@@ -94,37 +94,37 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MGMT-01 | - | Pending |
-| MGMT-02 | - | Pending |
-| MGMT-03 | - | Pending |
-| MGMT-04 | - | Pending |
-| MGMT-05 | - | Pending |
-| MGMT-06 | - | Pending |
-| MGMT-07 | - | Pending |
-| MGMT-08 | - | Pending |
-| WKSP-01 | - | Pending |
-| WKSP-02 | - | Pending |
-| WKSP-03 | - | Pending |
-| WKSP-04 | - | Pending |
-| DISC-01 | - | Pending |
-| DISC-02 | - | Pending |
-| DISC-03 | - | Pending |
-| DISC-04 | - | Pending |
-| MEM-01 | - | Pending |
-| MEM-02 | - | Pending |
-| MEM-03 | - | Pending |
-| MEM-04 | - | Pending |
-| MEM-05 | - | Pending |
-| MEM-06 | - | Pending |
-| HRTB-01 | - | Pending |
-| HRTB-02 | - | Pending |
-| HRTB-03 | - | Pending |
+| MGMT-01 | Phase 1 | Pending |
+| MGMT-02 | Phase 2 | Pending |
+| MGMT-03 | Phase 2 | Pending |
+| MGMT-04 | Phase 2 | Pending |
+| MGMT-05 | Phase 2 | Pending |
+| MGMT-06 | Phase 2 | Pending |
+| MGMT-07 | Phase 2 | Pending |
+| MGMT-08 | Phase 2 | Pending |
+| WKSP-01 | Phase 1 | Pending |
+| WKSP-02 | Phase 1 | Pending |
+| WKSP-03 | Phase 1 | Pending |
+| WKSP-04 | Phase 1 | Pending |
+| DISC-01 | Phase 3 | Pending |
+| DISC-02 | Phase 3 | Pending |
+| DISC-03 | Phase 3 | Pending |
+| DISC-04 | Phase 3 | Pending |
+| MEM-01 | Phase 4 | Pending |
+| MEM-02 | Phase 4 | Pending |
+| MEM-03 | Phase 4 | Pending |
+| MEM-04 | Phase 4 | Pending |
+| MEM-05 | Phase 4 | Pending |
+| MEM-06 | Phase 4 | Pending |
+| HRTB-01 | Phase 5 | Pending |
+| HRTB-02 | Phase 5 | Pending |
+| HRTB-03 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 25 total
-- Mapped to phases: 0
-- Unmapped: 25
+- Mapped to phases: 25
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-08*
-*Last updated: 2026-04-08 after initial definition*
+*Last updated: 2026-04-08 after roadmap creation*
