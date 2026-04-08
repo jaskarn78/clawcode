@@ -9,7 +9,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Agent Manager
 
-- [ ] **MGMT-01**: Central YAML config file defining all agents, their workspaces, channels, models, and skills
+- [x] **MGMT-01**: Central YAML config file defining all agents, their workspaces, channels, models, and skills
 - [ ] **MGMT-02**: User can start an individual agent by name via CLI command
 - [ ] **MGMT-03**: User can stop an individual agent by name via CLI command
 - [ ] **MGMT-04**: User can restart an individual agent by name via CLI command
@@ -94,7 +94,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MGMT-01 | Phase 1 | Pending |
+| MGMT-01 | Phase 1 | Complete |
 | MGMT-02 | Phase 2 | Pending |
 | MGMT-03 | Phase 2 | Pending |
 | MGMT-04 | Phase 2 | Pending |

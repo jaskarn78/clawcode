@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Project scaffolding, config schema, loader with defaults merging
+- [x] 01-01-PLAN.md — Project scaffolding, config schema, loader with defaults merging
 - [ ] 01-02-PLAN.md — Workspace creation, identity files, CLI entry point
 
 ### Phase 2: Agent Lifecycle
