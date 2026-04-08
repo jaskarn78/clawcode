@@ -45,11 +45,12 @@ Plans:
   3. When an agent process crashes, the manager detects it and restarts it with exponential backoff
   4. A PID registry tracks all running agent processes and is queryable
   5. On manager shutdown, all agent processes terminate cleanly with no zombies left behind
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — Foundation types, registry, backoff, session adapter, IPC protocol
+- [ ] 02-02-PLAN.md — Session manager, daemon, IPC server/client
+- [ ] 02-03-PLAN.md — CLI commands (start, stop, restart, start-all, status) and wiring
 
 ### Phase 3: Discord Integration
 **Goal**: Messages in Discord channels route to the correct agent and responses come back
@@ -102,8 +103,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Workspaces | 0/2 | Not started | - |
-| 2. Agent Lifecycle | 0/2 | Not started | - |
+| 1. Foundation & Workspaces | 2/2 | Complete | 2026-04-08 |
+| 2. Agent Lifecycle | 0/3 | Planning complete | - |
 | 3. Discord Integration | 0/2 | Not started | - |
 | 4. Memory System | 0/2 | Not started | - |
 | 5. Heartbeat & Monitoring | 0/1 | Not started | - |
