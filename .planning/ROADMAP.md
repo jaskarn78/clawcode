@@ -29,11 +29,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. Running a setup command creates isolated workspace directories for each configured agent
   3. Each agent workspace contains a SOUL.md and IDENTITY.md populated from config or defaults
   4. Agent workspaces are fully isolated -- no shared state, files, or database connections between them
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md — Project scaffolding, config schema, loader with defaults merging
+- [ ] 01-02-PLAN.md — Workspace creation, identity files, CLI entry point
 
 ### Phase 2: Agent Lifecycle
 **Goal**: User can manage agent processes individually and collectively, with automatic crash recovery
@@ -45,7 +45,7 @@ Plans:
   3. When an agent process crashes, the manager detects it and restarts it with exponential backoff
   4. A PID registry tracks all running agent processes and is queryable
   5. On manager shutdown, all agent processes terminate cleanly with no zombies left behind
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
 - [ ] 02-01: TBD
@@ -60,7 +60,7 @@ Plans:
   2. A message sent in a bound Discord channel is received and processed by the correct agent
   3. The agent's response appears in the same Discord channel the message came from
   4. Under sustained message volume from multiple channels, no agent exceeds Discord rate limits
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
 - [ ] 03-01: TBD
@@ -76,7 +76,7 @@ Plans:
   3. When context fill exceeds the configured threshold, auto-compaction triggers after flushing a context snapshot
   4. User can semantically search an agent's memories and get relevant results ranked by similarity
   5. Memory entries carry metadata (timestamp, source, access count, importance) that is queryable
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
 - [ ] 04-01: TBD
@@ -90,7 +90,7 @@ Plans:
   1. A heartbeat framework runs checks on each agent at a configurable interval
   2. Context fill percentage is reported as a built-in heartbeat check and triggers warnings at threshold
   3. New heartbeat checks can be added by dropping a check module into the plugin directory without modifying core code
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
 - [ ] 05-01: TBD
