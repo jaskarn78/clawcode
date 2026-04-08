@@ -17,7 +17,6 @@ async function makeTempDir(): Promise<string> {
 function makeAgent(overrides: Partial<ResolvedAgentConfig> & { workspace: string }): ResolvedAgentConfig {
   return {
     name: "test-agent",
-    workspace: overrides.workspace,
     channels: [],
     model: "sonnet",
     skills: [],
