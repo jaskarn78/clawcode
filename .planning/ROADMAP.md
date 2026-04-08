@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01-PLAN.md — Project scaffolding, config schema, loader with defaults merging
-- [ ] 01-02-PLAN.md — Workspace creation, identity files, CLI entry point
+- [x] 01-02-PLAN.md — Workspace creation, identity files, CLI entry point
 
 ### Phase 2: Agent Lifecycle
 **Goal**: User can manage agent processes individually and collectively, with automatic crash recovery

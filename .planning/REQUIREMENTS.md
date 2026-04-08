@@ -20,10 +20,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Workspace & Identity
 
-- [ ] **WKSP-01**: Each agent gets its own isolated workspace directory on creation
-- [ ] **WKSP-02**: Each agent workspace contains a SOUL.md file defining behavioral philosophy
-- [ ] **WKSP-03**: Each agent workspace contains an IDENTITY.md file defining name, avatar, and tone
-- [ ] **WKSP-04**: Agent workspaces are isolated — no cross-contamination of state or memory between agents
+- [x] **WKSP-01**: Each agent gets its own isolated workspace directory on creation
+- [x] **WKSP-02**: Each agent workspace contains a SOUL.md file defining behavioral philosophy
+- [x] **WKSP-03**: Each agent workspace contains an IDENTITY.md file defining name, avatar, and tone
+- [x] **WKSP-04**: Agent workspaces are isolated — no cross-contamination of state or memory between agents
 
 ### Discord Integration
 
@@ -102,10 +102,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MGMT-06 | Phase 2 | Pending |
 | MGMT-07 | Phase 2 | Pending |
 | MGMT-08 | Phase 2 | Pending |
-| WKSP-01 | Phase 1 | Pending |
-| WKSP-02 | Phase 1 | Pending |
-| WKSP-03 | Phase 1 | Pending |
-| WKSP-04 | Phase 1 | Pending |
+| WKSP-01 | Phase 1 | Complete |
+| WKSP-02 | Phase 1 | Complete |
+| WKSP-03 | Phase 1 | Complete |
+| WKSP-04 | Phase 1 | Complete |
 | DISC-01 | Phase 3 | Pending |
 | DISC-02 | Phase 3 | Pending |
 | DISC-03 | Phase 3 | Pending |
