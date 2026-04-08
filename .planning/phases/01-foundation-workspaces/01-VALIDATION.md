@@ -1,9 +1,9 @@
 ---
 phase: 1
 slug: foundation-workspaces
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-04-08
 ---
 
@@ -18,7 +18,7 @@ created: 2026-04-08
 | Property | Value |
 |----------|-------|
 | **Framework** | vitest |
-| **Config file** | vitest.config.ts (Wave 0 installs) |
+| **Config file** | vitest.config.ts (created by Plan 01-01 Task 1) |
 | **Quick run command** | `npx vitest run --reporter=verbose` |
 | **Full suite command** | `npx vitest run --coverage` |
 | **Estimated runtime** | ~5 seconds |
@@ -38,11 +38,10 @@ created: 2026-04-08
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 01-01-01 | 01 | 1 | MGMT-01 | unit | `npx vitest run src/__tests__/config.test.ts` | ❌ W0 | ⬜ pending |
-| 01-01-02 | 01 | 1 | MGMT-01 | unit | `npx vitest run src/__tests__/config-validation.test.ts` | ❌ W0 | ⬜ pending |
-| 01-02-01 | 02 | 1 | WKSP-01 | unit | `npx vitest run src/__tests__/workspace.test.ts` | ❌ W0 | ⬜ pending |
-| 01-02-02 | 02 | 1 | WKSP-02, WKSP-03 | unit | `npx vitest run src/__tests__/identity.test.ts` | ❌ W0 | ⬜ pending |
-| 01-02-03 | 02 | 1 | WKSP-04 | integration | `npx vitest run src/__tests__/isolation.test.ts` | ❌ W0 | ⬜ pending |
+| 01-01-T1 | 01 | 1 | MGMT-01 | typecheck | `npx tsc --noEmit` | inline | ⬜ pending |
+| 01-01-T2 | 01 | 1 | MGMT-01 | unit | `npx vitest run src/config/__tests__/` | inline | ⬜ pending |
+| 01-02-T1 | 02 | 2 | WKSP-01, WKSP-02, WKSP-03, WKSP-04 | unit | `npx vitest run src/agent/__tests__/` | inline | ⬜ pending |
+| 01-02-T2 | 02 | 2 | MGMT-01 | integration | `npx vitest run --reporter=verbose` | inline | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -50,13 +49,12 @@ created: 2026-04-08
 
 ## Wave 0 Requirements
 
-- [ ] `vitest` + `@vitest/coverage-v8` — test framework installation
-- [ ] `vitest.config.ts` — test configuration
-- [ ] `src/__tests__/config.test.ts` — stubs for MGMT-01 (config parsing)
-- [ ] `src/__tests__/config-validation.test.ts` — stubs for MGMT-01 (schema validation)
-- [ ] `src/__tests__/workspace.test.ts` — stubs for WKSP-01 (workspace creation)
-- [ ] `src/__tests__/identity.test.ts` — stubs for WKSP-02, WKSP-03 (identity files)
-- [ ] `src/__tests__/isolation.test.ts` — stubs for WKSP-04 (workspace isolation)
+Test files are created inline within plan tasks (not as separate Wave 0 stubs):
+- Plan 01-01 Task 1 creates vitest.config.ts + project scaffolding
+- Plan 01-01 Task 2 creates src/config/__tests__/schema.test.ts and src/config/__tests__/loader.test.ts
+- Plan 01-02 Task 1 creates src/agent/__tests__/workspace.test.ts
+
+Existing infrastructure covers all phase requirements via inline test creation.
 
 ---
 
@@ -70,11 +68,11 @@ created: 2026-04-08
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 5s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 5s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-04-08
