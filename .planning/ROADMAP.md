@@ -94,8 +94,8 @@ Plans:
   4. Context health zone is visible via IPC status query, CLI agent status, and dashboard (when built)
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 24-01-PLAN.md — Zone types, classifier, config schema, heartbeat check upgrade (CTXH-01, CTXH-03)
+- [ ] 24-02-PLAN.md — Zone alerts, IPC status, CLI zone column, Discord notifications (CTXH-02, CTXH-04)
 
 ### Phase 25: Episode Memory
 **Goal**: Agents can record and retrieve significant discrete events as first-class memory objects
