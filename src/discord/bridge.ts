@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { logger } from "../shared/logger.js";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
+import type { ThreadManager } from "./thread-manager.js";
 import type { Logger } from "pino";
 import type { DownloadResult } from "./attachment-types.js";
 import {
@@ -25,6 +26,7 @@ import {
 export type BridgeConfig = {
   readonly routingTable: RoutingTable;
   readonly sessionManager: SessionManager;
+  readonly threadManager?: ThreadManager;
   readonly botToken?: string;
   readonly log?: Logger;
 };
@@ -71,6 +73,7 @@ export class DiscordBridge {
   private readonly client: Client;
   private readonly routingTable: RoutingTable;
   private readonly sessionManager: SessionManager;
+  private readonly threadManager: ThreadManager | undefined;
   private readonly botToken: string;
   private readonly log: Logger;
   private running = false;
@@ -79,6 +82,7 @@ export class DiscordBridge {
   constructor(config: BridgeConfig) {
     this.routingTable = config.routingTable;
     this.sessionManager = config.sessionManager;
+    this.threadManager = config.threadManager;
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
 
@@ -107,6 +111,22 @@ export class DiscordBridge {
         "messageCreate event received",
       );
       void this.handleMessage(message);
+    });
+
+    // Thread creation listener -- spawns thread sessions for bound channels
+    this.client.on("threadCreate", (thread) => {
+      if (!this.threadManager) return;
+      this.log.info(
+        { threadId: thread.id, threadName: thread.name, parentId: thread.parentId },
+        "threadCreate event received",
+      );
+      if (thread.parentId) {
+        void this.threadManager.handleThreadCreate(
+          thread.id,
+          thread.name ?? "unnamed",
+          thread.parentId,
+        );
+      }
     });
 
     // Debug: log ALL events to see what's coming through
@@ -156,6 +176,24 @@ export class DiscordBridge {
     // Ignore bot messages (including our own)
     if (message.author.bot) {
       return;
+    }
+
+    // Thread routing takes priority over channel routing (per D-09)
+    if (this.threadManager && message.channel.isThread()) {
+      const sessionName = await this.threadManager.routeMessage(message.channelId);
+      if (sessionName) {
+        // Download attachments for thread messages the same way as channel messages
+        let downloadResults: readonly DownloadResult[] | undefined;
+        if (message.attachments.size > 0) {
+          const attachments = extractAttachments(message.attachments);
+          downloadResults = await downloadAllAttachments(attachments, "/tmp/thread-attachments", this.log);
+        }
+
+        const formattedMessage = formatDiscordMessage(message, downloadResults);
+        await this.sessionManager.forwardToAgent(sessionName, formattedMessage);
+        this.log.info({ sessionName, threadId: message.channelId }, "message routed to thread session");
+        return;
+      }
     }
 
     const channelId = message.channelId;
