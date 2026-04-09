@@ -64,8 +64,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — Discord types, routing table, and rate limiter modules with tests
+- [ ] 03-02-PLAN.md — Daemon/session integration, IPC extension, CLI routes command
 
 ### Phase 4: Memory System
 **Goal**: Agents have persistent memory that survives restarts, supports search, and manages context window pressure
