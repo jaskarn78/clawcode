@@ -9,10 +9,10 @@ Requirements for v1.3 milestone. Each maps to roadmap phases.
 
 ### Subagent Thread Skill
 
-- [ ] **SASK-01**: A ClawCode skill exists that wraps the spawn-subagent-thread IPC call into a natural agent-usable interface
-- [ ] **SASK-02**: The skill accepts task description and optional model selection, returns the thread URL and subagent session name
-- [ ] **SASK-03**: Agent system prompts include guidance to use the subagent thread skill instead of the raw Agent tool when Discord visibility is desired
-- [ ] **SASK-04**: The skill handles errors gracefully (no Discord client, no bound channel) with clear messages
+- [x] **SASK-01**: A ClawCode skill exists that wraps the spawn-subagent-thread IPC call into a natural agent-usable interface
+- [x] **SASK-02**: The skill accepts task description and optional model selection, returns the thread URL and subagent session name
+- [x] **SASK-03**: Agent system prompts include guidance to use the subagent thread skill instead of the raw Agent tool when Discord visibility is desired
+- [x] **SASK-04**: The skill handles errors gracefully (no Discord client, no bound channel) with clear messages
 
 ### MCP Client Consumption
 
@@ -44,10 +44,10 @@ Requirements for v1.3 milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SASK-01 | Phase 31 | Pending |
-| SASK-02 | Phase 31 | Pending |
-| SASK-03 | Phase 31 | Pending |
-| SASK-04 | Phase 31 | Pending |
+| SASK-01 | Phase 31 | Complete |
+| SASK-02 | Phase 31 | Complete |
+| SASK-03 | Phase 31 | Complete |
+| SASK-04 | Phase 31 | Complete |
 | MCPC-01 | Phase 32 | Pending |
 | MCPC-02 | Phase 32 | Pending |
 | MCPC-03 | Phase 32 | Pending |

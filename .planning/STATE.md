@@ -3,13 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Agent Integrations
 status: Ready to plan
-last_updated: "2026-04-09T23:00:00.000Z"
+stopped_at: Completed 31-02-PLAN.md
+last_updated: "2026-04-09T22:06:03.038Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 2
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
 ---
 
 # Project State
@@ -19,16 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v1.3 Agent Integrations -- Phase 31 (Subagent Thread Skill)
+**Current focus:** Phase 31 — Subagent Thread Skill
 
 ## Current Position
 
-Phase: 31 of 32 (Subagent Thread Skill)
+Phase: 32
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-04-09 -- Roadmap created for v1.3
-
-Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -56,6 +53,8 @@ Recent decisions affecting current work:
 - [v1.3 roadmap]: MCP client consumption second (Phase 32) -- larger, new capability building on existing MCP bridge
 - [Phase 27]: SubagentThreadSpawner service already exists with IPC -- Phase 31 wraps it as a skill
 - [Phase 27]: Thread bindings reuse existing ThreadBinding type
+- [Phase 31-subagent-thread-skill]: Registered spawn-thread CLI in src/cli/index.ts (matching existing pattern) instead of src/index.ts
+- [Phase 31-02]: Skill check uses config.skills directly rather than skillsCatalog lookup for reliability
 
 ### Pending Todos
 
@@ -72,9 +71,11 @@ Recent decisions affecting current work:
 |---|-------------|------|--------|-----------|
 | 260409-laz | Add persistent usage tracking to ClawCode agents | 2026-04-09 | 0979508 | [260409-laz](./quick/260409-laz-add-persistent-usage-tracking-to-clawcod/) |
 | 260409-lop | Add typing indicator and streaming responses | 2026-04-09 | 3a90864 | [260409-lop](./quick/260409-lop-add-typing-indicator-and-streaming-respo/) |
+| Phase 31-subagent-thread-skill P01 | 2min | 2 tasks | 6 files |
+| Phase 31-subagent-thread-skill P02 | 2min | 1 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Created v1.3 roadmap (Phases 31-32)
+Stopped at: Completed 31-02-PLAN.md
 Resume file: None

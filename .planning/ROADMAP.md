@@ -40,7 +40,7 @@ Phases 21-30 delivered: tech debt cleanup, config hot-reload, context health zon
 
 **Milestone Goal:** Complete subagent-thread UX and enable agents to connect to external MCP servers.
 
-- [ ] **Phase 31: Subagent Thread Skill** - Skill wrapper and system prompt guidance so agents naturally use Discord threads for subagent work
+- [x] **Phase 31: Subagent Thread Skill** - Skill wrapper and system prompt guidance so agents naturally use Discord threads for subagent work (completed 2026-04-09)
 - [ ] **Phase 32: MCP Client Consumption** - Per-agent MCP server config, daemon activation, tool discovery, health checks, and CLI visibility
 
 ## Phase Details
@@ -53,9 +53,9 @@ Phases 21-30 delivered: tech debt cleanup, config hot-reload, context health zon
   1. An agent can invoke a skill that spawns a subagent in a dedicated Discord thread, returning the thread URL and session name
   2. The skill gracefully reports clear error messages when Discord client is unavailable or no channel is bound
   3. Agent system prompts guide the agent to prefer the subagent thread skill over the raw Agent tool when Discord visibility is desired
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 31-01-PLAN.md -- Skill infrastructure: SKILL.md, CLI spawn-thread command, MCP spawn_subagent_thread tool
+- [x] 31-01-PLAN.md -- Skill infrastructure: SKILL.md, CLI spawn-thread command, MCP spawn_subagent_thread tool
 - [ ] 31-02-PLAN.md -- System prompt guidance injection in buildSessionConfig
 
 ### Phase 32: MCP Client Consumption
@@ -79,5 +79,5 @@ Plans:
 | 1-5 | v1.0 | - | Complete | 2026-04-09 |
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21-30 | v1.2 | - | Complete | 2026-04-09 |
-| 31. Subagent Thread Skill | v1.3 | 0/2 | Not started | - |
+| 31. Subagent Thread Skill | v1.3 | 1/2 | Complete    | 2026-04-09 |
 | 32. MCP Client Consumption | v1.3 | 0/? | Not started | - |
