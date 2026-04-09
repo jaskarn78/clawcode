@@ -299,14 +299,18 @@ export class DiscordBridge {
 
       // Final response handling
       if (response && response.trim().length > 0) {
-        if (messageRef.current && response.length <= 2000) {
-          // Final edit with complete text
-          await messageRef.current.edit(response);
-        } else if (response.length > 2000) {
+        if (response.length > 2000) {
           // Delete the streaming preview and send properly split messages
           if (messageRef.current) {
             try { await messageRef.current.delete(); } catch { /* ignore */ }
           }
+          await this.sendResponse(message, response);
+        } else if (messageRef.current) {
+          // Final edit with complete text
+          await messageRef.current.edit(response);
+        } else {
+          // No streaming message was created (fast response or no assistant chunks)
+          // Send the response as a new message
           await this.sendResponse(message, response);
         }
         this.log.info({ agent: agentName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
