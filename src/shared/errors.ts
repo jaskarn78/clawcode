@@ -97,3 +97,51 @@ function extractFieldPath(path: readonly (string | number)[]): string {
   const parts = path.map((p) => (typeof p === "number" ? `[${p}]` : p));
   return parts.join(".").replace(/\.\[/g, "[") || "(root)";
 }
+
+/**
+ * General manager error — base class for manager-specific failures.
+ */
+export class ManagerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ManagerError";
+  }
+}
+
+/**
+ * Thrown when an agent session operation fails.
+ * Includes the agent name for context.
+ */
+export class SessionError extends Error {
+  readonly agentName: string;
+
+  constructor(message: string, agentName: string) {
+    super(message);
+    this.name = "SessionError";
+    this.agentName = agentName;
+  }
+}
+
+/**
+ * Thrown when IPC communication fails.
+ * Includes a JSON-RPC error code.
+ */
+export class IpcError extends Error {
+  readonly code: number;
+
+  constructor(message: string, code: number) {
+    super(message);
+    this.name = "IpcError";
+    this.code = code;
+  }
+}
+
+/**
+ * Thrown when a CLI command requires the manager to be running but it is not.
+ */
+export class ManagerNotRunningError extends ManagerError {
+  constructor() {
+    super("Manager is not running. Start it with: clawcode start-all");
+    this.name = "ManagerNotRunningError";
+  }
+}
