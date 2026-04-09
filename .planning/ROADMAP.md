@@ -178,8 +178,8 @@ Plans:
   5. Dashboard shows context health zones, delivery queue status, failed message log, and recent Discord message activity per agent
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 30-01-PLAN.md — Dashboard server, SSE infrastructure, agent status panel (DASH-01, DASH-02)
+- [ ] 30-02-PLAN.md — All remaining panels, daemon wiring, visual verification (DASH-03, DASH-04, DASH-05, DASH-06, DASH-07, DASH-08)
 **UI hint**: yes
 
 ## Progress
@@ -199,4 +199,4 @@ Plans:
 | 27. Subagent Discord Threads | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 28. Security & Execution Approval | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 29. Agent Bootstrap | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 30. Web Dashboard | v1.2 | 0/? | Not started | - |
+| 30. Web Dashboard | v1.2 | 0/2 | Not started | - |
