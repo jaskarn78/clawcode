@@ -58,6 +58,11 @@ export type ResolvedAgentConfig = {
     readonly idleTimeoutMinutes: number;
     readonly maxThreadSessions: number;
   };
+  readonly webhook?: {
+    readonly displayName: string;
+    readonly avatarUrl?: string;
+    readonly webhookUrl?: string;
+  };
   readonly slashCommands: readonly {
     readonly name: string;
     readonly description: string;

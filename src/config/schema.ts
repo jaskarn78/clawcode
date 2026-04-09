@@ -76,6 +76,19 @@ export type SlashCommandOptionConfig = z.infer<typeof slashCommandOptionSchema>;
 export type SlashCommandEntryConfig = z.infer<typeof slashCommandEntrySchema>;
 
 /**
+ * Webhook identity configuration schema.
+ * Allows agents to post to Discord with custom display name and avatar.
+ */
+export const webhookConfigSchema = z.object({
+  displayName: z.string().min(1),
+  avatarUrl: z.string().url().optional(),
+  webhookUrl: z.string().url().optional(),
+});
+
+/** Inferred webhook config type. */
+export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
+
+/**
  * Thread management configuration schema.
  * Controls idle timeout and max concurrent thread sessions per agent.
  */
@@ -106,6 +119,7 @@ export const agentSchema = z.object({
   subagentModel: modelSchema.optional(),
   slashCommands: z.array(slashCommandEntrySchema).default([]),
   threads: threadsConfigSchema.optional(),
+  webhook: webhookConfigSchema.optional(),
 });
 
 /**
