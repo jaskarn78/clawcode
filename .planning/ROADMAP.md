@@ -135,8 +135,8 @@ Plans:
   4. When the subagent completes, the thread binding is cleaned up while the thread itself remains for history
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 27-01-PLAN.md — SubagentThreadSpawner types and service with thread creation, binding, cleanup (SATH-01, SATH-02, SATH-03)
+- [ ] 27-02-PLAN.md — Daemon wiring, IPC methods, session lifecycle cleanup, message routing (SATH-01, SATH-02, SATH-03, SATH-04)
 
 ### Phase 28: Security & Execution Approval
 **Goal**: Agents operate within defined security boundaries with auditable command approval and channel access control
@@ -196,7 +196,7 @@ Plans:
 | 24. Context Health Zones | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 25. Episode Memory | v1.2 | 2/2 | Complete    | 2026-04-09 |
 | 26. Discord Delivery Queue | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 27. Subagent Discord Threads | v1.2 | 0/? | Not started | - |
+| 27. Subagent Discord Threads | v1.2 | 0/2 | Not started | - |
 | 28. Security & Execution Approval | v1.2 | 0/? | Not started | - |
 | 29. Agent Bootstrap | v1.2 | 0/? | Not started | - |
 | 30. Web Dashboard | v1.2 | 0/? | Not started | - |
