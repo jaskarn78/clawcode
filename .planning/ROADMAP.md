@@ -176,6 +176,13 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
 | 12. Discord Slash Commands | v1.1 | 2/2 | Complete    | 2026-04-09 |
 | 13. Discord Attachments | v1.1 | 2/2 | Complete    | 2026-04-09 |
+| 14. Discord Thread Bindings | v1.1 | 3/3 | Complete | 2026-04-09 |
+| 15. Webhook Agent Identities | v1.1 | 2/2 | Complete | 2026-04-09 |
+| 16. Session Forking | v1.1 | 1/1 | Complete | 2026-04-09 |
+| 17. Context Summary on Resume | v1.1 | 1/1 | Complete | 2026-04-09 |
+| 18. MCP Bridge | v1.1 | 1/1 | Complete | 2026-04-09 |
+| 19. Discord Reaction Handling | v1.1 | 1/1 | Complete | 2026-04-09 |
+| 20. Memory Search CLI | v1.1 | 1/1 | Complete | 2026-04-09 |
 
 ### Phase 14: Discord Thread Bindings
 
@@ -191,60 +198,61 @@ Plans:
 
 ### Phase 15: Webhook Agent Identities
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Each agent posts to Discord with its own display name and avatar via webhooks instead of all using the bot identity
+**Requirements**: WHID-01, WHID-02, WHID-03, WHID-04
 **Depends on:** Phase 14
-**Plans:** 0 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 15 to break down)
+- [x] 15-01-PLAN.md — Webhook types, config schema, WebhookManager
+- [x] 15-02-PLAN.md — Daemon wiring, IPC webhooks method, CLI command
 
 ### Phase 16: Session Forking
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Fork an agent's context into a new independent session that inherits conversation history
+**Requirements**: FORK-01, FORK-02
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 16 to break down)
+- [x] 16-01-PLAN.md — Fork logic, SessionManager extension, IPC, and CLI
 
 ### Phase 17: Context Summary on Resume
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Inject a structured summary of previous conversation into system prompt when a session resumes after compaction or restart
+**Requirements**: CSUM-01, CSUM-02
 **Depends on:** Phase 16
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 17 to break down)
+- [x] 17-01-PLAN.md — Context summary persistence and session manager integration
 
 ### Phase 18: MCP Bridge
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Expose ClawCode tools as an MCP stdio server for external Claude Code sessions to connect to
+**Requirements**: MCPB-01, MCPB-02
 **Depends on:** Phase 17
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 18 to break down)
+- [x] 18-01-PLAN.md — MCP server with tools and CLI command
 
 ### Phase 19: Discord Reaction Handling
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Agents receive and respond to Discord emoji reactions in bound channels
+**Requirements**: DRCT-01, DRCT-02
 **Depends on:** Phase 18
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 19 to break down)
+- [x] 19-01-PLAN.md — Reaction formatting, bridge integration, and config
 
 ### Phase 20: Memory Search CLI
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** CLI commands for semantic search and browsing of agent memory stores
+**Requirements**: MSRC-01, MSRC-02
 **Depends on:** Phase 19
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 20 to break down)
+- [x] 20-01-PLAN.md — IPC methods and CLI memory command
