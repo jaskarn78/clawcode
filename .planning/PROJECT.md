@@ -41,17 +41,22 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-- [ ] Subagent spawning auto-creates Discord subthreads with webhook identity
-- [ ] Discord delivery queue with retry and failed message logging
-- [ ] Context health zones (green/yellow/orange/red alerts with auto-snapshot)
-- [ ] Episode-based memory (discrete event records alongside session logs)
-- [ ] Config hot-reload without daemon restart
-- [ ] Web dashboard for system management (agents, memory, schedules, health, config)
-- [ ] Execution approval system (per-agent command allowlists)
-- [ ] Config audit trail (JSONL log of changes)
-- [ ] Agent bootstrap/first-run BOOTSTRAP.md system
-- [ ] Per-agent SECURITY.md channel ACLs
-- [ ] Tech debt: attachment cleanup, logger consistency, session-manager splitting, test fixes
+- [ ] Subagent thread skill — wrap IPC call so agents auto-use Discord threads for subagents
+- [ ] MCP client consumption — agents connect to external MCP servers (Finnhub, Google Workspace, etc.)
+
+### Validated (v1.2)
+
+- Subagent spawning auto-creates Discord subthreads with webhook identity — v1.2
+- Discord delivery queue with retry and failed message logging — v1.2
+- Context health zones (green/yellow/orange/red alerts with auto-snapshot) — v1.2
+- Episode-based memory (discrete event records alongside session logs) — v1.2
+- Config hot-reload without daemon restart — v1.2
+- Web dashboard for system management — v1.2
+- Execution approval system (per-agent command allowlists) — v1.2
+- Config audit trail (JSONL log of changes) — v1.2
+- Agent bootstrap/first-run system — v1.2
+- Per-agent SECURITY.md channel ACLs — v1.2
+- Tech debt: attachment cleanup, logger consistency, session-manager splitting, test fixes — v1.2
 
 ### Out of Scope
 
@@ -64,22 +69,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Shared global memory — violates workspace isolation; per-agent memory with explicit sharing via admin
 - Visual UI for config/management — YAML config is sufficient; UI deferred
 
-## Current Milestone: v1.2 Production Hardening & Platform Parity
+## Current Milestone: v1.3 Agent Integrations
 
-**Goal:** Resolve tech debt, achieve OpenClaw feature parity on key platform capabilities, add subagent-to-Discord-thread spawning, and build a web dashboard.
+**Goal:** Complete subagent-thread UX and enable agents to connect to external MCP servers.
 
 **Target features:**
-- Tech debt cleanup (attachment cleanup, logger consistency, session-manager splitting, test fixtures, CLI tests, SDK v2 types)
-- Subagent spawning auto-creates Discord subthreads with webhook identity
-- Discord delivery queue with retry and failed message logging
-- Context health zones (green/yellow/orange/red alerts with auto-snapshot)
-- Episode-based memory (discrete event records alongside session logs)
-- Config hot-reload without daemon restart
-- Web dashboard (agent status, memory stats, schedules, health monitoring, config management)
-- Execution approval system (per-agent command allowlists)
-- Config audit trail (JSONL log of changes)
-- Agent bootstrap/first-run BOOTSTRAP.md system
-- Per-agent SECURITY.md channel ACLs
+- Subagent thread skill wrapping spawn-subagent-thread IPC for seamless Discord thread creation
+- System prompt injection guiding agents to use the skill instead of raw Agent tool
+- MCP server config per agent in clawcode.yaml (command, args, env vars)
+- Daemon passes MCP configs to agent sessions for Claude Code native activation
+- MCP tool discovery via system prompt injection
+- CLI command for MCP server status
 
 ## Context
 
@@ -126,4 +126,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-09 after v1.2 milestone started*
+*Last updated: 2026-04-09 after v1.3 milestone started*
