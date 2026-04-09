@@ -24,6 +24,8 @@ import { MemoryStore } from "../memory/store.js";
 import { EmbeddingService } from "../memory/embedder.js";
 import { SessionLogger } from "../memory/session-log.js";
 import { CompactionManager, CharacterCountFillProvider } from "../memory/compaction.js";
+import { TierManager } from "../memory/tier-manager.js";
+import { DEFAULT_TIER_CONFIG } from "../memory/tiers.js";
 
 /**
  * Configuration for creating a SessionManager.
@@ -59,6 +61,9 @@ export class SessionManager {
   private readonly compactionManagers: Map<string, CompactionManager> = new Map();
   private readonly sessionLoggers: Map<string, SessionLogger> = new Map();
   private readonly contextFillProviders: Map<string, CharacterCountFillProvider> = new Map();
+
+  // Tier management (per-agent)
+  private readonly tierManagers: Map<string, TierManager> = new Map();
 
   // Shared embedding service (singleton across all agents)
   private readonly embedder: EmbeddingService = new EmbeddingService();
@@ -100,7 +105,16 @@ export class SessionManager {
     registry = updateEntry(registry, name, { status: "starting" });
     await writeRegistry(this.registryPath, registry);
 
-    // Build session config
+    // Initialize memory resources BEFORE building session config (so hot memories are available)
+    this.initMemory(name, config);
+
+    // Refresh hot tier before building session config
+    const tierManager = this.tierManagers.get(name);
+    if (tierManager) {
+      tierManager.refreshHotTier();
+    }
+
+    // Build session config (includes hot memory injection)
     const sessionConfig = await this.buildSessionConfig(config);
 
     // Create session
@@ -125,9 +139,6 @@ export class SessionManager {
       startedAt: Date.now(),
     });
     await writeRegistry(this.registryPath, registry);
-
-    // Initialize memory resources for this agent
-    this.initMemory(name, config);
 
     this.log.info({ agent: name, sessionId: handle.sessionId }, "agent started");
   }
@@ -396,6 +407,11 @@ export class SessionManager {
     return this.sessionLoggers.get(agentName);
   }
 
+  /** Get the TierManager for a specific agent (for tier maintenance and cold operations). */
+  getTierManager(agentName: string): TierManager | undefined {
+    return this.tierManagers.get(agentName);
+  }
+
   /**
    * Pre-warm the embedding model at daemon startup (D-09).
    * Call before starting any agents to avoid cold-start latency.
@@ -440,6 +456,22 @@ export class SessionManager {
       const fillProvider = new CharacterCountFillProvider();
       this.contextFillProviders.set(name, fillProvider);
 
+      // Create TierManager for this agent
+      const tierConfig = config.memory?.tiers ?? DEFAULT_TIER_CONFIG;
+      const tierManager = new TierManager({
+        store,
+        embedder: this.embedder,
+        memoryDir,
+        tierConfig,
+        scoringConfig: {
+          semanticWeight: config.memory?.decay?.semanticWeight ?? 0.7,
+          decayWeight: config.memory?.decay?.decayWeight ?? 0.3,
+          halfLifeDays: config.memory?.decay?.halfLifeDays ?? 30,
+        },
+        log: this.log,
+      });
+      this.tierManagers.set(name, tierManager);
+
       this.log.info({ agent: name, dbPath }, "memory initialized");
     } catch (error) {
       this.log.error(
@@ -469,6 +501,7 @@ export class SessionManager {
     this.compactionManagers.delete(name);
     this.sessionLoggers.delete(name);
     this.contextFillProviders.delete(name);
+    this.tierManagers.delete(name);
   }
 
   // ---------------------------------------------------------------------------
@@ -659,6 +692,16 @@ export class SessionManager {
     // Append context summary from compaction restart (D-17)
     if (contextSummary) {
       systemPrompt += `\n\n## Context Summary (from previous session)\n${contextSummary}`;
+    }
+
+    // Inject hot memories into system prompt (D-11)
+    const agentTierManager = this.tierManagers.get(config.name);
+    if (agentTierManager) {
+      const hotMemories = agentTierManager.getHotMemories();
+      if (hotMemories.length > 0) {
+        systemPrompt += "\n\n## Key Memories\n\n";
+        systemPrompt += hotMemories.map((mem) => `- ${mem.content}`).join("\n");
+      }
     }
 
     return {

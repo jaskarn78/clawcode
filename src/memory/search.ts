@@ -63,6 +63,11 @@ export class SemanticSearch {
    * Over-fetches by 2x from KNN, scores using combined semantic + relevance
    * decay, then trims to topK. Updates access_count and accessed_at ONLY
    * for the final top-K results (after scoring, not during).
+   *
+   * NOTE: Cold-tier memories are excluded by design. When a memory is archived
+   * to cold, it is deleted from both the memories and vec_memories tables (D-14),
+   * so it cannot appear in vector search results. To search cold archives and
+   * promote back to warm, use TierManager.rewarmFromCold() explicitly.
    */
   search(queryEmbedding: Float32Array, topK: number): readonly RankedSearchResult[] {
     // Over-fetch by 2x for re-ranking headroom

@@ -28,6 +28,13 @@ export type ResolvedAgentConfig = {
       readonly enabled: boolean;
       readonly similarityThreshold: number;
     };
+    readonly tiers?: {
+      readonly hotAccessThreshold: number;
+      readonly hotAccessWindowDays: number;
+      readonly hotDemotionDays: number;
+      readonly coldRelevanceThreshold: number;
+      readonly hotBudget: number;
+    };
   };
   readonly heartbeat: {
     readonly enabled: boolean;

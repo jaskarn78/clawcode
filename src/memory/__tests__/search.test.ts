@@ -154,6 +154,59 @@ describe("SemanticSearch", () => {
     }
   });
 
+  describe("cold tier exclusion", () => {
+    it("search does NOT return memories that have been deleted (cold-archived)", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const search = new SemanticSearch(db);
+
+      // Insert a memory
+      const vec = randomEmbedding();
+      const entry = store.insert(
+        { content: "will be cold", source: "manual", importance: 0.5 },
+        vec,
+      );
+
+      // Simulate cold archival: delete from both tables (what TierManager.archiveToCold does)
+      store.delete(entry.id);
+
+      // Search should return nothing
+      const results = search.search(vec, 10);
+      expect(results.length).toBe(0);
+    });
+
+    it("search returns warm and hot memories but not deleted ones", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const search = new SemanticSearch(db);
+
+      const vec1 = directionalEmbedding(0, 1.0);
+      const vec2 = new Float32Array(384);
+      vec2[0] = 0.95;
+      vec2[1] = 0.05;
+      const norm = Math.sqrt(vec2[0] ** 2 + vec2[1] ** 2);
+      vec2[0] /= norm;
+      vec2[1] /= norm;
+
+      // Insert warm memory
+      store.insert(
+        { content: "warm memory", source: "manual" },
+        vec1,
+      );
+
+      // Insert and delete (cold archival simulation)
+      const coldEntry = store.insert(
+        { content: "cold memory", source: "manual" },
+        vec2,
+      );
+      store.delete(coldEntry.id);
+
+      const results = search.search(directionalEmbedding(0, 1.0), 10);
+      expect(results.length).toBe(1);
+      expect(results[0].content).toBe("warm memory");
+    });
+  });
+
   describe("relevance-aware search", () => {
     it("recently accessed memory ranks higher than stale memory with similar distance", () => {
       store = createTestStore();
