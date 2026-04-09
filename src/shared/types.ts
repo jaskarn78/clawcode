@@ -10,6 +10,10 @@ export type ResolvedAgentConfig = {
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;
+  readonly memory: {
+    readonly compactionThreshold: number;
+    readonly searchTopK: number;
+  };
 };
 
 /**

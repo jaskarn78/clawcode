@@ -21,4 +21,12 @@ export {
   type MemoryConfig,
 } from "./schema.js";
 
+export { CompactionManager, CharacterCountFillProvider } from "./compaction.js";
+export type {
+  CompactionDeps,
+  ConversationTurn,
+  ContextFillProvider,
+  CompactionResult,
+} from "./compaction.js";
+
 export { MemoryError, EmbeddingError } from "./errors.js";

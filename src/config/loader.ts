@@ -55,6 +55,7 @@ export function resolveAgentConfig(
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,
+    memory: agent.memory ?? defaults.memory,
   };
 }
 

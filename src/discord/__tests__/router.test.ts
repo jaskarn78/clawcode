@@ -21,6 +21,7 @@ function makeAgent(
     skills: [],
     soul: undefined,
     identity: undefined,
+    memory: { compactionThreshold: 0.75, searchTopK: 10 },
   };
 }
 

@@ -16,6 +16,7 @@ describe("resolveAgentConfig", () => {
     model: "sonnet",
     skills: ["default-skill"],
     basePath: "~/.clawcode/agents",
+    memory: { compactionThreshold: 0.75, searchTopK: 10 },
   };
 
   it("applies default model when agent does not specify one", () => {

@@ -22,6 +22,7 @@ function makeAgent(overrides: Partial<ResolvedAgentConfig> & { workspace: string
     skills: [],
     soul: undefined,
     identity: undefined,
+    memory: { compactionThreshold: 0.75, searchTopK: 10 },
     ...overrides,
   };
 }

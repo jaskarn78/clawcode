@@ -1,9 +1,19 @@
 import { z } from "zod/v4";
+import { memoryConfigSchema } from "../memory/schema.js";
 
 /**
  * Valid Claude model identifiers.
  */
 export const modelSchema = z.enum(["sonnet", "opus", "haiku"]);
+
+/**
+ * Memory configuration schema for compaction and search settings.
+ * Re-exported from the memory module for config-level use.
+ */
+export const memorySchema = memoryConfigSchema;
+
+/** Inferred memory config type. */
+export type MemoryConfig = z.infer<typeof memorySchema>;
 
 /**
  * Schema for a single agent entry in the config.
@@ -17,6 +27,7 @@ export const agentSchema = z.object({
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
+  memory: memorySchema.optional(),
 });
 
 /**
@@ -26,6 +37,10 @@ export const defaultsSchema = z.object({
   model: modelSchema.default("sonnet"),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
+  memory: memorySchema.default(() => ({
+    compactionThreshold: 0.75,
+    searchTopK: 10,
+  })),
 });
 
 /**
@@ -38,6 +53,7 @@ export const configSchema = z.object({
     model: "sonnet" as const,
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
+    memory: { compactionThreshold: 0.75, searchTopK: 10 },
   })),
   agents: z.array(agentSchema).min(1),
 });
