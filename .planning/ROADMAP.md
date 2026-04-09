@@ -150,8 +150,8 @@ Plans:
   5. Per-agent SECURITY.md files define channel ACLs, and messages from unauthorized users are silently ignored with a log entry
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 28-01-PLAN.md — Security types, config schema, allowlist matcher, ACL parser, approval log (EXEC-01, EXEC-03, EXEC-04, SECR-01)
+- [ ] 28-02-PLAN.md — Daemon wiring, bridge ACL enforcement, IPC approval methods, CLI command (EXEC-02, EXEC-03, EXEC-04, SECR-01, SECR-02, SECR-03)
 
 ### Phase 29: Agent Bootstrap
 **Goal**: New agents get a guided first-run experience that establishes their identity and personality
@@ -197,6 +197,6 @@ Plans:
 | 25. Episode Memory | v1.2 | 2/2 | Complete    | 2026-04-09 |
 | 26. Discord Delivery Queue | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 27. Subagent Discord Threads | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 28. Security & Execution Approval | v1.2 | 0/? | Not started | - |
+| 28. Security & Execution Approval | v1.2 | 0/2 | Not started | - |
 | 29. Agent Bootstrap | v1.2 | 0/? | Not started | - |
 | 30. Web Dashboard | v1.2 | 0/? | Not started | - |
