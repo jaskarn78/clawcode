@@ -473,7 +473,7 @@ describe("MemoryStore", () => {
 
     it("accepts all valid source values", () => {
       store = createTestStore();
-      const sources = ["conversation", "manual", "system"] as const;
+      const sources = ["conversation", "manual", "system", "episode"] as const;
 
       for (const source of sources) {
         const entry = store.insert(

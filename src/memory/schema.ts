@@ -6,6 +6,7 @@ export const memorySourceSchema = z.enum([
   "manual",
   "system",
   "consolidation",
+  "episode",
 ]);
 
 /** Schema for creating a new memory entry. */
@@ -46,6 +47,20 @@ export const tierConfigSchema = z.object({
   hotBudget: z.number().int().min(1).default(20),
 });
 
+/** Schema for episode input validation. */
+export const episodeInputSchema = z.object({
+  title: z.string().min(1).max(200),
+  summary: z.string().min(1),
+  importance: z.number().min(0).max(1).default(0.6),
+  tags: z.array(z.string()).default([]),
+  occurredAt: z.string().datetime().optional(),
+});
+
+/** Schema for episode archival configuration. */
+export const episodeConfigSchema = z.object({
+  archivalAgeDays: z.number().int().min(1).default(90),
+});
+
 /** Schema for memory system configuration. */
 export const memoryConfigSchema = z.object({
   compactionThreshold: z.number().min(0).max(1).default(0.75),
@@ -71,6 +86,9 @@ export const memoryConfigSchema = z.object({
     coldRelevanceThreshold: 0.05,
     hotBudget: 20,
   })),
+  episodes: episodeConfigSchema.default(() => ({
+    archivalAgeDays: 90,
+  })),
 });
 
 /** Inferred types from schemas. */
@@ -87,3 +105,9 @@ export type DedupConfig = z.infer<typeof dedupConfigSchema>;
 
 /** Inferred tier config type. */
 export type TierConfig = z.infer<typeof tierConfigSchema>;
+
+/** Inferred episode input type. */
+export type EpisodeInputValidated = z.infer<typeof episodeInputSchema>;
+
+/** Inferred episode config type. */
+export type EpisodeConfig = z.infer<typeof episodeConfigSchema>;

@@ -4,7 +4,16 @@
  */
 
 /** Valid sources for memory entries. */
-export type MemorySource = "conversation" | "manual" | "system" | "consolidation";
+export type MemorySource = "conversation" | "manual" | "system" | "consolidation" | "episode";
+
+/** Input for recording a discrete episode event as memory. */
+export type EpisodeInput = {
+  readonly title: string;
+  readonly summary: string;
+  readonly importance?: number;
+  readonly tags?: readonly string[];
+  readonly occurredAt?: string; // ISO 8601, defaults to now
+};
 
 /** Memory storage tier. */
 export type MemoryTier = "hot" | "warm" | "cold";

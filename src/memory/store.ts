@@ -63,6 +63,7 @@ export class MemoryStore {
       this.initSchema();
       this.migrateSchema();
       this.migrateTierColumn();
+      this.migrateEpisodeSource();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -377,7 +378,7 @@ export class MemoryStore {
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,
-        source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation')),
+        source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation', 'episode')),
         importance REAL NOT NULL DEFAULT 0.5 CHECK(importance >= 0.0 AND importance <= 1.0),
         access_count INTEGER NOT NULL DEFAULT 0,
         tags TEXT NOT NULL DEFAULT '[]',
@@ -434,7 +435,7 @@ export class MemoryStore {
         CREATE TABLE memories_new (
           id TEXT PRIMARY KEY,
           content TEXT NOT NULL,
-          source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation')),
+          source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation', 'episode')),
           importance REAL NOT NULL DEFAULT 0.5 CHECK(importance >= 0.0 AND importance <= 1.0),
           access_count INTEGER NOT NULL DEFAULT 0,
           tags TEXT NOT NULL DEFAULT '[]',
@@ -464,6 +465,52 @@ export class MemoryStore {
         "ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'warm' CHECK(tier IN ('hot', 'warm', 'cold'))",
       );
     }
+  }
+
+  /**
+   * Migrate existing databases to accept the 'episode' source value.
+   * Uses the same savepoint-test pattern as migrateSchema().
+   */
+  private migrateEpisodeSource(): void {
+    try {
+      this.db.exec("SAVEPOINT episode_migration_test");
+      try {
+        this.db.exec(
+          "INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier) VALUES ('__episode_migration_test__', 'test', 'episode', 0.5, '[]', '', '', '', 'warm')",
+        );
+        // Constraint accepts 'episode' -- no migration needed
+        this.db.exec("ROLLBACK TO episode_migration_test");
+        this.db.exec("RELEASE episode_migration_test");
+        return;
+      } catch {
+        // Constraint rejected 'episode' -- need migration
+        this.db.exec("ROLLBACK TO episode_migration_test");
+        this.db.exec("RELEASE episode_migration_test");
+      }
+    } catch {
+      return;
+    }
+
+    // Recreate table with updated CHECK constraint including 'episode'
+    this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE memories_new (
+          id TEXT PRIMARY KEY,
+          content TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation', 'episode')),
+          importance REAL NOT NULL DEFAULT 0.5 CHECK(importance >= 0.0 AND importance <= 1.0),
+          access_count INTEGER NOT NULL DEFAULT 0,
+          tags TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          accessed_at TEXT NOT NULL,
+          tier TEXT NOT NULL DEFAULT 'warm' CHECK(tier IN ('hot', 'warm', 'cold'))
+        );
+        INSERT INTO memories_new SELECT * FROM memories;
+        DROP TABLE memories;
+        ALTER TABLE memories_new RENAME TO memories;
+      `);
+    })();
   }
 
   private prepareStatements(): PreparedStatements {
