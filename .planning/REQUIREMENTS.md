@@ -9,9 +9,9 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 
 ### Advanced Memory
 
-- [ ] **AMEM-01**: Daily session logs automatically consolidated into weekly digest summaries
-- [ ] **AMEM-02**: Weekly digests automatically consolidated into monthly summaries
-- [ ] **AMEM-03**: Raw daily logs archived after consolidation (preserved but not in active search)
+- [x] **AMEM-01**: Daily session logs automatically consolidated into weekly digest summaries
+- [x] **AMEM-02**: Weekly digests automatically consolidated into monthly summaries
+- [x] **AMEM-03**: Raw daily logs archived after consolidation (preserved but not in active search)
 - [ ] **AMEM-04**: Unaccessed memories lose relevance score over time based on configurable decay rate
 - [ ] **AMEM-05**: Memory search results factor in relevance decay (recent/accessed memories rank higher)
 - [ ] **AMEM-06**: Semantically similar memories automatically merged into single authoritative entry on write
@@ -57,9 +57,9 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AMEM-01 | Phase 6 | Pending |
-| AMEM-02 | Phase 6 | Pending |
-| AMEM-03 | Phase 6 | Pending |
+| AMEM-01 | Phase 6 | Complete |
+| AMEM-02 | Phase 6 | Complete |
+| AMEM-03 | Phase 6 | Complete |
 | AMEM-04 | Phase 7 | Pending |
 | AMEM-05 | Phase 7 | Pending |
 | AMEM-06 | Phase 7 | Pending |
