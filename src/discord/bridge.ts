@@ -25,7 +25,7 @@ export type BridgeConfig = {
 /**
  * Load the Discord bot token from the standard Claude Code location.
  */
-function loadBotToken(): string {
+export function loadBotToken(): string {
   const envFile = join(
     homedir(),
     ".claude",

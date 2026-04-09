@@ -28,6 +28,8 @@ import { scanSkillsDirectory } from "../skills/scanner.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
+import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
+import { loadBotToken } from "../discord/bridge.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -110,7 +112,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -209,10 +211,36 @@ export async function startDaemon(
   // include channel binding instructions. No separate bridge needed.
   log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord routing via native agent plugin (no bridge)");
 
+  // 11b. Initialize slash command handler
+  let botToken: string;
+  try {
+    botToken = loadBotToken();
+  } catch {
+    botToken = "";
+    log.warn("Discord bot token not found — slash commands disabled");
+  }
+  const slashHandler = new SlashCommandHandler({
+    routingTable,
+    sessionManager: manager,
+    resolvedAgents,
+    botToken,
+    log,
+  });
+  if (botToken) {
+    try {
+      await slashHandler.start();
+      log.info("slash command handler started");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      log.warn({ error: msg }, "slash command handler failed to start (non-fatal)");
+    }
+  }
+
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
     server.close();
+    await slashHandler.stop();
     taskScheduler.stop();
     heartbeatRunner.stop();
     await manager.stopAll();
@@ -230,7 +258,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, shutdown };
 }
 
 /**
@@ -359,6 +387,18 @@ async function routeMethod(
       await writeMessage(inboxDir, message);
 
       return { ok: true, messageId: message.id };
+    }
+
+    case "slash-commands": {
+      const commands = configs.map((a) => ({
+        agent: a.name,
+        commands: resolveAgentCommands(a.slashCommands).map((c) => ({
+          name: c.name,
+          description: c.description,
+          claudeCommand: c.claudeCommand,
+        })),
+      }));
+      return { agents: commands };
     }
 
     default:

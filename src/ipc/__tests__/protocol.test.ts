@@ -19,6 +19,7 @@ describe("IPC_METHODS", () => {
       "schedules",
       "skills",
       "send-message",
+      "slash-commands",
     ]);
   });
 });
