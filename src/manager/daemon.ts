@@ -32,6 +32,7 @@ import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-comm
 import { loadBotToken } from "../discord/bridge.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
+import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -114,7 +115,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -210,9 +211,14 @@ export async function startDaemon(
   heartbeatRunner.setThreadManager(threadManager);
   log.info("thread manager initialized");
 
+  // 8d. Create WebhookManager for agent webhook identities
+  const webhookIdentities = buildWebhookIdentities(resolvedAgents);
+  const webhookManager = new WebhookManager({ identities: webhookIdentities, log });
+  log.info({ webhooks: webhookIdentities.size }, "webhook manager initialized");
+
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager);
+    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager);
   };
 
   // 10. Create IPC server
@@ -260,6 +266,7 @@ export async function startDaemon(
     for (const binding of allBindings) {
       try { await threadManager.removeThreadSession(binding.threadId); } catch { /* best-effort */ }
     }
+    webhookManager.destroy();
     await manager.stopAll();
     await unlink(SOCKET_PATH).catch(() => {});
     await unlink(PID_PATH).catch(() => {});
@@ -275,7 +282,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, shutdown };
 }
 
 /**
@@ -292,6 +299,7 @@ async function routeMethod(
   taskScheduler: TaskScheduler,
   skillsCatalog: SkillsCatalog,
   threadManager: ThreadManager,
+  webhookManager: WebhookManager,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -426,6 +434,21 @@ async function routeMethod(
         ? bindings.filter(b => b.agentName === agentFilter)
         : bindings;
       return { bindings: filtered };
+    }
+
+    case "webhooks": {
+      const webhooks: Array<{ agent: string; displayName: string; avatarUrl?: string; hasWebhookUrl: boolean }> = [];
+      for (const config of configs) {
+        if (config.webhook?.displayName) {
+          webhooks.push({
+            agent: config.name,
+            displayName: config.webhook.displayName,
+            avatarUrl: config.webhook.avatarUrl,
+            hasWebhookUrl: !!config.webhook.webhookUrl,
+          });
+        }
+      }
+      return { webhooks };
     }
 
     default:

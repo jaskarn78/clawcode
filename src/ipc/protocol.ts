@@ -17,6 +17,7 @@ export const IPC_METHODS = [
   "skills",
   "send-message",
   "slash-commands",
+  "webhooks",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
