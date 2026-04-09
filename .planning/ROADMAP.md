@@ -107,8 +107,8 @@ Plans:
   3. Episodes can be archived on a monthly cycle following the same pattern as the consolidation pipeline
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 25-01-PLAN.md — Episode types, schema migration, store, search integration (EPSD-01, EPSD-02, EPSD-03)
+- [ ] 25-02-PLAN.md — Episode archival pipeline and CLI integration (EPSD-04)
 
 ### Phase 26: Discord Delivery Queue
 **Goal**: Outbound Discord messages are reliably delivered with retry logic and failure visibility
