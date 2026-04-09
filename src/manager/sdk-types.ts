@@ -1,28 +1,40 @@
 /**
- * Local type definitions for the Claude Agent SDK v2 unstable API.
+ * Local type definitions for the Claude Agent SDK query() API.
  *
  * These mirror the subset of types used by session-adapter.ts.
  * The SDK is pre-1.0 and these types may change between minor versions.
  *
  * MIGRATION NOTES (when SDK stabilizes):
  * 1. Replace SdkModule with direct named imports from '@anthropic-ai/claude-agent-sdk'
- * 2. Replace SdkSession with SDK's exported SDKSession type
+ * 2. Replace SdkQuery with SDK's exported Query type
  * 3. Replace SdkStreamMessage with SDK's exported SDKMessage type
- * 4. Replace SdkSessionOptions with SDK's exported SDKSessionOptions type
+ * 4. Replace SdkQueryOptions with SDK's exported Options type
  * 5. Remove this file entirely once SDK types are stable
  * 6. Update loadSdk() in session-adapter.ts to use named imports instead of dynamic import
+ *
+ * API migration: unstable_v2_createSession/unstable_v2_resumeSession -> query()
+ * The query() API supports mcpServers, settingSources, resume, streamInput() for
+ * multi-turn, and mcpServerStatus() — capabilities the unstable_v2 API lacked.
  *
  * SDK version at time of writing: 0.2.97
  * SDK repo: https://github.com/anthropics/claude-agent-sdk-typescript
  */
 
 /**
- * Options passed to unstable_v2_createSession and unstable_v2_resumeSession.
- * Subset of SDK's SDKSessionOptions -- only fields we actually use.
+ * A user message sent via streamInput() for multi-turn conversations.
  */
-export type SdkSessionOptions = {
-  readonly model: string;
+export type SdkUserMessage = {
+  readonly type: "user";
+  readonly content: string;
+};
+
+/**
+ * Options passed to sdk.query().
+ * Subset of SDK's Options -- only fields we actually use.
+ */
+export type SdkQueryOptions = {
   readonly cwd?: string;
+  readonly model?: string;
   readonly systemPrompt?: string;
   readonly permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
   readonly mcpServers?: Record<string, {
@@ -30,6 +42,11 @@ export type SdkSessionOptions = {
     readonly args?: readonly string[];
     readonly env?: Readonly<Record<string, string>>;
   }>;
+  readonly settingSources?: readonly string[];
+  readonly resume?: string;
+  readonly sessionId?: string;
+  readonly allowDangerouslySkipPermissions?: boolean;
+  readonly env?: Readonly<Record<string, string | undefined>>;
 };
 
 /**
@@ -92,7 +109,7 @@ export type SdkResultError = {
 export type SdkResultMessage = SdkResultSuccess | SdkResultError;
 
 /**
- * Union of message types we handle from session.stream().
+ * Union of message types we handle from query() iteration.
  *
  * The SDK's full SDKMessage union has ~25 variants. We only discriminate on
  * "assistant" and "result" types in session-adapter -- all other message types
@@ -102,18 +119,16 @@ export type SdkResultMessage = SdkResultSuccess | SdkResultError;
 export type SdkStreamMessage = SdkAssistantMessage | SdkResultMessage;
 
 /**
- * The session object returned by unstable_v2_createSession / unstable_v2_resumeSession.
- * Mirrors SDK's SDKSession interface with the subset of members we use.
+ * The Query object returned by sdk.query().
+ * An async generator that yields SDK messages, with methods for multi-turn
+ * interaction and MCP server management.
  */
-export type SdkSession = {
-  readonly sessionId: string;
-  /** Runtime alias -- SDK exposes both sessionId and id */
-  readonly id?: string;
-  send(message: string): Promise<void>;
-  stream(): AsyncGenerator<SdkStreamMessage, void>;
+export type SdkQuery = AsyncGenerator<SdkStreamMessage, void> & {
+  interrupt(): Promise<void>;
   close(): void;
-  /** Event listener -- optional since it is not part of the official SDKSession interface */
-  on?(event: string, handler: (...args: unknown[]) => unknown): void;
+  streamInput(stream: AsyncIterable<SdkUserMessage>): Promise<void>;
+  mcpServerStatus(): Promise<unknown[]>;
+  setMcpServers(servers: Record<string, unknown>): Promise<unknown>;
 };
 
 /**
@@ -121,6 +136,5 @@ export type SdkSession = {
  * Contains only the functions we call from session-adapter.
  */
 export type SdkModule = {
-  unstable_v2_createSession(options: SdkSessionOptions): SdkSession;
-  unstable_v2_resumeSession(sessionId: string, options: SdkSessionOptions): SdkSession;
+  query(params: { prompt: string | AsyncIterable<SdkUserMessage>; options?: SdkQueryOptions }): SdkQuery;
 };
