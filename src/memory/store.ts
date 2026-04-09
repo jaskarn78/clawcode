@@ -6,6 +6,7 @@ import { MemoryError } from "./errors.js";
 import { checkForDuplicate, mergeMemory } from "./dedup.js";
 import type {
   MemoryEntry,
+  MemoryTier,
   CreateMemoryInput,
   SessionLogEntry,
 } from "./types.js";
@@ -136,6 +137,7 @@ export class MemoryStore {
         createdAt: now,
         updatedAt: now,
         accessedAt: now,
+        tier: "warm" as const,
       });
     } catch (error) {
       if (error instanceof MemoryError) throw error;
@@ -417,6 +419,7 @@ type MemoryRow = {
   readonly created_at: string;
   readonly updated_at: string;
   readonly accessed_at: string;
+  readonly tier: string;
 };
 
 /** Convert a raw SQLite row to an immutable MemoryEntry. */
@@ -432,5 +435,6 @@ function rowToEntry(row: MemoryRow): MemoryEntry {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     accessedAt: row.accessed_at,
+    tier: (row.tier ?? "warm") as MemoryTier,
   });
 }

@@ -6,6 +6,9 @@
 /** Valid sources for memory entries. */
 export type MemorySource = "conversation" | "manual" | "system" | "consolidation";
 
+/** Memory storage tier. */
+export type MemoryTier = "hot" | "warm" | "cold";
+
 /** A stored memory entry with full metadata. */
 export type MemoryEntry = {
   readonly id: string;
@@ -18,6 +21,7 @@ export type MemoryEntry = {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly accessedAt: string;
+  readonly tier: MemoryTier;
 };
 
 /** Input for creating a new memory entry. */

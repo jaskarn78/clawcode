@@ -7,6 +7,7 @@ export { SessionLogger } from "./session-log.js";
 
 export type {
   MemoryEntry,
+  MemoryTier,
   CreateMemoryInput,
   SearchResult,
   SessionLogEntry,
@@ -18,8 +19,17 @@ export {
   memorySourceSchema,
   createMemoryInputSchema,
   memoryConfigSchema,
+  tierConfigSchema,
   type MemoryConfig,
+  type TierConfig,
 } from "./schema.js";
+
+export {
+  shouldPromoteToHot,
+  shouldDemoteToWarm,
+  shouldArchiveToCold,
+  DEFAULT_TIER_CONFIG,
+} from "./tiers.js";
 
 export { CompactionManager, CharacterCountFillProvider } from "./compaction.js";
 export type {

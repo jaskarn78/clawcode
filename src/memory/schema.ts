@@ -37,6 +37,15 @@ export const dedupConfigSchema = z.object({
   similarityThreshold: z.number().min(0).max(1).default(0.85),
 });
 
+/** Schema for tier configuration. */
+export const tierConfigSchema = z.object({
+  hotAccessThreshold: z.number().int().min(1).default(3),
+  hotAccessWindowDays: z.number().int().min(1).default(7),
+  hotDemotionDays: z.number().int().min(1).default(7),
+  coldRelevanceThreshold: z.number().min(0).max(1).default(0.05),
+  hotBudget: z.number().int().min(1).default(20),
+});
+
 /** Schema for memory system configuration. */
 export const memoryConfigSchema = z.object({
   compactionThreshold: z.number().min(0).max(1).default(0.75),
@@ -55,6 +64,13 @@ export const memoryConfigSchema = z.object({
     enabled: true,
     similarityThreshold: 0.85,
   })),
+  tiers: tierConfigSchema.default(() => ({
+    hotAccessThreshold: 3,
+    hotAccessWindowDays: 7,
+    hotDemotionDays: 7,
+    coldRelevanceThreshold: 0.05,
+    hotBudget: 20,
+  })),
 });
 
 /** Inferred types from schemas. */
@@ -68,3 +84,6 @@ export type DecayConfig = z.infer<typeof decayConfigSchema>;
 
 /** Inferred deduplication config type. */
 export type DedupConfig = z.infer<typeof dedupConfigSchema>;
+
+/** Inferred tier config type. */
+export type TierConfig = z.infer<typeof tierConfigSchema>;

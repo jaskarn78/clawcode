@@ -13,6 +13,7 @@ type SearchRow = {
   readonly created_at: string;
   readonly updated_at: string;
   readonly accessed_at: string;
+  readonly tier: string;
   readonly distance: number;
 };
 
@@ -42,7 +43,7 @@ export class SemanticSearch {
     this.searchStmt = db.prepare(`
       SELECT
         m.id, m.content, m.source, m.importance, m.access_count,
-        m.tags, m.created_at, m.updated_at, m.accessed_at,
+        m.tags, m.created_at, m.updated_at, m.accessed_at, m.tier,
         v.distance
       FROM vec_memories v
       INNER JOIN memories m ON m.id = v.memory_id
@@ -112,6 +113,7 @@ function rowToSearchResult(row: SearchRow): SearchResult {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     accessedAt: row.accessed_at,
+    tier: (row.tier ?? "warm") as import("./types.js").MemoryTier,
     distance: row.distance,
   });
 }
