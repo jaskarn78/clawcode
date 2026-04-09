@@ -69,6 +69,9 @@ export class SessionManager {
   // Skills catalog (set by daemon after scanning)
   private skillsCatalog: SkillsCatalog = new Map();
 
+  // All agent configs (set by daemon for admin prompt injection)
+  private allAgentConfigs: readonly ResolvedAgentConfig[] = [];
+
   // Shared embedding service (singleton across all agents)
   private readonly embedder: EmbeddingService = new EmbeddingService();
 
@@ -85,6 +88,14 @@ export class SessionManager {
    */
   setSkillsCatalog(catalog: SkillsCatalog): void {
     this.skillsCatalog = catalog;
+  }
+
+  /**
+   * Set all agent configs for admin prompt injection.
+   * Called by daemon after resolving agents.
+   */
+  setAllAgentConfigs(configs: readonly ResolvedAgentConfig[]): void {
+    this.allAgentConfigs = configs;
   }
 
   /**
@@ -732,6 +743,26 @@ export class SessionManager {
         systemPrompt += skillDescriptions.join("\n");
         systemPrompt += "\n\nYour skill directories are symlinked in your workspace under skills/. Read SKILL.md in each for detailed instructions.\n";
       }
+    }
+
+    // Inject admin agent information (per D-11, D-12)
+    if (config.admin && this.allAgentConfigs.length > 0) {
+      const otherAgents = this.allAgentConfigs.filter(a => a.name !== config.name);
+      if (otherAgents.length > 0) {
+        systemPrompt += "\n\n## Admin Agent — Managed Agents\n\n";
+        systemPrompt += "You are the admin agent. You can read files in any agent's workspace and coordinate cross-agent tasks.\n\n";
+        systemPrompt += "| Agent | Workspace | Model |\n";
+        systemPrompt += "|-------|-----------|-------|\n";
+        for (const agent of otherAgents) {
+          systemPrompt += `| ${agent.name} | ${agent.workspace} | ${agent.model} |\n`;
+        }
+        systemPrompt += "\nTo send a message to another agent, describe what you want to communicate and the system will route it via the messaging system.\n";
+      }
+    }
+
+    // Inject subagent model guidance (per D-02, D-03)
+    if (config.subagentModel) {
+      systemPrompt += `\n\n## Subagent Configuration\n\nWhen spawning subagents via the Agent tool, use model: "${config.subagentModel}" unless a specific task requires a different model.\n`;
     }
 
     return {
