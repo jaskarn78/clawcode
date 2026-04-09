@@ -10,6 +10,8 @@ export const IPC_METHODS = [
   "restart",
   "start-all",
   "status",
+  "routes",
+  "rate-limit-status",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

@@ -13,6 +13,8 @@ describe("IPC_METHODS", () => {
       "restart",
       "start-all",
       "status",
+      "routes",
+      "rate-limit-status",
     ]);
   });
 });
