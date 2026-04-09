@@ -21,6 +21,8 @@ export const IPC_METHODS = [
   "fork-session",
   "memory-search",
   "memory-list",
+  "threads",
+  "usage",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

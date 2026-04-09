@@ -244,6 +244,7 @@ export async function startDaemon(
       routingTable,
       sessionManager: manager,
       threadManager,
+      webhookManager,
       botToken,
       log,
     });

@@ -24,6 +24,8 @@ describe("IPC_METHODS", () => {
       "fork-session",
       "memory-search",
       "memory-list",
+      "threads",
+      "usage",
     ]);
   });
 });

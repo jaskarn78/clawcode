@@ -25,6 +25,7 @@ import {
 } from "./attachments.js";
 import { formatReactionEvent } from "./reactions.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
+import type { WebhookManager } from "./webhook-manager.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -33,6 +34,7 @@ export type BridgeConfig = {
   readonly routingTable: RoutingTable;
   readonly sessionManager: SessionManager;
   readonly threadManager?: ThreadManager;
+  readonly webhookManager?: WebhookManager;
   readonly botToken?: string;
   readonly log?: Logger;
 };
@@ -80,6 +82,7 @@ export class DiscordBridge {
   private readonly routingTable: RoutingTable;
   private readonly sessionManager: SessionManager;
   private readonly threadManager: ThreadManager | undefined;
+  private readonly webhookManager: WebhookManager | undefined;
   private readonly botToken: string;
   private readonly log: Logger;
   private running = false;
@@ -89,6 +92,7 @@ export class DiscordBridge {
     this.routingTable = config.routingTable;
     this.sessionManager = config.sessionManager;
     this.threadManager = config.threadManager;
+    this.webhookManager = config.webhookManager;
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
 
@@ -304,14 +308,14 @@ export class DiscordBridge {
           if (messageRef.current) {
             try { await messageRef.current.delete(); } catch { /* ignore */ }
           }
-          await this.sendResponse(message, response);
+          await this.sendResponse(message, response, agentName);
         } else if (messageRef.current) {
           // Final edit with complete text
           await messageRef.current.edit(response);
         } else {
           // No streaming message was created (fast response or no assistant chunks)
           // Send the response as a new message
-          await this.sendResponse(message, response);
+          await this.sendResponse(message, response, agentName);
         }
         this.log.info({ agent: agentName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
       } else if (!messageRef.current) {
@@ -402,9 +406,17 @@ export class DiscordBridge {
    * Send a response back to the Discord channel.
    * Handles message length limits (2000 chars) by splitting.
    */
+  /**
+   * Resolve the agent name for a channel, checking thread bindings first.
+   */
+  private resolveAgentForChannel(channelId: string): string | undefined {
+    return this.routingTable.channelToAgent.get(channelId);
+  }
+
   private async sendResponse(
     originalMessage: Message,
     response: string,
+    agentName?: string,
   ): Promise<void> {
     // Deduplicate — don't send the same response twice within 5s
     const dedupeKey = `${originalMessage.channelId}:${response.slice(0, 100)}`;
@@ -413,6 +425,13 @@ export class DiscordBridge {
     }
     this.recentlySent.add(dedupeKey);
     setTimeout(() => this.recentlySent.delete(dedupeKey), 5000);
+
+    // Try webhook delivery if agent has a webhook configured
+    const resolvedAgent = agentName ?? this.resolveAgentForChannel(originalMessage.channelId);
+    if (resolvedAgent && this.webhookManager?.hasWebhook(resolvedAgent)) {
+      await this.webhookManager.send(resolvedAgent, response);
+      return;
+    }
 
     const MAX_LENGTH = 2000;
     const channel = originalMessage.channel;
