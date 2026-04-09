@@ -19,10 +19,10 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Subagent Discord Threads
 
-- [ ] **SATH-01**: When an agent spawns a subagent, a Discord thread is automatically created in the agent's bound channel
-- [ ] **SATH-02**: The subagent session is bound to the created thread with its own webhook identity
-- [ ] **SATH-03**: Subagent messages route through the Discord thread (not the parent channel)
-- [ ] **SATH-04**: When the subagent completes, the thread binding is cleaned up (thread remains for history)
+- [x] **SATH-01**: When an agent spawns a subagent, a Discord thread is automatically created in the agent's bound channel
+- [x] **SATH-02**: The subagent session is bound to the created thread with its own webhook identity
+- [x] **SATH-03**: Subagent messages route through the Discord thread (not the parent channel)
+- [x] **SATH-04**: When the subagent completes, the thread binding is cleaned up (thread remains for history)
 
 ### Discord Delivery Queue
 
@@ -137,10 +137,10 @@ Deferred to later milestones.
 | DQUE-02 | Phase 26 | Complete |
 | DQUE-03 | Phase 26 | Complete |
 | DQUE-04 | Phase 26 | Complete |
-| SATH-01 | Phase 27 | Pending |
-| SATH-02 | Phase 27 | Pending |
-| SATH-03 | Phase 27 | Pending |
-| SATH-04 | Phase 27 | Pending |
+| SATH-01 | Phase 27 | Complete |
+| SATH-02 | Phase 27 | Complete |
+| SATH-03 | Phase 27 | Complete |
+| SATH-04 | Phase 27 | Complete |
 | EXEC-01 | Phase 28 | Pending |
 | EXEC-02 | Phase 28 | Pending |
 | EXEC-03 | Phase 28 | Pending |

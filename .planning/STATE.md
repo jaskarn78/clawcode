@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
 status: Ready to plan
-stopped_at: Completed 26-02-PLAN.md
-last_updated: "2026-04-09T20:34:34.672Z"
+stopped_at: Completed 27-02-PLAN.md
+last_updated: "2026-04-09T20:49:47.011Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 10
-  completed_phases: 6
-  total_plans: 12
-  completed_plans: 12
+  completed_phases: 7
+  total_plans: 14
+  completed_plans: 14
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 26 — Discord Delivery Queue
+**Current focus:** Phase 27 — Subagent Discord Threads
 
 ## Current Position
 
-Phase: 27
+Phase: 28
 Plan: Not started
 
 ## Performance Metrics
@@ -63,6 +63,8 @@ Plan: Not started
 | Phase 25-episode-memory P02 | 2min | 2 tasks | 3 files |
 | Phase 26 P01 | 3min | 2 tasks | 4 files |
 | Phase 26-discord-delivery-queue P02 | 4min | 2 tasks | 6 files |
+| Phase 27-subagent-discord-threads P01 | 2min | 1 tasks | 3 files |
+| Phase 27-subagent-discord-threads P02 | 4min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -91,6 +93,10 @@ Recent decisions affecting current work:
 - [Phase 26]: Shared delivery_queue SQLite table managed by daemon, not per-agent DB
 - [Phase 26-discord-delivery-queue]: Delivery queue optional in BridgeConfig for backward compat -- falls back to direct send
 - [Phase 26-discord-delivery-queue]: deliverFn closure in daemon captures webhookManager + Discord client for queue-driven sends
+- [Phase 27-subagent-discord-threads]: Subagent session name format: {parentAgent}-sub-{nanoid(6)} for unique identification
+- [Phase 27-subagent-discord-threads]: Thread bindings reuse existing ThreadBinding type with agentName=parent and sessionName=subagent
+- [Phase 27-subagent-discord-threads]: Session end callbacks on SessionManager for cross-concern cleanup hooks
+- [Phase 27-subagent-discord-threads]: Thread detection in deliverFn via routing table membership check (not in table = thread channel)
 
 ### Pending Todos
 
@@ -111,5 +117,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 26-02-PLAN.md
+Stopped at: Completed 27-02-PLAN.md
 Resume file: None
