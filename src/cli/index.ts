@@ -27,6 +27,8 @@ import { registerDeliveryQueueCommand } from "./commands/delivery-queue.js";
 import { registerSecurityCommand } from "./commands/security.js";
 import { registerSpawnThreadCommand } from "./commands/spawn-thread.js";
 import { registerMcpServersCommand } from "./commands/mcp-servers.js";
+import { registerDashboardCommand } from "./commands/dashboard.js";
+import { registerAgentCreateCommand } from "./commands/agent-create.js";
 
 /**
  * Options for the init action.
@@ -131,6 +133,8 @@ registerDeliveryQueueCommand(program);
 registerSecurityCommand(program);
 registerSpawnThreadCommand(program);
 registerMcpServersCommand(program);
+registerDashboardCommand(program);
+registerAgentCreateCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =
