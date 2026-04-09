@@ -19,6 +19,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Centralized rate limiter prevents exceeding Discord's per-token rate limits across all agents — Validated in Phase 3
 - Intelligent memory system — structured markdown + SQLite semantic search, per-agent — Validated in Phase 4
 - Auto-compaction at configurable context fill threshold — Validated in Phase 4
+- Extensible heartbeat framework — periodic check system, context fill monitoring — Validated in Phase 5
 
 ### Active
 - [ ] Memory auto-consolidation — daily logs summarized into weekly/monthly digests, raw archived
@@ -91,4 +92,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-09 after Phase 4 completion*
+*Last updated: 2026-04-09 after Phase 5 completion — v1.0 milestone complete*
