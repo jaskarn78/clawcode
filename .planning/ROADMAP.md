@@ -62,7 +62,7 @@ Plans:
 Plans:
 - [x] 07-01-PLAN.md — Config schema, decay scoring, and relevance ranking functions
 - [x] 07-02-PLAN.md — Deduplication check and merge logic
-- [ ] 07-03-PLAN.md — Integration wiring into SemanticSearch and MemoryStore
+- [x] 07-03-PLAN.md — Integration wiring into SemanticSearch and MemoryStore
 
 ### Phase 8: Tiered Memory Storage
 **Goal**: Agents operate with the right memories at the right speed -- hot memories are instantly available in context, warm memories are a search away, cold memories are archived until needed

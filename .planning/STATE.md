@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
-status: Ready to execute
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-04-09T04:14:44.381Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-04-09T04:19:09.574Z"
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -55,6 +55,7 @@ Plan: 3 of 3
 | Phase 06 P03 | 2min | 2 tasks | 4 files |
 | Phase 07 P02 | 2min | 1 tasks | 2 files |
 | Phase 07 P01 | 3min | 2 tasks | 12 files |
+| Phase 07 P03 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,7 @@ Recent decisions affecting current work:
 - [Phase 06]: Set-based concurrency lock for consolidation (not file-based); warning status for failures (retry next cycle)
 - [Phase 07]: Dedup uses DELETE+INSERT for vec_memories embedding replacement (virtual tables don't support UPDATE)
 - [Phase 07]: Exponential half-life formula: importance * 0.5^(days/halfLifeDays) for predictable decay curve
+- [Phase 07]: Score decay BEFORE updating accessed_at to prevent self-boosting on read
 
 ### Pending Todos
 
@@ -86,6 +88,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T04:14:44.375Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-04-09T04:19:09.571Z
+Stopped at: Completed 07-03-PLAN.md
 Resume file: None
