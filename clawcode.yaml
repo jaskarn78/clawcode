@@ -13,6 +13,131 @@ defaults:
       warningThreshold: 0.6
       criticalThreshold: 0.75
 
+mcpServers:
+  finnhub:
+    name: finnhub
+    command: node
+    args:
+      - /home/jjagpal/clawd/mcp-servers/finnhub/server.js
+    env:
+      FINNHUB_API_KEY: op://clawdbot/Finnhub/api-key
+
+  finmentum-db:
+    name: finmentum-db
+    command: mcporter
+    args:
+      - serve
+      - mysql
+    env:
+      MYSQL_HOST: op://clawdbot/MySQL DB - Unraid/host
+      MYSQL_PORT: "3306"
+      MYSQL_USER: op://clawdbot/MySQL DB - Unraid/username
+      MYSQL_PASSWORD: op://clawdbot/Finmentum DB/password
+      MYSQL_DATABASE: finmentum
+
+  google-workspace:
+    name: google-workspace
+    command: node
+    args:
+      - /home/jjagpal/clawd/projects/google-workspace-mcp/dist/index.js
+
+  homeassistant:
+    name: homeassistant
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/homeassistant.py
+    env:
+      HA_URL: http://100.76.169.87:8123
+      HA_TOKEN: op://clawdbot/HA Access Token/Access Token
+
+  strava:
+    name: strava
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/strava.py
+    env:
+      STRAVA_CLIENT_ID: op://clawdbot/Strava OAuth Tokens/client_id
+      STRAVA_CLIENT_SECRET: op://clawdbot/Strava OAuth Tokens/client_secret
+      STRAVA_ACCESS_TOKEN: op://clawdbot/Strava OAuth Tokens/access_token
+      STRAVA_REFRESH_TOKEN: op://clawdbot/Strava OAuth Tokens/refresh_token
+
+  openai:
+    name: openai
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/openai_server.py
+    env:
+      OPENAI_API_KEY: '${OPENAI_API_KEY}'
+
+  anthropic:
+    name: anthropic
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/anthropic_server.py
+    env:
+      ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY}'
+
+  brave-search:
+    name: brave-search
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/brave_search.py
+    env:
+      BRAVE_API_KEY: '${BRAVE_API_KEY}'
+
+  elevenlabs:
+    name: elevenlabs
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/elevenlabs.py
+    env:
+      ELEVENLABS_API_KEY: '${ELEVENLABS_API_KEY}'
+
+  ollama:
+    name: ollama
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/ollama.py
+    env:
+      OLLAMA_URL: http://100.117.64.85:11434
+
+  browserless:
+    name: browserless
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/browserless.py
+    env:
+      BROWSERLESS_URL: http://100.117.64.85:3000
+
+  chatterbox-tts:
+    name: chatterbox-tts
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/chatterbox_tts.py
+    env:
+      CHATTERBOX_URL: http://100.117.64.85:4123
+
+  fal-ai:
+    name: fal-ai
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/fal_ai.py
+    env:
+      FAL_API_KEY: op://clawdbot/fal.ai Admin API Credentials/credential
+
+  finmentum-content:
+    name: finmentum-content
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/finmentum_content.py
+    env:
+      FINMENTUM_DB_PASSWORD: op://clawdbot/MySQL DB - Unraid/password
+      HEYGEN_API_KEY: op://clawdbot/HeyGen/api-key
+      PEXELS_API_KEY: op://clawdbot/Pexels/api-key
+      FINMENTUM_AVATAR_ID: op://clawdbot/HeyGen/avatar_id
+      FINMENTUM_VOICE_ID: op://clawdbot/HeyGen/voice_id
+      JAMENDO_CLIENT_ID: op://clawdbot/Jamendo/client_id
+
 agents:
   - name: test-agent
     model: sonnet
