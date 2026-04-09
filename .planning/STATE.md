@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
 status: Ready to execute
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-04-09T04:55:25.273Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-04-09T04:58:43.277Z"
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 09 (task-scheduling) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Plan: 2 of 3
 | Phase 08 P01 | 4min | 2 tasks | 8 files |
 | Phase 08 P02 | 4min | 2 tasks | 7 files |
 | Phase 09-task-scheduling P01 | 5min | 2 tasks | 12 files |
+| Phase 09-task-scheduling P02 | 2min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,7 @@ Recent decisions affecting current work:
 - [Phase 08]: Use date-fns differenceInDays for tier transition date math; Buffer-to-Float32Array conversion for getEmbedding; ALTER TABLE ADD COLUMN for backward-compatible tier migration
 - [Phase 08]: TierManager uses DI pattern; cold archives use yaml package; initMemory reordered before buildSessionConfig for hot injection
 - [Phase 09-task-scheduling]: Per-agent boolean lock for sequential scheduled task execution; cron validation deferred to runtime
+- [Phase 09-task-scheduling]: TaskScheduler initialized after heartbeat runner, stopped before it on shutdown
 
 ### Pending Todos
 
@@ -94,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T04:55:25.270Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-04-09T04:58:43.273Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
