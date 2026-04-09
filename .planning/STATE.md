@@ -81,9 +81,10 @@ Recent decisions affecting current work:
 | Phase 32-mcp-client-consumption P02 | 4min | 2 tasks | 9 files |
 | 260409-vs4 | Refactor SdkSessionAdapter from unstable_v2 to query() API | 2026-04-09 | e87e32b | [260409-vs4](./quick/260409-vs4-refactor-sdksessionadapter-from-unstable/) |
 | 260409-wdc | Configure all 14 OpenClaw MCP servers in clawcode.yaml | 2026-04-09 | 37137cc | [260409-wdc](./quick/260409-wdc-configure-all-openclaw-mcp-servers-in-cl/) |
+| 260409-whx | Fix stale test fixture type definitions (53 errors across 23 files) | 2026-04-09 | a56dee4 | [260409-whx](./quick/260409-whx-fix-stale-test-fixture-type-definitions-/) |
 
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed quick task 260409-wdc: Configure all OpenClaw MCP servers
+Stopped at: Completed quick task 260409-whx: Fix stale test fixture type definitions
 Resume file: None
