@@ -1,0 +1,90 @@
+# Requirements: ClawCode v1.1
+
+**Defined:** 2026-04-09
+**Core Value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
+
+## v1.1 Requirements
+
+Requirements for v1.1 milestone. Each maps to roadmap phases.
+
+### Advanced Memory
+
+- [ ] **AMEM-01**: Daily session logs automatically consolidated into weekly digest summaries
+- [ ] **AMEM-02**: Weekly digests automatically consolidated into monthly summaries
+- [ ] **AMEM-03**: Raw daily logs archived after consolidation (preserved but not in active search)
+- [ ] **AMEM-04**: Unaccessed memories lose relevance score over time based on configurable decay rate
+- [ ] **AMEM-05**: Memory search results factor in relevance decay (recent/accessed memories rank higher)
+- [ ] **AMEM-06**: Semantically similar memories automatically merged into single authoritative entry on write
+- [ ] **AMEM-07**: Deduplication preserves highest importance score and merges metadata
+- [ ] **AMEM-08**: Tiered storage — hot memories loaded into active context, warm searchable in SQLite, cold archived to markdown
+- [ ] **AMEM-09**: Automatic promotion from cold to warm on search hit, warm to hot on repeated access
+
+### Scheduling
+
+- [ ] **SKED-01**: User can define cron-like scheduled tasks per agent in clawcode.yaml
+- [ ] **SKED-02**: Scheduled tasks execute within the agent's persistent session at the defined interval
+- [ ] **SKED-03**: Scheduler status queryable via IPC and CLI (`clawcode schedules`)
+
+### Skills Registry
+
+- [ ] **SKIL-01**: Central skills registry cataloging all available skills with metadata (name, description, version)
+- [ ] **SKIL-02**: Per-agent skill assignment configurable in clawcode.yaml
+- [ ] **SKIL-03**: Agents can discover and list their assigned skills
+- [ ] **SKIL-04**: Skills are directories with SKILL.md — existing Claude Code skill format
+
+### Subagent Spawning
+
+- [ ] **SAGN-01**: Running agents can spawn subagents via Claude Code's native Agent tool
+- [ ] **SAGN-02**: Subagent model selection (sonnet/opus/haiku) configurable per spawn
+
+### Cross-Agent Communication
+
+- [ ] **XAGT-01**: Agents in the same workspace can send async messages to each other via file-based inbox
+- [ ] **XAGT-02**: Messages checked on heartbeat interval and delivered to agent session
+- [ ] **XAGT-03**: Admin agent has read access to all other agent workspaces across the system
+- [ ] **XAGT-04**: Admin agent can trigger restarts and coordinate cross-agent tasks via IPC
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Synchronous agent-to-agent RPC | Async inbox pattern is simpler and more reliable |
+| Shared global memory | Violates workspace isolation; per-agent memory with explicit sharing via admin |
+| Visual UI for config/management | YAML config is sufficient; UI deferred to v2+ |
+| Multi-platform support (Slack, Telegram) | Discord-only; channel-agnostic architecture for future |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| AMEM-01 | - | Pending |
+| AMEM-02 | - | Pending |
+| AMEM-03 | - | Pending |
+| AMEM-04 | - | Pending |
+| AMEM-05 | - | Pending |
+| AMEM-06 | - | Pending |
+| AMEM-07 | - | Pending |
+| AMEM-08 | - | Pending |
+| AMEM-09 | - | Pending |
+| SKED-01 | - | Pending |
+| SKED-02 | - | Pending |
+| SKED-03 | - | Pending |
+| SKIL-01 | - | Pending |
+| SKIL-02 | - | Pending |
+| SKIL-03 | - | Pending |
+| SKIL-04 | - | Pending |
+| SAGN-01 | - | Pending |
+| SAGN-02 | - | Pending |
+| XAGT-01 | - | Pending |
+| XAGT-02 | - | Pending |
+| XAGT-03 | - | Pending |
+| XAGT-04 | - | Pending |
+
+**Coverage:**
+- v1.1 requirements: 22 total
+- Mapped to phases: 0
+- Unmapped: 22
+
+---
+*Requirements defined: 2026-04-09*
+*Last updated: 2026-04-09 after v1.1 milestone definition*
