@@ -3,6 +3,7 @@ import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { nanoid } from "nanoid";
 import { MemoryError } from "./errors.js";
+import { checkForDuplicate, mergeMemory } from "./dedup.js";
 import type {
   MemoryEntry,
   CreateMemoryInput,
@@ -28,13 +29,27 @@ type PreparedStatements = {
  * extension, and creates all required tables. Provides CRUD operations
  * for memories and session log entries.
  */
+/** Configuration for deduplication on insert. */
+type DedupStoreConfig = {
+  readonly enabled: boolean;
+  readonly similarityThreshold: number;
+};
+
+/** Default deduplication configuration. */
+const DEFAULT_DEDUP_CONFIG: DedupStoreConfig = {
+  enabled: true,
+  similarityThreshold: 0.85,
+};
+
 export class MemoryStore {
   private readonly db: DatabaseType;
   private readonly stmts: PreparedStatements;
   private readonly dbPath: string;
+  private readonly dedupConfig: DedupStoreConfig;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, dedupConfig?: DedupStoreConfig) {
     this.dbPath = dbPath;
+    this.dedupConfig = dedupConfig ?? DEFAULT_DEDUP_CONFIG;
 
     try {
       this.db = new Database(dbPath);
@@ -64,12 +79,38 @@ export class MemoryStore {
    * Both the memories table and vec_memories table are updated atomically.
    */
   insert(input: CreateMemoryInput, embedding: Float32Array): MemoryEntry {
-    const now = new Date().toISOString();
-    const id = nanoid();
-    const importance = input.importance ?? 0.5;
-    const tags = input.tags ?? [];
-
     try {
+      // Dedup check: if enabled and not skipped, check for near-duplicates
+      if (this.dedupConfig.enabled && !input.skipDedup) {
+        const dedupResult = checkForDuplicate(embedding, this.db, {
+          similarityThreshold: this.dedupConfig.similarityThreshold,
+        });
+
+        if (dedupResult.action === "merge") {
+          mergeMemory(this.db, dedupResult.existingId, {
+            content: input.content,
+            importance: input.importance ?? 0.5,
+            tags: input.tags ?? [],
+            embedding,
+          });
+
+          const merged = this.getById(dedupResult.existingId);
+          if (!merged) {
+            throw new MemoryError(
+              `Merged memory ${dedupResult.existingId} not found after merge`,
+              this.dbPath,
+            );
+          }
+          return merged;
+        }
+      }
+
+      // Normal insert path
+      const now = new Date().toISOString();
+      const id = nanoid();
+      const importance = input.importance ?? 0.5;
+      const tags = input.tags ?? [];
+
       this.db.transaction(() => {
         this.stmts.insertMemory.run(
           id,
@@ -97,6 +138,7 @@ export class MemoryStore {
         accessedAt: now,
       });
     } catch (error) {
+      if (error instanceof MemoryError) throw error;
       const message =
         error instanceof Error ? error.message : "Unknown error";
       throw new MemoryError(`Failed to insert memory: ${message}`, this.dbPath);

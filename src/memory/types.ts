@@ -26,6 +26,7 @@ export type CreateMemoryInput = {
   readonly source: MemorySource;
   readonly importance?: number;
   readonly tags?: readonly string[];
+  readonly skipDedup?: boolean;
 };
 
 /** A search result extends MemoryEntry with distance score. */
@@ -44,3 +45,6 @@ export type SessionLogEntry = {
 
 /** Embedding vector type alias for clarity. */
 export type EmbeddingVector = Float32Array;
+
+/** Re-export RankedSearchResult for consumers. */
+export type { RankedSearchResult } from "./relevance.js";
