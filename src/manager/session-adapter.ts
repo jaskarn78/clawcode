@@ -1,5 +1,5 @@
 import type { AgentSessionConfig } from "./types.js";
-import type { SdkModule, SdkSession, SdkStreamMessage } from "./sdk-types.js";
+import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./sdk-types.js";
 
 /**
  * Callback invoked after each SDK send/sendAndCollect with usage data
@@ -156,27 +156,35 @@ export function createMockAdapter(): MockSessionAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// SDK implementation (real adapter)
+// SDK implementation (real adapter) — uses query() API
 // ---------------------------------------------------------------------------
 
 /**
- * SessionAdapter backed by the Claude Agent SDK V2 unstable API.
+ * SessionAdapter backed by the Claude Agent SDK query() API.
  * Uses dynamic imports so the file compiles even without the SDK installed.
  *
- * SDK installed in Plan 02.
+ * Each send/sendAndCollect/sendAndStream call creates a fresh query() with
+ * the `resume` option for session continuity. This per-turn-query approach
+ * avoids complex async coordination while preserving multi-turn context.
  */
 export class SdkSessionAdapter implements SessionAdapter {
   async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
-    const session = await sdk.unstable_v2_createSession({
+    const baseOptions: SdkQueryOptions = {
       model: config.model,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
+      settingSources: ["project"],
       ...(mcpServers ? { mcpServers } : {}),
-    });
-    return wrapSdkSession(session, usageCallback);
+    };
+
+    // Initial query to establish the session
+    const initialQuery = sdk.query({ prompt: "Session initialized.", options: baseOptions });
+    const { sessionId, query } = await drainInitialQuery(initialQuery);
+
+    return wrapSdkQuery(query, sdk, baseOptions, sessionId, usageCallback);
   }
 
   async resumeSession(
@@ -186,14 +194,17 @@ export class SdkSessionAdapter implements SessionAdapter {
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
-    const session = await sdk.unstable_v2_resumeSession(sessionId, {
+    const baseOptions: SdkQueryOptions = {
       model: config.model,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
+      settingSources: ["project"],
+      resume: sessionId,
       ...(mcpServers ? { mcpServers } : {}),
-    });
-    return wrapSdkSession(session, usageCallback);
+    };
+
+    return wrapSdkQuery(undefined, sdk, baseOptions, sessionId, usageCallback);
   }
 }
 
@@ -235,16 +246,25 @@ async function loadSdk(): Promise<SdkModule> {
 }
 
 /**
- * Safely extract session ID from an SDK session object.
- * The V2 unstable API may not have sessionId available immediately —
- * it becomes available after the first message exchange.
+ * Drain the initial query to extract the session ID from the first result message.
+ * Returns the session ID and the (now consumed) query reference.
  */
-function getSdkSessionId(session: SdkSession): string {
+async function drainInitialQuery(
+  query: SdkQuery,
+): Promise<{ readonly sessionId: string; readonly query: SdkQuery }> {
+  let sessionId = `pending-${Date.now()}`;
   try {
-    return session.sessionId ?? session.id ?? `pending-${Date.now()}`;
+    for await (const msg of query) {
+      if (msg.type === "result" && msg.session_id) {
+        sessionId = msg.session_id;
+        break;
+      }
+    }
   } catch {
-    return `pending-${Date.now()}`;
+    // If the initial drain fails, proceed with the pending ID.
+    // The next per-turn query will establish the session.
   }
+  return { sessionId, query };
 }
 
 /**
@@ -279,104 +299,155 @@ function extractUsage(
 }
 
 /**
- * Wrap an SDK session object into a SessionHandle.
+ * Wrap the SDK query() API into a SessionHandle.
+ *
+ * Uses a per-turn-query pattern: each send/sendAndCollect/sendAndStream creates
+ * a fresh query() call with `resume: sessionId` for session continuity. This is
+ * simpler than managing a persistent generator with streamInput() and avoids
+ * complex async coordination.
  */
-function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): SessionHandle {
+function wrapSdkQuery(
+  _initialQuery: SdkQuery | undefined,
+  sdk: SdkModule,
+  baseOptions: SdkQueryOptions,
+  initialSessionId: string,
+  usageCallback?: UsageCallback,
+): SessionHandle {
+  let sessionId = initialSessionId;
+  const errorHandlers: Array<(error: Error) => void> = [];
+  const endHandlers: Array<() => void> = [];
+  let closed = false;
+
+  /**
+   * Build options for a per-turn query, adding resume for session continuity.
+   */
+  function turnOptions(): SdkQueryOptions {
+    return { ...baseOptions, resume: sessionId };
+  }
+
+  /**
+   * Notify error handlers. Called when a query throws during iteration.
+   */
+  function notifyError(error: Error): void {
+    for (const handler of errorHandlers) {
+      try {
+        handler(error);
+      } catch {
+        // Error handler itself threw -- ignore to avoid cascading failures
+      }
+    }
+  }
+
   return {
     get sessionId(): string {
-      return getSdkSessionId(session);
+      return sessionId;
     },
+
     async send(message: string): Promise<void> {
-      // Enqueue message and drain stream to drive the agent's turn.
-      // The SDK requires stream() consumption for the agent to process
-      // the message and execute tool calls.
-      session.send(message);
-      if (typeof session.stream === "function") {
-        for await (const msg of session.stream()) {
+      if (closed) throw new Error(`Session ${sessionId} is closed`);
+      try {
+        const q = sdk.query({ prompt: message, options: turnOptions() });
+        for await (const msg of q) {
           if (msg.type === "result") {
+            if (msg.session_id) sessionId = msg.session_id;
             extractUsage(msg, usageCallback);
             break;
           }
         }
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        notifyError(error);
+        throw error;
       }
     },
+
     async sendAndCollect(message: string): Promise<string> {
-      // Enqueue message and drain stream, collecting the text result.
-      session.send(message);
-      if (typeof session.stream !== "function") {
-        return "";
-      }
-      // Collect assistant text blocks as they stream, since the final
-      // result.result may be empty for tool-use-only turns.
-      const textParts: string[] = [];
-      for await (const msg of session.stream()) {
-        // Capture assistant text messages as they arrive
-        if (msg.type === "assistant") {
-          if (typeof msg.content === "string" && msg.content.length > 0) {
-            textParts.push(msg.content);
-          }
-        }
-        if (msg.type === "result") {
-          extractUsage(msg, usageCallback);
-          // Prefer the result.result field if non-empty
-          if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
-            return msg.result;
-          }
-          // Check for error results
-          if (msg.subtype !== "success") {
-            if ("is_error" in msg && msg.is_error) {
-              throw new Error(`Agent error: ${msg.subtype}`);
+      if (closed) throw new Error(`Session ${sessionId} is closed`);
+      try {
+        const q = sdk.query({ prompt: message, options: turnOptions() });
+        const textParts: string[] = [];
+        for await (const msg of q) {
+          if (msg.type === "assistant") {
+            if (typeof msg.content === "string" && msg.content.length > 0) {
+              textParts.push(msg.content);
             }
           }
-          break;
+          if (msg.type === "result") {
+            if (msg.session_id) sessionId = msg.session_id;
+            extractUsage(msg, usageCallback);
+            // Prefer the result.result field if non-empty
+            if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
+              return msg.result;
+            }
+            // Check for error results
+            if (msg.subtype !== "success") {
+              if ("is_error" in msg && msg.is_error) {
+                throw new Error(`Agent error: ${msg.subtype}`);
+              }
+            }
+            break;
+          }
         }
+        // Fall back to collected assistant text
+        return textParts.join("\n");
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        notifyError(error);
+        throw error;
       }
-      // Fall back to collected assistant text
-      return textParts.join("\n");
     },
+
     async sendAndStream(message: string, onChunk: (accumulated: string) => void): Promise<string> {
-      // Like sendAndCollect, but calls onChunk with accumulated text as it streams.
-      session.send(message);
-      if (typeof session.stream !== "function") {
-        return "";
-      }
-      const textParts: string[] = [];
-      for await (const msg of session.stream()) {
-        if (msg.type === "assistant") {
-          if (typeof msg.content === "string" && msg.content.length > 0) {
-            textParts.push(msg.content);
-            onChunk(textParts.join("\n"));
-          }
-        }
-        if (msg.type === "result") {
-          extractUsage(msg, usageCallback);
-          if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
-            return msg.result;
-          }
-          if (msg.subtype !== "success") {
-            if ("is_error" in msg && msg.is_error) {
-              throw new Error(`Agent error: ${msg.subtype}`);
+      if (closed) throw new Error(`Session ${sessionId} is closed`);
+      try {
+        const q = sdk.query({ prompt: message, options: turnOptions() });
+        const textParts: string[] = [];
+        for await (const msg of q) {
+          if (msg.type === "assistant") {
+            if (typeof msg.content === "string" && msg.content.length > 0) {
+              textParts.push(msg.content);
+              onChunk(textParts.join("\n"));
             }
           }
-          break;
+          if (msg.type === "result") {
+            if (msg.session_id) sessionId = msg.session_id;
+            extractUsage(msg, usageCallback);
+            if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
+              return msg.result;
+            }
+            if (msg.subtype !== "success") {
+              if ("is_error" in msg && msg.is_error) {
+                throw new Error(`Agent error: ${msg.subtype}`);
+              }
+            }
+            break;
+          }
+        }
+        return textParts.join("\n");
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        notifyError(error);
+        throw error;
+      }
+    },
+
+    async close(): Promise<void> {
+      closed = true;
+      for (const handler of endHandlers) {
+        try {
+          handler();
+        } catch {
+          // End handler threw -- ignore
         }
       }
-      return textParts.join("\n");
     },
-    async close(): Promise<void> {
-      if (typeof session.close === "function") {
-        await session.close();
-      }
-    },
+
     onError(handler: (error: Error) => void): void {
-      if (typeof session.on === "function") {
-        session.on("error", handler as (...args: unknown[]) => unknown);
-      }
+      errorHandlers.push(handler);
     },
+
     onEnd(handler: () => void): void {
-      if (typeof session.on === "function") {
-        session.on("end", handler as (...args: unknown[]) => unknown);
-      }
+      endHandlers.push(handler);
     },
   };
 }
