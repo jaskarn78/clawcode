@@ -73,11 +73,11 @@ Plans:
   2. Warm-tier memories are retrievable via SQLite semantic search but not loaded into context by default
   3. Cold-tier memories exist as archived markdown files, excluded from search until promoted
   4. A search hit on a cold memory promotes it to warm; repeated access of a warm memory promotes it to hot
-**Plans**: 3 plans
+**Plans**: 2 plans
 
 Plans:
-- [ ] 08-01: TBD
-- [ ] 08-02: TBD
+- [ ] 08-01-PLAN.md --- Types, schema, pure tier functions, SQLite migration— Types, schema, pure tier functions, SQLite migration
+- [ ] 08-02-PLAN.md --- TierManager, cold archival, hot injection, integration wiring— TierManager, cold archival, hot injection, integration wiring
 
 ### Phase 9: Task Scheduling
 **Goal**: Agents can perform recurring work autonomously -- maintenance tasks, checks, and routines run on schedule without human triggering
