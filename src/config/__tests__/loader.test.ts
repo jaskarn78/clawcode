@@ -17,6 +17,15 @@ describe("resolveAgentConfig", () => {
     skills: ["default-skill"],
     basePath: "~/.clawcode/agents",
     memory: { compactionThreshold: 0.75, searchTopK: 10 },
+    heartbeat: {
+      enabled: true,
+      intervalSeconds: 60,
+      checkTimeoutSeconds: 10,
+      contextFill: {
+        warningThreshold: 0.6,
+        criticalThreshold: 0.75,
+      },
+    },
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -24,6 +33,7 @@ describe("resolveAgentConfig", () => {
       name: "writer",
       channels: [],
       skills: [],
+      heartbeat: true,
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -36,6 +46,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       model: "opus",
       skills: [],
+      heartbeat: true,
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -47,6 +58,7 @@ describe("resolveAgentConfig", () => {
       name: "writer",
       channels: [],
       skills: [],
+      heartbeat: true,
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -58,6 +70,7 @@ describe("resolveAgentConfig", () => {
       name: "writer",
       channels: [],
       skills: ["custom-skill"],
+      heartbeat: true,
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -69,6 +82,7 @@ describe("resolveAgentConfig", () => {
       name: "writer",
       channels: [],
       skills: [],
+      heartbeat: true,
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -81,6 +95,7 @@ describe("resolveAgentConfig", () => {
       workspace: "/custom/path",
       channels: [],
       skills: [],
+      heartbeat: true,
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -92,6 +107,7 @@ describe("resolveAgentConfig", () => {
       name: "writer",
       channels: ["ch1"],
       skills: [],
+      heartbeat: true,
     };
     const agentCopy = { ...agent };
 
@@ -105,6 +121,7 @@ describe("resolveAgentConfig", () => {
       name: "writer",
       channels: [],
       skills: [],
+      heartbeat: true,
     };
     const defaultsCopy = { ...defaults };
 

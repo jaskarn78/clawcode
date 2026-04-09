@@ -26,6 +26,15 @@ function makeConfig(name: string): ResolvedAgentConfig {
     soul: undefined,
     identity: undefined,
     memory: { compactionThreshold: 0.75, searchTopK: 10 },
+    heartbeat: {
+      enabled: true,
+      intervalSeconds: 60,
+      checkTimeoutSeconds: 10,
+      contextFill: {
+        warningThreshold: 0.6,
+        criticalThreshold: 0.75,
+      },
+    },
   };
 }
 

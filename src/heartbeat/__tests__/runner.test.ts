@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HeartbeatRunner } from "../runner.js";
-import type { CheckModule, HeartbeatConfig } from "../types.js";
+import type { CheckModule, CheckResult, HeartbeatConfig } from "../types.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
 
 function createMockSessionManager(agents: string[] = ["agent-a"]) {
@@ -37,7 +37,7 @@ function createDefaultConfig(overrides?: Partial<HeartbeatConfig>): HeartbeatCon
 
 function createMockCheck(
   name: string,
-  result = { status: "healthy" as const, message: "ok" },
+  result: CheckResult = { status: "healthy", message: "ok" },
   delay = 0,
 ): CheckModule {
   return {
