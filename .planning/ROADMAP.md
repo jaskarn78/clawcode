@@ -33,7 +33,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 - [x] **Phase 21: Tech Debt - Code Quality** - Attachment cleanup, logger consistency, silent catch fixes, session-manager split (completed 2026-04-09)
 - [x] **Phase 22: Tech Debt - Test & Type Safety** - Test fixture updates, CLI unit tests, SDK v2 type narrowing (completed 2026-04-09)
 - [x] **Phase 23: Config Hot-Reload & Audit Trail** - File watching, live config updates, JSONL change log (completed 2026-04-09)
-- [ ] **Phase 24: Context Health Zones** - Zone classification, alerts, auto-snapshots, status visibility
+- [x] **Phase 24: Context Health Zones** - Zone classification, alerts, auto-snapshots, status visibility (completed 2026-04-09)
 - [ ] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival
 - [ ] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log
 - [ ] **Phase 27: Subagent Discord Threads** - Auto thread creation on subagent spawn, webhook binding, routing, cleanup
@@ -94,7 +94,7 @@ Plans:
   4. Context health zone is visible via IPC status query, CLI agent status, and dashboard (when built)
 **Plans**: 2 plans
 Plans:
-- [ ] 24-01-PLAN.md — Zone types, classifier, config schema, heartbeat check upgrade (CTXH-01, CTXH-03)
+- [x] 24-01-PLAN.md — Zone types, classifier, config schema, heartbeat check upgrade (CTXH-01, CTXH-03)
 - [ ] 24-02-PLAN.md — Zone alerts, IPC status, CLI zone column, Discord notifications (CTXH-02, CTXH-04)
 
 ### Phase 25: Episode Memory
@@ -193,7 +193,7 @@ Plans:
 | 21. Tech Debt - Code Quality | v1.2 | 0/2 | Complete    | 2026-04-09 |
 | 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 24. Context Health Zones | v1.2 | 0/? | Not started | - |
+| 24. Context Health Zones | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 25. Episode Memory | v1.2 | 0/? | Not started | - |
 | 26. Discord Delivery Queue | v1.2 | 0/? | Not started | - |
 | 27. Subagent Discord Threads | v1.2 | 0/? | Not started | - |

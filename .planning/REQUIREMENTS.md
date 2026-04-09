@@ -33,10 +33,10 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Context Health
 
-- [ ] **CTXH-01**: Context fill level is categorized into zones: green (0-50%), yellow (50-70%), orange (70-85%), red (85%+)
-- [ ] **CTXH-02**: Zone transitions trigger configurable alerts (logged + optional Discord notification)
-- [ ] **CTXH-03**: Entering yellow+ zone automatically saves a context snapshot to agent memory
-- [ ] **CTXH-04**: Context health zone is visible in agent status via IPC, CLI, and dashboard
+- [x] **CTXH-01**: Context fill level is categorized into zones: green (0-50%), yellow (50-70%), orange (70-85%), red (85%+)
+- [x] **CTXH-02**: Zone transitions trigger configurable alerts (logged + optional Discord notification)
+- [x] **CTXH-03**: Entering yellow+ zone automatically saves a context snapshot to agent memory
+- [x] **CTXH-04**: Context health zone is visible in agent status via IPC, CLI, and dashboard
 
 ### Episode Memory
 
@@ -125,10 +125,10 @@ Deferred to later milestones.
 | HOTR-02 | Phase 23 | Complete |
 | HOTR-03 | Phase 23 | Complete |
 | HOTR-04 | Phase 23 | Complete |
-| CTXH-01 | Phase 24 | Pending |
-| CTXH-02 | Phase 24 | Pending |
-| CTXH-03 | Phase 24 | Pending |
-| CTXH-04 | Phase 24 | Pending |
+| CTXH-01 | Phase 24 | Complete |
+| CTXH-02 | Phase 24 | Complete |
+| CTXH-03 | Phase 24 | Complete |
+| CTXH-04 | Phase 24 | Complete |
 | EPSD-01 | Phase 25 | Pending |
 | EPSD-02 | Phase 25 | Pending |
 | EPSD-03 | Phase 25 | Pending |
