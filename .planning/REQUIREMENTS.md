@@ -36,8 +36,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **MEM-01**: Each agent has its own SQLite database for persistent memory storage
 - [x] **MEM-02**: Agent conversations are flushed to daily markdown session logs
-- [ ] **MEM-03**: Auto-compaction triggers at a configurable context fill threshold
-- [ ] **MEM-04**: Memory flush occurs before compaction to preserve context snapshot
+- [x] **MEM-03**: Auto-compaction triggers at a configurable context fill threshold
+- [x] **MEM-04**: Memory flush occurs before compaction to preserve context snapshot
 - [x] **MEM-05**: Semantic search across agent memories via sqlite-vec and local embeddings
 - [x] **MEM-06**: Memory entries include metadata (timestamp, source, access count, importance)
 
@@ -112,8 +112,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DISC-04 | Phase 3 | Complete |
 | MEM-01 | Phase 4 | Complete |
 | MEM-02 | Phase 4 | Complete |
-| MEM-03 | Phase 4 | Pending |
-| MEM-04 | Phase 4 | Pending |
+| MEM-03 | Phase 4 | Complete |
+| MEM-04 | Phase 4 | Complete |
 | MEM-05 | Phase 4 | Complete |
 | MEM-06 | Phase 4 | Complete |
 | HRTB-01 | Phase 5 | Pending |
