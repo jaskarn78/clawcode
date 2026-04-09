@@ -30,6 +30,8 @@ import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
 import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
 import { loadBotToken } from "../discord/bridge.js";
+import { ThreadManager } from "../discord/thread-manager.js";
+import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -112,7 +114,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -198,9 +200,19 @@ export async function startDaemon(
   }
   log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0).length }, "task scheduler initialized");
 
+  // 8c. Create ThreadManager for Discord thread session lifecycle
+  const threadManager = new ThreadManager({
+    sessionManager: manager,
+    routingTable,
+    registryPath: THREAD_REGISTRY_PATH,
+    log,
+  });
+  heartbeatRunner.setThreadManager(threadManager);
+  log.info("thread manager initialized");
+
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog);
+    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager);
   };
 
   // 10. Create IPC server
@@ -243,6 +255,11 @@ export async function startDaemon(
     await slashHandler.stop();
     taskScheduler.stop();
     heartbeatRunner.stop();
+    // Clean up all thread sessions before stopping agents
+    const allBindings = await threadManager.getActiveBindings();
+    for (const binding of allBindings) {
+      try { await threadManager.removeThreadSession(binding.threadId); } catch { /* best-effort */ }
+    }
     await manager.stopAll();
     await unlink(SOCKET_PATH).catch(() => {});
     await unlink(PID_PATH).catch(() => {});
@@ -258,7 +275,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, shutdown };
 }
 
 /**
@@ -274,6 +291,7 @@ async function routeMethod(
   heartbeatRunner: HeartbeatRunner,
   taskScheduler: TaskScheduler,
   skillsCatalog: SkillsCatalog,
+  threadManager: ThreadManager,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -399,6 +417,15 @@ async function routeMethod(
         })),
       }));
       return { agents: commands };
+    }
+
+    case "threads": {
+      const bindings = await threadManager.getActiveBindings();
+      const agentFilter = typeof params.agent === "string" ? params.agent : undefined;
+      const filtered = agentFilter
+        ? bindings.filter(b => b.agentName === agentFilter)
+        : bindings;
+      return { bindings: filtered };
     }
 
     default:

@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { Registry } from "../manager/types.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+import type { ThreadManager } from "../discord/thread-manager.js";
 import type {
   CheckModule,
   CheckContext,
@@ -45,6 +46,7 @@ export class HeartbeatRunner {
     Map<string, { result: CheckResult; lastChecked: string }>
   > = new Map();
   private readonly agentConfigs: Map<string, ResolvedAgentConfig> = new Map();
+  private threadManager: ThreadManager | undefined;
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -72,6 +74,13 @@ export class HeartbeatRunner {
     for (const config of configs) {
       this.agentConfigs.set(config.name, config);
     }
+  }
+
+  /**
+   * Set the ThreadManager reference for thread-idle check context injection.
+   */
+  setThreadManager(tm: ThreadManager): void {
+    this.threadManager = tm;
   }
 
   /**
@@ -138,6 +147,7 @@ export class HeartbeatRunner {
           sessionManager: this.sessionManager,
           registry,
           config: this.config,
+          ...(this.threadManager ? { threadManager: this.threadManager } : {}),
         };
 
         const timeoutMs = (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;

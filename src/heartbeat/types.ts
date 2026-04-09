@@ -1,5 +1,6 @@
 import type { SessionManager } from "../manager/session-manager.js";
 import type { Registry } from "../manager/types.js";
+import type { ThreadManager } from "../discord/thread-manager.js";
 
 /**
  * Health check status values.
@@ -23,6 +24,7 @@ export type CheckContext = {
   readonly sessionManager: SessionManager;
   readonly registry: Registry;
   readonly config: HeartbeatConfig;
+  readonly threadManager?: ThreadManager;
 };
 
 /**
