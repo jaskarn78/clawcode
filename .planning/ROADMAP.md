@@ -94,7 +94,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
+- [ ] 05-01-PLAN.md — Heartbeat types, config schema, discovery, runner, and context-fill check
+- [ ] 05-02-PLAN.md — Daemon integration, IPC heartbeat-status, CLI health command
 
 ## Progress
 
@@ -107,4 +108,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Agent Lifecycle | 0/3 | Planning complete | - |
 | 3. Discord Integration | 0/2 | Not started | - |
 | 4. Memory System | 0/2 | Not started | - |
-| 5. Heartbeat & Monitoring | 0/1 | Not started | - |
+| 5. Heartbeat & Monitoring | 0/2 | Planning complete | - |
