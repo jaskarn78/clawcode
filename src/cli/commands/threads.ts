@@ -89,6 +89,7 @@ export function formatThreadsTable(
     readonly agent: string;
     readonly threadId: string;
     readonly sessionName: string;
+    readonly source: string;
     readonly parentChannel: string;
     readonly age: string;
     readonly lastActive: string;
@@ -98,6 +99,7 @@ export function formatThreadsTable(
     agent: entry.agentName,
     threadId: truncate(entry.threadId, 20),
     sessionName: truncate(entry.sessionName, 30),
+    source: entry.sessionName.includes("-sub-") ? "subagent" : "user-created",
     parentChannel: truncate(entry.parentChannelId, 20),
     age: formatTimeAgo(entry.createdAt, now),
     lastActive: formatTimeAgo(entry.lastActivity, now),
@@ -107,6 +109,7 @@ export function formatThreadsTable(
   const agentWidth = Math.max(5, ...rows.map((r) => r.agent.length));
   const threadIdWidth = Math.max(9, ...rows.map((r) => r.threadId.length));
   const sessionWidth = Math.max(12, ...rows.map((r) => r.sessionName.length));
+  const sourceWidth = Math.max(6, ...rows.map((r) => r.source.length));
   const parentWidth = Math.max(14, ...rows.map((r) => r.parentChannel.length));
   const ageWidth = Math.max(3, ...rows.map((r) => r.age.length));
   const lastActiveWidth = Math.max(11, ...rows.map((r) => r.lastActive.length));
@@ -116,13 +119,14 @@ export function formatThreadsTable(
     "AGENT".padEnd(agentWidth),
     "THREAD ID".padEnd(threadIdWidth),
     "SESSION NAME".padEnd(sessionWidth),
+    "SOURCE".padEnd(sourceWidth),
     "PARENT CHANNEL".padEnd(parentWidth),
     "AGE".padEnd(ageWidth),
     "LAST ACTIVE".padEnd(lastActiveWidth),
   ].join("  ");
 
   const separator = "-".repeat(
-    agentWidth + threadIdWidth + sessionWidth + parentWidth + ageWidth + lastActiveWidth + 10,
+    agentWidth + threadIdWidth + sessionWidth + sourceWidth + parentWidth + ageWidth + lastActiveWidth + 12,
   );
 
   // Format rows
@@ -131,6 +135,7 @@ export function formatThreadsTable(
       row.agent.padEnd(agentWidth),
       row.threadId.padEnd(threadIdWidth),
       row.sessionName.padEnd(sessionWidth),
+      row.source.padEnd(sourceWidth),
       row.parentChannel.padEnd(parentWidth),
       row.age.padEnd(ageWidth),
       row.lastActive.padEnd(lastActiveWidth),

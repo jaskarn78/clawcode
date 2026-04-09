@@ -268,14 +268,16 @@ export async function startDaemon(
   const deliveryQueue = new DeliveryQueue({
     db: deliveryDb,
     deliverFn: async (agentName: string, channelId: string, content: string) => {
-      // Try webhook delivery first
-      if (webhookManager.hasWebhook(agentName)) {
+      // Try webhook delivery first -- but skip for thread channels since
+      // webhooks deliver to the parent channel, not the thread (SATH-03).
+      const isThreadChannel = !routingTableRef.current.channelToAgent.has(channelId);
+      if (!isThreadChannel && webhookManager.hasWebhook(agentName)) {
         await webhookManager.send(agentName, content);
         return;
       }
       // Fallback: send via Discord client channel
       if (discordBridge) {
-        const client = (discordBridge as unknown as { client: import("discord.js").Client }).client;
+        const client = discordBridge.discordClient;
         const channel = await client.channels.fetch(channelId);
         if (channel && "send" in channel && typeof channel.send === "function") {
           const MAX_LENGTH = 2000;
