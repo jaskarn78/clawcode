@@ -68,6 +68,7 @@ export function resolveAgentConfig(
     subagentModel: agent.subagentModel,
     threads: agent.threads ?? defaults.threads,
     webhook: agent.webhook ?? undefined,
+    reactions: agent.reactions ?? true,
     slashCommands: agent.slashCommands,
   };
 }

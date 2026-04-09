@@ -63,6 +63,7 @@ export type ResolvedAgentConfig = {
     readonly avatarUrl?: string;
     readonly webhookUrl?: string;
   };
+  readonly reactions: boolean;
   readonly slashCommands: readonly {
     readonly name: string;
     readonly description: string;

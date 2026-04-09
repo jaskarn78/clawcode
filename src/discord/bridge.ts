@@ -3,6 +3,10 @@ import {
   GatewayIntentBits,
   Partials,
   type Message,
+  type MessageReaction,
+  type PartialMessageReaction,
+  type User,
+  type PartialUser,
 } from "discord.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,6 +23,7 @@ import {
   formatAttachmentMetadata,
   isImageAttachment,
 } from "./attachments.js";
+import { formatReactionEvent } from "./reactions.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -92,8 +97,9 @@ export class DiscordBridge {
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMessageReactions,
       ],
-      partials: [Partials.Channel, Partials.Message],
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction],
     });
   }
 
@@ -127,6 +133,15 @@ export class DiscordBridge {
           thread.parentId,
         );
       }
+    });
+
+    // Reaction event listeners -- forward reactions in bound channels to agents
+    this.client.on("messageReactionAdd", (reaction, user) => {
+      void this.handleReaction(reaction, user, "add");
+    });
+
+    this.client.on("messageReactionRemove", (reaction, user) => {
+      void this.handleReaction(reaction, user, "remove");
     });
 
     // Debug: log ALL events to see what's coming through
@@ -250,6 +265,64 @@ export class DiscordBridge {
       } catch {
         // Ignore reaction failure
       }
+    }
+  }
+
+  /**
+   * Handle a reaction event (add or remove).
+   * Routes to the bound agent in the channel.
+   */
+  private async handleReaction(
+    reaction: MessageReaction | PartialMessageReaction,
+    user: User | PartialUser,
+    type: "add" | "remove",
+  ): Promise<void> {
+    // Ignore bot reactions (prevent feedback loops)
+    if (user.bot) {
+      return;
+    }
+
+    const channelId = reaction.message.channelId;
+    const agentName = this.routingTable.channelToAgent.get(channelId);
+
+    if (!agentName) {
+      return;
+    }
+
+    // Fetch partial reaction if needed
+    if (reaction.partial) {
+      try {
+        await reaction.fetch();
+      } catch {
+        this.log.warn({ channelId, type }, "failed to fetch partial reaction");
+        return;
+      }
+    }
+
+    const emoji = reaction.emoji.name ?? reaction.emoji.id ?? "unknown";
+    const userName = user.username ?? user.id;
+
+    const formatted = formatReactionEvent({
+      type,
+      emoji,
+      userName,
+      messageId: reaction.message.id,
+      channelId,
+      messageContent: reaction.message.content ?? undefined,
+    });
+
+    try {
+      await this.sessionManager.forwardToAgent(agentName, formatted);
+      this.log.info(
+        { agent: agentName, emoji, type, user: userName },
+        "reaction forwarded to agent",
+      );
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.log.error(
+        { agent: agentName, error: errorMsg },
+        "failed to forward reaction",
+      );
     }
   }
 

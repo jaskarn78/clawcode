@@ -120,6 +120,7 @@ export const agentSchema = z.object({
   slashCommands: z.array(slashCommandEntrySchema).default([]),
   threads: threadsConfigSchema.optional(),
   webhook: webhookConfigSchema.optional(),
+  reactions: z.boolean().default(true),
 });
 
 /**
