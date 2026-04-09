@@ -80,7 +80,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Memory module: types, SQLite store, embedder, search, session logger
+- [x] 04-01-PLAN.md — Memory module: types, SQLite store, embedder, search, session logger
 - [ ] 04-02-PLAN.md — Config extension, compaction manager, SessionManager integration
 
 ### Phase 5: Heartbeat & Monitoring

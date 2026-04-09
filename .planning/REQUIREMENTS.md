@@ -34,12 +34,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Memory
 
-- [ ] **MEM-01**: Each agent has its own SQLite database for persistent memory storage
-- [ ] **MEM-02**: Agent conversations are flushed to daily markdown session logs
+- [x] **MEM-01**: Each agent has its own SQLite database for persistent memory storage
+- [x] **MEM-02**: Agent conversations are flushed to daily markdown session logs
 - [ ] **MEM-03**: Auto-compaction triggers at a configurable context fill threshold
 - [ ] **MEM-04**: Memory flush occurs before compaction to preserve context snapshot
-- [ ] **MEM-05**: Semantic search across agent memories via sqlite-vec and local embeddings
-- [ ] **MEM-06**: Memory entries include metadata (timestamp, source, access count, importance)
+- [x] **MEM-05**: Semantic search across agent memories via sqlite-vec and local embeddings
+- [x] **MEM-06**: Memory entries include metadata (timestamp, source, access count, importance)
 
 ### Heartbeat
 
@@ -110,12 +110,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DISC-02 | Phase 3 | Complete |
 | DISC-03 | Phase 3 | Complete |
 | DISC-04 | Phase 3 | Complete |
-| MEM-01 | Phase 4 | Pending |
-| MEM-02 | Phase 4 | Pending |
+| MEM-01 | Phase 4 | Complete |
+| MEM-02 | Phase 4 | Complete |
 | MEM-03 | Phase 4 | Pending |
 | MEM-04 | Phase 4 | Pending |
-| MEM-05 | Phase 4 | Pending |
-| MEM-06 | Phase 4 | Pending |
+| MEM-05 | Phase 4 | Complete |
+| MEM-06 | Phase 4 | Complete |
 | HRTB-01 | Phase 5 | Pending |
 | HRTB-02 | Phase 5 | Pending |
 | HRTB-03 | Phase 5 | Pending |
