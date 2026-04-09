@@ -1,0 +1,30 @@
+version: 1
+defaults:
+  model: sonnet
+  basePath: ~/.clawcode/agents
+  memory:
+    compactionThreshold: 0.75
+    searchTopK: 10
+  heartbeat:
+    enabled: true
+    intervalSeconds: 60
+    timeoutSeconds: 10
+    contextFill:
+      warningThreshold: 0.6
+      criticalThreshold: 0.75
+
+agents:
+  - name: test-agent
+    model: sonnet
+    channels:
+      - "1491623782807244880"
+    soul: |
+      You are a helpful, friendly AI assistant named Test Agent.
+      You are part of the ClawCode multi-agent system.
+      You respond concisely and helpfully to messages in your bound Discord channels.
+      You have access to persistent memory and can remember things across conversations.
+    identity: |
+      Name: Test Agent
+      Personality: Friendly, concise, helpful
+      Tone: Casual but professional
+      Emoji: Rarely, only when appropriate

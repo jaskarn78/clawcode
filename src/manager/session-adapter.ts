@@ -6,10 +6,11 @@ import type { AgentSessionConfig } from "./types.js";
  */
 export type SessionHandle = {
   readonly sessionId: string;
-  send(message: string): Promise<void>;
-  close(): Promise<void>;
-  onError(handler: (error: Error) => void): void;
-  onEnd(handler: () => void): void;
+  send: (message: string) => Promise<void>;
+  sendAndCollect: (message: string) => Promise<string>;
+  close: () => Promise<void>;
+  onError: (handler: (error: Error) => void) => void;
+  onEnd: (handler: () => void) => void;
 };
 
 /**
@@ -44,6 +45,13 @@ export class MockSessionHandle implements SessionHandle {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
     }
+  }
+
+  async sendAndCollect(_message: string): Promise<string> {
+    if (this.closed) {
+      throw new Error(`Session ${this.sessionId} is closed`);
+    }
+    return `Mock response from ${this.sessionId}`;
   }
 
   async close(): Promise<void> {
@@ -178,13 +186,46 @@ async function loadSdk(): Promise<SdkModule> {
 }
 
 /**
+ * Safely extract session ID from an SDK session object.
+ * The V2 unstable API may not have sessionId available immediately —
+ * it becomes available after the first message exchange.
+ */
+function getSdkSessionId(session: SdkSession): string {
+  try {
+    return session.sessionId ?? session.id ?? `pending-${Date.now()}`;
+  } catch {
+    return `pending-${Date.now()}`;
+  }
+}
+
+/**
  * Wrap an SDK session object into a SessionHandle.
  */
 function wrapSdkSession(session: SdkSession): SessionHandle {
   return {
-    sessionId: session.sessionId ?? session.id ?? "unknown",
+    get sessionId(): string {
+      return getSdkSessionId(session);
+    },
     async send(message: string): Promise<void> {
       await session.send(message);
+    },
+    async sendAndCollect(message: string): Promise<string> {
+      await session.send(message);
+      if (typeof session.stream !== "function") {
+        return "";
+      }
+      for await (const msg of session.stream()) {
+        // The result message contains the final text response
+        if (msg.type === "result" && msg.subtype === "success" && typeof msg.result === "string") {
+          return msg.result;
+        }
+        // Handle error results
+        if (msg.type === "result" && msg.subtype === "error") {
+          const errorMsg = (msg as { error?: string }).error ?? "Unknown agent error";
+          throw new Error(`Agent error: ${errorMsg}`);
+        }
+      }
+      return "";
     },
     async close(): Promise<void> {
       if (typeof session.close === "function") {

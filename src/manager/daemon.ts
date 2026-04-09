@@ -23,6 +23,7 @@ import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
 import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { CheckStatus } from "../heartbeat/types.js";
+// Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
  * Base directory for manager runtime files.
@@ -160,7 +161,12 @@ export async function startDaemon(
   // 10. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
-  // 11. Register signal handlers per D-15
+  // 11. Discord routing handled natively by each agent's Claude Code session.
+  // The Discord MCP plugin is inherited by agent sessions. System prompts
+  // include channel binding instructions. No separate bridge needed.
+  log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord routing via native agent plugin (no bridge)");
+
+  // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
     server.close();

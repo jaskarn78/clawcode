@@ -133,6 +133,41 @@ export class SessionManager {
   }
 
   /**
+   * Send a message to a running agent and collect the response.
+   * Used when the caller needs the response text (e.g., for programmatic use).
+   *
+   * @throws SessionError if the agent is not running
+   */
+  async sendToAgent(name: string, message: string): Promise<string> {
+    const handle = this.sessions.get(name);
+    if (!handle) {
+      throw new SessionError(`Agent '${name}' is not running`, name);
+    }
+
+    this.log.info({ agent: name, messageLength: message.length }, "sending message to agent");
+    const response = await handle.sendAndCollect(message);
+    this.log.info({ agent: name, responseLength: response.length }, "agent responded");
+    return response;
+  }
+
+  /**
+   * Forward a message to a running agent (fire-and-forget).
+   * The agent processes the message and responds via its own tools (e.g., Discord plugin).
+   * Used by the Discord bridge for one-way message forwarding.
+   *
+   * @throws SessionError if the agent is not running
+   */
+  async forwardToAgent(name: string, message: string): Promise<void> {
+    const handle = this.sessions.get(name);
+    if (!handle) {
+      throw new SessionError(`Agent '${name}' is not running`, name);
+    }
+
+    this.log.info({ agent: name, messageLength: message.length }, "forwarding message to agent");
+    await handle.send(message);
+  }
+
+  /**
    * Stop an agent by name. Closes the session and updates the registry.
    *
    * @throws SessionError if the agent is not running
