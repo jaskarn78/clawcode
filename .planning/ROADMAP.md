@@ -141,7 +141,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 12-01-PLAN.md — Slash command types, default commands, config schema extension
+- [x] 12-01-PLAN.md — Slash command types, default commands, config schema extension
 - [ ] 12-02-PLAN.md — Registration, interaction handler, daemon wiring, IPC method
 
 ## Progress
@@ -157,14 +157,14 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
-| 12. Discord Slash Commands | v1.1 | 0/2 | Not started | - |
+| 12. Discord Slash Commands | v1.1 | 1/2 | In Progress|  |
 
 ### Phase 13: Discord Attachment and Image Support
 
 **Goal:** [To be planned]
 **Requirements**: TBD
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 13 to break down)

@@ -50,7 +50,7 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [ ] **DCMD-02**: Slash commands map to Claude Code skills/commands with argument passthrough
 - [ ] **DCMD-03**: Command execution routed to the correct agent based on channel binding
 - [ ] **DCMD-04**: Command responses sent back to Discord channel
-- [ ] **DCMD-05**: Configurable command mapping in clawcode.yaml per agent
+- [x] **DCMD-05**: Configurable command mapping in clawcode.yaml per agent
 
 ## Out of Scope
 
