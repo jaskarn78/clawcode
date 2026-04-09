@@ -47,10 +47,10 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Config Hot-Reload
 
-- [ ] **HOTR-01**: Daemon watches clawcode.yaml for changes and applies config updates without restart
-- [ ] **HOTR-02**: Hot-reloadable config fields: agent channels, skills, schedules, heartbeat settings
-- [ ] **HOTR-03**: Non-reloadable fields (model, workspace) log a warning suggesting restart
-- [ ] **HOTR-04**: Config changes are logged to JSONL audit trail with before/after diff
+- [x] **HOTR-01**: Daemon watches clawcode.yaml for changes and applies config updates without restart
+- [x] **HOTR-02**: Hot-reloadable config fields: agent channels, skills, schedules, heartbeat settings
+- [x] **HOTR-03**: Non-reloadable fields (model, workspace) log a warning suggesting restart
+- [x] **HOTR-04**: Config changes are logged to JSONL audit trail with before/after diff
 
 ### Execution Approval
 
@@ -121,10 +121,10 @@ Deferred to later milestones.
 | DEBT-05 | Phase 22 | Complete |
 | DEBT-06 | Phase 22 | Complete |
 | DEBT-07 | Phase 22 | Complete |
-| HOTR-01 | Phase 23 | Pending |
-| HOTR-02 | Phase 23 | Pending |
-| HOTR-03 | Phase 23 | Pending |
-| HOTR-04 | Phase 23 | Pending |
+| HOTR-01 | Phase 23 | Complete |
+| HOTR-02 | Phase 23 | Complete |
+| HOTR-03 | Phase 23 | Complete |
+| HOTR-04 | Phase 23 | Complete |
 | CTXH-01 | Phase 24 | Pending |
 | CTXH-02 | Phase 24 | Pending |
 | CTXH-03 | Phase 24 | Pending |

@@ -32,7 +32,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 
 - [x] **Phase 21: Tech Debt - Code Quality** - Attachment cleanup, logger consistency, silent catch fixes, session-manager split (completed 2026-04-09)
 - [x] **Phase 22: Tech Debt - Test & Type Safety** - Test fixture updates, CLI unit tests, SDK v2 type narrowing (completed 2026-04-09)
-- [ ] **Phase 23: Config Hot-Reload & Audit Trail** - File watching, live config updates, JSONL change log
+- [x] **Phase 23: Config Hot-Reload & Audit Trail** - File watching, live config updates, JSONL change log (completed 2026-04-09)
 - [ ] **Phase 24: Context Health Zones** - Zone classification, alerts, auto-snapshots, status visibility
 - [ ] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival
 - [ ] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log
@@ -80,7 +80,7 @@ Plans:
   3. Every config change is recorded in a JSONL audit trail with timestamp, field path, before value, and after value
 **Plans**: 2 plans
 Plans:
-- [ ] 23-01-PLAN.md — Config watcher, field-level differ, JSONL audit trail (HOTR-01, HOTR-03, HOTR-04)
+- [x] 23-01-PLAN.md — Config watcher, field-level differ, JSONL audit trail (HOTR-01, HOTR-03, HOTR-04)
 - [ ] 23-02-PLAN.md — Hot-reload application to running subsystems (HOTR-02)
 
 ### Phase 24: Context Health Zones
@@ -192,7 +192,7 @@ Plans:
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21. Tech Debt - Code Quality | v1.2 | 0/2 | Complete    | 2026-04-09 |
 | 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 23. Config Hot-Reload & Audit Trail | v1.2 | 0/? | Not started | - |
+| 23. Config Hot-Reload & Audit Trail | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 24. Context Health Zones | v1.2 | 0/? | Not started | - |
 | 25. Episode Memory | v1.2 | 0/? | Not started | - |
 | 26. Discord Delivery Queue | v1.2 | 0/? | Not started | - |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
-status: executing
-stopped_at: Completed 22-01-PLAN.md
-last_updated: "2026-04-09T19:21:21.963Z"
+status: Ready to plan
+stopped_at: Completed 23-02-PLAN.md
+last_updated: "2026-04-09T19:39:11.747Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 10
-  completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
 ---
 
 # Project State
@@ -20,14 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 22 -- Tech Debt - Test Type Safety
+**Current focus:** Phase 23 — Config Hot-Reload & Audit Trail
 
 ## Current Position
 
-Phase: 23 of 30 (config hot reload & audit trail)
+Phase: 24
 Plan: Not started
-Status: In progress
-Last activity: 2026-04-09
 
 ## Performance Metrics
 
@@ -57,6 +55,8 @@ Last activity: 2026-04-09
 | Phase 21-tech-debt-code-quality P01 | 6min | 2 tasks | 26 files |
 | Phase 22 P02 | 3min | 1 tasks | 2 files |
 | Phase 22 P01 | 9min | 2 tasks | 11 files |
+| Phase 23 P01 | 4min | 2 tasks | 7 files |
+| Phase 23 P02 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -74,6 +74,8 @@ Recent decisions affecting current work:
 - [Phase 21-tech-debt-code-quality]: CLI commands use cliLog/cliError for user-facing output, daemon/library code uses pino structured logger
 - [Phase 22]: SDK type mirroring: narrowed union types for unstable SDK with migration notes
 - [Phase 22]: Used vi.mocked() pattern for reassigning mock implementations instead of as-unknown-as casts
+- [Phase 23]: Agents matched by name (not index) in config diff to handle YAML reordering
+- [Phase 23]: routingTableRef mutable ref pattern for live routing updates via IPC after hot-reload
 
 ### Pending Todos
 
@@ -94,5 +96,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 22-01-PLAN.md
+Stopped at: Completed 23-02-PLAN.md
 Resume file: None
