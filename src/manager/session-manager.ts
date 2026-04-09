@@ -381,6 +381,21 @@ export class SessionManager {
     return this.contextFillProviders.get(agentName);
   }
 
+  /** Get the shared EmbeddingService (for consolidation digest embedding). */
+  getEmbedder(): EmbeddingService {
+    return this.embedder;
+  }
+
+  /** Get the resolved config for a specific agent (for workspace path lookup). */
+  getAgentConfig(agentName: string): ResolvedAgentConfig | undefined {
+    return this.configs.get(agentName);
+  }
+
+  /** Get the SessionLogger for a specific agent (for consolidation log discovery). */
+  getSessionLogger(agentName: string): SessionLogger | undefined {
+    return this.sessionLoggers.get(agentName);
+  }
+
   /**
    * Pre-warm the embedding model at daemon startup (D-09).
    * Call before starting any agents to avoid cold-start latency.

@@ -45,6 +45,7 @@ export class MemoryStore {
       sqliteVec.load(this.db);
 
       this.initSchema();
+      this.migrateSchema();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -211,12 +212,54 @@ export class MemoryStore {
     this.db.close();
   }
 
+  /**
+   * Delete a session log entry by date (for archiving after consolidation).
+   * Returns true if the entry existed and was deleted.
+   */
+  deleteSessionLog(date: string): boolean {
+    try {
+      const stmt = this.db.prepare(
+        "DELETE FROM session_logs WHERE date = ?",
+      );
+      const result = stmt.run(date);
+      return result.changes > 0;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to delete session log for ${date}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Get all tracked session log dates in ascending order.
+   * Used by the consolidation pipeline to discover available logs.
+   */
+  getSessionLogDates(): readonly string[] {
+    try {
+      const stmt = this.db.prepare(
+        "SELECT DISTINCT date FROM session_logs ORDER BY date ASC",
+      );
+      const rows = stmt.all() as ReadonlyArray<{ date: string }>;
+      return Object.freeze(rows.map((r) => r.date));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to get session log dates: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,
-        source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system')),
+        source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation')),
         importance REAL NOT NULL DEFAULT 0.5 CHECK(importance >= 0.0 AND importance <= 1.0),
         access_count INTEGER NOT NULL DEFAULT 0,
         tags TEXT NOT NULL DEFAULT '[]',
@@ -238,6 +281,54 @@ export class MemoryStore {
         embedding float[384] distance_metric=cosine
       );
     `);
+  }
+
+  /**
+   * Migrate existing databases to support the 'consolidation' source value.
+   * SQLite CHECK constraints cannot be altered in-place, so we use
+   * the standard table recreation pattern inside a transaction.
+   */
+  private migrateSchema(): void {
+    // Test if the current schema already accepts 'consolidation'
+    try {
+      this.db.exec("SAVEPOINT migration_test");
+      try {
+        this.db.exec(
+          "INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at) VALUES ('__migration_test__', 'test', 'consolidation', 0.5, '[]', '', '', '')",
+        );
+        // Constraint accepts 'consolidation' -- no migration needed
+        this.db.exec("ROLLBACK TO migration_test");
+        this.db.exec("RELEASE migration_test");
+        return;
+      } catch {
+        // Constraint rejected 'consolidation' -- need migration
+        this.db.exec("ROLLBACK TO migration_test");
+        this.db.exec("RELEASE migration_test");
+      }
+    } catch {
+      // Table doesn't exist yet (initSchema will create it)
+      return;
+    }
+
+    // Recreate table with updated CHECK constraint
+    this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE memories_new (
+          id TEXT PRIMARY KEY,
+          content TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('conversation', 'manual', 'system', 'consolidation')),
+          importance REAL NOT NULL DEFAULT 0.5 CHECK(importance >= 0.0 AND importance <= 1.0),
+          access_count INTEGER NOT NULL DEFAULT 0,
+          tags TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          accessed_at TEXT NOT NULL
+        );
+        INSERT INTO memories_new SELECT * FROM memories;
+        DROP TABLE memories;
+        ALTER TABLE memories_new RENAME TO memories;
+      `);
+    })();
   }
 
   private prepareStatements(): PreparedStatements {
