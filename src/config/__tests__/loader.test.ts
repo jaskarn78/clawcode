@@ -5,6 +5,7 @@ import { tmpdir, homedir } from "node:os";
 import {
   loadConfig,
   resolveAgentConfig,
+  resolveAllAgents,
   resolveContent,
 } from "../loader.js";
 import { expandHome } from "../defaults.js";
@@ -371,5 +372,201 @@ agents:
       const error = err as ConfigValidationError;
       expect(error.message).toContain("researcher");
     }
+  });
+});
+
+describe("loadConfig - shared MCP servers", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("loads full config with all 14 shared MCP servers and resolves agent references", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  model: sonnet
+  basePath: ~/.clawcode/agents
+
+mcpServers:
+  finnhub:
+    name: finnhub
+    command: node
+    args:
+      - /home/jjagpal/clawd/mcp-servers/finnhub/server.js
+    env:
+      FINNHUB_API_KEY: op://clawdbot/Finnhub/api-key
+  finmentum-db:
+    name: finmentum-db
+    command: mcporter
+    args:
+      - serve
+      - mysql
+    env:
+      MYSQL_HOST: "100.117.234.17"
+      MYSQL_PORT: "3306"
+      MYSQL_USER: jjagpal
+      MYSQL_PASSWORD: op://clawdbot/Finmentum DB/password
+      MYSQL_DATABASE: finmentum
+  google-workspace:
+    name: google-workspace
+    command: node
+    args:
+      - /home/jjagpal/clawd/projects/google-workspace-mcp/dist/index.js
+  homeassistant:
+    name: homeassistant
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/homeassistant.py
+    env:
+      HA_URL: http://100.76.169.87:8123
+      HA_TOKEN: op://clawdbot/HA Access Token/Access Token
+  strava:
+    name: strava
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/strava.py
+    env:
+      STRAVA_CLIENT_ID: op://clawdbot/Strava OAuth Tokens/client_id
+      STRAVA_CLIENT_SECRET: op://clawdbot/Strava OAuth Tokens/client_secret
+      STRAVA_ACCESS_TOKEN: op://clawdbot/Strava OAuth Tokens/access_token
+      STRAVA_REFRESH_TOKEN: op://clawdbot/Strava OAuth Tokens/refresh_token
+  openai:
+    name: openai
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/openai_server.py
+    env:
+      OPENAI_API_KEY: '\${OPENAI_API_KEY}'
+  anthropic:
+    name: anthropic
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/anthropic_server.py
+    env:
+      ANTHROPIC_API_KEY: '\${ANTHROPIC_API_KEY}'
+  brave-search:
+    name: brave-search
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/brave_search.py
+    env:
+      BRAVE_API_KEY: '\${BRAVE_API_KEY}'
+  elevenlabs:
+    name: elevenlabs
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/elevenlabs.py
+    env:
+      ELEVENLABS_API_KEY: '\${ELEVENLABS_API_KEY}'
+  ollama:
+    name: ollama
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/ollama.py
+    env:
+      OLLAMA_URL: http://100.117.64.85:11434
+  browserless:
+    name: browserless
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/browserless.py
+    env:
+      BROWSERLESS_URL: http://100.117.64.85:3000
+  chatterbox-tts:
+    name: chatterbox-tts
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/chatterbox_tts.py
+    env:
+      CHATTERBOX_URL: http://100.117.64.85:4123
+  fal-ai:
+    name: fal-ai
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/fal_ai.py
+    env:
+      FAL_API_KEY: op://clawdbot/fal.ai Admin API Credentials/credential
+  finmentum-content:
+    name: finmentum-content
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/finmentum_content.py
+    env:
+      FINMENTUM_DB_PASSWORD: op://clawdbot/MySQL DB - Unraid/password
+      HEYGEN_API_KEY: op://clawdbot/HeyGen/api-key
+      PEXELS_API_KEY: op://clawdbot/Pexels/api-key
+
+agents:
+  - name: plain-agent
+    channels:
+      - "1111111111111111"
+  - name: mcp-agent
+    channels:
+      - "2222222222222222"
+    mcpServers:
+      - finnhub
+      - brave-search
+      - homeassistant
+`,
+    );
+
+    // Load and validate
+    const config = await loadConfig(configPath);
+
+    // Verify 14 shared MCP servers loaded
+    const serverKeys = Object.keys(config.mcpServers);
+    expect(serverKeys).toHaveLength(14);
+    expect(serverKeys).toContain("finnhub");
+    expect(serverKeys).toContain("finmentum-db");
+    expect(serverKeys).toContain("google-workspace");
+    expect(serverKeys).toContain("homeassistant");
+    expect(serverKeys).toContain("strava");
+    expect(serverKeys).toContain("openai");
+    expect(serverKeys).toContain("anthropic");
+    expect(serverKeys).toContain("brave-search");
+    expect(serverKeys).toContain("elevenlabs");
+    expect(serverKeys).toContain("ollama");
+    expect(serverKeys).toContain("browserless");
+    expect(serverKeys).toContain("chatterbox-tts");
+    expect(serverKeys).toContain("fal-ai");
+    expect(serverKeys).toContain("finmentum-content");
+
+    // Verify a specific server's details
+    expect(config.mcpServers["finnhub"].command).toBe("node");
+    expect(config.mcpServers["finmentum-db"].env.MYSQL_HOST).toBe("100.117.234.17");
+
+    // Resolve all agents
+    const resolved = resolveAllAgents(config);
+    expect(resolved).toHaveLength(2);
+
+    // plain-agent has no mcpServers
+    const plainAgent = resolved.find((a) => a.name === "plain-agent");
+    expect(plainAgent).toBeDefined();
+    expect(plainAgent!.mcpServers).toEqual([]);
+
+    // mcp-agent has 3 resolved servers from string references
+    const mcpAgent = resolved.find((a) => a.name === "mcp-agent");
+    expect(mcpAgent).toBeDefined();
+    expect(mcpAgent!.mcpServers).toHaveLength(3);
+
+    const serverNames = mcpAgent!.mcpServers.map((s) => s.name);
+    expect(serverNames).toContain("finnhub");
+    expect(serverNames).toContain("brave-search");
+    expect(serverNames).toContain("homeassistant");
+
+    // Verify resolved server has full details (not just name)
+    const resolvedFinnhub = mcpAgent!.mcpServers.find((s) => s.name === "finnhub");
+    expect(resolvedFinnhub).toBeDefined();
+    expect(resolvedFinnhub!.command).toBe("node");
+    expect(resolvedFinnhub!.args).toEqual(["/home/jjagpal/clawd/mcp-servers/finnhub/server.js"]);
+    expect(resolvedFinnhub!.env.FINNHUB_API_KEY).toBe("op://clawdbot/Finnhub/api-key");
   });
 });
