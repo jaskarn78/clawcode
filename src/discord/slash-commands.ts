@@ -19,6 +19,7 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS } from "./slash-types.js";
 import { getAgentForChannel } from "./router.js";
+import { ProgressiveMessageEditor } from "./streaming.js";
 import type { Logger } from "pino";
 import { logger } from "../shared/logger.js";
 
@@ -250,18 +251,51 @@ export class SlashCommandHandler {
       "routing slash command to agent",
     );
 
+    // Show immediate "Thinking..." feedback
     try {
-      // Send to agent and collect response
-      const response = await this.sessionManager.sendToAgent(agentName, formattedMessage);
+      await interaction.editReply("Thinking...");
+    } catch {
+      // Non-fatal: continue even if this edit fails
+    }
 
-      // Truncate to Discord limit
+    // Set up progressive editor for streaming updates
+    const editor = new ProgressiveMessageEditor({
+      editFn: async (content: string) => {
+        const truncated = content.length > DISCORD_MAX_LENGTH
+          ? content.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+          : content;
+        await interaction.editReply(truncated);
+      },
+      editIntervalMs: 1500,
+    });
+
+    try {
+      // Stream from agent with progressive updates
+      const response = await this.sessionManager.streamFromAgent(
+        agentName,
+        formattedMessage,
+        (accumulated) => editor.update(accumulated),
+      );
+
+      await editor.flush();
+
+      // Handle empty response
+      const text = response.trim();
+      if (text.length === 0) {
+        await interaction.editReply("(No response from agent)");
+        return;
+      }
+
+      // Final edit with complete (possibly truncated) text
       const truncated =
-        response.length > DISCORD_MAX_LENGTH
-          ? response.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
-          : response;
+        text.length > DISCORD_MAX_LENGTH
+          ? text.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+          : text;
 
       await interaction.editReply(truncated);
     } catch (error) {
+      editor.dispose();
+
       const msg = error instanceof Error ? error.message : String(error);
       this.log.error(
         { agent: agentName, command: commandName, error: msg },

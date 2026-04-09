@@ -24,6 +24,7 @@ import {
   isImageAttachment,
 } from "./attachments.js";
 import { formatReactionEvent } from "./reactions.js";
+import { ProgressiveMessageEditor } from "./streaming.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -205,6 +206,12 @@ export class DiscordBridge {
         }
 
         const formattedMessage = formatDiscordMessage(message, downloadResults);
+
+        // Show typing indicator for thread messages
+        if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
+          void message.channel.sendTyping();
+        }
+
         await this.sessionManager.forwardToAgent(sessionName, formattedMessage);
         this.log.info({ sessionName, threadId: message.channelId }, "message routed to thread session");
         return;
@@ -229,6 +236,15 @@ export class DiscordBridge {
       "routing message to agent",
     );
 
+    // Show typing indicator immediately
+    if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
+      void message.channel.sendTyping();
+    }
+
+    // Track editor and typing interval for cleanup in error path
+    let editor: ProgressiveMessageEditor | undefined;
+    let typingInterval: ReturnType<typeof setInterval> | undefined;
+
     try {
       // Download attachments if present, before formatting the message
       let downloadResults: readonly DownloadResult[] | undefined;
@@ -245,14 +261,66 @@ export class DiscordBridge {
       // Format message for the agent (include Discord context + attachment metadata)
       const formattedMessage = formatDiscordMessage(message, downloadResults);
 
-      // One-way forward: send message to agent, let it reply via its own Discord plugin.
-      // The agent's Claude Code session inherits the Discord MCP plugin and will
-      // use the reply tool directly. We do NOT send responses from the bridge
-      // to avoid duplicate messages.
-      await this.sessionManager.forwardToAgent(agentName, formattedMessage);
+      // Refresh typing indicator every 8s (Discord typing lasts 10s)
+      typingInterval = setInterval(() => {
+        if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
+          void message.channel.sendTyping();
+        }
+      }, 8000);
 
-      this.log.info({ agent: agentName, channel: channelId }, "message forwarded to agent");
+      // Set up progressive message editor for streaming responses
+      const channel = message.channel;
+      // Mutable ref to track the sent message (avoids TS narrowing issue with async callbacks)
+      const messageRef: { current: Message | null } = { current: null };
+      editor = new ProgressiveMessageEditor({
+        editFn: async (content: string) => {
+          if (!messageRef.current) {
+            // First chunk: send a new message
+            if ("send" in channel && typeof channel.send === "function") {
+              messageRef.current = await channel.send(content);
+            }
+          } else {
+            // Subsequent chunks: edit the existing message
+            await messageRef.current.edit(content);
+          }
+        },
+      });
+
+      // Stream from agent with progressive updates
+      const response = await this.sessionManager.streamFromAgent(
+        agentName,
+        formattedMessage,
+        (accumulated) => editor!.update(accumulated),
+      );
+
+      clearInterval(typingInterval);
+      typingInterval = undefined;
+      await editor.flush();
+
+      // Final response handling
+      if (response && response.trim().length > 0) {
+        if (messageRef.current && response.length <= 2000) {
+          // Final edit with complete text
+          await messageRef.current.edit(response);
+        } else if (response.length > 2000) {
+          // Delete the streaming preview and send properly split messages
+          if (messageRef.current) {
+            try { await messageRef.current.delete(); } catch { /* ignore */ }
+          }
+          await this.sendResponse(message, response);
+        }
+        this.log.info({ agent: agentName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
+      } else if (!messageRef.current) {
+        this.log.warn({ agent: agentName, channel: channelId }, "agent returned empty response");
+      }
     } catch (error) {
+      if (typingInterval) {
+        clearInterval(typingInterval);
+      }
+      if (editor) {
+        editor.dispose();
+      }
+
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error(
         { agent: agentName, channel: channelId, error: errorMsg },
@@ -261,7 +329,7 @@ export class DiscordBridge {
 
       // Optionally send error indicator to Discord
       try {
-        await message.react("❌");
+        await message.react("\u274C");
       } catch {
         // Ignore reaction failure
       }
