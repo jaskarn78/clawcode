@@ -25,6 +25,7 @@ import { registerMemoryCommand } from "./commands/memory.js";
 import { registerUsageCommand } from "./commands/usage.js";
 import { registerDeliveryQueueCommand } from "./commands/delivery-queue.js";
 import { registerSecurityCommand } from "./commands/security.js";
+import { registerSpawnThreadCommand } from "./commands/spawn-thread.js";
 
 /**
  * Options for the init action.
@@ -127,6 +128,7 @@ registerMemoryCommand(program);
 registerUsageCommand(program);
 registerDeliveryQueueCommand(program);
 registerSecurityCommand(program);
+registerSpawnThreadCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =

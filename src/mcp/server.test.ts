@@ -31,7 +31,13 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 5 tools defined", () => {
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(5);
+  it("has exactly 6 tools defined", () => {
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(6);
+  });
+
+  it("defines spawn_subagent_thread tool", () => {
+    expect(TOOL_DEFINITIONS.spawn_subagent_thread).toBeDefined();
+    expect(TOOL_DEFINITIONS.spawn_subagent_thread.description).toContain("subagent");
+    expect(TOOL_DEFINITIONS.spawn_subagent_thread.ipcMethod).toBe("spawn-subagent-thread");
   });
 });

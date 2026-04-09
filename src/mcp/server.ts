@@ -29,6 +29,10 @@ export const TOOL_DEFINITIONS = {
     description: "Show configured webhook identities",
     ipcMethod: "webhooks",
   },
+  spawn_subagent_thread: {
+    description: "Spawn a subagent in a new Discord thread",
+    ipcMethod: "spawn-subagent-thread",
+  },
 } as const;
 
 /**
@@ -137,6 +141,40 @@ export function createMcpServer(): McpServer {
         .join("\n");
 
       return { content: [{ type: "text" as const, text }] };
+    },
+  );
+
+  // Tool: spawn_subagent_thread
+  server.tool(
+    "spawn_subagent_thread",
+    "Spawn a subagent in a new Discord thread",
+    {
+      agent: z.string().describe("Parent agent name"),
+      threadName: z.string().describe("Name for the Discord thread"),
+      model: z.enum(["sonnet", "opus", "haiku"]).optional().describe("Model for the subagent"),
+      systemPrompt: z.string().optional().describe("Custom system prompt"),
+    },
+    async ({ agent, threadName, model, systemPrompt }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "spawn-subagent-thread", {
+          parentAgent: agent,
+          threadName,
+          model,
+          systemPrompt,
+        })) as { threadId: string; sessionName: string; parentAgent: string; channelId: string };
+
+        const text = [
+          `Thread URL: https://discord.com/channels/@me/${result.threadId}`,
+          `Session: ${result.sessionName}`,
+          `Parent Agent: ${result.parentAgent}`,
+          `Channel: ${result.channelId}`,
+        ].join("\n");
+
+        return { content: [{ type: "text" as const, text }] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
+      }
     },
   );
 
