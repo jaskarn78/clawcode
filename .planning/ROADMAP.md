@@ -163,8 +163,8 @@ Plans:
   3. Bootstrap runs exactly once per agent (completion flag persisted in agent workspace prevents re-triggering)
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 29-01-PLAN.md — Bootstrap types, detector, prompt builder, writer with tests (BOOT-01, BOOT-02, BOOT-03)
+- [ ] 29-02-PLAN.md — Daemon wiring: startAgent bootstrap detection, session-config integration, integration tests (BOOT-01, BOOT-02, BOOT-03)
 
 ### Phase 30: Web Dashboard
 **Goal**: Operators can monitor and control the entire ClawCode system through a web interface
@@ -198,5 +198,5 @@ Plans:
 | 26. Discord Delivery Queue | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 27. Subagent Discord Threads | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 28. Security & Execution Approval | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 29. Agent Bootstrap | v1.2 | 0/? | Not started | - |
+| 29. Agent Bootstrap | v1.2 | 0/2 | Not started | - |
 | 30. Web Dashboard | v1.2 | 0/? | Not started | - |
