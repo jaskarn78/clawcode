@@ -41,12 +41,12 @@ Phases 1-5 delivered: central config, agent lifecycle, Discord routing, per-agen
   1. After 7 days of daily session logs, a weekly digest summary exists that captures key facts from those days
   2. After 4 weekly digests accumulate, a monthly summary exists that synthesizes the month
   3. Raw daily logs from consolidated periods are archived (still on disk) but no longer appear in standard memory search results
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
-- [ ] 06-03: TBD
+- [ ] 06-01-PLAN.md — Schema, types, config extension, and SessionManager accessors
+- [ ] 06-02-PLAN.md — Core consolidation logic (detect, summarize, store, archive)
+- [ ] 06-03-PLAN.md — Heartbeat check module and integration wiring
 
 ### Phase 7: Memory Relevance & Deduplication
 **Goal**: Memory search surfaces what matters -- recent and frequently accessed memories rank higher, and redundant entries collapse into single authoritative facts
@@ -57,7 +57,7 @@ Plans:
   2. Memory search results are ordered factoring in relevance decay -- not just semantic similarity
   3. When a new memory is stored that semantically duplicates an existing entry, only one entry remains (merged) rather than two
   4. The merged entry preserves the higher importance score and combines metadata from both sources
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 07-01: TBD
@@ -73,7 +73,7 @@ Plans:
   2. Warm-tier memories are retrievable via SQLite semantic search but not loaded into context by default
   3. Cold-tier memories exist as archived markdown files, excluded from search until promoted
   4. A search hit on a cold memory promotes it to warm; repeated access of a warm memory promotes it to hot
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 08-01: TBD
@@ -87,7 +87,7 @@ Plans:
   1. User can define a cron-expression scheduled task in clawcode.yaml and the agent executes it at the defined interval
   2. Scheduled tasks run within the agent's existing persistent session (not a separate process)
   3. Running `clawcode schedules` shows all scheduled tasks, their next run time, and last execution status
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 09-01: TBD
@@ -103,7 +103,7 @@ Plans:
   2. clawcode.yaml supports per-agent skill assignment and the agent only sees its assigned skills
   3. An agent can list its own skills at runtime and access their SKILL.md documentation
   4. Skills follow the existing Claude Code directory-with-SKILL.md format (no new format invented)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 10-01: TBD
@@ -120,7 +120,7 @@ Plans:
   3. The admin agent can read files in any other agent's workspace regardless of workspace isolation
   4. The admin agent can trigger agent restarts and coordinate cross-agent tasks via IPC commands
   5. Subagent spawning and async messaging are independent -- agents that never spawn subagents can still message each other
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 11-01: TBD
