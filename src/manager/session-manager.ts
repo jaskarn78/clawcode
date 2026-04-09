@@ -18,6 +18,7 @@ import type { UsageTracker } from "../usage/tracker.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
+import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -98,7 +99,10 @@ export class SessionManager {
     const tierManager = this.memory.tierManagers.get(name);
     if (tierManager) tierManager.refreshHotTier();
 
-    const sessionConfig = await buildSessionConfig(config, this.configDeps());
+    const bootstrapStatus = await detectBootstrapNeeded(config);
+    this.log.info({ agent: name, bootstrapStatus }, "bootstrap check");
+
+    const sessionConfig = await buildSessionConfig(config, this.configDeps(), undefined, bootstrapStatus);
 
     // Build usage callback
     const usageTracker = this.memory.usageTrackers.get(name);

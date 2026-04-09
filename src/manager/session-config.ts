@@ -5,6 +5,8 @@ import type { AgentSessionConfig } from "./types.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import type { TierManager } from "../memory/tier-manager.js";
 import { loadLatestSummary } from "../memory/context-summary.js";
+import type { BootstrapStatus } from "../bootstrap/types.js";
+import { buildBootstrapPrompt } from "../bootstrap/prompt-builder.js";
 
 /**
  * Dependencies required by buildSessionConfig.
@@ -25,7 +27,37 @@ export async function buildSessionConfig(
   config: ResolvedAgentConfig,
   deps: SessionConfigDeps,
   contextSummary?: string,
+  bootstrapStatus?: BootstrapStatus,
 ): Promise<AgentSessionConfig> {
+  // Bootstrap-needed agents get the walkthrough prompt instead of normal config
+  if (bootstrapStatus === "needed") {
+    let systemPrompt = buildBootstrapPrompt({
+      workspace: config.workspace,
+      agentName: config.name,
+      channels: [...config.channels],
+    });
+
+    // Still include Discord channel bindings even during bootstrap
+    const channels = config.channels ?? [];
+    if (channels.length > 0) {
+      systemPrompt += "\n\n## Discord Channel Bindings\n";
+      systemPrompt += `You are bound to the following Discord channel(s): ${channels.join(", ")}\n`;
+      systemPrompt +=
+        "ONLY respond to messages from these channels. Ignore messages from any other channel.\n";
+      systemPrompt +=
+        "When replying, use the reply tool with the chat_id from the incoming message.";
+    }
+
+    return {
+      name: config.name,
+      model: config.model,
+      workspace: config.workspace,
+      systemPrompt: systemPrompt.trim(),
+      channels,
+      contextSummary,
+    };
+  }
+
   let systemPrompt = "";
 
   // Read SOUL.md if available
