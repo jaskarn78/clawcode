@@ -29,6 +29,7 @@ import { TierManager } from "../memory/tier-manager.js";
 import { DEFAULT_TIER_CONFIG } from "../memory/tiers.js";
 import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
+import { loadLatestSummary, saveSummary } from "../memory/context-summary.js";
 
 /**
  * Configuration for creating a SessionManager.
@@ -480,6 +481,21 @@ export class SessionManager {
   }
 
   /**
+   * Persist a context summary after compaction.
+   * Saves to the agent's memory directory for injection on next resume.
+   */
+  async saveContextSummary(agentName: string, summary: string): Promise<void> {
+    const config = this.configs.get(agentName);
+    if (!config) {
+      this.log.warn({ agent: agentName }, "cannot save context summary: config not found");
+      return;
+    }
+    const memoryDir = join(config.workspace, "memory");
+    await saveSummary(memoryDir, agentName, summary);
+    this.log.info({ agent: agentName }, "context summary saved");
+  }
+
+  /**
    * Pre-warm the embedding model at daemon startup (D-09).
    * Call before starting any agents to avoid cold-start latency.
    */
@@ -756,9 +772,10 @@ export class SessionManager {
       systemPrompt += "When replying, use the reply tool with the chat_id from the incoming message.";
     }
 
-    // Append context summary from compaction restart (D-17)
-    if (contextSummary) {
-      systemPrompt += `\n\n## Context Summary (from previous session)\n${contextSummary}`;
+    // Append context summary from compaction restart or persisted summary (D-17)
+    const effectiveSummary = contextSummary ?? await loadLatestSummary(join(config.workspace, "memory"));
+    if (effectiveSummary) {
+      systemPrompt += `\n\n## Context Summary (from previous session)\n${effectiveSummary}`;
     }
 
     // Inject hot memories into system prompt (D-11)
