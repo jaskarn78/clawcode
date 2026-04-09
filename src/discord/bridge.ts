@@ -59,7 +59,7 @@ export function loadBotToken(): string {
       }
     }
   } catch {
-    // Fall through to env var check
+    // Config file not found or unreadable -- fall through to env var
   }
 
   const envToken = process.env.DISCORD_BOT_TOKEN;
@@ -306,7 +306,7 @@ export class DiscordBridge {
         if (response.length > 2000) {
           // Delete the streaming preview and send properly split messages
           if (messageRef.current) {
-            try { await messageRef.current.delete(); } catch { /* ignore */ }
+            try { await messageRef.current.delete(); } catch (err) { this.log.debug({ error: (err as Error).message }, "failed to delete typing indicator message"); }
           }
           await this.sendResponse(message, response, agentName);
         } else if (messageRef.current) {
@@ -338,8 +338,8 @@ export class DiscordBridge {
       // Optionally send error indicator to Discord
       try {
         await message.react("\u274C");
-      } catch {
-        // Ignore reaction failure
+      } catch (err) {
+        this.log.debug({ error: (err as Error).message }, "failed to add error reaction");
       }
     }
   }

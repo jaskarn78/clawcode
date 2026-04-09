@@ -291,12 +291,12 @@ export async function startDaemon(
     // Clean up all thread sessions before stopping agents
     const allBindings = await threadManager.getActiveBindings();
     for (const binding of allBindings) {
-      try { await threadManager.removeThreadSession(binding.threadId); } catch { /* best-effort */ }
+      try { await threadManager.removeThreadSession(binding.threadId); } catch { /* thread cleanup is best-effort during shutdown */ }
     }
     webhookManager.destroy();
     await manager.stopAll();
-    await unlink(SOCKET_PATH).catch(() => {});
-    await unlink(PID_PATH).catch(() => {});
+    await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
+    await unlink(PID_PATH).catch((err) => { log.debug({ path: PID_PATH, error: (err as Error).message }, "pid file cleanup failed (may not exist)"); });
   };
 
   process.on("SIGTERM", () => {

@@ -64,7 +64,7 @@ const threadIdleCheck: CheckModule = {
           await threadManager.removeThreadSession(binding.threadId);
           cleaned++;
         } catch {
-          // Log but continue -- will retry next cycle
+          /* thread cleanup is best-effort -- continue checking other threads, will retry next cycle */
         }
       }
     }

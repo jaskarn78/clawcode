@@ -50,7 +50,7 @@ const inboxCheck: CheckModule = {
         delivered++;
       } catch {
         failed++;
-        // Don't mark processed on failure -- retry next heartbeat
+        // Delivery failed -- don't mark processed so it retries next heartbeat cycle
       }
     }
 
