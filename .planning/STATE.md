@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
 status: Ready to plan
-stopped_at: Completed quick task 260409-laz (usage tracking)
-last_updated: "2026-04-09T15:32:59.361Z"
+last_updated: "2026-04-09T15:43:43.641Z"
+last_activity: "2026-04-09 - Completed quick task 260409-laz: Add persistent usage tracking to ClawCode agents"
 progress:
   total_phases: 15
   completed_phases: 15
@@ -121,6 +121,7 @@ Recent decisions affecting current work:
 - [Phase 14-discord-thread-bindings]: ThreadManager injected into CheckContext as optional field for backward compatibility
 - [Phase 14-discord-thread-bindings]: HeartbeatRunner gets setThreadManager method (not constructor param) to avoid circular init order
 - [Phase 14-discord-thread-bindings]: Thread cleanup in shutdown runs before manager.stopAll for graceful binding removal
+- [Phase quick]: 1500ms throttle for Discord streaming edits; mutable ref pattern for TS async callback narrowing; first chunk immediate, subsequent throttled
 
 ### Pending Todos
 
@@ -136,8 +137,9 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260409-laz | Add persistent usage tracking to ClawCode agents | 2026-04-09 | 0979508 | [260409-laz-add-persistent-usage-tracking-to-clawcod](./quick/260409-laz-add-persistent-usage-tracking-to-clawcod/) |
+| 260409-lop | Add typing indicator and streaming responses | 2026-04-09 | 3a90864 | [260409-lop-add-typing-indicator-and-streaming-respo](./quick/260409-lop-add-typing-indicator-and-streaming-respo/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-09 - Completed quick task 260409-laz: Add persistent usage tracking to ClawCode agents
+Last activity: 2026-04-09 - Completed quick task 260409-lop: Add typing indicator and streaming responses
 Resume file: None
