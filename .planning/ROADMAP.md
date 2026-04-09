@@ -80,8 +80,8 @@ Plans:
   3. Every config change is recorded in a JSONL audit trail with timestamp, field path, before value, and after value
 **Plans**: 2 plans
 Plans:
-- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
-- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
+- [ ] 23-01-PLAN.md — Config watcher, field-level differ, JSONL audit trail (HOTR-01, HOTR-03, HOTR-04)
+- [ ] 23-02-PLAN.md — Hot-reload application to running subsystems (HOTR-02)
 
 ### Phase 24: Context Health Zones
 **Goal**: Operators and agents have visibility into context window utilization with automatic protective actions
