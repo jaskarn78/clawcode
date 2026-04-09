@@ -44,6 +44,14 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [x] **XAGT-03**: Admin agent has read access to all other agent workspaces across the system
 - [x] **XAGT-04**: Admin agent can trigger restarts and coordinate cross-agent tasks via IPC
 
+### Discord Slash Commands
+
+- [ ] **DCMD-01**: Discord slash commands registered with Discord API on daemon startup from config
+- [ ] **DCMD-02**: Slash commands map to Claude Code skills/commands with argument passthrough
+- [ ] **DCMD-03**: Command execution routed to the correct agent based on channel binding
+- [ ] **DCMD-04**: Command responses sent back to Discord channel
+- [ ] **DCMD-05**: Configurable command mapping in clawcode.yaml per agent
+
 ## Out of Scope
 
 | Feature | Reason |

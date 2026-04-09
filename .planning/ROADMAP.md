@@ -141,3 +141,13 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
+
+### Phase 12: Discord Slash Commands — Register Discord slash commands that map to Claude Code skills/commands, with argument passthrough and auto-registration on daemon startup
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 12 to break down)
