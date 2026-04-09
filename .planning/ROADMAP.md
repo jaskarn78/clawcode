@@ -52,7 +52,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   2. Every log statement in the codebase uses the pino structured logger (zero console.log/console.error calls remain)
   3. All catch blocks either log the error with context and propagate it, or handle it explicitly (no silent swallows)
   4. session-manager.ts is split into focused modules each under 400 lines
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 22: Tech Debt - Test & Type Safety
 **Goal**: Test suite runs cleanly without type workarounds and CLI commands have unit test coverage
@@ -62,7 +65,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   1. All test fixtures include required fields (reactions, tiers) with no `as unknown as` casts remaining
   2. Every CLI command (schedules, skills, send, threads, webhooks, fork, memory, mcp, usage) has unit tests that verify output formatting and error handling
   3. SDK v2 unstable API usage has explicit TypeScript interfaces replacing `any` types, with documented migration notes
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 23: Config Hot-Reload & Audit Trail
 **Goal**: Operators can update agent configuration without restarting the daemon, with a full change history
@@ -72,7 +78,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   1. Editing clawcode.yaml while the daemon is running applies supported changes (channels, skills, schedules, heartbeat) within seconds without restart
   2. Changing non-reloadable fields (model, workspace) logs a clear warning indicating a restart is required
   3. Every config change is recorded in a JSONL audit trail with timestamp, field path, before value, and after value
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 24: Context Health Zones
 **Goal**: Operators and agents have visibility into context window utilization with automatic protective actions
@@ -83,7 +92,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   2. Zone transitions trigger log entries and optional Discord notifications to a configured channel
   3. Entering yellow or higher zone automatically saves a context snapshot to the agent's memory store
   4. Context health zone is visible via IPC status query, CLI agent status, and dashboard (when built)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 25: Episode Memory
 **Goal**: Agents can record and retrieve significant discrete events as first-class memory objects
@@ -93,7 +105,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   1. Agents can store episode records with title, summary, importance, tags, and timestamp alongside regular session logs
   2. Episodes appear in semantic search results when relevant queries are made (searched alongside regular memories)
   3. Episodes can be archived on a monthly cycle following the same pattern as the consolidation pipeline
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 26: Discord Delivery Queue
 **Goal**: Outbound Discord messages are reliably delivered with retry logic and failure visibility
@@ -104,7 +119,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   2. Failed deliveries are retried with exponential backoff up to 3 attempts before being marked as permanently failed
   3. Permanently failed messages are logged to a persistent failed-delivery log with error context and original message content
   4. Delivery queue status (pending count, retry count, failed count) is queryable via IPC and visible in CLI
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 27: Subagent Discord Threads
 **Goal**: Subagent conversations automatically surface in Discord as dedicated threads with proper identity
@@ -115,7 +133,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   2. The subagent session is bound to the thread with its own webhook identity (display name and avatar)
   3. All subagent messages route through the thread, not the parent channel
   4. When the subagent completes, the thread binding is cleaned up while the thread itself remains for history
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 28: Security & Execution Approval
 **Goal**: Agents operate within defined security boundaries with auditable command approval and channel access control
@@ -127,7 +148,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   3. Approval decisions can be persisted as "allow-always" rules for specific command patterns
   4. All approval and denial decisions are recorded in an audit log with timestamp, agent, command, and decision
   5. Per-agent SECURITY.md files define channel ACLs, and messages from unauthorized users are silently ignored with a log entry
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 29: Agent Bootstrap
 **Goal**: New agents get a guided first-run experience that establishes their identity and personality
@@ -137,7 +161,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   1. An agent starting without a SOUL.md receives a first-run bootstrap walkthrough
   2. Bootstrap generates SOUL.md and IDENTITY.md from guided prompts covering personality, role, and behavior
   3. Bootstrap runs exactly once per agent (completion flag persisted in agent workspace prevents re-triggering)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 
 ### Phase 30: Web Dashboard
 **Goal**: Operators can monitor and control the entire ClawCode system through a web interface
@@ -149,7 +176,10 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
   3. Dashboard displays memory statistics per agent (entry count, tier distribution, last consolidation time)
   4. Dashboard shows scheduled tasks with next run time, last execution status, and error history
   5. Dashboard shows context health zones, delivery queue status, failed message log, and recent Discord message activity per agent
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 21-01-PLAN.md — Attachment cleanup heartbeat, logger consistency, silent catch fixes (DEBT-01, DEBT-02, DEBT-03)
+- [ ] 21-02-PLAN.md — Split session-manager.ts into focused modules (DEBT-04)
 **UI hint**: yes
 
 ## Progress
@@ -160,7 +190,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 |-------|-----------|----------------|--------|-----------|
 | 1-5 | v1.0 | - | Complete | 2026-04-09 |
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
-| 21. Tech Debt - Code Quality | v1.2 | 0/? | Not started | - |
+| 21. Tech Debt - Code Quality | v1.2 | 0/2 | Planning complete | - |
 | 22. Tech Debt - Test & Type Safety | v1.2 | 0/? | Not started | - |
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 0/? | Not started | - |
 | 24. Context Health Zones | v1.2 | 0/? | Not started | - |
