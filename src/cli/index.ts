@@ -6,6 +6,11 @@ import {
   ConfigFileNotFoundError,
 } from "../shared/errors.js";
 import { logger } from "../shared/logger.js";
+import { registerStartCommand } from "./commands/start.js";
+import { registerStopCommand } from "./commands/stop.js";
+import { registerRestartCommand } from "./commands/restart.js";
+import { registerStartAllCommand } from "./commands/start-all.js";
+import { registerStatusCommand } from "./commands/status.js";
 
 /**
  * Options for the init action.
@@ -88,6 +93,13 @@ program
       process.exit(1);
     }
   });
+
+// Register lifecycle commands
+registerStartCommand(program);
+registerStopCommand(program);
+registerRestartCommand(program);
+registerStartAllCommand(program);
+registerStatusCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =

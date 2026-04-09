@@ -23,4 +23,46 @@ export {
   ConfigValidationError,
   ConfigFileNotFoundError,
   WorkspaceError,
+  ManagerError,
+  ManagerNotRunningError,
+  SessionError,
+  IpcError,
 } from "./shared/errors.js";
+
+// Session manager
+export { SessionManager } from "./manager/session-manager.js";
+export type { SessionManagerOptions } from "./manager/session-manager.js";
+
+// Manager types
+export type {
+  AgentStatus,
+  RegistryEntry,
+  Registry,
+  BackoffConfig,
+  AgentSessionConfig,
+} from "./manager/types.js";
+export { DEFAULT_BACKOFF_CONFIG } from "./manager/types.js";
+
+// Registry
+export {
+  readRegistry,
+  writeRegistry,
+  createEntry,
+  updateEntry,
+  EMPTY_REGISTRY,
+} from "./manager/registry.js";
+
+// Daemon
+export {
+  startDaemon,
+  SOCKET_PATH,
+  PID_PATH,
+  MANAGER_DIR,
+  REGISTRY_PATH,
+} from "./manager/daemon.js";
+
+// Session adapter
+export type { SessionAdapter, SessionHandle } from "./manager/session-adapter.js";
+
+// IPC client
+export { sendIpcRequest } from "./ipc/client.js";
