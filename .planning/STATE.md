@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
 status: Ready to execute
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-04-09T04:13:12.580Z"
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-04-09T04:14:44.381Z"
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 07 (memory-relevance-deduplication) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: 2 of 3
 | Phase 06 P02 | 3min | 1 tasks | 2 files |
 | Phase 06 P03 | 2min | 2 tasks | 4 files |
 | Phase 07 P02 | 2min | 1 tasks | 2 files |
+| Phase 07 P01 | 3min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,7 @@ Recent decisions affecting current work:
 - [Phase 06]: Per-check timeout as optional CheckModule property (backward-compatible)
 - [Phase 06]: Set-based concurrency lock for consolidation (not file-based); warning status for failures (retry next cycle)
 - [Phase 07]: Dedup uses DELETE+INSERT for vec_memories embedding replacement (virtual tables don't support UPDATE)
+- [Phase 07]: Exponential half-life formula: importance * 0.5^(days/halfLifeDays) for predictable decay curve
 
 ### Pending Todos
 
@@ -84,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T04:13:12.577Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-04-09T04:14:44.375Z
+Stopped at: Completed 07-01-PLAN.md
 Resume file: None

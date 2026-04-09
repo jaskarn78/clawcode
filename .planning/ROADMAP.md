@@ -60,7 +60,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Config schema, decay scoring, and relevance ranking functions
+- [x] 07-01-PLAN.md — Config schema, decay scoring, and relevance ranking functions
 - [x] 07-02-PLAN.md — Deduplication check and merge logic
 - [ ] 07-03-PLAN.md — Integration wiring into SemanticSearch and MemoryStore
 

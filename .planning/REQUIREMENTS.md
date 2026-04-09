@@ -12,8 +12,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [x] **AMEM-01**: Daily session logs automatically consolidated into weekly digest summaries
 - [x] **AMEM-02**: Weekly digests automatically consolidated into monthly summaries
 - [x] **AMEM-03**: Raw daily logs archived after consolidation (preserved but not in active search)
-- [ ] **AMEM-04**: Unaccessed memories lose relevance score over time based on configurable decay rate
-- [ ] **AMEM-05**: Memory search results factor in relevance decay (recent/accessed memories rank higher)
+- [x] **AMEM-04**: Unaccessed memories lose relevance score over time based on configurable decay rate
+- [x] **AMEM-05**: Memory search results factor in relevance decay (recent/accessed memories rank higher)
 - [x] **AMEM-06**: Semantically similar memories automatically merged into single authoritative entry on write
 - [x] **AMEM-07**: Deduplication preserves highest importance score and merges metadata
 - [ ] **AMEM-08**: Tiered storage -- hot memories loaded into active context, warm searchable in SQLite, cold archived to markdown
@@ -60,8 +60,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | AMEM-01 | Phase 6 | Complete |
 | AMEM-02 | Phase 6 | Complete |
 | AMEM-03 | Phase 6 | Complete |
-| AMEM-04 | Phase 7 | Pending |
-| AMEM-05 | Phase 7 | Pending |
+| AMEM-04 | Phase 7 | Complete |
+| AMEM-05 | Phase 7 | Complete |
 | AMEM-06 | Phase 7 | Complete |
 | AMEM-07 | Phase 7 | Complete |
 | AMEM-08 | Phase 8 | Pending |
