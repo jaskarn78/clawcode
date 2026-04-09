@@ -62,7 +62,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Bypass SDK unstable_v2 limitations for MCP and channels (agent-session)
+- ~~Bypass SDK unstable_v2 limitations for MCP and channels (agent-session)~~ -- resolved by 260409-vs4 (migrated to query() API)
 
 ### Blockers/Concerns
 
@@ -79,9 +79,10 @@ Recent decisions affecting current work:
 | Phase 31-subagent-thread-skill P02 | 2min | 1 tasks | 2 files |
 | Phase 32-mcp-client-consumption P01 | 4min | 2 tasks | 10 files |
 | Phase 32-mcp-client-consumption P02 | 4min | 2 tasks | 9 files |
+| 260409-vs4 | Refactor SdkSessionAdapter from unstable_v2 to query() API | 2026-04-09 | e87e32b | [260409-vs4](./quick/260409-vs4-refactor-sdksessionadapter-from-unstable/) |
 
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 32-02-PLAN.md
+Stopped at: Completed 260409-vs4-PLAN.md
 Resume file: None
