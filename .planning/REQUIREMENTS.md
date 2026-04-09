@@ -14,8 +14,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [x] **AMEM-03**: Raw daily logs archived after consolidation (preserved but not in active search)
 - [ ] **AMEM-04**: Unaccessed memories lose relevance score over time based on configurable decay rate
 - [ ] **AMEM-05**: Memory search results factor in relevance decay (recent/accessed memories rank higher)
-- [ ] **AMEM-06**: Semantically similar memories automatically merged into single authoritative entry on write
-- [ ] **AMEM-07**: Deduplication preserves highest importance score and merges metadata
+- [x] **AMEM-06**: Semantically similar memories automatically merged into single authoritative entry on write
+- [x] **AMEM-07**: Deduplication preserves highest importance score and merges metadata
 - [ ] **AMEM-08**: Tiered storage -- hot memories loaded into active context, warm searchable in SQLite, cold archived to markdown
 - [ ] **AMEM-09**: Automatic promotion from cold to warm on search hit, warm to hot on repeated access
 
@@ -62,8 +62,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | AMEM-03 | Phase 6 | Complete |
 | AMEM-04 | Phase 7 | Pending |
 | AMEM-05 | Phase 7 | Pending |
-| AMEM-06 | Phase 7 | Pending |
-| AMEM-07 | Phase 7 | Pending |
+| AMEM-06 | Phase 7 | Complete |
+| AMEM-07 | Phase 7 | Complete |
 | AMEM-08 | Phase 8 | Pending |
 | AMEM-09 | Phase 8 | Pending |
 | SKED-01 | Phase 9 | Pending |

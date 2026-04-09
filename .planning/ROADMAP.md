@@ -61,7 +61,7 @@ Plans:
 
 Plans:
 - [ ] 07-01-PLAN.md — Config schema, decay scoring, and relevance ranking functions
-- [ ] 07-02-PLAN.md — Deduplication check and merge logic
+- [x] 07-02-PLAN.md — Deduplication check and merge logic
 - [ ] 07-03-PLAN.md — Integration wiring into SemanticSearch and MemoryStore
 
 ### Phase 8: Tiered Memory Storage
