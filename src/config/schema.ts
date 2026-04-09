@@ -58,6 +58,7 @@ export const defaultsSchema = z.object({
   memory: memorySchema.default(() => ({
     compactionThreshold: 0.75,
     searchTopK: 10,
+    consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 },
   })),
   heartbeat: heartbeatConfigSchema.default(() => ({
     enabled: true,
@@ -77,7 +78,7 @@ export const configSchema = z.object({
     model: "sonnet" as const,
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
-    memory: { compactionThreshold: 0.75, searchTopK: 10 },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,

@@ -13,6 +13,12 @@ export type ResolvedAgentConfig = {
   readonly memory: {
     readonly compactionThreshold: number;
     readonly searchTopK: number;
+    readonly consolidation: {
+      readonly enabled: boolean;
+      readonly weeklyThreshold: number;
+      readonly monthlyThreshold: number;
+      readonly summaryModel?: "sonnet" | "opus" | "haiku";
+    };
   };
   readonly heartbeat: {
     readonly enabled: boolean;

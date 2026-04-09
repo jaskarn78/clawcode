@@ -4,7 +4,7 @@
  */
 
 /** Valid sources for memory entries. */
-export type MemorySource = "conversation" | "manual" | "system";
+export type MemorySource = "conversation" | "manual" | "system" | "consolidation";
 
 /** A stored memory entry with full metadata. */
 export type MemoryEntry = {

@@ -25,7 +25,7 @@ function makeConfig(name: string): ResolvedAgentConfig {
     skills: [],
     soul: undefined,
     identity: undefined,
-    memory: { compactionThreshold: 0.75, searchTopK: 10 },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
