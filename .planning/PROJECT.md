@@ -98,10 +98,10 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - CLI tooling (status, schedules, skills, threads, webhooks, fork, memory search)
 
 **Known tech debt:**
-- DATT-06: No periodic cleanup for downloaded attachment temp files
-- Some test fixtures have stale type definitions (missing reactions/tiers fields)
-- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts
-- Phases 14-20 requirement IDs not tracked in REQUIREMENTS.md
+- ~~DATT-06: No periodic cleanup for downloaded attachment temp files~~ — resolved (heartbeat check exists at src/heartbeat/checks/attachment-cleanup.ts)
+- ~~Some test fixtures have stale type definitions~~ — resolved (260409-whx: fixed all 23 files, zero tsc errors)
+- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)
+- Phases 14-20 requirement IDs not tracked in REQUIREMENTS.md (docs only)
 
 ## Key Decisions
 
