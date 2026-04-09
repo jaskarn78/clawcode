@@ -90,9 +90,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 09-01: TBD
-- [ ] 09-02: TBD
-- [ ] 09-03: TBD
+- [ ] 09-01-PLAN.md — Config schema, types, and TaskScheduler engine with croner
+- [ ] 09-02-PLAN.md — Daemon integration and IPC schedules method
+- [ ] 09-03-PLAN.md — CLI schedules command with formatted table output
 
 ### Phase 10: Skills Registry
 **Goal**: Agents know what they can do -- skills are cataloged centrally, assigned per-agent, and discoverable at runtime
