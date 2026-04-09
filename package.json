@@ -14,13 +14,17 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.97",
+    "@huggingface/transformers": "^4.0.1",
+    "better-sqlite3": "^12.8.0",
     "commander": "^14.0.3",
     "nanoid": "^5.1.7",
     "pino": "^9",
+    "sqlite-vec": "^0.1.9",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
