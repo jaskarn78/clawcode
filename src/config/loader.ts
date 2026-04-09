@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { configSchema } from "./schema.js";
 import { expandHome } from "./defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../shared/errors.js";
-import type { Config, AgentConfig, DefaultsConfig } from "./schema.js";
+import type { Config, AgentConfig, DefaultsConfig, McpServerSchemaConfig } from "./schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 
 /**
@@ -46,11 +46,34 @@ export async function loadConfig(configPath: string): Promise<Config> {
 export function resolveAgentConfig(
   agent: AgentConfig,
   defaults: DefaultsConfig,
+  sharedMcpServers: Record<string, McpServerSchemaConfig> = {},
 ): ResolvedAgentConfig {
   // Resolve heartbeat: if agent has heartbeat: false, disable but keep global config values
   const heartbeatConfig = agent.heartbeat === false
     ? { ...defaults.heartbeat, enabled: false }
     : defaults.heartbeat;
+
+  // Resolve MCP servers: string refs -> shared lookup, objects -> passthrough
+  const resolvedMcpMap = new Map<string, McpServerSchemaConfig>();
+  for (const entry of agent.mcpServers ?? []) {
+    if (typeof entry === "string") {
+      const shared = sharedMcpServers[entry];
+      if (!shared) {
+        throw new Error(
+          `MCP server "${entry}" not found in shared mcpServers definitions for agent "${agent.name}"`,
+        );
+      }
+      resolvedMcpMap.set(shared.name, shared);
+    } else {
+      resolvedMcpMap.set(entry.name, entry);
+    }
+  }
+  const mcpServers = [...resolvedMcpMap.values()].map((s) => ({
+    name: s.name,
+    command: s.command,
+    args: [...s.args],
+    env: { ...s.env },
+  }));
 
   return {
     name: agent.name,
@@ -70,6 +93,7 @@ export function resolveAgentConfig(
     webhook: agent.webhook ?? undefined,
     reactions: agent.reactions ?? true,
     security: agent.security ?? undefined,
+    mcpServers,
     slashCommands: agent.slashCommands,
   };
 }
@@ -110,7 +134,8 @@ export async function resolveContent(value: string): Promise<string> {
  * @returns Array of fully resolved agent configs
  */
 export function resolveAllAgents(config: Config): ResolvedAgentConfig[] {
-  return config.agents.map((agent) => resolveAgentConfig(agent, config.defaults));
+  const sharedMcpServers = config.mcpServers ?? {};
+  return config.agents.map((agent) => resolveAgentConfig(agent, config.defaults, sharedMcpServers));
 }
 
 /**

@@ -72,6 +72,12 @@ export type ResolvedAgentConfig = {
   readonly security?: {
     readonly allowlist: readonly { readonly pattern: string }[];
   };
+  readonly mcpServers: readonly {
+    readonly name: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly env: Readonly<Record<string, string>>;
+  }[];
   readonly slashCommands: readonly {
     readonly name: string;
     readonly description: string;

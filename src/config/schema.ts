@@ -123,6 +123,20 @@ export const securityConfigSchema = z.object({
 export type SecurityConfig = z.infer<typeof securityConfigSchema>;
 
 /**
+ * Schema for an MCP server configuration entry.
+ * Defines a server that Claude Code will connect to as an MCP client.
+ */
+export const mcpServerSchema = z.object({
+  name: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  env: z.record(z.string(), z.string()).default({}),
+});
+
+/** Inferred MCP server config type from schema. */
+export type McpServerSchemaConfig = z.infer<typeof mcpServerSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -144,6 +158,7 @@ export const agentSchema = z.object({
   webhook: webhookConfigSchema.optional(),
   reactions: z.boolean().default(true),
   security: securityConfigSchema.optional(),
+  mcpServers: z.array(z.union([mcpServerSchema, z.string()])).default([]),
 });
 
 /**
@@ -196,6 +211,7 @@ export const configSchema = z.object({
       maxThreadSessions: 10,
     },
   })),
+  mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   agents: z.array(agentSchema).min(1),
 });
 

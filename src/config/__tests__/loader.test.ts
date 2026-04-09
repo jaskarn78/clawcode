@@ -38,6 +38,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -54,6 +56,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -69,6 +73,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -84,6 +90,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -99,6 +107,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -115,6 +125,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -130,6 +142,8 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
     const agentCopy = { ...agent };
 
@@ -147,12 +161,97 @@ describe("resolveAgentConfig", () => {
       schedules: [],
       admin: false,
       slashCommands: [],
+      reactions: true,
+      mcpServers: [],
     };
     const defaultsCopy = { ...defaults };
 
     resolveAgentConfig(agent, defaults);
 
     expect(defaults).toEqual(defaultsCopy);
+  });
+});
+
+describe("resolveAgentConfig - mcpServers", () => {
+  const defaults: DefaultsConfig = {
+    model: "sonnet",
+    skills: [],
+    basePath: "~/.clawcode/agents",
+    skillsPath: "~/.clawcode/skills",
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
+    heartbeat: {
+      enabled: true,
+      intervalSeconds: 60,
+      checkTimeoutSeconds: 10,
+      contextFill: {
+        warningThreshold: 0.6,
+        criticalThreshold: 0.75,
+      },
+    },
+  };
+
+  const sharedMcpServers = {
+    finnhub: { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: { API_KEY: "xxx" } },
+    google: { name: "google", command: "npx", args: ["-y", "google-mcp"], env: {} },
+  };
+
+  const baseAgent: AgentConfig = {
+    name: "test",
+    channels: [],
+    skills: [],
+    heartbeat: true,
+    schedules: [],
+    admin: false,
+    slashCommands: [],
+    mcpServers: [],
+  };
+
+  it("resolves string references from shared definitions", () => {
+    const agent = { ...baseAgent, mcpServers: ["finnhub"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    expect(resolved.mcpServers).toHaveLength(1);
+    expect(resolved.mcpServers[0].name).toBe("finnhub");
+    expect(resolved.mcpServers[0].command).toBe("npx");
+    expect(resolved.mcpServers[0].args).toEqual(["-y", "finnhub-mcp"]);
+    expect(resolved.mcpServers[0].env).toEqual({ API_KEY: "xxx" });
+  });
+
+  it("passes inline MCP server objects through unchanged", () => {
+    const inline = { name: "custom", command: "my-server", args: ["--port", "3000"], env: { KEY: "val" } };
+    const agent = { ...baseAgent, mcpServers: [inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    expect(resolved.mcpServers).toHaveLength(1);
+    expect(resolved.mcpServers[0].name).toBe("custom");
+    expect(resolved.mcpServers[0].command).toBe("my-server");
+  });
+
+  it("merges inline and refs, inline wins on name collision", () => {
+    const inline = { name: "finnhub", command: "custom-finnhub", args: [], env: {} };
+    const agent = { ...baseAgent, mcpServers: ["finnhub", inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    // Later entry wins on name collision
+    expect(resolved.mcpServers).toHaveLength(1);
+    expect(resolved.mcpServers[0].command).toBe("custom-finnhub");
+  });
+
+  it("throws when string reference not found in shared definitions", () => {
+    const agent = { ...baseAgent, mcpServers: ["nonexistent"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    expect(() => resolveAgentConfig(agent, defaults, sharedMcpServers)).toThrow(
+      /MCP server.*nonexistent.*not found/i,
+    );
+  });
+
+  it("returns empty mcpServers array when agent has none", () => {
+    const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+    expect(resolved.mcpServers).toEqual([]);
+  });
+
+  it("resolves multiple string references", () => {
+    const agent = { ...baseAgent, mcpServers: ["finnhub", "google"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    expect(resolved.mcpServers).toHaveLength(2);
+    expect(resolved.mcpServers[0].name).toBe("finnhub");
+    expect(resolved.mcpServers[1].name).toBe("google");
   });
 });
 
