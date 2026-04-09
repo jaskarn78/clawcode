@@ -12,7 +12,36 @@ const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const RED_BOLD = "\x1b[1;31m";
 const YELLOW = "\x1b[33m";
+const ORANGE = "\x1b[38;5;208m";
 const DIM = "\x1b[2m";
+
+/**
+ * Zone data for an agent, from IPC heartbeat-status or context-zone-status.
+ */
+export type ZoneInfo = {
+  readonly zone: string;
+  readonly fillPercentage: number;
+};
+
+/**
+ * Colorize a zone name with ANSI escape codes.
+ */
+function colorizeZone(zone: string, fillPercentage: number): string {
+  const pct = Math.round(fillPercentage * 100);
+  const label = `${zone} ${pct}%`;
+  switch (zone) {
+    case "green":
+      return `${GREEN}${label}${RESET}`;
+    case "yellow":
+      return `${YELLOW}${label}${RESET}`;
+    case "orange":
+      return `${ORANGE}${label}${RESET}`;
+    case "red":
+      return `${RED}${label}${RESET}`;
+    default:
+      return label;
+  }
+}
 
 /**
  * Format a duration in milliseconds to a human-readable uptime string.
@@ -60,35 +89,43 @@ function colorizeStatus(status: string): string {
 
 /**
  * Format registry entries as a status table.
- * Columns: NAME, STATUS, UPTIME, RESTARTS
+ * Columns: NAME, STATUS, UPTIME, RESTARTS, and optionally ZONE.
  *
  * @param entries - Registry entries to display
  * @param now - Current timestamp (for testability)
+ * @param zones - Optional zone data keyed by agent name
  * @returns Formatted table string
  */
 export function formatStatusTable(
   entries: readonly RegistryEntry[],
   now?: number,
+  zones?: Readonly<Record<string, ZoneInfo>>,
 ): string {
   if (entries.length === 0) {
     return "No agents configured";
   }
 
   const currentTime = now ?? Date.now();
+  const hasZones = zones !== undefined && Object.keys(zones).length > 0;
 
   // Calculate column widths
   const nameWidth = Math.max(4, ...entries.map((e) => e.name.length));
   const statusWidth = Math.max(6, ...entries.map((e) => e.status.length));
   const uptimeWidth = 10;
   const restartsWidth = 8;
+  const zoneWidth = 12;
 
   // Header
-  const header = [
+  const headerParts = [
     "NAME".padEnd(nameWidth),
     "STATUS".padEnd(statusWidth),
     "UPTIME".padEnd(uptimeWidth),
     "RESTARTS".padEnd(restartsWidth),
-  ].join("  ");
+  ];
+  if (hasZones) {
+    headerParts.push("ZONE".padEnd(zoneWidth));
+  }
+  const header = headerParts.join("  ");
 
   const separator = "-".repeat(header.length);
 
@@ -99,12 +136,23 @@ export function formatStatusTable(
         ? formatUptime(currentTime - entry.startedAt)
         : "-";
 
-    return [
+    const rowParts = [
       entry.name.padEnd(nameWidth),
       colorizeStatus(entry.status.padEnd(statusWidth)),
       uptime.padEnd(uptimeWidth),
       String(entry.restartCount).padEnd(restartsWidth),
-    ].join("  ");
+    ];
+
+    if (hasZones) {
+      const zoneData = zones![entry.name];
+      if (zoneData) {
+        rowParts.push(colorizeZone(zoneData.zone, zoneData.fillPercentage));
+      } else {
+        rowParts.push(`${DIM}-${RESET}`);
+      }
+    }
+
+    return rowParts.join("  ");
   });
 
   return [header, separator, ...rows].join("\n");
@@ -125,7 +173,27 @@ export function registerStatusCommand(program: Command): void {
         const result = (await sendIpcRequest(SOCKET_PATH, "status", {})) as {
           entries: readonly RegistryEntry[];
         };
-        cliLog(formatStatusTable(result.entries));
+
+        // Fetch zone data (gracefully degrade if unavailable)
+        let zones: Record<string, ZoneInfo> | undefined;
+        try {
+          const heartbeatResult = (await sendIpcRequest(SOCKET_PATH, "heartbeat-status", {})) as {
+            agents: Record<string, { zone?: string; fillPercentage?: number }>;
+          };
+          zones = {};
+          for (const [name, data] of Object.entries(heartbeatResult.agents)) {
+            if (data.zone && typeof data.fillPercentage === "number") {
+              zones[name] = { zone: data.zone, fillPercentage: data.fillPercentage };
+            }
+          }
+          if (Object.keys(zones).length === 0) {
+            zones = undefined;
+          }
+        } catch {
+          // Zone data not available -- degrade gracefully
+        }
+
+        cliLog(formatStatusTable(result.entries, undefined, zones));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
           // Fallback: try reading registry file directly

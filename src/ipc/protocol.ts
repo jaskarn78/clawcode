@@ -23,6 +23,7 @@ export const IPC_METHODS = [
   "memory-list",
   "threads",
   "usage",
+  "context-zone-status",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

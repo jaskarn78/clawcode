@@ -23,6 +23,7 @@ import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
 import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { CheckStatus } from "../heartbeat/types.js";
+import type { ContextZone, ZoneTransition } from "../heartbeat/context-zones.js";
 import { TaskScheduler } from "../scheduler/scheduler.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 import { linkAgentSkills } from "../skills/linker.js";
@@ -187,6 +188,25 @@ export async function startDaemon(
     config: heartbeatConfig,
     checksDir: join(import.meta.dirname, "../heartbeat/checks"),
     log,
+    snapshotCallback: async (agentName: string, zone: ContextZone, fillPercentage: number) => {
+      const pct = Math.round(fillPercentage * 100);
+      const summaryMessage = `Auto-snapshot at ${pct}% context fill [${zone} zone]`;
+      try {
+        await manager.saveContextSummary(agentName, summaryMessage);
+        log.info({ agent: agentName, zone, fillPercentage }, "zone snapshot saved");
+      } catch (err) {
+        log.warn({ agent: agentName, error: (err as Error).message }, "zone snapshot save failed");
+      }
+    },
+    notificationCallback: async (agentName: string, transition: ZoneTransition) => {
+      const pct = Math.round(transition.fillPercentage * 100);
+      // TODO: Wire to Discord delivery queue (Phase 26) when available.
+      // For now, log the notification intent at info level.
+      log.info(
+        { agent: agentName, from: transition.from, to: transition.to, fillPercentage: pct },
+        `[Context Health] Agent '${agentName}' zone: ${transition.from} -> ${transition.to} (${pct}%)`,
+      );
+    },
   });
   await heartbeatRunner.initialize();
   heartbeatRunner.setAgentConfigs(resolvedAgents);
@@ -413,6 +433,7 @@ async function routeMethod(
 
     case "heartbeat-status": {
       const results = heartbeatRunner.getLatestResults();
+      const zoneStatuses = heartbeatRunner.getZoneStatuses();
       const agents: Record<string, unknown> = {};
       for (const [agentName, checks] of results) {
         const checksObj: Record<string, unknown> = {};
@@ -428,9 +449,23 @@ async function routeMethod(
             worstStatus = result.status;
           }
         }
-        agents[agentName] = { checks: checksObj, overall: worstStatus };
+        const zoneData = zoneStatuses.get(agentName);
+        agents[agentName] = {
+          checks: checksObj,
+          overall: worstStatus,
+          ...(zoneData ? { zone: zoneData.zone, fillPercentage: zoneData.fillPercentage } : {}),
+        };
       }
       return { agents };
+    }
+
+    case "context-zone-status": {
+      const zoneStatuses = heartbeatRunner.getZoneStatuses();
+      const agentsResult: Record<string, { zone: string; fillPercentage: number }> = {};
+      for (const [name, data] of zoneStatuses) {
+        agentsResult[name] = { zone: data.zone, fillPercentage: data.fillPercentage };
+      }
+      return { agents: agentsResult };
     }
 
     case "schedules": {
