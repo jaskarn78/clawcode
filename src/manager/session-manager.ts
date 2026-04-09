@@ -212,6 +212,29 @@ export class SessionManager {
   }
 
   /**
+   * Send a message to a running agent with streaming callbacks.
+   * Calls onChunk with accumulated text as each assistant message arrives.
+   * Returns the final complete response (same as sendToAgent).
+   *
+   * @throws SessionError if the agent is not running
+   */
+  async streamFromAgent(
+    name: string,
+    message: string,
+    onChunk: (accumulated: string) => void,
+  ): Promise<string> {
+    const handle = this.sessions.get(name);
+    if (!handle) {
+      throw new SessionError(`Agent '${name}' is not running`, name);
+    }
+
+    this.log.info({ agent: name, messageLength: message.length }, "streaming message to agent");
+    const response = await handle.sendAndStream(message, onChunk);
+    this.log.info({ agent: name, responseLength: response.length }, "agent stream complete");
+    return response;
+  }
+
+  /**
    * Forward a message to a running agent (fire-and-forget).
    * The agent processes the message and responds via its own tools (e.g., Discord plugin).
    * Used by the Discord bridge for one-way message forwarding.

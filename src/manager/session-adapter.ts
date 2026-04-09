@@ -21,6 +21,7 @@ export type SessionHandle = {
   readonly sessionId: string;
   send: (message: string) => Promise<void>;
   sendAndCollect: (message: string) => Promise<string>;
+  sendAndStream: (message: string, onChunk: (accumulated: string) => void) => Promise<string>;
   close: () => Promise<void>;
   onError: (handler: (error: Error) => void) => void;
   onEnd: (handler: () => void) => void;
@@ -65,6 +66,15 @@ export class MockSessionHandle implements SessionHandle {
       throw new Error(`Session ${this.sessionId} is closed`);
     }
     return `Mock response from ${this.sessionId}`;
+  }
+
+  async sendAndStream(_message: string, onChunk: (accumulated: string) => void): Promise<string> {
+    if (this.closed) {
+      throw new Error(`Session ${this.sessionId} is closed`);
+    }
+    const response = `Mock response from ${this.sessionId}`;
+    onChunk(response);
+    return response;
   }
 
   async close(): Promise<void> {
@@ -307,6 +317,38 @@ function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): Ses
         }
       }
       // Fall back to collected assistant text
+      return textParts.join("\n");
+    },
+    async sendAndStream(message: string, onChunk: (accumulated: string) => void): Promise<string> {
+      // Like sendAndCollect, but calls onChunk with accumulated text as it streams.
+      session.send(message);
+      if (typeof session.stream !== "function") {
+        return "";
+      }
+      const textParts: string[] = [];
+      for await (const msg of session.stream()) {
+        if (msg.type === "assistant") {
+          const content = (msg as Record<string, unknown>).content;
+          if (typeof content === "string" && content.length > 0) {
+            textParts.push(content);
+            onChunk(textParts.join("\n"));
+          }
+        }
+        if (msg.type === "result") {
+          extractUsage(msg as Record<string, unknown>, usageCallback);
+          const result = (msg as Record<string, unknown>).result;
+          if (typeof result === "string" && result.length > 0) {
+            return result;
+          }
+          if (msg.subtype !== "success") {
+            const is_error = (msg as Record<string, unknown>).is_error;
+            if (is_error) {
+              throw new Error(`Agent error: ${msg.subtype}`);
+            }
+          }
+          break;
+        }
+      }
       return textParts.join("\n");
     },
     async close(): Promise<void> {
