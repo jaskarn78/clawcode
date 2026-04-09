@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
-status: Ready to execute
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-04-09T05:47:14.348Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 12-02-PLAN.md
+last_updated: "2026-04-09T05:52:34.041Z"
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 20
-  completed_plans: 19
+  completed_plans: 20
 ---
 
 # Project State
@@ -69,6 +69,7 @@ Plan: 2 of 2
 | Phase 11-agent-collaboration P03 | 2min | 2 tasks | 2 files |
 | Phase 11-agent-collaboration P04 | 2min | 1 tasks | 2 files |
 | Phase 12-discord-slash-commands P01 | 3min | 2 tasks | 7 files |
+| Phase 12-discord-slash-commands P02 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,7 @@ Recent decisions affecting current work:
 - [Phase 11-agent-collaboration]: Admin validation placed before skills scanning for fast-fail; admin prompt uses markdown table for structured agent visibility
 - [Phase 11-agent-collaboration]: Followed skills.ts pattern exactly for CLI send command structure
 - [Phase 12-discord-slash-commands]: Discord ApplicationCommandOptionType stored as number (1-11), not enum; slashCommands follows schedules pattern exactly
+- [Phase 12-discord-slash-commands]: SlashCommandHandler creates own Client with Guilds intent; graceful degradation when bot token missing
 
 ### Pending Todos
 
@@ -116,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T05:47:14.344Z
-Stopped at: Completed 12-01-PLAN.md
+Last session: 2026-04-09T05:52:34.037Z
+Stopped at: Completed 12-02-PLAN.md
 Resume file: None
