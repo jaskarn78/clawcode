@@ -48,7 +48,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Foundation types, registry, backoff, session adapter, IPC protocol
+- [x] 02-01-PLAN.md — Foundation types, registry, backoff, session adapter, IPC protocol
 - [ ] 02-02-PLAN.md — Session manager, daemon, IPC server/client
 - [ ] 02-03-PLAN.md — CLI commands (start, stop, restart, start-all, status) and wiring
 
