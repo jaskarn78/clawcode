@@ -175,4 +175,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
 | 12. Discord Slash Commands | v1.1 | 2/2 | Complete    | 2026-04-09 |
-| 13. Discord Attachments | v1.1 | 2/2 | Complete   | 2026-04-09 |
+| 13. Discord Attachments | v1.1 | 2/2 | Complete    | 2026-04-09 |
