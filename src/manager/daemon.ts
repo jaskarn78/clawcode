@@ -42,6 +42,10 @@ import type { ConfigDiff } from "../config/types.js";
 import Database from "better-sqlite3";
 import { DeliveryQueue } from "../discord/delivery-queue.js";
 import { SubagentThreadSpawner } from "../discord/subagent-thread-spawner.js";
+import { AllowlistMatcher } from "../security/allowlist-matcher.js";
+import { ApprovalLog } from "../security/approval-log.js";
+import { parseSecurityMd } from "../security/acl-parser.js";
+import type { SecurityPolicy } from "../security/types.js";
 
 /**
  * Base directory for manager runtime files.
@@ -243,9 +247,46 @@ export async function startDaemon(
   const webhookManager = new WebhookManager({ identities: webhookIdentities, log });
   log.info({ webhooks: webhookIdentities.size }, "webhook manager initialized");
 
+  // 8e. Initialize security: approval log, allowlist matchers, security policies
+  const approvalLog = new ApprovalLog({
+    filePath: join(MANAGER_DIR, "approval-audit.jsonl"),
+    log,
+  });
+
+  const allowlistMatchers = new Map<string, AllowlistMatcher>();
+  for (const agent of resolvedAgents) {
+    if (agent.security?.allowlist && agent.security.allowlist.length > 0) {
+      const staticPatterns = agent.security.allowlist.map(e => e.pattern);
+      const matcher = new AllowlistMatcher(staticPatterns);
+      // Load persisted allow-always patterns
+      const alwaysPatterns = approvalLog.loadAllowAlways(agent.name);
+      for (const p of alwaysPatterns) {
+        matcher.addAllowAlways(p);
+      }
+      allowlistMatchers.set(agent.name, matcher);
+    }
+  }
+  log.info({ agents: allowlistMatchers.size }, "allowlist matchers initialized");
+
+  const securityPolicies = new Map<string, SecurityPolicy>();
+  for (const agent of resolvedAgents) {
+    try {
+      const acls = await parseSecurityMd(join(agent.workspace, "SECURITY.md"));
+      if (acls.length > 0) {
+        securityPolicies.set(agent.name, {
+          allowlist: agent.security?.allowlist ?? [],
+          channelAcls: acls,
+        });
+      }
+    } catch {
+      // No SECURITY.md or parse error — skip
+    }
+  }
+  log.info({ agents: securityPolicies.size }, "security policies loaded");
+
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies);
   };
 
   // 10. Create IPC server
@@ -321,6 +362,7 @@ export async function startDaemon(
       threadManager,
       webhookManager,
       deliveryQueue,
+      securityPolicies,
       botToken,
       log,
     });
@@ -454,6 +496,9 @@ async function routeMethod(
   webhookManager: WebhookManager,
   deliveryQueue: DeliveryQueue,
   subagentThreadSpawner: SubagentThreadSpawner | null,
+  allowlistMatchers: Map<string, AllowlistMatcher>,
+  approvalLog: ApprovalLog,
+  securityPolicies: Map<string, SecurityPolicy>,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -785,6 +830,71 @@ async function routeMethod(
       const threadId = validateStringParam(params, "threadId");
       await subagentThreadSpawner.cleanupSubagentThread(threadId);
       return { ok: true };
+    }
+
+    case "approve-command": {
+      const agentName = validateStringParam(params, "agent");
+      const command = validateStringParam(params, "command");
+      const approvedBy = typeof params.approvedBy === "string" ? params.approvedBy : "ipc";
+      await approvalLog.record({ timestamp: new Date().toISOString(), agentName, command, decision: "approved", approvedBy });
+      return { ok: true };
+    }
+
+    case "deny-command": {
+      const agentName = validateStringParam(params, "agent");
+      const command = validateStringParam(params, "command");
+      const approvedBy = typeof params.approvedBy === "string" ? params.approvedBy : "ipc";
+      await approvalLog.record({ timestamp: new Date().toISOString(), agentName, command, decision: "denied", approvedBy });
+      return { ok: true };
+    }
+
+    case "allow-always": {
+      const agentName = validateStringParam(params, "agent");
+      const pattern = validateStringParam(params, "pattern");
+      const approvedBy = typeof params.approvedBy === "string" ? params.approvedBy : "ipc";
+      await approvalLog.recordAllowAlways(agentName, pattern, approvedBy);
+      const matcher = allowlistMatchers.get(agentName);
+      if (matcher) matcher.addAllowAlways(pattern);
+      return { ok: true };
+    }
+
+    case "check-command": {
+      const agentName = validateStringParam(params, "agent");
+      const command = validateStringParam(params, "command");
+      const matcher = allowlistMatchers.get(agentName);
+      if (!matcher) return { allowed: true, reason: "no-allowlist-configured" };
+      const result = matcher.check(command);
+      return { allowed: result.allowed, matchedPattern: result.matchedPattern };
+    }
+
+    case "update-security": {
+      const targetAgent = validateStringParam(params, "agent");
+      const content = validateStringParam(params, "content");
+      const config = configs.find(c => c.name === targetAgent);
+      if (!config) throw new ManagerError(`Agent '${targetAgent}' not found`);
+      const securityPath = join(config.workspace, "SECURITY.md");
+      await writeFile(securityPath, content, "utf-8");
+      // Re-parse and update in-memory policies
+      const newAcls = await parseSecurityMd(securityPath);
+      const existingPolicy = securityPolicies.get(targetAgent);
+      securityPolicies.set(targetAgent, { allowlist: existingPolicy?.allowlist ?? [], channelAcls: newAcls });
+      return { ok: true };
+    }
+
+    case "security-status": {
+      const agentFilter = typeof params.agent === "string" ? params.agent : undefined;
+      const statuses: Record<string, unknown> = {};
+      for (const config of configs) {
+        if (agentFilter && config.name !== agentFilter) continue;
+        const matcher = allowlistMatchers.get(config.name);
+        const policy = securityPolicies.get(config.name);
+        statuses[config.name] = {
+          allowlistPatterns: config.security?.allowlist?.map(e => e.pattern) ?? [],
+          allowAlwaysPatterns: matcher?.getAllowAlwaysPatterns() ?? [],
+          channelAcls: policy?.channelAcls ?? [],
+        };
+      }
+      return { agents: statuses };
     }
 
     default:

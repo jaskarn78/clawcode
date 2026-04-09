@@ -27,6 +27,8 @@ import { formatReactionEvent } from "./reactions.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import type { WebhookManager } from "./webhook-manager.js";
 import type { DeliveryQueue } from "./delivery-queue.js";
+import { checkChannelAccess } from "../security/acl-parser.js";
+import type { SecurityPolicy } from "../security/types.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -37,6 +39,7 @@ export type BridgeConfig = {
   readonly threadManager?: ThreadManager;
   readonly webhookManager?: WebhookManager;
   readonly deliveryQueue?: DeliveryQueue;
+  readonly securityPolicies?: ReadonlyMap<string, SecurityPolicy>;
   readonly botToken?: string;
   readonly log?: Logger;
 };
@@ -86,6 +89,7 @@ export class DiscordBridge {
   private readonly threadManager: ThreadManager | undefined;
   private readonly webhookManager: WebhookManager | undefined;
   private readonly deliveryQueue: DeliveryQueue | undefined;
+  private readonly securityPolicies: ReadonlyMap<string, SecurityPolicy> | undefined;
   private readonly botToken: string;
   private readonly log: Logger;
   private running = false;
@@ -104,6 +108,7 @@ export class DiscordBridge {
     this.threadManager = config.threadManager;
     this.webhookManager = config.webhookManager;
     this.deliveryQueue = config.deliveryQueue;
+    this.securityPolicies = config.securityPolicies;
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
 
@@ -241,6 +246,21 @@ export class DiscordBridge {
     if (!agentName) {
       // Channel not bound to any agent — ignore
       return;
+    }
+
+    // Check channel ACL before routing (SECR-01, SECR-02)
+    if (this.securityPolicies) {
+      const policy = this.securityPolicies.get(agentName);
+      if (policy && policy.channelAcls.length > 0) {
+        const allowed = checkChannelAccess(channelId, message.author.id, [], policy.channelAcls);
+        if (!allowed) {
+          this.log.info(
+            { agent: agentName, user: message.author.username, userId: message.author.id, channel: channelId },
+            "message blocked by channel ACL",
+          );
+          return; // Silent ignore per SECR-02
+        }
+      }
     }
 
     this.log.info(
