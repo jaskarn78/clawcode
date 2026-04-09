@@ -19,7 +19,7 @@ Requirements for v1.3 milestone. Each maps to roadmap phases.
 - [ ] **MCPC-01**: clawcode.yaml supports per-agent MCP server definitions (name, command, args, env)
 - [ ] **MCPC-02**: Daemon passes MCP server configs to agent sessions so Claude Code's native MCP support activates them
 - [ ] **MCPC-03**: Agent system prompts list available MCP tools with descriptions for discoverability
-- [ ] **MCPC-04**: MCP server health is checkable — daemon can verify servers start and respond
+- [ ] **MCPC-04**: MCP server health is checkable -- daemon can verify servers start and respond
 - [ ] **MCPC-05**: CLI command `clawcode mcp-servers` lists configured MCP servers per agent with status
 - [ ] **MCPC-06**: MCP server configs support shared definitions (define once, assign to multiple agents)
 
@@ -44,13 +44,22 @@ Requirements for v1.3 milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated during roadmap creation) | | |
+| SASK-01 | Phase 31 | Pending |
+| SASK-02 | Phase 31 | Pending |
+| SASK-03 | Phase 31 | Pending |
+| SASK-04 | Phase 31 | Pending |
+| MCPC-01 | Phase 32 | Pending |
+| MCPC-02 | Phase 32 | Pending |
+| MCPC-03 | Phase 32 | Pending |
+| MCPC-04 | Phase 32 | Pending |
+| MCPC-05 | Phase 32 | Pending |
+| MCPC-06 | Phase 32 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 10 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 10
+- Mapped to phases: 10
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after initial definition*
+*Last updated: 2026-04-09 after roadmap creation*

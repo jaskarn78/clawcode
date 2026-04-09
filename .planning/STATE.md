@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Agent Integrations
-status: Defining requirements
-last_updated: "2026-04-09T22:00:00.000Z"
+status: Ready to plan
+last_updated: "2026-04-09T23:00:00.000Z"
 last_activity: 2026-04-09
 progress:
-  total_phases: 0
+  total_phases: 2
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -19,57 +19,31 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 30 — Web Dashboard
+**Current focus:** v1.3 Agent Integrations -- Phase 31 (Subagent Thread Skill)
 
 ## Current Position
 
-Phase: 30
+Phase: 31 of 32 (Subagent Thread Skill)
 Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-09 -- Roadmap created for v1.3
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 43 (v1.0: 11, v1.1: 32)
-- Average duration: ~3 min
-- Total execution time: ~2.2 hours
+- Total plans completed: 63 (v1.0: 11, v1.1: 32, v1.2: 20)
+- Average duration: ~3.5 min
+- Total execution time: ~3.7 hours
 
-**By Phase (v1.0):**
+**Recent Trend (v1.2):**
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 01 | 2 | 11min | 5.5min |
-| 02 | 3 | 17min | 5.7min |
-| 03 | 2 | 5min | 2.5min |
-| 04 | 2 | 9min | 4.5min |
-| 05 | 2 | 8min | 4.0min |
-
-**Recent Trend:**
-
-- v1.1 plans averaged ~2.5min each
+- v1.2 plans averaged ~3.5min each
 - Trend: Stable
 
 *Updated after each plan completion*
-| Phase 21-02 P02 | 4min | 1 tasks | 4 files |
-| Phase 21-tech-debt-code-quality P01 | 6min | 2 tasks | 26 files |
-| Phase 22 P02 | 3min | 1 tasks | 2 files |
-| Phase 22 P01 | 9min | 2 tasks | 11 files |
-| Phase 23 P01 | 4min | 2 tasks | 7 files |
-| Phase 23 P02 | 3min | 2 tasks | 3 files |
-| Phase 24-context-health-zones P01 | 4min | 2 tasks | 7 files |
-| Phase 24-context-health-zones P02 | 6min | 2 tasks | 8 files |
-| Phase 25-episode-memory P01 | 3min | 2 tasks | 6 files |
-| Phase 25-episode-memory P02 | 2min | 2 tasks | 3 files |
-| Phase 26 P01 | 3min | 2 tasks | 4 files |
-| Phase 26-discord-delivery-queue P02 | 4min | 2 tasks | 6 files |
-| Phase 27-subagent-discord-threads P01 | 2min | 1 tasks | 3 files |
-| Phase 27-subagent-discord-threads P02 | 4min | 2 tasks | 5 files |
-| Phase 28 P01 | 3min | 2 tasks | 9 files |
-| Phase 28-security-execution-approval P02 | 3min | 2 tasks | 6 files |
-| Phase 29 P01 | 2min | 2 tasks | 6 files |
-| Phase 29-agent-bootstrap P02 | 2min | 2 tasks | 3 files |
-| Phase 30 P01 | 4min | 2 tasks | 7 files |
-| Phase 30-web-dashboard P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -78,43 +52,10 @@ Plan: Not started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [v1.2 roadmap]: Tech debt first (Phases 21-22) before new features
-- [v1.2 roadmap]: Security + Execution Approval merged into single phase (28)
-- [v1.2 roadmap]: Web Dashboard last (Phase 30) -- depends on all other features
-- [v1.0]: Agents are Claude Code SDK sessions, not separate OS processes
-- [v1.0]: Memory uses local embeddings (all-MiniLM-L6-v2) -- zero cost, offline-capable
-- [Phase 21-02]: Split session-manager.ts using composition: AgentMemoryManager, SessionRecoveryManager, buildSessionConfig
-- [Phase 21-tech-debt-code-quality]: CLI commands use cliLog/cliError for user-facing output, daemon/library code uses pino structured logger
-- [Phase 22]: SDK type mirroring: narrowed union types for unstable SDK with migration notes
-- [Phase 22]: Used vi.mocked() pattern for reassigning mock implementations instead of as-unknown-as casts
-- [Phase 23]: Agents matched by name (not index) in config diff to handle YAML reordering
-- [Phase 23]: routingTableRef mutable ref pattern for live routing updates via IPC after hot-reload
-- [Phase 24-context-health-zones]: Zone thresholds optional in HeartbeatConfig with runtime fallback to defaults for backward compat
-- [Phase 24-context-health-zones]: Snapshot callback only fires on upward zone transitions to avoid redundant snapshots
-- [Phase 24-context-health-zones]: Discord notification wired as log-based with TODO for Phase 26 delivery queue
-- [Phase 24-context-health-zones]: Zone trackers lazily initialized on first context-fill result, not at construction
-- [Phase 25-episode-memory]: Episodes stored as standard MemoryEntry with source='episode' — no separate table, shared KNN search
-- [Phase 25-episode-memory]: Episode archival deletes vec_memories rows to fully remove from semantic search
-- [Phase 26]: Shared delivery_queue SQLite table managed by daemon, not per-agent DB
-- [Phase 26-discord-delivery-queue]: Delivery queue optional in BridgeConfig for backward compat -- falls back to direct send
-- [Phase 26-discord-delivery-queue]: deliverFn closure in daemon captures webhookManager + Discord client for queue-driven sends
-- [Phase 27-subagent-discord-threads]: Subagent session name format: {parentAgent}-sub-{nanoid(6)} for unique identification
-- [Phase 27-subagent-discord-threads]: Thread bindings reuse existing ThreadBinding type with agentName=parent and sessionName=subagent
-- [Phase 27-subagent-discord-threads]: Session end callbacks on SessionManager for cross-concern cleanup hooks
-- [Phase 27-subagent-discord-threads]: Thread detection in deliverFn via routing table membership check (not in table = thread channel)
-- [Phase 28]: Glob patterns converted to RegExp for command allowlist matching -- simple escaping with * to .* conversion
-- [Phase 28]: Channels with no ACL entry are open by default -- explicit restriction only
-- [Phase 28-security-execution-approval]: Security policies loaded from workspace SECURITY.md at daemon start, updated in-memory via IPC
-- [Phase 28-security-execution-approval]: ACL check before message routing in bridge -- unauthorized messages silently dropped with info log
-- [Phase 28-security-execution-approval]: Allow-always patterns restored from JSONL audit log on daemon start for cross-restart persistence
-- [Phase 29]: Flag file pattern (.bootstrap-complete) for first-run detection
-- [Phase 29-agent-bootstrap]: Bootstrap prompt replaces entire system prompt (early return) -- bootstrap IS the session purpose
-- [Phase 29-agent-bootstrap]: Channel bindings included in bootstrap mode for Discord context
-- [Phase 29-agent-bootstrap]: reconcileRegistry passes undefined bootstrapStatus -- resumed sessions skip bootstrap
-- [Phase 30]: Node.js built-in http.createServer (no Express) for zero-dependency dashboard server
-- [Phase 30]: SSE polling pattern: SseManager with shared fetchCurrentState() for both broadcast and REST endpoint
-- [Phase 30-web-dashboard]: Memory stats polled on slower 15s interval to reduce per-agent IPC load
-- [Phase 30-web-dashboard]: Messages panel reuses delivery queue stats rather than separate message tracking
+- [v1.3 roadmap]: Subagent thread skill first (Phase 31) -- small, completes existing Phase 27 infrastructure
+- [v1.3 roadmap]: MCP client consumption second (Phase 32) -- larger, new capability building on existing MCP bridge
+- [Phase 27]: SubagentThreadSpawner service already exists with IPC -- Phase 31 wraps it as a skill
+- [Phase 27]: Thread bindings reuse existing ThreadBinding type
 
 ### Pending Todos
 
@@ -135,5 +76,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 30-02-PLAN.md
+Stopped at: Created v1.3 roadmap (Phases 31-32)
 Resume file: None
