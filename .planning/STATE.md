@@ -84,5 +84,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 260409-vs4-PLAN.md
+Stopped at: Completed quick task 260409-vs4: SDK adapter refactor to query() API
 Resume file: None
