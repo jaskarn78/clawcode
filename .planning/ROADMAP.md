@@ -123,7 +123,7 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 11-01-PLAN.md — Types, config schema (admin + subagentModel), inbox file operations
+- [x] 11-01-PLAN.md — Types, config schema (admin + subagentModel), inbox file operations
 - [ ] 11-02-PLAN.md — Inbox heartbeat check and IPC send-message method
 - [ ] 11-03-PLAN.md — Admin agent validation, system prompt injection, cross-workspace access
 - [ ] 11-04-PLAN.md — CLI send command
@@ -140,4 +140,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 8. Tiered Memory Storage | v1.1 | 0/2 | Not started | - |
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
-| 11. Agent Collaboration | v1.1 | 0/4 | Not started | - |
+| 11. Agent Collaboration | v1.1 | 1/4 | In Progress|  |
