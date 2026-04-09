@@ -1,7 +1,353 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { HeartbeatRunner } from "../runner.js";
+import type { CheckModule, HeartbeatConfig } from "../types.js";
+import type { ResolvedAgentConfig } from "../../shared/types.js";
+
+function createMockSessionManager(agents: string[] = ["agent-a"]) {
+  return {
+    getRunningAgents: vi.fn().mockReturnValue(agents),
+    getContextFillProvider: vi.fn().mockReturnValue(undefined),
+    getCompactionManager: vi.fn().mockReturnValue(undefined),
+    getMemoryStore: vi.fn().mockReturnValue(undefined),
+  } as any;
+}
+
+function createMockLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  } as any;
+}
+
+function createDefaultConfig(overrides?: Partial<HeartbeatConfig>): HeartbeatConfig {
+  return {
+    enabled: true,
+    intervalSeconds: 60,
+    checkTimeoutSeconds: 10,
+    contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+    ...overrides,
+  };
+}
+
+function createMockCheck(
+  name: string,
+  result = { status: "healthy" as const, message: "ok" },
+  delay = 0,
+): CheckModule {
+  return {
+    name,
+    execute: vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          if (delay > 0) {
+            setTimeout(() => resolve(result), delay);
+          } else {
+            resolve(result);
+          }
+        }),
+    ),
+  };
+}
 
 describe("HeartbeatRunner", () => {
-  it("placeholder for runner tests", () => {
-    expect(true).toBe(true);
+  let tempDir: string;
+  let checksDir: string;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    tempDir = mkdtempSync(join(tmpdir(), "heartbeat-runner-"));
+    checksDir = join(tempDir, "checks");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("tick executes checks sequentially for each running agent", async () => {
+    const sessionManager = createMockSessionManager(["agent-a", "agent-b"]);
+    const log = createMockLogger();
+    const config = createDefaultConfig();
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    const check1 = createMockCheck("check-1");
+    const check2 = createMockCheck("check-2");
+
+    // Inject checks directly (bypass discovery for unit test)
+    (runner as any).checks = [check1, check2];
+
+    // Set agent configs for logging
+    const agentConfig: ResolvedAgentConfig = {
+      name: "agent-a",
+      workspace: join(tempDir, "agent-a"),
+      channels: [],
+      model: "sonnet",
+      skills: [],
+      soul: undefined,
+      identity: undefined,
+      memory: { compactionThreshold: 0.75, searchTopK: 10 },
+      heartbeat: config,
+    };
+    runner.setAgentConfigs([
+      agentConfig,
+      { ...agentConfig, name: "agent-b", workspace: join(tempDir, "agent-b") },
+    ]);
+
+    await runner.tick();
+
+    // Both checks executed for both agents
+    expect(check1.execute).toHaveBeenCalledTimes(2);
+    expect(check2.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips checks whose per-check interval has not elapsed", async () => {
+    const sessionManager = createMockSessionManager(["agent-a"]);
+    const log = createMockLogger();
+    const config = createDefaultConfig({ intervalSeconds: 60 });
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    // Check with 120s interval (longer than default 60s)
+    const slowCheck: CheckModule = {
+      name: "slow-check",
+      interval: 120,
+      execute: vi.fn().mockResolvedValue({ status: "healthy", message: "ok" }),
+    };
+
+    (runner as any).checks = [slowCheck];
+
+    // First tick: should execute (never run before)
+    await runner.tick();
+    expect(slowCheck.execute).toHaveBeenCalledTimes(1);
+
+    // Advance 60 seconds (less than check's 120s interval)
+    vi.advanceTimersByTime(60_000);
+
+    // Second tick: should skip
+    await runner.tick();
+    expect(slowCheck.execute).toHaveBeenCalledTimes(1);
+
+    // Advance another 60 seconds (total 120s, now due)
+    vi.advanceTimersByTime(60_000);
+
+    await runner.tick();
+    expect(slowCheck.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("timed-out check produces critical result", async () => {
+    const sessionManager = createMockSessionManager(["agent-a"]);
+    const log = createMockLogger();
+    const config = createDefaultConfig({ checkTimeoutSeconds: 1 });
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    // Check that takes 5 seconds (longer than 1s timeout)
+    const slowCheck = createMockCheck(
+      "slow-check",
+      { status: "healthy", message: "ok" },
+      5000,
+    );
+
+    (runner as any).checks = [slowCheck];
+
+    const agentConfig: ResolvedAgentConfig = {
+      name: "agent-a",
+      workspace: join(tempDir, "agent-a"),
+      channels: [],
+      model: "sonnet",
+      skills: [],
+      soul: undefined,
+      identity: undefined,
+      memory: { compactionThreshold: 0.75, searchTopK: 10 },
+      heartbeat: config,
+    };
+    runner.setAgentConfigs([agentConfig]);
+
+    // Start tick (will race against timeout)
+    const tickPromise = runner.tick();
+
+    // Advance past the timeout
+    vi.advanceTimersByTime(1100);
+
+    await tickPromise;
+
+    const results = runner.getLatestResults();
+    const agentResults = results.get("agent-a");
+    expect(agentResults).toBeDefined();
+
+    const checkResult = agentResults!.get("slow-check");
+    expect(checkResult).toBeDefined();
+    expect(checkResult!.result.status).toBe("critical");
+    expect(checkResult!.result.message).toContain("timed out");
+  });
+
+  it("start/stop manages interval lifecycle", () => {
+    const sessionManager = createMockSessionManager();
+    const log = createMockLogger();
+    const config = createDefaultConfig();
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    runner.start();
+    // Starting again should be a no-op
+    runner.start();
+
+    runner.stop();
+    // Stopping again should be safe
+    runner.stop();
+  });
+
+  it("latestResults updated after tick", async () => {
+    const sessionManager = createMockSessionManager(["agent-a"]);
+    const log = createMockLogger();
+    const config = createDefaultConfig();
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    const check = createMockCheck("health", {
+      status: "warning",
+      message: "getting warm",
+    });
+    (runner as any).checks = [check];
+
+    await runner.tick();
+
+    const results = runner.getLatestResults();
+    expect(results.has("agent-a")).toBe(true);
+
+    const agentResults = results.get("agent-a")!;
+    expect(agentResults.has("health")).toBe(true);
+
+    const entry = agentResults.get("health")!;
+    expect(entry.result.status).toBe("warning");
+    expect(entry.result.message).toBe("getting warm");
+    expect(entry.lastChecked).toBeTruthy();
+  });
+
+  it("critical results logged via pino warn", async () => {
+    const sessionManager = createMockSessionManager(["agent-a"]);
+    const log = createMockLogger();
+    const config = createDefaultConfig();
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    const criticalCheck = createMockCheck("critical-check", {
+      status: "critical",
+      message: "bad things",
+    });
+    (runner as any).checks = [criticalCheck];
+
+    const agentConfig: ResolvedAgentConfig = {
+      name: "agent-a",
+      workspace: join(tempDir, "agent-a"),
+      channels: [],
+      model: "sonnet",
+      skills: [],
+      soul: undefined,
+      identity: undefined,
+      memory: { compactionThreshold: 0.75, searchTopK: 10 },
+      heartbeat: config,
+    };
+    runner.setAgentConfigs([agentConfig]);
+
+    await runner.tick();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "agent-a",
+        check: "critical-check",
+      }),
+      "heartbeat check critical",
+    );
+  });
+
+  it("logs results to NDJSON heartbeat.log in agent workspace", async () => {
+    const sessionManager = createMockSessionManager(["agent-a"]);
+    const log = createMockLogger();
+    const config = createDefaultConfig();
+
+    const runner = new HeartbeatRunner({
+      sessionManager,
+      registryPath: join(tempDir, "registry.json"),
+      config,
+      checksDir,
+      log,
+    });
+
+    const check = createMockCheck("test-check", {
+      status: "healthy",
+      message: "all good",
+    });
+    (runner as any).checks = [check];
+
+    const workspace = join(tempDir, "agent-a");
+    const agentConfig: ResolvedAgentConfig = {
+      name: "agent-a",
+      workspace,
+      channels: [],
+      model: "sonnet",
+      skills: [],
+      soul: undefined,
+      identity: undefined,
+      memory: { compactionThreshold: 0.75, searchTopK: 10 },
+      heartbeat: config,
+    };
+    runner.setAgentConfigs([agentConfig]);
+
+    await runner.tick();
+
+    const logPath = join(workspace, "memory", "heartbeat.log");
+    expect(existsSync(logPath)).toBe(true);
+
+    const content = readFileSync(logPath, "utf-8").trim();
+    const entry = JSON.parse(content);
+    expect(entry.agent).toBe("agent-a");
+    expect(entry.check).toBe("test-check");
+    expect(entry.status).toBe("healthy");
+    expect(entry.message).toBe("all good");
+    expect(entry.timestamp).toBeTruthy();
   });
 });

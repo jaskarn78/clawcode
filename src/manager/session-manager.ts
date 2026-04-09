@@ -23,7 +23,7 @@ import type { Logger } from "pino";
 import { MemoryStore } from "../memory/store.js";
 import { EmbeddingService } from "../memory/embedder.js";
 import { SessionLogger } from "../memory/session-log.js";
-import { CompactionManager } from "../memory/compaction.js";
+import { CompactionManager, CharacterCountFillProvider } from "../memory/compaction.js";
 
 /**
  * Configuration for creating a SessionManager.
@@ -58,6 +58,7 @@ export class SessionManager {
   private readonly memoryStores: Map<string, MemoryStore> = new Map();
   private readonly compactionManagers: Map<string, CompactionManager> = new Map();
   private readonly sessionLoggers: Map<string, SessionLogger> = new Map();
+  private readonly contextFillProviders: Map<string, CharacterCountFillProvider> = new Map();
 
   // Shared embedding service (singleton across all agents)
   private readonly embedder: EmbeddingService = new EmbeddingService();
@@ -340,6 +341,11 @@ export class SessionManager {
     return this.compactionManagers.get(agentName);
   }
 
+  /** Get the CharacterCountFillProvider for a specific agent (used by heartbeat). */
+  getContextFillProvider(agentName: string): CharacterCountFillProvider | undefined {
+    return this.contextFillProviders.get(agentName);
+  }
+
   /**
    * Pre-warm the embedding model at daemon startup (D-09).
    * Call before starting any agents to avoid cold-start latency.
@@ -380,6 +386,10 @@ export class SessionManager {
       });
       this.compactionManagers.set(name, compactionManager);
 
+      // Create a fill provider for heartbeat monitoring
+      const fillProvider = new CharacterCountFillProvider();
+      this.contextFillProviders.set(name, fillProvider);
+
       this.log.info({ agent: name, dbPath }, "memory initialized");
     } catch (error) {
       this.log.error(
@@ -408,6 +418,7 @@ export class SessionManager {
     }
     this.compactionManagers.delete(name);
     this.sessionLoggers.delete(name);
+    this.contextFillProviders.delete(name);
   }
 
   // ---------------------------------------------------------------------------
