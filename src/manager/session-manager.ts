@@ -39,6 +39,7 @@ export class SessionManager {
   private readonly configs: Map<string, ResolvedAgentConfig> = new Map();
   private readonly memory: AgentMemoryManager;
   private readonly recovery: SessionRecoveryManager;
+  private readonly sessionEndCallbacks: Map<string, () => Promise<void>> = new Map();
   private skillsCatalog: SkillsCatalog = new Map();
   private allAgentConfigs: readonly ResolvedAgentConfig[] = [];
 
@@ -67,6 +68,14 @@ export class SessionManager {
 
   setAllAgentConfigs(configs: readonly ResolvedAgentConfig[]): void {
     this.allAgentConfigs = configs;
+  }
+
+  /**
+   * Register a callback to be invoked when a session ends (stop or crash).
+   * Used by daemon to auto-cleanup subagent thread bindings.
+   */
+  registerSessionEndCallback(sessionName: string, callback: () => Promise<void>): void {
+    this.sessionEndCallbacks.set(sessionName, callback);
   }
 
   /** @throws SessionError if the agent is already running */
@@ -108,6 +117,14 @@ export class SessionManager {
 
     handle.onError((error: Error) => {
       this.recovery.handleCrash(name, config, error, this.sessions);
+      // Invoke session end callback on crash (e.g., subagent thread cleanup)
+      const endCallback = this.sessionEndCallbacks.get(name);
+      if (endCallback) {
+        this.sessionEndCallbacks.delete(name);
+        endCallback().catch((err) => {
+          this.log.warn({ agent: name, error: (err as Error).message }, "session end callback failed on crash");
+        });
+      }
     });
     this.recovery.setStabilityTimer(name);
 
@@ -174,6 +191,18 @@ export class SessionManager {
     registry = await readRegistry(this.registryPath);
     registry = updateEntry(registry, name, { status: "stopped", sessionId: null });
     await writeRegistry(this.registryPath, registry);
+
+    // Invoke session end callback (e.g., subagent thread cleanup)
+    const endCallback = this.sessionEndCallbacks.get(name);
+    if (endCallback) {
+      this.sessionEndCallbacks.delete(name);
+      try {
+        await endCallback();
+      } catch (err) {
+        this.log.warn({ agent: name, error: (err as Error).message }, "session end callback failed");
+      }
+    }
+
     this.log.info({ agent: name }, "agent stopped");
   }
 

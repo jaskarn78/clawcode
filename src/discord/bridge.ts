@@ -91,6 +91,13 @@ export class DiscordBridge {
   private running = false;
   private readonly recentlySent: Set<string> = new Set();
 
+  /**
+   * Expose the Discord client for use by SubagentThreadSpawner.
+   */
+  get discordClient(): Client {
+    return this.client;
+  }
+
   constructor(config: BridgeConfig) {
     this.routingTable = config.routingTable;
     this.sessionManager = config.sessionManager;

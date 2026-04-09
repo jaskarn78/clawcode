@@ -26,6 +26,8 @@ export const IPC_METHODS = [
   "context-zone-status",
   "episode-list",
   "delivery-queue-status",
+  "spawn-subagent-thread",
+  "cleanup-subagent-thread",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

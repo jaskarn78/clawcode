@@ -41,6 +41,7 @@ import { ConfigReloader } from "./config-reloader.js";
 import type { ConfigDiff } from "../config/types.js";
 import Database from "better-sqlite3";
 import { DeliveryQueue } from "../discord/delivery-queue.js";
+import { SubagentThreadSpawner } from "../discord/subagent-thread-spawner.js";
 
 /**
  * Base directory for manager runtime files.
@@ -122,7 +123,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -244,7 +245,7 @@ export async function startDaemon(
 
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner);
   };
 
   // 10. Create IPC server
@@ -333,6 +334,19 @@ export async function startDaemon(
     log.warn("Discord bridge not started (no bot token or no channel bindings)");
   }
 
+  // 11b2. Create SubagentThreadSpawner for IPC-driven subagent thread creation
+  const subagentThreadSpawner = discordBridge
+    ? new SubagentThreadSpawner({
+        sessionManager: manager,
+        registryPath: THREAD_REGISTRY_PATH,
+        discordClient: discordBridge.discordClient,
+        log,
+      })
+    : null;
+  if (subagentThreadSpawner) {
+    log.info("subagent thread spawner initialized");
+  }
+
   // 11c. Initialize slash command handler
   const slashHandler = new SlashCommandHandler({
     routingTable,
@@ -388,6 +402,13 @@ export async function startDaemon(
     await slashHandler.stop();
     taskScheduler.stop();
     heartbeatRunner.stop();
+    // Clean up all subagent thread bindings before stopping agents
+    if (subagentThreadSpawner) {
+      const subBindings = await subagentThreadSpawner.getSubagentBindings();
+      for (const binding of subBindings) {
+        try { await subagentThreadSpawner.cleanupSubagentThread(binding.threadId); } catch { /* best-effort */ }
+      }
+    }
     // Clean up all thread sessions before stopping agents
     const allBindings = await threadManager.getActiveBindings();
     for (const binding of allBindings) {
@@ -411,7 +432,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, configWatcher, configReloader, routingTableRef, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, shutdown };
 }
 
 /**
@@ -430,6 +451,7 @@ async function routeMethod(
   threadManager: ThreadManager,
   webhookManager: WebhookManager,
   deliveryQueue: DeliveryQueue,
+  subagentThreadSpawner: SubagentThreadSpawner | null,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -731,6 +753,36 @@ async function routeMethod(
         stats: deliveryQueue.getStats(),
         failed: deliveryQueue.getFailedEntries(20),
       };
+    }
+
+    case "spawn-subagent-thread": {
+      if (!subagentThreadSpawner) {
+        throw new ManagerError("Subagent thread spawning requires Discord bridge");
+      }
+      const parentAgent = validateStringParam(params, "parentAgent");
+      const threadName = validateStringParam(params, "threadName");
+      const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
+      const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
+      const result = await subagentThreadSpawner.spawnInThread({
+        parentAgentName: parentAgent,
+        threadName,
+        systemPrompt,
+        model,
+      });
+      // Register session end callback for automatic cleanup (SATH-04)
+      manager.registerSessionEndCallback(result.sessionName, async () => {
+        await subagentThreadSpawner.cleanupSubagentThread(result.threadId);
+      });
+      return { ok: true, ...result };
+    }
+
+    case "cleanup-subagent-thread": {
+      if (!subagentThreadSpawner) {
+        throw new ManagerError("Subagent thread spawning requires Discord bridge");
+      }
+      const threadId = validateStringParam(params, "threadId");
+      await subagentThreadSpawner.cleanupSubagentThread(threadId);
+      return { ok: true };
     }
 
     default:
