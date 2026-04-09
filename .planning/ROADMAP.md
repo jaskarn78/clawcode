@@ -37,7 +37,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 - [x] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival (completed 2026-04-09)
 - [x] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log (completed 2026-04-09)
 - [x] **Phase 27: Subagent Discord Threads** - Auto thread creation on subagent spawn, webhook binding, routing, cleanup (completed 2026-04-09)
-- [ ] **Phase 28: Security & Execution Approval** - Command allowlists, approval flow, channel ACLs, audit logging
+- [x] **Phase 28: Security & Execution Approval** - Command allowlists, approval flow, channel ACLs, audit logging (completed 2026-04-09)
 - [ ] **Phase 29: Agent Bootstrap** - First-run detection, guided SOUL.md/IDENTITY.md generation
 - [ ] **Phase 30: Web Dashboard** - Agent status, memory stats, schedules, health, delivery queue, agent controls
 
@@ -150,7 +150,7 @@ Plans:
   5. Per-agent SECURITY.md files define channel ACLs, and messages from unauthorized users are silently ignored with a log entry
 **Plans**: 2 plans
 Plans:
-- [ ] 28-01-PLAN.md — Security types, config schema, allowlist matcher, ACL parser, approval log (EXEC-01, EXEC-03, EXEC-04, SECR-01)
+- [x] 28-01-PLAN.md — Security types, config schema, allowlist matcher, ACL parser, approval log (EXEC-01, EXEC-03, EXEC-04, SECR-01)
 - [ ] 28-02-PLAN.md — Daemon wiring, bridge ACL enforcement, IPC approval methods, CLI command (EXEC-02, EXEC-03, EXEC-04, SECR-01, SECR-02, SECR-03)
 
 ### Phase 29: Agent Bootstrap
@@ -197,6 +197,6 @@ Plans:
 | 25. Episode Memory | v1.2 | 2/2 | Complete    | 2026-04-09 |
 | 26. Discord Delivery Queue | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 27. Subagent Discord Threads | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 28. Security & Execution Approval | v1.2 | 0/2 | Not started | - |
+| 28. Security & Execution Approval | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 29. Agent Bootstrap | v1.2 | 0/? | Not started | - |
 | 30. Web Dashboard | v1.2 | 0/? | Not started | - |

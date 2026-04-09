@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
 status: Ready to plan
-stopped_at: Completed 27-02-PLAN.md
-last_updated: "2026-04-09T20:49:47.011Z"
+stopped_at: Completed 28-02-PLAN.md
+last_updated: "2026-04-09T21:04:32.081Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 10
-  completed_phases: 7
-  total_plans: 14
-  completed_plans: 14
+  completed_phases: 8
+  total_plans: 16
+  completed_plans: 16
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 27 — Subagent Discord Threads
+**Current focus:** Phase 28 — Security & Execution Approval
 
 ## Current Position
 
-Phase: 28
+Phase: 29
 Plan: Not started
 
 ## Performance Metrics
@@ -65,6 +65,8 @@ Plan: Not started
 | Phase 26-discord-delivery-queue P02 | 4min | 2 tasks | 6 files |
 | Phase 27-subagent-discord-threads P01 | 2min | 1 tasks | 3 files |
 | Phase 27-subagent-discord-threads P02 | 4min | 2 tasks | 5 files |
+| Phase 28 P01 | 3min | 2 tasks | 9 files |
+| Phase 28-security-execution-approval P02 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -97,6 +99,11 @@ Recent decisions affecting current work:
 - [Phase 27-subagent-discord-threads]: Thread bindings reuse existing ThreadBinding type with agentName=parent and sessionName=subagent
 - [Phase 27-subagent-discord-threads]: Session end callbacks on SessionManager for cross-concern cleanup hooks
 - [Phase 27-subagent-discord-threads]: Thread detection in deliverFn via routing table membership check (not in table = thread channel)
+- [Phase 28]: Glob patterns converted to RegExp for command allowlist matching -- simple escaping with * to .* conversion
+- [Phase 28]: Channels with no ACL entry are open by default -- explicit restriction only
+- [Phase 28-security-execution-approval]: Security policies loaded from workspace SECURITY.md at daemon start, updated in-memory via IPC
+- [Phase 28-security-execution-approval]: ACL check before message routing in bridge -- unauthorized messages silently dropped with info log
+- [Phase 28-security-execution-approval]: Allow-always patterns restored from JSONL audit log on daemon start for cross-restart persistence
 
 ### Pending Todos
 
@@ -117,5 +124,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 27-02-PLAN.md
+Stopped at: Completed 28-02-PLAN.md
 Resume file: None

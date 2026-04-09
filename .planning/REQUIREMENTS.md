@@ -54,10 +54,10 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Execution Approval
 
-- [ ] **EXEC-01**: Per-agent command allowlists configurable in clawcode.yaml (pattern-based)
-- [ ] **EXEC-02**: Commands not on allowlist require approval via IPC or Discord reaction
-- [ ] **EXEC-03**: Approval decisions can be persisted as "allow-always" for specific command patterns
-- [ ] **EXEC-04**: Approval audit log records all approved/denied execution requests
+- [x] **EXEC-01**: Per-agent command allowlists configurable in clawcode.yaml (pattern-based)
+- [x] **EXEC-02**: Commands not on allowlist require approval via IPC or Discord reaction
+- [x] **EXEC-03**: Approval decisions can be persisted as "allow-always" for specific command patterns
+- [x] **EXEC-04**: Approval audit log records all approved/denied execution requests
 
 ### Agent Bootstrap
 
@@ -67,9 +67,9 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Security & Access Control
 
-- [ ] **SECR-01**: Per-agent SECURITY.md defines channel access control lists (who can message this agent)
-- [ ] **SECR-02**: Messages from unauthorized users in bound channels are ignored with a log entry
-- [ ] **SECR-03**: Admin agent can update SECURITY.md for any agent via IPC command
+- [x] **SECR-01**: Per-agent SECURITY.md defines channel access control lists (who can message this agent)
+- [x] **SECR-02**: Messages from unauthorized users in bound channels are ignored with a log entry
+- [x] **SECR-03**: Admin agent can update SECURITY.md for any agent via IPC command
 
 ### Web Dashboard
 
@@ -141,13 +141,13 @@ Deferred to later milestones.
 | SATH-02 | Phase 27 | Complete |
 | SATH-03 | Phase 27 | Complete |
 | SATH-04 | Phase 27 | Complete |
-| EXEC-01 | Phase 28 | Pending |
-| EXEC-02 | Phase 28 | Pending |
-| EXEC-03 | Phase 28 | Pending |
-| EXEC-04 | Phase 28 | Pending |
-| SECR-01 | Phase 28 | Pending |
-| SECR-02 | Phase 28 | Pending |
-| SECR-03 | Phase 28 | Pending |
+| EXEC-01 | Phase 28 | Complete |
+| EXEC-02 | Phase 28 | Complete |
+| EXEC-03 | Phase 28 | Complete |
+| EXEC-04 | Phase 28 | Complete |
+| SECR-01 | Phase 28 | Complete |
+| SECR-02 | Phase 28 | Complete |
+| SECR-03 | Phase 28 | Complete |
 | BOOT-01 | Phase 29 | Pending |
 | BOOT-02 | Phase 29 | Pending |
 | BOOT-03 | Phase 29 | Pending |
