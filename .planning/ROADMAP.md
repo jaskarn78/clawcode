@@ -41,7 +41,7 @@ Phases 21-30 delivered: tech debt cleanup, config hot-reload, context health zon
 **Milestone Goal:** Complete subagent-thread UX and enable agents to connect to external MCP servers.
 
 - [x] **Phase 31: Subagent Thread Skill** - Skill wrapper and system prompt guidance so agents naturally use Discord threads for subagent work (completed 2026-04-09)
-- [ ] **Phase 32: MCP Client Consumption** - Per-agent MCP server config, daemon activation, tool discovery, health checks, and CLI visibility
+- [x] **Phase 32: MCP Client Consumption** - Per-agent MCP server config, daemon activation, tool discovery, health checks, and CLI visibility (completed 2026-04-09)
 
 ## Phase Details
 
@@ -68,9 +68,9 @@ Plans:
   3. Agent system prompts list available MCP tools with descriptions so agents know what external tools they can use
   4. Running `clawcode mcp-servers` shows configured MCP servers per agent with health/connectivity status
   5. MCP server health is verifiable -- the daemon can confirm servers start and respond before marking them active
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 32-01-PLAN.md -- Config schema, types, resolution, and SDK session passthrough (MCPC-01, MCPC-02, MCPC-06)
+- [x] 32-01-PLAN.md -- Config schema, types, resolution, and SDK session passthrough (MCPC-01, MCPC-02, MCPC-06)
 - [ ] 32-02-PLAN.md -- System prompt MCP tools injection, health checks, CLI mcp-servers command (MCPC-03, MCPC-04, MCPC-05)
 
 ## Progress
@@ -83,4 +83,4 @@ Plans:
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21-30 | v1.2 | - | Complete | 2026-04-09 |
 | 31. Subagent Thread Skill | v1.3 | 1/2 | Complete    | 2026-04-09 |
-| 32. MCP Client Consumption | v1.3 | 0/2 | Not started | - |
+| 32. MCP Client Consumption | v1.3 | 1/2 | Complete    | 2026-04-09 |

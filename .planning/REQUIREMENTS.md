@@ -16,12 +16,12 @@ Requirements for v1.3 milestone. Each maps to roadmap phases.
 
 ### MCP Client Consumption
 
-- [ ] **MCPC-01**: clawcode.yaml supports per-agent MCP server definitions (name, command, args, env)
-- [ ] **MCPC-02**: Daemon passes MCP server configs to agent sessions so Claude Code's native MCP support activates them
-- [ ] **MCPC-03**: Agent system prompts list available MCP tools with descriptions for discoverability
-- [ ] **MCPC-04**: MCP server health is checkable -- daemon can verify servers start and respond
-- [ ] **MCPC-05**: CLI command `clawcode mcp-servers` lists configured MCP servers per agent with status
-- [ ] **MCPC-06**: MCP server configs support shared definitions (define once, assign to multiple agents)
+- [x] **MCPC-01**: clawcode.yaml supports per-agent MCP server definitions (name, command, args, env)
+- [x] **MCPC-02**: Daemon passes MCP server configs to agent sessions so Claude Code's native MCP support activates them
+- [x] **MCPC-03**: Agent system prompts list available MCP tools with descriptions for discoverability
+- [x] **MCPC-04**: MCP server health is checkable -- daemon can verify servers start and respond
+- [x] **MCPC-05**: CLI command `clawcode mcp-servers` lists configured MCP servers per agent with status
+- [x] **MCPC-06**: MCP server configs support shared definitions (define once, assign to multiple agents)
 
 ## Future Requirements
 
@@ -48,12 +48,12 @@ Requirements for v1.3 milestone. Each maps to roadmap phases.
 | SASK-02 | Phase 31 | Complete |
 | SASK-03 | Phase 31 | Complete |
 | SASK-04 | Phase 31 | Complete |
-| MCPC-01 | Phase 32 | Pending |
-| MCPC-02 | Phase 32 | Pending |
-| MCPC-03 | Phase 32 | Pending |
-| MCPC-04 | Phase 32 | Pending |
-| MCPC-05 | Phase 32 | Pending |
-| MCPC-06 | Phase 32 | Pending |
+| MCPC-01 | Phase 32 | Complete |
+| MCPC-02 | Phase 32 | Complete |
+| MCPC-03 | Phase 32 | Complete |
+| MCPC-04 | Phase 32 | Complete |
+| MCPC-05 | Phase 32 | Complete |
+| MCPC-06 | Phase 32 | Complete |
 
 **Coverage:**
 - v1.3 requirements: 10 total

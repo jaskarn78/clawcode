@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Agent Integrations
-status: Ready to plan
-stopped_at: Completed 31-02-PLAN.md
-last_updated: "2026-04-09T22:06:03.038Z"
+status: Milestone complete
+stopped_at: Completed 32-02-PLAN.md
+last_updated: "2026-04-09T22:23:25.819Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 2
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 4
 ---
 
 # Project State
@@ -20,7 +20,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 31 — Subagent Thread Skill
+**Current focus:** Phase 32 — MCP Client Consumption
 
 ## Current Position
 
@@ -55,6 +55,10 @@ Recent decisions affecting current work:
 - [Phase 27]: Thread bindings reuse existing ThreadBinding type
 - [Phase 31-subagent-thread-skill]: Registered spawn-thread CLI in src/cli/index.ts (matching existing pattern) instead of src/index.ts
 - [Phase 31-02]: Skill check uses config.skills directly rather than skillsCatalog lookup for reliability
+- [Phase 32-mcp-client-consumption]: MCP servers as union type (inline or string ref) with shared definitions at config root
+- [Phase 32-mcp-client-consumption]: SDK receives mcpServers as Record<name, config> matching Claude Code SDK API
+- [Phase 32-mcp-client-consumption]: Health check uses node:child_process spawn with JSON-RPC initialize as MCP liveness probe
+- [Phase 32-mcp-client-consumption]: Dynamic import of health module in daemon to avoid circular deps
 
 ### Pending Todos
 
@@ -73,9 +77,11 @@ Recent decisions affecting current work:
 | 260409-lop | Add typing indicator and streaming responses | 2026-04-09 | 3a90864 | [260409-lop](./quick/260409-lop-add-typing-indicator-and-streaming-respo/) |
 | Phase 31-subagent-thread-skill P01 | 2min | 2 tasks | 6 files |
 | Phase 31-subagent-thread-skill P02 | 2min | 1 tasks | 2 files |
+| Phase 32-mcp-client-consumption P01 | 4min | 2 tasks | 10 files |
+| Phase 32-mcp-client-consumption P02 | 4min | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 31-02-PLAN.md
+Stopped at: Completed 32-02-PLAN.md
 Resume file: None
