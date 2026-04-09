@@ -11,6 +11,13 @@ import { logger } from "../shared/logger.js";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { Logger } from "pino";
+import type { DownloadResult } from "./attachment-types.js";
+import {
+  extractAttachments,
+  downloadAllAttachments,
+  formatAttachmentMetadata,
+  isImageAttachment,
+} from "./attachments.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -170,8 +177,20 @@ export class DiscordBridge {
     );
 
     try {
-      // Format message for the agent (include Discord context)
-      const formattedMessage = formatDiscordMessage(message);
+      // Download attachments if present, before formatting the message
+      let downloadResults: readonly DownloadResult[] | undefined;
+
+      if (message.attachments.size > 0) {
+        const agentConfig = this.sessionManager.getAgentConfig(agentName);
+        const workspace = agentConfig?.workspace ?? "/tmp";
+        const attachDir = join(workspace, "inbox", "attachments");
+
+        const attachments = extractAttachments(message.attachments);
+        downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
+      }
+
+      // Format message for the agent (include Discord context + attachment metadata)
+      const formattedMessage = formatDiscordMessage(message, downloadResults);
 
       // One-way forward: send message to agent, let it reply via its own Discord plugin.
       // The agent's Claude Code session inherits the Discord MCP plugin and will
@@ -234,16 +253,43 @@ export class DiscordBridge {
 
 /**
  * Format a Discord message for the agent, including metadata.
+ * When downloadResults are provided, replaces the simple attachment listing
+ * with structured metadata from formatAttachmentMetadata, plus multimodal
+ * hints for image attachments.
+ *
+ * Exported for testing.
  */
-function formatDiscordMessage(message: Message): string {
+export function formatDiscordMessage(
+  message: Message,
+  downloadResults?: readonly DownloadResult[],
+): string {
   const parts = [
     `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${message.createdAt.toISOString()}">`,
     message.content,
     `</channel>`,
   ];
 
-  // Include attachments if any
-  if (message.attachments.size > 0) {
+  // Include attachments: use structured metadata if download results provided
+  if (downloadResults && downloadResults.length > 0) {
+    const metadata = formatAttachmentMetadata(downloadResults);
+    if (metadata) {
+      parts.push(`\n${metadata}`);
+    }
+
+    // Add multimodal reading hints for successfully downloaded images
+    for (const result of downloadResults) {
+      if (
+        result.success &&
+        result.path !== null &&
+        isImageAttachment(result.attachmentInfo.contentType)
+      ) {
+        parts.push(
+          `(Image downloaded -- read the file at ${result.path} to see its contents)`,
+        );
+      }
+    }
+  } else if (message.attachments.size > 0) {
+    // Fallback: simple attachment listing (backward compatible)
     const attachmentList = [...message.attachments.values()]
       .map((a) => `  - ${a.name} (${a.contentType ?? "unknown"}, ${a.size} bytes): ${a.url}`)
       .join("\n");
