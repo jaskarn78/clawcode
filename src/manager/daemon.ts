@@ -23,6 +23,7 @@ import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
 import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { CheckStatus } from "../heartbeat/types.js";
+import { TaskScheduler } from "../scheduler/scheduler.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -105,7 +106,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -153,9 +154,21 @@ export async function startDaemon(
   heartbeatRunner.start();
   log.info({ checks: "discovered", interval: heartbeatConfig.intervalSeconds }, "heartbeat started");
 
+  // 8b. Initialize task scheduler (per D-08, D-10)
+  const taskScheduler = new TaskScheduler({
+    sessionManager: manager,
+    log,
+  });
+  for (const agentConfig of resolvedAgents) {
+    if (agentConfig.schedules.length > 0) {
+      taskScheduler.addAgent(agentConfig.name, agentConfig.schedules);
+    }
+  }
+  log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0).length }, "task scheduler initialized");
+
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner);
+    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler);
   };
 
   // 10. Create IPC server
@@ -170,6 +183,7 @@ export async function startDaemon(
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
     server.close();
+    taskScheduler.stop();
     heartbeatRunner.stop();
     await manager.stopAll();
     await unlink(SOCKET_PATH).catch(() => {});
@@ -186,7 +200,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, shutdown };
 }
 
 /**
@@ -200,6 +214,7 @@ async function routeMethod(
   routingTable: RoutingTable,
   rateLimiter: RateLimiter,
   heartbeatRunner: HeartbeatRunner,
+  taskScheduler: TaskScheduler,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -274,6 +289,11 @@ async function routeMethod(
         agents[agentName] = { checks: checksObj, overall: worstStatus };
       }
       return { agents };
+    }
+
+    case "schedules": {
+      const statuses = taskScheduler.getStatuses();
+      return { schedules: statuses };
     }
 
     default:

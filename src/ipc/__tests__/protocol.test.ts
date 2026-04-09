@@ -16,6 +16,7 @@ describe("IPC_METHODS", () => {
       "routes",
       "rate-limit-status",
       "heartbeat-status",
+      "schedules",
     ]);
   });
 });
