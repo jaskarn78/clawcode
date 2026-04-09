@@ -128,6 +128,22 @@ Plans:
 - [x] 11-03-PLAN.md — Admin agent validation, system prompt injection, cross-workspace access
 - [x] 11-04-PLAN.md — CLI send command
 
+### Phase 12: Discord Slash Commands
+**Goal**: Discord users can invoke agent capabilities via slash commands -- commands auto-register on startup, route to the correct agent, and return responses inline
+**Depends on:** Phase 11
+**Requirements**: DCMD-01, DCMD-02, DCMD-03, DCMD-04, DCMD-05
+**Success Criteria** (what must be TRUE):
+  1. Slash commands defined in clawcode.yaml are registered with Discord's REST API on daemon startup (guild-scoped)
+  2. Invoking a slash command in a bound channel routes to the correct agent with argument passthrough
+  3. Agent responses are sent back via Discord interaction reply
+  4. Default commands (status, memory, schedule, health, compact) work out of the box without config
+  5. Agents can define custom slash commands in their config that override or extend the defaults
+**Plans**: 2 plans
+
+Plans:
+- [ ] 12-01-PLAN.md — Slash command types, default commands, config schema extension
+- [ ] 12-02-PLAN.md — Registration, interaction handler, daemon wiring, IPC method
+
 ## Progress
 
 **Execution Order:**
@@ -141,13 +157,14 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
+| 12. Discord Slash Commands | v1.1 | 0/2 | Not started | - |
 
-### Phase 12: Discord Slash Commands — Register Discord slash commands that map to Claude Code skills/commands, with argument passthrough and auto-registration on daemon startup
+### Phase 13: Discord Attachment and Image Support
 
 **Goal:** [To be planned]
 **Requirements**: TBD
-**Depends on:** Phase 11
+**Depends on:** Phase 12
 **Plans:** 0 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 12 to break down)
+- [ ] TBD (run /gsd:plan-phase 13 to break down)

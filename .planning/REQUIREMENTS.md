@@ -87,12 +87,17 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | XAGT-02 | Phase 11 | Complete |
 | XAGT-03 | Phase 11 | Complete |
 | XAGT-04 | Phase 11 | Complete |
+| DCMD-01 | Phase 12 | Planned |
+| DCMD-02 | Phase 12 | Planned |
+| DCMD-03 | Phase 12 | Planned |
+| DCMD-04 | Phase 12 | Planned |
+| DCMD-05 | Phase 12 | Planned |
 
 **Coverage:**
-- v1.1 requirements: 22 total
-- Mapped to phases: 22
+- v1.1 requirements: 27 total
+- Mapped to phases: 27
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after v1.1 roadmap creation*
+*Last updated: 2026-04-08 after Phase 12 planning*
