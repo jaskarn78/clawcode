@@ -106,6 +106,23 @@ export const threadsConfigSchema = z.object({
 export type ThreadsConfig = z.infer<typeof threadsConfigSchema>;
 
 /**
+ * Schema for a single allowlist entry (glob pattern for command matching).
+ */
+export const allowlistEntrySchema = z.object({
+  pattern: z.string().min(1),
+});
+
+/**
+ * Security configuration schema for per-agent execution approval.
+ */
+export const securityConfigSchema = z.object({
+  allowlist: z.array(allowlistEntrySchema).default([]),
+});
+
+/** Inferred security config type. */
+export type SecurityConfig = z.infer<typeof securityConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -126,6 +143,7 @@ export const agentSchema = z.object({
   threads: threadsConfigSchema.optional(),
   webhook: webhookConfigSchema.optional(),
   reactions: z.boolean().default(true),
+  security: securityConfigSchema.optional(),
 });
 
 /**
