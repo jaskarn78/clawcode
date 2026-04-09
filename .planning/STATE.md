@@ -2,14 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
-status: Ready to plan
-last_updated: "2026-04-09T18:00:00.000Z"
-last_activity: 2026-04-09
+status: executing
+stopped_at: Completed 22-01-PLAN.md
+last_updated: "2026-04-09T18:54:45.799Z"
+last_activity: 2026-04-09 -- Completed 22-01-PLAN.md
 progress:
-  total_phases: 30
-  completed_phases: 20
-  total_plans: 0
-  completed_plans: 0
+  total_phases: 10
+  completed_phases: 1
+  total_plans: 4
+  completed_plans: 3
 ---
 
 # Project State
@@ -19,16 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 21 - Tech Debt - Code Quality
+**Current focus:** Phase 22 -- Tech Debt - Test Type Safety
 
 ## Current Position
 
-Phase: 21 of 30 (Tech Debt - Code Quality)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-04-09 -- v1.2 roadmap created (10 phases, 43 requirements)
-
-Progress: [====================..........] 67% (20/30 phases, v1.0+v1.1 complete)
+Phase: 22 of 30 (Tech Debt - Test Type Safety)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-04-09 -- Completed 22-01-PLAN.md
 
 ## Performance Metrics
 
@@ -54,6 +53,10 @@ Progress: [====================..........] 67% (20/30 phases, v1.0+v1.1 complete
 - Trend: Stable
 
 *Updated after each plan completion*
+| Phase 21-02 P02 | 4min | 1 tasks | 4 files |
+| Phase 21-tech-debt-code-quality P01 | 6min | 2 tasks | 26 files |
+| Phase 22 P02 | 3min | 1 tasks | 2 files |
+| Phase 22 P01 | 9min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -67,6 +70,10 @@ Recent decisions affecting current work:
 - [v1.2 roadmap]: Web Dashboard last (Phase 30) -- depends on all other features
 - [v1.0]: Agents are Claude Code SDK sessions, not separate OS processes
 - [v1.0]: Memory uses local embeddings (all-MiniLM-L6-v2) -- zero cost, offline-capable
+- [Phase 21-02]: Split session-manager.ts using composition: AgentMemoryManager, SessionRecoveryManager, buildSessionConfig
+- [Phase 21-tech-debt-code-quality]: CLI commands use cliLog/cliError for user-facing output, daemon/library code uses pino structured logger
+- [Phase 22]: SDK type mirroring: narrowed union types for unstable SDK with migration notes
+- [Phase 22]: Used vi.mocked() pattern for reassigning mock implementations instead of as-unknown-as casts
 
 ### Pending Todos
 
@@ -87,5 +94,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: v1.2 roadmap created, ready to plan Phase 21
+Stopped at: Completed 22-01-PLAN.md
 Resume file: None

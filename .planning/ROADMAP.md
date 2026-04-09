@@ -67,7 +67,7 @@ Plans:
   3. SDK v2 unstable API usage has explicit TypeScript interfaces replacing `any` types, with documented migration notes
 **Plans**: 2 plans
 Plans:
-- [ ] 22-01-PLAN.md — Fix test fixtures, add CLI unit tests (DEBT-05, DEBT-06)
+- [x] 22-01-PLAN.md — Fix test fixtures, add CLI unit tests (DEBT-05, DEBT-06)
 - [ ] 22-02-PLAN.md — SDK v2 type narrowing with migration notes (DEBT-07)
 
 ### Phase 23: Config Hot-Reload & Audit Trail
@@ -191,7 +191,7 @@ Plans:
 | 1-5 | v1.0 | - | Complete | 2026-04-09 |
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21. Tech Debt - Code Quality | v1.2 | 0/2 | Complete    | 2026-04-09 |
-| 22. Tech Debt - Test & Type Safety | v1.2 | 0/2 | Planned | - |
+| 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | In Progress|  |
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 0/? | Not started | - |
 | 24. Context Health Zones | v1.2 | 0/? | Not started | - |
 | 25. Episode Memory | v1.2 | 0/? | Not started | - |

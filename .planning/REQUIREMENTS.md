@@ -9,13 +9,13 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Tech Debt
 
-- [ ] **DEBT-01**: Attachment temp file cleanup runs periodically via heartbeat check (cleanupAttachments wired)
-- [ ] **DEBT-02**: All console.error/console.log calls replaced with structured pino logger
-- [ ] **DEBT-03**: Silent error catches (10+ locations) replaced with proper logging and error propagation
-- [ ] **DEBT-04**: session-manager.ts split into focused modules under 400 lines each
-- [ ] **DEBT-05**: Test fixtures updated with all required fields (reactions, tiers) — no more `as unknown as` casts
-- [ ] **DEBT-06**: CLI commands have unit tests (schedules, skills, send, threads, webhooks, fork, memory, mcp, usage)
-- [ ] **DEBT-07**: SDK v2 unstable API types narrowed from `any` to explicit interfaces with documented migration path
+- [x] **DEBT-01**: Attachment temp file cleanup runs periodically via heartbeat check (cleanupAttachments wired)
+- [x] **DEBT-02**: All console.error/console.log calls replaced with structured pino logger
+- [x] **DEBT-03**: Silent error catches (10+ locations) replaced with proper logging and error propagation
+- [x] **DEBT-04**: session-manager.ts split into focused modules under 400 lines each
+- [x] **DEBT-05**: Test fixtures updated with all required fields (reactions, tiers) — no more `as unknown as` casts
+- [x] **DEBT-06**: CLI commands have unit tests (schedules, skills, send, threads, webhooks, fork, memory, mcp, usage)
+- [x] **DEBT-07**: SDK v2 unstable API types narrowed from `any` to explicit interfaces with documented migration path
 
 ### Subagent Discord Threads
 
@@ -114,13 +114,13 @@ Deferred to later milestones.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEBT-01 | Phase 21 | Pending |
-| DEBT-02 | Phase 21 | Pending |
-| DEBT-03 | Phase 21 | Pending |
-| DEBT-04 | Phase 21 | Pending |
-| DEBT-05 | Phase 22 | Pending |
-| DEBT-06 | Phase 22 | Pending |
-| DEBT-07 | Phase 22 | Pending |
+| DEBT-01 | Phase 21 | Complete |
+| DEBT-02 | Phase 21 | Complete |
+| DEBT-03 | Phase 21 | Complete |
+| DEBT-04 | Phase 21 | Complete |
+| DEBT-05 | Phase 22 | Complete |
+| DEBT-06 | Phase 22 | Complete |
+| DEBT-07 | Phase 22 | Complete |
 | HOTR-01 | Phase 23 | Pending |
 | HOTR-02 | Phase 23 | Pending |
 | HOTR-03 | Phase 23 | Pending |
