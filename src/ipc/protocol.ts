@@ -19,6 +19,8 @@ export const IPC_METHODS = [
   "slash-commands",
   "webhooks",
   "fork-session",
+  "memory-search",
+  "memory-list",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

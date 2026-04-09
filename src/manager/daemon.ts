@@ -33,6 +33,7 @@ import { loadBotToken } from "../discord/bridge.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
+import { SemanticSearch } from "../memory/search.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -457,6 +458,60 @@ async function routeMethod(
         }
       }
       return { webhooks };
+    }
+
+    case "memory-search": {
+      const agentName = validateStringParam(params, "agent");
+      const query = validateStringParam(params, "query");
+      const topK = typeof params.topK === "number" ? params.topK : 10;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(`Memory store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const embedder = manager.getEmbedder();
+      const queryEmbedding = await embedder.embed(query);
+      const search = new SemanticSearch(store.getDatabase());
+      const results = search.search(queryEmbedding, topK);
+
+      return {
+        results: results.map((r) => ({
+          id: r.id,
+          content: r.content,
+          source: r.source,
+          importance: r.importance,
+          accessCount: r.accessCount,
+          tier: r.tier,
+          createdAt: r.createdAt,
+          score: r.combinedScore,
+          distance: r.distance,
+        })),
+      };
+    }
+
+    case "memory-list": {
+      const agentName = validateStringParam(params, "agent");
+      const limit = typeof params.limit === "number" ? params.limit : 20;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(`Memory store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const entries = store.listRecent(limit);
+      return {
+        entries: entries.map((e) => ({
+          id: e.id,
+          content: e.content,
+          source: e.source,
+          importance: e.importance,
+          accessCount: e.accessCount,
+          tier: e.tier,
+          createdAt: e.createdAt,
+          accessedAt: e.accessedAt,
+        })),
+      };
     }
 
     default:
