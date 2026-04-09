@@ -18,6 +18,7 @@ export const IPC_METHODS = [
   "send-message",
   "slash-commands",
   "webhooks",
+  "fork-session",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

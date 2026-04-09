@@ -18,6 +18,7 @@ import { registerSkillsCommand } from "./commands/skills.js";
 import { registerSendCommand } from "./commands/send.js";
 import { registerThreadsCommand } from "./commands/threads.js";
 import { registerWebhooksCommand } from "./commands/webhooks.js";
+import { registerForkCommand } from "./commands/fork.js";
 
 /**
  * Options for the init action.
@@ -114,6 +115,7 @@ registerSkillsCommand(program);
 registerSendCommand(program);
 registerThreadsCommand(program);
 registerWebhooksCommand(program);
+registerForkCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =

@@ -27,6 +27,8 @@ import { SessionLogger } from "../memory/session-log.js";
 import { CompactionManager, CharacterCountFillProvider } from "../memory/compaction.js";
 import { TierManager } from "../memory/tier-manager.js";
 import { DEFAULT_TIER_CONFIG } from "../memory/tiers.js";
+import { buildForkName, buildForkConfig } from "./fork.js";
+import type { ForkOptions, ForkResult } from "./fork.js";
 
 /**
  * Configuration for creating a SessionManager.
@@ -199,6 +201,48 @@ export class SessionManager {
 
     this.log.info({ agent: name, messageLength: message.length }, "forwarding message to agent");
     await handle.send(message);
+  }
+
+  /**
+   * Fork an agent's session into a new independent session.
+   * The fork inherits the parent's config but has no channel bindings.
+   *
+   * @param agentName - Name of the agent to fork
+   * @param options - Optional system prompt and model overrides
+   * @returns ForkResult with the fork name and session ID
+   * @throws SessionError if the agent is not running or config not found
+   */
+  async forkSession(
+    agentName: string,
+    options?: ForkOptions,
+  ): Promise<ForkResult> {
+    if (!this.sessions.has(agentName)) {
+      throw new SessionError(`Agent '${agentName}' is not running`, agentName);
+    }
+
+    const parentConfig = this.configs.get(agentName);
+    if (!parentConfig) {
+      throw new SessionError(`Config for agent '${agentName}' not found`, agentName);
+    }
+
+    const forkName = buildForkName(agentName);
+    const forkConfig = buildForkConfig(parentConfig, forkName, options);
+
+    await this.startAgent(forkName, forkConfig);
+
+    const handle = this.sessions.get(forkName);
+    const sessionId = handle?.sessionId ?? "unknown";
+
+    this.log.info(
+      { parent: agentName, fork: forkName, sessionId },
+      "session forked",
+    );
+
+    return {
+      forkName,
+      parentAgent: agentName,
+      sessionId,
+    };
   }
 
   /**

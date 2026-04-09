@@ -436,6 +436,14 @@ async function routeMethod(
       return { bindings: filtered };
     }
 
+    case "fork-session": {
+      const name = validateStringParam(params, "name");
+      const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
+      const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
+      const result = await manager.forkSession(name, { systemPromptOverride: systemPrompt, modelOverride: model });
+      return { ok: true, forkName: result.forkName, parentAgent: result.parentAgent, sessionId: result.sessionId };
+    }
+
     case "webhooks": {
       const webhooks: Array<{ agent: string; displayName: string; avatarUrl?: string; hasWebhookUrl: boolean }> = [];
       for (const config of configs) {
