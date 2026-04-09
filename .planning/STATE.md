@@ -125,7 +125,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- Bypass SDK unstable_v2 limitations for MCP and channels (agent-session)
 
 ### Blockers/Concerns
 
