@@ -32,6 +32,7 @@ export type CheckContext = {
 export type CheckModule = {
   readonly name: string;
   readonly interval?: number;
+  readonly timeout?: number; // Per-check timeout in seconds. Overrides config.checkTimeoutSeconds.
   readonly execute: (context: CheckContext) => Promise<CheckResult>;
 };
 

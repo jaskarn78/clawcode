@@ -140,7 +140,7 @@ export class HeartbeatRunner {
           config: this.config,
         };
 
-        const timeoutMs = this.config.checkTimeoutSeconds * 1000;
+        const timeoutMs = (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;
         const result = await this.executeWithTimeout(check, context, timeoutMs);
         const timestamp = new Date().toISOString();
 
