@@ -12,6 +12,7 @@ export const IPC_METHODS = [
   "status",
   "routes",
   "rate-limit-status",
+  "heartbeat-status",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

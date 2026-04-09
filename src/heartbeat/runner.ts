@@ -110,6 +110,12 @@ export class HeartbeatRunner {
     };
 
     for (const agentName of agentNames) {
+      // Skip agents with heartbeat disabled (D-13)
+      const agentConfig = this.agentConfigs.get(agentName);
+      if (agentConfig && agentConfig.heartbeat.enabled === false) {
+        continue;
+      }
+
       if (!this.latestResults.has(agentName)) {
         this.latestResults.set(agentName, new Map());
       }

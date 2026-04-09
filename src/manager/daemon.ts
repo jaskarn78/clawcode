@@ -21,6 +21,8 @@ import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
 import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
 import type { RoutingTable, RateLimiter } from "../discord/types.js";
+import { HeartbeatRunner } from "../heartbeat/runner.js";
+import type { CheckStatus } from "../heartbeat/types.js";
 
 /**
  * Base directory for manager runtime files.
@@ -102,7 +104,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -136,18 +138,33 @@ export async function startDaemon(
   // 7. Reconcile registry per D-10
   await manager.reconcileRegistry(resolvedAgents);
 
-  // 8. Create IPC handler
+  // 8. Initialize heartbeat runner
+  const heartbeatConfig = config.defaults.heartbeat;
+  const heartbeatRunner = new HeartbeatRunner({
+    sessionManager: manager,
+    registryPath: REGISTRY_PATH,
+    config: heartbeatConfig,
+    checksDir: join(import.meta.dirname, "../heartbeat/checks"),
+    log,
+  });
+  await heartbeatRunner.initialize();
+  heartbeatRunner.setAgentConfigs(resolvedAgents);
+  heartbeatRunner.start();
+  log.info({ checks: "discovered", interval: heartbeatConfig.intervalSeconds }, "heartbeat started");
+
+  // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter);
+    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner);
   };
 
-  // 9. Create IPC server
+  // 10. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
-  // 10. Register signal handlers per D-15
+  // 11. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
     server.close();
+    heartbeatRunner.stop();
     await manager.stopAll();
     await unlink(SOCKET_PATH).catch(() => {});
     await unlink(PID_PATH).catch(() => {});
@@ -163,7 +180,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, shutdown };
 }
 
 /**
@@ -176,6 +193,7 @@ async function routeMethod(
   params: Record<string, unknown>,
   routingTable: RoutingTable,
   rateLimiter: RateLimiter,
+  heartbeatRunner: HeartbeatRunner,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -228,6 +246,28 @@ async function routeMethod(
         channelTokens: Object.fromEntries(stats.channelTokens),
         queueDepths: Object.fromEntries(stats.queueDepths),
       };
+    }
+
+    case "heartbeat-status": {
+      const results = heartbeatRunner.getLatestResults();
+      const agents: Record<string, unknown> = {};
+      for (const [agentName, checks] of results) {
+        const checksObj: Record<string, unknown> = {};
+        let worstStatus: CheckStatus = "healthy";
+        for (const [checkName, { result, lastChecked }] of checks) {
+          checksObj[checkName] = {
+            status: result.status,
+            message: result.message,
+            lastChecked,
+            ...(result.metadata ? { metadata: result.metadata } : {}),
+          };
+          if (result.status === "critical" || (result.status === "warning" && worstStatus !== "critical")) {
+            worstStatus = result.status;
+          }
+        }
+        agents[agentName] = { checks: checksObj, overall: worstStatus };
+      }
+      return { agents };
     }
 
     default:
