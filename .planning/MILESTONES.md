@@ -1,5 +1,18 @@
 # Milestones: ClawCode
 
+## v1.3 Agent Integrations (Shipped: 2026-04-09)
+
+**Phases completed:** 2 phases, 4 plans, 7 tasks
+
+**Key accomplishments:**
+
+- CLI command, MCP tool, and skill documentation wrapping spawn-subagent-thread IPC for agent-driven Discord thread creation
+- Conditional system prompt injection telling agents with subagent-thread skill to prefer spawn_subagent_thread MCP tool over raw Agent tool for Discord-visible subagent work
+- MCP server config in clawcode.yaml with shared definitions, per-agent resolution, and SDK session passthrough
+- MCP tool listing in agent system prompts, server health checking via JSON-RPC initialize, and CLI mcp-servers command with IPC plumbing
+
+---
+
 ## v1.2 Production Hardening & Platform Parity (Shipped: 2026-04-09)
 
 **Phases completed:** 10 phases, 20 plans, 37 tasks
