@@ -27,6 +27,7 @@ import { TaskScheduler } from "../scheduler/scheduler.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
+import { writeMessage, createMessage } from "../collaboration/inbox.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -338,6 +339,26 @@ async function routeMethod(
         : allAssignments;
 
       return { catalog, assignments };
+    }
+
+    case "send-message": {
+      const from = validateStringParam(params, "from");
+      const to = validateStringParam(params, "to");
+      const content = validateStringParam(params, "content");
+      const priority = typeof params.priority === "string" ? params.priority : "normal";
+
+      // Find target agent config to get workspace path
+      const targetConfig = configs.find((c) => c.name === to);
+      if (!targetConfig) {
+        throw new ManagerError(`Target agent '${to}' not found in config`);
+      }
+
+      // Write message to target agent's inbox
+      const inboxDir = join(targetConfig.workspace, "inbox");
+      const message = createMessage(from, to, content, priority as "normal" | "high" | "urgent");
+      await writeMessage(inboxDir, message);
+
+      return { ok: true, messageId: message.id };
     }
 
     default:

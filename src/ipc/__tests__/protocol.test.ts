@@ -18,6 +18,7 @@ describe("IPC_METHODS", () => {
       "heartbeat-status",
       "schedules",
       "skills",
+      "send-message",
     ]);
   });
 });
