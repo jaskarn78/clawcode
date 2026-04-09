@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
 status: Ready to plan
-stopped_at: Completed 28-02-PLAN.md
-last_updated: "2026-04-09T21:04:32.081Z"
+stopped_at: Completed 29-02-PLAN.md
+last_updated: "2026-04-09T21:21:00.552Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 10
-  completed_phases: 8
-  total_plans: 16
-  completed_plans: 16
+  completed_phases: 9
+  total_plans: 18
+  completed_plans: 18
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 28 — Security & Execution Approval
+**Current focus:** Phase 29 — Agent Bootstrap
 
 ## Current Position
 
-Phase: 29
+Phase: 30
 Plan: Not started
 
 ## Performance Metrics
@@ -67,6 +67,8 @@ Plan: Not started
 | Phase 27-subagent-discord-threads P02 | 4min | 2 tasks | 5 files |
 | Phase 28 P01 | 3min | 2 tasks | 9 files |
 | Phase 28-security-execution-approval P02 | 3min | 2 tasks | 6 files |
+| Phase 29 P01 | 2min | 2 tasks | 6 files |
+| Phase 29-agent-bootstrap P02 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -104,6 +106,10 @@ Recent decisions affecting current work:
 - [Phase 28-security-execution-approval]: Security policies loaded from workspace SECURITY.md at daemon start, updated in-memory via IPC
 - [Phase 28-security-execution-approval]: ACL check before message routing in bridge -- unauthorized messages silently dropped with info log
 - [Phase 28-security-execution-approval]: Allow-always patterns restored from JSONL audit log on daemon start for cross-restart persistence
+- [Phase 29]: Flag file pattern (.bootstrap-complete) for first-run detection
+- [Phase 29-agent-bootstrap]: Bootstrap prompt replaces entire system prompt (early return) -- bootstrap IS the session purpose
+- [Phase 29-agent-bootstrap]: Channel bindings included in bootstrap mode for Discord context
+- [Phase 29-agent-bootstrap]: reconcileRegistry passes undefined bootstrapStatus -- resumed sessions skip bootstrap
 
 ### Pending Todos
 
@@ -124,5 +130,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 28-02-PLAN.md
+Stopped at: Completed 29-02-PLAN.md
 Resume file: None

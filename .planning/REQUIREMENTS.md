@@ -61,9 +61,9 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Agent Bootstrap
 
-- [ ] **BOOT-01**: New agents without a SOUL.md get a first-run bootstrap walkthrough
-- [ ] **BOOT-02**: Bootstrap generates SOUL.md, IDENTITY.md from guided prompts
-- [ ] **BOOT-03**: Bootstrap is triggered once on first agent start (flag persisted in agent workspace)
+- [x] **BOOT-01**: New agents without a SOUL.md get a first-run bootstrap walkthrough
+- [x] **BOOT-02**: Bootstrap generates SOUL.md, IDENTITY.md from guided prompts
+- [x] **BOOT-03**: Bootstrap is triggered once on first agent start (flag persisted in agent workspace)
 
 ### Security & Access Control
 
@@ -148,9 +148,9 @@ Deferred to later milestones.
 | SECR-01 | Phase 28 | Complete |
 | SECR-02 | Phase 28 | Complete |
 | SECR-03 | Phase 28 | Complete |
-| BOOT-01 | Phase 29 | Pending |
-| BOOT-02 | Phase 29 | Pending |
-| BOOT-03 | Phase 29 | Pending |
+| BOOT-01 | Phase 29 | Complete |
+| BOOT-02 | Phase 29 | Complete |
+| BOOT-03 | Phase 29 | Complete |
 | DASH-01 | Phase 30 | Pending |
 | DASH-02 | Phase 30 | Pending |
 | DASH-03 | Phase 30 | Pending |

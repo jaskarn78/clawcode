@@ -38,7 +38,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 - [x] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log (completed 2026-04-09)
 - [x] **Phase 27: Subagent Discord Threads** - Auto thread creation on subagent spawn, webhook binding, routing, cleanup (completed 2026-04-09)
 - [x] **Phase 28: Security & Execution Approval** - Command allowlists, approval flow, channel ACLs, audit logging (completed 2026-04-09)
-- [ ] **Phase 29: Agent Bootstrap** - First-run detection, guided SOUL.md/IDENTITY.md generation
+- [x] **Phase 29: Agent Bootstrap** - First-run detection, guided SOUL.md/IDENTITY.md generation (completed 2026-04-09)
 - [ ] **Phase 30: Web Dashboard** - Agent status, memory stats, schedules, health, delivery queue, agent controls
 
 ## Phase Details
@@ -163,7 +163,7 @@ Plans:
   3. Bootstrap runs exactly once per agent (completion flag persisted in agent workspace prevents re-triggering)
 **Plans**: 2 plans
 Plans:
-- [ ] 29-01-PLAN.md — Bootstrap types, detector, prompt builder, writer with tests (BOOT-01, BOOT-02, BOOT-03)
+- [x] 29-01-PLAN.md — Bootstrap types, detector, prompt builder, writer with tests (BOOT-01, BOOT-02, BOOT-03)
 - [ ] 29-02-PLAN.md — Daemon wiring: startAgent bootstrap detection, session-config integration, integration tests (BOOT-01, BOOT-02, BOOT-03)
 
 ### Phase 30: Web Dashboard
@@ -198,5 +198,5 @@ Plans:
 | 26. Discord Delivery Queue | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 27. Subagent Discord Threads | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 28. Security & Execution Approval | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 29. Agent Bootstrap | v1.2 | 0/2 | Not started | - |
+| 29. Agent Bootstrap | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 30. Web Dashboard | v1.2 | 0/? | Not started | - |
