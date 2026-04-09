@@ -1,5 +1,33 @@
 # Milestones: ClawCode
 
+## v1.2 Production Hardening & Platform Parity (Shipped: 2026-04-09)
+
+**Phases completed:** 10 phases, 20 plans, 37 tasks
+
+**Key accomplishments:**
+
+- Split 960-line session-manager.ts into four focused modules (302/155/223/146 lines) using composition pattern with unchanged public API
+- Eliminated all as-unknown-as casts from 7 test files and added unit tests for 4 untested CLI commands (fork, send, webhooks, mcp)
+- Explicit TypeScript interfaces replacing any types for Claude Agent SDK v2 unstable API with migration documentation
+- Chokidar-based config watcher with field-level diffing, reloadable/non-reloadable classification, and JSONL audit trail
+- ConfigReloader dispatches config diffs to routing, scheduler, heartbeat, skills, and webhooks subsystems with routingTableRef pattern for live IPC updates
+- 4-zone context classification (green/yellow/orange/red) with configurable thresholds, transition tracking, and auto-snapshot on upward entry to yellow+
+- Zone trackers in HeartbeatRunner with IPC endpoints, color-coded CLI status column, and auto-snapshot/notification callbacks
+- EpisodeStore with structured content format, schema migration, and semantic search integration via existing MemoryStore/sqlite-vec infrastructure
+- Episode archival pipeline moving old episodes to cold tier with vec_memories removal, plus CLI episodes subcommand for operator visibility
+- SQLite-backed Discord delivery queue with enqueue/retry/fail lifecycle and exponential backoff (1s base, 30s cap, 3 max attempts)
+- Wired SQLite delivery queue into Discord bridge send path with IPC status endpoint and CLI visibility command
+- SubagentThreadSpawner service that creates Discord threads for subagent sessions with webhook identity and binding persistence
+- End-to-end subagent thread spawning via IPC with automatic session lifecycle cleanup and thread-aware message routing
+- Glob-based command allowlist matcher, SECURITY.md channel ACL parser, and JSONL approval audit log with allow-always persistence
+- Channel ACL enforcement in Discord bridge, 6 security IPC methods in daemon, and CLI security status command with tests
+- First-run bootstrap detection, prompt generation, and identity file writer with flag-based idempotency
+- Bootstrap detection wired into startAgent with early-return prompt replacement and 4-test integration suite
+- Dependency-free HTTP dashboard with SSE real-time agent status, bold dark aesthetic using JetBrains Mono and hot pink accent, plus REST API for agent control
+- All dashboard panels (schedules, health, memory, delivery queue, messages) with SSE real-time updates and daemon auto-start wiring
+
+---
+
 ## v1.1 Advanced Intelligence (Shipped: 2026-04-09)
 
 **Phases completed:** 15 phases, 32 plans, 43 tasks
