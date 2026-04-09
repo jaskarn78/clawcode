@@ -24,6 +24,9 @@ import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { CheckStatus } from "../heartbeat/types.js";
 import { TaskScheduler } from "../scheduler/scheduler.js";
+import { scanSkillsDirectory } from "../skills/scanner.js";
+import { linkAgentSkills } from "../skills/linker.js";
+import type { SkillsCatalog } from "../skills/types.js";
 // Discord bridge removed — agents handle Discord natively via inherited MCP plugin
 
 /**
@@ -106,7 +109,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -123,6 +126,15 @@ export async function startDaemon(
 
   // 5. Resolve all agents
   const resolvedAgents = resolveAllAgents(config);
+
+  // 5a. Scan skills directory and link agent skills
+  const skillsPath = resolvedAgents.length > 0 ? resolvedAgents[0].skillsPath : "";
+  const skillsCatalog = await scanSkillsDirectory(skillsPath, log);
+  log.info({ skills: skillsCatalog.size }, "skills catalog loaded");
+
+  for (const agent of resolvedAgents) {
+    await linkAgentSkills(join(agent.workspace, "skills"), agent.skills, skillsCatalog, log);
+  }
 
   // 5b. Build routing table and rate limiter
   const routingTable = buildRoutingTable(resolvedAgents);
@@ -168,7 +180,7 @@ export async function startDaemon(
 
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler);
+    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog);
   };
 
   // 10. Create IPC server
@@ -200,7 +212,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, shutdown };
 }
 
 /**
@@ -215,6 +227,7 @@ async function routeMethod(
   rateLimiter: RateLimiter,
   heartbeatRunner: HeartbeatRunner,
   taskScheduler: TaskScheduler,
+  skillsCatalog: SkillsCatalog,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -294,6 +307,20 @@ async function routeMethod(
     case "schedules": {
       const statuses = taskScheduler.getStatuses();
       return { schedules: statuses };
+    }
+
+    case "skills": {
+      const catalog = Array.from(skillsCatalog.entries()).map(([, entry]) => ({ ...entry }));
+      const allAssignments = Object.fromEntries(configs.map((c) => [c.name, c.skills]));
+
+      const agentFilter = typeof params.agent === "string" ? params.agent : undefined;
+      const assignments = agentFilter
+        ? Object.fromEntries(
+            Object.entries(allAssignments).filter(([name]) => name === agentFilter),
+          )
+        : allAssignments;
+
+      return { catalog, assignments };
     }
 
     default:
