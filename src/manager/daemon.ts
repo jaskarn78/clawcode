@@ -17,6 +17,10 @@ import type { SessionAdapter } from "./session-adapter.js";
 import { SdkSessionAdapter } from "./session-adapter.js";
 import { loadConfig, resolveAllAgents } from "../config/loader.js";
 import { readRegistry } from "./registry.js";
+import { buildRoutingTable } from "../discord/router.js";
+import { createRateLimiter } from "../discord/rate-limiter.js";
+import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
+import type { RoutingTable, RateLimiter } from "../discord/types.js";
 
 /**
  * Base directory for manager runtime files.
@@ -98,7 +102,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -116,6 +120,11 @@ export async function startDaemon(
   // 5. Resolve all agents
   const resolvedAgents = resolveAllAgents(config);
 
+  // 5b. Build routing table and rate limiter
+  const routingTable = buildRoutingTable(resolvedAgents);
+  const rateLimiter = createRateLimiter(DEFAULT_RATE_LIMITER_CONFIG);
+  log.info({ routes: routingTable.channelToAgent.size }, "routing table built");
+
   // 6. Create SessionManager
   const sessionAdapter = adapter ?? new SdkSessionAdapter();
   const manager = new SessionManager({
@@ -129,7 +138,7 @@ export async function startDaemon(
 
   // 8. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params);
+    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter);
   };
 
   // 9. Create IPC server
@@ -154,7 +163,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, shutdown };
+  return { server, manager, routingTable, rateLimiter, shutdown };
 }
 
 /**
@@ -165,6 +174,8 @@ async function routeMethod(
   configs: readonly import("../shared/types.js").ResolvedAgentConfig[],
   method: string,
   params: Record<string, unknown>,
+  routingTable: RoutingTable,
+  rateLimiter: RateLimiter,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -201,6 +212,22 @@ async function routeMethod(
     case "status": {
       const registry = await readRegistry(REGISTRY_PATH);
       return { entries: registry.entries };
+    }
+
+    case "routes": {
+      return {
+        channels: Object.fromEntries(routingTable.channelToAgent),
+        agents: Object.fromEntries(routingTable.agentToChannels),
+      };
+    }
+
+    case "rate-limit-status": {
+      const stats = rateLimiter.getStats();
+      return {
+        globalTokens: stats.globalTokens,
+        channelTokens: Object.fromEntries(stats.channelTokens),
+        queueDepths: Object.fromEntries(stats.queueDepths),
+      };
     }
 
     default:

@@ -54,6 +54,7 @@ export type AgentSessionConfig = {
   readonly model: "sonnet" | "opus" | "haiku";
   readonly workspace: string;
   readonly systemPrompt: string;
+  readonly channels: readonly string[];
 };
 
 /**

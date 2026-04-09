@@ -482,11 +482,21 @@ export class SessionManager {
       }
     }
 
+    // Append Discord channel binding instructions if channels are configured
+    const channels = config.channels ?? [];
+    if (channels.length > 0) {
+      systemPrompt += "\n\n## Discord Channel Bindings\n";
+      systemPrompt += `You are bound to the following Discord channel(s): ${channels.join(", ")}\n`;
+      systemPrompt += "ONLY respond to messages from these channels. Ignore messages from any other channel.\n";
+      systemPrompt += "When replying, use the reply tool with the chat_id from the incoming message.";
+    }
+
     return {
       name: config.name,
       model: config.model,
       workspace: config.workspace,
       systemPrompt: systemPrompt.trim(),
+      channels,
     };
   }
 
