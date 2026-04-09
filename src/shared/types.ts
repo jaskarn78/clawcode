@@ -45,6 +45,7 @@ export type ResolvedAgentConfig = {
       readonly criticalThreshold: number;
     };
   };
+  readonly skillsPath: string;
   readonly schedules: readonly {
     readonly name: string;
     readonly cron: string;

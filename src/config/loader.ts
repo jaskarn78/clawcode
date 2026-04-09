@@ -61,6 +61,7 @@ export function resolveAgentConfig(
     soul: agent.soul,
     identity: agent.identity,
     memory: agent.memory ?? defaults.memory,
+    skillsPath: expandHome(defaults.skillsPath),
     heartbeat: heartbeatConfig,
     schedules: agent.schedules,
   };

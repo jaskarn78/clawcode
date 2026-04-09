@@ -71,6 +71,7 @@ export const defaultsSchema = z.object({
   model: modelSchema.default("sonnet"),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
+  skillsPath: z.string().default("~/.clawcode/skills"),
   memory: memorySchema.default(() => ({
     compactionThreshold: 0.75,
     searchTopK: 10,
@@ -96,6 +97,7 @@ export const configSchema = z.object({
     model: "sonnet" as const,
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
+    skillsPath: "~/.clawcode/skills",
     memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
     heartbeat: {
       enabled: true,
