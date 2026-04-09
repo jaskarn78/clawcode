@@ -29,7 +29,7 @@ Phases 1-5 delivered: central config, agent lifecycle, Discord routing, per-agen
 - [ ] **Phase 8: Tiered Memory Storage** - Hot/warm/cold memory tiers with automatic promotion on access
 - [ ] **Phase 9: Task Scheduling** - Cron-like scheduled tasks per agent within persistent sessions
 - [x] **Phase 10: Skills Registry** - Central skill catalog with per-agent assignment and discovery (completed 2026-04-09)
-- [ ] **Phase 11: Agent Collaboration** - Subagent spawning, async messaging between agents, and admin cross-workspace access
+- [x] **Phase 11: Agent Collaboration** - Subagent spawning, async messaging between agents, and admin cross-workspace access (completed 2026-04-09)
 
 ## Phase Details
 
@@ -126,7 +126,7 @@ Plans:
 - [x] 11-01-PLAN.md — Types, config schema (admin + subagentModel), inbox file operations
 - [x] 11-02-PLAN.md — Inbox heartbeat check and IPC send-message method
 - [x] 11-03-PLAN.md — Admin agent validation, system prompt injection, cross-workspace access
-- [ ] 11-04-PLAN.md — CLI send command
+- [x] 11-04-PLAN.md — CLI send command
 
 ## Progress
 
@@ -140,4 +140,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 8. Tiered Memory Storage | v1.1 | 0/2 | Not started | - |
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
-| 11. Agent Collaboration | v1.1 | 3/4 | In Progress|  |
+| 11. Agent Collaboration | v1.1 | 4/4 | Complete   | 2026-04-09 |
