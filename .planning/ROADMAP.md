@@ -107,7 +107,7 @@ Plans:
 
 Plans:
 - [x] 10-01-PLAN.md — Skills types, directory scanner, and config schema extension
-- [ ] 10-02-PLAN.md — Daemon wiring, system prompt injection, symlinks, and IPC skills method
+- [x] 10-02-PLAN.md — Daemon wiring, system prompt injection, symlinks, and IPC skills method
 - [ ] 10-03-PLAN.md — CLI skills command with formatted table output
 
 ### Phase 11: Agent Collaboration
@@ -139,5 +139,5 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 7. Memory Relevance & Deduplication | v1.1 | 0/3 | Not started | - |
 | 8. Tiered Memory Storage | v1.1 | 0/2 | Not started | - |
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
-| 10. Skills Registry | v1.1 | 1/3 | In Progress|  |
+| 10. Skills Registry | v1.1 | 2/3 | In Progress|  |
 | 11. Agent Collaboration | v1.1 | 0/4 | Not started | - |

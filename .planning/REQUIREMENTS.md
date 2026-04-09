@@ -28,8 +28,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 ### Skills Registry
 
 - [x] **SKIL-01**: Central skills registry cataloging all available skills with metadata (name, description, version)
-- [ ] **SKIL-02**: Per-agent skill assignment configurable in clawcode.yaml
-- [ ] **SKIL-03**: Agents can discover and list their assigned skills
+- [x] **SKIL-02**: Per-agent skill assignment configurable in clawcode.yaml
+- [x] **SKIL-03**: Agents can discover and list their assigned skills
 - [x] **SKIL-04**: Skills are directories with SKILL.md -- existing Claude Code skill format
 
 ### Subagent Spawning
@@ -70,8 +70,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | SKED-02 | Phase 9 | Complete |
 | SKED-03 | Phase 9 | Complete |
 | SKIL-01 | Phase 10 | Complete |
-| SKIL-02 | Phase 10 | Pending |
-| SKIL-03 | Phase 10 | Pending |
+| SKIL-02 | Phase 10 | Complete |
+| SKIL-03 | Phase 10 | Complete |
 | SKIL-04 | Phase 10 | Complete |
 | SAGN-01 | Phase 11 | Pending |
 | SAGN-02 | Phase 11 | Pending |
