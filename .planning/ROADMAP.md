@@ -68,7 +68,10 @@ Plans:
   3. Agent system prompts list available MCP tools with descriptions so agents know what external tools they can use
   4. Running `clawcode mcp-servers` shows configured MCP servers per agent with health/connectivity status
   5. MCP server health is verifiable -- the daemon can confirm servers start and respond before marking them active
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 32-01-PLAN.md -- Config schema, types, resolution, and SDK session passthrough (MCPC-01, MCPC-02, MCPC-06)
+- [ ] 32-02-PLAN.md -- System prompt MCP tools injection, health checks, CLI mcp-servers command (MCPC-03, MCPC-04, MCPC-05)
 
 ## Progress
 
@@ -80,4 +83,4 @@ Plans:
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21-30 | v1.2 | - | Complete | 2026-04-09 |
 | 31. Subagent Thread Skill | v1.3 | 1/2 | Complete    | 2026-04-09 |
-| 32. MCP Client Consumption | v1.3 | 0/? | Not started | - |
+| 32. MCP Client Consumption | v1.3 | 0/2 | Not started | - |
