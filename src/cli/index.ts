@@ -23,6 +23,7 @@ import { registerForkCommand } from "./commands/fork.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerMemoryCommand } from "./commands/memory.js";
 import { registerUsageCommand } from "./commands/usage.js";
+import { registerDeliveryQueueCommand } from "./commands/delivery-queue.js";
 
 /**
  * Options for the init action.
@@ -123,6 +124,7 @@ registerForkCommand(program);
 registerMcpCommand(program);
 registerMemoryCommand(program);
 registerUsageCommand(program);
+registerDeliveryQueueCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =
