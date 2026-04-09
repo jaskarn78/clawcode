@@ -12,6 +12,7 @@ import { registerRestartCommand } from "./commands/restart.js";
 import { registerStartAllCommand } from "./commands/start-all.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerRoutesCommand } from "./commands/routes.js";
+import { registerHealthCommand } from "./commands/health.js";
 
 /**
  * Options for the init action.
@@ -102,6 +103,7 @@ registerRestartCommand(program);
 registerStartAllCommand(program);
 registerStatusCommand(program);
 registerRoutesCommand(program);
+registerHealthCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =
