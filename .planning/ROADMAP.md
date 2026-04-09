@@ -28,7 +28,7 @@ Phases 1-5 delivered: central config, agent lifecycle, Discord routing, per-agen
 - [ ] **Phase 7: Memory Relevance & Deduplication** - Memories decay over time and duplicates merge automatically
 - [ ] **Phase 8: Tiered Memory Storage** - Hot/warm/cold memory tiers with automatic promotion on access
 - [ ] **Phase 9: Task Scheduling** - Cron-like scheduled tasks per agent within persistent sessions
-- [ ] **Phase 10: Skills Registry** - Central skill catalog with per-agent assignment and discovery
+- [x] **Phase 10: Skills Registry** - Central skill catalog with per-agent assignment and discovery (completed 2026-04-09)
 - [ ] **Phase 11: Agent Collaboration** - Subagent spawning, async messaging between agents, and admin cross-workspace access
 
 ## Phase Details
@@ -108,7 +108,7 @@ Plans:
 Plans:
 - [x] 10-01-PLAN.md — Skills types, directory scanner, and config schema extension
 - [x] 10-02-PLAN.md — Daemon wiring, system prompt injection, symlinks, and IPC skills method
-- [ ] 10-03-PLAN.md — CLI skills command with formatted table output
+- [x] 10-03-PLAN.md — CLI skills command with formatted table output
 
 ### Phase 11: Agent Collaboration
 **Goal**: Agents work together -- they can spawn helpers, exchange messages asynchronously, and the admin agent can oversee and coordinate across the entire system
@@ -139,5 +139,5 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 7. Memory Relevance & Deduplication | v1.1 | 0/3 | Not started | - |
 | 8. Tiered Memory Storage | v1.1 | 0/2 | Not started | - |
 | 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
-| 10. Skills Registry | v1.1 | 2/3 | In Progress|  |
+| 10. Skills Registry | v1.1 | 3/3 | Complete   | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 0/4 | Not started | - |
