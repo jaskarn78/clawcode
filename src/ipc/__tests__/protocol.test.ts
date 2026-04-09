@@ -20,6 +20,10 @@ describe("IPC_METHODS", () => {
       "skills",
       "send-message",
       "slash-commands",
+      "webhooks",
+      "fork-session",
+      "memory-search",
+      "memory-list",
     ]);
   });
 });
