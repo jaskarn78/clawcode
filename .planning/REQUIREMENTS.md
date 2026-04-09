@@ -40,10 +40,10 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Episode Memory
 
-- [ ] **EPSD-01**: Agents can store discrete episode records (significant events with metadata) alongside session logs
-- [ ] **EPSD-02**: Episodes have structured fields: title, summary, importance, tags, timestamp
-- [ ] **EPSD-03**: Episodes are searchable via semantic search alongside regular memories
-- [ ] **EPSD-04**: Episodes can be archived monthly (similar to consolidation pipeline pattern)
+- [x] **EPSD-01**: Agents can store discrete episode records (significant events with metadata) alongside session logs
+- [x] **EPSD-02**: Episodes have structured fields: title, summary, importance, tags, timestamp
+- [x] **EPSD-03**: Episodes are searchable via semantic search alongside regular memories
+- [x] **EPSD-04**: Episodes can be archived monthly (similar to consolidation pipeline pattern)
 
 ### Config Hot-Reload
 
@@ -129,10 +129,10 @@ Deferred to later milestones.
 | CTXH-02 | Phase 24 | Complete |
 | CTXH-03 | Phase 24 | Complete |
 | CTXH-04 | Phase 24 | Complete |
-| EPSD-01 | Phase 25 | Pending |
-| EPSD-02 | Phase 25 | Pending |
-| EPSD-03 | Phase 25 | Pending |
-| EPSD-04 | Phase 25 | Pending |
+| EPSD-01 | Phase 25 | Complete |
+| EPSD-02 | Phase 25 | Complete |
+| EPSD-03 | Phase 25 | Complete |
+| EPSD-04 | Phase 25 | Complete |
 | DQUE-01 | Phase 26 | Pending |
 | DQUE-02 | Phase 26 | Pending |
 | DQUE-03 | Phase 26 | Pending |

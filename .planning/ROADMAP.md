@@ -34,7 +34,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 - [x] **Phase 22: Tech Debt - Test & Type Safety** - Test fixture updates, CLI unit tests, SDK v2 type narrowing (completed 2026-04-09)
 - [x] **Phase 23: Config Hot-Reload & Audit Trail** - File watching, live config updates, JSONL change log (completed 2026-04-09)
 - [x] **Phase 24: Context Health Zones** - Zone classification, alerts, auto-snapshots, status visibility (completed 2026-04-09)
-- [ ] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival
+- [x] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival (completed 2026-04-09)
 - [ ] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log
 - [ ] **Phase 27: Subagent Discord Threads** - Auto thread creation on subagent spawn, webhook binding, routing, cleanup
 - [ ] **Phase 28: Security & Execution Approval** - Command allowlists, approval flow, channel ACLs, audit logging
@@ -107,8 +107,8 @@ Plans:
   3. Episodes can be archived on a monthly cycle following the same pattern as the consolidation pipeline
 **Plans**: 2 plans
 Plans:
-- [ ] 25-01-PLAN.md — Episode types, schema migration, store, search integration (EPSD-01, EPSD-02, EPSD-03)
-- [ ] 25-02-PLAN.md — Episode archival pipeline and CLI integration (EPSD-04)
+- [x] 25-01-PLAN.md — Episode types, schema migration, store, search integration (EPSD-01, EPSD-02, EPSD-03)
+- [x] 25-02-PLAN.md — Episode archival pipeline and CLI integration (EPSD-04)
 
 ### Phase 26: Discord Delivery Queue
 **Goal**: Outbound Discord messages are reliably delivered with retry logic and failure visibility
@@ -194,7 +194,7 @@ Plans:
 | 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 24. Context Health Zones | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 25. Episode Memory | v1.2 | 0/? | Not started | - |
+| 25. Episode Memory | v1.2 | 2/2 | Complete   | 2026-04-09 |
 | 26. Discord Delivery Queue | v1.2 | 0/? | Not started | - |
 | 27. Subagent Discord Threads | v1.2 | 0/? | Not started | - |
 | 28. Security & Execution Approval | v1.2 | 0/? | Not started | - |

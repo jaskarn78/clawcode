@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
-status: Ready to plan
-stopped_at: Completed 24-02-PLAN.md
-last_updated: "2026-04-09T20:00:32.325Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-04-09T20:12:46.061Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 10
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 24 — Context Health Zones
+**Current focus:** Phase 25 — Episode Memory
 
 ## Current Position
 
-Phase: 25
-Plan: Not started
+Phase: 25 (Episode Memory) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -59,6 +59,8 @@ Plan: Not started
 | Phase 23 P02 | 3min | 2 tasks | 3 files |
 | Phase 24-context-health-zones P01 | 4min | 2 tasks | 7 files |
 | Phase 24-context-health-zones P02 | 6min | 2 tasks | 8 files |
+| Phase 25-episode-memory P01 | 3min | 2 tasks | 6 files |
+| Phase 25-episode-memory P02 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -82,6 +84,8 @@ Recent decisions affecting current work:
 - [Phase 24-context-health-zones]: Snapshot callback only fires on upward zone transitions to avoid redundant snapshots
 - [Phase 24-context-health-zones]: Discord notification wired as log-based with TODO for Phase 26 delivery queue
 - [Phase 24-context-health-zones]: Zone trackers lazily initialized on first context-fill result, not at construction
+- [Phase 25-episode-memory]: Episodes stored as standard MemoryEntry with source='episode' — no separate table, shared KNN search
+- [Phase 25-episode-memory]: Episode archival deletes vec_memories rows to fully remove from semantic search
 
 ### Pending Todos
 
@@ -102,5 +106,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 24-02-PLAN.md
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
