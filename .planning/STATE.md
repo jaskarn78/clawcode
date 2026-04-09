@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
-status: Ready to execute
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-04-09T04:35:14.500Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-04-09T04:41:19.710Z"
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -57,6 +57,7 @@ Plan: 2 of 2
 | Phase 07 P01 | 3min | 2 tasks | 12 files |
 | Phase 07 P03 | 3min | 2 tasks | 5 files |
 | Phase 08 P01 | 4min | 2 tasks | 8 files |
+| Phase 08 P02 | 4min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,7 @@ Recent decisions affecting current work:
 - [Phase 07]: Exponential half-life formula: importance * 0.5^(days/halfLifeDays) for predictable decay curve
 - [Phase 07]: Score decay BEFORE updating accessed_at to prevent self-boosting on read
 - [Phase 08]: Use date-fns differenceInDays for tier transition date math; Buffer-to-Float32Array conversion for getEmbedding; ALTER TABLE ADD COLUMN for backward-compatible tier migration
+- [Phase 08]: TierManager uses DI pattern; cold archives use yaml package; initMemory reordered before buildSessionConfig for hot injection
 
 ### Pending Todos
 
@@ -90,6 +92,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T04:35:14.497Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-04-09T04:41:19.706Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None

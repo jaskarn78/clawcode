@@ -77,7 +77,7 @@ Plans:
 
 Plans:
 - [x] 08-01-PLAN.md --- Types, schema, pure tier functions, SQLite migration� Types, schema, pure tier functions, SQLite migration
-- [ ] 08-02-PLAN.md --- TierManager, cold archival, hot injection, integration wiring� TierManager, cold archival, hot injection, integration wiring
+- [x] 08-02-PLAN.md --- TierManager, cold archival, hot injection, integration wiring� TierManager, cold archival, hot injection, integration wiring
 
 ### Phase 9: Task Scheduling
 **Goal**: Agents can perform recurring work autonomously -- maintenance tasks, checks, and routines run on schedule without human triggering
