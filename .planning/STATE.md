@@ -66,8 +66,8 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
-- Claude Agent SDK V2 is pre-1.0 (unstable preview) -- pin exact version, wrap in thin adapter
-- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts
+- ~~Claude Agent SDK V2 unstable_v2 limitations~~ -- resolved: migrated to query() API (260409-vs4)
+- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)
 
 ### Quick Tasks Completed
 
@@ -86,5 +86,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed quick task 260409-whx: Fix stale test fixture type definitions
+Stopped at: Completed tech debt sweep — zero tsc errors, all code tests passing
 Resume file: None
