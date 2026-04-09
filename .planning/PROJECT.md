@@ -15,9 +15,10 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Central config system defining all agents, their workspaces, channels, models, skills — Validated in Phase 1
 - Per-agent workspace directories with SOUL.md, IDENTITY.md, and agent-specific config — Validated in Phase 1
 - Agent Manager that can start/stop/restart individual agents and boot all from config — Validated in Phase 2
+- Discord channel routing — each agent bound to specific channel(s), messages routed accordingly — Validated in Phase 3
+- Centralized rate limiter prevents exceeding Discord's per-token rate limits across all agents — Validated in Phase 3
 
 ### Active
-- [ ] Discord channel routing — each agent bound to specific channel(s), messages routed accordingly
 - [ ] Intelligent memory system — structured markdown + SQLite semantic search, per-agent
 - [ ] Memory auto-consolidation — daily logs summarized into weekly/monthly digests, raw archived
 - [ ] Memory relevance decay — unaccessed memories lose priority over time
@@ -90,4 +91,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-09 after Phase 2 completion*
+*Last updated: 2026-04-09 after Phase 3 completion*
