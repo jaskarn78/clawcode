@@ -13,6 +13,24 @@ import type {
   HeartbeatLogEntry,
 } from "./types.js";
 import { discoverChecks } from "./discovery.js";
+import {
+  ContextZoneTracker,
+  DEFAULT_ZONE_THRESHOLDS,
+} from "./context-zones.js";
+import type {
+  ContextZone,
+  ZoneTransition,
+  ZoneThresholds,
+  SnapshotCallback,
+} from "./context-zones.js";
+
+/**
+ * Callback invoked on any zone transition (for Discord notifications etc.).
+ */
+export type ZoneNotificationCallback = (
+  agentName: string,
+  transition: ZoneTransition,
+) => Promise<void>;
 
 /**
  * Options for creating a HeartbeatRunner.
@@ -23,6 +41,8 @@ export type HeartbeatRunnerOptions = {
   readonly config: HeartbeatConfig;
   readonly checksDir: string;
   readonly log: Logger;
+  readonly snapshotCallback?: SnapshotCallback;
+  readonly notificationCallback?: ZoneNotificationCallback;
 };
 
 /**
@@ -37,6 +57,8 @@ export class HeartbeatRunner {
   private readonly config: HeartbeatConfig;
   private readonly checksDir: string;
   private readonly log: Logger;
+  private readonly snapshotCallback?: SnapshotCallback;
+  private readonly notificationCallback?: ZoneNotificationCallback;
 
   private checks: readonly CheckModule[] = [];
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -46,6 +68,7 @@ export class HeartbeatRunner {
     Map<string, { result: CheckResult; lastChecked: string }>
   > = new Map();
   private readonly agentConfigs: Map<string, ResolvedAgentConfig> = new Map();
+  private readonly zoneTrackers: Map<string, ContextZoneTracker> = new Map();
   private threadManager: ThreadManager | undefined;
 
   constructor(options: HeartbeatRunnerOptions) {
@@ -54,6 +77,8 @@ export class HeartbeatRunner {
     this.config = options.config;
     this.checksDir = options.checksDir;
     this.log = options.log;
+    this.snapshotCallback = options.snapshotCallback;
+    this.notificationCallback = options.notificationCallback;
   }
 
   /**
@@ -112,6 +137,15 @@ export class HeartbeatRunner {
   async tick(): Promise<void> {
     const agentNames = this.sessionManager.getRunningAgents();
 
+    // Cleanup zone trackers for agents no longer running
+    const runningSet = new Set(agentNames);
+    for (const [name, tracker] of this.zoneTrackers) {
+      if (!runningSet.has(name)) {
+        tracker.reset();
+        this.zoneTrackers.delete(name);
+      }
+    }
+
     // Build a minimal registry for context (read-only snapshot)
     const registry: Registry = {
       entries: [],
@@ -158,7 +192,6 @@ export class HeartbeatRunner {
         this.lastRun.set(runKey, now);
 
         // Log to NDJSON file
-        const agentConfig = this.agentConfigs.get(agentName);
         if (agentConfig) {
           this.logResult(agentConfig.workspace, agentName, check.name, result, timestamp);
         }
@@ -170,6 +203,58 @@ export class HeartbeatRunner {
             "heartbeat check critical",
           );
         }
+
+        // Zone tracking: update zone tracker if fill percentage is present in metadata
+        if (check.name === "context-fill" && result.metadata && typeof result.metadata.fillPercentage === "number") {
+          await this.updateZoneTracker(agentName, result.metadata.fillPercentage as number, agentConfig);
+        }
+      }
+    }
+  }
+
+  /**
+   * Update the zone tracker for an agent with a new fill percentage.
+   * Creates tracker lazily if needed. Logs transitions and fires callbacks.
+   */
+  private async updateZoneTracker(
+    agentName: string,
+    fillPercentage: number,
+    agentConfig: ResolvedAgentConfig | undefined,
+  ): Promise<void> {
+    // Get or create zone tracker
+    if (!this.zoneTrackers.has(agentName)) {
+      const thresholds: ZoneThresholds =
+        agentConfig?.heartbeat?.contextFill?.zoneThresholds ?? DEFAULT_ZONE_THRESHOLDS;
+      const tracker = new ContextZoneTracker({
+        agentName,
+        thresholds,
+        onSnapshot: this.snapshotCallback,
+      });
+      this.zoneTrackers.set(agentName, tracker);
+    }
+
+    const tracker = this.zoneTrackers.get(agentName)!;
+    const transition = await tracker.update(fillPercentage);
+
+    if (transition) {
+      this.log.info(
+        {
+          agent: agentName,
+          from: transition.from,
+          to: transition.to,
+          fillPercentage: transition.fillPercentage,
+        },
+        "context zone transition",
+      );
+
+      // Fire notification callback (fire-and-forget)
+      if (this.notificationCallback) {
+        this.notificationCallback(agentName, transition).catch((err) => {
+          this.log.warn(
+            { agent: agentName, error: (err as Error).message },
+            "zone notification callback failed",
+          );
+        });
       }
     }
   }
@@ -182,6 +267,27 @@ export class HeartbeatRunner {
     ReadonlyMap<string, { result: CheckResult; lastChecked: string }>
   > {
     return this.latestResults;
+  }
+
+  /**
+   * Get current zone statuses for all tracked agents.
+   * Returns zone and last known fill percentage from latest results.
+   */
+  getZoneStatuses(): ReadonlyMap<string, { zone: ContextZone; fillPercentage: number }> {
+    const result = new Map<string, { zone: ContextZone; fillPercentage: number }>();
+    for (const [name, tracker] of this.zoneTrackers) {
+      // Extract last known fill percentage from latest results metadata
+      let fillPercentage = 0;
+      const agentResults = this.latestResults.get(name);
+      if (agentResults) {
+        const fillResult = agentResults.get("context-fill");
+        if (fillResult?.result.metadata && typeof fillResult.result.metadata.fillPercentage === "number") {
+          fillPercentage = fillResult.result.metadata.fillPercentage as number;
+        }
+      }
+      result.set(name, { zone: tracker.zone, fillPercentage });
+    }
+    return result;
   }
 
   /**

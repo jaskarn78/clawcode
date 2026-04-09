@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { HeartbeatRunner } from "../runner.js";
 import type { CheckModule, CheckResult, HeartbeatConfig } from "../types.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
+import type { ZoneTransition } from "../context-zones.js";
 
 function createMockSessionManager(agents: string[] = ["agent-a"]) {
   return {
@@ -353,5 +354,175 @@ describe("HeartbeatRunner", () => {
     expect(entry.status).toBe("healthy");
     expect(entry.message).toBe("all good");
     expect(entry.timestamp).toBeTruthy();
+  });
+
+  describe("zone tracking", () => {
+    function createAgentConfig(name: string, workspace: string, config: HeartbeatConfig): ResolvedAgentConfig {
+      return {
+        name,
+        workspace,
+        channels: [],
+        model: "sonnet",
+        skills: [],
+        soul: undefined,
+        identity: undefined,
+        memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
+        schedules: [],
+        heartbeat: config,
+      };
+    }
+
+    function createContextFillCheck(fillPercentage: number): CheckModule {
+      return {
+        name: "context-fill",
+        execute: vi.fn().mockResolvedValue({
+          status: fillPercentage >= 0.75 ? "critical" : fillPercentage >= 0.6 ? "warning" : "healthy",
+          message: `Context fill: ${Math.round(fillPercentage * 100)}%`,
+          metadata: { fillPercentage },
+        }),
+      };
+    }
+
+    it("getZoneStatuses returns correct zone after tick with fill metadata", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+      });
+
+      const check = createContextFillCheck(0.55);
+      (runner as any).checks = [check];
+      runner.setAgentConfigs([createAgentConfig("agent-a", join(tempDir, "agent-a"), config)]);
+
+      await runner.tick();
+
+      const zones = runner.getZoneStatuses();
+      expect(zones.has("agent-a")).toBe(true);
+      expect(zones.get("agent-a")!.zone).toBe("yellow");
+      expect(zones.get("agent-a")!.fillPercentage).toBe(0.55);
+    });
+
+    it("zone transition triggers pino log.info", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+      });
+
+      // First tick at 55% (green -> yellow transition)
+      const check = createContextFillCheck(0.55);
+      (runner as any).checks = [check];
+      runner.setAgentConfigs([createAgentConfig("agent-a", join(tempDir, "agent-a"), config)]);
+
+      await runner.tick();
+
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "agent-a",
+          from: "green",
+          to: "yellow",
+          fillPercentage: 0.55,
+        }),
+        "context zone transition",
+      );
+    });
+
+    it("snapshotCallback called on upward transition to yellow+", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+      const snapshotCallback = vi.fn().mockResolvedValue(undefined);
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+        snapshotCallback,
+      });
+
+      const check = createContextFillCheck(0.55);
+      (runner as any).checks = [check];
+      runner.setAgentConfigs([createAgentConfig("agent-a", join(tempDir, "agent-a"), config)]);
+
+      await runner.tick();
+
+      expect(snapshotCallback).toHaveBeenCalledWith("agent-a", "yellow", 0.55);
+    });
+
+    it("notificationCallback called on any zone transition", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+      const notificationCallback = vi.fn().mockResolvedValue(undefined);
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+        notificationCallback,
+      });
+
+      const check = createContextFillCheck(0.55);
+      (runner as any).checks = [check];
+      runner.setAgentConfigs([createAgentConfig("agent-a", join(tempDir, "agent-a"), config)]);
+
+      await runner.tick();
+
+      expect(notificationCallback).toHaveBeenCalledWith(
+        "agent-a",
+        expect.objectContaining({
+          from: "green",
+          to: "yellow",
+          fillPercentage: 0.55,
+        }),
+      );
+    });
+
+    it("agent cleanup removes zone tracker when agent no longer running", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+      });
+
+      const check = createContextFillCheck(0.55);
+      (runner as any).checks = [check];
+      runner.setAgentConfigs([createAgentConfig("agent-a", join(tempDir, "agent-a"), config)]);
+
+      await runner.tick();
+
+      // agent-a should have a zone tracker
+      expect(runner.getZoneStatuses().has("agent-a")).toBe(true);
+
+      // Now agent-a is no longer running
+      sessionManager.getRunningAgents.mockReturnValue([]);
+
+      await runner.tick();
+
+      // Zone tracker should be cleaned up
+      expect(runner.getZoneStatuses().has("agent-a")).toBe(false);
+    });
   });
 });
