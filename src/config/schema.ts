@@ -48,6 +48,34 @@ export const scheduleEntrySchema = z.object({
 export type ScheduleEntryConfig = z.infer<typeof scheduleEntrySchema>;
 
 /**
+ * Schema for a single slash command option.
+ * Type field uses Discord's ApplicationCommandOptionType (1-11).
+ */
+export const slashCommandOptionSchema = z.object({
+  name: z.string().min(1),
+  type: z.number().int().min(1).max(11),
+  description: z.string().min(1),
+  required: z.boolean().default(false),
+});
+
+/**
+ * Schema for a single slash command entry.
+ * Name must be lowercase alphanumeric with hyphens (Discord requirement).
+ */
+export const slashCommandEntrySchema = z.object({
+  name: z.string().min(1).max(32).regex(/^[\w-]+$/),
+  description: z.string().min(1).max(100),
+  claudeCommand: z.string().min(1),
+  options: z.array(slashCommandOptionSchema).default([]),
+});
+
+/** Inferred slash command option type. */
+export type SlashCommandOptionConfig = z.infer<typeof slashCommandOptionSchema>;
+
+/** Inferred slash command entry type. */
+export type SlashCommandEntryConfig = z.infer<typeof slashCommandEntrySchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -64,6 +92,7 @@ export const agentSchema = z.object({
   schedules: z.array(scheduleEntrySchema).default([]),
   admin: z.boolean().default(false),
   subagentModel: modelSchema.optional(),
+  slashCommands: z.array(slashCommandEntrySchema).default([]),
 });
 
 /**

@@ -36,6 +36,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -50,6 +52,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -63,6 +67,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -76,6 +82,8 @@ describe("resolveAgentConfig", () => {
       skills: ["custom-skill"],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -89,6 +97,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -103,6 +113,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -116,6 +128,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
     const agentCopy = { ...agent };
 
@@ -131,6 +145,8 @@ describe("resolveAgentConfig", () => {
       skills: [],
       heartbeat: true,
       schedules: [],
+      admin: false,
+      slashCommands: [],
     };
     const defaultsCopy = { ...defaults };
 

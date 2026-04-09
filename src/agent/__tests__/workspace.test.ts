@@ -24,6 +24,10 @@ function makeAgent(overrides: Partial<ResolvedAgentConfig> & { workspace: string
     identity: undefined,
     memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
     schedules: [],
+    admin: false,
+    subagentModel: undefined,
+    skillsPath: "~/.clawcode/skills",
+    slashCommands: [],
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
