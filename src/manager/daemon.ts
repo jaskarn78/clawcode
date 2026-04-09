@@ -35,6 +35,9 @@ import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
 import { SemanticSearch } from "../memory/search.js";
 import { startOfWeek } from "date-fns";
+import { ConfigWatcher } from "../config/watcher.js";
+import { ConfigReloader } from "./config-reloader.js";
+import type { ConfigDiff } from "../config/types.js";
 
 /**
  * Base directory for manager runtime files.
@@ -116,7 +119,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -219,7 +222,7 @@ export async function startDaemon(
 
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager);
   };
 
   // 10. Create IPC server
@@ -278,9 +281,36 @@ export async function startDaemon(
     }
   }
 
+  // 11c. Initialize config hot-reload
+  const auditTrailPath = join(MANAGER_DIR, "config-audit.jsonl");
+  const routingTableRef = { current: routingTable };
+
+  const configReloader = new ConfigReloader({
+    sessionManager: manager,
+    taskScheduler,
+    heartbeatRunner,
+    webhookManager,
+    skillsCatalog,
+    routingTableRef,
+    log,
+  });
+
+  const configWatcher = new ConfigWatcher({
+    configPath,
+    auditTrailPath,
+    onChange: async (diff, newResolvedAgents) => {
+      const summary = await configReloader.applyChanges(diff, newResolvedAgents);
+      log.info({ subsystems: summary.subsystemsReloaded, agents: summary.agentsAffected }, "config hot-reloaded");
+    },
+    log,
+  });
+  await configWatcher.start();
+  log.info({ configPath, auditTrail: auditTrailPath }, "config watcher started");
+
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
+    await configWatcher.stop();
     server.close();
     if (discordBridge) {
       await discordBridge.stop();
@@ -309,7 +339,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, configWatcher, configReloader, routingTableRef, shutdown };
 }
 
 /**
@@ -320,7 +350,7 @@ async function routeMethod(
   configs: readonly import("../shared/types.js").ResolvedAgentConfig[],
   method: string,
   params: Record<string, unknown>,
-  routingTable: RoutingTable,
+  routingTableRef: { current: RoutingTable },
   rateLimiter: RateLimiter,
   heartbeatRunner: HeartbeatRunner,
   taskScheduler: TaskScheduler,
@@ -367,8 +397,8 @@ async function routeMethod(
 
     case "routes": {
       return {
-        channels: Object.fromEntries(routingTable.channelToAgent),
-        agents: Object.fromEntries(routingTable.agentToChannels),
+        channels: Object.fromEntries(routingTableRef.current.channelToAgent),
+        agents: Object.fromEntries(routingTableRef.current.agentToChannels),
       };
     }
 
