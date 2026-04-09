@@ -28,8 +28,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Discord Integration
 
 - [x] **DISC-01**: Config maps Discord channel IDs to agent IDs for message routing
-- [ ] **DISC-02**: Incoming Discord messages route to the correct agent based on channel binding
-- [ ] **DISC-03**: Agent responses are delivered back to the originating Discord channel
+- [x] **DISC-02**: Incoming Discord messages route to the correct agent based on channel binding
+- [x] **DISC-03**: Agent responses are delivered back to the originating Discord channel
 - [x] **DISC-04**: Centralized rate limiter prevents exceeding Discord's per-token rate limits across all agents
 
 ### Memory
@@ -107,8 +107,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WKSP-03 | Phase 1 | Complete |
 | WKSP-04 | Phase 1 | Complete |
 | DISC-01 | Phase 3 | Complete |
-| DISC-02 | Phase 3 | Pending |
-| DISC-03 | Phase 3 | Pending |
+| DISC-02 | Phase 3 | Complete |
+| DISC-03 | Phase 3 | Complete |
 | DISC-04 | Phase 3 | Complete |
 | MEM-01 | Phase 4 | Pending |
 | MEM-02 | Phase 4 | Pending |
