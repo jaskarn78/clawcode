@@ -46,6 +46,7 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
     threads: { idleTimeoutMinutes: 30, maxThreadSessions: 5 },
     reactions: false,
     slashCommands: [],
+    mcpServers: [],
     ...overrides,
   };
 }
@@ -105,5 +106,44 @@ describe("buildSessionConfig — subagent thread skill guidance", () => {
     // Should have both Available Skills section and Subagent Thread Skill section
     expect(result.systemPrompt).toContain("## Available Skills");
     expect(result.systemPrompt).toContain("## Subagent Thread Skill");
+  });
+});
+
+describe("buildSessionConfig — MCP tools injection", () => {
+  it("includes Available MCP Tools section when agent has mcpServers configured", async () => {
+    const config = makeConfig({
+      mcpServers: [
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
+      ],
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("## Available MCP Tools");
+  });
+
+  it("lists each server name and command in the MCP tools section", async () => {
+    const config = makeConfig({
+      mcpServers: [
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
+        { name: "google-workspace", command: "node", args: ["gw-server.js"], env: { API_KEY: "test" } },
+      ],
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("**finnhub**");
+    expect(result.systemPrompt).toContain("`npx -y finnhub-mcp`");
+    expect(result.systemPrompt).toContain("**google-workspace**");
+    expect(result.systemPrompt).toContain("`node gw-server.js`");
+  });
+
+  it("does NOT include MCP tools section when agent has empty mcpServers", async () => {
+    const config = makeConfig({ mcpServers: [] });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("Available MCP Tools");
+  });
+
+  it("does NOT include MCP tools section when mcpServers is undefined (defaults to empty)", async () => {
+    // mcpServers defaults to [] via ?? in buildSessionConfig
+    const config = makeConfig();
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("Available MCP Tools");
   });
 });
