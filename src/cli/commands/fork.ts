@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 /**
  * Shape of the "fork-session" IPC response.
@@ -37,16 +38,16 @@ export function registerForkCommand(program: Command): void {
           "fork-session",
           params,
         )) as ForkResponse;
-        console.log(`Forked ${result.parentAgent} -> ${result.forkName}`);
-        console.log(`Session ID: ${result.sessionId}`);
+        cliLog(`Forked ${result.parentAgent} -> ${result.forkName}`);
+        cliLog(`Session ID: ${result.sessionId}`);
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
-          console.error("Manager is not running. Start it with: clawcode start-all");
+          cliError("Manager is not running. Start it with: clawcode start-all");
           process.exit(1);
           return;
         }
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${msg}`);
+        cliError(`Error: ${msg}`);
         process.exit(1);
       }
     });

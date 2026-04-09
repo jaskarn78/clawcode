@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { cliError } from "../output.js";
 
 /**
  * Register the `clawcode mcp` command.
@@ -15,7 +16,7 @@ export function registerMcpCommand(program: Command): void {
         await startMcpServer();
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`Error starting MCP server: ${msg}`);
+        cliError(`Error starting MCP server: ${msg}`);
         process.exit(1);
       }
     });

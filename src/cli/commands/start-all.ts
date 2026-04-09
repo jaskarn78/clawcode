@@ -6,6 +6,7 @@ import { startDaemon, SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
 import { formatStatusTable } from "./status.js";
 import type { RegistryEntry } from "../../manager/types.js";
+import { cliLog, cliError } from "../output.js";
 
 /**
  * Check if the daemon is already running by sending a status request.
@@ -55,7 +56,7 @@ export function registerStartAllCommand(program: Command): void {
     .action(async (opts: { config: string; foreground: boolean }) => {
       try {
         if (opts.foreground) {
-          console.log(
+          cliLog(
             "Manager running in foreground. Press Ctrl+C to stop.",
           );
           await startDaemon(opts.config);
@@ -65,7 +66,7 @@ export function registerStartAllCommand(program: Command): void {
           // Check if already running
           const existing = await checkDaemonRunning();
           if (existing !== null) {
-            console.log("Manager is already running");
+            cliLog("Manager is already running");
             return;
           }
 
@@ -91,13 +92,13 @@ export function registerStartAllCommand(program: Command): void {
           const entries = await waitForDaemon();
 
           if (entries !== null) {
-            console.log(
+            cliLog(
               `Manager started. Booting ${entries.length} agent(s)...`,
             );
-            console.log();
-            console.log(formatStatusTable(entries));
+            cliLog();
+            cliLog(formatStatusTable(entries));
           } else {
-            console.error(
+            cliError(
               "Manager failed to start. Check logs at ~/.clawcode/manager/",
             );
             process.exit(1);
@@ -106,7 +107,7 @@ export function registerStartAllCommand(program: Command): void {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${message}`);
+        cliError(`Error: ${message}`);
         process.exit(1);
       }
     });

@@ -6,6 +6,7 @@ import {
   IpcError,
   SessionError,
 } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 /**
  * Register the `clawcode start <name>` command.
@@ -22,21 +23,21 @@ export function registerStartCommand(program: Command): void {
           name,
           config: opts.config,
         });
-        console.log(`Agent '${name}' started`);
+        cliLog(`Agent '${name}' started`);
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
-          console.error(
+          cliError(
             "Manager is not running. Start it with: clawcode start-all",
           );
           process.exit(1);
         }
         if (error instanceof IpcError || error instanceof SessionError) {
-          console.error(`Error: ${error.message}`);
+          cliError(`Error: ${error.message}`);
           process.exit(1);
         }
         const message =
           error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${message}`);
+        cliError(`Error: ${message}`);
         process.exit(1);
       }
     });

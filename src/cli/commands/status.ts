@@ -4,6 +4,7 @@ import { SOCKET_PATH, REGISTRY_PATH } from "../../manager/daemon.js";
 import { readRegistry } from "../../manager/registry.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
 import type { RegistryEntry } from "../../manager/types.js";
+import { cliLog, cliError } from "../output.js";
 
 // ANSI color codes
 const RESET = "\x1b[0m";
@@ -124,22 +125,22 @@ export function registerStatusCommand(program: Command): void {
         const result = (await sendIpcRequest(SOCKET_PATH, "status", {})) as {
           entries: readonly RegistryEntry[];
         };
-        console.log(formatStatusTable(result.entries));
+        cliLog(formatStatusTable(result.entries));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
           // Fallback: try reading registry file directly
           try {
             const registry = await readRegistry(REGISTRY_PATH);
             if (registry.entries.length === 0) {
-              console.log("No agents configured");
+              cliLog("No agents configured");
             } else {
-              console.log(
+              cliLog(
                 `${DIM}(Manager is not running -- showing last known state)${RESET}\n`,
               );
-              console.log(formatStatusTable(registry.entries));
+              cliLog(formatStatusTable(registry.entries));
             }
           } catch {
-            console.error(
+            cliError(
               "Manager is not running. Start it with: clawcode start-all",
             );
             process.exit(1);
@@ -148,7 +149,7 @@ export function registerStatusCommand(program: Command): void {
         }
         const message =
           error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${message}`);
+        cliError(`Error: ${message}`);
         process.exit(1);
       }
     });

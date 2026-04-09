@@ -6,6 +6,7 @@ import {
   ConfigFileNotFoundError,
 } from "../shared/errors.js";
 import { logger } from "../shared/logger.js";
+import { cliLog, cliError } from "./output.js";
 import { registerStartCommand } from "./commands/start.js";
 import { registerStopCommand } from "./commands/stop.js";
 import { registerRestartCommand } from "./commands/restart.js";
@@ -47,15 +48,15 @@ export async function initAction(options: InitOptions): Promise<void> {
   const resolvedAgents = resolveAllAgents(config);
 
   if (options.dryRun) {
-    console.log("Dry run -- showing what would be created:\n");
+    cliLog("Dry run -- showing what would be created:\n");
     for (const agent of resolvedAgents) {
-      console.log(`  Agent: ${agent.name}`);
-      console.log(`    Workspace: ${agent.workspace}`);
-      console.log(`    Files: SOUL.md, IDENTITY.md`);
-      console.log(`    Dirs: memory/, skills/`);
-      console.log();
+      cliLog(`  Agent: ${agent.name}`);
+      cliLog(`    Workspace: ${agent.workspace}`);
+      cliLog(`    Files: SOUL.md, IDENTITY.md`);
+      cliLog(`    Dirs: memory/, skills/`);
+      cliLog("");
     }
-    console.log(`Would initialize ${resolvedAgents.length} agent workspace(s)`);
+    cliLog(`Would initialize ${resolvedAgents.length} agent workspace(s)`);
     return;
   }
 
@@ -63,13 +64,13 @@ export async function initAction(options: InitOptions): Promise<void> {
 
   for (const result of results) {
     if (result.filesWritten.length > 0) {
-      console.log(`Created: ${result.path}`);
+      cliLog(`Created: ${result.path}`);
     } else {
-      console.log(`Exists: ${result.path}`);
+      cliLog(`Exists: ${result.path}`);
     }
   }
 
-  console.log(`\nInitialized ${results.length} agent workspace(s)`);
+  cliLog(`\nInitialized ${results.length} agent workspace(s)`);
   logger.info({ count: results.length }, "workspaces initialized");
 }
 
@@ -92,15 +93,15 @@ program
       await initAction({ config: opts.config, dryRun: opts.dryRun });
     } catch (error) {
       if (error instanceof ConfigFileNotFoundError) {
-        console.error(`Error: ${error.message}`);
+        cliError(`Error: ${error.message}`);
         process.exit(1);
       }
       if (error instanceof ConfigValidationError) {
-        console.error(`Error: Invalid config:\n${error.issues.join("\n")}`);
+        cliError(`Error: Invalid config:\n${error.issues.join("\n")}`);
         process.exit(1);
       }
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Error: ${message}`);
+      cliError(`Error: ${message}`);
       process.exit(1);
     }
   });

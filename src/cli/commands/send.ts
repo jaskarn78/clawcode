@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 /**
  * Shape of the "send-message" IPC response.
@@ -29,15 +30,15 @@ export function registerSendCommand(program: Command): void {
           content: message,
           priority: opts.priority,
         })) as SendResponse;
-        console.log(`Message sent to ${agent} (id: ${result.messageId})`);
+        cliLog(`Message sent to ${agent} (id: ${result.messageId})`);
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
-          console.error("Manager is not running. Start it with: clawcode start-all");
+          cliError("Manager is not running. Start it with: clawcode start-all");
           process.exit(1);
           return;
         }
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${msg}`);
+        cliError(`Error: ${msg}`);
         process.exit(1);
       }
     });

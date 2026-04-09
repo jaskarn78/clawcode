@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 /**
  * Shape of the "usage" IPC response.
@@ -73,17 +74,17 @@ export function registerUsageCommand(program: Command): void {
             date: opts.date,
             sessionId: opts.sessionId,
           })) as UsageResponse;
-          console.log(formatUsageTable(result));
+          cliLog(formatUsageTable(result));
         } catch (error) {
           if (error instanceof ManagerNotRunningError) {
-            console.error(
+            cliError(
               "Manager is not running. Start it with: clawcode start-all",
             );
             process.exit(1);
             return;
           }
           const msg = error instanceof Error ? error.message : String(error);
-          console.error(`Error: ${msg}`);
+          cliError(`Error: ${msg}`);
           process.exit(1);
         }
       },

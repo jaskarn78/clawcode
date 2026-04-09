@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 /**
  * A single skill catalog entry from the IPC response.
@@ -114,10 +115,10 @@ export function registerSkillsCommand(program: Command): void {
           "skills",
           {},
         )) as SkillsResponse;
-        console.log(formatSkillsTable(result));
+        cliLog(formatSkillsTable(result));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
-          console.error(
+          cliError(
             "Manager is not running. Start it with: clawcode start-all",
           );
           process.exit(1);
@@ -125,7 +126,7 @@ export function registerSkillsCommand(program: Command): void {
         }
         const message =
           error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${message}`);
+        cliError(`Error: ${message}`);
         process.exit(1);
       }
     });

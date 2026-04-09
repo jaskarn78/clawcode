@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 // ANSI color codes
 const RESET = "\x1b[0m";
@@ -200,10 +201,10 @@ export function registerHealthCommand(program: Command): void {
           "heartbeat-status",
           {},
         )) as HeartbeatStatusResponse;
-        console.log(formatHealthTable(result));
+        cliLog(formatHealthTable(result));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
-          console.error(
+          cliError(
             "Manager is not running. Start it with: clawcode start-all",
           );
           process.exit(1);
@@ -211,7 +212,7 @@ export function registerHealthCommand(program: Command): void {
         }
         const message =
           error instanceof Error ? error.message : String(error);
-        console.error(`Error: ${message}`);
+        cliError(`Error: ${message}`);
         process.exit(1);
       }
     });

@@ -11,6 +11,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync, copyFileSync, unlinkSync } from "node:fs";
 import { join, basename } from "node:path";
+import { logger } from "../shared/logger.js";
 import {
   getISOWeek,
   getISOWeekYear,
@@ -437,7 +438,7 @@ export async function archiveDailyLogs(
     } catch (error) {
       // Log but don't throw -- partial archive is acceptable
       const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error(`Failed to archive ${fileName}: ${msg}`);
+      logger.error({ fileName, error: msg }, "failed to archive daily log");
     }
   }
 
@@ -470,7 +471,7 @@ export async function archiveWeeklyDigests(
       archived += 1;
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error(`Failed to archive weekly digest ${fileName}: ${msg}`);
+      logger.error({ fileName, error: msg }, "failed to archive weekly digest");
     }
   }
 

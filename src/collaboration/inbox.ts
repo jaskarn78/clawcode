@@ -2,6 +2,7 @@ import { mkdir, writeFile, readdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { nanoid } from "nanoid";
 import type { InboxMessage, MessagePriority } from "./types.js";
+import { logger } from "../shared/logger.js";
 
 /**
  * Create a new InboxMessage with a generated id and current timestamp.
@@ -79,13 +80,13 @@ export async function readMessages(
       const parsed = JSON.parse(raw) as InboxMessage;
 
       if (!parsed.id || !parsed.from || !parsed.to || !parsed.content || !parsed.timestamp) {
-        console.warn(`[inbox] Skipping malformed message file: ${file}`);
+        logger.warn({ file }, "skipping malformed inbox message file");
         continue;
       }
 
       messages.push(parsed);
     } catch {
-      console.warn(`[inbox] Failed to parse message file: ${file}`);
+      logger.warn({ file }, "failed to parse inbox message file");
     }
   }
 

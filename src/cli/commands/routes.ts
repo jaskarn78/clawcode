@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError, IpcError } from "../../shared/errors.js";
+import { cliLog, cliError } from "../output.js";
 
 // ANSI color codes
 const RESET = "\x1b[0m";
@@ -57,21 +58,21 @@ export async function routesAction(): Promise<void> {
       agents: Record<string, string[]>;
     };
 
-    console.log("Channel Routes:\n");
-    console.log(formatRoutesTable(result.channels));
+    cliLog("Channel Routes:\n");
+    cliLog(formatRoutesTable(result.channels));
   } catch (error) {
     if (error instanceof ManagerNotRunningError) {
-      console.error(
+      cliError(
         "Daemon is not running. Start with: clawcode start-all",
       );
       process.exit(1);
     }
     if (error instanceof IpcError) {
-      console.error(`Error: ${error.message}`);
+      cliError(`Error: ${error.message}`);
       process.exit(1);
     }
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Error: ${message}`);
+    cliError(`Error: ${message}`);
     process.exit(1);
   }
 }
