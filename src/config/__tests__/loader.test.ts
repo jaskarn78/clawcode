@@ -34,6 +34,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -47,6 +48,7 @@ describe("resolveAgentConfig", () => {
       model: "opus",
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -59,6 +61,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -71,6 +74,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       skills: ["custom-skill"],
       heartbeat: true,
+      schedules: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -83,6 +87,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -96,6 +101,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);
@@ -108,6 +114,7 @@ describe("resolveAgentConfig", () => {
       channels: ["ch1"],
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
     const agentCopy = { ...agent };
 
@@ -122,6 +129,7 @@ describe("resolveAgentConfig", () => {
       channels: [],
       skills: [],
       heartbeat: true,
+      schedules: [],
     };
     const defaultsCopy = { ...defaults };
 

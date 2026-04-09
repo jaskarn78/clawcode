@@ -33,6 +33,21 @@ export const heartbeatConfigSchema = z.object({
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 
 /**
+ * Schema for a single scheduled task entry.
+ * Cron field accepts standard cron expressions or croner's extended format.
+ * Validation of the cron expression itself happens at scheduler startup.
+ */
+export const scheduleEntrySchema = z.object({
+  name: z.string().min(1),
+  cron: z.string().min(1),
+  prompt: z.string().min(1),
+  enabled: z.boolean().default(true),
+});
+
+/** Inferred schedule entry config type. */
+export type ScheduleEntryConfig = z.infer<typeof scheduleEntrySchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -46,6 +61,7 @@ export const agentSchema = z.object({
   identity: z.string().optional(),
   memory: memorySchema.optional(),
   heartbeat: z.boolean().default(true),
+  schedules: z.array(scheduleEntrySchema).default([]),
 });
 
 /**

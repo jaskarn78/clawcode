@@ -62,6 +62,7 @@ export function resolveAgentConfig(
     identity: agent.identity,
     memory: agent.memory ?? defaults.memory,
     heartbeat: heartbeatConfig,
+    schedules: agent.schedules,
   };
 }
 
