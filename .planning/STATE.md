@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Advanced Intelligence
-status: v1.1 milestone complete
-last_updated: "2026-04-09T16:58:30.384Z"
+milestone: v1.2
+milestone_name: Production Hardening & Platform Parity
+status: Defining requirements
+last_updated: "2026-04-09T17:10:00.000Z"
 last_activity: 2026-04-09
 progress:
-  total_phases: 15
-  completed_phases: 15
-  total_plans: 32
-  completed_plans: 32
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -19,12 +19,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v1.1 milestone complete — planning next milestone
+**Current focus:** v1.2 — Production Hardening & Platform Parity
 
 ## Current Position
 
-Milestone: v1.1 complete
-Next: /gsd:new-milestone
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-09 — Milestone v1.2 started
 
 ## Performance Metrics
 

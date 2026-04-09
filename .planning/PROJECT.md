@@ -41,7 +41,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-(No active requirements — define via `/gsd:new-milestone`)
+- [ ] Subagent spawning auto-creates Discord subthreads with webhook identity
+- [ ] Discord delivery queue with retry and failed message logging
+- [ ] Context health zones (green/yellow/orange/red alerts with auto-snapshot)
+- [ ] Episode-based memory (discrete event records alongside session logs)
+- [ ] Config hot-reload without daemon restart
+- [ ] Web dashboard for system management (agents, memory, schedules, health, config)
+- [ ] Execution approval system (per-agent command allowlists)
+- [ ] Config audit trail (JSONL log of changes)
+- [ ] Agent bootstrap/first-run BOOTSTRAP.md system
+- [ ] Per-agent SECURITY.md channel ACLs
+- [ ] Tech debt: attachment cleanup, logger consistency, session-manager splitting, test fixes
 
 ### Out of Scope
 
@@ -53,6 +63,23 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Synchronous agent-to-agent RPC — async inbox pattern is simpler and more reliable
 - Shared global memory — violates workspace isolation; per-agent memory with explicit sharing via admin
 - Visual UI for config/management — YAML config is sufficient; UI deferred
+
+## Current Milestone: v1.2 Production Hardening & Platform Parity
+
+**Goal:** Resolve tech debt, achieve OpenClaw feature parity on key platform capabilities, add subagent-to-Discord-thread spawning, and build a web dashboard.
+
+**Target features:**
+- Tech debt cleanup (attachment cleanup, logger consistency, session-manager splitting, test fixtures, CLI tests, SDK v2 types)
+- Subagent spawning auto-creates Discord subthreads with webhook identity
+- Discord delivery queue with retry and failed message logging
+- Context health zones (green/yellow/orange/red alerts with auto-snapshot)
+- Episode-based memory (discrete event records alongside session logs)
+- Config hot-reload without daemon restart
+- Web dashboard (agent status, memory stats, schedules, health monitoring, config management)
+- Execution approval system (per-agent command allowlists)
+- Config audit trail (JSONL log of changes)
+- Agent bootstrap/first-run BOOTSTRAP.md system
+- Per-agent SECURITY.md channel ACLs
 
 ## Context
 
@@ -99,4 +126,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-09 after v1.1 milestone complete*
+*Last updated: 2026-04-09 after v1.2 milestone started*
