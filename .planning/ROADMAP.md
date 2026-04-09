@@ -41,7 +41,7 @@ Phases 1-5 delivered: central config, agent lifecycle, Discord routing, per-agen
   1. After 7 days of daily session logs, a weekly digest summary exists that captures key facts from those days
   2. After 4 weekly digests accumulate, a monthly summary exists that synthesizes the month
   3. Raw daily logs from consolidated periods are archived (still on disk) but no longer appear in standard memory search results
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 06-01-PLAN.md — Schema, types, config extension, and SessionManager accessors
@@ -57,7 +57,7 @@ Plans:
   2. Memory search results are ordered factoring in relevance decay -- not just semantic similarity
   3. When a new memory is stored that semantically duplicates an existing entry, only one entry remains (merged) rather than two
   4. The merged entry preserves the higher importance score and combines metadata from both sources
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 07-01-PLAN.md — Config schema, decay scoring, and relevance ranking functions
@@ -87,7 +87,7 @@ Plans:
   1. User can define a cron-expression scheduled task in clawcode.yaml and the agent executes it at the defined interval
   2. Scheduled tasks run within the agent's existing persistent session (not a separate process)
   3. Running `clawcode schedules` shows all scheduled tasks, their next run time, and last execution status
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 09-01-PLAN.md — Config schema, types, and TaskScheduler engine with croner
@@ -103,7 +103,7 @@ Plans:
   2. clawcode.yaml supports per-agent skill assignment and the agent only sees its assigned skills
   3. An agent can list its own skills at runtime and access their SKILL.md documentation
   4. Skills follow the existing Claude Code directory-with-SKILL.md format (no new format invented)
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 10-01-PLAN.md — Skills types, directory scanner, and config schema extension
@@ -120,13 +120,13 @@ Plans:
   3. The admin agent can read files in any other agent's workspace regardless of workspace isolation
   4. The admin agent can trigger agent restarts and coordinate cross-agent tasks via IPC commands
   5. Subagent spawning and async messaging are independent -- agents that never spawn subagents can still message each other
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
-- [ ] 11-01: TBD
-- [ ] 11-02: TBD
-- [ ] 11-03: TBD
-- [ ] 11-04: TBD
+- [ ] 11-01-PLAN.md — Types, config schema (admin + subagentModel), inbox file operations
+- [ ] 11-02-PLAN.md — Inbox heartbeat check and IPC send-message method
+- [ ] 11-03-PLAN.md — Admin agent validation, system prompt injection, cross-workspace access
+- [ ] 11-04-PLAN.md — CLI send command
 
 ## Progress
 
