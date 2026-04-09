@@ -43,6 +43,11 @@ export type ResolvedAgentConfig = {
     readonly contextFill: {
       readonly warningThreshold: number;
       readonly criticalThreshold: number;
+      readonly zoneThresholds?: {
+        readonly yellow: number;
+        readonly orange: number;
+        readonly red: number;
+      };
     };
   };
   readonly skillsPath: string;

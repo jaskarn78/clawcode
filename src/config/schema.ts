@@ -26,7 +26,12 @@ export const heartbeatConfigSchema = z.object({
   contextFill: z.object({
     warningThreshold: z.number().min(0).max(1).default(0.6),
     criticalThreshold: z.number().min(0).max(1).default(0.75),
-  }).default(() => ({ warningThreshold: 0.6, criticalThreshold: 0.75 })),
+    zoneThresholds: z.object({
+      yellow: z.number().min(0).max(1).default(0.50),
+      orange: z.number().min(0).max(1).default(0.70),
+      red: z.number().min(0).max(1).default(0.85),
+    }).default(() => ({ yellow: 0.50, orange: 0.70, red: 0.85 })),
+  }).default(() => ({ warningThreshold: 0.6, criticalThreshold: 0.75, zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 } })),
 });
 
 /** Inferred heartbeat config type. */
@@ -142,7 +147,7 @@ export const defaultsSchema = z.object({
     enabled: true,
     intervalSeconds: 60,
     checkTimeoutSeconds: 10,
-    contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+    contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75, zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 } },
   })),
   threads: threadsConfigSchema.default(() => ({
     idleTimeoutMinutes: 1440,
@@ -166,7 +171,7 @@ export const configSchema = z.object({
       enabled: true,
       intervalSeconds: 60,
       checkTimeoutSeconds: 10,
-      contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+      contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75, zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 } },
     },
     threads: {
       idleTimeoutMinutes: 1440,

@@ -48,6 +48,11 @@ export type HeartbeatConfig = {
   readonly contextFill: {
     readonly warningThreshold: number;
     readonly criticalThreshold: number;
+    readonly zoneThresholds?: {
+      readonly yellow: number;
+      readonly orange: number;
+      readonly red: number;
+    };
   };
 };
 

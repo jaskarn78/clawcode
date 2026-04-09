@@ -1,13 +1,18 @@
 import type { CheckModule, CheckResult } from "../types.js";
+import { classifyZone, DEFAULT_ZONE_THRESHOLDS } from "../context-zones.js";
 
 /**
  * Built-in context fill percentage check.
  *
  * Reports healthy/warning/critical based on the agent's context fill
- * relative to configured thresholds. Uses CharacterCountFillProvider
- * from the SessionManager for live fill state.
+ * classified into 4 zones (green/yellow/orange/red).
+ * Uses CharacterCountFillProvider from the SessionManager for live fill state.
  *
- * Critical results include a recommendation to compact (but never auto-trigger).
+ * Zone-to-status mapping:
+ * - green -> healthy
+ * - yellow -> warning
+ * - orange -> warning
+ * - red -> critical (includes compaction recommendation)
  */
 const contextFillCheck: CheckModule = {
   name: "context-fill",
@@ -25,28 +30,29 @@ const contextFillCheck: CheckModule = {
 
     const fillPercentage = provider.getContextFillPercentage();
     const pct = Math.round(fillPercentage * 100);
-    const { warningThreshold, criticalThreshold } = config.contextFill;
+    const thresholds = config.contextFill.zoneThresholds ?? DEFAULT_ZONE_THRESHOLDS;
+    const zone = classifyZone(fillPercentage, thresholds);
 
-    if (fillPercentage >= criticalThreshold) {
+    if (zone === "red") {
       return {
         status: "critical",
-        message: `Context fill: ${pct}% -- recommend compaction`,
-        metadata: { fillPercentage },
+        message: `Context fill: ${pct}% [${zone}] -- recommend compaction`,
+        metadata: { fillPercentage, zone },
       };
     }
 
-    if (fillPercentage >= warningThreshold) {
+    if (zone === "orange" || zone === "yellow") {
       return {
         status: "warning",
-        message: `Context fill: ${pct}%`,
-        metadata: { fillPercentage },
+        message: `Context fill: ${pct}% [${zone}]`,
+        metadata: { fillPercentage, zone },
       };
     }
 
     return {
       status: "healthy",
-      message: `Context fill: ${pct}%`,
-      metadata: { fillPercentage },
+      message: `Context fill: ${pct}% [${zone}]`,
+      metadata: { fillPercentage, zone },
     };
   },
 };
