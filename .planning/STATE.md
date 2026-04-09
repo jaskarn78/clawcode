@@ -131,8 +131,13 @@ None yet.
 - Claude Agent SDK V2 is pre-1.0 (unstable preview) -- pin exact version, wrap in thin adapter
 - Discord plugin API surface needs validation for thread management and message editing capabilities
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260409-laz | Add persistent usage tracking to ClawCode agents | 2026-04-09 | 0979508 | [260409-laz-add-persistent-usage-tracking-to-clawcod](./quick/260409-laz-add-persistent-usage-tracking-to-clawcod/) |
+
 ## Session Continuity
 
-Last session: 2026-04-09T15:32:58.806Z
-Stopped at: Completed quick task 260409-laz (usage tracking)
+Last activity: 2026-04-09 - Completed quick task 260409-laz: Add persistent usage tracking to ClawCode agents
 Resume file: None
