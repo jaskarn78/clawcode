@@ -248,6 +248,68 @@ describe("MemoryStore", () => {
     });
   });
 
+  describe("deduplication on insert", () => {
+    /** Create a normalized directional embedding. */
+    function directionalEmbedding(dim: number, value: number): Float32Array {
+      const arr = new Float32Array(384);
+      arr[dim] = value;
+      const norm = Math.abs(value);
+      if (norm > 0) arr[dim] /= norm;
+      return arr;
+    }
+
+    it("merges near-duplicate embedding instead of creating two entries", () => {
+      store = new MemoryStore(":memory:", { enabled: true, similarityThreshold: 0.85 });
+      const vec = directionalEmbedding(0, 1.0);
+
+      store.insert({ content: "original", source: "manual" }, vec);
+      store.insert({ content: "duplicate", source: "manual" }, vec);
+
+      const list = store.listRecent(100);
+      expect(list.length).toBe(1);
+      expect(list[0].content).toBe("duplicate");
+    });
+
+    it("merged entry keeps max importance and union of tags", () => {
+      store = new MemoryStore(":memory:", { enabled: true, similarityThreshold: 0.85 });
+      const vec = directionalEmbedding(0, 1.0);
+
+      store.insert(
+        { content: "original", source: "manual", importance: 0.3, tags: ["a"] },
+        vec,
+      );
+      store.insert(
+        { content: "updated", source: "manual", importance: 0.8, tags: ["b"] },
+        vec,
+      );
+
+      const list = store.listRecent(100);
+      expect(list.length).toBe(1);
+      expect(list[0].importance).toBe(0.8);
+      expect([...list[0].tags].sort()).toEqual(["a", "b"]);
+    });
+
+    it("skipDedup creates new entry even with duplicate embedding", () => {
+      store = new MemoryStore(":memory:", { enabled: true, similarityThreshold: 0.85 });
+      const vec = directionalEmbedding(0, 1.0);
+
+      store.insert({ content: "original", source: "manual" }, vec);
+      store.insert({ content: "skip-dedup", source: "manual", skipDedup: true }, vec);
+
+      const list = store.listRecent(100);
+      expect(list.length).toBe(2);
+    });
+
+    it("first insert into empty DB succeeds normally", () => {
+      store = new MemoryStore(":memory:", { enabled: true, similarityThreshold: 0.85 });
+      const vec = directionalEmbedding(0, 1.0);
+
+      const entry = store.insert({ content: "first", source: "manual" }, vec);
+      expect(entry.content).toBe("first");
+      expect(entry.id).toBeTruthy();
+    });
+  });
+
   describe("source validation", () => {
     it("rejects invalid source values", () => {
       store = createTestStore();

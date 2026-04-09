@@ -3,7 +3,8 @@ import { MemoryStore } from "../store.js";
 import { SemanticSearch } from "../search.js";
 
 function createTestStore(): MemoryStore {
-  return new MemoryStore(":memory:");
+  // Disable dedup for search tests to avoid unintended merges
+  return new MemoryStore(":memory:", { enabled: false, similarityThreshold: 0.85 });
 }
 
 /** Create a normalized random vector. */
@@ -151,5 +152,92 @@ describe("SemanticSearch", () => {
     if (results.length > 0) {
       expect(Object.isFrozen(results[0])).toBe(true);
     }
+  });
+
+  describe("relevance-aware search", () => {
+    it("recently accessed memory ranks higher than stale memory with similar distance", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const search = new SemanticSearch(db);
+
+      // Create two memories with the same embedding direction
+      const vec = directionalEmbedding(0, 1.0);
+      // Slightly different vector so both can coexist
+      const vec2 = new Float32Array(384);
+      vec2[0] = 0.99;
+      vec2[1] = 0.01;
+      const norm = Math.sqrt(vec2[0] ** 2 + vec2[1] ** 2);
+      vec2[0] /= norm;
+      vec2[1] /= norm;
+
+      const staleEntry = store.insert(
+        { content: "stale memory", source: "manual", importance: 0.8 },
+        vec,
+      );
+      const recentEntry = store.insert(
+        { content: "recent memory", source: "manual", importance: 0.8 },
+        vec2,
+      );
+
+      // Make the stale entry 60 days old via direct SQL
+      const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+      db.prepare("UPDATE memories SET accessed_at = ? WHERE id = ?").run(
+        sixtyDaysAgo,
+        staleEntry.id,
+      );
+
+      const queryVec = directionalEmbedding(0, 1.0);
+      const results = search.search(queryVec, 10);
+
+      expect(results.length).toBe(2);
+      // Recent memory should rank first due to higher combined score
+      expect(results[0].content).toBe("recent memory");
+      expect(results[0].combinedScore).toBeGreaterThan(results[1].combinedScore);
+    });
+
+    it("returned objects have relevanceScore and combinedScore fields", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const search = new SemanticSearch(db);
+
+      store.insert(
+        { content: "test", source: "manual", importance: 0.5 },
+        randomEmbedding(),
+      );
+
+      const results = search.search(randomEmbedding(), 10);
+      expect(results.length).toBeGreaterThan(0);
+      expect(typeof results[0].relevanceScore).toBe("number");
+      expect(typeof results[0].combinedScore).toBe("number");
+      expect(results[0].relevanceScore).toBeGreaterThanOrEqual(0);
+      expect(results[0].combinedScore).toBeGreaterThanOrEqual(0);
+    });
+
+    it("accessed_at is updated after search for returned results", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const search = new SemanticSearch(db);
+
+      const entry = store.insert(
+        { content: "tracked", source: "manual" },
+        randomEmbedding(),
+      );
+
+      // Set accessed_at to a known old value
+      const oldTime = "2020-01-01T00:00:00.000Z";
+      db.prepare("UPDATE memories SET accessed_at = ? WHERE id = ?").run(
+        oldTime,
+        entry.id,
+      );
+
+      const results = search.search(randomEmbedding(), 10);
+      expect(results.length).toBe(1);
+      // accessed_at should be updated to after the old value
+      expect(results[0].accessedAt > oldTime).toBe(true);
+
+      // Verify in DB too
+      const row = db.prepare("SELECT accessed_at FROM memories WHERE id = ?").get(entry.id) as { accessed_at: string };
+      expect(row.accessed_at > oldTime).toBe(true);
+    });
   });
 });
