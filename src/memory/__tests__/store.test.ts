@@ -310,6 +310,155 @@ describe("MemoryStore", () => {
     });
   });
 
+  describe("tier column migration", () => {
+    it("tier column exists after store creation", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+
+      const columns = db
+        .prepare("PRAGMA table_info(memories)")
+        .all() as Array<{ name: string }>;
+      const columnNames = columns.map((c) => c.name);
+      expect(columnNames).toContain("tier");
+    });
+
+    it("new memories default to warm tier", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "tier test", source: "manual" },
+        randomEmbedding(),
+      );
+
+      expect(entry.tier).toBe("warm");
+
+      // Also verify from DB directly
+      const db = store.getDatabase();
+      const row = db
+        .prepare("SELECT tier FROM memories WHERE id = ?")
+        .get(entry.id) as { tier: string };
+      expect(row.tier).toBe("warm");
+    });
+  });
+
+  describe("updateTier", () => {
+    it("changes the tier value", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "update tier", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const updated = store.updateTier(entry.id, "hot");
+      expect(updated).toBe(true);
+
+      const db = store.getDatabase();
+      const row = db
+        .prepare("SELECT tier FROM memories WHERE id = ?")
+        .get(entry.id) as { tier: string };
+      expect(row.tier).toBe("hot");
+    });
+
+    it("returns false for non-existent ID", () => {
+      store = createTestStore();
+      expect(store.updateTier("nonexistent", "cold")).toBe(false);
+    });
+
+    it("can set tier to cold", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "cold test", source: "manual" },
+        randomEmbedding(),
+      );
+
+      store.updateTier(entry.id, "cold");
+
+      const db = store.getDatabase();
+      const row = db
+        .prepare("SELECT tier FROM memories WHERE id = ?")
+        .get(entry.id) as { tier: string };
+      expect(row.tier).toBe("cold");
+    });
+  });
+
+  describe("listByTier", () => {
+    it("filters by tier correctly", () => {
+      store = createTestStore();
+      const e1 = store.insert(
+        { content: "warm1", source: "manual" },
+        randomEmbedding(),
+      );
+      const e2 = store.insert(
+        { content: "warm2", source: "manual" },
+        randomEmbedding(),
+      );
+      store.insert(
+        { content: "warm3", source: "manual" },
+        randomEmbedding(),
+      );
+
+      // Promote one to hot, one to cold
+      store.updateTier(e1.id, "hot");
+      store.updateTier(e2.id, "cold");
+
+      const warm = store.listByTier("warm", 100);
+      expect(warm).toHaveLength(1);
+      expect(warm[0].content).toBe("warm3");
+
+      const hot = store.listByTier("hot", 100);
+      expect(hot).toHaveLength(1);
+      expect(hot[0].content).toBe("warm1");
+
+      const cold = store.listByTier("cold", 100);
+      expect(cold).toHaveLength(1);
+      expect(cold[0].content).toBe("warm2");
+    });
+
+    it("respects limit parameter", () => {
+      store = createTestStore();
+      for (let i = 0; i < 5; i++) {
+        store.insert(
+          { content: `entry${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+      }
+
+      const limited = store.listByTier("warm", 2);
+      expect(limited).toHaveLength(2);
+    });
+
+    it("returns frozen array", () => {
+      store = createTestStore();
+      store.insert(
+        { content: "test", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const results = store.listByTier("warm", 10);
+      expect(Object.isFrozen(results)).toBe(true);
+    });
+  });
+
+  describe("getEmbedding", () => {
+    it("returns Float32Array for existing memory", () => {
+      store = createTestStore();
+      const embedding = randomEmbedding();
+      const entry = store.insert(
+        { content: "embed test", source: "manual" },
+        embedding,
+      );
+
+      const retrieved = store.getEmbedding(entry.id);
+      expect(retrieved).toBeInstanceOf(Float32Array);
+      expect(retrieved).toHaveLength(384);
+    });
+
+    it("returns null for non-existent memory", () => {
+      store = createTestStore();
+      const result = store.getEmbedding("nonexistent-id");
+      expect(result).toBeNull();
+    });
+  });
+
   describe("source validation", () => {
     it("rejects invalid source values", () => {
       store = createTestStore();

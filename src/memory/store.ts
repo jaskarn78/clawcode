@@ -62,6 +62,7 @@ export class MemoryStore {
 
       this.initSchema();
       this.migrateSchema();
+      this.migrateTierColumn();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -298,6 +299,79 @@ export class MemoryStore {
     }
   }
 
+  /**
+   * Retrieve the embedding vector for a memory by ID.
+   * Returns null if the memory has no embedding stored.
+   */
+  getEmbedding(id: string): Float32Array | null {
+    try {
+      const row = this.db
+        .prepare("SELECT embedding FROM vec_memories WHERE memory_id = ?")
+        .get(id) as { embedding: Buffer | Float32Array } | undefined;
+      if (!row?.embedding) return null;
+      // SQLite returns Buffer; convert to Float32Array
+      const buf = row.embedding;
+      if (buf instanceof Float32Array) return buf;
+      return new Float32Array(
+        (buf as Buffer).buffer,
+        (buf as Buffer).byteOffset,
+        (buf as Buffer).byteLength / 4,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to get embedding for ${id}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * List memories filtered by tier, ordered by accessed_at descending.
+   * Returns a frozen array of MemoryEntry objects.
+   */
+  listByTier(tier: MemoryTier, limit: number): readonly MemoryEntry[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT id, content, source, importance, access_count, tags,
+                  created_at, updated_at, accessed_at, tier
+           FROM memories WHERE tier = ? ORDER BY accessed_at DESC LIMIT ?`,
+        )
+        .all(tier, limit) as MemoryRow[];
+      return Object.freeze(rows.map(rowToEntry));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to list memories by tier ${tier}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Update the tier of a memory entry.
+   * Returns true if the row was updated, false if not found.
+   */
+  updateTier(id: string, tier: MemoryTier): boolean {
+    try {
+      const now = new Date().toISOString();
+      const result = this.db
+        .prepare("UPDATE memories SET tier = ?, updated_at = ? WHERE id = ?")
+        .run(tier, now, id);
+      return result.changes > 0;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to update tier for ${id}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
@@ -375,11 +449,28 @@ export class MemoryStore {
     })();
   }
 
+  /**
+   * Migrate existing databases to add the tier column.
+   * Uses PRAGMA table_info to detect if column already exists.
+   */
+  private migrateTierColumn(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(memories)")
+      .all() as ReadonlyArray<{ name: string }>;
+    const hasTier = columns.some((c) => c.name === "tier");
+
+    if (!hasTier) {
+      this.db.exec(
+        "ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'warm' CHECK(tier IN ('hot', 'warm', 'cold'))",
+      );
+    }
+  }
+
   private prepareStatements(): PreparedStatements {
     return {
       insertMemory: this.db.prepare(`
-        INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'warm')
       `),
       insertVec: this.db.prepare(`
         INSERT INTO vec_memories (memory_id, embedding)
@@ -387,7 +478,7 @@ export class MemoryStore {
       `),
       getById: this.db.prepare(`
         SELECT id, content, source, importance, access_count, tags,
-               created_at, updated_at, accessed_at
+               created_at, updated_at, accessed_at, tier
         FROM memories WHERE id = ?
       `),
       updateAccess: this.db.prepare(`
@@ -397,7 +488,7 @@ export class MemoryStore {
       deleteVec: this.db.prepare(`DELETE FROM vec_memories WHERE memory_id = ?`),
       listRecent: this.db.prepare(`
         SELECT id, content, source, importance, access_count, tags,
-               created_at, updated_at, accessed_at
+               created_at, updated_at, accessed_at, tier
         FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?
       `),
       insertSessionLog: this.db.prepare(`
