@@ -149,6 +149,9 @@ export async function startDaemon(
     log,
   });
 
+  // 6b. Wire skills catalog into session manager for prompt injection
+  manager.setSkillsCatalog(skillsCatalog);
+
   // 7. Reconcile registry per D-10
   await manager.reconcileRegistry(resolvedAgents);
 

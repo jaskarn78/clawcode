@@ -20,6 +20,7 @@ import {
 import { calculateBackoff } from "./backoff.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { Logger } from "pino";
+import type { SkillsCatalog } from "../skills/types.js";
 import { MemoryStore } from "../memory/store.js";
 import { EmbeddingService } from "../memory/embedder.js";
 import { SessionLogger } from "../memory/session-log.js";
@@ -65,6 +66,9 @@ export class SessionManager {
   // Tier management (per-agent)
   private readonly tierManagers: Map<string, TierManager> = new Map();
 
+  // Skills catalog (set by daemon after scanning)
+  private skillsCatalog: SkillsCatalog = new Map();
+
   // Shared embedding service (singleton across all agents)
   private readonly embedder: EmbeddingService = new EmbeddingService();
 
@@ -73,6 +77,14 @@ export class SessionManager {
     this.registryPath = options.registryPath;
     this.backoffConfig = options.backoffConfig ?? DEFAULT_BACKOFF_CONFIG;
     this.log = options.log ?? logger;
+  }
+
+  /**
+   * Set the skills catalog for system prompt injection.
+   * Called by daemon after scanning the skills directory.
+   */
+  setSkillsCatalog(catalog: SkillsCatalog): void {
+    this.skillsCatalog = catalog;
   }
 
   /**
@@ -701,6 +713,24 @@ export class SessionManager {
       if (hotMemories.length > 0) {
         systemPrompt += "\n\n## Key Memories\n\n";
         systemPrompt += hotMemories.map((mem) => `- ${mem.content}`).join("\n");
+      }
+    }
+
+    // Inject assigned skill descriptions into system prompt (D-06, D-08)
+    const assignedSkills = config.skills ?? [];
+    if (assignedSkills.length > 0) {
+      const skillDescriptions: string[] = [];
+      for (const skillName of assignedSkills) {
+        const entry = this.skillsCatalog.get(skillName);
+        if (entry) {
+          const versionPart = entry.version !== null ? ` (v${entry.version})` : "";
+          skillDescriptions.push(`- **${entry.name}**${versionPart}: ${entry.description}`);
+        }
+      }
+      if (skillDescriptions.length > 0) {
+        systemPrompt += "\n\n## Available Skills\n\n";
+        systemPrompt += skillDescriptions.join("\n");
+        systemPrompt += "\n\nYour skill directories are symlinked in your workspace under skills/. Read SKILL.md in each for detailed instructions.\n";
       }
     }
 
