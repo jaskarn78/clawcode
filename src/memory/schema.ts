@@ -24,6 +24,19 @@ export const consolidationConfigSchema = z.object({
   summaryModel: z.enum(["sonnet", "opus", "haiku"]).optional(),
 });
 
+/** Schema for relevance decay configuration. */
+export const decayConfigSchema = z.object({
+  halfLifeDays: z.number().int().min(1).default(30),
+  semanticWeight: z.number().min(0).max(1).default(0.7),
+  decayWeight: z.number().min(0).max(1).default(0.3),
+});
+
+/** Schema for memory deduplication configuration. */
+export const dedupConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  similarityThreshold: z.number().min(0).max(1).default(0.85),
+});
+
 /** Schema for memory system configuration. */
 export const memoryConfigSchema = z.object({
   compactionThreshold: z.number().min(0).max(1).default(0.75),
@@ -33,6 +46,15 @@ export const memoryConfigSchema = z.object({
     weeklyThreshold: 7,
     monthlyThreshold: 4,
   })),
+  decay: decayConfigSchema.default(() => ({
+    halfLifeDays: 30,
+    semanticWeight: 0.7,
+    decayWeight: 0.3,
+  })),
+  deduplication: dedupConfigSchema.default(() => ({
+    enabled: true,
+    similarityThreshold: 0.85,
+  })),
 });
 
 /** Inferred types from schemas. */
@@ -40,3 +62,9 @@ export type MemoryConfig = z.infer<typeof memoryConfigSchema>;
 
 /** Inferred consolidation config type. */
 export type ConsolidationConfig = z.infer<typeof consolidationConfigSchema>;
+
+/** Inferred decay config type. */
+export type DecayConfig = z.infer<typeof decayConfigSchema>;
+
+/** Inferred deduplication config type. */
+export type DedupConfig = z.infer<typeof dedupConfigSchema>;

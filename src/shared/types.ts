@@ -19,6 +19,15 @@ export type ResolvedAgentConfig = {
       readonly monthlyThreshold: number;
       readonly summaryModel?: "sonnet" | "opus" | "haiku";
     };
+    readonly decay: {
+      readonly halfLifeDays: number;
+      readonly semanticWeight: number;
+      readonly decayWeight: number;
+    };
+    readonly deduplication: {
+      readonly enabled: boolean;
+      readonly similarityThreshold: number;
+    };
   };
   readonly heartbeat: {
     readonly enabled: boolean;
