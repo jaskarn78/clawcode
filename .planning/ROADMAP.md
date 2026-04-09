@@ -90,7 +90,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — Config schema, types, and TaskScheduler engine with croner
+- [x] 09-01-PLAN.md — Config schema, types, and TaskScheduler engine with croner
 - [ ] 09-02-PLAN.md — Daemon integration and IPC schedules method
 - [ ] 09-03-PLAN.md — CLI schedules command with formatted table output
 

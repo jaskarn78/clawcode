@@ -21,8 +21,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 
 ### Scheduling
 
-- [ ] **SKED-01**: User can define cron-like scheduled tasks per agent in clawcode.yaml
-- [ ] **SKED-02**: Scheduled tasks execute within the agent's persistent session at the defined interval
+- [x] **SKED-01**: User can define cron-like scheduled tasks per agent in clawcode.yaml
+- [x] **SKED-02**: Scheduled tasks execute within the agent's persistent session at the defined interval
 - [ ] **SKED-03**: Scheduler status queryable via IPC and CLI (`clawcode schedules`)
 
 ### Skills Registry
@@ -66,8 +66,8 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | AMEM-07 | Phase 7 | Complete |
 | AMEM-08 | Phase 8 | Complete |
 | AMEM-09 | Phase 8 | Complete |
-| SKED-01 | Phase 9 | Pending |
-| SKED-02 | Phase 9 | Pending |
+| SKED-01 | Phase 9 | Complete |
+| SKED-02 | Phase 9 | Complete |
 | SKED-03 | Phase 9 | Pending |
 | SKIL-01 | Phase 10 | Pending |
 | SKIL-02 | Phase 10 | Pending |
