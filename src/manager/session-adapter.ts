@@ -168,7 +168,6 @@ async function loadSdk(): Promise<SdkModule> {
     return cachedSdk;
   }
   try {
-    // @ts-expect-error -- SDK installed in Plan 02
     cachedSdk = await import("@anthropic-ai/claude-agent-sdk");
     return cachedSdk;
   } catch {
