@@ -64,6 +64,8 @@ export function resolveAgentConfig(
     skillsPath: expandHome(defaults.skillsPath),
     heartbeat: heartbeatConfig,
     schedules: agent.schedules,
+    admin: agent.admin ?? false,
+    subagentModel: agent.subagentModel,
   };
 }
 

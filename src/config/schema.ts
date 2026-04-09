@@ -62,6 +62,8 @@ export const agentSchema = z.object({
   memory: memorySchema.optional(),
   heartbeat: z.boolean().default(true),
   schedules: z.array(scheduleEntrySchema).default([]),
+  admin: z.boolean().default(false),
+  subagentModel: modelSchema.optional(),
 });
 
 /**
