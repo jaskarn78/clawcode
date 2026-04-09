@@ -143,6 +143,20 @@ export async function buildSessionConfig(
     }
   }
 
+  // Inject subagent thread skill guidance (SASK-03)
+  const hasSubagentThreadSkill = (config.skills ?? []).includes("subagent-thread");
+  if (hasSubagentThreadSkill) {
+    systemPrompt += "\n\n## Subagent Thread Skill\n\n";
+    systemPrompt += "You have the **subagent-thread** skill. When you need to delegate work to a subagent ";
+    systemPrompt += "and want the work visible in Discord, prefer the `spawn_subagent_thread` MCP tool ";
+    systemPrompt += "over the raw Agent tool.\n\n";
+    systemPrompt += "The `spawn_subagent_thread` tool creates a dedicated Discord thread where the subagent ";
+    systemPrompt += "operates. This makes the subagent's work visible to channel members and provides a ";
+    systemPrompt += "shareable thread URL.\n\n";
+    systemPrompt += "Use the raw Agent tool only when Discord visibility is NOT needed (e.g., quick internal ";
+    systemPrompt += "computations, file operations that don't need a thread).\n";
+  }
+
   // Inject admin agent information (per D-11, D-12)
   if (config.admin && deps.allAgentConfigs.length > 0) {
     const otherAgents = deps.allAgentConfigs.filter(
