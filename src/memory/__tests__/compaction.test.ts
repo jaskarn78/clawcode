@@ -32,7 +32,7 @@ function mockMemoryStore(): MemoryStore {
       createdAt: "2026-04-09T00:00:00Z",
     }),
     close: vi.fn(),
-  } as MemoryStore;
+  } as unknown as MemoryStore;
 }
 
 /** Create a mock EmbeddingService. */
@@ -41,7 +41,7 @@ function mockEmbedder(): EmbeddingService {
     embed: vi.fn().mockResolvedValue(new Float32Array(384)),
     warmup: vi.fn().mockResolvedValue(undefined),
     isReady: vi.fn().mockReturnValue(true),
-  } as EmbeddingService;
+  } as unknown as EmbeddingService;
 }
 
 /** Create a mock SessionLogger. */
@@ -49,7 +49,7 @@ function mockSessionLogger(): SessionLogger {
   return {
     flushConversation: vi.fn().mockResolvedValue("/tmp/memory/2026-04-09.md"),
     appendEntry: vi.fn().mockResolvedValue(undefined),
-  } as SessionLogger;
+  } as unknown as SessionLogger;
 }
 
 /** Create a silent mock logger. */
@@ -59,7 +59,7 @@ function mockLogger(): Logger {
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
-  } as Logger;
+  } as unknown as Logger;
 }
 
 /** Sample conversation turns for testing. */
@@ -118,9 +118,9 @@ describe("CompactionManager.compact", () => {
       return "/tmp/memory/2026-04-09.md";
     });
 
-    vi.mocked(deps.memoryStore.insert).mockImplementation(() => {
+    vi.mocked(deps.memoryStore.insert).mockImplementation((_input, _embedding) => {
       callOrder.push("insert");
-      return { id: "mem-1", content: "test", source: "conversation", importance: 0.5, accessCount: 0, tags: [], embedding: null, createdAt: "", updatedAt: "", accessedAt: "" };
+      return { id: "mem-1", content: "test", source: "conversation" as const, importance: 0.5, accessCount: 0, tags: [], embedding: null, createdAt: "", updatedAt: "", accessedAt: "", tier: "warm" as const };
     });
 
     const extractMemories = vi.fn().mockResolvedValue(["fact1"]);

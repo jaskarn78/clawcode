@@ -62,7 +62,7 @@ describe("EmbeddingService", () => {
     );
 
     vi.mocked(pipeline).mockResolvedValueOnce(
-      mockExtractor as Awaited<ReturnType<typeof pipeline>>,
+      mockExtractor as unknown as Awaited<ReturnType<typeof pipeline>>,
     );
 
     // Create a fresh service to use the new mock

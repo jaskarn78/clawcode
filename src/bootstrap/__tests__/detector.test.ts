@@ -10,7 +10,6 @@ import type { ResolvedAgentConfig } from "../../shared/types.js";
 function makeConfig(overrides: Partial<ResolvedAgentConfig> & { workspace: string }): ResolvedAgentConfig {
   return {
     name: "test-agent",
-    workspace: overrides.workspace,
     channels: ["#general"],
     model: "sonnet",
     skills: [],
@@ -35,6 +34,7 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> & { workspace: strin
     subagentModel: undefined,
     threads: { idleTimeoutMinutes: 30, maxThreadSessions: 10 },
     reactions: false,
+    mcpServers: [],
     slashCommands: [],
     ...overrides,
   };

@@ -36,6 +36,13 @@ function makeConfig(name: string): ResolvedAgentConfig {
         criticalThreshold: 0.75,
       },
     },
+    skillsPath: "/tmp/skills",
+    admin: false,
+    subagentModel: undefined,
+    threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+    reactions: false,
+    mcpServers: [],
+    slashCommands: [],
   };
 }
 

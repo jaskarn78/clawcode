@@ -150,7 +150,7 @@ describe("TierManager", () => {
         randomEmbedding(),
       );
 
-      const filePath = tm.archiveToCold(entry);
+      const filePath = tm.archiveToCold(entry)!;
 
       expect(existsSync(filePath)).toBe(true);
       const content = readFileSync(filePath, "utf-8");
@@ -220,7 +220,7 @@ describe("TierManager", () => {
         randomEmbedding(),
       );
 
-      const filePath = tm.archiveToCold(entry);
+      const filePath = tm.archiveToCold(entry)!;
       const fileName = filePath.split("/").pop()!;
       expect(fileName).toContain(entry.id);
       expect(fileName).toContain("my-special-memory-about-testing");
@@ -245,7 +245,7 @@ describe("TierManager", () => {
         { content: "rewarmed content", source: "conversation", importance: 0.7, tags: ["test"] },
         randomEmbedding(),
       );
-      const filePath = tm.archiveToCold(entry);
+      const filePath = tm.archiveToCold(entry)!;
 
       // Now rewarm it
       const rewarmed = await tm.rewarmFromCold(filePath);
@@ -263,7 +263,7 @@ describe("TierManager", () => {
         { content: "ephemeral cold", source: "manual" },
         randomEmbedding(),
       );
-      const filePath = tm.archiveToCold(entry);
+      const filePath = tm.archiveToCold(entry)!;
       expect(existsSync(filePath)).toBe(true);
 
       await tm.rewarmFromCold(filePath);
@@ -286,7 +286,7 @@ describe("TierManager", () => {
         { content: "needs re-embed", source: "manual" },
         randomEmbedding(),
       );
-      const filePath = tm.archiveToCold(entry);
+      const filePath = tm.archiveToCold(entry)!;
 
       await tm.rewarmFromCold(filePath);
 

@@ -56,7 +56,7 @@ function makeMessage(overrides: {
       }
       return result;
     },
-  } as Collection<string, Attachment>;
+  } as unknown as Collection<string, Attachment>;
 
   return {
     content: overrides.content ?? "hello",
@@ -67,7 +67,7 @@ function makeMessage(overrides: {
     attachments: collection,
     reference: null,
     channel: { sendTyping: vi.fn(), send: vi.fn().mockResolvedValue({ edit: vi.fn() }) },
-  } as Message;
+  } as unknown as Message;
 }
 
 // ── Mock attachment module ──────────────────────────────────────────────────

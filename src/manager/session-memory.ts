@@ -83,7 +83,7 @@ export class AgentMemoryManager {
       this.tierManagers.set(name, tierManager);
 
       // Create EpisodeStore for this agent
-      const episodeStore = new EpisodeStore({ store, embedder: this.embedder });
+      const episodeStore = new EpisodeStore(store, this.embedder);
       this.episodeStores.set(name, episodeStore);
 
       // Create UsageTracker for this agent

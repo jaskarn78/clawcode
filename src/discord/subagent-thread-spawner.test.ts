@@ -59,6 +59,7 @@ function makeAgentConfig(
     },
     slashCommands: [],
     reactions: false,
+    mcpServers: [],
     ...overrides,
   };
 }
