@@ -10,13 +10,13 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Agent Manager
 
 - [x] **MGMT-01**: Central YAML config file defining all agents, their workspaces, channels, models, and skills
-- [ ] **MGMT-02**: User can start an individual agent by name via CLI command
-- [ ] **MGMT-03**: User can stop an individual agent by name via CLI command
-- [ ] **MGMT-04**: User can restart an individual agent by name via CLI command
-- [ ] **MGMT-05**: User can boot all configured agents with a single command
+- [x] **MGMT-02**: User can start an individual agent by name via CLI command
+- [x] **MGMT-03**: User can stop an individual agent by name via CLI command
+- [x] **MGMT-04**: User can restart an individual agent by name via CLI command
+- [x] **MGMT-05**: User can boot all configured agents with a single command
 - [x] **MGMT-06**: Manager detects agent process crashes and auto-restarts with exponential backoff
 - [x] **MGMT-07**: Manager maintains a PID registry tracking all running agent processes
-- [ ] **MGMT-08**: Manager prevents and cleans up zombie processes on shutdown
+- [x] **MGMT-08**: Manager prevents and cleans up zombie processes on shutdown
 
 ### Workspace & Identity
 
@@ -95,13 +95,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | MGMT-01 | Phase 1 | Complete |
-| MGMT-02 | Phase 2 | Pending |
-| MGMT-03 | Phase 2 | Pending |
-| MGMT-04 | Phase 2 | Pending |
-| MGMT-05 | Phase 2 | Pending |
+| MGMT-02 | Phase 2 | Complete |
+| MGMT-03 | Phase 2 | Complete |
+| MGMT-04 | Phase 2 | Complete |
+| MGMT-05 | Phase 2 | Complete |
 | MGMT-06 | Phase 2 | Complete |
 | MGMT-07 | Phase 2 | Complete |
-| MGMT-08 | Phase 2 | Pending |
+| MGMT-08 | Phase 2 | Complete |
 | WKSP-01 | Phase 1 | Complete |
 | WKSP-02 | Phase 1 | Complete |
 | WKSP-03 | Phase 1 | Complete |
