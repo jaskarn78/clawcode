@@ -171,8 +171,77 @@ export function formatMemoryList(data: MemoryListResponse): string {
 }
 
 /**
+ * A single episode list entry from the IPC response.
+ */
+type EpisodeListEntry = {
+  readonly id: string;
+  readonly content: string;
+  readonly importance: number;
+  readonly tags: readonly string[];
+  readonly tier: string;
+  readonly createdAt: string;
+};
+
+/**
+ * Shape of the "episode-list" IPC response.
+ */
+type EpisodeListResponse = {
+  readonly entries: readonly EpisodeListEntry[];
+  readonly count: number;
+};
+
+/**
+ * Parse the episode title from the structured content format "[Episode: {title}]".
+ */
+function parseEpisodeTitle(content: string): string {
+  const match = content.match(/^\[Episode:\s*(.+?)\]/);
+  return match ? match[1] : truncate(content, 40);
+}
+
+/**
+ * Format episode list entries as a table.
+ */
+export function formatEpisodeList(data: EpisodeListResponse): string {
+  if (data.entries.length === 0) {
+    return `No episodes recorded (total: ${data.count})`;
+  }
+
+  const rows = data.entries.map((e) => ({
+    title: truncate(parseEpisodeTitle(e.content), 40),
+    importance: e.importance.toFixed(1),
+    tags: (e.tags as readonly string[]).filter((t) => t !== "episode").join(", ") || "-",
+    date: e.createdAt.slice(0, 19) + "Z",
+  }));
+
+  const titleWidth = Math.max(5, ...rows.map((r) => r.title.length));
+  const impWidth = 4;
+  const tagsWidth = Math.max(4, ...rows.map((r) => r.tags.length));
+  const dateWidth = 20;
+
+  const header = [
+    "TITLE".padEnd(titleWidth),
+    "IMP".padEnd(impWidth),
+    "TAGS".padEnd(tagsWidth),
+    "DATE".padEnd(dateWidth),
+  ].join("  ");
+
+  const separator = "-".repeat(titleWidth + impWidth + tagsWidth + dateWidth + 6);
+
+  const formatted = rows.map((row) =>
+    [
+      row.title.padEnd(titleWidth),
+      row.importance.padEnd(impWidth),
+      row.tags.padEnd(tagsWidth),
+      row.date.padEnd(dateWidth),
+    ].join("  "),
+  );
+
+  return [`Episodes (total: ${data.count})`, "", header, separator, ...formatted].join("\n");
+}
+
+/**
  * Register the `clawcode memory` command group.
- * Includes `memory search` and `memory list` subcommands.
+ * Includes `memory search`, `memory list`, and `memory episodes` subcommands.
  */
 export function registerMemoryCommand(program: Command): void {
   const memoryCmd = program
@@ -214,6 +283,41 @@ export function registerMemoryCommand(program: Command): void {
           limit: parseInt(opts.limit, 10),
         })) as MemoryListResponse;
         cliLog(formatMemoryList(result));
+      } catch (error) {
+        if (error instanceof ManagerNotRunningError) {
+          cliError("Manager is not running. Start it with: clawcode start-all");
+          process.exit(1);
+          return;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        cliError(`Error: ${msg}`);
+        process.exit(1);
+      }
+    });
+
+  memoryCmd
+    .command("episodes <agent>")
+    .description("List recent episodes for an agent")
+    .option("--count", "Show episode count only")
+    .option("--limit <n>", "Number of entries", "10")
+    .action(async (agent: string, opts: { count?: boolean; limit: string }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "episode-list", {
+          agent,
+          limit: parseInt(opts.limit, 10),
+        })) as EpisodeListResponse;
+
+        if (opts.count) {
+          cliLog(`Episodes: ${result.count}`);
+          return;
+        }
+
+        if (result.entries.length === 0) {
+          cliLog(`No episodes recorded for ${agent}`);
+          return;
+        }
+
+        cliLog(formatEpisodeList(result));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
           cliError("Manager is not running. Start it with: clawcode start-all");
