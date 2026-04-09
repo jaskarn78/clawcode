@@ -55,6 +55,7 @@ export type AgentSessionConfig = {
   readonly workspace: string;
   readonly systemPrompt: string;
   readonly channels: readonly string[];
+  readonly contextSummary?: string;
 };
 
 /**

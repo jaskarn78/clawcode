@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { mkdirSync, existsSync } from "node:fs";
 import { logger } from "../shared/logger.js";
 import { SessionError } from "../shared/errors.js";
 import type { SessionAdapter, SessionHandle } from "./session-adapter.js";
@@ -19,6 +20,10 @@ import {
 import { calculateBackoff } from "./backoff.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { Logger } from "pino";
+import { MemoryStore } from "../memory/store.js";
+import { EmbeddingService } from "../memory/embedder.js";
+import { SessionLogger } from "../memory/session-log.js";
+import { CompactionManager } from "../memory/compaction.js";
 
 /**
  * Configuration for creating a SessionManager.
@@ -48,6 +53,14 @@ export class SessionManager {
     new Map();
   private readonly restartTimers: Map<string, ReturnType<typeof setTimeout>> =
     new Map();
+
+  // Memory lifecycle maps (per-agent)
+  private readonly memoryStores: Map<string, MemoryStore> = new Map();
+  private readonly compactionManagers: Map<string, CompactionManager> = new Map();
+  private readonly sessionLoggers: Map<string, SessionLogger> = new Map();
+
+  // Shared embedding service (singleton across all agents)
+  private readonly embedder: EmbeddingService = new EmbeddingService();
 
   constructor(options: SessionManagerOptions) {
     this.adapter = options.adapter;
@@ -112,6 +125,9 @@ export class SessionManager {
     });
     await writeRegistry(this.registryPath, registry);
 
+    // Initialize memory resources for this agent
+    this.initMemory(name, config);
+
     this.log.info({ agent: name, sessionId: handle.sessionId }, "agent started");
   }
 
@@ -129,6 +145,9 @@ export class SessionManager {
     // Cancel timers
     this.clearStabilityTimer(name);
     this.clearRestartTimer(name);
+
+    // Clean up memory resources
+    this.cleanupMemory(name);
 
     // Transition to stopping
     let registry = await readRegistry(this.registryPath);
@@ -308,6 +327,90 @@ export class SessionManager {
   }
 
   // ---------------------------------------------------------------------------
+  // Memory accessors
+  // ---------------------------------------------------------------------------
+
+  /** Get the MemoryStore for a specific agent (for CLI search commands). */
+  getMemoryStore(agentName: string): MemoryStore | undefined {
+    return this.memoryStores.get(agentName);
+  }
+
+  /** Get the CompactionManager for a specific agent. */
+  getCompactionManager(agentName: string): CompactionManager | undefined {
+    return this.compactionManagers.get(agentName);
+  }
+
+  /**
+   * Pre-warm the embedding model at daemon startup (D-09).
+   * Call before starting any agents to avoid cold-start latency.
+   */
+  async warmupEmbeddings(): Promise<void> {
+    await this.embedder.warmup();
+    this.log.info("embedding model warmed up");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Memory lifecycle (private)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Initialize memory resources for an agent.
+   * Creates MemoryStore, SessionLogger, and CompactionManager.
+   */
+  private initMemory(name: string, config: ResolvedAgentConfig): void {
+    try {
+      const memoryDir = join(config.workspace, "memory");
+      if (!existsSync(memoryDir)) {
+        mkdirSync(memoryDir, { recursive: true });
+      }
+
+      const dbPath = join(memoryDir, "memories.db");
+      const store = new MemoryStore(dbPath);
+      this.memoryStores.set(name, store);
+
+      const sessionLogger = new SessionLogger(memoryDir);
+      this.sessionLoggers.set(name, sessionLogger);
+
+      const compactionManager = new CompactionManager({
+        memoryStore: store,
+        embedder: this.embedder,
+        sessionLogger,
+        threshold: config.memory.compactionThreshold,
+        log: this.log,
+      });
+      this.compactionManagers.set(name, compactionManager);
+
+      this.log.info({ agent: name, dbPath }, "memory initialized");
+    } catch (error) {
+      this.log.error(
+        { agent: name, error: (error as Error).message },
+        "failed to initialize memory (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Clean up memory resources for an agent.
+   * Closes the MemoryStore and removes from all maps.
+   */
+  private cleanupMemory(name: string): void {
+    const store = this.memoryStores.get(name);
+    if (store) {
+      try {
+        store.close();
+      } catch (error) {
+        this.log.warn(
+          { agent: name, error: (error as Error).message },
+          "error closing memory store",
+        );
+      }
+      this.memoryStores.delete(name);
+    }
+    this.compactionManagers.delete(name);
+    this.sessionLoggers.delete(name);
+  }
+
+  // ---------------------------------------------------------------------------
   // Private methods
   // ---------------------------------------------------------------------------
 
@@ -449,6 +552,7 @@ export class SessionManager {
    */
   private async buildSessionConfig(
     config: ResolvedAgentConfig,
+    contextSummary?: string,
   ): Promise<AgentSessionConfig> {
     let systemPrompt = "";
 
@@ -491,12 +595,18 @@ export class SessionManager {
       systemPrompt += "When replying, use the reply tool with the chat_id from the incoming message.";
     }
 
+    // Append context summary from compaction restart (D-17)
+    if (contextSummary) {
+      systemPrompt += `\n\n## Context Summary (from previous session)\n${contextSummary}`;
+    }
+
     return {
       name: config.name,
       model: config.model,
       workspace: config.workspace,
       systemPrompt: systemPrompt.trim(),
       channels,
+      contextSummary,
     };
   }
 
