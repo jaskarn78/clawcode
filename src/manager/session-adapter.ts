@@ -1,4 +1,5 @@
 import type { AgentSessionConfig } from "./types.js";
+import type { SdkModule, SdkSession, SdkStreamMessage } from "./sdk-types.js";
 
 /**
  * Callback invoked after each SDK send/sendAndCollect with usage data
@@ -192,11 +193,6 @@ export class SdkSessionAdapter implements SessionAdapter {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SdkModule = any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SdkSession = any;
-
 let cachedSdk: SdkModule | null = null;
 
 /**
@@ -235,13 +231,14 @@ function getSdkSessionId(session: SdkSession): string {
  * Wrapped in try/catch so extraction failures never break the send flow.
  */
 function extractUsage(
-  msg: Record<string, unknown>,
+  msg: SdkStreamMessage,
   callback?: UsageCallback,
 ): void {
   if (!callback) return;
+  if (msg.type !== "result") return;
   try {
     const costUsd = typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0;
-    const usage = msg.usage as Record<string, unknown> | undefined;
+    const usage = msg.usage;
     const tokensIn = typeof usage?.input_tokens === "number" ? usage.input_tokens : 0;
     const tokensOut = typeof usage?.output_tokens === "number" ? usage.output_tokens : 0;
     const numTurns = typeof msg.num_turns === "number" ? msg.num_turns : 0;
@@ -276,7 +273,7 @@ function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): Ses
       if (typeof session.stream === "function") {
         for await (const msg of session.stream()) {
           if (msg.type === "result") {
-            extractUsage(msg as Record<string, unknown>, usageCallback);
+            extractUsage(msg, usageCallback);
             break;
           }
         }
@@ -294,22 +291,19 @@ function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): Ses
       for await (const msg of session.stream()) {
         // Capture assistant text messages as they arrive
         if (msg.type === "assistant") {
-          const content = (msg as Record<string, unknown>).content;
-          if (typeof content === "string" && content.length > 0) {
-            textParts.push(content);
+          if (typeof msg.content === "string" && msg.content.length > 0) {
+            textParts.push(msg.content);
           }
         }
         if (msg.type === "result") {
-          extractUsage(msg as Record<string, unknown>, usageCallback);
+          extractUsage(msg, usageCallback);
           // Prefer the result.result field if non-empty
-          const result = (msg as Record<string, unknown>).result;
-          if (typeof result === "string" && result.length > 0) {
-            return result;
+          if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
+            return msg.result;
           }
           // Check for error results
           if (msg.subtype !== "success") {
-            const is_error = (msg as Record<string, unknown>).is_error;
-            if (is_error) {
+            if ("is_error" in msg && msg.is_error) {
               throw new Error(`Agent error: ${msg.subtype}`);
             }
           }
@@ -328,21 +322,18 @@ function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): Ses
       const textParts: string[] = [];
       for await (const msg of session.stream()) {
         if (msg.type === "assistant") {
-          const content = (msg as Record<string, unknown>).content;
-          if (typeof content === "string" && content.length > 0) {
-            textParts.push(content);
+          if (typeof msg.content === "string" && msg.content.length > 0) {
+            textParts.push(msg.content);
             onChunk(textParts.join("\n"));
           }
         }
         if (msg.type === "result") {
-          extractUsage(msg as Record<string, unknown>, usageCallback);
-          const result = (msg as Record<string, unknown>).result;
-          if (typeof result === "string" && result.length > 0) {
-            return result;
+          extractUsage(msg, usageCallback);
+          if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
+            return msg.result;
           }
           if (msg.subtype !== "success") {
-            const is_error = (msg as Record<string, unknown>).is_error;
-            if (is_error) {
+            if ("is_error" in msg && msg.is_error) {
               throw new Error(`Agent error: ${msg.subtype}`);
             }
           }
