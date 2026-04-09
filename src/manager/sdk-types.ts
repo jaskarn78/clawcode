@@ -25,6 +25,11 @@ export type SdkSessionOptions = {
   readonly cwd?: string;
   readonly systemPrompt?: string;
   readonly permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
+  readonly mcpServers?: Record<string, {
+    readonly command: string;
+    readonly args?: readonly string[];
+    readonly env?: Readonly<Record<string, string>>;
+  }>;
 };
 
 /**

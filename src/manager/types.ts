@@ -56,6 +56,12 @@ export type AgentSessionConfig = {
   readonly systemPrompt: string;
   readonly channels: readonly string[];
   readonly contextSummary?: string;
+  readonly mcpServers?: readonly {
+    readonly name: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly env: Readonly<Record<string, string>>;
+  }[];
 };
 
 /**

@@ -168,11 +168,13 @@ export function createMockAdapter(): MockSessionAdapter {
 export class SdkSessionAdapter implements SessionAdapter {
   async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
     const sdk = await loadSdk();
+    const mcpServers = transformMcpServersForSdk(config.mcpServers);
     const session = await sdk.unstable_v2_createSession({
       model: config.model,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
+      ...(mcpServers ? { mcpServers } : {}),
     });
     return wrapSdkSession(session, usageCallback);
   }
@@ -183,14 +185,32 @@ export class SdkSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
+    const mcpServers = transformMcpServersForSdk(config.mcpServers);
     const session = await sdk.unstable_v2_resumeSession(sessionId, {
       model: config.model,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
+      ...(mcpServers ? { mcpServers } : {}),
     });
     return wrapSdkSession(session, usageCallback);
   }
+}
+
+/**
+ * Transform the mcpServers array from AgentSessionConfig into the SDK's
+ * expected Record format (keyed by server name).
+ * Returns undefined if no servers are configured.
+ */
+function transformMcpServersForSdk(
+  mcpServers?: readonly { readonly name: string; readonly command: string; readonly args: readonly string[]; readonly env: Readonly<Record<string, string>> }[],
+): Record<string, { command: string; args: string[]; env: Record<string, string> }> | undefined {
+  if (!mcpServers || mcpServers.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    mcpServers.map((s) => [s.name, { command: s.command, args: [...s.args], env: { ...s.env } }]),
+  );
 }
 
 let cachedSdk: SdkModule | null = null;

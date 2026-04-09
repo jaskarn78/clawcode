@@ -188,5 +188,6 @@ export async function buildSessionConfig(
     systemPrompt: systemPrompt.trim(),
     channels,
     contextSummary,
+    mcpServers: config.mcpServers ?? [],
   };
 }
