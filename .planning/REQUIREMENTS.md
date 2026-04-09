@@ -73,14 +73,14 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Web Dashboard
 
-- [ ] **DASH-01**: Web server serves a dashboard UI accessible on a configurable port
-- [ ] **DASH-02**: Dashboard displays real-time agent status (running/stopped/error, uptime, model, channels)
-- [ ] **DASH-03**: Dashboard shows memory statistics per agent (entry count, tier distribution, last consolidation)
-- [ ] **DASH-04**: Dashboard shows scheduled tasks with next run time, last status, and error history
-- [ ] **DASH-05**: Dashboard shows health monitoring (context fill zones, heartbeat check results, system metrics)
-- [ ] **DASH-06**: Dashboard shows recent Discord message activity (last N messages per agent with timestamps)
-- [ ] **DASH-07**: Dashboard allows starting/stopping/restarting agents via UI controls
-- [ ] **DASH-08**: Dashboard shows delivery queue status and failed message log
+- [x] **DASH-01**: Web server serves a dashboard UI accessible on a configurable port
+- [x] **DASH-02**: Dashboard displays real-time agent status (running/stopped/error, uptime, model, channels)
+- [x] **DASH-03**: Dashboard shows memory statistics per agent (entry count, tier distribution, last consolidation)
+- [x] **DASH-04**: Dashboard shows scheduled tasks with next run time, last status, and error history
+- [x] **DASH-05**: Dashboard shows health monitoring (context fill zones, heartbeat check results, system metrics)
+- [x] **DASH-06**: Dashboard shows recent Discord message activity (last N messages per agent with timestamps)
+- [x] **DASH-07**: Dashboard allows starting/stopping/restarting agents via UI controls
+- [x] **DASH-08**: Dashboard shows delivery queue status and failed message log
 
 ## Future Requirements
 
@@ -151,14 +151,14 @@ Deferred to later milestones.
 | BOOT-01 | Phase 29 | Complete |
 | BOOT-02 | Phase 29 | Complete |
 | BOOT-03 | Phase 29 | Complete |
-| DASH-01 | Phase 30 | Pending |
-| DASH-02 | Phase 30 | Pending |
-| DASH-03 | Phase 30 | Pending |
-| DASH-04 | Phase 30 | Pending |
-| DASH-05 | Phase 30 | Pending |
-| DASH-06 | Phase 30 | Pending |
-| DASH-07 | Phase 30 | Pending |
-| DASH-08 | Phase 30 | Pending |
+| DASH-01 | Phase 30 | Complete |
+| DASH-02 | Phase 30 | Complete |
+| DASH-03 | Phase 30 | Complete |
+| DASH-04 | Phase 30 | Complete |
+| DASH-05 | Phase 30 | Complete |
+| DASH-06 | Phase 30 | Complete |
+| DASH-07 | Phase 30 | Complete |
+| DASH-08 | Phase 30 | Complete |
 
 **Coverage:**
 - v1.2 requirements: 43 total

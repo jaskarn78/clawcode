@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
-status: Ready to plan
-stopped_at: Completed 29-02-PLAN.md
-last_updated: "2026-04-09T21:21:00.552Z"
+status: Milestone complete
+stopped_at: Completed 30-02-PLAN.md
+last_updated: "2026-04-09T21:42:03.773Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 10
-  completed_phases: 9
-  total_plans: 18
-  completed_plans: 18
+  completed_phases: 10
+  total_plans: 20
+  completed_plans: 20
 ---
 
 # Project State
@@ -20,7 +20,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 29 — Agent Bootstrap
+**Current focus:** Phase 30 — Web Dashboard
 
 ## Current Position
 
@@ -69,6 +69,8 @@ Plan: Not started
 | Phase 28-security-execution-approval P02 | 3min | 2 tasks | 6 files |
 | Phase 29 P01 | 2min | 2 tasks | 6 files |
 | Phase 29-agent-bootstrap P02 | 2min | 2 tasks | 3 files |
+| Phase 30 P01 | 4min | 2 tasks | 7 files |
+| Phase 30-web-dashboard P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -110,6 +112,10 @@ Recent decisions affecting current work:
 - [Phase 29-agent-bootstrap]: Bootstrap prompt replaces entire system prompt (early return) -- bootstrap IS the session purpose
 - [Phase 29-agent-bootstrap]: Channel bindings included in bootstrap mode for Discord context
 - [Phase 29-agent-bootstrap]: reconcileRegistry passes undefined bootstrapStatus -- resumed sessions skip bootstrap
+- [Phase 30]: Node.js built-in http.createServer (no Express) for zero-dependency dashboard server
+- [Phase 30]: SSE polling pattern: SseManager with shared fetchCurrentState() for both broadcast and REST endpoint
+- [Phase 30-web-dashboard]: Memory stats polled on slower 15s interval to reduce per-agent IPC load
+- [Phase 30-web-dashboard]: Messages panel reuses delivery queue stats rather than separate message tracking
 
 ### Pending Todos
 
@@ -130,5 +136,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-09
-Stopped at: Completed 29-02-PLAN.md
+Stopped at: Completed 30-02-PLAN.md
 Resume file: None

@@ -39,7 +39,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 - [x] **Phase 27: Subagent Discord Threads** - Auto thread creation on subagent spawn, webhook binding, routing, cleanup (completed 2026-04-09)
 - [x] **Phase 28: Security & Execution Approval** - Command allowlists, approval flow, channel ACLs, audit logging (completed 2026-04-09)
 - [x] **Phase 29: Agent Bootstrap** - First-run detection, guided SOUL.md/IDENTITY.md generation (completed 2026-04-09)
-- [ ] **Phase 30: Web Dashboard** - Agent status, memory stats, schedules, health, delivery queue, agent controls
+- [x] **Phase 30: Web Dashboard** - Agent status, memory stats, schedules, health, delivery queue, agent controls (completed 2026-04-09)
 
 ## Phase Details
 
@@ -178,7 +178,7 @@ Plans:
   5. Dashboard shows context health zones, delivery queue status, failed message log, and recent Discord message activity per agent
 **Plans**: 2 plans
 Plans:
-- [ ] 30-01-PLAN.md — Dashboard server, SSE infrastructure, agent status panel (DASH-01, DASH-02)
+- [x] 30-01-PLAN.md — Dashboard server, SSE infrastructure, agent status panel (DASH-01, DASH-02)
 - [ ] 30-02-PLAN.md — All remaining panels, daemon wiring, visual verification (DASH-03, DASH-04, DASH-05, DASH-06, DASH-07, DASH-08)
 **UI hint**: yes
 
@@ -199,4 +199,4 @@ Plans:
 | 27. Subagent Discord Threads | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 28. Security & Execution Approval | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 29. Agent Bootstrap | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 30. Web Dashboard | v1.2 | 0/2 | Not started | - |
+| 30. Web Dashboard | v1.2 | 1/2 | Complete    | 2026-04-09 |
