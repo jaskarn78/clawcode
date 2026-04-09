@@ -127,6 +127,17 @@ export async function startDaemon(
   // 5. Resolve all agents
   const resolvedAgents = resolveAllAgents(config);
 
+  // 5c. Validate only one admin agent (per D-14)
+  const adminAgents = resolvedAgents.filter(a => a.admin);
+  if (adminAgents.length > 1) {
+    throw new ManagerError(
+      `Only one admin agent allowed, found ${adminAgents.length}: ${adminAgents.map(a => a.name).join(", ")}`
+    );
+  }
+  if (adminAgents.length === 1) {
+    log.info({ admin: adminAgents[0].name }, "admin agent configured");
+  }
+
   // 5a. Scan skills directory and link agent skills
   const skillsPath = resolvedAgents.length > 0 ? resolvedAgents[0].skillsPath : "";
   const skillsCatalog = await scanSkillsDirectory(skillsPath, log);
@@ -151,6 +162,9 @@ export async function startDaemon(
 
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
+
+  // 6c. Wire agent configs into session manager for admin prompt injection
+  manager.setAllAgentConfigs(resolvedAgents);
 
   // 7. Reconcile registry per D-10
   await manager.reconcileRegistry(resolvedAgents);
