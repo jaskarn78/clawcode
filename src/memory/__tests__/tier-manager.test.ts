@@ -224,7 +224,7 @@ describe("TierManager", () => {
       const fileName = filePath.split("/").pop()!;
       expect(fileName).toContain(entry.id);
       expect(fileName).toContain("my-special-memory-about-testing");
-      expect(fileName).toEndWith(".md");
+      expect(fileName.endsWith(".md")).toBe(true);
     });
   });
 

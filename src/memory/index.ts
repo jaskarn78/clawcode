@@ -40,3 +40,11 @@ export type {
 } from "./compaction.js";
 
 export { MemoryError, EmbeddingError } from "./errors.js";
+
+export {
+  TierManager,
+  embeddingToBase64,
+  base64ToEmbedding,
+  generateColdSlug,
+} from "./tier-manager.js";
+export type { TierManagerDeps, MaintenanceResult } from "./tier-manager.js";
