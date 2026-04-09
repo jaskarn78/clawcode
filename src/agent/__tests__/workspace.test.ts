@@ -41,6 +41,8 @@ function makeAgent(overrides: Partial<ResolvedAgentConfig> & { workspace: string
         criticalThreshold: 0.75,
       },
     },
+    reactions: false,
+    mcpServers: [],
     ...overrides,
   };
 }

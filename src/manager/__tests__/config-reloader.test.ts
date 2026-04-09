@@ -30,6 +30,7 @@ function makeAgent(overrides: Partial<ResolvedAgentConfig> & { name: string }): 
     subagentModel: undefined,
     threads: { idleTimeoutMinutes: 30, maxThreadSessions: 5 },
     reactions: false,
+    mcpServers: [],
     slashCommands: [],
     ...overrides,
   };

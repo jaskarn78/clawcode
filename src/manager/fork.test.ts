@@ -43,6 +43,8 @@ describe("buildForkConfig", () => {
     subagentModel: undefined,
     threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
     slashCommands: [{ name: "search", description: "Search", claudeCommand: "search", options: [] }],
+    reactions: false,
+    mcpServers: [],
   };
 
   it("creates config with fork name and no channels", () => {

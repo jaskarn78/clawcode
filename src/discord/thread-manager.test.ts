@@ -62,6 +62,8 @@ function makeAgentConfig(
       maxThreadSessions: 10,
     },
     slashCommands: [],
+    reactions: false,
+    mcpServers: [],
     ...overrides,
   };
 }
@@ -107,7 +109,7 @@ function makeMockSessionManager() {
     },
   };
 
-  return mock as SessionManager & {
+  return mock as unknown as SessionManager & {
     startAgent: ReturnType<typeof vi.fn>;
     stopAgent: ReturnType<typeof vi.fn>;
     forwardToAgent: ReturnType<typeof vi.fn>;

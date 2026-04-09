@@ -33,7 +33,7 @@ function buildContext(overrides: {
     warmupEmbeddings: vi.fn(),
     setSkillsCatalog: vi.fn(),
     setAllAgentConfigs: vi.fn(),
-  } as CheckContext["sessionManager"];
+  } as unknown as CheckContext["sessionManager"];
 
   return {
     agentName,

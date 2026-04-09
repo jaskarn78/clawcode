@@ -95,7 +95,7 @@ export function registerStartAllCommand(program: Command): void {
             cliLog(
               `Manager started. Booting ${entries.length} agent(s)...`,
             );
-            cliLog();
+            cliLog("");
             cliLog(formatStatusTable(entries));
           } else {
             cliError(

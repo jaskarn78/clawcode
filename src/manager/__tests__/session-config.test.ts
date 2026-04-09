@@ -98,8 +98,8 @@ describe("buildSessionConfig — subagent thread skill guidance", () => {
     const config = makeConfig({ skills: ["content-engine", "subagent-thread", "market-research"] });
     const deps = makeDeps({
       skillsCatalog: new Map([
-        ["content-engine", { name: "content-engine", version: "1.0", description: "Content creation" }],
-        ["market-research", { name: "market-research", version: "1.0", description: "Market research" }],
+        ["content-engine", { name: "content-engine", version: "1.0", description: "Content creation", path: "/tmp/skills/content-engine" }],
+        ["market-research", { name: "market-research", version: "1.0", description: "Market research", path: "/tmp/skills/market-research" }],
       ]),
     });
     const result = await buildSessionConfig(config, deps);

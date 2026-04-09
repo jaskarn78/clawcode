@@ -31,7 +31,7 @@ function createMockEmbedder(): EmbeddingService {
     embed: vi.fn().mockResolvedValue(randomEmbedding()),
     warmup: vi.fn().mockResolvedValue(undefined),
     isReady: vi.fn().mockReturnValue(true),
-  } as EmbeddingService;
+  } as unknown as EmbeddingService;
 }
 
 function createMockSummarize(): (prompt: string) => Promise<string> {

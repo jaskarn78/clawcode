@@ -175,6 +175,8 @@ export const defaultsSchema = z.object({
     consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 },
     decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 },
     deduplication: { enabled: true, similarityThreshold: 0.85 },
+    tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 },
+    episodes: { archivalAgeDays: 90 },
   })),
   heartbeat: heartbeatConfigSchema.default(() => ({
     enabled: true,
@@ -199,7 +201,7 @@ export const configSchema = z.object({
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
-    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
