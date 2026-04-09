@@ -17,6 +17,7 @@ describe("IPC_METHODS", () => {
       "rate-limit-status",
       "heartbeat-status",
       "schedules",
+      "skills",
     ]);
   });
 });

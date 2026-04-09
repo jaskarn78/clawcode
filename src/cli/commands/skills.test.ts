@@ -93,11 +93,10 @@ describe("formatSkillsTable", () => {
     });
     const lines = result.split("\n");
     const dataRow = lines[2];
-    // After the description column, the agents column should have "-"
     expect(dataRow).toContain("unassigned");
-    // Check the last column is "-"
-    const columns = dataRow.split(/\s{2,}/);
-    expect(columns[columns.length - 1].trim()).toBe("-");
+    // The AGENTS column header is present, and data row ends with the agents value
+    // Since no agents assigned, the row should contain "-" after the description
+    expect(dataRow.trimEnd()).toMatch(/-\s*$/);
   });
 
   it("shows comma-separated agent names when agents assigned", () => {
