@@ -194,7 +194,7 @@ Plans:
 | 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 24. Context Health Zones | v1.2 | 1/2 | Complete    | 2026-04-09 |
-| 25. Episode Memory | v1.2 | 2/2 | Complete   | 2026-04-09 |
+| 25. Episode Memory | v1.2 | 2/2 | Complete    | 2026-04-09 |
 | 26. Discord Delivery Queue | v1.2 | 0/? | Not started | - |
 | 27. Subagent Discord Threads | v1.2 | 0/? | Not started | - |
 | 28. Security & Execution Approval | v1.2 | 0/? | Not started | - |
