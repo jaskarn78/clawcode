@@ -45,7 +45,7 @@ Phases 1-5 delivered: central config, agent lifecycle, Discord routing, per-agen
 
 Plans:
 - [x] 06-01-PLAN.md — Schema, types, config extension, and SessionManager accessors
-- [ ] 06-02-PLAN.md — Core consolidation logic (detect, summarize, store, archive)
+- [x] 06-02-PLAN.md — Core consolidation logic (detect, summarize, store, archive)
 - [ ] 06-03-PLAN.md — Heartbeat check module and integration wiring
 
 ### Phase 7: Memory Relevance & Deduplication
