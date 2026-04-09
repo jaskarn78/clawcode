@@ -35,3 +35,74 @@ export type DashboardState = {
   readonly agents: readonly AgentStatusData[];
   readonly updatedAt: number;
 };
+
+/**
+ * Scheduled task data from the scheduler IPC endpoint.
+ */
+export type ScheduleData = {
+  readonly name: string;
+  readonly agentName: string;
+  readonly cron: string;
+  readonly enabled: boolean;
+  readonly lastRun: number | null;
+  readonly lastStatus: string;
+  readonly lastError: string | null;
+  readonly nextRun: number | null;
+};
+
+/**
+ * Context health check data from the heartbeat IPC endpoint.
+ */
+export type HealthData = {
+  readonly agents: Record<
+    string,
+    {
+      readonly checks: Record<
+        string,
+        {
+          readonly status: string;
+          readonly message: string;
+          readonly lastChecked: string;
+        }
+      >;
+      readonly overall: string;
+      readonly zone?: string;
+      readonly fillPercentage?: number;
+    }
+  >;
+};
+
+/**
+ * Delivery queue statistics and failed entries.
+ */
+export type DeliveryQueueData = {
+  readonly stats: {
+    readonly pending: number;
+    readonly inFlight: number;
+    readonly failed: number;
+    readonly delivered: number;
+    readonly totalEnqueued: number;
+  };
+  readonly failed: ReadonlyArray<{
+    readonly id: string;
+    readonly agentName: string;
+    readonly content: string;
+    readonly lastError: string | null;
+    readonly createdAt: string;
+    readonly attempts: number;
+  }>;
+};
+
+/**
+ * Aggregated memory statistics per agent.
+ */
+export type MemoryStatsData = {
+  readonly agents: Record<
+    string,
+    {
+      readonly entryCount: number;
+      readonly episodeCount: number;
+      readonly tierDistribution: Record<string, number>;
+    }
+  >;
+};

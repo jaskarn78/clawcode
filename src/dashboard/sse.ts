@@ -6,13 +6,23 @@
 import type { ServerResponse } from "node:http";
 import type { Logger } from "pino";
 import { sendIpcRequest } from "../ipc/client.js";
-import type { AgentStatusData, DashboardState } from "./types.js";
+import type {
+  AgentStatusData,
+  DashboardState,
+  ScheduleData,
+  HealthData,
+  DeliveryQueueData,
+  MemoryStatsData,
+} from "./types.js";
 
 type SseManagerConfig = {
   readonly socketPath: string;
   readonly pollIntervalMs: number;
   readonly log: Logger;
 };
+
+/** Memory stats are polled less frequently (every 15s). */
+const MEMORY_POLL_INTERVAL_MS = 15_000;
 
 /**
  * Manages SSE client connections and periodic polling of agent status.
@@ -23,6 +33,10 @@ export class SseManager {
   private readonly pollIntervalMs: number;
   private readonly log: Logger;
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private memoryIntervalId: ReturnType<typeof setInterval> | null = null;
+
+  /** Cached agent names from the last status poll (used for memory queries). */
+  private lastAgentNames: readonly string[] = [];
 
   constructor(config: SseManagerConfig) {
     this.socketPath = config.socketPath;
@@ -66,9 +80,17 @@ export class SseManager {
    */
   start(): void {
     if (this.intervalId !== null) return;
+
+    // Primary poll: agent status, schedules, health, delivery queue
     this.intervalId = setInterval(() => {
       void this.pollAndBroadcast();
     }, this.pollIntervalMs);
+
+    // Slower poll: memory stats (every 15s)
+    this.memoryIntervalId = setInterval(() => {
+      void this.pollMemoryStats();
+    }, MEMORY_POLL_INTERVAL_MS);
+
     this.log.info({ pollIntervalMs: this.pollIntervalMs }, "SSE polling started");
   }
 
@@ -79,8 +101,12 @@ export class SseManager {
     if (this.intervalId !== null) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      this.log.info("SSE polling stopped");
     }
+    if (this.memoryIntervalId !== null) {
+      clearInterval(this.memoryIntervalId);
+      this.memoryIntervalId = null;
+    }
+    this.log.info("SSE polling stopped");
   }
 
   /**
@@ -126,6 +152,9 @@ export class SseManager {
       };
     });
 
+    // Cache agent names for memory poll
+    this.lastAgentNames = agents.map((a) => a.name);
+
     return {
       agents,
       updatedAt: Date.now(),
@@ -133,9 +162,34 @@ export class SseManager {
   }
 
   /**
-   * Poll daemon and broadcast agent status to all connected clients.
+   * Fetch schedule data from daemon.
+   */
+  async fetchSchedules(): Promise<{ schedules: readonly ScheduleData[] }> {
+    const result = await sendIpcRequest(this.socketPath, "schedules", {});
+    return result as { schedules: readonly ScheduleData[] };
+  }
+
+  /**
+   * Fetch health/heartbeat data from daemon.
+   */
+  async fetchHealth(): Promise<HealthData> {
+    const result = await sendIpcRequest(this.socketPath, "heartbeat-status", {});
+    return result as HealthData;
+  }
+
+  /**
+   * Fetch delivery queue status from daemon.
+   */
+  async fetchDeliveryQueue(): Promise<DeliveryQueueData> {
+    const result = await sendIpcRequest(this.socketPath, "delivery-queue-status", {});
+    return result as DeliveryQueueData;
+  }
+
+  /**
+   * Poll daemon and broadcast agent status plus additional data to all connected clients.
    */
   private async pollAndBroadcast(): Promise<void> {
+    // Agent status (primary)
     try {
       const state = await this.fetchCurrentState();
       this.broadcast("agent-status", state);
@@ -143,5 +197,75 @@ export class SseManager {
       this.log.warn({ err }, "Failed to poll daemon for dashboard");
       this.broadcast("error", { message: "Daemon not reachable" });
     }
+
+    // Schedules
+    try {
+      const schedules = await this.fetchSchedules();
+      this.broadcast("schedules", schedules);
+    } catch (err) {
+      this.log.debug({ err }, "Failed to poll schedules");
+    }
+
+    // Health
+    try {
+      const health = await this.fetchHealth();
+      this.broadcast("health", health);
+    } catch (err) {
+      this.log.debug({ err }, "Failed to poll health");
+    }
+
+    // Delivery queue
+    try {
+      const deliveryQueue = await this.fetchDeliveryQueue();
+      this.broadcast("delivery-queue", deliveryQueue);
+    } catch (err) {
+      this.log.debug({ err }, "Failed to poll delivery queue");
+    }
+  }
+
+  /**
+   * Poll per-agent memory stats (slower interval).
+   */
+  private async pollMemoryStats(): Promise<void> {
+    const agentNames = [...this.lastAgentNames];
+    if (agentNames.length === 0) return;
+
+    const agents: Record<
+      string,
+      { entryCount: number; episodeCount: number; tierDistribution: Record<string, number> }
+    > = {};
+
+    const results = await Promise.allSettled(
+      agentNames.map(async (name) => {
+        const [memResult, epResult] = await Promise.all([
+          sendIpcRequest(this.socketPath, "memory-list", { agent: name, limit: 1 }),
+          sendIpcRequest(this.socketPath, "episode-list", { agent: name, count: true }),
+        ]);
+
+        const memData = memResult as {
+          entries: ReadonlyArray<{ tier?: string }>;
+          totalCount?: number;
+          tierCounts?: Record<string, number>;
+        };
+        const epData = epResult as { count: number };
+
+        return {
+          name,
+          entryCount: memData.totalCount ?? memData.entries?.length ?? 0,
+          episodeCount: epData.count ?? 0,
+          tierDistribution: memData.tierCounts ?? {},
+        };
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        const { name, ...stats } = result.value;
+        agents[name] = stats;
+      }
+    }
+
+    const memoryStats: MemoryStatsData = { agents };
+    this.broadcast("memory-stats", memoryStats);
   }
 }

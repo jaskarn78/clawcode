@@ -452,3 +452,306 @@ body {
   background: rgba(255, 23, 68, 0.1);
   border-color: var(--status-error);
 }
+
+/* ---------- Schedules Panel ---------- */
+
+.schedules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.schedules-table th {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 51, 102, 0.1);
+}
+
+.schedules-table td {
+  padding: 6px 8px;
+  font-family: "IBM Plex Sans", sans-serif;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.schedule-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.schedule-row.schedule-disabled {
+  opacity: 0.4;
+}
+
+.schedule-cron code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--accent-secondary);
+  background: var(--bg-elevated);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.schedule-next {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+/* ---------- Status Dots ---------- */
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-success {
+  background: var(--status-running);
+  box-shadow: 0 0 4px rgba(0, 230, 118, 0.4);
+}
+
+.dot-warning {
+  background: var(--status-warning);
+  box-shadow: 0 0 4px rgba(255, 196, 0, 0.4);
+}
+
+.dot-error {
+  background: var(--status-error);
+  box-shadow: 0 0 4px rgba(255, 23, 68, 0.4);
+}
+
+.dot-pending {
+  background: var(--text-secondary);
+}
+
+/* ---------- Health Panel ---------- */
+
+.health-card {
+  background: var(--bg-elevated);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.health-card:last-child {
+  margin-bottom: 0;
+}
+
+.health-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.health-agent-name {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.zone-bar-lg {
+  height: 8px;
+}
+
+.health-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.health-check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+}
+
+.health-check-name {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--text-primary);
+  min-width: 80px;
+}
+
+.health-check-msg {
+  color: var(--text-secondary);
+  font-family: "IBM Plex Sans", sans-serif;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Delivery Queue Panel ---------- */
+
+.delivery-stats,
+.messages-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 8px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stat-number {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.stat-number.stat-delivered {
+  color: var(--accent-secondary);
+}
+
+.stat-number.stat-failed {
+  color: var(--status-error);
+}
+
+.stat-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Failed entries table */
+
+.failed-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.failed-table th {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.65rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 51, 102, 0.1);
+}
+
+.failed-table td {
+  padding: 4px 6px;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.failed-id code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  color: var(--accent-secondary);
+}
+
+.failed-error {
+  color: var(--status-error);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failed-time {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+}
+
+/* ---------- Memory Panel ---------- */
+
+.memory-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 6px;
+}
+
+.memory-card:last-child {
+  margin-bottom: 0;
+}
+
+.memory-agent-name {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  min-width: 80px;
+}
+
+.memory-stats-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.72rem;
+}
+
+.memory-entry-count,
+.memory-episode-count {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.memory-stat-label {
+  color: var(--text-secondary);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.65rem;
+  margin-right: 6px;
+}
+
+/* Tier distribution bar */
+
+.tier-bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-deep);
+  flex: 1;
+  min-width: 40px;
+}
+
+.tier-segment {
+  height: 100%;
+  transition: width 0.4s ease;
+}
+
+.tier-hot {
+  background: var(--accent-primary);
+}
+
+.tier-warm {
+  background: var(--status-warning);
+}
+
+.tier-cold {
+  background: var(--text-secondary);
+}

@@ -155,6 +155,39 @@ async function handleRequest(
       return;
     }
 
+    // One-shot schedules endpoint
+    if (method === "GET" && pathname === "/api/schedules") {
+      try {
+        const data = await sseManager.fetchSchedules();
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
+    // One-shot health endpoint
+    if (method === "GET" && pathname === "/api/health") {
+      try {
+        const data = await sseManager.fetchHealth();
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
+    // One-shot delivery queue endpoint
+    if (method === "GET" && pathname === "/api/delivery-queue") {
+      try {
+        const data = await sseManager.fetchDeliveryQueue();
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
     // Agent control: POST /api/agents/:name/:action
     if (
       method === "POST" &&
