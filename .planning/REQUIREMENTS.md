@@ -114,13 +114,57 @@ Deferred to later milestones.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated during roadmap creation) | | |
+| DEBT-01 | Phase 21 | Pending |
+| DEBT-02 | Phase 21 | Pending |
+| DEBT-03 | Phase 21 | Pending |
+| DEBT-04 | Phase 21 | Pending |
+| DEBT-05 | Phase 22 | Pending |
+| DEBT-06 | Phase 22 | Pending |
+| DEBT-07 | Phase 22 | Pending |
+| HOTR-01 | Phase 23 | Pending |
+| HOTR-02 | Phase 23 | Pending |
+| HOTR-03 | Phase 23 | Pending |
+| HOTR-04 | Phase 23 | Pending |
+| CTXH-01 | Phase 24 | Pending |
+| CTXH-02 | Phase 24 | Pending |
+| CTXH-03 | Phase 24 | Pending |
+| CTXH-04 | Phase 24 | Pending |
+| EPSD-01 | Phase 25 | Pending |
+| EPSD-02 | Phase 25 | Pending |
+| EPSD-03 | Phase 25 | Pending |
+| EPSD-04 | Phase 25 | Pending |
+| DQUE-01 | Phase 26 | Pending |
+| DQUE-02 | Phase 26 | Pending |
+| DQUE-03 | Phase 26 | Pending |
+| DQUE-04 | Phase 26 | Pending |
+| SATH-01 | Phase 27 | Pending |
+| SATH-02 | Phase 27 | Pending |
+| SATH-03 | Phase 27 | Pending |
+| SATH-04 | Phase 27 | Pending |
+| EXEC-01 | Phase 28 | Pending |
+| EXEC-02 | Phase 28 | Pending |
+| EXEC-03 | Phase 28 | Pending |
+| EXEC-04 | Phase 28 | Pending |
+| SECR-01 | Phase 28 | Pending |
+| SECR-02 | Phase 28 | Pending |
+| SECR-03 | Phase 28 | Pending |
+| BOOT-01 | Phase 29 | Pending |
+| BOOT-02 | Phase 29 | Pending |
+| BOOT-03 | Phase 29 | Pending |
+| DASH-01 | Phase 30 | Pending |
+| DASH-02 | Phase 30 | Pending |
+| DASH-03 | Phase 30 | Pending |
+| DASH-04 | Phase 30 | Pending |
+| DASH-05 | Phase 30 | Pending |
+| DASH-06 | Phase 30 | Pending |
+| DASH-07 | Phase 30 | Pending |
+| DASH-08 | Phase 30 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 43 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 43
+- Mapped to phases: 43/43
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after initial definition*
+*Last updated: 2026-04-09 after roadmap creation*

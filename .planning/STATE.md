@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Production Hardening & Platform Parity
-status: Defining requirements
-last_updated: "2026-04-09T17:10:00.000Z"
+status: Ready to plan
+last_updated: "2026-04-09T18:00:00.000Z"
 last_activity: 2026-04-09
 progress:
-  total_phases: 0
-  completed_phases: 0
+  total_phases: 30
+  completed_phases: 20
   total_plans: 0
   completed_plans: 0
 ---
@@ -19,22 +19,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v1.2 — Production Hardening & Platform Parity
+**Current focus:** Phase 21 - Tech Debt - Code Quality
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-04-09 — Milestone v1.2 started
+Phase: 21 of 30 (Tech Debt - Code Quality)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-04-09 -- v1.2 roadmap created (10 phases, 43 requirements)
+
+Progress: [====================..........] 67% (20/30 phases, v1.0+v1.1 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 11 (v1.0)
-- Average duration: 4.5 min
-- Total execution time: ~50 min
+- Total plans completed: 43 (v1.0: 11, v1.1: 32)
+- Average duration: ~3 min
+- Total execution time: ~2.2 hours
 
 **By Phase (v1.0):**
 
@@ -48,35 +50,10 @@ Last activity: 2026-04-09 — Milestone v1.2 started
 
 **Recent Trend:**
 
-- Last 5 plans: 4min, 5min, 3min, 5min, 3min
+- v1.1 plans averaged ~2.5min each
 - Trend: Stable
 
 *Updated after each plan completion*
-| Phase 06 P01 | 3min | 2 tasks | 12 files |
-| Phase 06 P02 | 3min | 1 tasks | 2 files |
-| Phase 06 P03 | 2min | 2 tasks | 4 files |
-| Phase 07 P02 | 2min | 1 tasks | 2 files |
-| Phase 07 P01 | 3min | 2 tasks | 12 files |
-| Phase 07 P03 | 3min | 2 tasks | 5 files |
-| Phase 08 P01 | 4min | 2 tasks | 8 files |
-| Phase 08 P02 | 4min | 2 tasks | 7 files |
-| Phase 09-task-scheduling P01 | 5min | 2 tasks | 12 files |
-| Phase 09-task-scheduling P02 | 2min | 1 tasks | 3 files |
-| Phase 09-task-scheduling P03 | 2min | 1 tasks | 3 files |
-| Phase 10-skills-registry P01 | 3min | 2 tasks | 7 files |
-| Phase 10-skills-registry P02 | 3min | 2 tasks | 4 files |
-| Phase 10-skills-registry P03 | 3min | 1 tasks | 4 files |
-| Phase 11-agent-collaboration P01 | 2min | 2 tasks | 5 files |
-| Phase 11-agent-collaboration P02 | 2min | 2 tasks | 4 files |
-| Phase 11-agent-collaboration P03 | 2min | 2 tasks | 2 files |
-| Phase 11-agent-collaboration P04 | 2min | 1 tasks | 2 files |
-| Phase 12-discord-slash-commands P01 | 3min | 2 tasks | 7 files |
-| Phase 12-discord-slash-commands P02 | 3min | 2 tasks | 6 files |
-| Phase 13-discord-attachments P01 | 2min | 1 tasks | 3 files |
-| Phase 13-discord-attachments P02 | 2min | 1 tasks | 2 files |
-| Phase 14-discord-thread-bindings P01 | 3min | 2 tasks | 7 files |
-| Phase 14-discord-thread-bindings P02 | 3min | 2 tasks | 3 files |
-| Phase 14-discord-thread-bindings P03 | 3min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -85,45 +62,11 @@ Last activity: 2026-04-09 — Milestone v1.2 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [v1.2 roadmap]: Tech debt first (Phases 21-22) before new features
+- [v1.2 roadmap]: Security + Execution Approval merged into single phase (28)
+- [v1.2 roadmap]: Web Dashboard last (Phase 30) -- depends on all other features
 - [v1.0]: Agents are Claude Code SDK sessions, not separate OS processes
 - [v1.0]: Memory uses local embeddings (all-MiniLM-L6-v2) -- zero cost, offline-capable
-- [v1.0]: SQLite + sqlite-vec for KNN search with cosine distance
-- [v1.0]: Directory-based heartbeat check discovery with dynamic import
-- [Phase 06]: SQLite migration uses savepoint test to detect constraint update need
-- [Phase 06]: Consolidation config nested inside memoryConfigSchema, not separate top-level
-- [Phase 06]: ConsolidationDeps interface for dependency injection; monthly grouping by ISO week start date
-- [Phase 06]: Per-check timeout as optional CheckModule property (backward-compatible)
-- [Phase 06]: Set-based concurrency lock for consolidation (not file-based); warning status for failures (retry next cycle)
-- [Phase 07]: Dedup uses DELETE+INSERT for vec_memories embedding replacement (virtual tables don't support UPDATE)
-- [Phase 07]: Exponential half-life formula: importance * 0.5^(days/halfLifeDays) for predictable decay curve
-- [Phase 07]: Score decay BEFORE updating accessed_at to prevent self-boosting on read
-- [Phase 08]: Use date-fns differenceInDays for tier transition date math; Buffer-to-Float32Array conversion for getEmbedding; ALTER TABLE ADD COLUMN for backward-compatible tier migration
-- [Phase 08]: TierManager uses DI pattern; cold archives use yaml package; initMemory reordered before buildSessionConfig for hot injection
-- [Phase 09-task-scheduling]: Per-agent boolean lock for sequential scheduled task execution; cron validation deferred to runtime
-- [Phase 09-task-scheduling]: TaskScheduler initialized after heartbeat runner, stopped before it on shutdown
-- [Phase 09-task-scheduling]: Followed health.ts/status.ts patterns exactly for CLI command consistency
-- [Phase 10-skills-registry]: Regex-based YAML frontmatter parsing for SKILL.md (no external YAML dep)
-- [Phase 10-skills-registry]: skillsPath is global default, not per-agent; passed through ResolvedAgentConfig
-- [Phase 10-skills-registry]: IPC skills method supports optional agent filter; system prompt injection only for assigned skills found in catalog
-- [Phase 10-skills-registry]: Followed schedules.ts pattern exactly for CLI command structure
-- [Phase 11-agent-collaboration]: Atomic inbox write pattern (tmp+rename) for crash safety; admin validation deferred to daemon
-- [Phase 11-agent-collaboration]: Inbox check follows context-fill.ts pattern exactly for consistency
-- [Phase 11-agent-collaboration]: Priority param cast to MessagePriority union type in daemon routing
-- [Phase 11-agent-collaboration]: Admin validation placed before skills scanning for fast-fail; admin prompt uses markdown table for structured agent visibility
-- [Phase 11-agent-collaboration]: Followed skills.ts pattern exactly for CLI send command structure
-- [Phase 12-discord-slash-commands]: Discord ApplicationCommandOptionType stored as number (1-11), not enum; slashCommands follows schedules pattern exactly
-- [Phase 12-discord-slash-commands]: SlashCommandHandler creates own Client with Guilds intent; graceful degradation when bot token missing
-- [Phase 13-discord-attachments]: Timeout parameter exposed on downloadAttachment for testability (default DOWNLOAD_TIMEOUT_MS)
-- [Phase 13-discord-attachments]: formatDiscordMessage exported with optional DownloadResult[] for backward-compatible attachment integration
-- [Phase 14-discord-thread-bindings]: Thread registry follows exact same atomic write pattern as manager/registry.ts
-- [Phase 14-discord-thread-bindings]: ThreadConfig uses idleTimeoutMinutes (1440 = 24h) and maxThreadSessions (10) as defaults
-- [Phase 14-discord-thread-bindings]: Thread session config clones parent agent config with soul prepended with thread context block
-- [Phase 14-discord-thread-bindings]: Thread routing checked BEFORE channel routing in bridge handleMessage (early return pattern)
-- [Phase 14-discord-thread-bindings]: ThreadManager is optional in BridgeConfig for backward compatibility
-- [Phase 14-discord-thread-bindings]: ThreadManager injected into CheckContext as optional field for backward compatibility
-- [Phase 14-discord-thread-bindings]: HeartbeatRunner gets setThreadManager method (not constructor param) to avoid circular init order
-- [Phase 14-discord-thread-bindings]: Thread cleanup in shutdown runs before manager.stopAll for graceful binding removal
-- [Phase quick]: 1500ms throttle for Discord streaming edits; mutable ref pattern for TS async callback narrowing; first chunk immediate, subsequent throttled
 
 ### Pending Todos
 
@@ -132,16 +75,17 @@ Recent decisions affecting current work:
 ### Blockers/Concerns
 
 - Claude Agent SDK V2 is pre-1.0 (unstable preview) -- pin exact version, wrap in thin adapter
-- Discord plugin API surface needs validation for thread management and message editing capabilities
+- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 260409-laz | Add persistent usage tracking to ClawCode agents | 2026-04-09 | 0979508 | [260409-laz-add-persistent-usage-tracking-to-clawcod](./quick/260409-laz-add-persistent-usage-tracking-to-clawcod/) |
-| 260409-lop | Add typing indicator and streaming responses | 2026-04-09 | 3a90864 | [260409-lop-add-typing-indicator-and-streaming-respo](./quick/260409-lop-add-typing-indicator-and-streaming-respo/) |
+| 260409-laz | Add persistent usage tracking to ClawCode agents | 2026-04-09 | 0979508 | [260409-laz](./quick/260409-laz-add-persistent-usage-tracking-to-clawcod/) |
+| 260409-lop | Add typing indicator and streaming responses | 2026-04-09 | 3a90864 | [260409-lop](./quick/260409-lop-add-typing-indicator-and-streaming-respo/) |
 
 ## Session Continuity
 
 Last activity: 2026-04-09
+Stopped at: v1.2 roadmap created, ready to plan Phase 21
 Resume file: None
