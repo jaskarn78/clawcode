@@ -144,6 +144,23 @@ Plans:
 - [x] 12-01-PLAN.md — Slash command types, default commands, config schema extension
 - [x] 12-02-PLAN.md — Registration, interaction handler, daemon wiring, IPC method
 
+### Phase 13: Discord Attachment and Image Support
+**Goal**: Agents can receive and process attachments/images from Discord messages and send files back -- enabling multimodal conversations and file exchange
+**Depends on:** Phase 12
+**Requirements**: DATT-01, DATT-02, DATT-03, DATT-04, DATT-05, DATT-06
+**Success Criteria** (what must be TRUE):
+  1. When a user sends a message with attachments, the bridge downloads them to the agent's workspace before forwarding
+  2. Image attachments are downloaded and their local paths included in the message so Claude can read them (multimodal)
+  3. Non-image file attachments are downloaded and their paths included for agent file access
+  4. Attachments over 25MB are logged as warnings and skipped
+  5. Agents can send files back to Discord using the reply tool's files parameter
+  6. Downloaded temp files are cleaned up periodically
+**Plans**: 2 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Attachment types, download/format/cleanup module with tests
+- [ ] 13-02-PLAN.md — Bridge integration for attachment download and forwarding
+
 ## Progress
 
 **Execution Order:**
@@ -158,13 +175,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
 | 12. Discord Slash Commands | v1.1 | 2/2 | Complete    | 2026-04-09 |
-
-### Phase 13: Discord Attachment and Image Support
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 12
-**Plans:** 2/2 plans complete
-
-Plans:
-- [ ] TBD (run /gsd:plan-phase 13 to break down)
+| 13. Discord Attachments | v1.1 | 0/2 | Not started | - |

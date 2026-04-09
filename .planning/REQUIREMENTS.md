@@ -52,6 +52,15 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [x] **DCMD-04**: Command responses sent back to Discord channel
 - [x] **DCMD-05**: Configurable command mapping in clawcode.yaml per agent
 
+### Discord Attachments
+
+- [ ] **DATT-01**: Attachment metadata (name, type, size, local path) included in messages forwarded to agents
+- [ ] **DATT-02**: Image attachments downloaded to agent workspace and path passed for multimodal reading
+- [ ] **DATT-03**: Non-image file attachments downloaded and path provided to agent for file access
+- [ ] **DATT-04**: Large attachments (>25MB) logged as warnings and not downloaded
+- [ ] **DATT-05**: Agents can send files back to Discord via the reply tool's files parameter
+- [ ] **DATT-06**: Downloaded attachment temp files cleaned up periodically (24h default)
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -87,17 +96,23 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | XAGT-02 | Phase 11 | Complete |
 | XAGT-03 | Phase 11 | Complete |
 | XAGT-04 | Phase 11 | Complete |
-| DCMD-01 | Phase 12 | Planned |
-| DCMD-02 | Phase 12 | Planned |
-| DCMD-03 | Phase 12 | Planned |
-| DCMD-04 | Phase 12 | Planned |
-| DCMD-05 | Phase 12 | Planned |
+| DCMD-01 | Phase 12 | Complete |
+| DCMD-02 | Phase 12 | Complete |
+| DCMD-03 | Phase 12 | Complete |
+| DCMD-04 | Phase 12 | Complete |
+| DCMD-05 | Phase 12 | Complete |
+| DATT-01 | Phase 13 | Planned |
+| DATT-02 | Phase 13 | Planned |
+| DATT-03 | Phase 13 | Planned |
+| DATT-04 | Phase 13 | Planned |
+| DATT-05 | Phase 13 | Planned |
+| DATT-06 | Phase 13 | Planned |
 
 **Coverage:**
-- v1.1 requirements: 27 total
-- Mapped to phases: 27
+- v1.1 requirements: 33 total
+- Mapped to phases: 33
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-08 after Phase 12 planning*
+*Last updated: 2026-04-09 after Phase 13 planning*
