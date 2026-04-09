@@ -182,10 +182,10 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 **Goal:** Discord threads in bound channels automatically get dedicated agent sessions -- threads are detected, sessions spawned with parent config, messages routed to thread sessions, and idle sessions cleaned up
 **Requirements**: THRD-01, THRD-02, THRD-03, THRD-04, THRD-05
 **Depends on:** Phase 13
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 14-01-PLAN.md — Thread binding types, persistent registry, config schema extension
+- [x] 14-01-PLAN.md — Thread binding types, persistent registry, config schema extension
 - [ ] 14-02-PLAN.md — ThreadManager class, bridge thread detection and message routing
 - [ ] 14-03-PLAN.md — Idle cleanup heartbeat check, daemon wiring, CLI threads command
 
