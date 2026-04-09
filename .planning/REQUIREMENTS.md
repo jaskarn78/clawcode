@@ -54,12 +54,12 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 
 ### Discord Attachments
 
-- [ ] **DATT-01**: Attachment metadata (name, type, size, local path) included in messages forwarded to agents
-- [ ] **DATT-02**: Image attachments downloaded to agent workspace and path passed for multimodal reading
-- [ ] **DATT-03**: Non-image file attachments downloaded and path provided to agent for file access
-- [ ] **DATT-04**: Large attachments (>25MB) logged as warnings and not downloaded
+- [x] **DATT-01**: Attachment metadata (name, type, size, local path) included in messages forwarded to agents
+- [x] **DATT-02**: Image attachments downloaded to agent workspace and path passed for multimodal reading
+- [x] **DATT-03**: Non-image file attachments downloaded and path provided to agent for file access
+- [x] **DATT-04**: Large attachments (>25MB) logged as warnings and not downloaded
 - [ ] **DATT-05**: Agents can send files back to Discord via the reply tool's files parameter
-- [ ] **DATT-06**: Downloaded attachment temp files cleaned up periodically (24h default)
+- [x] **DATT-06**: Downloaded attachment temp files cleaned up periodically (24h default)
 
 ## Out of Scope
 

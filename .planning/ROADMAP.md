@@ -158,7 +158,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 13-01-PLAN.md — Attachment types, download/format/cleanup module with tests
+- [x] 13-01-PLAN.md — Attachment types, download/format/cleanup module with tests
 - [ ] 13-02-PLAN.md — Bridge integration for attachment download and forwarding
 
 ## Progress
@@ -175,4 +175,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
 | 12. Discord Slash Commands | v1.1 | 2/2 | Complete    | 2026-04-09 |
-| 13. Discord Attachments | v1.1 | 0/2 | Not started | - |
+| 13. Discord Attachments | v1.1 | 1/2 | In Progress|  |
