@@ -26,13 +26,26 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - [ ] Memory relevance decay — unaccessed memories lose priority over time
 - [ ] Memory deduplication — repeated facts merged into single authoritative entries
 - [ ] Tiered memory storage — hot (active context), warm (searchable), cold (archived)
-- [ ] Memory flush to daily markdown logs with context snapshots
-- [ ] Extensible heartbeat framework — periodic check system, empty initially, add checks later
 - [ ] Cron/scheduler — run tasks on schedule within persistent agent sessions
 - [ ] Skills registry — extend Claude Code's skill system with better discovery and per-agent assignment
 - [ ] Subagent spawning via Claude Code's native Agent tool with model selection (sonnet/opus)
 - [ ] Cross-agent communication — agents in same workspace can message each other
 - [ ] Admin agent with access to all other agents across workspaces
+
+## Current Milestone: v1.1 Advanced Intelligence
+
+**Goal:** Make agents smarter over time with self-maintaining memory and operational capabilities
+
+**Target features:**
+- Memory auto-consolidation (daily -> weekly -> monthly digests)
+- Memory relevance decay (unaccessed memories lose priority)
+- Memory deduplication (merge repeated facts)
+- Tiered memory storage (hot/warm/cold)
+- Cron/scheduler for periodic tasks
+- Skills registry with per-agent assignment
+- Subagent spawning with model selection
+- Cross-agent async communication
+- Admin agent with cross-workspace access
 - [ ] Central config system defining all agents, their workspaces, channels, models, skills
 
 ### Out of Scope
@@ -92,4 +105,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-09 after Phase 5 completion — v1.0 milestone complete*
+*Last updated: 2026-04-09 after v1.0 complete, v1.1 milestone started*
