@@ -157,6 +157,17 @@ export async function buildSessionConfig(
     systemPrompt += "computations, file operations that don't need a thread).\n";
   }
 
+  // Inject MCP tools section into system prompt (MCPC-03)
+  const mcpServers = config.mcpServers ?? [];
+  if (mcpServers.length > 0) {
+    systemPrompt += "\n\n## Available MCP Tools\n\n";
+    systemPrompt += "The following external MCP servers are configured and available to you:\n\n";
+    for (const server of mcpServers) {
+      systemPrompt += `- **${server.name}**: \`${server.command} ${server.args.join(" ")}\`\n`;
+    }
+    systemPrompt += "\nThese servers are activated automatically. Use their tools as needed for your tasks.\n";
+  }
+
   // Inject admin agent information (per D-11, D-12)
   if (config.admin && deps.allAgentConfigs.length > 0) {
     const otherAgents = deps.allAgentConfigs.filter(
