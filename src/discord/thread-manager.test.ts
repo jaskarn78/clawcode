@@ -73,7 +73,7 @@ function makeMockSessionManager() {
   const configs = new Map<string, ResolvedAgentConfig>();
   const running = new Set<string>();
 
-  return {
+  const mock = {
     startAgent: vi.fn(async (name: string, _config: ResolvedAgentConfig) => {
       running.add(name);
     }),
@@ -83,11 +83,31 @@ function makeMockSessionManager() {
     forwardToAgent: vi.fn(async (_name: string, _message: string) => {}),
     getAgentConfig: vi.fn((agentName: string) => configs.get(agentName)),
     getRunningAgents: vi.fn(() => [...running]),
+    sendToAgent: vi.fn(),
+    streamFromAgent: vi.fn(),
+    forkSession: vi.fn(),
+    restartAgent: vi.fn(),
+    startAll: vi.fn(),
+    stopAll: vi.fn(),
+    reconcileRegistry: vi.fn(),
+    getMemoryStore: vi.fn(),
+    getCompactionManager: vi.fn(),
+    getContextFillProvider: vi.fn(),
+    getEmbedder: vi.fn(),
+    getSessionLogger: vi.fn(),
+    getTierManager: vi.fn(),
+    getUsageTracker: vi.fn(),
+    saveContextSummary: vi.fn(),
+    warmupEmbeddings: vi.fn(),
+    setSkillsCatalog: vi.fn(),
+    setAllAgentConfigs: vi.fn(),
     // Test helper to pre-populate configs
     _setConfig(name: string, config: ResolvedAgentConfig) {
       configs.set(name, config);
     },
-  } as unknown as SessionManager & {
+  };
+
+  return mock as SessionManager & {
     startAgent: ReturnType<typeof vi.fn>;
     stopAgent: ReturnType<typeof vi.fn>;
     forwardToAgent: ReturnType<typeof vi.fn>;
@@ -137,7 +157,7 @@ describe("ThreadManager", () => {
     sessionManager._setConfig("agent-a", agentConfig);
 
     threadManager = new ThreadManager({
-      sessionManager: sessionManager as unknown as SessionManager,
+      sessionManager,
       routingTable,
       registryPath,
     });

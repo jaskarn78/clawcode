@@ -32,7 +32,7 @@ function mockMemoryStore(): MemoryStore {
       createdAt: "2026-04-09T00:00:00Z",
     }),
     close: vi.fn(),
-  } as unknown as MemoryStore;
+  } as MemoryStore;
 }
 
 /** Create a mock EmbeddingService. */
@@ -41,7 +41,7 @@ function mockEmbedder(): EmbeddingService {
     embed: vi.fn().mockResolvedValue(new Float32Array(384)),
     warmup: vi.fn().mockResolvedValue(undefined),
     isReady: vi.fn().mockReturnValue(true),
-  } as unknown as EmbeddingService;
+  } as EmbeddingService;
 }
 
 /** Create a mock SessionLogger. */
@@ -49,7 +49,7 @@ function mockSessionLogger(): SessionLogger {
   return {
     flushConversation: vi.fn().mockResolvedValue("/tmp/memory/2026-04-09.md"),
     appendEntry: vi.fn().mockResolvedValue(undefined),
-  } as unknown as SessionLogger;
+  } as SessionLogger;
 }
 
 /** Create a silent mock logger. */
@@ -59,7 +59,7 @@ function mockLogger(): Logger {
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
-  } as unknown as Logger;
+  } as Logger;
 }
 
 /** Sample conversation turns for testing. */
@@ -113,14 +113,12 @@ describe("CompactionManager.compact", () => {
   it("flushes conversation to session log FIRST before any inserts", async () => {
     const callOrder: string[] = [];
 
-    const sessionLogger = deps.sessionLogger as unknown as { flushConversation: ReturnType<typeof vi.fn> };
-    sessionLogger.flushConversation = vi.fn().mockImplementation(async () => {
+    vi.mocked(deps.sessionLogger.flushConversation).mockImplementation(async () => {
       callOrder.push("flush");
       return "/tmp/memory/2026-04-09.md";
     });
 
-    const store = deps.memoryStore as unknown as { insert: ReturnType<typeof vi.fn> };
-    store.insert = vi.fn().mockImplementation(() => {
+    vi.mocked(deps.memoryStore.insert).mockImplementation(() => {
       callOrder.push("insert");
       return { id: "mem-1", content: "test", source: "conversation", importance: 0.5, accessCount: 0, tags: [], embedding: null, createdAt: "", updatedAt: "", accessedAt: "" };
     });

@@ -20,7 +20,7 @@ function buildContext(overrides: {
 } = {}): CheckContext {
   const agentName = overrides.agentName ?? "test-agent";
 
-  const sessionManager = {
+  const sessionManager: CheckContext["sessionManager"] = {
     getMemoryStore: vi.fn().mockReturnValue(overrides.memoryStore ?? {}),
     getEmbedder: vi.fn().mockReturnValue(overrides.embedder ?? {}),
     getAgentConfig: vi.fn().mockReturnValue(
@@ -41,7 +41,21 @@ function buildContext(overrides: {
     getSessionLogger: vi.fn(),
     getCompactionManager: vi.fn(),
     warmupEmbeddings: vi.fn(),
-  } as unknown as CheckContext["sessionManager"];
+    startAgent: vi.fn(),
+    streamFromAgent: vi.fn(),
+    forwardToAgent: vi.fn(),
+    forkSession: vi.fn(),
+    stopAgent: vi.fn(),
+    restartAgent: vi.fn(),
+    startAll: vi.fn(),
+    stopAll: vi.fn(),
+    reconcileRegistry: vi.fn(),
+    getTierManager: vi.fn(),
+    getUsageTracker: vi.fn(),
+    saveContextSummary: vi.fn(),
+    setSkillsCatalog: vi.fn(),
+    setAllAgentConfigs: vi.fn(),
+  } as CheckContext["sessionManager"];
 
   return {
     agentName,

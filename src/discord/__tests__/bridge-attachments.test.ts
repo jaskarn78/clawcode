@@ -41,7 +41,7 @@ function makeMessage(overrides: {
 } = {}): Message {
   const attMap = new Map<string, Attachment>();
   for (const a of overrides.attachments ?? []) {
-    attMap.set(a.id, a as unknown as Attachment);
+    attMap.set(a.id, a as Attachment);
   }
 
   // Mimic discord.js Collection with .map and .values
@@ -56,7 +56,7 @@ function makeMessage(overrides: {
       }
       return result;
     },
-  } as unknown as Collection<string, Attachment>;
+  } as Collection<string, Attachment>;
 
   return {
     content: overrides.content ?? "hello",
@@ -66,7 +66,8 @@ function makeMessage(overrides: {
     createdAt: new Date("2026-04-09T12:00:00Z"),
     attachments: collection,
     reference: null,
-  } as unknown as Message;
+    channel: { sendTyping: vi.fn(), send: vi.fn().mockResolvedValue({ edit: vi.fn() }) },
+  } as Message;
 }
 
 // ── Mock attachment module ──────────────────────────────────────────────────
@@ -179,11 +180,11 @@ describe("formatDiscordMessage (with attachment support)", () => {
 describe("handleMessage attachment integration", () => {
   let DiscordBridge: typeof import("../bridge.js").DiscordBridge;
 
-  const mockForwardToAgent = vi.fn();
+  const mockStreamFromAgent = vi.fn();
   const mockGetAgentConfig = vi.fn();
 
   const fakeSessionManager = {
-    forwardToAgent: mockForwardToAgent,
+    streamFromAgent: mockStreamFromAgent,
     getAgentConfig: mockGetAgentConfig,
   };
 
@@ -195,7 +196,7 @@ describe("handleMessage attachment integration", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockGetAgentConfig.mockReturnValue({ workspace: "/workspace/test-agent" });
-    mockForwardToAgent.mockResolvedValue(undefined);
+    mockStreamFromAgent.mockResolvedValue("agent response");
     mockExtractAttachments.mockReturnValue([makeAttachmentInfo()]);
     mockDownloadAllAttachments.mockResolvedValue([makeDownloadResult()]);
     mockFormatAttachmentMetadata.mockReturnValue(
@@ -248,6 +249,6 @@ describe("handleMessage attachment integration", () => {
 
     expect(mockExtractAttachments).not.toHaveBeenCalled();
     expect(mockDownloadAllAttachments).not.toHaveBeenCalled();
-    expect(mockForwardToAgent).toHaveBeenCalled();
+    expect(mockStreamFromAgent).toHaveBeenCalled();
   });
 });
