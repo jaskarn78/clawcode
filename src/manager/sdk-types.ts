@@ -94,10 +94,7 @@ export type SdkResultMessage = SdkResultSuccess | SdkResultError;
  * are ignored during stream consumption. This narrowed union keeps our adapter
  * focused on what it actually processes.
  */
-export type SdkStreamMessage = SdkAssistantMessage | SdkResultMessage | {
-  readonly type: string;
-  readonly [key: string]: unknown;
-};
+export type SdkStreamMessage = SdkAssistantMessage | SdkResultMessage;
 
 /**
  * The session object returned by unstable_v2_createSession / unstable_v2_resumeSession.
@@ -105,11 +102,13 @@ export type SdkStreamMessage = SdkAssistantMessage | SdkResultMessage | {
  */
 export type SdkSession = {
   readonly sessionId: string;
+  /** Runtime alias -- SDK exposes both sessionId and id */
+  readonly id?: string;
   send(message: string): Promise<void>;
   stream(): AsyncGenerator<SdkStreamMessage, void>;
   close(): void;
   /** Event listener -- optional since it is not part of the official SDKSession interface */
-  on?(event: string, handler: (...args: unknown[]) => void): void;
+  on?(event: string, handler: (...args: unknown[]) => unknown): void;
 };
 
 /**

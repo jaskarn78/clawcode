@@ -204,7 +204,8 @@ async function loadSdk(): Promise<SdkModule> {
     return cachedSdk;
   }
   try {
-    cachedSdk = await import("@anthropic-ai/claude-agent-sdk");
+    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    cachedSdk = sdk as unknown as SdkModule;
     return cachedSdk;
   } catch {
     throw new Error(
@@ -349,12 +350,12 @@ function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): Ses
     },
     onError(handler: (error: Error) => void): void {
       if (typeof session.on === "function") {
-        session.on("error", handler);
+        session.on("error", handler as (...args: unknown[]) => unknown);
       }
     },
     onEnd(handler: () => void): void {
       if (typeof session.on === "function") {
-        session.on("end", handler);
+        session.on("end", handler as (...args: unknown[]) => unknown);
       }
     },
   };
