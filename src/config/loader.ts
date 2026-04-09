@@ -66,6 +66,7 @@ export function resolveAgentConfig(
     schedules: agent.schedules,
     admin: agent.admin ?? false,
     subagentModel: agent.subagentModel,
+    threads: agent.threads ?? defaults.threads,
     slashCommands: agent.slashCommands,
   };
 }

@@ -54,6 +54,10 @@ export type ResolvedAgentConfig = {
   }[];
   readonly admin: boolean;
   readonly subagentModel: "sonnet" | "opus" | "haiku" | undefined;
+  readonly threads: {
+    readonly idleTimeoutMinutes: number;
+    readonly maxThreadSessions: number;
+  };
   readonly slashCommands: readonly {
     readonly name: string;
     readonly description: string;

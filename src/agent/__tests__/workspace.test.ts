@@ -28,6 +28,10 @@ function makeAgent(overrides: Partial<ResolvedAgentConfig> & { workspace: string
     subagentModel: undefined,
     skillsPath: "~/.clawcode/skills",
     slashCommands: [],
+    threads: {
+      idleTimeoutMinutes: 1440,
+      maxThreadSessions: 10,
+    },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,

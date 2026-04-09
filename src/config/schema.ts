@@ -76,6 +76,18 @@ export type SlashCommandOptionConfig = z.infer<typeof slashCommandOptionSchema>;
 export type SlashCommandEntryConfig = z.infer<typeof slashCommandEntrySchema>;
 
 /**
+ * Thread management configuration schema.
+ * Controls idle timeout and max concurrent thread sessions per agent.
+ */
+export const threadsConfigSchema = z.object({
+  idleTimeoutMinutes: z.number().int().min(1).default(1440),
+  maxThreadSessions: z.number().int().min(1).default(10),
+});
+
+/** Inferred threads config type. */
+export type ThreadsConfig = z.infer<typeof threadsConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -93,6 +105,7 @@ export const agentSchema = z.object({
   admin: z.boolean().default(false),
   subagentModel: modelSchema.optional(),
   slashCommands: z.array(slashCommandEntrySchema).default([]),
+  threads: threadsConfigSchema.optional(),
 });
 
 /**
@@ -116,6 +129,10 @@ export const defaultsSchema = z.object({
     checkTimeoutSeconds: 10,
     contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
   })),
+  threads: threadsConfigSchema.default(() => ({
+    idleTimeoutMinutes: 1440,
+    maxThreadSessions: 10,
+  })),
 });
 
 /**
@@ -135,6 +152,10 @@ export const configSchema = z.object({
       intervalSeconds: 60,
       checkTimeoutSeconds: 10,
       contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+    },
+    threads: {
+      idleTimeoutMinutes: 1440,
+      maxThreadSessions: 10,
     },
   })),
   agents: z.array(agentSchema).min(1),
