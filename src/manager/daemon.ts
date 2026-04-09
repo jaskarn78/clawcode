@@ -39,6 +39,8 @@ import { startOfWeek } from "date-fns";
 import { ConfigWatcher } from "../config/watcher.js";
 import { ConfigReloader } from "./config-reloader.js";
 import type { ConfigDiff } from "../config/types.js";
+import Database from "better-sqlite3";
+import { DeliveryQueue } from "../discord/delivery-queue.js";
 
 /**
  * Base directory for manager runtime files.
@@ -242,7 +244,7 @@ export async function startDaemon(
 
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue);
   };
 
   // 10. Create IPC server
@@ -257,7 +259,54 @@ export async function startDaemon(
     log.warn("Discord bot token not found — bridge and slash commands disabled");
   }
 
-  // 11a. Start Discord bridge to receive messages and route them to agent sessions.
+  // 11a. Create delivery queue for reliable outbound message delivery.
+  // The deliverFn closure captures webhookManager and the Discord client ref
+  // so the queue can send via webhook or channel.send with splitting.
+  const deliveryDbPath = join(MANAGER_DIR, "delivery-queue.db");
+  const deliveryDb = new Database(deliveryDbPath);
+  const deliveryQueue = new DeliveryQueue({
+    db: deliveryDb,
+    deliverFn: async (agentName: string, channelId: string, content: string) => {
+      // Try webhook delivery first
+      if (webhookManager.hasWebhook(agentName)) {
+        await webhookManager.send(agentName, content);
+        return;
+      }
+      // Fallback: send via Discord client channel
+      if (discordBridge) {
+        const client = (discordBridge as unknown as { client: import("discord.js").Client }).client;
+        const channel = await client.channels.fetch(channelId);
+        if (channel && "send" in channel && typeof channel.send === "function") {
+          const MAX_LENGTH = 2000;
+          if (content.length <= MAX_LENGTH) {
+            await (channel as { send: (c: string) => Promise<unknown> }).send(content);
+          } else {
+            // Split long messages at newlines or spaces
+            let remaining = content;
+            while (remaining.length > 0) {
+              if (remaining.length <= MAX_LENGTH) {
+                await (channel as { send: (c: string) => Promise<unknown> }).send(remaining);
+                break;
+              }
+              let splitIdx = remaining.lastIndexOf("\n", MAX_LENGTH);
+              if (splitIdx <= 0 || splitIdx < MAX_LENGTH / 2) {
+                splitIdx = remaining.lastIndexOf(" ", MAX_LENGTH);
+              }
+              if (splitIdx <= 0 || splitIdx < MAX_LENGTH / 2) {
+                splitIdx = MAX_LENGTH;
+              }
+              await (channel as { send: (c: string) => Promise<unknown> }).send(remaining.slice(0, splitIdx));
+              remaining = remaining.slice(splitIdx).trimStart();
+            }
+          }
+        }
+      }
+    },
+    log,
+  });
+  log.info({ dbPath: deliveryDbPath }, "delivery queue initialized");
+
+  // 11b. Start Discord bridge to receive messages and route them to agent sessions.
   // The bridge connects to Discord via discord.js, listens for messages in bound
   // channels, and forwards them to agent sessions via sessionManager.forwardToAgent().
   // Agents respond via their inherited Discord MCP plugin (reply tool).
@@ -268,6 +317,7 @@ export async function startDaemon(
       sessionManager: manager,
       threadManager,
       webhookManager,
+      deliveryQueue,
       botToken,
       log,
     });
@@ -283,7 +333,7 @@ export async function startDaemon(
     log.warn("Discord bridge not started (no bot token or no channel bindings)");
   }
 
-  // 11b. Initialize slash command handler
+  // 11c. Initialize slash command handler
   const slashHandler = new SlashCommandHandler({
     routingTable,
     sessionManager: manager,
@@ -301,7 +351,7 @@ export async function startDaemon(
     }
   }
 
-  // 11c. Initialize config hot-reload
+  // 11d. Initialize config hot-reload
   const auditTrailPath = join(MANAGER_DIR, "config-audit.jsonl");
   const routingTableRef = { current: routingTable };
 
@@ -343,6 +393,8 @@ export async function startDaemon(
     for (const binding of allBindings) {
       try { await threadManager.removeThreadSession(binding.threadId); } catch { /* thread cleanup is best-effort during shutdown */ }
     }
+    deliveryQueue.stop();
+    deliveryDb.close();
     webhookManager.destroy();
     await manager.stopAll();
     await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
@@ -377,6 +429,7 @@ async function routeMethod(
   skillsCatalog: SkillsCatalog,
   threadManager: ThreadManager,
   webhookManager: WebhookManager,
+  deliveryQueue: DeliveryQueue,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -670,6 +723,13 @@ async function routeMethod(
           tier: e.tier,
           createdAt: e.createdAt,
         })),
+      };
+    }
+
+    case "delivery-queue-status": {
+      return {
+        stats: deliveryQueue.getStats(),
+        failed: deliveryQueue.getFailedEntries(20),
       };
     }
 

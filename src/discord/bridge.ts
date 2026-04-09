@@ -26,6 +26,7 @@ import {
 import { formatReactionEvent } from "./reactions.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import type { WebhookManager } from "./webhook-manager.js";
+import type { DeliveryQueue } from "./delivery-queue.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -35,6 +36,7 @@ export type BridgeConfig = {
   readonly sessionManager: SessionManager;
   readonly threadManager?: ThreadManager;
   readonly webhookManager?: WebhookManager;
+  readonly deliveryQueue?: DeliveryQueue;
   readonly botToken?: string;
   readonly log?: Logger;
 };
@@ -83,6 +85,7 @@ export class DiscordBridge {
   private readonly sessionManager: SessionManager;
   private readonly threadManager: ThreadManager | undefined;
   private readonly webhookManager: WebhookManager | undefined;
+  private readonly deliveryQueue: DeliveryQueue | undefined;
   private readonly botToken: string;
   private readonly log: Logger;
   private running = false;
@@ -93,6 +96,7 @@ export class DiscordBridge {
     this.sessionManager = config.sessionManager;
     this.threadManager = config.threadManager;
     this.webhookManager = config.webhookManager;
+    this.deliveryQueue = config.deliveryQueue;
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
 
@@ -172,6 +176,7 @@ export class DiscordBridge {
     });
 
     await this.client.login(this.botToken);
+    this.deliveryQueue?.start();
     this.running = true;
   }
 
@@ -182,6 +187,7 @@ export class DiscordBridge {
     if (!this.running) {
       return;
     }
+    this.deliveryQueue?.stop();
     this.client.removeAllListeners();
     await this.client.destroy();
     this.running = false;
@@ -426,8 +432,28 @@ export class DiscordBridge {
     this.recentlySent.add(dedupeKey);
     setTimeout(() => this.recentlySent.delete(dedupeKey), 5000);
 
-    // Try webhook delivery if agent has a webhook configured
     const resolvedAgent = agentName ?? this.resolveAgentForChannel(originalMessage.channelId);
+
+    // Route through delivery queue if available — queue handles retry on failure
+    if (this.deliveryQueue && resolvedAgent) {
+      this.deliveryQueue.enqueue(resolvedAgent, originalMessage.channelId, response);
+      return;
+    }
+
+    // Fallback: direct send (backward compatible when no queue configured)
+    await this.sendDirect(originalMessage, response, resolvedAgent);
+  }
+
+  /**
+   * Send a response directly to Discord without the delivery queue.
+   * Tries webhook first, then falls back to channel.send with splitting.
+   */
+  private async sendDirect(
+    originalMessage: Message,
+    response: string,
+    resolvedAgent?: string,
+  ): Promise<void> {
+    // Try webhook delivery if agent has a webhook configured
     if (resolvedAgent && this.webhookManager?.hasWebhook(resolvedAgent)) {
       await this.webhookManager.send(resolvedAgent, response);
       return;
