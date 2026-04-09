@@ -76,8 +76,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [x] 08-01-PLAN.md --- Types, schema, pure tier functions, SQLite migration� Types, schema, pure tier functions, SQLite migration
-- [x] 08-02-PLAN.md --- TierManager, cold archival, hot injection, integration wiring� TierManager, cold archival, hot injection, integration wiring
+- [x] 08-01-PLAN.md --- Types, schema, pure tier functions, SQLite migration
+- [x] 08-02-PLAN.md --- TierManager, cold archival, hot injection, integration wiring
 
 ### Phase 9: Task Scheduling
 **Goal**: Agents can perform recurring work autonomously -- maintenance tasks, checks, and routines run on schedule without human triggering
@@ -106,9 +106,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 10-01: TBD
-- [ ] 10-02: TBD
-- [ ] 10-03: TBD
+- [ ] 10-01-PLAN.md — Skills types, directory scanner, and config schema extension
+- [ ] 10-02-PLAN.md — Daemon wiring, system prompt injection, symlinks, and IPC skills method
+- [ ] 10-03-PLAN.md — CLI skills command with formatted table output
 
 ### Phase 11: Agent Collaboration
 **Goal**: Agents work together -- they can spawn helpers, exchange messages asynchronously, and the admin agent can oversee and coordinate across the entire system
