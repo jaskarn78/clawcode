@@ -904,6 +904,53 @@ async function routeMethod(
       return { agents: statuses };
     }
 
+    case "mcp-servers": {
+      const agentFilter = typeof params.agent === "string" ? params.agent : undefined;
+      const check = params.check === true;
+
+      type McpServerEntry = {
+        readonly agent: string;
+        readonly name: string;
+        readonly command: string;
+        readonly args: readonly string[];
+        readonly healthy: boolean | null;
+        readonly latencyMs?: number;
+        readonly error?: string;
+      };
+
+      const entries: McpServerEntry[] = [];
+
+      for (const config of configs) {
+        if (agentFilter && config.name !== agentFilter) continue;
+        const mcpServers = config.mcpServers ?? [];
+        for (const server of mcpServers) {
+          if (check) {
+            const { checkMcpServerHealth } = await import("../mcp/health.js");
+            const result = await checkMcpServerHealth(server);
+            entries.push({
+              agent: config.name,
+              name: server.name,
+              command: server.command,
+              args: server.args,
+              healthy: result.healthy,
+              latencyMs: result.latencyMs,
+              ...(result.error !== undefined ? { error: result.error } : {}),
+            });
+          } else {
+            entries.push({
+              agent: config.name,
+              name: server.name,
+              command: server.command,
+              args: server.args,
+              healthy: null,
+            });
+          }
+        }
+      }
+
+      return { servers: entries };
+    }
+
     default:
       throw new ManagerError(`Unknown method: ${method}`);
   }

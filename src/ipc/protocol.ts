@@ -28,6 +28,7 @@ export const IPC_METHODS = [
   "delivery-queue-status",
   "spawn-subagent-thread",
   "cleanup-subagent-thread",
+  "mcp-servers",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
