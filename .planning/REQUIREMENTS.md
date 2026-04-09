@@ -1,7 +1,7 @@
 # Requirements: ClawCode v1.1
 
 **Defined:** 2026-04-09
-**Core Value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
+**Core Value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
 
 ## v1.1 Requirements
 
@@ -16,7 +16,7 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [ ] **AMEM-05**: Memory search results factor in relevance decay (recent/accessed memories rank higher)
 - [ ] **AMEM-06**: Semantically similar memories automatically merged into single authoritative entry on write
 - [ ] **AMEM-07**: Deduplication preserves highest importance score and merges metadata
-- [ ] **AMEM-08**: Tiered storage — hot memories loaded into active context, warm searchable in SQLite, cold archived to markdown
+- [ ] **AMEM-08**: Tiered storage -- hot memories loaded into active context, warm searchable in SQLite, cold archived to markdown
 - [ ] **AMEM-09**: Automatic promotion from cold to warm on search hit, warm to hot on repeated access
 
 ### Scheduling
@@ -30,7 +30,7 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 - [ ] **SKIL-01**: Central skills registry cataloging all available skills with metadata (name, description, version)
 - [ ] **SKIL-02**: Per-agent skill assignment configurable in clawcode.yaml
 - [ ] **SKIL-03**: Agents can discover and list their assigned skills
-- [ ] **SKIL-04**: Skills are directories with SKILL.md — existing Claude Code skill format
+- [ ] **SKIL-04**: Skills are directories with SKILL.md -- existing Claude Code skill format
 
 ### Subagent Spawning
 
@@ -57,34 +57,34 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AMEM-01 | - | Pending |
-| AMEM-02 | - | Pending |
-| AMEM-03 | - | Pending |
-| AMEM-04 | - | Pending |
-| AMEM-05 | - | Pending |
-| AMEM-06 | - | Pending |
-| AMEM-07 | - | Pending |
-| AMEM-08 | - | Pending |
-| AMEM-09 | - | Pending |
-| SKED-01 | - | Pending |
-| SKED-02 | - | Pending |
-| SKED-03 | - | Pending |
-| SKIL-01 | - | Pending |
-| SKIL-02 | - | Pending |
-| SKIL-03 | - | Pending |
-| SKIL-04 | - | Pending |
-| SAGN-01 | - | Pending |
-| SAGN-02 | - | Pending |
-| XAGT-01 | - | Pending |
-| XAGT-02 | - | Pending |
-| XAGT-03 | - | Pending |
-| XAGT-04 | - | Pending |
+| AMEM-01 | Phase 6 | Pending |
+| AMEM-02 | Phase 6 | Pending |
+| AMEM-03 | Phase 6 | Pending |
+| AMEM-04 | Phase 7 | Pending |
+| AMEM-05 | Phase 7 | Pending |
+| AMEM-06 | Phase 7 | Pending |
+| AMEM-07 | Phase 7 | Pending |
+| AMEM-08 | Phase 8 | Pending |
+| AMEM-09 | Phase 8 | Pending |
+| SKED-01 | Phase 9 | Pending |
+| SKED-02 | Phase 9 | Pending |
+| SKED-03 | Phase 9 | Pending |
+| SKIL-01 | Phase 10 | Pending |
+| SKIL-02 | Phase 10 | Pending |
+| SKIL-03 | Phase 10 | Pending |
+| SKIL-04 | Phase 10 | Pending |
+| SAGN-01 | Phase 11 | Pending |
+| SAGN-02 | Phase 11 | Pending |
+| XAGT-01 | Phase 11 | Pending |
+| XAGT-02 | Phase 11 | Pending |
+| XAGT-03 | Phase 11 | Pending |
+| XAGT-04 | Phase 11 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after v1.1 milestone definition*
+*Last updated: 2026-04-09 after v1.1 roadmap creation*

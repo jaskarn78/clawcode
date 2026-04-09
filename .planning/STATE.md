@@ -1,62 +1,59 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: Milestone complete
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-04-09T01:49:09.083Z"
+milestone: v1.1
+milestone_name: Advanced Intelligence
+status: Ready to plan
+stopped_at: Roadmap created for v1.1
+last_updated: "2026-04-09"
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 11
-  completed_plans: 11
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 18
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-08)
+See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 05 — heartbeat-monitoring
+**Current focus:** Phase 06 -- Memory Consolidation Pipeline
 
 ## Current Position
 
-Phase: 05
+Phase: 06 of 11 (Memory Consolidation Pipeline)
 Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-09 -- v1.1 roadmap created (6 phases, 22 requirements)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 11 (v1.0)
+- Average duration: 4.5 min
+- Total execution time: ~50 min
 
-**By Phase:**
+**By Phase (v1.0):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01 | 2 | 11min | 5.5min |
+| 02 | 3 | 17min | 5.7min |
+| 03 | 2 | 5min | 2.5min |
+| 04 | 2 | 9min | 4.5min |
+| 05 | 2 | 8min | 4.0min |
 
 **Recent Trend:**
 
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 4min, 5min, 3min, 5min, 3min
+- Trend: Stable
 
 *Updated after each plan completion*
-| Phase 01 P01 | 4min | 3 tasks | 11 files |
-| Phase 01 P02 | 7min | 2 tasks | 7 files |
-| Phase 02 P01 | 5min | 3 tasks | 9 files |
-| Phase 02 P02 | 9min | 2 tasks | 9 files |
-| Phase 02 P03 | 3min | 3 tasks | 9 files |
-| Phase 03 P01 | 3min | 2 tasks | 5 files |
-| Phase 03 P02 | 2min | 2 tasks | 7 files |
-| Phase 04 P01 | 5min | 2 tasks | 13 files |
-| Phase 04 P02 | 4min | 2 tasks | 12 files |
-| Phase 05 P01 | 5min | 2 tasks | 12 files |
-| Phase 05 P02 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -65,38 +62,10 @@ Plan: Not started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Roadmap]: 5 phases derived from 25 v1 requirements across 5 categories
-- [Roadmap]: Heartbeat depends on both lifecycle (Phase 2) and memory (Phase 4) for context fill monitoring
-- [Roadmap]: Discord (Phase 3) and Memory (Phase 4) can execute in parallel after Phase 2
-- [Phase 01]: Zod 4 default() on object schemas requires function form for nested defaults
-- [Phase 01]: Content resolution heuristic: newlines=inline, path-like+exists=file, else inline
-- [Phase 01]: initAction exported as named function for direct test invocation
-- [Phase 01]: Idempotency: config-provided soul/identity overwrites; defaults preserve existing files
-- [Phase 02]: Zod 4 uses z.refine() not z.refinement() for custom validation checks
-- [Phase 02]: SdkSessionAdapter uses dynamic import() with @ts-expect-error for SDK not yet installed
-- [Phase 02]: MockSessionAdapter uses sequential counter IDs for deterministic testing
-- [Phase 02]: Sequential stopAll to avoid registry write races
-- [Phase 02]: D-16 satisfied by in-process session model, no child process management needed
-- [Phase 02]: ANSI escape codes for status colors instead of chalk/kleur dependency
-- [Phase 02]: Status command falls back to registry file when daemon not running
-- [Phase 02]: Background daemon spawning via npx tsx on daemon-entry.ts
-- [Phase 03]: Closure-based rate limiter with injectable clock for deterministic tests
-- [Phase 03]: Pure bucket operations (refill/tryConsume) with mutable Map container pattern
-- [Phase 03]: Queue overflow drops oldest message to preserve most recent context
-- [Phase 03]: Channel binding via system prompt injection for Discord routing
-- [Phase 03]: Map-to-Object.fromEntries for IPC JSON serialization of routing data
-- [Phase 04]: vec0 virtual table with distance_metric=cosine for KNN search (not manual vec_distance_cosine)
-- [Phase 04]: Dynamic import() for @huggingface/transformers to avoid module-level load
-- [Phase 04]: rowid DESC tiebreaker in listRecent for deterministic ordering
-- [Phase 04]: Reused memoryConfigSchema from memory/schema.ts rather than duplicating in config/schema.ts
-- [Phase 04]: extractMemories is callback parameter for agent-driven fact extraction (D-18)
-- [Phase 04]: Memory init non-fatal: agent can start without memory if SQLite fails
-- [Phase 05]: Context fill provider stored as per-agent Map in SessionManager alongside compaction managers
-- [Phase 05]: Directory-based check discovery with dynamic import and default export validation
-- [Phase 05]: Per-agent heartbeat disable via boolean on agentSchema, global config on defaultsSchema
-- [Phase 05]: HeartbeatRunner passed as parameter to routeMethod for clean dependency injection
-- [Phase 05]: heartbeat-status aggregates per-agent worst-case overall status from individual checks
-- [Phase 05]: Heartbeat-disabled agents filtered in runner tick via agentConfig.heartbeat.enabled (D-13)
+- [v1.0]: Agents are Claude Code SDK sessions, not separate OS processes
+- [v1.0]: Memory uses local embeddings (all-MiniLM-L6-v2) -- zero cost, offline-capable
+- [v1.0]: SQLite + sqlite-vec for KNN search with cosine distance
+- [v1.0]: Directory-based heartbeat check discovery with dynamic import
 
 ### Pending Todos
 
@@ -109,6 +78,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T01:46:11.704Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-04-09
+Stopped at: v1.1 roadmap created, ready to plan Phase 6
 Resume file: None
