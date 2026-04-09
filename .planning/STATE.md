@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 5 context gathered
-last_updated: "2026-04-09T01:24:50.505Z"
+status: Ready to execute
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-04-09T01:42:06.012Z"
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 11
+  completed_plans: 10
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-08)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 04 — memory-system
+**Current focus:** Phase 05 — heartbeat-monitoring
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
+Phase: 05 (heartbeat-monitoring) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Plan: Not started
 | Phase 03 P02 | 2min | 2 tasks | 7 files |
 | Phase 04 P01 | 5min | 2 tasks | 13 files |
 | Phase 04 P02 | 4min | 2 tasks | 12 files |
+| Phase 05 P01 | 5min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,9 @@ Recent decisions affecting current work:
 - [Phase 04]: Reused memoryConfigSchema from memory/schema.ts rather than duplicating in config/schema.ts
 - [Phase 04]: extractMemories is callback parameter for agent-driven fact extraction (D-18)
 - [Phase 04]: Memory init non-fatal: agent can start without memory if SQLite fails
+- [Phase 05]: Context fill provider stored as per-agent Map in SessionManager alongside compaction managers
+- [Phase 05]: Directory-based check discovery with dynamic import and default export validation
+- [Phase 05]: Per-agent heartbeat disable via boolean on agentSchema, global config on defaultsSchema
 
 ### Pending Todos
 
@@ -101,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T01:24:50.502Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-heartbeat-monitoring/05-CONTEXT.md
+Last session: 2026-04-09T01:42:06.006Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None

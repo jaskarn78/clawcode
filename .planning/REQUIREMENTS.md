@@ -43,9 +43,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Heartbeat
 
-- [ ] **HRTB-01**: Extensible heartbeat framework that runs checks on a configurable interval
-- [ ] **HRTB-02**: Context fill percentage monitoring as the first built-in heartbeat check
-- [ ] **HRTB-03**: Heartbeat checks are pluggable — new checks can be added without modifying core code
+- [x] **HRTB-01**: Extensible heartbeat framework that runs checks on a configurable interval
+- [x] **HRTB-02**: Context fill percentage monitoring as the first built-in heartbeat check
+- [x] **HRTB-03**: Heartbeat checks are pluggable — new checks can be added without modifying core code
 
 ## v1.x Requirements
 
@@ -116,9 +116,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MEM-04 | Phase 4 | Complete |
 | MEM-05 | Phase 4 | Complete |
 | MEM-06 | Phase 4 | Complete |
-| HRTB-01 | Phase 5 | Pending |
-| HRTB-02 | Phase 5 | Pending |
-| HRTB-03 | Phase 5 | Pending |
+| HRTB-01 | Phase 5 | Complete |
+| HRTB-02 | Phase 5 | Complete |
+| HRTB-03 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 25 total

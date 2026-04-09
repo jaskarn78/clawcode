@@ -94,7 +94,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — Heartbeat types, config schema, discovery, runner, and context-fill check
+- [x] 05-01-PLAN.md — Heartbeat types, config schema, discovery, runner, and context-fill check
 - [ ] 05-02-PLAN.md — Daemon integration, IPC heartbeat-status, CLI health command
 
 ## Progress
