@@ -40,7 +40,7 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 ### Cross-Agent Communication
 
 - [x] **XAGT-01**: Agents in the same workspace can send async messages to each other via file-based inbox
-- [ ] **XAGT-02**: Messages checked on heartbeat interval and delivered to agent session
+- [x] **XAGT-02**: Messages checked on heartbeat interval and delivered to agent session
 - [ ] **XAGT-03**: Admin agent has read access to all other agent workspaces across the system
 - [ ] **XAGT-04**: Admin agent can trigger restarts and coordinate cross-agent tasks via IPC
 
@@ -76,7 +76,7 @@ Requirements for v1.1 milestone. Each maps to roadmap phases.
 | SAGN-01 | Phase 11 | Complete |
 | SAGN-02 | Phase 11 | Complete |
 | XAGT-01 | Phase 11 | Complete |
-| XAGT-02 | Phase 11 | Pending |
+| XAGT-02 | Phase 11 | Complete |
 | XAGT-03 | Phase 11 | Pending |
 | XAGT-04 | Phase 11 | Pending |
 
