@@ -28,6 +28,10 @@ describe("IPC_METHODS", () => {
       "usage",
       "context-zone-status",
       "episode-list",
+      "delivery-queue-status",
+      "spawn-subagent-thread",
+      "cleanup-subagent-thread",
+      "mcp-servers",
     ]);
   });
 });
