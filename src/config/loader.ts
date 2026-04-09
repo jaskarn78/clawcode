@@ -47,6 +47,11 @@ export function resolveAgentConfig(
   agent: AgentConfig,
   defaults: DefaultsConfig,
 ): ResolvedAgentConfig {
+  // Resolve heartbeat: if agent has heartbeat: false, disable but keep global config values
+  const heartbeatConfig = agent.heartbeat === false
+    ? { ...defaults.heartbeat, enabled: false }
+    : defaults.heartbeat;
+
   return {
     name: agent.name,
     workspace: agent.workspace ?? join(expandHome(defaults.basePath), agent.name),
@@ -56,6 +61,7 @@ export function resolveAgentConfig(
     soul: agent.soul,
     identity: agent.identity,
     memory: agent.memory ?? defaults.memory,
+    heartbeat: heartbeatConfig,
   };
 }
 

@@ -14,6 +14,15 @@ export type ResolvedAgentConfig = {
     readonly compactionThreshold: number;
     readonly searchTopK: number;
   };
+  readonly heartbeat: {
+    readonly enabled: boolean;
+    readonly intervalSeconds: number;
+    readonly checkTimeoutSeconds: number;
+    readonly contextFill: {
+      readonly warningThreshold: number;
+      readonly criticalThreshold: number;
+    };
+  };
 };
 
 /**

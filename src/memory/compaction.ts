@@ -58,6 +58,14 @@ export class CompactionManager {
   }
 
   /**
+   * Get the configured compaction threshold.
+   * Exposed for the heartbeat context-fill check.
+   */
+  getThreshold(): number {
+    return this.deps.threshold;
+  }
+
+  /**
    * Check whether compaction should trigger based on context fill.
    * Returns true when fillPercentage >= configured threshold.
    */

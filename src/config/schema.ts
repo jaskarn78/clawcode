@@ -16,6 +16,23 @@ export const memorySchema = memoryConfigSchema;
 export type MemoryConfig = z.infer<typeof memorySchema>;
 
 /**
+ * Heartbeat monitoring configuration schema.
+ * Controls the periodic health check system for agents.
+ */
+export const heartbeatConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  intervalSeconds: z.number().int().min(10).default(60),
+  checkTimeoutSeconds: z.number().int().min(1).default(10),
+  contextFill: z.object({
+    warningThreshold: z.number().min(0).max(1).default(0.6),
+    criticalThreshold: z.number().min(0).max(1).default(0.75),
+  }).default(() => ({ warningThreshold: 0.6, criticalThreshold: 0.75 })),
+});
+
+/** Inferred heartbeat config type. */
+export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -28,6 +45,7 @@ export const agentSchema = z.object({
   soul: z.string().optional(),
   identity: z.string().optional(),
   memory: memorySchema.optional(),
+  heartbeat: z.boolean().default(true),
 });
 
 /**
@@ -40,6 +58,12 @@ export const defaultsSchema = z.object({
   memory: memorySchema.default(() => ({
     compactionThreshold: 0.75,
     searchTopK: 10,
+  })),
+  heartbeat: heartbeatConfigSchema.default(() => ({
+    enabled: true,
+    intervalSeconds: 60,
+    checkTimeoutSeconds: 10,
+    contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
   })),
 });
 
@@ -54,6 +78,12 @@ export const configSchema = z.object({
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     memory: { compactionThreshold: 0.75, searchTopK: 10 },
+    heartbeat: {
+      enabled: true,
+      intervalSeconds: 60,
+      checkTimeoutSeconds: 10,
+      contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+    },
   })),
   agents: z.array(agentSchema).min(1),
 });
