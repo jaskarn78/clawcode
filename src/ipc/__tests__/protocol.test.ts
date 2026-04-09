@@ -26,6 +26,7 @@ describe("IPC_METHODS", () => {
       "memory-list",
       "threads",
       "usage",
+      "context-zone-status",
     ]);
   });
 });
