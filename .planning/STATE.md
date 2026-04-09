@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Advanced Intelligence
-status: Ready to plan
-stopped_at: Phase 8 context gathered
-last_updated: "2026-04-09T04:22:36.382Z"
+status: Ready to execute
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-04-09T04:35:14.500Z"
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 07 — memory-relevance-deduplication
+**Current focus:** Phase 08 — tiered-memory-storage
 
 ## Current Position
 
-Phase: 8
-Plan: Not started
+Phase: 08 (tiered-memory-storage) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Plan: Not started
 | Phase 07 P02 | 2min | 1 tasks | 2 files |
 | Phase 07 P01 | 3min | 2 tasks | 12 files |
 | Phase 07 P03 | 3min | 2 tasks | 5 files |
+| Phase 08 P01 | 4min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,7 @@ Recent decisions affecting current work:
 - [Phase 07]: Dedup uses DELETE+INSERT for vec_memories embedding replacement (virtual tables don't support UPDATE)
 - [Phase 07]: Exponential half-life formula: importance * 0.5^(days/halfLifeDays) for predictable decay curve
 - [Phase 07]: Score decay BEFORE updating accessed_at to prevent self-boosting on read
+- [Phase 08]: Use date-fns differenceInDays for tier transition date math; Buffer-to-Float32Array conversion for getEmbedding; ALTER TABLE ADD COLUMN for backward-compatible tier migration
 
 ### Pending Todos
 
@@ -88,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T04:22:36.378Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-tiered-memory-storage/08-CONTEXT.md
+Last session: 2026-04-09T04:35:14.497Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None
