@@ -7,10 +7,10 @@ import {
 
 describe("slash-types", () => {
   describe("DEFAULT_SLASH_COMMANDS", () => {
-    it("contains exactly 5 commands: status, memory, schedule, health, compact", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(5);
+    it("contains exactly 6 commands: status, memory, schedule, health, compact, usage", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(6);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
-      expect(names).toEqual(["status", "memory", "schedule", "health", "compact"]);
+      expect(names).toEqual(["status", "memory", "schedule", "health", "compact", "usage"]);
     });
 
     it("each default command has name, description, claudeCommand fields (all non-empty strings)", () => {
@@ -38,7 +38,7 @@ describe("slash-types", () => {
 
     it("commands without options have an empty options array", () => {
       const nonMemory = DEFAULT_SLASH_COMMANDS.filter((cmd) => cmd.name !== "memory");
-      expect(nonMemory.length).toBe(4);
+      expect(nonMemory.length).toBe(5);
       for (const cmd of nonMemory) {
         expect(cmd.options).toEqual([]);
       }
