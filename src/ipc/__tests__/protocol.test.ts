@@ -27,6 +27,7 @@ describe("IPC_METHODS", () => {
       "threads",
       "usage",
       "context-zone-status",
+      "episode-list",
     ]);
   });
 });

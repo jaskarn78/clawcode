@@ -645,6 +645,34 @@ async function routeMethod(
       };
     }
 
+    case "episode-list": {
+      const agentName = validateStringParam(params, "agent");
+      const limit = typeof params.limit === "number" ? params.limit : 20;
+      const countOnly = params.count === true;
+
+      const episodeStore = manager.getEpisodeStore(agentName);
+      if (!episodeStore) {
+        throw new ManagerError(`Episode store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      if (countOnly) {
+        return { count: episodeStore.getEpisodeCount() };
+      }
+
+      const episodes = episodeStore.listEpisodes(limit);
+      return {
+        episodes: episodes.map((e) => ({
+          id: e.id,
+          content: e.content,
+          source: e.source,
+          importance: e.importance,
+          tags: e.tags,
+          tier: e.tier,
+          createdAt: e.createdAt,
+        })),
+      };
+    }
+
     default:
       throw new ManagerError(`Unknown method: ${method}`);
   }

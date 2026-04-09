@@ -266,6 +266,7 @@ export class SessionManager {
   getSessionLogger(agentName: string): SessionLogger | undefined { return this.memory.sessionLoggers.get(agentName); }
   getTierManager(agentName: string): TierManager | undefined { return this.memory.tierManagers.get(agentName); }
   getUsageTracker(agentName: string): UsageTracker | undefined { return this.memory.usageTrackers.get(agentName); }
+  getEpisodeStore(agentName: string) { return this.memory.episodeStores.get(agentName); }
 
   async saveContextSummary(agentName: string, summary: string): Promise<void> {
     const config = this.configs.get(agentName);

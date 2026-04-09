@@ -24,6 +24,7 @@ export const IPC_METHODS = [
   "threads",
   "usage",
   "context-zone-status",
+  "episode-list",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

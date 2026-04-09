@@ -13,6 +13,7 @@ import { TierManager } from "../memory/tier-manager.js";
 import { DEFAULT_TIER_CONFIG } from "../memory/tiers.js";
 import { saveSummary } from "../memory/context-summary.js";
 import { UsageTracker } from "../usage/tracker.js";
+import { EpisodeStore } from "../memory/episode-store.js";
 
 /**
  * Manages per-agent memory lifecycle: initialization, cleanup, and accessors.
@@ -28,6 +29,7 @@ export class AgentMemoryManager {
     new Map();
   readonly tierManagers: Map<string, TierManager> = new Map();
   readonly usageTrackers: Map<string, UsageTracker> = new Map();
+  readonly episodeStores: Map<string, EpisodeStore> = new Map();
   readonly embedder: EmbeddingService = new EmbeddingService();
 
   constructor(private readonly log: Logger) {}
@@ -79,6 +81,10 @@ export class AgentMemoryManager {
         log: this.log,
       });
       this.tierManagers.set(name, tierManager);
+
+      // Create EpisodeStore for this agent
+      const episodeStore = new EpisodeStore({ store, embedder: this.embedder });
+      this.episodeStores.set(name, episodeStore);
 
       // Create UsageTracker for this agent
       const usageDbPath = join(memoryDir, "usage.db");
