@@ -31,7 +31,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 **Milestone Goal:** Resolve tech debt, achieve OpenClaw feature parity on key platform capabilities, add subagent-to-Discord-thread spawning, and build a web dashboard.
 
 - [x] **Phase 21: Tech Debt - Code Quality** - Attachment cleanup, logger consistency, silent catch fixes, session-manager split (completed 2026-04-09)
-- [ ] **Phase 22: Tech Debt - Test & Type Safety** - Test fixture updates, CLI unit tests, SDK v2 type narrowing
+- [x] **Phase 22: Tech Debt - Test & Type Safety** - Test fixture updates, CLI unit tests, SDK v2 type narrowing (completed 2026-04-09)
 - [ ] **Phase 23: Config Hot-Reload & Audit Trail** - File watching, live config updates, JSONL change log
 - [ ] **Phase 24: Context Health Zones** - Zone classification, alerts, auto-snapshots, status visibility
 - [ ] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival
@@ -191,7 +191,7 @@ Plans:
 | 1-5 | v1.0 | - | Complete | 2026-04-09 |
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21. Tech Debt - Code Quality | v1.2 | 0/2 | Complete    | 2026-04-09 |
-| 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | In Progress|  |
+| 22. Tech Debt - Test & Type Safety | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 0/? | Not started | - |
 | 24. Context Health Zones | v1.2 | 0/? | Not started | - |
 | 25. Episode Memory | v1.2 | 0/? | Not started | - |
