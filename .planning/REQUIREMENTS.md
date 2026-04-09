@@ -26,10 +26,10 @@ Requirements for v1.2 milestone. Each maps to roadmap phases.
 
 ### Discord Delivery Queue
 
-- [ ] **DQUE-01**: Outbound Discord messages are enqueued before delivery with retry on failure
-- [ ] **DQUE-02**: Failed messages are logged to a persistent failed-delivery log with error context
-- [ ] **DQUE-03**: Delivery queue retries failed messages with exponential backoff (max 3 retries)
-- [ ] **DQUE-04**: Delivery queue status is queryable via IPC and visible in CLI/dashboard
+- [x] **DQUE-01**: Outbound Discord messages are enqueued before delivery with retry on failure
+- [x] **DQUE-02**: Failed messages are logged to a persistent failed-delivery log with error context
+- [x] **DQUE-03**: Delivery queue retries failed messages with exponential backoff (max 3 retries)
+- [x] **DQUE-04**: Delivery queue status is queryable via IPC and visible in CLI/dashboard
 
 ### Context Health
 
@@ -133,10 +133,10 @@ Deferred to later milestones.
 | EPSD-02 | Phase 25 | Complete |
 | EPSD-03 | Phase 25 | Complete |
 | EPSD-04 | Phase 25 | Complete |
-| DQUE-01 | Phase 26 | Pending |
-| DQUE-02 | Phase 26 | Pending |
-| DQUE-03 | Phase 26 | Pending |
-| DQUE-04 | Phase 26 | Pending |
+| DQUE-01 | Phase 26 | Complete |
+| DQUE-02 | Phase 26 | Complete |
+| DQUE-03 | Phase 26 | Complete |
+| DQUE-04 | Phase 26 | Complete |
 | SATH-01 | Phase 27 | Pending |
 | SATH-02 | Phase 27 | Pending |
 | SATH-03 | Phase 27 | Pending |

@@ -35,7 +35,7 @@ Phases 6-20 delivered: memory consolidation, relevance/dedup, tiered storage, ta
 - [x] **Phase 23: Config Hot-Reload & Audit Trail** - File watching, live config updates, JSONL change log (completed 2026-04-09)
 - [x] **Phase 24: Context Health Zones** - Zone classification, alerts, auto-snapshots, status visibility (completed 2026-04-09)
 - [x] **Phase 25: Episode Memory** - Discrete event records, structured fields, semantic search, archival (completed 2026-04-09)
-- [ ] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log
+- [x] **Phase 26: Discord Delivery Queue** - Outbound message queuing, retry with backoff, failed delivery log (completed 2026-04-09)
 - [ ] **Phase 27: Subagent Discord Threads** - Auto thread creation on subagent spawn, webhook binding, routing, cleanup
 - [ ] **Phase 28: Security & Execution Approval** - Command allowlists, approval flow, channel ACLs, audit logging
 - [ ] **Phase 29: Agent Bootstrap** - First-run detection, guided SOUL.md/IDENTITY.md generation
@@ -121,7 +121,7 @@ Plans:
   4. Delivery queue status (pending count, retry count, failed count) is queryable via IPC and visible in CLI
 **Plans**: 2 plans
 Plans:
-- [ ] 26-01-PLAN.md — Delivery queue types, SQLite persistence, exponential backoff retry (DQUE-01, DQUE-02, DQUE-03)
+- [x] 26-01-PLAN.md — Delivery queue types, SQLite persistence, exponential backoff retry (DQUE-01, DQUE-02, DQUE-03)
 - [ ] 26-02-PLAN.md — Bridge integration, IPC status method, CLI command (DQUE-01, DQUE-04)
 
 ### Phase 27: Subagent Discord Threads
@@ -195,7 +195,7 @@ Plans:
 | 23. Config Hot-Reload & Audit Trail | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 24. Context Health Zones | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 25. Episode Memory | v1.2 | 2/2 | Complete    | 2026-04-09 |
-| 26. Discord Delivery Queue | v1.2 | 0/2 | Planned     | - |
+| 26. Discord Delivery Queue | v1.2 | 1/2 | Complete    | 2026-04-09 |
 | 27. Subagent Discord Threads | v1.2 | 0/? | Not started | - |
 | 28. Security & Execution Approval | v1.2 | 0/? | Not started | - |
 | 29. Agent Bootstrap | v1.2 | 0/? | Not started | - |
