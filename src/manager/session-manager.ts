@@ -30,6 +30,7 @@ import { DEFAULT_TIER_CONFIG } from "../memory/tiers.js";
 import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
 import { loadLatestSummary, saveSummary } from "../memory/context-summary.js";
+import { UsageTracker } from "../usage/tracker.js";
 
 /**
  * Configuration for creating a SessionManager.
@@ -65,6 +66,9 @@ export class SessionManager {
   private readonly compactionManagers: Map<string, CompactionManager> = new Map();
   private readonly sessionLoggers: Map<string, SessionLogger> = new Map();
   private readonly contextFillProviders: Map<string, CharacterCountFillProvider> = new Map();
+
+  // Usage tracking (per-agent)
+  private readonly usageTrackers: Map<string, UsageTracker> = new Map();
 
   // Tier management (per-agent)
   private readonly tierManagers: Map<string, TierManager> = new Map();
@@ -143,8 +147,28 @@ export class SessionManager {
     // Build session config (includes hot memory injection)
     const sessionConfig = await this.buildSessionConfig(config);
 
+    // Build usage callback for this agent.
+    // Use a mutable ref so the callback captures the session ID after handle creation.
+    const usageTracker = this.usageTrackers.get(name);
+    const sessionIdRef = { current: "" };
+    const usageCallback = usageTracker
+      ? (data: { tokens_in: number; tokens_out: number; cost_usd: number; turns: number; model: string; duration_ms: number }) => {
+          try {
+            usageTracker.record({
+              agent: name,
+              timestamp: new Date().toISOString(),
+              session_id: sessionIdRef.current,
+              ...data,
+            });
+          } catch {
+            // Non-fatal: usage recording should never break agent operation
+          }
+        }
+      : undefined;
+
     // Create session
-    const handle = await this.adapter.createSession(sessionConfig);
+    const handle = await this.adapter.createSession(sessionConfig, usageCallback);
+    sessionIdRef.current = handle.sessionId;
 
     // Store handle
     this.sessions.set(name, handle);
@@ -480,6 +504,11 @@ export class SessionManager {
     return this.tierManagers.get(agentName);
   }
 
+  /** Get the UsageTracker for a specific agent (for usage queries via IPC/CLI). */
+  getUsageTracker(agentName: string): UsageTracker | undefined {
+    return this.usageTrackers.get(agentName);
+  }
+
   /**
    * Persist a context summary after compaction.
    * Saves to the agent's memory directory for injection on next resume.
@@ -555,6 +584,11 @@ export class SessionManager {
       });
       this.tierManagers.set(name, tierManager);
 
+      // Create UsageTracker for this agent
+      const usageDbPath = join(memoryDir, "usage.db");
+      const usageTracker = new UsageTracker(usageDbPath);
+      this.usageTrackers.set(name, usageTracker);
+
       this.log.info({ agent: name, dbPath }, "memory initialized");
     } catch (error) {
       this.log.error(
@@ -585,6 +619,19 @@ export class SessionManager {
     this.sessionLoggers.delete(name);
     this.contextFillProviders.delete(name);
     this.tierManagers.delete(name);
+
+    const usageTracker = this.usageTrackers.get(name);
+    if (usageTracker) {
+      try {
+        usageTracker.close();
+      } catch (error) {
+        this.log.warn(
+          { agent: name, error: (error as Error).message },
+          "error closing usage tracker",
+        );
+      }
+      this.usageTrackers.delete(name);
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -29,12 +29,12 @@ import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
 import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
-import { loadBotToken } from "../discord/bridge.js";
+import { loadBotToken, DiscordBridge } from "../discord/bridge.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
 import { SemanticSearch } from "../memory/search.js";
-// Discord bridge removed — agents handle Discord natively via inherited MCP plugin
+import { startOfWeek } from "date-fns";
 
 /**
  * Base directory for manager runtime files.
@@ -116,7 +116,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -225,19 +225,41 @@ export async function startDaemon(
   // 10. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
-  // 11. Discord routing handled natively by each agent's Claude Code session.
-  // The Discord MCP plugin is inherited by agent sessions. System prompts
-  // include channel binding instructions. No separate bridge needed.
-  log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord routing via native agent plugin (no bridge)");
-
-  // 11b. Initialize slash command handler
+  // 11. Load Discord bot token (shared by bridge and slash commands)
   let botToken: string;
   try {
     botToken = loadBotToken();
   } catch {
     botToken = "";
-    log.warn("Discord bot token not found — slash commands disabled");
+    log.warn("Discord bot token not found — bridge and slash commands disabled");
   }
+
+  // 11a. Start Discord bridge to receive messages and route them to agent sessions.
+  // The bridge connects to Discord via discord.js, listens for messages in bound
+  // channels, and forwards them to agent sessions via sessionManager.forwardToAgent().
+  // Agents respond via their inherited Discord MCP plugin (reply tool).
+  let discordBridge: DiscordBridge | null = null;
+  if (botToken && routingTable.channelToAgent.size > 0) {
+    discordBridge = new DiscordBridge({
+      routingTable,
+      sessionManager: manager,
+      threadManager,
+      botToken,
+      log,
+    });
+    try {
+      await discordBridge.start();
+      log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord bridge started");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      log.error({ error: msg }, "Discord bridge failed to start");
+      discordBridge = null;
+    }
+  } else {
+    log.warn("Discord bridge not started (no bot token or no channel bindings)");
+  }
+
+  // 11b. Initialize slash command handler
   const slashHandler = new SlashCommandHandler({
     routingTable,
     sessionManager: manager,
@@ -259,6 +281,9 @@ export async function startDaemon(
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
     server.close();
+    if (discordBridge) {
+      await discordBridge.stop();
+    }
     await slashHandler.stop();
     taskScheduler.stop();
     heartbeatRunner.stop();
@@ -283,7 +308,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, shutdown };
 }
 
 /**
@@ -488,6 +513,46 @@ async function routeMethod(
           distance: r.distance,
         })),
       };
+    }
+
+    case "usage": {
+      const agentName = validateStringParam(params, "agent");
+      const period = typeof params.period === "string" ? params.period : "session";
+      const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+      const date = typeof params.date === "string" ? params.date : undefined;
+
+      const usageTracker = manager.getUsageTracker(agentName);
+      if (!usageTracker) {
+        throw new ManagerError(`Usage tracker not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      let aggregate;
+      switch (period) {
+        case "session": {
+          const sid = sessionId ?? "";
+          aggregate = usageTracker.getSessionUsage(sid);
+          break;
+        }
+        case "daily": {
+          const day = date ?? new Date().toISOString().slice(0, 10);
+          aggregate = usageTracker.getDailyUsage(day);
+          break;
+        }
+        case "weekly": {
+          const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+          const weekStartStr = weekStart.toISOString().slice(0, 10);
+          aggregate = usageTracker.getWeeklyUsage(weekStartStr);
+          break;
+        }
+        case "total": {
+          aggregate = usageTracker.getTotalUsage(agentName);
+          break;
+        }
+        default:
+          throw new ManagerError(`Invalid usage period: ${period}`);
+      }
+
+      return { agent: agentName, period, ...aggregate };
     }
 
     case "memory-list": {

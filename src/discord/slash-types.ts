@@ -49,7 +49,15 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     name: "status",
     description: "Get the agent's current status",
-    claudeCommand: "Report your current status including what you're working on",
+    claudeCommand: `Report your status in EXACTLY this compact format (replace values with your actual state). Use emoji line prefixes. Keep it concise — no extra text:
+
+🤖 {your name} · {model}
+🧮 Tokens: {input tokens} in / {output tokens} out
+📚 Context: {estimate}% used · 🧹 Compactions: {count}
+🧵 Session: {your session id or "active"} • updated {when}
+⚙️ Runtime: SDK session · Permissions: bypass
+💰 Usage: {tokens in} in / {tokens out} out · \${cost} this session
+📋 Task: {what you're currently doing or "idle"}`,
     options: [],
   },
   {
@@ -81,6 +89,12 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     name: "compact",
     description: "Trigger context compaction",
     claudeCommand: "Trigger context compaction now and report the result",
+    options: [],
+  },
+  {
+    name: "usage",
+    description: "Show token usage and costs",
+    claudeCommand: "Report your usage statistics: session totals and this week's usage. Include tokens in/out, cost, turns, and duration.",
     options: [],
   },
 ] as const;

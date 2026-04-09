@@ -1,6 +1,19 @@
 import type { AgentSessionConfig } from "./types.js";
 
 /**
+ * Callback invoked after each SDK send/sendAndCollect with usage data
+ * extracted from the result message.
+ */
+export type UsageCallback = (data: {
+  readonly tokens_in: number;
+  readonly tokens_out: number;
+  readonly cost_usd: number;
+  readonly turns: number;
+  readonly model: string;
+  readonly duration_ms: number;
+}) => void;
+
+/**
  * A handle to an active agent session.
  * Provides methods to interact with and monitor the session lifecycle.
  */
@@ -19,8 +32,8 @@ export type SessionHandle = {
  * and production uses SdkSessionAdapter.
  */
 export type SessionAdapter = {
-  createSession(config: AgentSessionConfig): Promise<SessionHandle>;
-  resumeSession(sessionId: string, config: AgentSessionConfig): Promise<SessionHandle>;
+  createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle>;
+  resumeSession(sessionId: string, config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle>;
 };
 
 // ---------------------------------------------------------------------------
@@ -91,21 +104,29 @@ export class MockSessionHandle implements SessionHandle {
  */
 export class MockSessionAdapter implements SessionAdapter {
   readonly sessions: Map<string, MockSessionHandle> = new Map();
+  readonly usageCallbacks: Map<string, UsageCallback> = new Map();
   private counter = 0;
 
-  async createSession(config: AgentSessionConfig): Promise<SessionHandle> {
+  async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
     this.counter += 1;
     const sessionId = `mock-${config.name}-${this.counter}`;
     const handle = new MockSessionHandle(sessionId);
     this.sessions.set(sessionId, handle);
+    if (usageCallback) {
+      this.usageCallbacks.set(sessionId, usageCallback);
+    }
     return handle;
   }
 
   async resumeSession(
     sessionId: string,
     config: AgentSessionConfig,
+    usageCallback?: UsageCallback,
   ): Promise<SessionHandle> {
     const existing = this.sessions.get(sessionId);
+    if (usageCallback) {
+      this.usageCallbacks.set(sessionId, usageCallback);
+    }
     if (existing) {
       return existing;
     }
@@ -134,7 +155,7 @@ export function createMockAdapter(): MockSessionAdapter {
  * SDK installed in Plan 02.
  */
 export class SdkSessionAdapter implements SessionAdapter {
-  async createSession(config: AgentSessionConfig): Promise<SessionHandle> {
+  async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const session = await sdk.unstable_v2_createSession({
       model: config.model,
@@ -142,12 +163,13 @@ export class SdkSessionAdapter implements SessionAdapter {
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
     });
-    return wrapSdkSession(session);
+    return wrapSdkSession(session, usageCallback);
   }
 
   async resumeSession(
     sessionId: string,
     config: AgentSessionConfig,
+    usageCallback?: UsageCallback,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const session = await sdk.unstable_v2_resumeSession(sessionId, {
@@ -156,7 +178,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
     });
-    return wrapSdkSession(session);
+    return wrapSdkSession(session, usageCallback);
   }
 }
 
@@ -199,33 +221,93 @@ function getSdkSessionId(session: SdkSession): string {
 }
 
 /**
+ * Extract usage data from an SDK result message and invoke the callback.
+ * Wrapped in try/catch so extraction failures never break the send flow.
+ */
+function extractUsage(
+  msg: Record<string, unknown>,
+  callback?: UsageCallback,
+): void {
+  if (!callback) return;
+  try {
+    const costUsd = typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0;
+    const usage = msg.usage as Record<string, unknown> | undefined;
+    const tokensIn = typeof usage?.input_tokens === "number" ? usage.input_tokens : 0;
+    const tokensOut = typeof usage?.output_tokens === "number" ? usage.output_tokens : 0;
+    const numTurns = typeof msg.num_turns === "number" ? msg.num_turns : 0;
+    const durationMs = typeof msg.duration_ms === "number" ? msg.duration_ms : 0;
+    const model = typeof msg.model === "string" ? msg.model : "";
+    callback({
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: costUsd,
+      turns: numTurns,
+      model,
+      duration_ms: durationMs,
+    });
+  } catch {
+    // Never break the send flow due to usage extraction failure
+  }
+}
+
+/**
  * Wrap an SDK session object into a SessionHandle.
  */
-function wrapSdkSession(session: SdkSession): SessionHandle {
+function wrapSdkSession(session: SdkSession, usageCallback?: UsageCallback): SessionHandle {
   return {
     get sessionId(): string {
       return getSdkSessionId(session);
     },
     async send(message: string): Promise<void> {
-      await session.send(message);
+      // Enqueue message and drain stream to drive the agent's turn.
+      // The SDK requires stream() consumption for the agent to process
+      // the message and execute tool calls.
+      session.send(message);
+      if (typeof session.stream === "function") {
+        for await (const msg of session.stream()) {
+          if (msg.type === "result") {
+            extractUsage(msg as Record<string, unknown>, usageCallback);
+            break;
+          }
+        }
+      }
     },
     async sendAndCollect(message: string): Promise<string> {
-      await session.send(message);
+      // Enqueue message and drain stream, collecting the text result.
+      session.send(message);
       if (typeof session.stream !== "function") {
         return "";
       }
+      // Collect assistant text blocks as they stream, since the final
+      // result.result may be empty for tool-use-only turns.
+      const textParts: string[] = [];
       for await (const msg of session.stream()) {
-        // The result message contains the final text response
-        if (msg.type === "result" && msg.subtype === "success" && typeof msg.result === "string") {
-          return msg.result;
+        // Capture assistant text messages as they arrive
+        if (msg.type === "assistant") {
+          const content = (msg as Record<string, unknown>).content;
+          if (typeof content === "string" && content.length > 0) {
+            textParts.push(content);
+          }
         }
-        // Handle error results
-        if (msg.type === "result" && msg.subtype === "error") {
-          const errorMsg = (msg as { error?: string }).error ?? "Unknown agent error";
-          throw new Error(`Agent error: ${errorMsg}`);
+        if (msg.type === "result") {
+          extractUsage(msg as Record<string, unknown>, usageCallback);
+          // Prefer the result.result field if non-empty
+          const result = (msg as Record<string, unknown>).result;
+          if (typeof result === "string" && result.length > 0) {
+            return result;
+          }
+          // Check for error results
+          if (msg.subtype !== "success") {
+            const is_error = (msg as Record<string, unknown>).is_error;
+            if (is_error) {
+              throw new Error(`Agent error: ${msg.subtype}`);
+            }
+          }
+          break;
         }
       }
-      return "";
+      // Fall back to collected assistant text
+      return textParts.join("\n");
     },
     async close(): Promise<void> {
       if (typeof session.close === "function") {

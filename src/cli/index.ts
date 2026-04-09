@@ -21,6 +21,7 @@ import { registerWebhooksCommand } from "./commands/webhooks.js";
 import { registerForkCommand } from "./commands/fork.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerMemoryCommand } from "./commands/memory.js";
+import { registerUsageCommand } from "./commands/usage.js";
 
 /**
  * Options for the init action.
@@ -120,6 +121,7 @@ registerWebhooksCommand(program);
 registerForkCommand(program);
 registerMcpCommand(program);
 registerMemoryCommand(program);
+registerUsageCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =
