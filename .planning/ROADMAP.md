@@ -3,7 +3,7 @@
 ## Milestones
 
 - :white_check_mark: **v1.0 Core Multi-Agent System** - Phases 1-5 (shipped 2026-04-09)
-- :construction: **v1.1 Advanced Intelligence** - Phases 6-11 (in progress)
+- :construction: **v1.1 Advanced Intelligence** - Phases 6-20 (in progress)
 
 ## Phases
 
@@ -24,10 +24,10 @@ Phases 1-5 delivered: central config, agent lifecycle, Discord routing, per-agen
 - Integer phases (6, 7, 8...): Planned milestone work
 - Decimal phases (7.1, 7.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 6: Memory Consolidation Pipeline** - Daily logs roll up into weekly and monthly digests with raw archival
-- [ ] **Phase 7: Memory Relevance & Deduplication** - Memories decay over time and duplicates merge automatically
-- [ ] **Phase 8: Tiered Memory Storage** - Hot/warm/cold memory tiers with automatic promotion on access
-- [ ] **Phase 9: Task Scheduling** - Cron-like scheduled tasks per agent within persistent sessions
+- [x] **Phase 6: Memory Consolidation Pipeline** - Daily logs roll up into weekly and monthly digests with raw archival (completed 2026-04-09)
+- [x] **Phase 7: Memory Relevance & Deduplication** - Memories decay over time and duplicates merge automatically (completed 2026-04-09)
+- [x] **Phase 8: Tiered Memory Storage** - Hot/warm/cold memory tiers with automatic promotion on access (completed 2026-04-09)
+- [x] **Phase 9: Task Scheduling** - Cron-like scheduled tasks per agent within persistent sessions (completed 2026-04-09)
 - [x] **Phase 10: Skills Registry** - Central skill catalog with per-agent assignment and discovery (completed 2026-04-09)
 - [x] **Phase 11: Agent Collaboration** - Subagent spawning, async messaging between agents, and admin cross-workspace access (completed 2026-04-09)
 
@@ -168,10 +168,10 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 6. Memory Consolidation Pipeline | v1.1 | 0/3 | Not started | - |
-| 7. Memory Relevance & Deduplication | v1.1 | 0/3 | Not started | - |
-| 8. Tiered Memory Storage | v1.1 | 0/2 | Not started | - |
-| 9. Task Scheduling | v1.1 | 0/3 | Not started | - |
+| 6. Memory Consolidation Pipeline | v1.1 | 3/3 | Complete    | 2026-04-09 |
+| 7. Memory Relevance & Deduplication | v1.1 | 3/3 | Complete    | 2026-04-09 |
+| 8. Tiered Memory Storage | v1.1 | 2/2 | Complete    | 2026-04-09 |
+| 9. Task Scheduling | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 10. Skills Registry | v1.1 | 3/3 | Complete    | 2026-04-09 |
 | 11. Agent Collaboration | v1.1 | 4/4 | Complete    | 2026-04-09 |
 | 12. Discord Slash Commands | v1.1 | 2/2 | Complete    | 2026-04-09 |
