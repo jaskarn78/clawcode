@@ -37,6 +37,10 @@ export const TOOL_DEFINITIONS = {
     description: "Search your memory for relevant context, past decisions, and knowledge",
     ipcMethod: "memory-lookup",
   },
+  ask_advisor: {
+    description: "Ask opus for advice on a complex decision without switching sessions",
+    ipcMethod: "ask-advisor",
+  },
 } as const;
 
 /**
@@ -209,6 +213,35 @@ export function createMcpServer(): McpServer {
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result.results, null, 2) }],
       };
+    },
+  );
+
+  // Tool: ask_advisor
+  server.tool(
+    "ask_advisor",
+    "Ask opus for advice on a complex decision without switching sessions",
+    {
+      question: z.string().describe("The question or decision you need advice on"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ question, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "ask-advisor", {
+          agent,
+          question,
+        })) as { answer: string; budget_remaining: number };
+
+        const text = [
+          result.answer,
+          "",
+          `--- Budget remaining: ${result.budget_remaining} advisor calls today ---`,
+        ].join("\n");
+
+        return { content: [{ type: "text" as const, text }] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Advisor error: ${message}` }] };
+      }
     },
   );
 
