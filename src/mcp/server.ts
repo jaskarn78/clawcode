@@ -33,6 +33,10 @@ export const TOOL_DEFINITIONS = {
     description: "Spawn a subagent in a new Discord thread",
     ipcMethod: "spawn-subagent-thread",
   },
+  memory_lookup: {
+    description: "Search your memory for relevant context, past decisions, and knowledge",
+    ipcMethod: "memory-lookup",
+  },
 } as const;
 
 /**
@@ -175,6 +179,36 @@ export function createMcpServer(): McpServer {
         const message = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
       }
+    },
+  );
+
+  // Tool: memory_lookup
+  server.tool(
+    "memory_lookup",
+    "Search your memory for relevant context, past decisions, and knowledge",
+    {
+      query: z.string().describe("What to search for in memory"),
+      limit: z.number().int().min(1).max(20).default(5).describe("Max results to return"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ query, limit, agent }) => {
+      const result = (await sendIpcRequest(SOCKET_PATH, "memory-lookup", {
+        agent,
+        query,
+        limit,
+      })) as {
+        results: readonly {
+          id: string;
+          content: string;
+          relevance_score: number;
+          tags: readonly string[];
+          created_at: string;
+        }[];
+      };
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.results, null, 2) }],
+      };
     },
   );
 
