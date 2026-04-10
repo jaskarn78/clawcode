@@ -44,6 +44,10 @@ Plan: Not started
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 35 added: Resolve OpenClaw coexistence conflicts
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.

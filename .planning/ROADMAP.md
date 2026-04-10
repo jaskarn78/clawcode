@@ -118,3 +118,13 @@ Plans:
 | 32. MCP Client Consumption | v1.3 | 2/2 | Complete | 2026-04-09 |
 | 33. Global Skill Install | v1.4 | 0/1 | Not Started | - |
 | 34. Standalone Agent Runner | v1.4 | 0/2 | Not Started | - |
+
+### Phase 35: Resolve OpenClaw coexistence conflicts
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 34
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 35 to break down)
