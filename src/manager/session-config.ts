@@ -7,6 +7,7 @@ import type { TierManager } from "../memory/tier-manager.js";
 import { loadLatestSummary } from "../memory/context-summary.js";
 import type { BootstrapStatus } from "../bootstrap/types.js";
 import { buildBootstrapPrompt } from "../bootstrap/prompt-builder.js";
+import { extractFingerprint, formatFingerprint } from "../memory/fingerprint.js";
 
 /**
  * Dependencies required by buildSessionConfig.
@@ -60,19 +61,19 @@ export async function buildSessionConfig(
 
   let systemPrompt = "";
 
-  // Read SOUL.md if available
-  if (config.soul) {
-    systemPrompt += config.soul + "\n\n";
-  } else {
+  // Read SOUL.md content for fingerprint extraction (LOAD-02)
+  let soulContent = config.soul ?? "";
+  if (!soulContent) {
     try {
-      const soulContent = await readFile(
-        join(config.workspace, "SOUL.md"),
-        "utf-8",
-      );
-      systemPrompt += soulContent + "\n\n";
+      soulContent = await readFile(join(config.workspace, "SOUL.md"), "utf-8");
     } catch {
-      // No SOUL.md, that's fine
+      // No SOUL.md
     }
+  }
+
+  if (soulContent) {
+    const fingerprint = extractFingerprint(soulContent);
+    systemPrompt += formatFingerprint(fingerprint) + "\n\n";
   }
 
   // Read IDENTITY.md if available
@@ -89,6 +90,9 @@ export async function buildSessionConfig(
       // No IDENTITY.md, that's fine
     }
   }
+
+  // Inject agent name and memory_lookup guidance (LOAD-01)
+  systemPrompt += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n\n`;
 
   // Append Discord channel binding instructions if channels are configured
   const channels = config.channels ?? [];
@@ -109,10 +113,10 @@ export async function buildSessionConfig(
     systemPrompt += `\n\n## Context Summary (from previous session)\n${effectiveSummary}`;
   }
 
-  // Inject hot memories into system prompt (D-11)
+  // Inject hot memories into system prompt — top 3 only (LOAD-02)
   const agentTierManager = deps.tierManagers.get(config.name);
   if (agentTierManager) {
-    const hotMemories = agentTierManager.getHotMemories();
+    const hotMemories = agentTierManager.getHotMemories().slice(0, 3);
     if (hotMemories.length > 0) {
       systemPrompt += "\n\n## Key Memories\n\n";
       systemPrompt += hotMemories

@@ -98,8 +98,9 @@ describe("Bootstrap integration with buildSessionConfig", () => {
 
     const result = await buildSessionConfig(config, deps, undefined, status);
 
-    // Should contain the custom SOUL.md content
-    expect(result.systemPrompt).toContain("I am a researcher agent");
+    // Should contain fingerprint extracted from SOUL.md (name from heading)
+    expect(result.systemPrompt).toContain("My Soul");
+    expect(result.systemPrompt).toContain("## Identity");
     expect(result.systemPrompt).not.toContain("First-Run Bootstrap Session");
   });
 
@@ -115,6 +116,8 @@ describe("Bootstrap integration with buildSessionConfig", () => {
     // No bootstrapStatus parameter (backward compatibility)
     const result = await buildSessionConfig(config, deps);
 
+    // Fingerprint extracts name from heading — "SOUL.md - Who You Are"
+    expect(result.systemPrompt).toContain("## Identity");
     expect(result.systemPrompt).toContain("Who You Are");
     expect(result.systemPrompt).not.toContain("First-Run Bootstrap Session");
   });
