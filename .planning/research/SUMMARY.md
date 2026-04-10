@@ -1,201 +1,198 @@
 # Project Research Summary
 
-**Project:** ClawCode
-**Domain:** Multi-agent Claude Code orchestration with Discord integration
-**Researched:** 2026-04-08
-**Confidence:** MEDIUM-HIGH
+**Project:** ClawCode v1.5 — Smart Memory & Model Tiering
+**Domain:** Multi-agent AI orchestration — knowledge graph memory, on-demand context loading, model cost tiering
+**Researched:** 2026-04-10
+**Confidence:** HIGH
 
 ## Executive Summary
 
-ClawCode is a multi-agent orchestration system that manages 14+ persistent Claude Code sessions as individual agents, each with distinct identity, memory, and Discord channel bindings. The recommended approach treats Claude Code itself as the agent runtime -- not a framework wrapping an LLM, but orchestration code managing full Claude Code sessions via the official Agent SDK. This is the core architectural insight that separates ClawCode from competitors like CrewAI, AutoGen, and LangGraph, all of which build agent frameworks around raw model APIs. The stack is TypeScript on Node.js 22 LTS, with the Claude Agent SDK as the primary orchestration primitive, SQLite per-agent for memory, and local embeddings via Hugging Face Transformers for semantic search.
+ClawCode v1.5 adds three interlocking capabilities to an already-functioning multi-agent system: a knowledge graph layer over the flat memory store, on-demand memory retrieval to replace eager context injection, and model cost tiering with haiku as the default. All three features are implementable with zero new dependencies — the existing stack (better-sqlite3, sqlite-vec, @huggingface/transformers, Claude Agent SDK) covers every requirement. The recommended approach leans on SQLite adjacency list tables for the graph (no graphology, no graph database), session-level model switching for tiering (the advisor tool is not yet available through the Agent SDK), and a hybrid hot-tier + on-demand retrieval pattern that keeps the existing working memory system intact while layering graph-augmented search on top.
 
-The architecture follows a supervisor pattern: a single deterministic TypeScript manager process (not an AI agent) boots, monitors, and restarts agent sessions from a central YAML config. Communication between agents is strictly asynchronous and file-based. Memory is tiered (hot/warm/cold) with per-agent SQLite databases -- never shared. Discord integration delegates to the existing Claude Code Discord plugin with a thin routing layer on top. This design prioritizes isolation, debuggability, and resilience over cleverness.
+The fundamental risk in v1.5 is that every new feature is designed to reduce context bloat, but if built naively, each one individually adds overhead that compounds. Graph traversal can fan out and consume more tokens than the hot-tier it replaces. Tiering instructions add 300-500 fixed tokens per turn. Personality compression requires careful extraction or agents lose character. The mitigation is strict token budget accounting from day one: assign explicit budgets (identity 500 tokens, hot memory 2,000 tokens, graph expansion 1,500 tokens, tooling 500 tokens) and measure system prompt size before and after each phase. v1.5 must produce a smaller net system prompt than v1.4, not a larger one.
 
-The primary risks are: (1) context window amnesia after auto-compaction silently erasing agent identity and task state, (2) SQLite write contention when 14+ agents write simultaneously, (3) zombie processes accumulating when the manager crashes, and (4) Discord rate limit exhaustion from a shared bot token. All four must be addressed in Phase 1 -- they are foundational, not features to bolt on later. The Claude Agent SDK being pre-1.0 (v0.2.x) is a secondary risk mitigated by pinning versions and wrapping SDK calls in a thin adapter.
+The build order is non-negotiable due to hard dependencies: knowledge graph schema first (graph traversal code and referential integrity hooks must exist before consolidation or archival is modified), then on-demand loading (requires graph for 1-hop expansion), then model tiering (benefits from compact prompts produced by Phase 2, and haiku viability depends on the reduced context from Phase 2). A pre-Phase 3 haiku compatibility audit — running the full test suite against haiku before switching agents — is mandatory to identify which operations need simplified prompts or automatic escalation.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack is deliberately conservative: proven libraries on a stable runtime, with the Claude Agent SDK as the only pre-1.0 dependency. Local embeddings eliminate API costs and network dependencies for memory search. SQLite eliminates the operational burden of running a database server. Every dependency was chosen to minimize moving parts in a system managing 14+ concurrent processes.
+v1.5 requires zero new npm packages. The three features map cleanly onto existing dependencies with new SQLite schema additions. The Agent SDK's `Query.setModel()` for mid-session model switching turned out to be the wrong primitive — session-level model creation (new session with context summary injection) is the correct approach because the SDK does not support changing models on an active session.
 
-**Core technologies:**
-- **TypeScript 6.0 + Node.js 22 LTS:** Type safety for complex agent configs and process lifecycle; LTS stability for long-running processes
-- **@anthropic-ai/claude-agent-sdk 0.2.x:** The orchestration primitive -- programmatic session creation, resumption, subagent definitions, and tool approval hooks
-- **better-sqlite3 + sqlite-vec:** Per-agent synchronous SQLite with vector search extension for semantic memory; no external DB server
-- **@huggingface/transformers 4.x:** Local all-MiniLM-L6-v2 embeddings (384-dim) -- zero cost, zero network dependency, ~50ms per embedding
-- **croner 10.x:** TypeScript-native cron scheduling with timezone/DST handling
-- **execa 9.x:** Promise-based process management with graceful termination
-- **zod 4.x:** Runtime schema validation for configs, messages, and memory entries
-- **pino 9.x:** High-performance structured logging (critical with 14+ concurrent loggers)
+**Core technologies (new additions only — no new packages):**
+- SQLite adjacency list tables (`memory_links`): knowledge graph storage — simple JOINs handle all traversal patterns needed (backlinks, forward links, 2-hop BFS). graphology rejected as overengineering for ~100-500 nodes per agent.
+- SQLite FTS5 (built-in to better-sqlite3): keyword search over note content — complements vector similarity for exact-match queries.
+- Session-level model routing (`ModelTierRouter`): haiku default with new-session escalation to sonnet/opus — NOT mid-session setModel() which is unsupported by the SDK.
+- Extended `UsageTracker` tables (`model_decisions`, `cost_budgets`): per-agent, per-model spend tracking and budget enforcement.
 
-**Critical version constraint:** Pin @anthropic-ai/claude-agent-sdk to exact version. It is pre-1.0 and breaking changes between minor versions are expected.
+**Critical version note:** Pin `@anthropic-ai/claude-agent-sdk` at exact version (pre-1.0). The advisor tool type (`advisor_20260301`) is a Messages API beta feature not yet available through the Agent SDK — design around session-level switching, not the advisor tool.
 
 ### Expected Features
 
-**Must have (table stakes -- v1.0):**
-- Central YAML config defining all agents, workspaces, channels, models
-- Agent lifecycle management (start/stop/restart, boot-all-from-config)
-- Per-agent workspace isolation with SOUL.md + IDENTITY.md
-- Discord channel binding (message routing to correct agent)
-- Per-agent memory (SQLite + markdown logs)
-- Extensible heartbeat framework with context-fill monitoring
-- Auto-compaction with identity-preserving instructions
-- Graceful error recovery with exponential backoff
+**Must have (table stakes for v1.5):**
+- On-demand memory retrieval via `memory_search` MCP tool — replaces eager hot-tier context injection (Mem0 research: 90% token savings, 26% accuracy boost)
+- Knowledge graph links (`memory_links` table + auto-link on insert + backlink resolution) — structural relationships between memories
+- Haiku as default model — single config schema change, 3x cheaper than sonnet on both input and output
+- Model escalation mechanism — `ModelTierRouter` with keyword/error-rate/complexity triggers, creates new sessions at escalated model
+- Personality efficient loading — compact identity fingerprint (~200-300 tokens) in system prompt, full SOUL.md as retrievable memory
+- Token cost tracking — per-agent, per-model counters, CLI reporting, budget enforcement
 
-**Should have (differentiators -- v1.x after core stabilizes):**
-- Memory auto-consolidation (daily -> weekly -> monthly digests)
-- Memory relevance decay and deduplication
-- Cross-agent async communication (file-based inbox)
-- Cron/scheduler for periodic agent tasks
-- Skills registry with per-agent assignment
-- Subagent spawning with model selection (haiku/sonnet/opus)
+**Should have (differentiators):**
+- Graph-aware retrieval — 1-hop neighbor expansion after KNN search (configurable, default enabled)
+- Advisor tool integration — DEFER until SDK exposes the advisor tool type natively
+- Escalation budget controls — per-agent daily/weekly token budgets with Discord alerts at 80%
+- Context assembly pipeline — modular composer with per-source token budgets
 
-**Defer (v2+):**
-- Admin agent with cross-workspace MCP tools (needs security model first)
-- Tiered memory hot/warm/cold (only needed at scale)
-- Multi-platform support (Slack, Telegram) -- Discord-only for v1
-- Visual config UI (config schema must stabilize first)
-
-**Anti-features (explicitly avoid):**
-- Multi-provider model support (destroys the native Claude Code advantage)
-- Synchronous inter-agent RPC (guaranteed deadlocks at scale)
-- Shared memory / global knowledge base (violates isolation, causes races)
-- Real-time streaming between agents (creates tight coupling)
+**Defer to v2+:**
+- Full graph visualization UI (DOT format CLI output is sufficient for agents)
+- Shared knowledge graph across agents (violates workspace isolation)
+- Automatic personality evolution / SOUL.md self-modification (identity drift is a feature-killing bug)
+- Complex escalation chains beyond two-tier (haiku default + opus advisor)
+- LLM-powered entity extraction on every memory write (doubles token cost per write)
 
 ### Architecture Approach
 
-Four-layer architecture: Control Plane (manager, config, health monitor), Agent Runtime Layer (individual Claude Code SDK sessions), Communication Layer (Discord router, file-based IPC, agent mailboxes), and Persistence Layer (per-agent SQLite memory, session store, scheduler state). The manager is pure deterministic TypeScript code -- not an AI agent. Each agent is an SDK V2 session with its own workspace, identity files, and isolated memory database.
+v1.5 adds three new components alongside existing modules without replacing them. The hot tier is NOT removed — it stays as a baseline working memory; on-demand loading layers on top as supplemental graph-augmented search. The existing `buildSessionConfig()` is modified to support compact mode but remains backward-compatible.
 
-**Major components:**
-1. **Agent Manager** -- Supervisor process: boots agents from config, monitors health via heartbeat, handles restart with backoff, tracks PIDs in persistent registry
-2. **Agent Runtime** -- Wrapper around Claude Agent SDK sessions: identity loading, workspace management, lifecycle hooks (PreToolUse for heartbeat files)
-3. **Discord Router** -- Thin routing layer mapping channel IDs to agent session IDs; delegates actual Discord communication to the existing plugin
-4. **Memory Store** -- Per-agent SQLite database with tables for memories, vectors, daily logs, and context snapshots; markdown logs for human readability
-5. **IPC Bus** -- File-based JSON message passing between agents via per-agent inbox directories; chokidar watches for new messages
-6. **Scheduler** -- Cron job execution in the manager process dispatching scheduled tasks to agent sessions
+**Major new components:**
+1. `KnowledgeGraph` (`src/memory/knowledge-graph.ts`) — edge CRUD, BFS traversal with visited-set tracking, auto-link on insert (fire-and-forget, non-blocking), orphan detection
+2. `ContextAssembler` (`src/memory/context-assembler.ts`) — compact personality extraction, token-budgeted context composition, backward-compatible `full` mode
+3. `ModelTierRouter` (`src/manager/model-tier.ts`) — escalation state machine (base → escalated → cooldown → base), trigger evaluation, new session creation for escalated models
+4. `MemorySearchTool` (`src/mcp/tools/memory-search.ts`) — MCP tool exposing graph-augmented search to agents
+
+**Modified existing components:**
+- `MemoryStore`: add `memory_links` table migration + link CRUD
+- `buildSessionConfig()`: support compact personality mode, remove hot memory injection when on-demand enabled
+- `consolidation.ts`: create `derived` links from source memories to digest
+- `dedup.ts`: create `supersedes` links on merge + merge edges from both sources
+- `UsageTracker`: add `model_decisions` and `cost_budgets` tables, savings calculation
 
 ### Critical Pitfalls
 
-1. **Context window amnesia after auto-compaction** -- Auto-compaction silently drops identity instructions and task state. Prevent by implementing proactive compaction at 60-70% capacity with explicit preservation instructions, and re-reading SOUL.md/IDENTITY.md after every compaction.
+1. **Context explosion from graph traversal** — hub nodes fan out exponentially via backlinks, producing more tokens than the hot-tier they replace. Mitigation: token budget cap (not depth limit), relevance-gated traversal at each hop (cosine distance threshold), fan-out cap of 5-8 edges per node, BFS not DFS. Instrument token counting from day one.
 
-2. **SQLite SQLITE_BUSY from concurrent writes** -- 14+ agents writing simultaneously causes "database is locked" errors even with WAL mode. Prevent by using per-agent databases (never shared), WAL mode with 5000ms busy_timeout, BEGIN IMMEDIATE for all writes, and periodic WAL checkpointing.
+2. **Escalation spiral (agents permanently on opus)** — opus responses increase context complexity, making haiku struggle on subsequent turns, triggering further escalation. Mitigation: mandatory de-escalation after N turns, scoped escalation (fork context → run task → return result only), per-agent hourly cost caps with hard enforcement, escalation cooldown (min 5 turns before re-escalating).
 
-3. **Zombie processes after manager crash** -- Orphaned Claude Code processes consume resources and create ghost Discord responses. Prevent by tracking PIDs in a persistent registry, using process groups, implementing cleanup on manager startup, and handling SIGTERM -> SIGKILL shutdown sequence.
+3. **Broken graph edges after consolidation/archival** — consolidation deletes source memories; graph edges become dangling references. Mitigation: pre-consolidation hook to redirect edges to the new digest node in the same transaction; soft-delete for archival (keep stub node with ID and pointer); ON DELETE CASCADE on edge table.
 
-4. **Discord rate limit exhaustion** -- 14 agents sharing one bot token collectively exceed 50 req/s. Prevent by implementing a centralized rate limiter across all agent processes, exponential backoff with jitter on 429s, and response debouncing.
+4. **On-demand loading defeats the hot tier** — reactive pull model means agents confabulate rather than querying. Pure on-demand is not viable. Mitigation: hybrid — hot tier stays as working memory baseline (identity + active task), on-demand is supplement for deeper recall. Core identity is never on-demand.
 
-5. **Agent identity drift over long sessions** -- Persona consistency degrades 30%+ after 8-12 turns. Prevent by periodic identity re-injection, behavioral specifications (not just personality descriptions) in SOUL.md, and structured output constraints.
+5. **v1.5 system prompt larger than v1.4** — each feature adds instructional overhead (tiering instructions, tool definitions, graph usage guidance). Mitigation: token budget accounting as design constraint before writing code; tiering decisions belong in the orchestrator not the agent prompt; merge instruction blocks; measure v1.4 vs v1.5 prompt size — v1.5 must be equal or smaller.
+
+6. **Haiku can't execute existing agent capabilities** — all prompts and tool chains were designed for sonnet. Mitigation: mandatory haiku compatibility audit (full test suite against haiku) before Phase 3 implementation. Gradual rollout: 2-3 low-complexity agents first.
+
+7. **Circular graph references cause infinite traversal** — similarity-based edge creation produces symmetric cycles. Mitigation: visited-set tracking is mandatory in the first traversal implementation (not a retrofit). Edge creation threshold must be stricter than dedup threshold.
 
 ## Implications for Roadmap
 
-Based on combined research, here is the suggested phase structure:
+Research is unanimous on phase ordering — FEATURES.md, ARCHITECTURE.md, and PITFALLS.md independently arrive at the same 4-phase structure. The ordering is driven by hard dependencies.
 
-### Phase 1: Foundation and Agent Manager
-**Rationale:** Everything depends on the manager being able to boot agents from config and keep them alive. Process lifecycle is the single most critical capability. The three highest-severity pitfalls (zombie processes, SQLite contention, Discord rate limits) must be addressed here.
-**Delivers:** A working system where N agents boot from YAML config, connect to Discord channels, and survive crashes.
-**Features:** Central config, agent lifecycle management, per-agent workspace isolation, boot-all-from-config, graceful error recovery, PID registry, basic heartbeat
-**Avoids:** Zombie processes (persistent PID registry), SQLite contention (per-agent databases from day one)
+### Phase 1: Knowledge Graph Foundation
 
-### Phase 2: Discord Integration
-**Rationale:** Discord is the user-facing interface. Without routing, agents are headless. Depends on Phase 1 agent lifecycle.
-**Delivers:** Messages in Discord channels route to the correct agent and responses come back.
-**Features:** Discord channel binding, channel-to-agent routing, rate limit coordination across agents
-**Avoids:** Rate limit exhaustion (centralized limiter), duplicate responses (strict channel binding)
+**Rationale:** Everything else depends on this. Graph-aware retrieval (Phase 2) needs the graph to traverse. Referential integrity hooks for consolidation and archival must exist before any subsequent feature modifies memory lifecycle. Token budget design is a constraint that must be established here.
 
-### Phase 3: Agent Identity and Basic Memory
-**Rationale:** Agents need persistent identity and memory to be useful beyond single sessions. Identity drift becomes a problem as soon as agents run for more than a few hours. Memory schema must include trust/provenance from the start.
-**Delivers:** Agents with stable personalities and persistent memory that survives restarts and compactions.
-**Features:** SOUL.md/IDENTITY.md system, per-agent SQLite memory, auto-compaction with identity preservation, memory trust levels
-**Avoids:** Identity drift (periodic re-injection), memory poisoning (trust classification from day one), context amnesia (proactive compaction)
+**Delivers:** `memory_links` schema + migration, `KnowledgeGraph` class (link CRUD, BFS traversal with visited-set, fan-out cap, token-budgeted traversal), auto-link on insert, consolidation `derived` links, archival edge cleanup hooks, orphan detection.
 
-### Phase 4: Advanced Memory
-**Rationale:** Once basic memory works, add the intelligence layer. Consolidation, decay, and semantic search make agents genuinely useful over weeks and months. Depends on Phase 3 memory foundation.
-**Delivers:** Agents with intelligent memory that consolidates, decays, and is semantically searchable.
-**Features:** Memory auto-consolidation (daily/weekly/monthly), relevance decay, deduplication, semantic search via sqlite-vec + local embeddings, storage lifecycle (TTLs, cleanup, VACUUM)
-**Avoids:** Storage bloat (hard TTLs, log rotation), unbounded WAL growth (scheduled checkpointing)
+**Addresses features:** Knowledge graph links (table stakes), graph-aware retrieval groundwork.
 
-### Phase 5: Scheduling and Operations
-**Rationale:** Periodic tasks (memory consolidation triggers, health checks, status reports) need a scheduler. This phase makes the system self-maintaining.
-**Delivers:** Agents that perform scheduled work autonomously and a health monitoring system that catches problems early.
-**Features:** Cron/scheduler, extended heartbeat framework (context fill, memory pressure, Discord connection health), auto-compaction triggers
-**Avoids:** Performance traps (scheduled WAL checkpointing, embedding batching)
+**Avoids pitfalls:** Context explosion (token budget + relevance gating designed here), stale graph edges (referential integrity hooks), circular traversal (visited-set tracking), links-in-content anti-pattern (separate edge table enforced from day one).
 
-### Phase 6: Multi-Agent Communication
-**Rationale:** Cross-agent features are the capstone. They depend on stable agent lifecycle, identity, and memory. Building communication before agents are individually reliable creates cascading failure risk.
-**Delivers:** Agents that can collaborate via async messaging without tight coupling.
-**Features:** File-based IPC bus, per-agent inbox/mailbox, cross-agent async messaging, circuit breakers, distributed tracing
-**Avoids:** Inter-agent deadlocks (async-only, fire-and-forget with optional callbacks), cascading failures (circuit breakers, timeouts)
+### Phase 2: On-Demand Memory Loading
 
-### Phase 7: Skills, Subagents, and Admin
-**Rationale:** These are power features that layer on top of a working multi-agent system. The admin agent requires both cross-agent communication and lifecycle management.
-**Delivers:** Composable skills, cost-optimized subagent spawning, and a privileged admin agent.
-**Features:** Skills registry with per-agent assignment, subagent spawning with model selection, admin agent with MCP tools
-**Avoids:** Privilege escalation (admin in separate process group, scoped permissions)
+**Rationale:** Depends on Phase 1 for graph expansion. Reduces context bloat before the haiku switch — haiku performs better with compact prompts. Personality efficient loading belongs here because it is part of the context assembly problem, not the model selection problem.
+
+**Delivers:** `ContextAssembler` with compact personality mode, `memory_search` MCP tool (graph-augmented search), modified `buildSessionConfig()` for compact mode, config schema additions (`personalityMode`, `onDemandSearch`), hybrid hot-tier + on-demand design.
+
+**Addresses features:** On-demand memory retrieval (table stakes), personality efficient loading (table stakes), graph-aware retrieval (differentiator).
+
+**Avoids pitfalls:** On-demand defeating hot tier (hybrid approach), personality tokens competing with memory tokens (compact fingerprint + token budget accounting).
+
+### Phase 3: Model Tiering
+
+**Rationale:** Requires compact prompts from Phase 2 to make haiku viable. Requires a pre-phase haiku compatibility audit as a mandatory spike before implementation begins.
+
+**Delivers:** Haiku as default model (config change), `ModelTierRouter` (escalation state machine, session creation for escalated models, de-escalation and cooldown), escalation triggers (keyword, error-rate, complexity, explicit command), extended `UsageTracker` (model breakdowns, budget enforcement, savings calculation), per-agent cost budgets with Discord alerts, CLI `clawcode costs [agent]`.
+
+**Addresses features:** Haiku default (table stakes), model escalation mechanism (table stakes), token cost tracking (table stakes), escalation budget controls (differentiator).
+
+**Avoids pitfalls:** Escalation spiral (mandatory de-escalation, scoped escalation, cost caps), haiku capability gap (pre-phase audit), escalation logic in prompt (orchestrator owns escalation decisions).
+
+### Phase 4: Integration and Cost Optimization
+
+**Rationale:** Wire all three features together, add monitoring, validate net prompt size is smaller than v1.4.
+
+**Delivers:** Context assembly pipeline (modular composer with per-source token budgets), semantic link discovery (background croner job), memory importance auto-scoring (heuristic-based), dashboard cost savings visualization, CLI `clawcode memory graph <agent>` (DOT format), heartbeat checks for escalation budget monitoring.
+
+**Addresses features:** Context assembly pipeline (differentiator), semantic link discovery (differentiator), memory importance auto-scoring (differentiator).
+
+**Avoids pitfalls:** System prompt net growth (final measurement gate — must verify v1.5 prompt is smaller than v1.4).
 
 ### Phase Ordering Rationale
 
-- **Dependency-driven:** The feature dependency graph from FEATURES.md shows Central Config -> Lifecycle -> Workspace -> Memory as the critical path. Every other feature branches from this chain.
-- **Risk-front-loaded:** The four critical pitfalls (zombies, SQLite, rate limits, identity drift) are all addressed in Phases 1-3. This means the system is production-reliable before adding advanced features.
-- **Incremental value:** Phase 1+2 delivers a working multi-agent Discord system. Phase 3 makes it persistent. Phase 4 makes it intelligent. Each phase boundary is a usable milestone.
-- **Isolation before communication:** Cross-agent features (Phase 6) come after individual agent reliability (Phases 1-5). This matches the architectural principle that you cannot build controlled communication without established boundaries.
+- Graph schema before on-demand loading because graph-augmented search is a core capability of the memory_search tool
+- On-demand loading before model tiering because compact prompts directly improve haiku viability
+- Haiku compatibility audit sits at the Phase 2/Phase 3 boundary — treat it as a gate, not a Phase 3 task
+- Referential integrity (edge cleanup in consolidation/archival) must be Phase 1, not a later "nice to have"
+- Integration last because it composes all three features and requires them running to validate
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
-- **Phase 3 (Identity + Memory):** The Claude Agent SDK V2 session API is unstable preview. How session.send() interacts with compaction, and whether PreToolUse hooks can reliably trigger heartbeat file writes, needs hands-on validation.
-- **Phase 4 (Advanced Memory):** sqlite-vec integration with better-sqlite3 for production KNN search at scale needs benchmarking. The consolidation pipeline (LLM-powered summarization) needs prompt engineering research.
-- **Phase 6 (Multi-Agent Communication):** File-based IPC performance and reliability with 14+ agents needs load testing. The interaction between chokidar watchers and high message volumes needs validation.
+Phases needing deeper research during planning:
+- **Phase 3 (pre-implementation spike):** Haiku compatibility audit — empirical measurement against the actual codebase, cannot be substituted with upfront research.
+- **Phase 3:** Context summary injection design for escalated sessions — no established pattern in the codebase, needs prototyping.
 
 Phases with standard patterns (skip research-phase):
-- **Phase 1 (Foundation):** Process management, YAML config loading, and health monitoring are well-documented Node.js patterns.
-- **Phase 2 (Discord):** Channel routing is a lookup table. Discord plugin delegation is straightforward.
-- **Phase 5 (Scheduling):** Croner is well-documented and the scheduling pattern is standard.
+- **Phase 1:** SQLite adjacency list pattern is well-documented; BFS with visited sets is standard graph algorithms.
+- **Phase 2:** MCP tool registration follows existing patterns in `src/mcp/server.ts`.
+- **Phase 4:** Semantic link discovery reuses existing sqlite-vec KNN and croner scheduling already in use.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | MEDIUM-HIGH | Core stack is proven (Node.js, SQLite, TypeScript). Agent SDK is pre-1.0 and fast-moving -- the main uncertainty. All versions verified via npm on 2026-04-08. |
-| Features | HIGH | Comprehensive competitor analysis (CrewAI, AutoGen, LangGraph, OpenClaw). Clear MVP definition with dependency graph. Feature prioritization is well-grounded. |
-| Architecture | HIGH | Four-layer architecture with clear component boundaries. Build order aligns with feature dependencies. Anti-patterns well-documented. Claude Agent SDK V2 API documented but marked unstable. |
-| Pitfalls | HIGH | 8 pitfalls identified with specific prevention strategies, warning signs, and phase mappings. Sources include academic papers (arXiv), official docs (SQLite, Discord), and production experience reports. |
+| Stack | HIGH | Zero new dependencies — all features verified against existing packages. Agent SDK advisor tool gap is a known constraint, not a research gap. SQLite FTS5 and recursive CTEs verified as built into better-sqlite3. |
+| Features | MEDIUM-HIGH | Table stakes features are clear and consensus across research. Advisor tool (differentiator) deferred due to SDK constraint. Haiku benchmark data (70-80% of tasks) is from Anthropic third-party reports, MEDIUM confidence. |
+| Architecture | HIGH | Existing codebase well-understood. Integration points identified precisely (file names, line references). Advisor tool anti-pattern (mid-session setModel not in SDK) confirmed. Session-level escalation is the correct approach. |
+| Pitfalls | HIGH | 8 critical pitfalls identified with specific prevention steps, verification checklists, and phase-to-pitfall mapping. Most derive from codebase analysis + domain research cross-validation. |
 
-**Overall confidence:** MEDIUM-HIGH
-
-The main uncertainty is the Claude Agent SDK V2 preview API. If it changes significantly, the agent runtime wrapper (Phase 1) will need updating, but the thin adapter pattern recommended in STACK.md isolates this risk.
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Agent SDK V2 stability:** The `unstable_v2_createSession` / `unstable_v2_resumeSession` APIs are explicitly marked unstable. Need a fallback strategy if V2 is removed or significantly changed before graduating to stable. The CLI `--print` flag is the degraded-mode fallback.
-- **Discord plugin API surface:** Research assumes the existing Discord plugin handles most Discord communication. The exact capabilities and limitations of the plugin need validation -- specifically whether it supports thread management, reactions, and message editing in the ways the routing layer requires.
-- **Local embedding quality:** all-MiniLM-L6-v2 is recommended for cost/speed but its quality for agent memory search (vs. a purpose-built embedding model) needs validation with real agent memory content. Start with full-text SQLite search as fallback.
-- **Process group behavior on Linux:** The recommendation to use process groups for zombie cleanup assumes standard Linux process group semantics. Need to verify this works correctly with the Claude Agent SDK's process spawning model.
-- **Compaction hook mechanism:** The strategy to inject custom preservation instructions before auto-compaction requires a way to detect approaching context limits programmatically. The exact mechanism (heartbeat polling vs. SDK callback) needs validation.
+- **Haiku empirical viability**: Research says haiku handles 70-80% of agent tasks, but ClawCode agents run complex multi-step tool sequences, memory consolidation LLM calls, and identity-sensitive conversations. The actual haiku viability percentage for this specific workload is unknown until the compatibility audit. Plan for the audit to reveal that consolidation and memory extraction prompts need haiku-specific rewrites.
+
+- **Advisor tool SDK timeline**: The Anthropic advisor tool (`advisor_20260301`) is a Messages API beta feature not exposed through the Claude Agent SDK. No public timeline for availability. The architecture correctly designs around this constraint, but the escalation architecture should include a clear extension point for when the advisor tool becomes available.
+
+- **Context summary injection for escalated sessions**: When creating an escalated session, the system must inject a context summary of the current conversation. Quality of this summary determines whether escalated sessions operate effectively. Non-trivial design problem with no established pattern in the codebase — needs prototyping in Phase 3.
+
+- **Edge auto-link threshold calibration**: The similarity threshold for auto-creating graph edges (proposed cosine distance < 0.15) has not been validated against the actual memory corpus. Too strict = sparse graph. Too loose = dense cycles and noisy traversal. Needs empirical calibration against real agent memory stores in Phase 1.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [Claude Agent SDK TypeScript](https://platform.claude.com/docs/en/agent-sdk/typescript) -- SDK API, session management
-- [Claude Agent SDK V2 Preview](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview) -- V2 session API
-- [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams) -- multi-agent coordination
-- [SQLite WAL Documentation](https://www.sqlite.org/wal.html) -- concurrency model
-- [Discord Rate Limits](https://docs.discord.com/developers/topics/rate-limits) -- rate limit buckets
-- [sqlite-vec GitHub](https://github.com/asg017/sqlite-vec) -- vector search extension
-- [better-sqlite3 npm](https://www.npmjs.com/package/better-sqlite3) -- SQLite driver
-- Existing OpenClaw implementation at ~/.openclaw/ -- reference architecture
+- [Claude Agent SDK TypeScript Reference](https://platform.claude.com/docs/en/agent-sdk/typescript) — Query interface, session management, model options
+- [Claude API Pricing](https://platform.claude.com/docs/en/about-claude/pricing) — haiku $1/$5, sonnet $3/$15, opus $5/$25 per MTok (April 2026)
+- [Mem0 Research (arXiv 2504.19413)](https://arxiv.org/abs/2504.19413) — 26% accuracy boost, 91% lower latency, 90% token savings with selective retrieval
+- [Memory in the Age of AI Agents (arXiv 2512.13564)](https://arxiv.org/abs/2512.13564) — memory taxonomy for agent systems
+- [SQLite FTS5 Documentation](https://www.sqlite.org/fts5.html) — full-text search built into better-sqlite3
+- [AI Agent Cost Tracking (Microsoft)](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/tracking-every-token-granular-cost-and-usage-metrics-for-microsoft-foundry-agent/4503143) — per-agent token telemetry patterns
+- [Tiered Model Routing (FreeCodeCamp)](https://www.freecodecamp.org/news/how-to-build-a-cost-efficient-ai-agent-with-tiered-model-routing) — complexity classification implementation
+- ClawCode codebase: `src/memory/`, `src/manager/session-config.ts`, `src/manager/session-adapter.ts`, `src/usage/tracker.ts`
 
 ### Secondary (MEDIUM confidence)
-- [Multi-Agent Orchestration Patterns (Chanl)](https://www.chanl.ai/blog/multi-agent-orchestration-patterns-production-2026) -- production patterns
-- [CrewAI Memory Docs](https://docs.crewai.com/en/concepts/memory) -- competitor memory system
-- [Examining Identity Drift in LLM Agents (arXiv 2412.00804)](https://arxiv.org/abs/2412.00804) -- persona degradation research
-- [Why Multi-Agent AI Systems Fail (Galileo)](https://galileo.ai/blog/multi-agent-ai-failures-prevention) -- failure mode analysis
-- [Why Do Multi-Agent LLM Systems Fail (arXiv 2503.13657)](https://arxiv.org/abs/2503.13657) -- deadlock research
+- [Anthropic Advisor Strategy (MindStudio)](https://www.mindstudio.ai/blog/anthropic-advisor-strategy-cut-ai-agent-costs) — Sonnet + Opus advisor: 2.7pp SWE-bench gain, 11.9% cost reduction
+- [Claude Haiku 4.5 Multi-Agent (Caylent)](https://caylent.com/blog/claude-haiku-4-5-deep-dive-cost-capabilities-and-the-multi-agent-opportunity) — Haiku handles 70-80% of agent tasks
+- [GAM Dual-Agent Memory (VentureBeat)](https://venturebeat.com/ai/gam-takes-aim-at-context-rot-a-dual-agent-memory-architecture-that) — JIT memory pipeline architecture
+- [Context Engineering Guide (Mem0)](https://mem0.ai/blog/context-engineering-ai-agents-guide) — modular context assembly patterns
+- [Obsidian Internal Links (DeepWiki)](https://deepwiki.com/obsidianmd/obsidian-help/4.2-internal-links-and-graph-view) — wikilink format, backlink resolution patterns
+- [Knowledge Graph for Obsidian (GitHub)](https://github.com/obra/knowledge-graph) — SQLite + sqlite-vec graph implementation reference
+- [Zep Temporal Knowledge Graph (arXiv 2501.13956)](https://arxiv.org/abs/2501.13956) — fact invalidation, temporal edges in agent memory
+- [Building AI Agents with Knowledge Graph Memory](https://medium.com/@saeedhajebi/building-ai-agents-with-knowledge-graph-memory-a-comprehensive-guide-to-graphiti-3b77e6084dec) — edge management patterns
 
-### Tertiary (LOW confidence)
-- [SoulSpec.org](https://soulspec.org/) -- SOUL.md as emerging standard (adoption unclear)
-- [Node.js Zombie Process Issue #46569](https://github.com/nodejs/node/issues/46569) -- specific zombie edge case
+### Tertiary (LOW confidence — needs validation)
+- [Anthropic Advisor Tool Launch](https://gadgetbond.com/anthropic-claude-opus-sonnet-haiku-advisor-tool/) — advisor tool beta details (third-party reporting on official feature)
+- [Karpathy LLM Wiki Pattern](https://a2a-mcp.org/blog/andrej-karpathy-llm-knowledge-bases-obsidian-wiki) — LLM-compiled wiki with indexes
 
 ---
-*Research completed: 2026-04-08*
+*Research completed: 2026-04-10*
 *Ready for roadmap: yes*
