@@ -47,6 +47,7 @@ import { ApprovalLog } from "../security/approval-log.js";
 import { parseSecurityMd } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
 import { startDashboardServer } from "../dashboard/server.js";
+import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
  * Base directory for manager runtime files.
@@ -142,6 +143,9 @@ export async function startDaemon(
 
   // 4. Load config
   const config = await loadConfig(configPath);
+
+  // 4b. Install workspace skills to ~/.claude/skills/
+  await installWorkspaceSkills(join(process.cwd(), "skills"), undefined, log);
 
   // 5. Resolve all agents
   const resolvedAgents = resolveAllAgents(config);
