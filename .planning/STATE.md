@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
-status: Ready to plan
-stopped_at: v1.5 roadmap created, ready to plan Phase 36
-last_updated: "2026-04-10T19:00:00.000Z"
+status: Ready to execute
+stopped_at: Completed 36-01-PLAN.md
+last_updated: "2026-04-10T20:19:16.464Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
+  total_plans: 2
   completed_plans: 0
 ---
 
@@ -20,16 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 36 - Knowledge Graph Foundation (v1.5)
+**Current focus:** Phase 36 — Knowledge Graph Foundation
 
 ## Current Position
 
-Phase: 36 of 41 (Knowledge Graph Foundation) -- 1 of 6 in v1.5
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-04-10 -- v1.5 roadmap created
-
-Progress: [..........] 0/6 v1.5 phases
+Phase: 36 (Knowledge Graph Foundation) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -57,6 +53,9 @@ Recent decisions affecting current work:
 - [v1.5 Roadmap]: Session-level model routing for escalation (SDK does not support mid-session setModel)
 - [v1.5 Roadmap]: Hybrid hot-tier + on-demand loading (pure on-demand causes confabulation)
 - [v1.5 Roadmap]: Local embeddings stay (384-dim sufficient for graph similarity)
+- [Phase 36]: matchAll over exec loop for stateless regex extraction
+- [Phase 36]: INSERT OR IGNORE for idempotent edge creation via composite PK
+- [Phase 36]: foreign_keys pragma ON for CASCADE edge cleanup on memory deletion
 
 ### Pending Todos
 
@@ -79,9 +78,10 @@ None yet.
 | 260409-whx | Fix stale test fixture type definitions (53 errors across 23 files) | 2026-04-09 | a56dee4 | [260409-whx](./quick/260409-whx-fix-stale-test-fixture-type-definitions-/) |
 | 260409-x58 | Wire up dashboard CLI command and agent create wizard | 2026-04-09 | 9da521d | [260409-x58](./quick/260409-x58-wire-up-dashboard-cli-command-and-agent-/) |
 | 260410-01x | Migrate workspace-general to test-agent | 2026-04-10 | e110678 | [260410-01x](./quick/260410-01x-migrate-workspace-general-from-openclaw-/) |
+| Phase 36 P01 | 423s | 2 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-10
-Stopped at: v1.5 roadmap created, ready to plan Phase 36
+Stopped at: Completed 36-01-PLAN.md
 Resume file: None
