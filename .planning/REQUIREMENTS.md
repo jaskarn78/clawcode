@@ -15,8 +15,8 @@
 
 ### On-Demand Loading (LOAD)
 
-- [ ] **LOAD-01**: Agent retrieves memories via a `memory_lookup` tool call instead of eager hot-tier context stuffing
-- [ ] **LOAD-02**: Agent identity is loaded as a compressed personality fingerprint (~200-300 tokens) with full SOUL.md available as retrievable memory
+- [x] **LOAD-01**: Agent retrieves memories via a `memory_lookup` tool call instead of eager hot-tier context stuffing
+- [x] **LOAD-02**: Agent identity is loaded as a compressed personality fingerprint (~200-300 tokens) with full SOUL.md available as retrievable memory
 - [ ] **LOAD-03**: Context assembly pipeline composes identity, memories, graph results, and tools with per-source token budgets
 
 ### Model Tiering (TIER)
@@ -54,8 +54,8 @@
 | GRAPH-02 | Phase 36 | Complete |
 | GRAPH-03 | Phase 38 | Pending |
 | GRAPH-04 | Phase 38 | Pending |
-| LOAD-01 | Phase 37 | Pending |
-| LOAD-02 | Phase 37 | Pending |
+| LOAD-01 | Phase 37 | Complete |
+| LOAD-02 | Phase 37 | Complete |
 | LOAD-03 | Phase 41 | Pending |
 | TIER-01 | Phase 39 | Pending |
 | TIER-02 | Phase 39 | Pending |

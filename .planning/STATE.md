@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
 status: Ready to plan
-stopped_at: Completed 36-02-PLAN.md
-last_updated: "2026-04-10T20:30:13.268Z"
+stopped_at: Completed 37-02-PLAN.md
+last_updated: "2026-04-10T21:27:17.119Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 4
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 36 — Knowledge Graph Foundation
+**Current focus:** Phase 37 — On-Demand Memory Loading
 
 ## Current Position
 
-Phase: 37
+Phase: 38
 Plan: Not started
 
 ## Performance Metrics
@@ -57,6 +57,8 @@ Recent decisions affecting current work:
 - [Phase 36]: INSERT OR IGNORE for idempotent edge creation via composite PK
 - [Phase 36]: foreign_keys pragma ON for CASCADE edge cleanup on memory deletion
 - [Phase 36]: Graph query functions (getBacklinks/getForwardLinks) return frozen typed results from prepared statements
+- [Phase 37]: Fingerprint caps 5 traits/3 constraints for compact output; memory-lookup clamps limit 1-20
+- [Phase 37]: storeSoulMemory as separate async method to avoid changing initMemory signature
 
 ### Pending Todos
 
@@ -81,9 +83,11 @@ None yet.
 | 260410-01x | Migrate workspace-general to test-agent | 2026-04-10 | e110678 | [260410-01x](./quick/260410-01x-migrate-workspace-general-from-openclaw-/) |
 | Phase 36 P01 | 423s | 2 tasks | 4 files |
 | Phase 36 P02 | 5min | 2 tasks | 3 files |
+| Phase 37 P01 | 4min | 2 tasks | 6 files |
+| Phase 37 P02 | 5min | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-10
-Stopped at: Completed 36-02-PLAN.md
+Stopped at: Completed 37-02-PLAN.md
 Resume file: None
