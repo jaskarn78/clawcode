@@ -10,8 +10,8 @@
 
 - [x] **GRAPH-01**: Agent memories support `[[wikilink]]` syntax that creates explicit links between memory entries
 - [x] **GRAPH-02**: Agent can query backlinks for any memory entry (what links to this?)
-- [ ] **GRAPH-03**: Memory search results include 1-hop graph neighbors for richer context retrieval
-- [ ] **GRAPH-04**: Background job auto-discovers and suggests links between semantically similar unlinked memories
+- [x] **GRAPH-03**: Memory search results include 1-hop graph neighbors for richer context retrieval
+- [x] **GRAPH-04**: Background job auto-discovers and suggests links between semantically similar unlinked memories
 
 ### On-Demand Loading (LOAD)
 
@@ -52,8 +52,8 @@
 |-------------|-------|--------|
 | GRAPH-01 | Phase 36 | Complete |
 | GRAPH-02 | Phase 36 | Complete |
-| GRAPH-03 | Phase 38 | Pending |
-| GRAPH-04 | Phase 38 | Pending |
+| GRAPH-03 | Phase 38 | Complete |
+| GRAPH-04 | Phase 38 | Complete |
 | LOAD-01 | Phase 37 | Complete |
 | LOAD-02 | Phase 37 | Complete |
 | LOAD-03 | Phase 41 | Pending |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
 status: Ready to plan
-stopped_at: Completed 37-02-PLAN.md
-last_updated: "2026-04-10T21:27:17.119Z"
+stopped_at: Completed 38-02-PLAN.md
+last_updated: "2026-04-10T21:58:57.027Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 37 — On-Demand Memory Loading
+**Current focus:** Phase 38 — Graph Intelligence
 
 ## Current Position
 
-Phase: 38
+Phase: 39
 Plan: Not started
 
 ## Performance Metrics
@@ -59,6 +59,10 @@ Recent decisions affecting current work:
 - [Phase 36]: Graph query functions (getBacklinks/getForwardLinks) return frozen typed results from prepared statements
 - [Phase 37]: Fingerprint caps 5 traits/3 constraints for compact output; memory-lookup clamps limit 1-20
 - [Phase 37]: storeSoulMemory as separate async method to avoid changing initMemory signature
+- [Phase 38]: GraphSearch composes SemanticSearch rather than extending it
+- [Phase 38]: Neighbor similarity via dot product (L2-normalized embeddings)
+- [Phase 38]: Auto-linker skips cold-tier neighbors (not just candidates) to prevent linking into frozen memories
+- [Phase 38]: sqlite-vec cosine distance converted to similarity via 1 - distance
 
 ### Pending Todos
 
@@ -85,9 +89,11 @@ None yet.
 | Phase 36 P02 | 5min | 2 tasks | 3 files |
 | Phase 37 P01 | 4min | 2 tasks | 6 files |
 | Phase 37 P02 | 5min | 2 tasks | 6 files |
+| Phase 38 P01 | 5min | 2 tasks | 4 files |
+| Phase 38 P02 | 10min | 1 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-10
-Stopped at: Completed 37-02-PLAN.md
+Stopped at: Completed 38-02-PLAN.md
 Resume file: None
