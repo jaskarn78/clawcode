@@ -97,7 +97,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 v1.0-v1.4 delivered 35 phases across 5 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, and agent runtime.
 
-**Current milestone:** v1.5 Smart Memory & Model Tiering
+**Current milestone:** v1.5 Smart Memory & Model Tiering — Phase 36 complete (Knowledge Graph Foundation: wikilinks, adjacency table, backlink queries)
 
 ## Context
 
@@ -144,4 +144,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-10 after v1.5 milestone start*
+*Last updated: 2026-04-10 after Phase 36 completion*
