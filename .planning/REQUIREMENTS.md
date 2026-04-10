@@ -9,7 +9,7 @@
 ### Knowledge Graph (GRAPH)
 
 - [x] **GRAPH-01**: Agent memories support `[[wikilink]]` syntax that creates explicit links between memory entries
-- [ ] **GRAPH-02**: Agent can query backlinks for any memory entry (what links to this?)
+- [x] **GRAPH-02**: Agent can query backlinks for any memory entry (what links to this?)
 - [ ] **GRAPH-03**: Memory search results include 1-hop graph neighbors for richer context retrieval
 - [ ] **GRAPH-04**: Background job auto-discovers and suggests links between semantically similar unlinked memories
 
@@ -51,7 +51,7 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | GRAPH-01 | Phase 36 | Complete |
-| GRAPH-02 | Phase 36 | Pending |
+| GRAPH-02 | Phase 36 | Complete |
 | GRAPH-03 | Phase 38 | Pending |
 | GRAPH-04 | Phase 38 | Pending |
 | LOAD-01 | Phase 37 | Pending |
