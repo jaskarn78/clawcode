@@ -107,8 +107,8 @@ Plans:
   3. Graph expansion respects token budgets (neighbor inclusion is relevance-gated, not unbounded fan-out)
 **Plans:** 2 plans
 Plans:
-- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
-- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
+- [ ] 38-01-PLAN.md — Graph-enriched search: GraphSearch class + IPC wiring (GRAPH-03)
+- [ ] 38-02-PLAN.md — Auto-linker heartbeat check for automatic link discovery (GRAPH-04)
 
 ### Phase 39: Model Tiering & Escalation
 **Goal**: Agents run on haiku by default and escalate to more capable models when tasks demand it
@@ -168,7 +168,7 @@ Plans:
 | 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 36. Knowledge Graph Foundation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 37. On-Demand Memory Loading | v1.5 | 1/2 | Complete    | 2026-04-10 |
-| 38. Graph Intelligence | v1.5 | 0/? | Not started | - |
+| 38. Graph Intelligence | v1.5 | 0/2 | Not started | - |
 | 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
 | 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
 | 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |
