@@ -165,7 +165,7 @@ export const agentSchema = z.object({
  * Schema for top-level defaults that agents inherit.
  */
 export const defaultsSchema = z.object({
-  model: modelSchema.default("sonnet"),
+  model: modelSchema.default("haiku"),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -209,7 +209,7 @@ export const configSchema = z.object({
   version: z.literal(1),
   discord: discordConfigSchema,
   defaults: defaultsSchema.default(() => ({
-    model: "sonnet" as const,
+    model: "haiku" as const,
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
