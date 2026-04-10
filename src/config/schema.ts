@@ -159,6 +159,16 @@ export const agentSchema = z.object({
   reactions: z.boolean().default(true),
   security: securityConfigSchema.optional(),
   mcpServers: z.array(z.union([mcpServerSchema, z.string()])).default([]),
+  escalationBudget: z.object({
+    daily: z.object({
+      sonnet: z.number().int().positive().optional(),
+      opus: z.number().int().positive().optional(),
+    }).optional(),
+    weekly: z.object({
+      sonnet: z.number().int().positive().optional(),
+      opus: z.number().int().positive().optional(),
+    }).optional(),
+  }).optional(),
 });
 
 /**
