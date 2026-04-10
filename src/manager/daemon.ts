@@ -440,15 +440,23 @@ export async function startDaemon(
   await configWatcher.start();
   log.info({ configPath, auditTrail: auditTrailPath }, "config watcher started");
 
-  // 11d. Start dashboard server
+  // 11d. Start dashboard server (non-fatal — daemon continues if port is taken)
   const dashboardPort = Number(process.env.CLAWCODE_DASHBOARD_PORT) || 3100;
-  const dashboard = await startDashboardServer({ port: dashboardPort, socketPath: SOCKET_PATH });
-  log.info({ port: dashboardPort }, "dashboard server started");
+  let dashboard: Awaited<ReturnType<typeof startDashboardServer>> | null = null;
+  try {
+    dashboard = await startDashboardServer({ port: dashboardPort, socketPath: SOCKET_PATH });
+    log.info({ port: dashboardPort }, "dashboard server started");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn({ port: dashboardPort, error: msg }, "dashboard server failed to start — continuing without dashboard");
+  }
 
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
-    await dashboard.close();
+    if (dashboard) {
+      await dashboard.close();
+    }
     await configWatcher.stop();
     server.close();
     if (discordBridge) {
@@ -487,7 +495,7 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard, shutdown };
+  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
