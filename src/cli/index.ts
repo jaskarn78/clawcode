@@ -143,12 +143,14 @@ registerDashboardCommand(program);
 registerAgentCreateCommand(program);
 registerRunCommand(program);
 
-// Only parse when run as CLI entry point (not when imported by tests)
+// Only parse when run as CLI entry point (not when imported by tests).
+// Check for common CLI invocation patterns: direct .ts/.js execution,
+// tsx runner, or npm-linked binary (symlink won't match file extension).
+const entryPath = process.argv[1] ?? "";
 const isDirectRun =
-  typeof process !== "undefined" &&
-  process.argv[1] !== undefined &&
-  (process.argv[1].endsWith("/cli/index.ts") ||
-    process.argv[1].endsWith("/cli/index.js"));
+  entryPath.endsWith("/cli/index.ts") ||
+  entryPath.endsWith("/cli/index.js") ||
+  entryPath.endsWith("/bin/clawcode");
 
 if (isDirectRun) {
   program.parse();

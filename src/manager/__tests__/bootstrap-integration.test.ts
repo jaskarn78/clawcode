@@ -128,7 +128,7 @@ describe("Bootstrap integration with buildSessionConfig", () => {
 
     const result = await buildSessionConfig(config, deps, undefined, status);
 
-    expect(result.systemPrompt).toContain("Discord Channel Bindings");
+    expect(result.systemPrompt).toContain("Discord Communication");
     expect(result.systemPrompt).toContain("general");
     expect(result.systemPrompt).toContain("dev");
   });

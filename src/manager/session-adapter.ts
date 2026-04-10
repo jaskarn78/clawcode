@@ -160,6 +160,18 @@ export function createMockAdapter(): MockSessionAdapter {
 // ---------------------------------------------------------------------------
 
 /**
+ * Build a clean environment for the SDK subprocess.
+ *
+ * Strips ANTHROPIC_API_KEY from the inherited process.env so the Claude CLI
+ * subprocess uses OAuth subscription auth instead of a potentially stale
+ * external API key.
+ */
+function buildCleanEnv(): Record<string, string | undefined> {
+  const { ANTHROPIC_API_KEY: _stripped, ...rest } = process.env;
+  return rest;
+}
+
+/**
  * SessionAdapter backed by the Claude Agent SDK query() API.
  * Uses dynamic imports so the file compiles even without the SDK installed.
  *
@@ -177,6 +189,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
       settingSources: ["project"],
+      env: buildCleanEnv(),
       ...(mcpServers ? { mcpServers } : {}),
     };
 
@@ -201,6 +214,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       permissionMode: "bypassPermissions",
       settingSources: ["project"],
       resume: sessionId,
+      env: buildCleanEnv(),
       ...(mcpServers ? { mcpServers } : {}),
     };
 

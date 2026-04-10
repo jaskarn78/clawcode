@@ -70,10 +70,12 @@ export function registerStartAllCommand(program: Command): void {
             return;
           }
 
-          // Spawn daemon as detached child process
+          // Spawn daemon as detached child process.
+          // Use cwd-relative path since the bundled CLI's import.meta.dirname
+          // resolves to dist/cli/ which breaks the relative path to source.
           const entryScript = resolve(
-            import.meta.dirname ?? ".",
-            "../../manager/daemon-entry.ts",
+            process.cwd(),
+            "src/manager/daemon-entry.ts",
           );
 
           const child = spawn(
@@ -82,7 +84,11 @@ export function registerStartAllCommand(program: Command): void {
             {
               detached: true,
               stdio: "ignore",
-              env: { ...process.env },
+              cwd: process.cwd(),
+              env: (() => {
+                const { ANTHROPIC_API_KEY: _, ...rest } = process.env;
+                return rest;
+              })(),
             },
           );
 

@@ -118,7 +118,7 @@ Plans:
 | 32. MCP Client Consumption | v1.3 | 2/2 | Complete | 2026-04-09 |
 | 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
-| 35. Resolve OpenClaw Coexistence | v1.4 | 0/2 | In Progress | - |
+| 35. Resolve OpenClaw Coexistence | v1.4 | 0/2 | Complete    | 2026-04-10 |
 
 ### Phase 35: Resolve OpenClaw coexistence conflicts
 
@@ -131,7 +131,7 @@ Plans:
   3. Dashboard server binds to `127.0.0.1` and daemon starts successfully even if port 3100 is taken
   4. Config loader resolves `${VAR_NAME}` patterns against `process.env` in MCP server env blocks
   5. `installWorkspaceSkills` is called exactly once during daemon startup
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 35-01-PLAN.md -- Token hard-fail, slash command namespace prefix, skill install dedup (COEX-01, COEX-02, COEX-05)

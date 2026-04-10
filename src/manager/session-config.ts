@@ -40,12 +40,12 @@ export async function buildSessionConfig(
     // Still include Discord channel bindings even during bootstrap
     const channels = config.channels ?? [];
     if (channels.length > 0) {
-      systemPrompt += "\n\n## Discord Channel Bindings\n";
-      systemPrompt += `You are bound to the following Discord channel(s): ${channels.join(", ")}\n`;
-      systemPrompt +=
-        "ONLY respond to messages from these channels. Ignore messages from any other channel.\n";
-      systemPrompt +=
-        "When replying, use the reply tool with the chat_id from the incoming message.";
+      systemPrompt += "\n\n## Discord Communication\n";
+      systemPrompt += `You are bound to Discord channel(s): ${channels.join(", ")}\n`;
+      systemPrompt += "Messages from Discord are delivered to you automatically. ";
+      systemPrompt += "Your text responses are sent back to Discord automatically — just respond normally. ";
+      systemPrompt += "Do NOT use Discord REST API calls, bot tokens, or any Discord tools to reply. ";
+      systemPrompt += "Simply output your response as text and the system handles delivery.";
     }
 
     return {
@@ -93,12 +93,12 @@ export async function buildSessionConfig(
   // Append Discord channel binding instructions if channels are configured
   const channels = config.channels ?? [];
   if (channels.length > 0) {
-    systemPrompt += "\n\n## Discord Channel Bindings\n";
-    systemPrompt += `You are bound to the following Discord channel(s): ${channels.join(", ")}\n`;
-    systemPrompt +=
-      "ONLY respond to messages from these channels. Ignore messages from any other channel.\n";
-    systemPrompt +=
-      "When replying, use the reply tool with the chat_id from the incoming message.";
+    systemPrompt += "\n\n## Discord Communication\n";
+    systemPrompt += `You are bound to Discord channel(s): ${channels.join(", ")}\n`;
+    systemPrompt += "Messages from Discord are delivered to you automatically. ";
+    systemPrompt += "Your text responses are sent back to Discord automatically — just respond normally. ";
+    systemPrompt += "Do NOT use Discord REST API calls, bot tokens, or any Discord tools to reply. ";
+    systemPrompt += "Simply output your response as text and the system handles delivery.";
   }
 
   // Append context summary from compaction restart or persisted summary (D-17)

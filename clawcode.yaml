@@ -1,4 +1,6 @@
 version: 1
+discord:
+  botToken: op://clawdbot/Clawdbot Discord Token/credential
 defaults:
   model: sonnet
   basePath: ~/.clawcode/agents
@@ -147,16 +149,10 @@ agents:
       - "1491623782807244880"
     mcpServers:
       - homeassistant
-      - strava
       - openai
       - anthropic
       - brave-search
-      - elevenlabs
-      - ollama
       - browserless
-      - chatterbox-tts
-      - fal-ai
-      - finmentum-content
     soul: |
       # SOUL.md - Who You Are
 

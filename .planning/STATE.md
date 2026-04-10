@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4
-milestone_name: Agent Runtime
-status: in_progress
-stopped_at: Starting Phase 33
-last_updated: "2026-04-10T00:50:00.000Z"
+milestone: v1.3
+milestone_name: Agent Integrations
+status: Milestone complete
+stopped_at: Completed 35-01-PLAN.md
+last_updated: "2026-04-10T16:33:49.092Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 2
   completed_phases: 0
-  total_plans: 3
+  total_plans: 0
   completed_plans: 0
 ---
 
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 33 — Global Skill Install
+**Current focus:** Phase 35 — resolve-openclaw-coexistence-conflicts
 
 ## Current Position
 
-Phase: 33
+Phase: 35
 Plan: Not started
 
 ## Performance Metrics
@@ -63,6 +63,9 @@ Recent decisions affecting current work:
 - [Phase 32-mcp-client-consumption]: SDK receives mcpServers as Record<name, config> matching Claude Code SDK API
 - [Phase 32-mcp-client-consumption]: Health check uses node:child_process spawn with JSON-RPC initialize as MCP liveness probe
 - [Phase 32-mcp-client-consumption]: Dynamic import of health module in daemon to avoid circular deps
+- [Phase 35]: Dashboard binds to 127.0.0.1 only; missing env vars resolve to empty string
+- [Phase 35]: Discord token resolved from config.discord.botToken, not shared plugin token (COEX-01)
+- [Phase 35]: All ClawCode slash commands prefixed with clawcode- for OpenClaw coexistence (COEX-02)
 
 ### Pending Todos
 
@@ -88,9 +91,11 @@ Recent decisions affecting current work:
 | 260409-whx | Fix stale test fixture type definitions (53 errors across 23 files) | 2026-04-09 | a56dee4 | [260409-whx](./quick/260409-whx-fix-stale-test-fixture-type-definitions-/) |
 | 260409-x58 | Wire up dashboard CLI command and agent create wizard | 2026-04-09 | 9da521d | [260409-x58](./quick/260409-x58-wire-up-dashboard-cli-command-and-agent-/) |
 | 260410-01x | Migrate workspace-general to test-agent (11 MCP servers, soul, identity, 111 memory files) | 2026-04-10 | e110678 | [260410-01x](./quick/260410-01x-migrate-workspace-general-from-openclaw-/) |
+| Phase 35 P02 | 3min | 2 tasks | 4 files |
+| Phase 35 P01 | 8min | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-10
-Stopped at: Migrated workspace-general to test-agent (Clawdy)
+Stopped at: Completed 35-01-PLAN.md
 Resume file: None
