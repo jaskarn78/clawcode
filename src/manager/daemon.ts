@@ -1157,6 +1157,36 @@ async function routeMethod(
       };
     }
 
+    case "costs": {
+      const period = typeof params.period === "string" ? params.period : "today";
+      const now = new Date();
+      let since: Date;
+      switch (period) {
+        case "today":
+          since = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          break;
+        case "week": {
+          const dayOfWeek = now.getDay();
+          since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+          break;
+        }
+        case "month":
+          since = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        default:
+          since = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+      const results: Array<{ agent: string; model: string; input_tokens: number; output_tokens: number; cost_usd: number }> = [];
+      for (const agentName of manager.getRunningAgents()) {
+        const tracker = manager.getUsageTracker(agentName);
+        if (tracker) {
+          const agentCosts = tracker.getCostsByAgentModel(since.toISOString(), now.toISOString());
+          results.push(...agentCosts);
+        }
+      }
+      return { period, costs: results };
+    }
+
     default:
       throw new ManagerError(`Unknown method: ${method}`);
   }
