@@ -21,11 +21,11 @@
 
 ### Model Tiering (TIER)
 
-- [ ] **TIER-01**: Default agent model is haiku instead of sonnet
-- [ ] **TIER-02**: Agent can escalate to a more capable model (sonnet/opus) when task complexity exceeds haiku's capability
-- [ ] **TIER-03**: Agent can call opus as an advisor tool for hard decisions without switching sessions
+- [x] **TIER-01**: Default agent model is haiku instead of sonnet
+- [x] **TIER-02**: Agent can escalate to a more capable model (sonnet/opus) when task complexity exceeds haiku's capability
+- [x] **TIER-03**: Agent can call opus as an advisor tool for hard decisions without switching sessions
 - [ ] **TIER-04**: Per-agent escalation budgets enforce daily/weekly token limits for upgraded models with Discord alerts
-- [ ] **TIER-05**: Discord slash command allows operator to set/change default model for an agent
+- [x] **TIER-05**: Discord slash command allows operator to set/change default model for an agent
 
 ### Cost Optimization (COST)
 
@@ -57,11 +57,11 @@
 | LOAD-01 | Phase 37 | Complete |
 | LOAD-02 | Phase 37 | Complete |
 | LOAD-03 | Phase 41 | Pending |
-| TIER-01 | Phase 39 | Pending |
-| TIER-02 | Phase 39 | Pending |
-| TIER-03 | Phase 39 | Pending |
+| TIER-01 | Phase 39 | Complete |
+| TIER-02 | Phase 39 | Complete |
+| TIER-03 | Phase 39 | Complete |
 | TIER-04 | Phase 40 | Pending |
-| TIER-05 | Phase 39 | Pending |
+| TIER-05 | Phase 39 | Complete |
 | COST-01 | Phase 40 | Pending |
 | COST-02 | Phase 40 | Pending |
 

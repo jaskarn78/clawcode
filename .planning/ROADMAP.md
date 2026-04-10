@@ -63,7 +63,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 - [x] **Phase 36: Knowledge Graph Foundation** - Wikilink syntax and backlink queries over agent memories (completed 2026-04-10)
 - [x] **Phase 37: On-Demand Memory Loading** - Agents retrieve memories via tool calls instead of eager context stuffing (completed 2026-04-10)
 - [x] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery (completed 2026-04-10)
-- [ ] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus
+- [x] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus (completed 2026-04-10)
 - [ ] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement
 - [ ] **Phase 41: Context Assembly Pipeline** - Modular context composition with per-source token budgets
 
@@ -120,9 +120,9 @@ Plans:
   3. Agent can invoke opus as an advisor tool for hard decisions without abandoning its current session
   4. Operator can set or change an agent's default model via a Discord slash command
   5. Escalated sessions automatically de-escalate after task completion (no permanent model drift)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 39-01-PLAN.md — Haiku default + EscalationMonitor for fork-based escalation (TIER-01, TIER-02)
+- [x] 39-01-PLAN.md — Haiku default + EscalationMonitor for fork-based escalation (TIER-01, TIER-02)
 - [ ] 39-02-PLAN.md — ask_advisor MCP tool + /model slash command (TIER-03, TIER-05)
 
 ### Phase 40: Cost Optimization & Budgets
@@ -169,6 +169,6 @@ Plans:
 | 36. Knowledge Graph Foundation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 37. On-Demand Memory Loading | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 38. Graph Intelligence | v1.5 | 0/2 | Complete    | 2026-04-10 |
-| 39. Model Tiering & Escalation | v1.5 | 0/2 | Not started | - |
+| 39. Model Tiering & Escalation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
 | 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
 status: Ready to plan
-stopped_at: Completed 38-02-PLAN.md
-last_updated: "2026-04-10T21:58:57.027Z"
+stopped_at: Completed 39-02-PLAN.md
+last_updated: "2026-04-10T22:40:08.120Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 6
-  completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 8
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 38 — Graph Intelligence
+**Current focus:** Phase 39 — Model Tiering & Escalation
 
 ## Current Position
 
-Phase: 39
+Phase: 40
 Plan: Not started
 
 ## Performance Metrics
@@ -63,6 +63,10 @@ Recent decisions affecting current work:
 - [Phase 38]: Neighbor similarity via dot product (L2-normalized embeddings)
 - [Phase 38]: Auto-linker skips cold-tier neighbors (not just candidates) to prevent linking into frozen memories
 - [Phase 38]: sqlite-vec cosine distance converted to similarity via 1 - distance
+- [Phase 39]: Default model changed from sonnet to haiku for cost efficiency
+- [Phase 39]: Fork-based escalation with per-agent lock prevents feedback loops
+- [Phase 39]: Advisor uses fork-based one-shot opus query with shared daemon-level budget DB
+- [Phase 39]: set-model creates new frozen config and updates SessionManager via setAllAgentConfigs
 
 ### Pending Todos
 
@@ -91,9 +95,11 @@ None yet.
 | Phase 37 P02 | 5min | 2 tasks | 6 files |
 | Phase 38 P01 | 5min | 2 tasks | 4 files |
 | Phase 38 P02 | 10min | 1 tasks | 3 files |
+| Phase 39 P01 | 3min | 2 tasks | 5 files |
+| Phase 39 P02 | 5min | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-10
-Stopped at: Completed 38-02-PLAN.md
+Stopped at: Completed 39-02-PLAN.md
 Resume file: None
