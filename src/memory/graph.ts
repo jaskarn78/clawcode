@@ -3,7 +3,12 @@
  *
  * Extracts [[wikilink]] references from memory content and provides
  * graph traversal over the resulting directed edges.
+ * Also provides backlink/forward-link query functions.
  */
+
+import type { MemoryEntry, MemoryTier } from "./types.js";
+import type { BacklinkResult, ForwardLinkResult } from "./graph.types.js";
+import type { MemoryStore } from "./store.js";
 
 /** Regex pattern matching [[wikilink]] syntax. */
 const WIKILINK_PATTERN = /\[\[([^\]]+)\]\]/g;
@@ -69,4 +74,64 @@ export function traverseGraph(
   visited.delete(startId);
 
   return Object.freeze(visited);
+}
+
+/** Raw row shape from backlink/forward-link SQL queries. */
+type BacklinkRow = {
+  readonly id: string;
+  readonly content: string;
+  readonly source: string;
+  readonly importance: number;
+  readonly access_count: number;
+  readonly tags: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly accessed_at: string;
+  readonly tier: string;
+  readonly link_text: string;
+};
+
+/** Convert a SQL row to an immutable MemoryEntry (no embedding loaded). */
+function rowToMemoryEntry(row: BacklinkRow): MemoryEntry {
+  return Object.freeze({
+    id: row.id,
+    content: row.content,
+    source: row.source as MemoryEntry["source"],
+    importance: row.importance,
+    accessCount: row.access_count,
+    tags: Object.freeze(JSON.parse(row.tags) as string[]),
+    embedding: null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    accessedAt: row.accessed_at,
+    tier: (row.tier ?? "warm") as MemoryTier,
+  });
+}
+
+/**
+ * Get all memories that link TO a given target (backlinks).
+ *
+ * Returns frozen array of results ordered by created_at DESC.
+ */
+export function getBacklinks(store: MemoryStore, targetId: string): readonly BacklinkResult[] {
+  const stmts = store.getGraphStatements();
+  const rows = stmts.getBacklinks.all(targetId) as BacklinkRow[];
+  return Object.freeze(rows.map((row) => Object.freeze({
+    memory: rowToMemoryEntry(row),
+    linkText: row.link_text,
+  })));
+}
+
+/**
+ * Get all memories that a given source links TO (forward links).
+ *
+ * Returns frozen array of results ordered by created_at DESC.
+ */
+export function getForwardLinks(store: MemoryStore, sourceId: string): readonly ForwardLinkResult[] {
+  const stmts = store.getGraphStatements();
+  const rows = stmts.getForwardLinks.all(sourceId) as BacklinkRow[];
+  return Object.freeze(rows.map((row) => Object.freeze({
+    memory: rowToMemoryEntry(row),
+    linkText: row.link_text,
+  })));
 }
