@@ -7,6 +7,7 @@
 - :white_check_mark: **v1.2 Production Hardening & Platform Parity** - Phases 21-30 (shipped 2026-04-09)
 - :white_check_mark: **v1.3 Agent Integrations** - Phases 31-32 (shipped 2026-04-09)
 - :white_check_mark: **v1.4 Agent Runtime** - Phases 33-35 (shipped 2026-04-10)
+- :construction: **v1.5 Smart Memory & Model Tiering** - Phases 36-41 (in progress)
 
 ## Phases
 
@@ -55,9 +56,87 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 
 </details>
 
+### :construction: v1.5 Smart Memory & Model Tiering (In Progress)
+
+**Milestone Goal:** Reduce context bloat by loading memory on-demand via a knowledge graph, and default agents to haiku with intelligent escalation to sonnet/opus.
+
+- [ ] **Phase 36: Knowledge Graph Foundation** - Wikilink syntax and backlink queries over agent memories
+- [ ] **Phase 37: On-Demand Memory Loading** - Agents retrieve memories via tool calls instead of eager context stuffing
+- [ ] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery
+- [ ] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus
+- [ ] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement
+- [ ] **Phase 41: Context Assembly Pipeline** - Modular context composition with per-source token budgets
+
+## Phase Details
+
+### Phase 36: Knowledge Graph Foundation
+**Goal**: Agent memories are structurally linked via wikilinks and queryable as a graph
+**Depends on**: Nothing (first phase of v1.5)
+**Requirements**: GRAPH-01, GRAPH-02
+**Success Criteria** (what must be TRUE):
+  1. Agent can write a memory containing `[[another-memory]]` and the system creates a directed link between them
+  2. Agent can query "what links to memory X?" and receive a list of all memories containing wikilinks to X
+  3. Consolidation and archival operations preserve graph edges (no dangling references after memory lifecycle events)
+  4. Graph traversal terminates correctly on circular references (visited-set tracking prevents infinite loops)
+**Plans**: TBD
+
+### Phase 37: On-Demand Memory Loading
+**Goal**: Agents pull relevant memories when needed instead of having everything stuffed into context at session start
+**Depends on**: Phase 36
+**Requirements**: LOAD-01, LOAD-02
+**Success Criteria** (what must be TRUE):
+  1. Agent can invoke a `memory_lookup` tool to search and retrieve memories mid-conversation
+  2. Agent identity loads as a compact fingerprint (~200-300 tokens) instead of the full SOUL.md in the system prompt
+  3. Full SOUL.md content is available as a retrievable memory when the agent needs deeper identity context
+  4. System prompt size with on-demand loading is measurably smaller than the v1.4 eager-injection approach
+**Plans**: TBD
+
+### Phase 38: Graph Intelligence
+**Goal**: Memory search leverages graph structure for richer retrieval, and the graph grows automatically
+**Depends on**: Phase 36, Phase 37
+**Requirements**: GRAPH-03, GRAPH-04
+**Success Criteria** (what must be TRUE):
+  1. Memory search results include 1-hop graph neighbors alongside direct KNN hits, providing richer context
+  2. A background job periodically scans for semantically similar unlinked memories and suggests (or creates) links
+  3. Graph expansion respects token budgets (neighbor inclusion is relevance-gated, not unbounded fan-out)
+**Plans**: TBD
+
+### Phase 39: Model Tiering & Escalation
+**Goal**: Agents run on haiku by default and escalate to more capable models when tasks demand it
+**Depends on**: Phase 37
+**Requirements**: TIER-01, TIER-02, TIER-03, TIER-05
+**Success Criteria** (what must be TRUE):
+  1. New agent sessions start with haiku as the default model instead of sonnet
+  2. Agent automatically escalates to sonnet or opus when task complexity exceeds haiku's capability (error-rate, keyword, or complexity triggers)
+  3. Agent can invoke opus as an advisor tool for hard decisions without abandoning its current session
+  4. Operator can set or change an agent's default model via a Discord slash command
+  5. Escalated sessions automatically de-escalate after task completion (no permanent model drift)
+**Plans**: TBD
+
+### Phase 40: Cost Optimization & Budgets
+**Goal**: Token spend is tracked, scored, and budget-enforced across the agent fleet
+**Depends on**: Phase 39
+**Requirements**: COST-01, COST-02, TIER-04
+**Success Criteria** (what must be TRUE):
+  1. Per-agent, per-model token usage is recorded in SQLite and viewable via CLI (`clawcode costs`) and dashboard
+  2. New memories receive automatic importance scores based on content heuristics (length, entity density, recency)
+  3. Per-agent escalation budgets enforce daily/weekly token limits for upgraded models
+  4. Discord alerts fire when an agent approaches or exceeds its escalation budget
+**Plans**: TBD
+
+### Phase 41: Context Assembly Pipeline
+**Goal**: Identity, memories, graph results, and tools are composed into context with explicit per-source token budgets
+**Depends on**: Phase 38, Phase 39, Phase 40
+**Requirements**: LOAD-03
+**Success Criteria** (what must be TRUE):
+  1. Context assembly composes identity, hot memories, graph-expanded results, and tool definitions with configurable per-source token budgets
+  2. Total assembled context stays within a defined ceiling (no source can exceed its budget and starve others)
+  3. Net system prompt size for a v1.5 agent is equal to or smaller than an equivalent v1.4 agent
+**Plans**: TBD
+
 ## Progress
 
-**Execution Order:** All phases complete through v1.4.
+**Execution Order:** Phases execute in numeric order: 36 -> 37 -> 38 -> 39 -> 40 -> 41
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -69,3 +148,9 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 | 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
+| 36. Knowledge Graph Foundation | v1.5 | 0/? | Not started | - |
+| 37. On-Demand Memory Loading | v1.5 | 0/? | Not started | - |
+| 38. Graph Intelligence | v1.5 | 0/? | Not started | - |
+| 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
+| 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
+| 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |
