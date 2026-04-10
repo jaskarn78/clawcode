@@ -4,6 +4,7 @@ import * as sqliteVec from "sqlite-vec";
 import { nanoid } from "nanoid";
 import { MemoryError } from "./errors.js";
 import { checkForDuplicate, mergeMemory } from "./dedup.js";
+import { extractWikilinks } from "./graph.js";
 import type {
   MemoryEntry,
   MemoryTier,
@@ -21,6 +22,11 @@ type PreparedStatements = {
   readonly deleteVec: Statement;
   readonly listRecent: Statement;
   readonly insertSessionLog: Statement;
+  readonly insertLink: Statement;
+  readonly deleteLinksFrom: Statement;
+  readonly getBacklinks: Statement;
+  readonly getForwardLinks: Statement;
+  readonly checkMemoryExists: Statement;
 };
 
 /**
@@ -57,6 +63,7 @@ export class MemoryStore {
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("busy_timeout = 5000");
       this.db.pragma("synchronous = NORMAL");
+      this.db.pragma("foreign_keys = ON");
 
       sqliteVec.load(this.db);
 
@@ -64,6 +71,7 @@ export class MemoryStore {
       this.migrateSchema();
       this.migrateTierColumn();
       this.migrateEpisodeSource();
+      this.migrateGraphLinks();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -97,6 +105,19 @@ export class MemoryStore {
             embedding,
           });
 
+          // Re-extract links after merge
+          this.db.transaction(() => {
+            const mergedTargets = extractWikilinks(input.content);
+            this.stmts.deleteLinksFrom.run(dedupResult.existingId);
+            const mergeNow = new Date().toISOString();
+            for (const targetId of mergedTargets) {
+              const exists = this.stmts.checkMemoryExists.get(targetId);
+              if (exists) {
+                this.stmts.insertLink.run(dedupResult.existingId, targetId, targetId, mergeNow);
+              }
+            }
+          })();
+
           const merged = this.getById(dedupResult.existingId);
           if (!merged) {
             throw new MemoryError(
@@ -126,6 +147,15 @@ export class MemoryStore {
           now,
         );
         this.stmts.insertVec.run(id, embedding);
+
+        // Extract wikilinks and create edges to existing targets
+        const targets = extractWikilinks(input.content);
+        for (const targetId of targets) {
+          const exists = this.stmts.checkMemoryExists.get(targetId);
+          if (exists) {
+            this.stmts.insertLink.run(id, targetId, targetId, now);
+          }
+        }
       })();
 
       return Object.freeze({
@@ -373,6 +403,11 @@ export class MemoryStore {
     }
   }
 
+  /** Get prepared statements for graph queries (used by graph module). */
+  getGraphStatements(): Pick<PreparedStatements, 'getBacklinks' | 'getForwardLinks' | 'insertLink' | 'deleteLinksFrom' | 'checkMemoryExists'> {
+    return this.stmts;
+  }
+
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
@@ -513,6 +548,26 @@ export class MemoryStore {
     })();
   }
 
+  /**
+   * Migrate existing databases to add the memory_links graph table.
+   * Creates an adjacency list with CASCADE foreign keys for edge cleanup.
+   */
+  private migrateGraphLinks(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_links (
+        source_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        link_text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (source_id, target_id),
+        FOREIGN KEY (source_id) REFERENCES memories(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_id) REFERENCES memories(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_links_target
+        ON memory_links(target_id);
+    `);
+  }
+
   private prepareStatements(): PreparedStatements {
     return {
       insertMemory: this.db.prepare(`
@@ -542,6 +597,31 @@ export class MemoryStore {
         INSERT INTO session_logs (id, date, file_path, entry_count, created_at)
         VALUES (?, ?, ?, ?, ?)
       `),
+      insertLink: this.db.prepare(
+        "INSERT OR IGNORE INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)",
+      ),
+      deleteLinksFrom: this.db.prepare(
+        "DELETE FROM memory_links WHERE source_id = ?",
+      ),
+      getBacklinks: this.db.prepare(`
+        SELECT m.id, m.content, m.source, m.importance, m.access_count, m.tags,
+               m.created_at, m.updated_at, m.accessed_at, m.tier, ml.link_text
+        FROM memory_links ml
+        JOIN memories m ON ml.source_id = m.id
+        WHERE ml.target_id = ?
+        ORDER BY m.created_at DESC
+      `),
+      getForwardLinks: this.db.prepare(`
+        SELECT m.id, m.content, m.source, m.importance, m.access_count, m.tags,
+               m.created_at, m.updated_at, m.accessed_at, m.tier, ml.link_text
+        FROM memory_links ml
+        JOIN memories m ON ml.target_id = m.id
+        WHERE ml.source_id = ?
+        ORDER BY m.created_at DESC
+      `),
+      checkMemoryExists: this.db.prepare(
+        "SELECT 1 FROM memories WHERE id = ?",
+      ),
     };
   }
 }
