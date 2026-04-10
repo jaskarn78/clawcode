@@ -6,7 +6,7 @@
 - :white_check_mark: **v1.1 Advanced Intelligence** - Phases 6-20 (shipped 2026-04-09)
 - :white_check_mark: **v1.2 Production Hardening & Platform Parity** - Phases 21-30 (shipped 2026-04-09)
 - :white_check_mark: **v1.3 Agent Integrations** - Phases 31-32 (shipped 2026-04-09)
-- :construction: **v1.4 Agent Runtime** - Phases 33-34 (in progress)
+- :white_check_mark: **v1.4 Agent Runtime** - Phases 33-35 (shipped 2026-04-10)
 
 ## Phases
 
@@ -74,12 +74,13 @@ Plans:
 - [x] 32-01-PLAN.md -- Config schema, types, resolution, and SDK session passthrough (MCPC-01, MCPC-02, MCPC-06)
 - [x] 32-02-PLAN.md -- System prompt MCP tools injection, health checks, CLI mcp-servers command (MCPC-03, MCPC-04, MCPC-05)
 
-### v1.4 Agent Runtime (In Progress)
+### v1.4 Agent Runtime (Complete)
 
 **Milestone Goal:** Deploy ClawCode to actually run agents — install the subagent-thread skill globally and build a standalone agent runner that starts, manages, and hot-restarts a single agent process via the Claude Agent SDK.
 
 - [x] **Phase 33: Global Skill Install** - Install workspace skills to ~/.claude/skills/ at daemon startup so agents can access them outside the daemon's skill injection path (completed 2026-04-10)
 - [x] **Phase 34: Standalone Agent Runner** - Build `src/agent/runner.ts` — a self-contained runner that starts a single agent via SdkSessionAdapter, connects it to Discord via DiscordBridge, and manages its full lifecycle (start, hot-restart, graceful stop) without needing the full daemon (completed 2026-04-10)
+- [x] **Phase 35: Resolve OpenClaw Coexistence Conflicts** - Fix HIGH-risk coexistence conflicts: token hard-fail, slash command namespace, dashboard non-fatal, env var interpolation, skill install dedup (completed 2026-04-10)
 
 ### Phase 33: Global Skill Install
 **Goal**: Skills defined in workspace `skills/` are automatically installed to `~/.claude/skills/` at daemon startup so agents running as raw Claude Code sessions (outside the daemon) can also access them
@@ -118,7 +119,7 @@ Plans:
 | 32. MCP Client Consumption | v1.3 | 2/2 | Complete | 2026-04-09 |
 | 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
-| 35. Resolve OpenClaw Coexistence | v1.4 | 0/2 | Complete    | 2026-04-10 |
+| 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
 
 ### Phase 35: Resolve OpenClaw coexistence conflicts
 
@@ -134,5 +135,5 @@ Plans:
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 35-01-PLAN.md -- Token hard-fail, slash command namespace prefix, skill install dedup (COEX-01, COEX-02, COEX-05)
-- [ ] 35-02-PLAN.md -- Dashboard non-fatal + env var interpolation in config loader (COEX-03, COEX-04)
+- [x] 35-01-PLAN.md -- Token hard-fail, slash command namespace prefix, skill install dedup (COEX-01, COEX-02, COEX-05)
+- [x] 35-02-PLAN.md -- Dashboard non-fatal + env var interpolation in config loader (COEX-03, COEX-04)
