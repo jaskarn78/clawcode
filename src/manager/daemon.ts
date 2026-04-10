@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -30,7 +31,7 @@ import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
 import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
-import { loadBotToken, DiscordBridge } from "../discord/bridge.js";
+import { DiscordBridge } from "../discord/bridge.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
@@ -144,9 +145,6 @@ export async function startDaemon(
   // 4. Load config
   const config = await loadConfig(configPath);
 
-  // 4b. Install workspace skills to ~/.claude/skills/
-  await installWorkspaceSkills(join(process.cwd(), "skills"), undefined, log);
-
   // 5. Resolve all agents
   const resolvedAgents = resolveAllAgents(config);
 
@@ -163,6 +161,10 @@ export async function startDaemon(
 
   // 5a. Scan skills directory and link agent skills
   const skillsPath = resolvedAgents.length > 0 ? resolvedAgents[0].skillsPath : "";
+
+  // Install workspace skills to global and agent skills directories (once)
+  await installWorkspaceSkills(join(process.cwd(), "skills"), skillsPath, log);
+
   const skillsCatalog = await scanSkillsDirectory(skillsPath, log);
   log.info({ skills: skillsCatalog.size }, "skills catalog loaded");
 
@@ -297,13 +299,25 @@ export async function startDaemon(
   // 10. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
-  // 11. Load Discord bot token (shared by bridge and slash commands)
+  // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token)
   let botToken: string;
-  try {
-    botToken = loadBotToken();
-  } catch {
+  if (config.discord?.botToken) {
+    const raw = config.discord.botToken;
+    if (raw.startsWith("op://")) {
+      try {
+        botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000 }).trim();
+      } catch {
+        throw new Error(
+          "Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. " +
+          "Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken"
+        );
+      }
+    } else {
+      botToken = raw;
+    }
+  } else {
     botToken = "";
-    log.warn("Discord bot token not found — bridge and slash commands disabled");
+    log.warn("No discord.botToken configured — Discord bridge disabled");
   }
 
   // 11a. Create delivery queue for reliable outbound message delivery.
