@@ -737,6 +737,32 @@ async function routeMethod(
       };
     }
 
+    case "memory-lookup": {
+      const agentName = validateStringParam(params, "agent");
+      const query = validateStringParam(params, "query");
+      const limit = typeof params.limit === "number" ? Math.min(Math.max(params.limit, 1), 20) : 5;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(`Memory store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const embedder = manager.getEmbedder();
+      const queryEmbedding = await embedder.embed(query);
+      const search = new SemanticSearch(store.getDatabase());
+      const results = search.search(queryEmbedding, limit);
+
+      return {
+        results: results.map((r) => ({
+          id: r.id,
+          content: r.content,
+          relevance_score: r.combinedScore,
+          tags: r.tags,
+          created_at: r.createdAt,
+        })),
+      };
+    }
+
     case "usage": {
       const agentName = validateStringParam(params, "agent");
       const period = typeof params.period === "string" ? params.period : "session";
