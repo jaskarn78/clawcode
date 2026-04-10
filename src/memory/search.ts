@@ -83,8 +83,17 @@ export class SemanticSearch {
     // IMPORTANT: Score BEFORE updating accessed_at (Pitfall 6)
     const ranked = scoreAndRank(searchResults, this.scoringConfig, new Date());
 
+    // Apply importance weighting: multiplicative boost that rewards high-importance
+    // memories without overriding strong semantic matches
+    const importanceWeighted = ranked
+      .map((result) => {
+        const boostedScore = result.combinedScore * (0.7 + 0.3 * result.importance);
+        return Object.freeze({ ...result, combinedScore: boostedScore });
+      })
+      .sort((a, b) => b.combinedScore - a.combinedScore);
+
     // Trim to requested topK
-    const topResults = ranked.slice(0, topK);
+    const topResults = importanceWeighted.slice(0, topK);
 
     // Update access_count and accessed_at ONLY for final top-K results
     const now = new Date().toISOString();

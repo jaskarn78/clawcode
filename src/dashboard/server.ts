@@ -177,6 +177,20 @@ async function handleRequest(
       return;
     }
 
+    // One-shot costs endpoint
+    if (method === "GET" && pathname === "/api/costs") {
+      try {
+        const queryString = (req.url ?? "").split("?")[1] ?? "";
+        const params = new URLSearchParams(queryString);
+        const period = params.get("period") ?? "today";
+        const data = await sendIpcRequest(socketPath, "costs", { period });
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
     // One-shot delivery queue endpoint
     if (method === "GET" && pathname === "/api/delivery-queue") {
       try {
