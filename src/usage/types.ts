@@ -33,3 +33,15 @@ export type UsageAggregate = {
   readonly duration_ms: number;
   readonly event_count: number;
 };
+
+/**
+ * Cost data grouped by agent and model.
+ * Returned by getCostsByAgentModel for per-agent/per-model cost breakdown.
+ */
+export type CostByAgentModel = {
+  readonly agent: string;
+  readonly model: string;
+  readonly tokens_in: number;
+  readonly tokens_out: number;
+  readonly cost_usd: number;
+};

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { nanoid } from "nanoid";
 import { addDays } from "date-fns";
-import type { UsageEvent, UsageAggregate } from "./types.js";
+import type { UsageEvent, UsageAggregate, CostByAgentModel } from "./types.js";
 
 /**
  * Zero-value aggregate returned when no events match a query.
@@ -24,6 +24,7 @@ type PreparedStatements = {
   readonly weeklyUsage: Statement;
   readonly totalUsage: Statement;
   readonly totalUsageByAgent: Statement;
+  readonly costsByAgentModel: Statement;
 };
 
 /**
@@ -111,6 +112,18 @@ export class UsageTracker {
   }
 
   /**
+   * Get cost data grouped by agent and model for a time range.
+   *
+   * @param startTime - ISO timestamp (inclusive)
+   * @param endTime - ISO timestamp (exclusive)
+   * @returns Frozen array of CostByAgentModel rows
+   */
+  getCostsByAgentModel(startTime: string, endTime: string): readonly CostByAgentModel[] {
+    const rows = this.stmts.costsByAgentModel.all(startTime, endTime) as CostByAgentModel[];
+    return Object.freeze(rows.map((row) => Object.freeze({ ...row })));
+  }
+
+  /**
    * Close the database connection.
    */
   close(): void {
@@ -167,6 +180,16 @@ export class UsageTracker {
       `),
       totalUsageByAgent: this.db.prepare(`
         SELECT ${aggregateSql} FROM usage_events WHERE agent = ?
+      `),
+      costsByAgentModel: this.db.prepare(`
+        SELECT agent, model,
+          COALESCE(SUM(tokens_in), 0) AS tokens_in,
+          COALESCE(SUM(tokens_out), 0) AS tokens_out,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM usage_events
+        WHERE timestamp >= ? AND timestamp < ?
+        GROUP BY agent, model
+        ORDER BY cost_usd DESC
       `),
     };
   }
