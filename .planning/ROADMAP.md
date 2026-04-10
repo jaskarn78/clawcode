@@ -61,7 +61,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 **Milestone Goal:** Reduce context bloat by loading memory on-demand via a knowledge graph, and default agents to haiku with intelligent escalation to sonnet/opus.
 
 - [x] **Phase 36: Knowledge Graph Foundation** - Wikilink syntax and backlink queries over agent memories (completed 2026-04-10)
-- [ ] **Phase 37: On-Demand Memory Loading** - Agents retrieve memories via tool calls instead of eager context stuffing
+- [x] **Phase 37: On-Demand Memory Loading** - Agents retrieve memories via tool calls instead of eager context stuffing (completed 2026-04-10)
 - [ ] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery
 - [ ] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus
 - [ ] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement
@@ -92,9 +92,9 @@ Plans:
   2. Agent identity loads as a compact fingerprint (~200-300 tokens) instead of the full SOUL.md in the system prompt
   3. Full SOUL.md content is available as a retrievable memory when the agent needs deeper identity context
   4. System prompt size with on-demand loading is measurably smaller than the v1.4 eager-injection approach
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 37-01-PLAN.md — Fingerprint extraction + memory_lookup MCP tool (LOAD-01, LOAD-02)
+- [x] 37-01-PLAN.md — Fingerprint extraction + memory_lookup MCP tool (LOAD-01, LOAD-02)
 - [ ] 37-02-PLAN.md — Session config refactor + SOUL.md storage (LOAD-01, LOAD-02)
 
 ### Phase 38: Graph Intelligence
@@ -167,7 +167,7 @@ Plans:
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 36. Knowledge Graph Foundation | v1.5 | 1/2 | Complete    | 2026-04-10 |
-| 37. On-Demand Memory Loading | v1.5 | 0/? | Not started | - |
+| 37. On-Demand Memory Loading | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 38. Graph Intelligence | v1.5 | 0/? | Not started | - |
 | 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
 | 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
