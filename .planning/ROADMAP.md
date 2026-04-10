@@ -78,7 +78,10 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   2. Agent can query "what links to memory X?" and receive a list of all memories containing wikilinks to X
   3. Consolidation and archival operations preserve graph edges (no dangling references after memory lifecycle events)
   4. Graph traversal terminates correctly on circular references (visited-set tracking prevents infinite loops)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
+- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
 
 ### Phase 37: On-Demand Memory Loading
 **Goal**: Agents pull relevant memories when needed instead of having everything stuffed into context at session start
@@ -89,7 +92,10 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   2. Agent identity loads as a compact fingerprint (~200-300 tokens) instead of the full SOUL.md in the system prompt
   3. Full SOUL.md content is available as a retrievable memory when the agent needs deeper identity context
   4. System prompt size with on-demand loading is measurably smaller than the v1.4 eager-injection approach
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
+- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
 
 ### Phase 38: Graph Intelligence
 **Goal**: Memory search leverages graph structure for richer retrieval, and the graph grows automatically
@@ -99,7 +105,10 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   1. Memory search results include 1-hop graph neighbors alongside direct KNN hits, providing richer context
   2. A background job periodically scans for semantically similar unlinked memories and suggests (or creates) links
   3. Graph expansion respects token budgets (neighbor inclusion is relevance-gated, not unbounded fan-out)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
+- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
 
 ### Phase 39: Model Tiering & Escalation
 **Goal**: Agents run on haiku by default and escalate to more capable models when tasks demand it
@@ -111,7 +120,10 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   3. Agent can invoke opus as an advisor tool for hard decisions without abandoning its current session
   4. Operator can set or change an agent's default model via a Discord slash command
   5. Escalated sessions automatically de-escalate after task completion (no permanent model drift)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
+- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
 
 ### Phase 40: Cost Optimization & Budgets
 **Goal**: Token spend is tracked, scored, and budget-enforced across the agent fleet
@@ -122,7 +134,10 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   2. New memories receive automatic importance scores based on content heuristics (length, entity density, recency)
   3. Per-agent escalation budgets enforce daily/weekly token limits for upgraded models
   4. Discord alerts fire when an agent approaches or exceeds its escalation budget
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
+- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
 
 ### Phase 41: Context Assembly Pipeline
 **Goal**: Identity, memories, graph results, and tools are composed into context with explicit per-source token budgets
@@ -132,7 +147,10 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   1. Context assembly composes identity, hot memories, graph-expanded results, and tool definitions with configurable per-source token budgets
   2. Total assembled context stays within a defined ceiling (no source can exceed its budget and starve others)
   3. Net system prompt size for a v1.5 agent is equal to or smaller than an equivalent v1.4 agent
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
+- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
 
 ## Progress
 
@@ -148,7 +166,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 | 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
-| 36. Knowledge Graph Foundation | v1.5 | 0/? | Not started | - |
+| 36. Knowledge Graph Foundation | v1.5 | 0/2 | Planning complete | - |
 | 37. On-Demand Memory Loading | v1.5 | 0/? | Not started | - |
 | 38. Graph Intelligence | v1.5 | 0/? | Not started | - |
 | 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
