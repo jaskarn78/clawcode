@@ -1,5 +1,15 @@
 # Milestones: ClawCode
 
+## v1.4 Agent Runtime (Shipped: 2026-04-10)
+
+**Phases completed:** 0 phases, 0 plans, 0 tasks
+
+**Key accomplishments:**
+
+- (none recorded)
+
+---
+
 ## v1.3 Agent Integrations (Shipped: 2026-04-09)
 
 **Phases completed:** 2 phases, 4 plans, 7 tasks
