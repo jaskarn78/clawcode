@@ -36,6 +36,7 @@ import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
 import { SemanticSearch } from "../memory/search.js";
+import { GraphSearch } from "../memory/graph-search.js";
 import { startOfWeek } from "date-fns";
 import { ConfigWatcher } from "../config/watcher.js";
 import { ConfigReloader } from "./config-reloader.js";
@@ -749,8 +750,8 @@ async function routeMethod(
 
       const embedder = manager.getEmbedder();
       const queryEmbedding = await embedder.embed(query);
-      const search = new SemanticSearch(store.getDatabase());
-      const results = search.search(queryEmbedding, limit);
+      const graphSearch = new GraphSearch(store);
+      const results = graphSearch.search(queryEmbedding, limit);
 
       return {
         results: results.map((r) => ({
@@ -759,6 +760,8 @@ async function routeMethod(
           relevance_score: r.combinedScore,
           tags: r.tags,
           created_at: r.createdAt,
+          source: r.source,
+          linked_from: r.linkedFrom,
         })),
       };
     }
