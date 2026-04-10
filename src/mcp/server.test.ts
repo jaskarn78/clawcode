@@ -31,8 +31,14 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 6 tools defined", () => {
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(6);
+  it("has exactly 8 tools defined", () => {
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(8);
+  });
+
+  it("defines ask_advisor tool", () => {
+    expect(TOOL_DEFINITIONS.ask_advisor).toBeDefined();
+    expect(TOOL_DEFINITIONS.ask_advisor.description).toContain("advice");
+    expect(TOOL_DEFINITIONS.ask_advisor.ipcMethod).toBe("ask-advisor");
   });
 
   it("defines spawn_subagent_thread tool", () => {

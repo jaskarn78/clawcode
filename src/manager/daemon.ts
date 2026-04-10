@@ -52,6 +52,7 @@ import { startDashboardServer } from "../dashboard/server.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
+import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
 
 /**
  * Base directory for manager runtime files.
@@ -196,6 +197,11 @@ export async function startDaemon(
   });
   log.info("escalation monitor initialized");
 
+  // 6a2. Create advisor budget tracker (shared SQLite DB in manager dir)
+  const advisorBudgetDb = new Database(join(MANAGER_DIR, "advisor-budget.db"));
+  const advisorBudget = new AdvisorBudget(advisorBudgetDb);
+  log.info("advisor budget initialized");
+
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
 
@@ -304,7 +310,7 @@ export async function startDaemon(
 
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget);
   };
 
   // 10. Create IPC server
@@ -505,6 +511,7 @@ export async function startDaemon(
     }
     deliveryQueue.stop();
     deliveryDb.close();
+    advisorBudgetDb.close();
     webhookManager.destroy();
     await manager.stopAll();
     await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
@@ -545,6 +552,7 @@ async function routeMethod(
   approvalLog: ApprovalLog,
   securityPolicies: Map<string, SecurityPolicy>,
   escalationMonitor: EscalationMonitor,
+  advisorBudget: AdvisorBudget,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -1043,6 +1051,74 @@ async function routeMethod(
       }
 
       return { servers: entries };
+    }
+
+    case "ask-advisor": {
+      const agentName = validateStringParam(params, "agent");
+      const question = validateStringParam(params, "question");
+
+      // Check budget before doing any expensive work
+      if (!advisorBudget.canCall(agentName)) {
+        throw new ManagerError(
+          `Advisor budget exhausted for agent '${agentName}' (0 calls remaining today)`,
+        );
+      }
+
+      // Retrieve top 5 relevant memories for context
+      let memoryContext = "";
+      const store = manager.getMemoryStore(agentName);
+      if (store) {
+        try {
+          const embedder = manager.getEmbedder();
+          const queryEmbedding = await embedder.embed(question);
+          const search = new SemanticSearch(store.getDatabase());
+          const results = search.search(queryEmbedding, 5);
+          if (results.length > 0) {
+            memoryContext = results
+              .map((r, i) => `[${i + 1}] ${r.content}`)
+              .join("\n");
+          }
+        } catch {
+          // Memory search failure is non-fatal for advisor
+        }
+      }
+
+      // Fork a session with opus model for one-shot advice
+      const systemPrompt = [
+        `You are an advisor to agent "${agentName}". Provide concise, actionable guidance.`,
+        ...(memoryContext
+          ? ["\nRelevant context from agent's memory:", memoryContext]
+          : []),
+      ].join("\n");
+
+      const fork = await manager.forkSession(agentName, {
+        modelOverride: "opus" as const,
+        systemPromptOverride: systemPrompt,
+      });
+
+      let answer: string;
+      try {
+        answer = await manager.sendToAgent(fork.forkName, question);
+      } finally {
+        // Always clean up the fork
+        await manager.stopAgent(fork.forkName).catch(() => {});
+      }
+
+      // Truncate response to 2000 chars
+      if (answer.length > ADVISOR_RESPONSE_MAX_LENGTH) {
+        answer = answer.slice(0, ADVISOR_RESPONSE_MAX_LENGTH);
+      }
+
+      // Record the call after success
+      advisorBudget.recordCall(agentName);
+      const budgetRemaining = advisorBudget.getRemaining(agentName);
+
+      return { answer, budget_remaining: budgetRemaining };
+    }
+
+    case "set-model": {
+      // Placeholder -- implemented in Task 2
+      throw new ManagerError("set-model not yet implemented");
     }
 
     default:
