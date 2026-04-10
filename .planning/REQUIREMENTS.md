@@ -43,27 +43,27 @@
 - Shared knowledge graph across agents — violates workspace isolation
 - Automatic personality evolution — identity drift is a feature-killing bug
 - Vector re-embedding on model upgrade — current 384-dim is sufficient
-- Complex escalation chains (haiku→sonnet→opus→sonnet) — two-tier only (haiku + advisor)
+- Complex escalation chains (haiku->sonnet->opus->sonnet) — two-tier only (haiku + advisor)
 - LLM-powered entity/relation extraction — doubles token cost on writes
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GRAPH-01 | — | Pending |
-| GRAPH-02 | — | Pending |
-| GRAPH-03 | — | Pending |
-| GRAPH-04 | — | Pending |
-| LOAD-01 | — | Pending |
-| LOAD-02 | — | Pending |
-| LOAD-03 | — | Pending |
-| TIER-01 | — | Pending |
-| TIER-02 | — | Pending |
-| TIER-03 | — | Pending |
-| TIER-04 | — | Pending |
-| TIER-05 | — | Pending |
-| COST-01 | — | Pending |
-| COST-02 | — | Pending |
+| GRAPH-01 | Phase 36 | Pending |
+| GRAPH-02 | Phase 36 | Pending |
+| GRAPH-03 | Phase 38 | Pending |
+| GRAPH-04 | Phase 38 | Pending |
+| LOAD-01 | Phase 37 | Pending |
+| LOAD-02 | Phase 37 | Pending |
+| LOAD-03 | Phase 41 | Pending |
+| TIER-01 | Phase 39 | Pending |
+| TIER-02 | Phase 39 | Pending |
+| TIER-03 | Phase 39 | Pending |
+| TIER-04 | Phase 40 | Pending |
+| TIER-05 | Phase 39 | Pending |
+| COST-01 | Phase 40 | Pending |
+| COST-02 | Phase 40 | Pending |
 
 ---
 *14 requirements | 4 categories | Created 2026-04-10*
