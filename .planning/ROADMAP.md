@@ -107,7 +107,7 @@ Plans:
 
 ## Progress
 
-**Execution Order:** Phases execute in numeric order: 31, 32, 33, 34.
+**Execution Order:** Phases execute in numeric order: 31, 32, 33, 34, 35.
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -118,11 +118,12 @@ Plans:
 | 32. MCP Client Consumption | v1.3 | 2/2 | Complete | 2026-04-09 |
 | 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
+| 35. Resolve OpenClaw Coexistence | v1.4 | 0/2 | In Progress | - |
 
 ### Phase 35: Resolve OpenClaw coexistence conflicts
 
 **Goal:** Fix HIGH-risk coexistence conflicts so ClawCode and OpenClaw run safely on the same machine — hard fail on shared token fallback, namespace slash commands, make dashboard non-fatal, add env var interpolation in config loader, deduplicate skill install call
-**Requirements**: TBD
+**Requirements**: COEX-01, COEX-02, COEX-03, COEX-04, COEX-05
 **Depends on:** Phase 34
 **Success Criteria** (what must be TRUE):
   1. Daemon refuses to start Discord bridge if `op read` fails for bot token (no silent fallback to shared plugin token)
@@ -130,7 +131,8 @@ Plans:
   3. Dashboard server binds to `127.0.0.1` and daemon starts successfully even if port 3100 is taken
   4. Config loader resolves `${VAR_NAME}` patterns against `process.env` in MCP server env blocks
   5. `installWorkspaceSkills` is called exactly once during daemon startup
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 35 to break down)
+- [ ] 35-01-PLAN.md -- Token hard-fail, slash command namespace prefix, skill install dedup (COEX-01, COEX-02, COEX-05)
+- [ ] 35-02-PLAN.md -- Dashboard non-fatal + env var interpolation in config loader (COEX-03, COEX-04)
