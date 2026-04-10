@@ -62,7 +62,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 
 - [x] **Phase 36: Knowledge Graph Foundation** - Wikilink syntax and backlink queries over agent memories (completed 2026-04-10)
 - [x] **Phase 37: On-Demand Memory Loading** - Agents retrieve memories via tool calls instead of eager context stuffing (completed 2026-04-10)
-- [ ] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery
+- [x] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery (completed 2026-04-10)
 - [ ] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus
 - [ ] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement
 - [ ] **Phase 41: Context Assembly Pipeline** - Modular context composition with per-source token budgets
@@ -105,7 +105,7 @@ Plans:
   1. Memory search results include 1-hop graph neighbors alongside direct KNN hits, providing richer context
   2. A background job periodically scans for semantically similar unlinked memories and suggests (or creates) links
   3. Graph expansion respects token budgets (neighbor inclusion is relevance-gated, not unbounded fan-out)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 38-01-PLAN.md — Graph-enriched search: GraphSearch class + IPC wiring (GRAPH-03)
 - [ ] 38-02-PLAN.md — Auto-linker heartbeat check for automatic link discovery (GRAPH-04)
@@ -168,7 +168,7 @@ Plans:
 | 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 36. Knowledge Graph Foundation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 37. On-Demand Memory Loading | v1.5 | 1/2 | Complete    | 2026-04-10 |
-| 38. Graph Intelligence | v1.5 | 0/2 | Not started | - |
+| 38. Graph Intelligence | v1.5 | 0/2 | Complete    | 2026-04-10 |
 | 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
 | 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
 | 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |
