@@ -95,6 +95,7 @@ export function resolveAgentConfig(
     webhook: agent.webhook ?? undefined,
     reactions: agent.reactions ?? true,
     security: agent.security ?? undefined,
+    contextBudgets: agent.contextBudgets ?? undefined,
     mcpServers,
     slashCommands: agent.slashCommands,
   };

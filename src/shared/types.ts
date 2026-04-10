@@ -78,6 +78,12 @@ export type ResolvedAgentConfig = {
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;
   }[];
+  readonly contextBudgets?: {
+    readonly identity: number;
+    readonly hotMemories: number;
+    readonly toolDefinitions: number;
+    readonly graphContext: number;
+  };
   readonly slashCommands: readonly {
     readonly name: string;
     readonly description: string;
