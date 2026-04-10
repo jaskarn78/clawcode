@@ -1,4 +1,6 @@
 import type { SessionManager } from "./session-manager.js";
+import type { EscalationBudget, AgentBudgetConfig } from "../usage/budget.js";
+import { BudgetExceededError } from "../usage/budget.js";
 
 /**
  * Configuration for the escalation monitor.
@@ -28,15 +30,34 @@ export const DEFAULT_ESCALATION_CONFIG: EscalationConfig = {
  * Concurrent escalation requests for the same agent are serialized
  * via a per-agent lock set.
  */
+/**
+ * Optional budget enforcement and alert configuration for EscalationMonitor.
+ */
+export type EscalationBudgetOptions = {
+  readonly budget?: EscalationBudget;
+  readonly budgetConfigs?: ReadonlyMap<string, AgentBudgetConfig>;
+  readonly alertCallback?: (agent: string, model: string, threshold: "warning" | "exceeded") => void;
+};
+
 export class EscalationMonitor {
   private readonly sessionManager: SessionManager;
   private readonly config: EscalationConfig;
   private readonly errorCounts: Map<string, number> = new Map();
   private readonly escalating: Set<string> = new Set();
+  private readonly budget: EscalationBudget | undefined;
+  private readonly budgetConfigs: ReadonlyMap<string, AgentBudgetConfig> | undefined;
+  private readonly alertCallback: ((agent: string, model: string, threshold: "warning" | "exceeded") => void) | undefined;
 
-  constructor(sessionManager: SessionManager, config: EscalationConfig) {
+  constructor(
+    sessionManager: SessionManager,
+    config: EscalationConfig,
+    budgetOptions?: EscalationBudgetOptions,
+  ) {
     this.sessionManager = sessionManager;
     this.config = config;
+    this.budget = budgetOptions?.budget;
+    this.budgetConfigs = budgetOptions?.budgetConfigs;
+    this.alertCallback = budgetOptions?.alertCallback;
   }
 
   /**
@@ -86,6 +107,18 @@ export class EscalationMonitor {
    * Error count is reset after successful escalation.
    */
   async escalate(agentName: string, message: string): Promise<string> {
+    // Budget guard: check before allowing escalation
+    if (this.budget && this.budgetConfigs) {
+      const budgetConfig = this.budgetConfigs.get(agentName);
+      if (budgetConfig && !this.budget.canEscalate(agentName, this.config.escalationModel, budgetConfig)) {
+        const threshold = this.budget.checkAlerts(agentName, this.config.escalationModel, budgetConfig);
+        if (threshold && this.budget.shouldAlert(agentName, this.config.escalationModel, threshold)) {
+          this.alertCallback?.(agentName, this.config.escalationModel, threshold);
+        }
+        throw new BudgetExceededError(agentName, this.config.escalationModel);
+      }
+    }
+
     this.escalating.add(agentName);
     try {
       const fork = await this.sessionManager.forkSession(agentName, {
@@ -94,6 +127,25 @@ export class EscalationMonitor {
       const response = await this.sessionManager.sendToAgent(fork.forkName, message);
       await this.sessionManager.stopAgent(fork.forkName);
       this.errorCounts.set(agentName, 0);
+
+      // Record usage after successful escalation
+      if (this.budget) {
+        // Rough token estimate: ~4 chars per token for input + output
+        const estimatedTokens = Math.ceil((message.length + response.length) / 4);
+        this.budget.recordUsage(agentName, this.config.escalationModel, estimatedTokens);
+
+        // Check alert thresholds after recording
+        if (this.budgetConfigs) {
+          const budgetConfig = this.budgetConfigs.get(agentName);
+          if (budgetConfig) {
+            const threshold = this.budget.checkAlerts(agentName, this.config.escalationModel, budgetConfig);
+            if (threshold && this.budget.shouldAlert(agentName, this.config.escalationModel, threshold)) {
+              this.alertCallback?.(agentName, this.config.escalationModel, threshold);
+            }
+          }
+        }
+      }
+
       return response;
     } finally {
       this.escalating.delete(agentName);

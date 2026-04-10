@@ -1,5 +1,6 @@
 import {
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   Partials,
   type Message,
@@ -190,6 +191,49 @@ export class DiscordBridge {
     await this.client.login(this.botToken);
     this.deliveryQueue?.start();
     this.running = true;
+  }
+
+  /**
+   * Send a budget alert embed to a Discord channel.
+   * Fire-and-forget: errors are logged, never thrown.
+   */
+  async sendBudgetAlert(
+    channelId: string,
+    data: {
+      readonly agent: string;
+      readonly model: string;
+      readonly tokensUsed: number;
+      readonly tokenLimit: number;
+      readonly period: string;
+      readonly threshold: "warning" | "exceeded";
+    },
+  ): Promise<void> {
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !("send" in channel) || typeof channel.send !== "function") {
+        this.log.warn({ channelId }, "cannot send budget alert: channel not sendable");
+        return;
+      }
+
+      const percentage = Math.round((data.tokensUsed / data.tokenLimit) * 100);
+      const isExceeded = data.threshold === "exceeded";
+
+      const embed = new EmbedBuilder()
+        .setTitle(isExceeded ? "Budget Exceeded" : "Budget Warning")
+        .setColor(isExceeded ? 0xFF0000 : 0xFFCC00)
+        .addFields(
+          { name: "Agent", value: data.agent, inline: true },
+          { name: "Model", value: data.model, inline: true },
+          { name: "Usage", value: `${data.tokensUsed.toLocaleString()} / ${data.tokenLimit.toLocaleString()} (${percentage}%)`, inline: true },
+          { name: "Period", value: data.period, inline: true },
+        )
+        .setTimestamp();
+
+      await channel.send({ embeds: [embed] });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.log.error({ channelId, error: errorMsg, agent: data.agent }, "failed to send budget alert");
+    }
   }
 
   /**
