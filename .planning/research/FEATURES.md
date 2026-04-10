@@ -1,231 +1,178 @@
-# Feature Research
+# Feature Research: v1.5 Smart Memory & Model Tiering
 
-**Domain:** Multi-agent AI orchestration (persistent Claude Code agents with Discord integration)
-**Researched:** 2026-04-08
-**Confidence:** HIGH
+**Domain:** AI agent knowledge graphs, on-demand context loading, model routing/escalation
+**Researched:** 2026-04-10
+**Confidence:** MEDIUM-HIGH
+**Scope:** NEW features only -- existing memory system (hot/warm/cold tiers, consolidation, decay, dedup, episodes, context health zones) is already shipped in v1.0-v1.4.
 
 ## Feature Landscape
 
-### Table Stakes (Users Expect These)
+### Table Stakes (Must Have for v1.5)
 
-Features users assume exist. Missing these = product feels incomplete.
+Features that define this milestone. Without these, v1.5 has no reason to exist.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Agent lifecycle management (start/stop/restart) | Every orchestration system has this. CrewAI, AutoGen, LangGraph all provide process control. Without it, you're manually managing terminals. | MEDIUM | Central manager process that tracks PIDs, handles graceful shutdown, and can restart crashed agents. OpenClaw's agent manager is the reference. |
-| Per-agent workspace isolation | OpenClaw, CrewAI, and AutoGen all isolate agent state. Shared state causes cross-contamination bugs that are impossible to debug. | LOW | Each agent gets its own directory tree: config, memory, session state. Claude Code already supports per-project `.claude/` directories -- leverage this. |
-| Agent identity system (SOUL.md / IDENTITY.md) | SOUL.md is becoming an industry pattern (SoulSpec.org, soul-md.xyz). OpenClaw pioneered the separation of soul (philosophy) from identity (presentation) from config (capabilities). Users expect persistent personality across sessions. | LOW | Markdown files per agent. SOUL.md for behavioral philosophy, IDENTITY.md for name/avatar/tone. Already a proven pattern -- just formalize it. |
-| Discord channel binding | Core value prop of ClawCode. Each agent owns channel(s). Messages route to the right agent. OpenClaw does this with its gateway; ClawCode does it with native Discord plugin per process. | MEDIUM | Channel-to-agent mapping in central config. The Discord plugin already handles the connection -- this is routing logic on top. |
-| Per-agent memory (conversation history + facts) | CrewAI has unified memory with scope trees. AutoGen maintains conversation history. LangGraph has checkpointing. Any agent without memory feels broken after the first session reset. | HIGH | SQLite-backed with markdown logs for human readability. This is the most complex table-stakes feature because it needs to survive process restarts and context window limits. |
-| Central configuration | Every framework has a single config defining all agents. CrewAI uses YAML crew definitions. OpenClaw uses AGENTS.md + per-agent configs. Without central config, adding/modifying agents requires code changes. | LOW | Single YAML/JSON file defining all agents, their workspaces, channels, models, skills. Declarative, not imperative. |
-| Auto-compaction / context management | Claude Code sessions hit context limits. OpenClaw has heartbeat-driven compaction. Without this, agents silently degrade as context fills up, producing worse responses with no warning. | MEDIUM | Monitor context fill percentage. At threshold, trigger `/compact` equivalent. Flush conversation to memory before compacting. |
-| Boot-all-from-config | Users expect `clawcode start` to bring up all agents from a config file. Manual startup per agent is a non-starter for 14+ agents. | LOW | Read config, iterate agents, spawn Claude Code processes. Simple but essential. |
-| Graceful error recovery | Agents crash. Processes die. OOM kills happen. If the system can't detect and recover from failures, it's a toy. AutoGen and CrewAI both handle this at the framework level. | MEDIUM | Heartbeat monitoring + automatic restart. Exponential backoff for repeated failures. Alert the admin agent on persistent failures. |
+| Feature | Why Expected | Complexity | Dependencies on Existing Code | Notes |
+|---------|--------------|------------|-------------------------------|-------|
+| On-demand memory retrieval | Current system eagerly loads hot-tier memories into context on session resume. This burns tokens on irrelevant context. Industry standard is JIT loading (GAM, Mem0, xMemory all do this). Mem0 reports 90% token savings with selective retrieval. | MEDIUM | `search.ts` (KNN search), `tier-manager.ts` (hot tier), `context-summary.ts` (resume injection) | Replace eager hot-tier context loading with query-triggered retrieval. Agent calls a tool to search memory when needed. Hot tier still exists for truly critical context (identity, active task state) but shrinks dramatically. |
+| Knowledge graph links (wikilinks) | Memory entries are flat records with no explicit relationships. "Project X" and "Project X deadline" and "Project X team lead" exist as independent facts. Obsidian proved `[[backlinks]]` are the minimum viable graph -- users and agents both understand them. | MEDIUM | `store.ts` (SQLite schema), `embedder.ts` (similarity for auto-linking) | New `memory_links` table: `source_id`, `target_id`, `link_type` (explicit/semantic/consolidation). Parse `[[wikilink]]` syntax in memory content to auto-create edges. Backlink resolution on retrieval. Consolidation digests already summarize related memories -- links formalize what consolidation does implicitly. |
+| Haiku as default model | Sonnet default burns 10-20x more tokens than necessary for routine agent tasks (acknowledging messages, simple lookups, casual conversation). Haiku 4.5 handles 70-80% of real agent work according to Anthropic's own benchmarks. Config already supports haiku/sonnet/opus per agent. | LOW | `config/schema.ts` (`modelSchema.default("sonnet")`) | Change default from `"sonnet"` to `"haiku"`. Migration note for existing configs. Agents that genuinely need sonnet baseline (e.g., code-heavy agents) override in their agent config. |
+| Model escalation mechanism | Agent on haiku cannot handle complex reasoning, code generation, or multi-step planning. Needs a way to upgrade. Two proven patterns exist: (1) confidence-based self-assessment, (2) Anthropic's advisor tool where haiku calls opus for guidance. | HIGH | Haiku default, Claude Agent SDK, agent-manager session lifecycle | Implement the advisor tool pattern (officially supported by Anthropic as of March 2026). Haiku agent calls an `advisor` tool that routes to opus. Opus reviews context, returns guidance, haiku continues. Proven: Sonnet + Opus advisor = 2.7pp gain on SWE-bench, 11.9% cost reduction vs. pure Opus. |
+| Personality efficient loading | SOUL.md and IDENTITY.md loaded into system prompt consume ~1500-2500 tokens every turn. With haiku's smaller context window, this matters even more. Need compressed identity that preserves personality without context bloat. | MEDIUM | Per-agent SOUL.md/IDENTITY.md, `context-summary.ts` | Extract core traits into structured "personality fingerprint" (~200-300 tokens): name, tone keywords, behavioral rules, hard boundaries. Full SOUL.md available as retrievable memory for identity-relevant queries. Personality is immutable config; learned preferences are mutable memory. |
+| Token cost tracking | Running 14 agents on haiku with occasional opus escalation needs spend visibility. Without tracking, you cannot know if escalation is working or hemorrhaging money. Microsoft, Galileo, and Coralogix all emphasize per-agent token granularity. | MEDIUM | `agent-manager.ts`, per-agent process tracking | Per-agent, per-model token counters in SQLite. Track input/output tokens separately. Expose via CLI (`clawcode costs [agent]`) and existing web dashboard. Tag every usage event with agent ID, model, task type. |
 
 ### Differentiators (Competitive Advantage)
 
-Features that set ClawCode apart from CrewAI/AutoGen/LangGraph and from OpenClaw itself.
+Features that elevate ClawCode beyond basic implementation. Not required for launch but high value.
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Native Claude Code processes (no gateway) | Every other multi-agent system is a framework you build on top of. ClawCode treats Claude Code itself as the agent runtime. No bridge, no middleware, no translation layer. Each agent IS a full Claude Code session with all its capabilities (MCP, tools, filesystem, git). | MEDIUM | This is the core architectural insight. Competitors wrap LLMs in frameworks. ClawCode wraps orchestration around Claude Code. The agent already exists -- we just manage it. |
-| Intelligent memory with relevance decay | CrewAI has scoped memory but no temporal decay. Most systems treat all memories equally. Real memory fades. Unaccessed facts should lose priority over time, keeping active context sharp and relevant. | HIGH | Composite scoring: semantic similarity + recency + access frequency + importance. Auto-archive memories below threshold. This prevents the "infinite context" problem where old irrelevant facts crowd out recent relevant ones. |
-| Memory auto-consolidation (daily -> weekly -> monthly) | No competitor does this well. Raw conversation logs are useless at scale. Automatic summarization from daily logs into weekly/monthly digests mirrors how human organizations actually manage institutional knowledge. | HIGH | LLM-powered summarization pipeline. Daily: extract key facts. Weekly: merge dailies into themes. Monthly: distill to essential knowledge. Raw always preserved for audit. |
-| Tiered memory storage (hot/warm/cold) | Inspired by database storage tiers. Hot memory is in active context. Warm is searchable but not loaded. Cold is archived. This is how you scale to months/years of agent operation without drowning in context. | HIGH | Hot = current session context. Warm = SQLite with semantic search (embeddings). Cold = compressed markdown archives. Retrieval promotes cold -> warm -> hot as needed. |
-| Cross-agent communication | AutoGen has GroupChat. CrewAI has crew-internal messaging. But ClawCode agents are separate processes, potentially in different workspaces. Enabling them to message each other creates emergent collaboration without forced coupling. | MEDIUM | Message bus or shared file protocol. Agent A writes to Agent B's inbox. Agent B picks up on next heartbeat. Async by design -- no blocking RPC between agents. |
-| Admin agent (privileged cross-workspace access) | Unique to ClawCode's architecture. One agent that can reach into any other agent's workspace, check health, read memory, trigger actions. Like a sysadmin for your AI team. | MEDIUM | Special agent with elevated filesystem permissions. Can read other agents' memory, trigger restarts via manager, coordinate cross-agent tasks. Security boundary is critical here. |
-| Skills registry with per-agent assignment | Claude Code has skills (SKILL.md). But there's no registry, no discovery, no way to say "Agent X gets skills A,B,C while Agent Y gets D,E,F." A proper registry makes skills a first-class composable unit. | MEDIUM | Catalog of available skills. Per-agent assignment in config. Skills are directories with SKILL.md -- the format exists, we add the management layer. |
-| Subagent spawning with model selection | Claude Code's Agent tool already spawns subagents. ClawCode adds the ability to choose the model (haiku for cheap/fast tasks, opus for complex reasoning). This is cost optimization built into the architecture. | LOW | Wrapper around Claude Code's native Agent tool. Config specifies default model per agent. Subagent spawning can override to a cheaper model for simple subtasks. |
-| Extensible heartbeat framework | Most monitoring is baked-in and rigid. An extensible heartbeat where you can add custom checks (memory pressure, context fill, task queue depth, Discord connection health) without modifying core code. | LOW | Heartbeat runs on interval. Checks are pluggable functions. Start empty, add checks as needed. Each check returns healthy/warning/critical. |
-| Cron/scheduler within persistent sessions | LangGraph requires external schedulers. CrewAI has no built-in scheduling. Running cron-like tasks inside a persistent Claude Code session means the agent can do periodic work (summarize daily logs, check RSS feeds, post updates) without external tooling. | MEDIUM | Time-based task execution within the agent's own session. No separate cron daemon -- the agent IS the executor. Tasks defined in agent config. |
-| Memory deduplication | When the same fact gets stored 50 times across conversations ("user prefers dark mode"), it wastes storage and pollutes search results. Automatic deduplication merges repeated facts into single authoritative entries. | MEDIUM | On memory write, check for semantic similarity with existing memories. If above threshold, merge into existing entry (update timestamp, increment confidence). Prevents memory bloat over long-running agents. |
+| Feature | Value Proposition | Complexity | Dependencies | Notes |
+|---------|-------------------|------------|--------------|-------|
+| Graph-aware retrieval | When retrieving a memory via KNN search, also pull 1-hop neighbors from knowledge graph. "Tell me about Project X" returns the Project X memory PLUS linked memories (team, deadlines, decisions). Prevents losing structurally related but semantically distant context. | MEDIUM | Knowledge graph links, on-demand retrieval, `search.ts` | Graph traversal query after KNN: expand result set by following links. Configurable depth (1-hop default, 2-hop max). Similar to how Obsidian shows backlinks alongside the current note. |
+| Semantic link discovery | Auto-detect relationships between memories without explicit `[[wikilinks]]`. Use existing embedding similarity to suggest "related memories" that haven't been linked. Mirrors Obsidian's "unlinked mentions" feature. | MEDIUM | Knowledge graph links, `embedder.ts`, croner (scheduling) | Periodic background job (croner) finds high-similarity memory pairs without existing links. Creates `suggested` link type. Agent or operator can accept/reject. Leverages existing sqlite-vec KNN infrastructure. |
+| Advisor tool integration | Use Anthropic's official advisor pattern: haiku agent calls opus as a tool for hard decisions. Officially supported, battle-tested (March 2026). Better than model-switching because the haiku session stays alive. | HIGH | Model escalation, Claude API advisor tool, Agent SDK | Implement `advisor` as a Claude tool definition. Haiku handles routine work, recognizes when reasoning gets complex, calls advisor. Opus reviews shared context, returns plan/correction, haiku resumes. No session restart needed. |
+| Escalation budget controls | Per-agent daily/weekly token budgets for escalated model usage. Prevents a single agent from burning unlimited opus tokens. Graceful degradation when budget exhausted (agent continues on haiku, logs warning). | MEDIUM | Token cost tracking, model escalation | Per-agent config: `escalation: { dailyBudgetTokens, weeklyBudgetTokens, allowedModels }`. Track against token counters. Discord alert via existing heartbeat when approaching 80% of budget. |
+| Context assembly pipeline | Modular system that assembles context from multiple sources with token budget awareness. Each source (identity, memories, graph neighbors, task context) gets a token allocation. Prevents any single source from dominating context. | HIGH | On-demand retrieval, personality loading, graph-aware retrieval, token tracking | The "context engineering" pattern from 2025 research (Mem0, GAM). Pipeline: identity fingerprint (200-300 tokens) -> active task context (variable) -> relevant memories (configurable cap) -> graph expansions (remaining budget). Total budget = model context window * configurable fill ratio. |
+| Memory importance auto-scoring | New memories get importance scored based on content analysis rather than fixed defaults (currently 0.5). "User's name is John" = high importance. "Weather is nice" = low importance. | LOW | Existing importance field in `MemoryEntry` | Start with lightweight heuristic (entity detection, keyword patterns, question/answer format detection). Can optionally use haiku for scoring if enabled. Rule-based handles 80% of cases -- don't over-engineer. |
 
-### Anti-Features (Commonly Requested, Often Problematic)
+### Anti-Features (Do NOT Build)
 
-Features that seem good but create problems for ClawCode specifically.
+Features that seem appealing but create problems for ClawCode's architecture.
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| Multi-provider model support (Ollama, OpenRouter) | "I want to use GPT-4 or local models" | ClawCode's value is native Claude Code integration. Supporting other providers means building a gateway layer -- exactly what we're eliminating. It re-introduces the middleware complexity OpenClaw has. | Use Claude Code's native model selection (sonnet/opus/haiku). If users need other models, they use a different framework. Opinionated simplicity. |
-| Real-time streaming between agents | "Agents should see each other's output in real-time" | Creates tight coupling between agent processes. One slow agent blocks others. Debugging becomes a nightmare. AutoGen's GroupChat pattern consumes 20+ LLM calls per task because of this. | Async message passing. Agents communicate via inboxes checked on heartbeat. Eventual consistency, not real-time. Much simpler to debug and reason about. |
-| WhatsApp/Telegram/Slack support (v1) | "I want agents on all platforms" | Each platform has different APIs, rate limits, attachment handling, threading models. Supporting multiple platforms in v1 splits focus and delays core feature delivery. | Discord-only for v1. The architecture should be channel-agnostic internally so platforms can be added later, but v1 ships with Discord only. |
-| Visual workflow builder / no-code UI | "I want to drag and drop agent configurations" | Premature abstraction. The configuration surface is still evolving. Building a UI locks you into a config schema before it's stable. CrewAI added no-code and it created a maintenance burden. | YAML/JSON config files. Human-readable, version-controllable, scriptable. Add a UI only after the config schema is stable (v2+). |
-| Agent-to-agent RPC / synchronous calls | "Agent A should call Agent B and wait for a response" | Synchronous calls between LLM processes are inherently unreliable. Timeouts, context window issues, and cascading failures. Distributed systems 101: avoid synchronous coupling. | Async message passing with optional callback. Agent A posts a request, continues its work, gets notified when Agent B responds. |
-| Shared memory / global knowledge base | "All agents should see the same facts" | Violates workspace isolation. Creates race conditions on writes. Makes it impossible to reason about what an agent knows. CrewAI's scoped memory exists precisely because global memory failed. | Per-agent memory with explicit sharing. The admin agent can copy specific facts between agent memories. Controlled, auditable, no surprises. |
-| Voice/TTS integration | "Agents should talk in voice channels" | Adds significant complexity (speech-to-text, text-to-speech, real-time audio streaming). Orthogonal to the core orchestration problem. | Out of scope for v1. Could be added as a skill/plugin later if the extensibility framework is solid. |
-| Auto-scaling / dynamic agent spawning | "Spin up new agents based on load" | Over-engineering for the scale ClawCode targets (14-30 agents). Dynamic spawning needs service discovery, load balancing, and resource management that adds massive complexity. | Fixed agent pool defined in config. If you need more agents, update config and restart. Manual scaling is fine for this scale. |
+| Full graph visualization UI | "Show me the knowledge graph like Obsidian's graph view" | Engineering cost is enormous for marginal value. Agents don't need visualization. Obsidian's graph view is famously pretty but rarely actionable for knowledge retrieval. | CLI: `clawcode memory graph <agent>` outputs DOT format. Pipe to Graphviz for visuals. Add to web dashboard later as a low-priority enhancement. |
+| Real-time model switching mid-turn | "Agent should switch from haiku to sonnet mid-response" | Claude Code sessions are bound to a model. Cannot change mid-turn without killing session and losing context. | Advisor tool (call opus as sub-tool within same turn) or escalate on NEXT session based on self-assessment. |
+| Shared knowledge graph across agents | "All agents should share one knowledge graph" | Violates workspace isolation (key design decision since v1.0). Concurrent SQLite writes from 14 agents. Link semantics differ per agent domain. | Admin agent copies/links memories between stores via existing cross-agent IPC. Explicit, auditable, no concurrent write issues. |
+| Automatic personality evolution | "Agent should update SOUL.md based on interactions" | Identity drift is a feature-killing bug. Users expect consistent personality. Uncontrolled self-modification leads to unpredictable behavior and impossible debugging. | Track "learned preferences" in memory (mutable). Personality stays in SOUL.md (immutable config). Clear separation. |
+| Vector re-embedding on model upgrade | "Switch to a better embedding model and re-embed everything" | Current 384-dim all-MiniLM-L6-v2 is sufficient for memory search. Re-embedding is expensive and requires schema migration (dimension change). | Keep current embedding model. If quality proves insufficient (evidence needed), add a second vec table with new embeddings alongside existing ones. |
+| Complex escalation chains (haiku -> sonnet -> opus -> sonnet -> haiku) | "Model should bounce between tiers based on sub-task complexity" | Each model switch adds session management complexity. Debugging becomes nightmarish. Context may be lost at each transition. | Two-tier only: haiku default + opus advisor tool. For agents that consistently need more than haiku, set sonnet as their base model in config. Simple, predictable. |
+| LLM-powered link extraction (entity/relation extraction) | "Use Claude to automatically extract entities and relationships from every memory" | Doubles token cost on every memory write. Extraction quality varies. Creates a dependency on model availability for basic memory operations. | Wikilinks (explicit, user/agent-authored) + embedding similarity (implicit, automatic). Two complementary signals without LLM cost on every write. |
 
 ## Feature Dependencies
 
 ```
-[Central Config]
-    +-- requires --> [nothing -- foundational]
+[Haiku Default]
+    |
+    v
+[Model Escalation Mechanism]
+    |                   \
+    v                    v
+[Advisor Tool]    [Token Cost Tracking]
+                        |
+                        v
+                  [Escalation Budget Controls]
 
-[Agent Lifecycle Management]
-    +-- requires --> [Central Config]
-    +-- requires --> [Boot-all-from-config]
+[Knowledge Graph Links]
+    |           \
+    v            v
+[Graph-Aware    [Semantic Link
+ Retrieval]      Discovery]
 
-[Per-agent Workspace Isolation]
-    +-- requires --> [Central Config]
-
-[Agent Identity (SOUL.md)]
-    +-- requires --> [Per-agent Workspace Isolation]
-
-[Discord Channel Binding]
-    +-- requires --> [Central Config]
-    +-- requires --> [Agent Lifecycle Management]
-
-[Per-agent Memory]
-    +-- requires --> [Per-agent Workspace Isolation]
-
-[Auto-compaction]
-    +-- requires --> [Heartbeat Framework]
-    +-- requires --> [Per-agent Memory]
-
-[Memory Consolidation (daily/weekly/monthly)]
-    +-- requires --> [Per-agent Memory]
-    +-- requires --> [Cron/Scheduler]
-
-[Memory Relevance Decay]
-    +-- requires --> [Per-agent Memory]
-
-[Memory Deduplication]
-    +-- requires --> [Per-agent Memory]
-
-[Tiered Memory (hot/warm/cold)]
-    +-- requires --> [Per-agent Memory]
-    +-- requires --> [Memory Relevance Decay]
-
-[Cross-agent Communication]
-    +-- requires --> [Agent Lifecycle Management]
-    +-- requires --> [Per-agent Workspace Isolation]
-
-[Admin Agent]
-    +-- requires --> [Cross-agent Communication]
-    +-- requires --> [Agent Lifecycle Management]
-
-[Skills Registry]
-    +-- requires --> [Per-agent Workspace Isolation]
-    +-- requires --> [Central Config]
-
-[Subagent Spawning]
-    +-- requires --> [Agent Lifecycle Management]
-
-[Cron/Scheduler]
-    +-- requires --> [Heartbeat Framework]
-
-[Heartbeat Framework]
-    +-- requires --> [Agent Lifecycle Management]
-
-[Graceful Error Recovery]
-    +-- requires --> [Heartbeat Framework]
-    +-- requires --> [Agent Lifecycle Management]
+[On-Demand Memory Retrieval]
+    |
+    +---> [Personality Efficient Loading]
+    |
+    v
+[Context Assembly Pipeline]
+    ^           ^           ^
+    |           |           |
+[Personality] [Graph-Aware] [Token Tracking]
 ```
 
 ### Dependency Notes
 
-- **Central Config is foundational:** Everything depends on knowing which agents exist, where they live, and what they do. Build this first.
-- **Heartbeat Framework unlocks monitoring:** Auto-compaction, cron, and error recovery all need a periodic check system. Build the heartbeat early with an empty check list, then add checks incrementally.
-- **Memory is a deep tree:** Basic per-agent memory must exist before any advanced memory feature (consolidation, decay, dedup, tiering). Memory is the longest dependency chain.
-- **Cross-agent communication requires isolation first:** You can't build controlled communication between agents if their boundaries aren't established.
-- **Admin Agent is a capstone:** It needs both cross-agent communication and lifecycle management. Build it last among the core features.
+- **Haiku default is prerequisite for everything model-related:** No point building escalation if agents are already on sonnet. Flip the default first, then build escape hatches.
+- **Token cost tracking is cross-cutting:** Needed by escalation budgets AND context assembly (token budget awareness). Build early alongside haiku default.
+- **Knowledge graph links must exist before graph-aware retrieval:** Cannot traverse a graph that doesn't exist. Schema + wikilink parsing first, retrieval second.
+- **On-demand retrieval is prerequisite for context assembly:** The assembly pipeline composes multiple on-demand sources. Build individual retrieval first, then the compositor.
+- **Semantic link discovery is independent enhancement:** Background job that enriches the graph. Does not block any other feature. Add anytime after graph links exist.
+- **Advisor tool requires escalation mechanism:** The advisor pattern is a specific escalation strategy. Build the generic escalation hooks first (self-assessment output, escalation trigger), then implement advisor as one strategy.
 
 ## MVP Definition
 
-### Launch With (v1.0)
+### Phase 1: Foundation (Build First)
 
-Minimum viable product -- what's needed to prove ClawCode works better than managing Claude Code sessions manually.
+- [ ] **Haiku default model** -- Config schema change + migration guidance. Lowest effort, highest immediate cost savings. Touches: `config/schema.ts`.
+- [ ] **Token cost tracking** -- Per-agent, per-model counters in SQLite. CLI `clawcode costs`. Foundation for all escalation features. New module alongside existing memory.
+- [ ] **Knowledge graph links table** -- `memory_links` schema, wikilink parsing in memory content, backlink queries, link CRUD. Foundation for graph retrieval. Touches: `memory/store.ts`.
 
-- [ ] Central config (YAML) defining agents, workspaces, channels, models -- the single source of truth
-- [ ] Agent lifecycle management (start/stop/restart individual agents, boot-all) -- the manager process
-- [ ] Per-agent workspace isolation with SOUL.md + IDENTITY.md -- agent identity
-- [ ] Discord channel binding -- messages route to the correct agent
-- [ ] Per-agent memory (SQLite + markdown logs) -- basic persistence across sessions
-- [ ] Heartbeat framework (extensible, starts with context-fill check) -- monitoring foundation
-- [ ] Auto-compaction at configurable context threshold -- prevents silent degradation
-- [ ] Graceful error recovery (detect crash, restart with backoff) -- production reliability
+### Phase 2: Smart Loading (Build Second)
 
-### Add After Validation (v1.x)
+- [ ] **On-demand memory retrieval** -- Replace eager hot-tier context stuffing with tool-based retrieval. Agent searches memory when needed. Hot tier shrinks to identity + active task only. Touches: `context-summary.ts`, `tier-manager.ts`.
+- [ ] **Personality efficient loading** -- Compressed identity fingerprint (~200-300 tokens) for system prompt. Full SOUL.md as retrievable memory. Touches: session resume flow.
+- [ ] **Graph-aware retrieval** -- 1-hop neighbor expansion on KNN search results. Touches: `search.ts`.
 
-Features to add once core orchestration is stable and running reliably.
+### Phase 3: Model Intelligence (Build Third)
 
-- [ ] Memory auto-consolidation (daily -> weekly -> monthly) -- trigger: agents running for 1+ weeks and daily logs pile up
-- [ ] Memory relevance decay -- trigger: search results return too many stale/irrelevant memories
-- [ ] Memory deduplication -- trigger: duplicate facts observed in memory stores
-- [ ] Cron/scheduler for periodic tasks -- trigger: users want agents to do scheduled work (summaries, reports)
-- [ ] Skills registry with per-agent assignment -- trigger: more than 5 skills exist and assignment becomes manual
-- [ ] Cross-agent communication (async inbox) -- trigger: users need agents to collaborate on tasks
-- [ ] Subagent spawning with model selection -- trigger: cost optimization becomes important
+- [ ] **Model escalation mechanism** -- Self-assessment output field on agent responses, escalation trigger logic, advisor tool definition. Touches: agent lifecycle, SDK integration.
+- [ ] **Advisor tool integration** -- Opus advisor callable from haiku/sonnet agents via Claude API advisor tool. Touches: tool definitions, agent config.
+- [ ] **Escalation budget controls** -- Per-agent token budgets, budget monitoring heartbeat check, Discord alerts. Touches: config schema, heartbeat.
 
-### Future Consideration (v2+)
+### Phase 4: Polish (Build Last)
 
-Features to defer until the orchestration layer is battle-tested.
-
-- [ ] Admin agent with cross-workspace access -- needs solid security model first
-- [ ] Tiered memory storage (hot/warm/cold) -- only needed at scale (months of operation)
-- [ ] Multi-platform support (Slack, Telegram) -- architecture should be channel-agnostic, but v1 is Discord only
-- [ ] Visual config UI -- only after config schema stabilizes
-- [ ] Agent marketplace / shared skill registry -- community feature, needs ecosystem first
+- [ ] **Context assembly pipeline** -- Modular context builder composing identity + memories + graph + task with per-source token budgets.
+- [ ] **Semantic link discovery** -- Background croner job for auto-suggesting memory links based on embedding similarity.
+- [ ] **Memory importance auto-scoring** -- Heuristic-based importance on memory creation. Enhancement to existing flow.
 
 ## Feature Prioritization Matrix
 
-| Feature | User Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| Central config system | HIGH | LOW | P1 |
-| Agent lifecycle management | HIGH | MEDIUM | P1 |
-| Per-agent workspace isolation | HIGH | LOW | P1 |
-| Agent identity (SOUL.md/IDENTITY.md) | HIGH | LOW | P1 |
-| Discord channel binding | HIGH | MEDIUM | P1 |
-| Per-agent memory (SQLite + markdown) | HIGH | HIGH | P1 |
-| Heartbeat framework | HIGH | LOW | P1 |
-| Auto-compaction | HIGH | MEDIUM | P1 |
-| Graceful error recovery | HIGH | MEDIUM | P1 |
-| Memory auto-consolidation | MEDIUM | HIGH | P2 |
-| Memory relevance decay | MEDIUM | MEDIUM | P2 |
-| Memory deduplication | MEDIUM | MEDIUM | P2 |
-| Cron/scheduler | MEDIUM | MEDIUM | P2 |
-| Skills registry | MEDIUM | MEDIUM | P2 |
-| Cross-agent communication | MEDIUM | MEDIUM | P2 |
-| Subagent spawning + model selection | MEDIUM | LOW | P2 |
-| Admin agent | MEDIUM | HIGH | P3 |
-| Tiered memory (hot/warm/cold) | LOW | HIGH | P3 |
+| Feature | User Value | Implementation Cost | Priority | Phase |
+|---------|------------|---------------------|----------|-------|
+| Haiku default model | HIGH | LOW | P1 | 1 |
+| Token cost tracking | HIGH | MEDIUM | P1 | 1 |
+| Knowledge graph links | HIGH | MEDIUM | P1 | 1 |
+| On-demand memory retrieval | HIGH | MEDIUM | P1 | 2 |
+| Personality efficient loading | MEDIUM | MEDIUM | P2 | 2 |
+| Graph-aware retrieval | MEDIUM | MEDIUM | P2 | 2 |
+| Model escalation mechanism | HIGH | HIGH | P1 | 3 |
+| Advisor tool integration | HIGH | HIGH | P2 | 3 |
+| Escalation budget controls | MEDIUM | MEDIUM | P2 | 3 |
+| Context assembly pipeline | MEDIUM | HIGH | P3 | 4 |
+| Semantic link discovery | LOW | MEDIUM | P3 | 4 |
+| Memory importance auto-scoring | LOW | LOW | P3 | 4 |
 
-**Priority key:**
-- P1: Must have for launch -- without these, ClawCode is worse than manual Claude Code management
-- P2: Should have, add after core is stable -- these make ClawCode genuinely powerful
-- P3: Nice to have, future consideration -- these are the long-term vision
+## Competitor/Prior Art Analysis
 
-## Competitor Feature Analysis
+| Feature | Obsidian | Mem0 | GAM (Research) | Anthropic Advisor | ClawCode Approach |
+|---------|----------|------|----------------|-------------------|-------------------|
+| Knowledge links | `[[wikilinks]]`, backlinks, graph view, unlinked mentions | Entity graph extraction via LLM | Full lossless record, no explicit graph | N/A | Wikilinks in memory content + SQLite link table. Simpler than entity extraction, more explicit than pure semantic. Add semantic suggestions as enhancement. |
+| On-demand loading | Manual (user navigates) | Automatic relevance scoring, 26% accuracy boost, 90% token savings | JIT memory pipeline, task-specific assembly | N/A | Tool-based retrieval. Agent explicitly searches. Hot tier shrinks to identity + active task. Hybrid: minimal pre-load + on-demand expansion. |
+| Model tiering | N/A | N/A | N/A | Advisor tool: executor (haiku/sonnet) + advisor (opus). 2.7pp SWE-bench gain, 11.9% cost reduction. | Adopt advisor pattern directly. Haiku default, opus advisor tool. Per-agent override to sonnet baseline where needed. |
+| Identity/personality | N/A | User preferences as memory | N/A | N/A | Compressed fingerprint in system prompt (~200-300 tokens). Full SOUL.md as retrievable memory. Personality = immutable config, preferences = mutable memory. |
+| Cost tracking | N/A | API usage dashboard | N/A | Token counting in API responses | Per-agent SQLite counters. Per-model breakdown. CLI + dashboard reporting. Budget alerts via Discord heartbeat. |
+| Context assembly | N/A | Dynamic extraction + consolidation | JIT task-specific assembly | N/A | Modular pipeline with per-source token budgets. Identity -> task -> memories -> graph. Budget-aware composition. |
 
-| Feature | OpenClaw | CrewAI | AutoGen/AG2 | LangGraph | ClawCode Approach |
-|---------|----------|--------|-------------|-----------|-------------------|
-| Agent runtime | Custom gateway process | Python framework | Python framework | Graph execution engine | Native Claude Code processes -- no framework layer |
-| Process management | Built-in agent manager | Crew lifecycle | GroupChat manager | External (user manages) | Central manager process with heartbeat monitoring |
-| Memory | SQLite + semantic search + markdown | Unified scoped memory (LLM-analyzed) | In-memory conversation history | Checkpointing (SQLite/Postgres) | SQLite + markdown + decay + consolidation + dedup |
-| Agent identity | SOUL.md + IDENTITY.md (pioneered it) | Role/backstory/goal strings | System message | State schema | SOUL.md + IDENTITY.md (carry forward from OpenClaw) |
-| Inter-agent comms | Explicit channels + shared files | Crew-internal task passing | GroupChat (shared conversation) | Graph edges (directed) | Async inbox (file-based message passing) |
-| Scheduling | Built-in cron | None built-in | None built-in | External scheduler required | Cron within persistent sessions |
-| Skills/plugins | Skills + tools + plugins | Tools (Python functions) | Tools (Python functions) | Tools as graph nodes | Skills registry with per-agent assignment |
-| Chat integration | 22+ channels (Discord, WhatsApp, Telegram, etc.) | None (API only) | None (API only) | None (API only) | Discord-only via native plugin (channel-agnostic architecture for future) |
-| Context management | Heartbeat + auto-compaction | Task output passing | Conversation truncation | Checkpointing with time-travel | Heartbeat + auto-compaction + tiered memory |
-| Workspace isolation | Per-agent dirs + sandbox (Landlock/seccomp) | No workspace concept | No workspace concept | Thread-based state isolation | Per-agent dirs (leverage Claude Code's project isolation) |
-| Config | AGENTS.md + per-agent YAML | Python code / YAML | Python code | Python code | Single YAML config file |
+## Integration Points with Existing System
+
+| Existing Component | How v1.5 Features Connect | Risk Level |
+|-------------------|--------------------------|------------|
+| `memory/store.ts` | New `memory_links` table, link CRUD methods. Additive schema change. | LOW -- new table, no existing table changes |
+| `memory/search.ts` | Graph-aware expansion after KNN results. Wraps existing search with link traversal. | LOW -- extends, doesn't modify |
+| `memory/tier-manager.ts` | On-demand retrieval changes how hot tier feeds context. Hot tier shrinks but still exists. | MEDIUM -- behavioral change to existing flow |
+| `memory/context-summary.ts` | Refactored to use context assembly pipeline. Most impacted existing file. | HIGH -- significant refactor of resume behavior |
+| `memory/schema.ts` | New config sections: `knowledgeGraph`, `modelTiering`, `costTracking` | LOW -- additive schema additions |
+| `memory/consolidation.ts` | Consolidation digests gain wikilinks to source memories. Minor enhancement. | LOW -- additive |
+| `memory/embedder.ts` | Reused as-is for semantic link discovery. No changes needed. | NONE |
+| `config/schema.ts` | Default model change haiku. New escalation config fields. | LOW -- default change + additive fields |
+| `agent-manager.ts` | Token tracking hooks, escalation lifecycle. Needs callback/event system for token counting. | MEDIUM -- new capability wired into existing lifecycle |
+| `heartbeat/` | New checks: escalation budget monitoring, cost alerting. Uses existing extensible check framework. | LOW -- new checks, framework already supports this |
 
 ## Sources
 
-- [Best Multi-Agent Frameworks in 2026](https://gurusup.com/blog/best-multi-agent-frameworks-2026) -- framework comparison
-- [CrewAI Memory Docs](https://docs.crewai.com/en/concepts/memory) -- CrewAI's unified memory system
-- [AutoGen Conversation Patterns](https://microsoft.github.io/autogen/0.2/docs/tutorial/conversation-patterns/) -- GroupChat patterns
-- [AutoGen Group Chat Design](https://microsoft.github.io/autogen/stable//user-guide/core-user-guide/design-patterns/group-chat.html) -- speaker selection
-- [LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence) -- checkpointing system
-- [OpenClaw Multi-Agent Routing](https://docs.openclaw.ai/concepts/multi-agent) -- workspace isolation architecture
-- [SoulSpec.org](https://soulspec.org/) -- open standard for AI agent personas
-- [SOUL.md Pattern](https://www.soul-md.xyz/) -- composable AI agent identity
-- [AI Agent Skills Guide 2026](https://calmops.com/ai/ai-agent-skills-complete-guide-2026/) -- skills as portable capabilities
-- [CrewAI vs LangGraph vs AutoGen vs OpenAgents](https://openagents.org/blog/posts/2026-02-23-open-source-ai-agent-frameworks-compared) -- framework comparison
-- [Architecture and Orchestration of Memory Systems in AI Agents](https://www.analyticsvidhya.com/blog/2026/04/memory-systems-in-ai-agents/) -- episodic/semantic memory patterns
-- [AI Agent Failure Modes](https://dev.to/clevagent/three-ai-agent-failure-modes-that-traditional-monitoring-will-never-catch-2ik4) -- monitoring patterns
+- [Anthropic Advisor Tool Launch](https://gadgetbond.com/anthropic-claude-opus-sonnet-haiku-advisor-tool/) -- Official advisor pattern, March 2026. MEDIUM confidence (third-party reporting on official feature).
+- [Anthropic Advisor Strategy Guide (MindStudio)](https://www.mindstudio.ai/blog/anthropic-advisor-strategy-cut-ai-agent-costs) -- Sonnet + Opus advisor: 2.7pp SWE-bench gain, 11.9% cost reduction. MEDIUM confidence.
+- [Tiered Model Routing (FreeCodeCamp)](https://www.freecodecamp.org/news/how-to-build-a-cost-efficient-ai-agent-with-tiered-model-routing) -- Cost curve implementation: deterministic -> haiku -> sonnet. HIGH confidence (tutorial with code).
+- [GAM Dual-Agent Memory (VentureBeat)](https://venturebeat.com/ai/gam-takes-aim-at-context-rot-a-dual-agent-memory-architecture-that) -- JIT memory pipeline, context rot problem. MEDIUM confidence.
+- [Mem0 Research (arXiv 2504.19413)](https://arxiv.org/abs/2504.19413) -- 26% accuracy boost, 91% lower latency, 90% token savings. HIGH confidence (peer-reviewed).
+- [Memory in the Age of AI Agents (arXiv 2512.13564)](https://arxiv.org/abs/2512.13564) -- Taxonomy: factual, experiential, working memory. HIGH confidence.
+- [Context Engineering Guide (Mem0)](https://mem0.ai/blog/context-engineering-ai-agents-guide) -- Modular context assembly, selective loading patterns. MEDIUM confidence.
+- [Obsidian Internal Links (DeepWiki)](https://deepwiki.com/obsidianmd/obsidian-help/4.2-internal-links-and-graph-view) -- Wikilink format, metadata cache, backlink resolution. HIGH confidence.
+- [Karpathy LLM Wiki Pattern](https://a2a-mcp.org/blog/andrej-karpathy-llm-knowledge-bases-obsidian-wiki) -- LLM-compiled wiki with indexes, ~400K word scale. MEDIUM confidence.
+- [Claude Haiku 4.5 Multi-Agent (Caylent)](https://caylent.com/blog/claude-haiku-4-5-deep-dive-cost-capabilities-and-the-multi-agent-opportunity) -- Haiku for 70-80% of agent tasks. MEDIUM confidence.
+- [Claude Models Overview](https://platform.claude.com/docs/en/about-claude/models/overview) -- Official model specs and pricing. HIGH confidence.
+- [xMemory Token Reduction (VentureBeat)](https://venturebeat.com/orchestration/how-xmemory-cuts-token-costs-and-context-bloat-in-ai-agents) -- Context bloat reduction. MEDIUM confidence.
+- [AI Agent Cost Optimization (Zylos)](https://zylos.ai/research/2026-02-19-ai-agent-cost-optimization-token-economics) -- Per-agent token tagging, budget allocation. MEDIUM confidence.
+- [AI Agent Cost Tracking (Microsoft)](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/tracking-every-token-granular-cost-and-usage-metrics-for-microsoft-foundry-agent/4503143) -- Granular token telemetry patterns. HIGH confidence.
 
 ---
-*Feature research for: ClawCode multi-agent orchestration*
-*Researched: 2026-04-08*
+*Feature research for: ClawCode v1.5 Smart Memory & Model Tiering*
+*Researched: 2026-04-10*

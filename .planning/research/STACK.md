@@ -1,185 +1,255 @@
-# Stack Research
+# Stack Research: v1.5 Smart Memory & Model Tiering
 
-**Domain:** Multi-agent orchestration system on Claude Code
-**Researched:** 2026-04-08
-**Confidence:** MEDIUM-HIGH (core stack is proven; Agent SDK is fast-moving pre-1.0)
+**Domain:** On-demand knowledge graph memory, personality retention, model tiering with escalation
+**Researched:** 2026-04-10
+**Confidence:** HIGH
 
-## Recommended Stack
+## Scope
+
+This research covers ONLY new stack additions for v1.5. The existing validated stack (TypeScript, Node.js 22 LTS, better-sqlite3, sqlite-vec, @huggingface/transformers, croner, execa, zod, pino, discord.js 14) is not re-evaluated.
+
+## Recommended Stack Additions
 
 ### Core Technologies
 
-| Technology | Version | Purpose | Why Recommended | Confidence |
-|------------|---------|---------|-----------------|------------|
-| TypeScript | 6.0.2 | Language | Type safety for complex agent configs, process lifecycle, and message routing. Non-negotiable for a system this interconnected. | HIGH |
-| Node.js | 22 LTS | Runtime | LTS stability matters when managing 14+ persistent child processes. Bun is available on-box (1.3.11) but Node 22 LTS is the safer choice for long-running process management and better-sqlite3 native addon compatibility. | HIGH |
-| @anthropic-ai/claude-agent-sdk | 0.2.x | Agent lifecycle | The official SDK for programmatically spawning and managing Claude Code sessions. Provides `spawn_claude_code_process`, session management, subagent definitions, and `forkSession`. This IS the orchestration primitive. | HIGH |
-| better-sqlite3 | 12.8.0 | Database | Synchronous, single-threaded SQLite access. Perfect for per-agent memory stores. Proven pattern from OpenClaw. Works with sqlite-vec via `loadExtension()`. | HIGH |
-| sqlite-vec | 0.1.9 | Vector search | Pure-C SQLite extension for KNN vector search. Successor to sqlite-vss (deprecated). No Faiss dependency. Loads directly into better-sqlite3. Supports float32/int8 vectors with SIMD acceleration. | MEDIUM |
-| @huggingface/transformers | 4.0.1 | Local embeddings | Runs all-MiniLM-L6-v2 (384-dim) locally in Node.js via ONNX. Zero API keys, zero cost, zero network dependency. Good enough for memory semantic search at agent scale (~tens of thousands of entries). | MEDIUM |
-| croner | 10.0.1 | Cron scheduling | TypeScript-native, handles DST/leap years, timezone-aware. Used by PM2 and Uptime Kuma. Cleaner API than node-cron with better error handling. | HIGH |
-| execa | 9.6.1 | Process management | Wraps child_process with promises, template strings, graceful termination, and Windows support. Use for spawning and managing the `claude` CLI processes alongside the Agent SDK. | HIGH |
-| zod | 4.3.6 | Config validation | Schema validation for agent configs, memory entries, cron definitions, and cross-agent messages. The standard for TypeScript runtime validation. | HIGH |
-| discord.js | 14.26.2 | Discord (fallback) | NOT primary -- the existing Claude Code Discord plugin handles channel routing. discord.js is only needed if you need to do things the plugin cannot (e.g., programmatic channel creation, role management, admin commands). Keep as optional dependency. | MEDIUM |
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| Pure SQLite (no new dep) | -- | Knowledge graph storage | Backlinks and note links are a simple adjacency list: a `links` table with `(source_id, target_id, link_type, context)` columns. This is a 50-row table pattern, not a graph database problem. SQLite CTEs handle traversal (backlink resolution, 2-hop neighborhood queries). Adding a graph DB or even graphology for this is overengineering. better-sqlite3 already loaded, zero new deps. |
+| SQLite FTS5 (built-in) | -- | Full-text search for notes | FTS5 is compiled into better-sqlite3 by default. Enables fast keyword search across note content, complementing vector search. Used for exact-match queries ("find notes mentioning agent-X") that vector similarity handles poorly. |
+| `query().setModel()` (Agent SDK) | 0.2.101 | Mid-session model switching | The Claude Agent SDK's `Query` interface exposes `setModel(model?: string)` for changing models mid-session. This is the official mechanism for haiku-default with sonnet/opus escalation. No new dependency -- already using `@anthropic-ai/claude-agent-sdk`. |
 
 ### Supporting Libraries
 
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| chokidar | 4.x | File watching | Watch agent workspace directories for config changes, memory file updates, and SOUL.md modifications. Triggers hot-reload of agent configs. |
-| pino | 9.x | Structured logging | Fast JSON logger. Each agent process gets its own log stream. Central manager aggregates. Pino's low overhead matters with 14+ concurrent agents. |
-| nanoid | 5.x | ID generation | Lightweight, URL-safe unique IDs for messages, memory entries, and cross-agent communication. |
-| date-fns | 4.x | Date handling | Memory timestamps, consolidation windows (daily/weekly/monthly), relevance decay calculations. Lighter than dayjs for tree-shaking. |
-| glob | 11.x | File patterns | Agent workspace discovery, skill registry scanning, memory file enumeration. |
+| (none needed) | -- | -- | All three v1.5 features are implementable with existing dependencies plus SQLite schema additions. See rationale below. |
 
-### Development Tools
+### New SQLite Tables (Schema Additions)
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| tsx | Run TypeScript directly | `npx tsx` for development. Faster iteration than `tsc` + `node`. |
-| vitest | Testing | Fast, TypeScript-native, ESM-first. Test agent configs, memory consolidation, cron scheduling in isolation. |
-| tsup | Bundling | Zero-config TypeScript bundler for production builds. ESM output. |
-| @types/better-sqlite3 | Types | TypeScript definitions for better-sqlite3 |
+These extend the existing per-agent `MemoryStore` database:
+
+```sql
+-- Knowledge graph: notes as first-class entities
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  note_type TEXT NOT NULL DEFAULT 'note'
+    CHECK(note_type IN ('note', 'soul', 'identity', 'skill', 'episode_summary')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Backlinks / forward links between notes
+CREATE TABLE IF NOT EXISTS note_links (
+  source_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  link_type TEXT NOT NULL DEFAULT 'reference'
+    CHECK(link_type IN ('reference', 'extends', 'contradicts', 'supersedes')),
+  context TEXT, -- surrounding text where link appears
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (source_id, target_id)
+);
+
+-- Vector embeddings for notes (reuses same 384-dim as memories)
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_notes USING vec0(
+  note_id TEXT PRIMARY KEY,
+  embedding float[384] distance_metric=cosine
+);
+
+-- Model escalation tracking
+CREATE TABLE IF NOT EXISTS model_decisions (
+  id TEXT PRIMARY KEY,
+  agent TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  from_model TEXT NOT NULL,
+  to_model TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  trigger_type TEXT NOT NULL
+    CHECK(trigger_type IN ('complexity', 'failure', 'explicit', 'cost_ceiling')),
+  tokens_before INTEGER DEFAULT 0,
+  session_id TEXT NOT NULL
+);
+
+-- Cost budget tracking (extends existing usage_events)
+CREATE TABLE IF NOT EXISTS cost_budgets (
+  agent TEXT PRIMARY KEY,
+  daily_limit_usd REAL NOT NULL DEFAULT 1.0,
+  weekly_limit_usd REAL NOT NULL DEFAULT 5.0,
+  escalation_budget_pct REAL NOT NULL DEFAULT 0.3,
+  updated_at TEXT NOT NULL
+);
+```
+
+### Architecture-Driving Decisions
+
+#### 1. Knowledge Graph in SQLite, Not Graphology
+
+**Decision:** Use SQLite adjacency list tables, not `graphology` (0.26.0).
+
+**Why:** The knowledge graph here is ~dozens to ~hundreds of notes per agent with bidirectional links. This is not a graph algorithm problem (no PageRank, no community detection, no shortest-path needed). It is a structured lookup problem:
+- "What notes link to this note?" = `SELECT * FROM note_links WHERE target_id = ?`
+- "What does this note link to?" = `SELECT * FROM note_links WHERE source_id = ?`
+- "Find all notes within 2 hops" = SQLite recursive CTE (5 lines)
+- "Find semantically similar notes" = existing sqlite-vec KNN query
+
+Graphology adds 200KB+ of in-memory graph overhead and requires syncing between SQLite (persistence) and graphology (in-memory). For a system running 14+ agents, that is wasted memory for zero benefit. SQLite CTEs handle the traversal patterns needed here.
+
+**When to reconsider:** If you add graph analytics (community detection, centrality scoring, pathfinding across thousands of nodes). Unlikely for per-agent memory.
+
+#### 2. On-Demand Context Assembly, Not Pre-Stuffed
+
+**Decision:** Replace the current "stuff everything into systemPrompt at boot" pattern with a lazy-load tool.
+
+**Current problem (session-config.ts lines 112-120):** Hot memories are injected into `systemPrompt` at session start. SOUL.md and IDENTITY.md are read and concatenated. This burns context tokens permanently regardless of whether the agent needs them for a given message.
+
+**New pattern:** Provide a `memory_lookup` tool that agents call on-demand:
+- Agent receives a message
+- Agent decides what context it needs
+- Agent calls `memory_lookup` with a query
+- Tool returns relevant notes, linked notes (1-hop backlinks), and personality snippets
+- Only the relevant context enters the conversation
+
+This is the Obsidian pattern: notes are not loaded until you navigate to them. Backlinks surface related context without loading everything.
+
+**Personality retention:** SOUL.md and IDENTITY.md become notes in the knowledge graph with `note_type = 'soul'` and `note_type = 'identity'`. A compact 2-3 line personality summary stays in systemPrompt. The full soul/identity is available on-demand via the tool.
+
+#### 3. Model Tiering via Agent SDK `setModel()`
+
+**Decision:** Use the Agent SDK's built-in `Query.setModel()` for runtime model switching.
+
+**How it works:** The `query()` function returns a `Query` object (async generator) with a `setModel(model?: string)` method. Calling it mid-session changes the model for subsequent turns without breaking conversation history.
+
+**Escalation triggers (implemented in the session manager, not a new library):**
+1. **Complexity detection:** Message length > threshold, code generation requests, multi-step reasoning keywords
+2. **Failure recovery:** If haiku produces an error or low-quality response, retry with sonnet
+3. **Explicit request:** User says "use opus for this" or agent config specifies escalation rules
+4. **Cost ceiling:** Track spend per agent per day, refuse escalation if budget exceeded
+
+**Default model change:** Update `defaultsSchema` from `model: "sonnet"` to `model: "haiku"` in config/schema.ts. Per-agent overrides remain supported.
+
+#### 4. Cost Tracking Extends Existing UsageTracker
+
+**Decision:** Extend the existing `UsageTracker` (src/usage/tracker.ts) with per-model breakdowns and budget enforcement. No new dependency needed.
+
+**Additions:**
+- `getModelBreakdown(agent, dateRange)` -- aggregate by model for cost analysis
+- `checkBudget(agent)` -- returns remaining daily/weekly budget
+- `wouldExceedBudget(agent, estimatedTokens, targetModel)` -- pre-flight check before escalation
+
+**Pricing constants (April 2026):**
+
+| Model | Input $/MTok | Output $/MTok |
+|-------|-------------|---------------|
+| Claude Haiku 4.5 | $1.00 | $5.00 |
+| Claude Sonnet 4.6 | $3.00 | $15.00 |
+| Claude Opus 4.6 | $5.00 | $25.00 |
+
+Haiku is 3x cheaper than Sonnet on input and 3x cheaper on output. Sonnet-to-Opus is a further ~1.7x. The savings from defaulting to haiku across 14 agents are significant.
 
 ## Installation
 
 ```bash
-# Core
-npm install @anthropic-ai/claude-agent-sdk better-sqlite3 sqlite-vec @huggingface/transformers croner execa zod pino nanoid
-
-# Supporting
-npm install chokidar date-fns glob
-
-# Dev dependencies
-npm install -D typescript tsx vitest tsup @types/better-sqlite3 @types/node
+# No new packages needed for v1.5
+# All features build on existing dependencies:
+#   - better-sqlite3 (graph tables, FTS5)
+#   - sqlite-vec (note embeddings)
+#   - @huggingface/transformers (embedding generation)
+#   - @anthropic-ai/claude-agent-sdk (setModel())
+#   - zod (new config schemas)
+#   - nanoid (IDs for notes, links, decisions)
 ```
-
-## Architecture-Driving Decisions
-
-### Claude Agent SDK IS the Orchestration Layer
-
-The single most important stack decision: `@anthropic-ai/claude-agent-sdk` replaces any custom process orchestration you might build. It provides:
-
-- **`ClaudeAgent.create()`** -- programmatic agent spawning with model selection (sonnet/opus/haiku)
-- **`agents` option** -- define subagents inline with description, prompt, tools, model override
-- **`forkSession`** -- branch conversations without losing context
-- **Session resumption** -- resume by session ID for persistent agents
-- **Custom `spawn_claude_code_process`** -- full control over how the `claude` CLI gets invoked (cwd, env, signal)
-- **`settingSources`** -- per-agent control over which config files to load
-
-This means the Agent Manager is a TypeScript process that uses the SDK to lifecycle-manage N agent sessions, NOT a custom child_process wrapper.
-
-### Local Embeddings, Not API-Based
-
-Use `@huggingface/transformers` with `all-MiniLM-L6-v2` (384-dim) for memory semantic search. Rationale:
-- Zero ongoing cost (14 agents * thousands of memory entries = real API spend otherwise)
-- Zero network dependency (agents work offline)
-- 384 dimensions is plenty for memory similarity (not building a search engine)
-- Model downloads once (~23MB), runs in ~50ms per embedding
-- sqlite-vec handles KNN search over 384-dim float32 vectors efficiently
-
-Do NOT use Voyage AI, OpenAI embeddings, or Cohere for this. API-based embeddings add latency, cost, and a network dependency to every memory operation.
-
-### SQLite Per-Agent, Not Shared
-
-Each agent gets its own SQLite database file in its workspace directory. Rationale:
-- True isolation (agent crash doesn't corrupt another's memory)
-- No WAL contention between 14+ concurrent writers
-- Simple backup/restore per agent
-- Matches the workspace isolation pattern from OpenClaw
-
-Schema: one DB per agent with tables for `memories`, `memory_vectors`, `daily_logs`, `context_snapshots`.
-
-### Node.js Over Bun for Production
-
-Despite Bun being available (1.3.11), use Node.js 22 LTS because:
-- better-sqlite3 native addon is battle-tested on Node, quirky on Bun
-- Claude Agent SDK is tested against Node.js
-- Long-running process stability matters more than startup speed
-- Node 22 LTS has support until April 2027
-
-Use Bun for quick scripts if desired, but the agent manager and agents run on Node.
 
 ## Alternatives Considered
 
 | Recommended | Alternative | When to Use Alternative |
 |-------------|-------------|-------------------------|
-| @anthropic-ai/claude-agent-sdk | Raw `child_process.spawn('claude', ...)` | Never for this project. The SDK exists specifically for this use case. Raw spawn loses session management, tool approval, and subagent support. |
-| better-sqlite3 | bun:sqlite | If you migrate to Bun runtime entirely. bun:sqlite is 3-6x faster for reads but tied to Bun runtime. |
-| better-sqlite3 | node:sqlite (Node 22 built-in) | Node's built-in SQLite is experimental (--experimental-vm-modules). Not ready for production. Revisit when it graduates. |
-| sqlite-vec | sqlite-vss | Never. sqlite-vss is deprecated by its author in favor of sqlite-vec. sqlite-vss depends on Faiss which is a build nightmare. |
-| @huggingface/transformers | Voyage AI API / OpenAI embeddings | If memory corpus grows beyond ~100K entries per agent and local embedding quality becomes a bottleneck. Unlikely for this use case. |
-| @huggingface/transformers | @xenova/transformers | Never. @xenova/transformers is the old package name (v2). @huggingface/transformers v4.x is the current maintained fork. |
-| croner | node-cron | If you want a simpler API and don't care about timezone handling. node-cron has 3M weekly downloads but lacks DST handling and TypeScript types. |
-| execa | child_process (native) | If you want zero dependencies. execa adds graceful termination, promise-based API, and better error messages. Worth the 120KB. |
-| pino | winston | Never for this use case. Winston's overhead per log line matters when 14+ agents are logging concurrently. Pino is 5x faster. |
-| discord.js 14.x | discord.js 15.x | When v15 reaches stable. Currently 92% milestone completion, pre-release only. Stick with v14 for production. |
-| zod 4.x | zod 3.x | No reason to use 3.x for a new project. Zod 4 has better performance and tree-shaking. |
+| SQLite adjacency list | graphology 0.26.0 | If you need in-memory graph algorithms (PageRank, community detection, centrality). Not needed for backlink resolution. |
+| SQLite adjacency list | Neo4j / FalkorDB | If graph grows beyond ~100K nodes per agent with complex traversal patterns. Absurd for per-agent note graphs of ~100-500 nodes. |
+| SQLite FTS5 | Elasticsearch / MeiliSearch | If full-text search needs faceting, fuzzy matching, or search-as-you-type UI. FTS5 covers the keyword search use case here. |
+| Agent SDK `setModel()` | Separate Claude API client | If you need to call Claude outside of Claude Code sessions (e.g., background batch jobs). For live agent sessions, the SDK method is correct. |
+| Extend UsageTracker | Separate cost tracking service | If you need real-time cost dashboards across multiple deployments. Single-machine, single-daemon -- SQLite is fine. |
+| On-demand tool | RAG pipeline (LangChain) | Never. The agent IS the LLM. It calls a tool to fetch context. That is RAG without the framework overhead. |
 
 ## What NOT to Use
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| LangChain / LangGraph | Massive abstraction layer that fights Claude Code's native agent model. You'd be wrapping an agent framework in another agent framework. | Claude Agent SDK directly |
-| Redis / PostgreSQL | Overkill for per-agent memory. Adds operational complexity (running a DB server) for what SQLite handles perfectly at this scale. | better-sqlite3 per agent |
-| BullMQ / Agenda | Job queue systems designed for distributed workloads. Cron scheduling here is per-agent, in-process. No queue needed. | croner (in-process) |
-| PM2 | Process manager that would fight the Agent SDK's own process lifecycle. The SDK handles spawn/restart/signal. | Agent SDK + execa |
-| Prisma / Drizzle ORM | ORM overhead for what are simple key-value and vector queries. Raw better-sqlite3 prepared statements are faster and clearer. | better-sqlite3 directly |
-| @xenova/transformers | Deprecated package name. The project moved to @huggingface/transformers. | @huggingface/transformers 4.x |
-| sqlite-vss | Deprecated. Depends on Faiss (C++ build nightmare). Author created sqlite-vec as replacement. | sqlite-vec |
-| Embeddings APIs (Voyage, OpenAI, Cohere) | Adds cost, latency, and network dependency to every memory operation. Local embeddings are sufficient for this use case. | @huggingface/transformers locally |
+| graphology | Adds 200KB+ in-memory overhead per agent for graph operations you do not need. Backlink queries are simple SQL JOINs. | SQLite `note_links` table + recursive CTEs |
+| Neo4j / ArangoDB / FalkorDB | Network graph databases for a problem that is ~100 nodes per agent. Operational overhead of running a graph DB server is absurd here. | SQLite adjacency list |
+| LangChain / LlamaIndex | Wrapping an agent framework inside another agent framework to do what a SQLite query + tool definition achieves. | Direct SQLite queries exposed as Claude Code tools |
+| Separate embedding model for notes | You already have all-MiniLM-L6-v2 loaded for memories. Notes use the same 384-dim embeddings. No second model needed. | Existing @huggingface/transformers pipeline |
+| Redis for cost tracking | In-memory cache for data that needs persistence (budgets, spend history). SQLite already handles this. | Extend UsageTracker with budget columns |
+| graphology-communities-louvain | Community detection on a per-agent note graph of ~100 nodes is meaningless. | Nothing -- you do not need community detection |
 
 ## Stack Patterns by Variant
 
-**If an agent needs heavy memory search (>50K entries):**
-- Consider adding a dedicated memory compaction job that runs more aggressively
-- sqlite-vec handles 100K+ vectors fine with brute-force KNN; no index needed below that
-- If exceeding 100K, create a vec0 virtual table with IVF indexing
+**If an agent has a large memory corpus (>10K memories):**
+- The knowledge graph `notes` table remains small (notes are summaries/references, not raw memories)
+- Memories continue in the existing `memories` table with sqlite-vec
+- Notes link TO memories via `note_links` with `link_type = 'reference'`
+- This keeps graph traversal fast even with large memory stores
 
-**If cross-agent communication needs to be real-time:**
-- Use Node.js IPC (process.send/process.on) between the manager and agent processes
-- The Agent SDK supports inter-agent messaging natively via agent teams (experimental)
-- Fallback: filesystem-based message queue (write JSON to agent's inbox directory, chokidar watches it)
+**If cost tracking needs real-time enforcement:**
+- Add a `CostGuard` middleware that wraps `query()` calls
+- Before each turn: `wouldExceedBudget()` check
+- If over budget: force model downgrade or queue the message
+- Log all decisions to `model_decisions` table for analysis
 
-**If you need admin commands beyond what the Discord plugin provides:**
-- Add discord.js 14.x as a direct dependency for the admin agent only
-- Register slash commands for /status, /restart-agent, /agent-logs
-- Keep this separate from the plugin-based channel routing
+**If personality context is too large for on-demand loading:**
+- Split SOUL.md into a compact summary (always in systemPrompt, ~200 tokens)
+- Full personality details as notes in the knowledge graph
+- Agent can `memory_lookup("my personality traits for humor")` when relevant
+- This pattern is proven by Obsidian: atomic notes > monolithic documents
 
 ## Version Compatibility
 
 | Package A | Compatible With | Notes |
 |-----------|-----------------|-------|
-| better-sqlite3@12.8.0 | sqlite-vec@0.1.9 | Load via `db.loadExtension(sqliteVecPath)`. sqlite-vec npm package exports the path. |
-| better-sqlite3@12.8.0 | Node.js 22 LTS | Requires node-gyp build. Pre-built binaries available via `prebuild-install`. |
-| @huggingface/transformers@4.0.1 | Node.js 22 LTS | ONNX Runtime backend. First run downloads model (~23MB cached in `~/.cache/huggingface`). |
-| @anthropic-ai/claude-agent-sdk@0.2.x | Node.js 22 LTS | SDK is pre-1.0. Expect breaking changes between minor versions. Pin exact version in package.json. |
-| sqlite-vec@0.1.9 | better-sqlite3, bun:sqlite, node:sqlite | Multi-driver compatible. Use better-sqlite3 for Node.js. |
-| croner@10.0.1 | Node.js 22, Bun, Deno | Runtime-agnostic. Pure JS, no native dependencies. |
-| execa@9.6.1 | Node.js 22 LTS | ESM-only since v6. Project must use ESM (`"type": "module"` in package.json). |
+| better-sqlite3@12.8.0 | FTS5 | FTS5 is compiled in by default. No additional native module needed. Verify with `db.exec("CREATE VIRTUAL TABLE test_fts USING fts5(content)")`. |
+| better-sqlite3@12.8.0 | SQLite recursive CTEs | CTEs have been in SQLite since 3.8.3 (2014). better-sqlite3 bundles SQLite 3.47+. Zero compatibility risk. |
+| @anthropic-ai/claude-agent-sdk@0.2.101 | `Query.setModel()` | Available in current SDK version. The `query()` return type exposes `setModel(model?: string)`. Pin exact version -- SDK is pre-1.0. |
+| sqlite-vec@0.1.9 | `vec_notes` table | Same vec0 format as existing `vec_memories`. Multiple vec0 virtual tables in one database work fine. |
+| @huggingface/transformers@4.0.1 | Note embeddings | Same model (all-MiniLM-L6-v2) produces 384-dim vectors for both memories and notes. One pipeline instance, two consumers. |
 
-## Key Risk: Claude Agent SDK Pre-1.0
+## Key Integration Points with Existing Code
 
-The Agent SDK at 0.2.97 is rapidly evolving. Mitigations:
-1. **Pin exact version** in package.json (not `^0.2.97`)
-2. **Wrap SDK calls in a thin adapter layer** so breaking changes are isolated
-3. **Track the CHANGELOG** at `github.com/anthropics/claude-agent-sdk-typescript`
-4. **Have a fallback**: the `claude --print` CLI flag can serve as a degraded-mode alternative if the SDK breaks
+### MemoryStore (src/memory/store.ts)
+- Add `notes`, `note_links`, `vec_notes` tables in `initSchema()`
+- Add prepared statements for note CRUD and link management
+- Reuse existing `getDatabase()` for `SemanticSearch` on notes
+
+### SessionConfig (src/manager/session-config.ts)
+- Reduce systemPrompt to compact personality summary (~200 tokens)
+- Remove hot memory injection from boot (lines 112-120)
+- Add `memory_lookup` tool definition to agent's available tools
+
+### UsageTracker (src/usage/tracker.ts)
+- Add `model_decisions` and `cost_budgets` tables
+- Add `getModelBreakdown()`, `checkBudget()`, `wouldExceedBudget()` methods
+- Add per-model aggregation to existing prepared statements
+
+### Config Schema (src/config/schema.ts)
+- Change `defaultsSchema.model` default from `"sonnet"` to `"haiku"`
+- Add `escalation` config to agent schema: `{ enabled, maxModel, triggers, budget }`
+- Add `costBudget` config to defaults: `{ dailyLimitUsd, weeklyLimitUsd, escalationBudgetPct }`
+
+### AgentSessionConfig (src/manager/types.ts)
+- Add optional `escalationConfig` field
+- Model field remains the default/starting model
+- Runtime model changes happen via SDK `setModel()`, not config changes
 
 ## Sources
 
-- [Claude Agent SDK TypeScript (GitHub)](https://github.com/anthropics/claude-agent-sdk-typescript) -- SDK source, changelog, API
-- [Claude Agent SDK Reference](https://platform.claude.com/docs/en/agent-sdk/typescript) -- Official docs
-- [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams) -- Experimental multi-agent coordination
-- [Claude Code CLI Reference](https://code.claude.com/docs/en/cli-reference) -- --print flag, session management
-- [sqlite-vec (GitHub)](https://github.com/asg017/sqlite-vec) -- Vector search extension, installation, API
-- [sqlite-vec JS usage](https://alexgarcia.xyz/sqlite-vec/js.html) -- Node.js/Bun/Deno integration guide
-- [better-sqlite3 (npm)](https://www.npmjs.com/package/better-sqlite3) -- v12.8.0, synchronous SQLite
-- [@huggingface/transformers](https://huggingface.co/docs/transformers.js) -- Local ONNX inference in Node.js
-- [Croner](https://croner.56k.guru/) -- TypeScript cron scheduler docs
-- [execa (GitHub)](https://github.com/sindresorhus/execa) -- Process execution library
-- [Node-cron vs Croner comparison](https://www.pkgpulse.com/blog/node-cron-vs-node-schedule-vs-croner-task-scheduling-nodejs-2026) -- Scheduler comparison (2026)
-- npm registry -- All version numbers verified via `npm view` on 2026-04-08
+- [Claude Agent SDK TypeScript Reference](https://platform.claude.com/docs/en/agent-sdk/typescript) -- `Query.setModel()` method, session management
+- [Claude Agent SDK Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions) -- session lifecycle, model switching
+- [Claude API Pricing](https://platform.claude.com/docs/en/about-claude/pricing) -- haiku $1/$5, sonnet $3/$15, opus $5/$25 per MTok
+- [simple-graph (GitHub)](https://github.com/dpapathanasiou/simple-graph) -- SQLite adjacency list pattern reference
+- [graphology (npm)](https://www.npmjs.com/package/graphology) -- v0.26.0, evaluated and rejected for this use case
+- [obra/knowledge-graph (GitHub)](https://github.com/obra/knowledge-graph) -- Obsidian vault as knowledge graph, SQLite + sqlite-vec + FTS5 pattern
+- [SQLite FTS5 Documentation](https://www.sqlite.org/fts5.html) -- full-text search extension, built into better-sqlite3
+- npm registry -- all versions verified via `npm view` on 2026-04-10
 
 ---
-*Stack research for: ClawCode multi-agent orchestration system*
-*Researched: 2026-04-08*
+*Stack research for: v1.5 Smart Memory & Model Tiering*
+*Researched: 2026-04-10*
