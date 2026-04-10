@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { join } from "node:path";
 import { loadConfig, resolveAllAgents } from "../config/loader.js";
 import { createWorkspaces } from "../agent/workspace.js";
 import {
@@ -29,6 +30,7 @@ import { registerSpawnThreadCommand } from "./commands/spawn-thread.js";
 import { registerMcpServersCommand } from "./commands/mcp-servers.js";
 import { registerDashboardCommand } from "./commands/dashboard.js";
 import { registerAgentCreateCommand } from "./commands/agent-create.js";
+import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
  * Options for the init action.
@@ -65,6 +67,9 @@ export async function initAction(options: InitOptions): Promise<void> {
     cliLog(`Would initialize ${resolvedAgents.length} agent workspace(s)`);
     return;
   }
+
+  // Install workspace skills to ~/.claude/skills/
+  await installWorkspaceSkills(join(process.cwd(), "skills"));
 
   const results = await createWorkspaces(resolvedAgents);
 

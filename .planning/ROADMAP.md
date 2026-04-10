@@ -5,7 +5,8 @@
 - :white_check_mark: **v1.0 Core Multi-Agent System** - Phases 1-5 (shipped 2026-04-09)
 - :white_check_mark: **v1.1 Advanced Intelligence** - Phases 6-20 (shipped 2026-04-09)
 - :white_check_mark: **v1.2 Production Hardening & Platform Parity** - Phases 21-30 (shipped 2026-04-09)
-- :construction: **v1.3 Agent Integrations** - Phases 31-32 (in progress)
+- :white_check_mark: **v1.3 Agent Integrations** - Phases 31-32 (shipped 2026-04-09)
+- :construction: **v1.4 Agent Runtime** - Phases 33-34 (in progress)
 
 ## Phases
 
@@ -56,7 +57,7 @@ Phases 21-30 delivered: tech debt cleanup, config hot-reload, context health zon
 **Plans:** 2/2 plans complete
 Plans:
 - [x] 31-01-PLAN.md -- Skill infrastructure: SKILL.md, CLI spawn-thread command, MCP spawn_subagent_thread tool
-- [ ] 31-02-PLAN.md -- System prompt guidance injection in buildSessionConfig
+- [x] 31-02-PLAN.md -- System prompt guidance injection in buildSessionConfig
 
 ### Phase 32: MCP Client Consumption
 **Goal**: Agents can connect to and use tools from external MCP servers configured per-agent in clawcode.yaml
@@ -71,16 +72,49 @@ Plans:
 **Plans:** 2/2 plans complete
 Plans:
 - [x] 32-01-PLAN.md -- Config schema, types, resolution, and SDK session passthrough (MCPC-01, MCPC-02, MCPC-06)
-- [ ] 32-02-PLAN.md -- System prompt MCP tools injection, health checks, CLI mcp-servers command (MCPC-03, MCPC-04, MCPC-05)
+- [x] 32-02-PLAN.md -- System prompt MCP tools injection, health checks, CLI mcp-servers command (MCPC-03, MCPC-04, MCPC-05)
+
+### v1.4 Agent Runtime (In Progress)
+
+**Milestone Goal:** Deploy ClawCode to actually run agents — install the subagent-thread skill globally and build a standalone agent runner that starts, manages, and hot-restarts a single agent process via the Claude Agent SDK.
+
+- [ ] **Phase 33: Global Skill Install** - Install workspace skills to ~/.claude/skills/ at daemon startup so agents can access them outside the daemon's skill injection path
+- [ ] **Phase 34: Standalone Agent Runner** - Build `src/agent/runner.ts` — a self-contained runner that starts a single agent via SdkSessionAdapter, connects it to Discord via DiscordBridge, and manages its full lifecycle (start, hot-restart, graceful stop) without needing the full daemon
+
+### Phase 33: Global Skill Install
+**Goal**: Skills defined in workspace `skills/` are automatically installed to `~/.claude/skills/` at daemon startup so agents running as raw Claude Code sessions (outside the daemon) can also access them
+**Depends on**: Phase 31 (subagent-thread skill exists in skills/)
+**Requirements**: GSKIN-01, GSKIN-02
+**Success Criteria** (what must be TRUE):
+  1. `~/.claude/skills/subagent-thread/SKILL.md` exists and matches the workspace's `skills/subagent-thread/SKILL.md`
+  2. Daemon startup copies all workspace skills to `~/.claude/skills/` before starting agent sessions
+**Plans:** 0/1 plans complete
+Plans:
+- [ ] 33-01-PLAN.md -- Skill installer: copy workspace skills to ~/.claude/skills/ at daemon startup
+
+### Phase 34: Standalone Agent Runner
+**Goal**: A lightweight `clawcode run <agent>` command that starts a single named agent — SDK session + Discord bridge + lifecycle management — without the full daemon overhead
+**Depends on**: Phase 33 (skills installed), Phase 1 (SdkSessionAdapter), Phase 3 (DiscordBridge)
+**Requirements**: RUNNER-01, RUNNER-02, RUNNER-03
+**Success Criteria** (what must be TRUE):
+  1. `clawcode run test-agent` starts the test-agent session, connects it to its Discord channel, and keeps it running
+  2. The runner hot-restarts the agent on crash (exponential backoff, max 3 attempts)
+  3. Ctrl+C gracefully stops the agent and cleans up resources
+**Plans:** 0/2 plans complete
+Plans:
+- [ ] 34-01-PLAN.md -- AgentRunner class: SDK session + DiscordBridge wiring + crash recovery
+- [ ] 34-02-PLAN.md -- CLI `clawcode run <agent>` command + graceful shutdown signal handling
 
 ## Progress
 
-**Execution Order:** Phases execute in numeric order: 31, 32.
+**Execution Order:** Phases execute in numeric order: 31, 32, 33, 34.
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-5 | v1.0 | - | Complete | 2026-04-09 |
 | 6-20 | v1.1 | - | Complete | 2026-04-09 |
 | 21-30 | v1.2 | - | Complete | 2026-04-09 |
-| 31. Subagent Thread Skill | v1.3 | 1/2 | Complete    | 2026-04-09 |
-| 32. MCP Client Consumption | v1.3 | 1/2 | Complete    | 2026-04-09 |
+| 31. Subagent Thread Skill | v1.3 | 2/2 | Complete | 2026-04-09 |
+| 32. MCP Client Consumption | v1.3 | 2/2 | Complete | 2026-04-09 |
+| 33. Global Skill Install | v1.4 | 0/1 | Not Started | - |
+| 34. Standalone Agent Runner | v1.4 | 0/2 | Not Started | - |
