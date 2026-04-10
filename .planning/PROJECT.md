@@ -52,7 +52,19 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-(No active requirements — next milestone not yet planned)
+(Requirements defined in REQUIREMENTS.md for v1.5)
+
+## Current Milestone: v1.5 Smart Memory & Model Tiering
+
+**Goal:** Reduce context bloat by loading memory/personality on-demand (Obsidian-style knowledge graph), and default agents to haiku with intelligent escalation to sonnet/opus.
+
+**Target features:**
+- On-demand memory loading — agents pull relevant context when needed instead of stuffing everything into the prompt
+- Knowledge graph structure — Obsidian-like linked notes with backlinks and semantic connections
+- Personality retention — agent identity/soul loaded efficiently without burning context
+- Model tiering — haiku as default model for all agents
+- Smart escalation — agents detect when a task needs sonnet or opus and upgrade automatically
+- Cost optimization — track and minimize token spend across the agent fleet
 
 ### Validated (v1.2)
 
@@ -81,11 +93,11 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ## Current State
 
-**Latest milestone:** v1.4 Agent Runtime (shipped 2026-04-10)
+**Latest shipped milestone:** v1.4 Agent Runtime (shipped 2026-04-10)
 
 v1.0-v1.4 delivered 35 phases across 5 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, and agent runtime.
 
-**Next milestone:** Not yet planned. Run `/gsd:new-milestone` to start.
+**Current milestone:** v1.5 Smart Memory & Model Tiering
 
 ## Context
 
@@ -132,4 +144,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-10 after v1.4 milestone*
+*Last updated: 2026-04-10 after v1.5 milestone start*

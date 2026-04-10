@@ -1,13 +1,13 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: Agent Integrations
-status: v1.4 milestone complete
-stopped_at: Completed 35-01-PLAN.md
-last_updated: "2026-04-10T16:40:04.556Z"
+milestone: v1.5
+milestone_name: Smart Memory & Model Tiering
+status: Defining requirements
+stopped_at: null
+last_updated: "2026-04-10T18:00:00.000Z"
 last_activity: 2026-04-10
 progress:
-  total_phases: 2
+  total_phases: 0
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,15 +17,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-09)
+See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 35 — resolve-openclaw-coexistence-conflicts
+**Current focus:** v1.5 — Smart Memory & Model Tiering (defining requirements)
 
 ## Current Position
 
-Phase: 35
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
 
 ## Performance Metrics
 
