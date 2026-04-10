@@ -7,6 +7,7 @@ import {
   resolveAgentConfig,
   resolveAllAgents,
   resolveContent,
+  resolveEnvVars,
 } from "../loader.js";
 import { expandHome } from "../defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../../shared/errors.js";
@@ -573,5 +574,94 @@ agents:
     expect(resolvedFinnhub!.command).toBe("node");
     expect(resolvedFinnhub!.args).toEqual(["/home/jjagpal/clawd/mcp-servers/finnhub/server.js"]);
     expect(resolvedFinnhub!.env.FINNHUB_API_KEY).toBe("op://clawdbot/Finnhub/api-key");
+  });
+});
+
+describe("resolveEnvVars", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    savedEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    savedEnv.TOKEN = process.env.TOKEN;
+    savedEnv.A = process.env.A;
+    savedEnv.B = process.env.B;
+  });
+
+  afterEach(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+  });
+
+  it("resolves a single env var", () => {
+    process.env.OPENAI_API_KEY = "sk-123";
+    expect(resolveEnvVars("${OPENAI_API_KEY}")).toBe("sk-123");
+  });
+
+  it("returns empty string for missing env var", () => {
+    delete process.env.MISSING_VAR;
+    expect(resolveEnvVars("${MISSING_VAR}")).toBe("");
+  });
+
+  it("handles partial interpolation with surrounding text", () => {
+    process.env.TOKEN = "abc";
+    expect(resolveEnvVars("Bearer ${TOKEN}")).toBe("Bearer abc");
+  });
+
+  it("passes through strings without env var patterns", () => {
+    expect(resolveEnvVars("no-vars-here")).toBe("no-vars-here");
+  });
+
+  it("resolves multiple env vars in one string", () => {
+    process.env.A = "foo";
+    process.env.B = "bar";
+    expect(resolveEnvVars("${A}_${B}")).toBe("foo_bar");
+  });
+});
+
+describe("resolveAgentConfig - MCP env var interpolation", () => {
+  const defaults: DefaultsConfig = {
+    model: "sonnet",
+    skills: [],
+    basePath: "~/.clawcode/agents",
+    skillsPath: "~/.clawcode/skills",
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+    heartbeat: {
+      enabled: true,
+      intervalSeconds: 60,
+      checkTimeoutSeconds: 10,
+      contextFill: {
+        warningThreshold: 0.6,
+        criticalThreshold: 0.75,
+        zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 },
+      },
+    },
+    threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+  };
+
+  afterEach(() => {
+    delete process.env.TEST_API_KEY;
+  });
+
+  it("resolves ${VAR_NAME} patterns in MCP server env values", () => {
+    process.env.TEST_API_KEY = "sk-test-999";
+    const agent: AgentConfig = {
+      name: "test-agent",
+      channels: [],
+      skills: [],
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [{ name: "my-server", command: "node", args: ["server.js"], env: { API_KEY: "${TEST_API_KEY}" } }],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.mcpServers[0].env.API_KEY).toBe("sk-test-999");
   });
 });
