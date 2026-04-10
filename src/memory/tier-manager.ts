@@ -9,6 +9,7 @@
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import { extractWikilinks } from "./graph.js";
 import { shouldPromoteToHot, shouldDemoteToWarm, shouldArchiveToCold } from "./tiers.js";
 import type { TierConfig } from "./tiers.js";
 import { scoreAndRank, type ScoringConfig } from "./relevance.js";
@@ -190,6 +191,21 @@ export class TierManager {
       );
       db.prepare("INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)").run(id, embedding);
     })();
+
+    // Re-extract graph edges from rewarmed content
+    const targets = extractWikilinks(content);
+    if (targets.length > 0) {
+      const stmts = this.store.getGraphStatements();
+      const linkNow = new Date().toISOString();
+      db.transaction(() => {
+        for (const targetId of targets) {
+          const exists = stmts.checkMemoryExists.get(targetId);
+          if (exists) {
+            stmts.insertLink.run(id, targetId, targetId, linkNow);
+          }
+        }
+      })();
+    }
 
     // Delete the cold archive file
     unlinkSync(filePath);

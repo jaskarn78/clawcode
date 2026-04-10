@@ -1,6 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { stringify as yamlStringify } from "yaml";
 import { extractWikilinks, traverseGraph, getBacklinks, getForwardLinks } from "../graph.js";
 import { MemoryStore } from "../store.js";
+import { TierManager, embeddingToBase64 } from "../tier-manager.js";
+import type { TierConfig } from "../tiers.js";
+import { DEFAULT_TIER_CONFIG } from "../tiers.js";
+import type { ScoringConfig } from "../relevance.js";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 describe("extractWikilinks", () => {
@@ -308,5 +316,174 @@ describe("getBacklinks and getForwardLinks", () => {
     // DESC order: newest first
     expect(results[0].memory.id).toBe("new-linker");
     expect(results[1].memory.id).toBe("old-linker");
+  });
+});
+
+/** Fake logger for TierManager tests. */
+function fakeLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+    level: "info",
+  };
+}
+
+const DEFAULT_SCORING: ScoringConfig = {
+  recencyWeight: 0.4,
+  importanceWeight: 0.3,
+  accessWeight: 0.2,
+  distanceWeight: 0.1,
+  recencyHalfLifeDays: 7,
+};
+
+describe("edge lifecycle", () => {
+  let store: MemoryStore;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    store = new MemoryStore(":memory:", { enabled: false, similarityThreshold: 0.85 });
+    db = store.getDatabase();
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  /** Insert a memory with a known ID directly into SQLite. */
+  function insertWithKnownId(id: string, content: string): void {
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO memories (id, content, source, importance, access_count, tags, created_at, updated_at, accessed_at, tier)
+       VALUES (?, ?, 'manual', 0.5, 0, '[]', ?, ?, ?, 'warm')`,
+    ).run(id, content, now, now, now);
+    db.prepare("INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)").run(
+      id,
+      zeroEmbedding(),
+    );
+  }
+
+  it("cold archival removes edges via CASCADE (source deleted)", () => {
+    insertWithKnownId("B-id", "target memory B");
+    // Insert A linking to B
+    const memA = store.insert(
+      { content: "A links to [[B-id]]", source: "manual", skipDedup: true },
+      zeroEmbedding(),
+    );
+
+    // Verify edge exists
+    let links = db.prepare("SELECT * FROM memory_links WHERE source_id = ?").all(memA.id) as LinkRow[];
+    expect(links).toHaveLength(1);
+
+    // Delete source A
+    store.delete(memA.id);
+
+    links = db.prepare("SELECT * FROM memory_links WHERE source_id = ?").all(memA.id) as LinkRow[];
+    expect(links).toHaveLength(0);
+  });
+
+  it("deleting target removes inbound edges via CASCADE", () => {
+    insertWithKnownId("B-id", "target memory B");
+    store.insert(
+      { content: "A links to [[B-id]]", source: "manual", skipDedup: true },
+      zeroEmbedding(),
+    );
+
+    // Verify edge exists
+    let links = db.prepare("SELECT * FROM memory_links WHERE target_id = ?").all("B-id") as LinkRow[];
+    expect(links).toHaveLength(1);
+
+    // Delete target B
+    store.delete("B-id");
+
+    links = db.prepare("SELECT * FROM memory_links WHERE target_id = ?").all("B-id") as LinkRow[];
+    expect(links).toHaveLength(0);
+  });
+
+  it("circular references: A->B->C->A terminates via traverseGraph", () => {
+    // Insert A, B, C with known IDs and circular links
+    insertWithKnownId("circ-A", "placeholder A");
+    insertWithKnownId("circ-B", "placeholder B");
+    insertWithKnownId("circ-C", "placeholder C");
+
+    // Create edges manually: A->B, B->C, C->A
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)").run(
+      "circ-A", "circ-B", "circ-B", now,
+    );
+    db.prepare("INSERT INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)").run(
+      "circ-B", "circ-C", "circ-C", now,
+    );
+    db.prepare("INSERT INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)").run(
+      "circ-C", "circ-A", "circ-A", now,
+    );
+
+    // Traverse from A using forward links from memory_links
+    const getNeighborsFn = (id: string): readonly string[] => {
+      const rows = db.prepare("SELECT target_id FROM memory_links WHERE source_id = ?").all(id) as Array<{ target_id: string }>;
+      return rows.map((r) => r.target_id);
+    };
+
+    const result = traverseGraph("circ-A", getNeighborsFn, 10);
+    expect(result).toEqual(new Set(["circ-B", "circ-C"]));
+  });
+
+  it("rewarmFromCold restores graph edges from content wikilinks", async () => {
+    const testDir = join(tmpdir(), `graph-rewarm-test-${Date.now()}`);
+    const coldDir = join(testDir, "archive", "cold");
+    mkdirSync(coldDir, { recursive: true });
+
+    // Insert target memory so edge can be created
+    insertWithKnownId("rewarm-target", "I am the target");
+
+    // Create cold archive file with wikilink to target
+    const archiveContent = "This memory links to [[rewarm-target]]";
+    const frontmatter = {
+      id: "rewarm-source",
+      source: "manual",
+      importance: 0.7,
+      access_count: 3,
+      tags: ["test"],
+      created_at: "2024-06-01T00:00:00Z",
+      updated_at: "2024-06-01T00:00:00Z",
+      accessed_at: "2024-06-01T00:00:00Z",
+      tier: "cold",
+      archived_at: "2024-07-01T00:00:00Z",
+      embedding_base64: embeddingToBase64(zeroEmbedding()),
+    };
+    const markdown = `---\n${yamlStringify(frontmatter)}---\n\n# Memory: ${archiveContent.slice(0, 80)}\n\n${archiveContent}\n`;
+    const filePath = join(coldDir, "rewarm-source-test.md");
+    writeFileSync(filePath, markdown, "utf-8");
+
+    // Create mock embedder
+    const mockEmbedder = {
+      embed: vi.fn().mockResolvedValue(zeroEmbedding()),
+      warmup: vi.fn().mockResolvedValue(undefined),
+      isReady: vi.fn().mockReturnValue(true),
+    };
+
+    // Create TierManager and rewarm
+    const tm = new TierManager({
+      store,
+      embedder: mockEmbedder as any,
+      memoryDir: testDir,
+      tierConfig: DEFAULT_TIER_CONFIG,
+      scoringConfig: DEFAULT_SCORING,
+      log: fakeLogger() as any,
+    });
+
+    await tm.rewarmFromCold(filePath);
+
+    // Verify edge was created from rewarmed memory to target
+    const links = db.prepare("SELECT * FROM memory_links WHERE source_id = ?").all("rewarm-source") as LinkRow[];
+    expect(links).toHaveLength(1);
+    expect(links[0].target_id).toBe("rewarm-target");
+
+    // Cleanup
+    rmSync(testDir, { recursive: true, force: true });
   });
 });
