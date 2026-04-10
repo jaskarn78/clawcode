@@ -191,11 +191,23 @@ export const defaultsSchema = z.object({
 });
 
 /**
+ * Schema for optional Discord configuration.
+ * botToken can be a literal token or an op:// reference resolved via 1Password CLI.
+ */
+export const discordConfigSchema = z.object({
+  botToken: z.string().min(1).optional(),
+}).optional();
+
+/** Discord config type. */
+export type DiscordConfig = z.infer<typeof discordConfigSchema>;
+
+/**
  * Root config schema for clawcode.yaml.
  * Requires version: 1 and at least one agent.
  */
 export const configSchema = z.object({
   version: z.literal(1),
+  discord: discordConfigSchema,
   defaults: defaultsSchema.default(() => ({
     model: "sonnet" as const,
     skills: [] as string[],
