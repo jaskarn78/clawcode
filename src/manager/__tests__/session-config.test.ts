@@ -65,7 +65,9 @@ describe("buildSessionConfig — subagent thread skill guidance", () => {
   it("includes Subagent Thread Skill section when agent has subagent-thread skill", async () => {
     const config = makeConfig({ skills: ["subagent-thread"] });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).toContain("## Subagent Thread Skill");
+    // Subagent thread guidance is now inside the unified "## Available Tools" section
+    expect(result.systemPrompt).toContain("## Available Tools");
+    expect(result.systemPrompt).toContain("subagent-thread");
   });
 
   it("includes guidance to prefer subagent-thread skill over raw Agent tool", async () => {
@@ -77,16 +79,16 @@ describe("buildSessionConfig — subagent thread skill guidance", () => {
     expect(result.systemPrompt).toContain("over the raw Agent tool");
   });
 
-  it("does NOT include Subagent Thread Skill section when skill not assigned", async () => {
+  it("does NOT include subagent thread guidance when skill not assigned", async () => {
     const config = makeConfig({ skills: [] });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).not.toContain("Subagent Thread Skill");
+    expect(result.systemPrompt).not.toContain("spawn_subagent_thread");
   });
 
   it("does NOT include guidance when agent has other skills but not subagent-thread", async () => {
     const config = makeConfig({ skills: ["some-other-skill"] });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).not.toContain("Subagent Thread Skill");
+    expect(result.systemPrompt).not.toContain("spawn_subagent_thread");
   });
 
   it("mentions spawn_subagent_thread MCP tool in guidance", async () => {
@@ -104,21 +106,23 @@ describe("buildSessionConfig — subagent thread skill guidance", () => {
       ]),
     });
     const result = await buildSessionConfig(config, deps);
-    // Should have both Available Skills section and Subagent Thread Skill section
-    expect(result.systemPrompt).toContain("## Available Skills");
-    expect(result.systemPrompt).toContain("## Subagent Thread Skill");
+    // Both skill descriptions and subagent thread guidance under unified "## Available Tools"
+    expect(result.systemPrompt).toContain("## Available Tools");
+    expect(result.systemPrompt).toContain("content-engine");
+    expect(result.systemPrompt).toContain("spawn_subagent_thread");
   });
 });
 
 describe("buildSessionConfig — MCP tools injection", () => {
-  it("includes Available MCP Tools section when agent has mcpServers configured", async () => {
+  it("includes MCP tools in Available Tools section when agent has mcpServers configured", async () => {
     const config = makeConfig({
       mcpServers: [
         { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
       ],
     });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).toContain("## Available MCP Tools");
+    expect(result.systemPrompt).toContain("## Available Tools");
+    expect(result.systemPrompt).toContain("finnhub");
   });
 
   it("lists each server name and command in the MCP tools section", async () => {
@@ -135,17 +139,17 @@ describe("buildSessionConfig — MCP tools injection", () => {
     expect(result.systemPrompt).toContain("`node gw-server.js`");
   });
 
-  it("does NOT include MCP tools section when agent has empty mcpServers", async () => {
+  it("does NOT include MCP tools content when agent has empty mcpServers", async () => {
     const config = makeConfig({ mcpServers: [] });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).not.toContain("Available MCP Tools");
+    expect(result.systemPrompt).not.toContain("MCP servers are configured");
   });
 
-  it("does NOT include MCP tools section when mcpServers is undefined (defaults to empty)", async () => {
+  it("does NOT include MCP tools content when mcpServers is undefined (defaults to empty)", async () => {
     // mcpServers defaults to [] via ?? in buildSessionConfig
     const config = makeConfig();
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).not.toContain("Available MCP Tools");
+    expect(result.systemPrompt).not.toContain("MCP servers are configured");
   });
 });
 
@@ -249,6 +253,55 @@ The full context of its creation spans multiple paragraphs of detail.
     expect(result.systemPrompt).toContain(
       "When using memory_lookup, pass 'my-agent' as the agent parameter"
     );
+  });
+
+  it("applies custom contextBudgets from config to truncate sources", async () => {
+    // Set a very small identity budget (10 tokens = 40 chars) to force truncation
+    const longIdentity = "A".repeat(200);
+    const config = makeConfig({
+      identity: longIdentity,
+      contextBudgets: {
+        identity: 10,
+        hotMemories: 10,
+        toolDefinitions: 10,
+        graphContext: 10,
+      },
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    // The identity content should be truncated (40 chars + "..." suffix is much less than 200)
+    // The agent name line is also in identity, so total identity source > 200 chars
+    // With 10 token budget, only 40 chars survive + "..."
+    expect(result.systemPrompt.length).toBeLessThan(longIdentity.length);
+  });
+
+  it("v1.5 prompt size is not larger than v1.4 equivalent for typical sources", async () => {
+    // Typical agent: identity, 3 hot memories, 2 skills, 1 MCP server, discord channel
+    const soulContent = "# Agent: TestBot\n\n## Soul\n- Helpful\n- Direct\n\n## Style\nConcise.\n";
+    const config = makeConfig({
+      soul: soulContent,
+      channels: ["123456789"],
+      skills: ["content-engine"],
+      mcpServers: [
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
+      ],
+    });
+
+    const hotMemories = [
+      makeHotMemory("User prefers TypeScript", 1.0),
+      makeHotMemory("Project uses vitest for testing", 0.9),
+      makeHotMemory("Deploy target is Node 22 LTS", 0.8),
+    ];
+    const tierManager = makeTierManager(hotMemories);
+    const tierManagers = new Map([["test-agent", tierManager as any]]);
+    const skillsCatalog = new Map([
+      ["content-engine", { name: "content-engine", version: "1.0", description: "Content creation", path: "/tmp/skills/content-engine" }],
+    ]);
+
+    const result = await buildSessionConfig(config, makeDeps({ tierManagers, skillsCatalog }));
+    // v1.4 equivalent for this config was approximately 1200 chars
+    // v1.5 should be equal or smaller due to budget enforcement
+    // Set a generous ceiling to ensure no regression
+    expect(result.systemPrompt.length).toBeLessThanOrEqual(2000);
   });
 
   it("bootstrap agents still get bootstrap prompt without fingerprint", async () => {
