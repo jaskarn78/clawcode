@@ -94,8 +94,9 @@ export class SessionManager {
     registry = updateEntry(registry, name, { status: "starting" });
     await writeRegistry(this.registryPath, registry);
 
-    // Initialize memory and refresh hot tier
+    // Initialize memory, store SOUL.md as retrievable memory, and refresh hot tier
     this.memory.initMemory(name, config);
+    await this.memory.storeSoulMemory(name, config);
     const tierManager = this.memory.tierManagers.get(name);
     if (tierManager) tierManager.refreshHotTier();
 
