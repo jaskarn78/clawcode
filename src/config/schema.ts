@@ -137,6 +137,21 @@ export const mcpServerSchema = z.object({
 export type McpServerSchemaConfig = z.infer<typeof mcpServerSchema>;
 
 /**
+ * Context budget configuration schema.
+ * Controls per-source token budgets for the context assembly pipeline.
+ * Values represent estimated token counts (chars/4 heuristic).
+ */
+export const contextBudgetsSchema = z.object({
+  identity: z.number().int().positive().default(1000),
+  hotMemories: z.number().int().positive().default(3000),
+  toolDefinitions: z.number().int().positive().default(2000),
+  graphContext: z.number().int().positive().default(2000),
+});
+
+/** Inferred context budgets type. */
+export type ContextBudgetsConfig = z.infer<typeof contextBudgetsSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -159,6 +174,7 @@ export const agentSchema = z.object({
   reactions: z.boolean().default(true),
   security: securityConfigSchema.optional(),
   mcpServers: z.array(z.union([mcpServerSchema, z.string()])).default([]),
+  contextBudgets: contextBudgetsSchema.optional(),
   escalationBudget: z.object({
     daily: z.object({
       sonnet: z.number().int().positive().optional(),
