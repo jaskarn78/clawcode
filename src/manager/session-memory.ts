@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { Logger } from "pino";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import { MemoryStore } from "../memory/store.js";
@@ -148,6 +149,41 @@ export class AgentMemoryManager {
     const memoryDir = join(workspace, "memory");
     await saveSummary(memoryDir, agentName, summary);
     this.log.info({ agent: agentName }, "context summary saved");
+  }
+
+  /**
+   * Store SOUL.md as a retrievable memory entry for an agent (LOAD-02).
+   *
+   * Reads SOUL.md from the agent's workspace and inserts it as a high-importance
+   * memory with tags ["soul", "identity"]. Idempotent — skips insert if a "soul"
+   * tagged entry already exists.
+   */
+  async storeSoulMemory(name: string, config: ResolvedAgentConfig): Promise<void> {
+    const store = this.memoryStores.get(name);
+    if (!store) return;
+
+    try {
+      const soulPath = join(config.workspace, "SOUL.md");
+      const soulContent = await readFile(soulPath, "utf-8");
+
+      const existingSoul = store.findByTag("soul");
+      if (existingSoul.length === 0) {
+        const embedding = await this.embedder.embed(soulContent);
+        store.insert(
+          {
+            content: soulContent,
+            source: "system",
+            importance: 1.0,
+            tags: ["soul", "identity"],
+            skipDedup: true,
+          },
+          embedding,
+        );
+        this.log.info({ agent: name }, "Stored SOUL.md as memory entry");
+      }
+    } catch {
+      // No SOUL.md or embedding failure — not fatal
+    }
   }
 
   /**

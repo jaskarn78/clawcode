@@ -403,6 +403,30 @@ export class MemoryStore {
     }
   }
 
+  /**
+   * Find memories that contain a specific tag in their tags JSON array.
+   * Returns a frozen array of frozen MemoryEntry objects.
+   */
+  findByTag(tag: string): readonly MemoryEntry[] {
+    try {
+      const rows = this.db.prepare(`
+        SELECT m.id, m.content, m.source, m.importance, m.access_count,
+               m.tags, m.created_at, m.updated_at, m.accessed_at, m.tier
+        FROM memories m, json_each(m.tags) AS t
+        WHERE t.value = ?
+      `).all(tag) as MemoryRow[];
+
+      return Object.freeze(rows.map(rowToEntry));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to find memories by tag ${tag}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
   /** Get prepared statements for graph queries (used by graph module). */
   getGraphStatements(): Pick<PreparedStatements, 'getBacklinks' | 'getForwardLinks' | 'insertLink' | 'deleteLinksFrom' | 'checkMemoryExists'> {
     return this.stmts;
