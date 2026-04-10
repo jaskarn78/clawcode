@@ -94,8 +94,8 @@ Plans:
   4. System prompt size with on-demand loading is measurably smaller than the v1.4 eager-injection approach
 **Plans:** 2 plans
 Plans:
-- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
-- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
+- [ ] 37-01-PLAN.md — Fingerprint extraction + memory_lookup MCP tool (LOAD-01, LOAD-02)
+- [ ] 37-02-PLAN.md — Session config refactor + SOUL.md storage (LOAD-01, LOAD-02)
 
 ### Phase 38: Graph Intelligence
 **Goal**: Memory search leverages graph structure for richer retrieval, and the graph grows automatically
