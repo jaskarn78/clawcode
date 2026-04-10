@@ -78,7 +78,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
   2. Agent can query "what links to memory X?" and receive a list of all memories containing wikilinks to X
   3. Consolidation and archival operations preserve graph edges (no dangling references after memory lifecycle events)
   4. Graph traversal terminates correctly on circular references (visited-set tracking prevents infinite loops)
-**Plans:** 2 plans
+**Plans:** 0/2 plans executed
 Plans:
 - [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
 - [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
@@ -166,7 +166,7 @@ Plans:
 | 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
 | 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
 | 35. Resolve OpenClaw Coexistence | v1.4 | 2/2 | Complete | 2026-04-10 |
-| 36. Knowledge Graph Foundation | v1.5 | 0/2 | Planning complete | - |
+| 36. Knowledge Graph Foundation | v1.5 | 0/2 | Planned    |  |
 | 37. On-Demand Memory Loading | v1.5 | 0/? | Not started | - |
 | 38. Graph Intelligence | v1.5 | 0/? | Not started | - |
 | 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
