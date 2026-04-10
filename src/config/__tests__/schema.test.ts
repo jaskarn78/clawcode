@@ -193,7 +193,7 @@ describe("configSchema", () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.defaults.model).toBe("sonnet");
+      expect(result.data.defaults.model).toBe("haiku");
       expect(result.data.defaults.skills).toEqual([]);
       expect(result.data.defaults.basePath).toBe("~/.clawcode/agents");
     }
