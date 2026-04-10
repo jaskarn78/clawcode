@@ -78,8 +78,8 @@ Plans:
 
 **Milestone Goal:** Deploy ClawCode to actually run agents — install the subagent-thread skill globally and build a standalone agent runner that starts, manages, and hot-restarts a single agent process via the Claude Agent SDK.
 
-- [ ] **Phase 33: Global Skill Install** - Install workspace skills to ~/.claude/skills/ at daemon startup so agents can access them outside the daemon's skill injection path
-- [ ] **Phase 34: Standalone Agent Runner** - Build `src/agent/runner.ts` — a self-contained runner that starts a single agent via SdkSessionAdapter, connects it to Discord via DiscordBridge, and manages its full lifecycle (start, hot-restart, graceful stop) without needing the full daemon
+- [x] **Phase 33: Global Skill Install** - Install workspace skills to ~/.claude/skills/ at daemon startup so agents can access them outside the daemon's skill injection path (completed 2026-04-10)
+- [x] **Phase 34: Standalone Agent Runner** - Build `src/agent/runner.ts` — a self-contained runner that starts a single agent via SdkSessionAdapter, connects it to Discord via DiscordBridge, and manages its full lifecycle (start, hot-restart, graceful stop) without needing the full daemon (completed 2026-04-10)
 
 ### Phase 33: Global Skill Install
 **Goal**: Skills defined in workspace `skills/` are automatically installed to `~/.claude/skills/` at daemon startup so agents running as raw Claude Code sessions (outside the daemon) can also access them
@@ -88,9 +88,9 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. `~/.claude/skills/subagent-thread/SKILL.md` exists and matches the workspace's `skills/subagent-thread/SKILL.md`
   2. Daemon startup copies all workspace skills to `~/.claude/skills/` before starting agent sessions
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 Plans:
-- [ ] 33-01-PLAN.md -- Skill installer: copy workspace skills to ~/.claude/skills/ at daemon startup
+- [x] 33-01-PLAN.md -- Skill installer: copy workspace skills to ~/.claude/skills/ at daemon startup
 
 ### Phase 34: Standalone Agent Runner
 **Goal**: A lightweight `clawcode run <agent>` command that starts a single named agent — SDK session + Discord bridge + lifecycle management — without the full daemon overhead
@@ -100,10 +100,10 @@ Plans:
   1. `clawcode run test-agent` starts the test-agent session, connects it to its Discord channel, and keeps it running
   2. The runner hot-restarts the agent on crash (exponential backoff, max 3 attempts)
   3. Ctrl+C gracefully stops the agent and cleans up resources
-**Plans:** 0/2 plans complete
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 34-01-PLAN.md -- AgentRunner class: SDK session + DiscordBridge wiring + crash recovery
-- [ ] 34-02-PLAN.md -- CLI `clawcode run <agent>` command + graceful shutdown signal handling
+- [x] 34-01-PLAN.md -- AgentRunner class: SDK session + DiscordBridge wiring + crash recovery
+- [x] 34-02-PLAN.md -- CLI `clawcode run <agent>` command + graceful shutdown signal handling
 
 ## Progress
 
@@ -116,14 +116,20 @@ Plans:
 | 21-30 | v1.2 | - | Complete | 2026-04-09 |
 | 31. Subagent Thread Skill | v1.3 | 2/2 | Complete | 2026-04-09 |
 | 32. MCP Client Consumption | v1.3 | 2/2 | Complete | 2026-04-09 |
-| 33. Global Skill Install | v1.4 | 0/1 | Not Started | - |
-| 34. Standalone Agent Runner | v1.4 | 0/2 | Not Started | - |
+| 33. Global Skill Install | v1.4 | 1/1 | Complete | 2026-04-10 |
+| 34. Standalone Agent Runner | v1.4 | 2/2 | Complete | 2026-04-10 |
 
 ### Phase 35: Resolve OpenClaw coexistence conflicts
 
-**Goal:** [To be planned]
+**Goal:** Fix HIGH-risk coexistence conflicts so ClawCode and OpenClaw run safely on the same machine — hard fail on shared token fallback, namespace slash commands, make dashboard non-fatal, add env var interpolation in config loader, deduplicate skill install call
 **Requirements**: TBD
 **Depends on:** Phase 34
+**Success Criteria** (what must be TRUE):
+  1. Daemon refuses to start Discord bridge if `op read` fails for bot token (no silent fallback to shared plugin token)
+  2. All ClawCode slash commands are prefixed with `clawcode-` to avoid overwriting OpenClaw's
+  3. Dashboard server binds to `127.0.0.1` and daemon starts successfully even if port 3100 is taken
+  4. Config loader resolves `${VAR_NAME}` patterns against `process.env` in MCP server env blocks
+  5. `installWorkspaceSkills` is called exactly once during daemon startup
 **Plans:** 0 plans
 
 Plans:
