@@ -65,7 +65,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 - [x] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery (completed 2026-04-10)
 - [x] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus (completed 2026-04-10)
 - [x] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement (completed 2026-04-10)
-- [ ] **Phase 41: Context Assembly Pipeline** - Modular context composition with per-source token budgets
+- [x] **Phase 41: Context Assembly Pipeline** - Modular context composition with per-source token budgets (completed 2026-04-10)
 
 ## Phase Details
 
@@ -151,9 +151,9 @@ Plans:
   1. Context assembly composes identity, hot memories, graph-expanded results, and tool definitions with configurable per-source token budgets
   2. Total assembled context stays within a defined ceiling (no source can exceed its budget and starve others)
   3. Net system prompt size for a v1.5 agent is equal to or smaller than an equivalent v1.4 agent
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 41-01-PLAN.md — Context assembler module with TDD (LOAD-03)
+- [x] 41-01-PLAN.md — Context assembler module with TDD (LOAD-03)
 - [ ] 41-02-PLAN.md — Schema extension + buildSessionConfig refactor (LOAD-03)
 
 
@@ -179,4 +179,4 @@ Plans:
 | 38. Graph Intelligence | v1.5 | 0/2 | Complete    | 2026-04-10 |
 | 39. Model Tiering & Escalation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 40. Cost Optimization & Budgets | v1.5 | 1/2 | Complete    | 2026-04-10 |
-| 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |
+| 41. Context Assembly Pipeline | v1.5 | 1/2 | Complete    | 2026-04-10 |
