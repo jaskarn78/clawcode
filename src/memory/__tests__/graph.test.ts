@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { extractWikilinks, traverseGraph } from "../graph.js";
+import { extractWikilinks, traverseGraph, getBacklinks, getForwardLinks } from "../graph.js";
 import { MemoryStore } from "../store.js";
 import type { Database as DatabaseType } from "better-sqlite3";
 
@@ -186,5 +186,127 @@ describe("MemoryStore graph integration", () => {
     const links = db.prepare("SELECT * FROM memory_links WHERE target_id = ?").all(memB.id) as LinkRow[];
     // Two different sources linking to B = 2 edges (different source_ids)
     expect(links).toHaveLength(2);
+  });
+});
+
+describe("getBacklinks and getForwardLinks", () => {
+  let store: MemoryStore;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    store = new MemoryStore(":memory:", { enabled: false, similarityThreshold: 0.85 });
+    db = store.getDatabase();
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  /** Insert a memory with a known ID directly into SQLite. */
+  function insertWithKnownId(id: string, content: string): void {
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO memories (id, content, source, importance, access_count, tags, created_at, updated_at, accessed_at, tier)
+       VALUES (?, ?, 'manual', 0.5, 0, '[]', ?, ?, ?, 'warm')`,
+    ).run(id, content, now, now, now);
+    db.prepare("INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)").run(
+      id,
+      zeroEmbedding(),
+    );
+  }
+
+  it("getBacklinks returns memories that link to a target", () => {
+    // Insert target B with known ID
+    insertWithKnownId("B-id", "I am memory B");
+
+    // Insert memory A that links to B via store.insert (triggers edge creation)
+    const memA = store.insert(
+      { content: "A links to [[B-id]]", source: "manual", skipDedup: true },
+      zeroEmbedding(),
+    );
+
+    const results = getBacklinks(store, "B-id");
+    expect(results).toHaveLength(1);
+    expect(results[0].memory.id).toBe(memA.id);
+    expect(results[0].linkText).toBe("B-id");
+  });
+
+  it("getBacklinks returns empty array for nonexistent target", () => {
+    const results = getBacklinks(store, "nonexistent");
+    expect(results).toHaveLength(0);
+  });
+
+  it("getForwardLinks returns memories that a source links to", () => {
+    // Insert targets B and C with known IDs
+    insertWithKnownId("B-id", "I am B");
+    insertWithKnownId("C-id", "I am C");
+
+    // Insert A linking to both B and C
+    store.insert(
+      { content: "A links to [[B-id]] and [[C-id]]", source: "manual", skipDedup: true },
+      zeroEmbedding(),
+    );
+
+    // Get forward links from A (need to find A's ID first)
+    const links = db.prepare("SELECT source_id FROM memory_links LIMIT 1").get() as { source_id: string };
+    const results = getForwardLinks(store, links.source_id);
+    expect(results).toHaveLength(2);
+    const targetIds = results.map((r) => r.memory.id).sort();
+    expect(targetIds).toEqual(["B-id", "C-id"]);
+  });
+
+  it("getForwardLinks returns empty array for memory with no outbound links", () => {
+    insertWithKnownId("isolated", "No outbound links here");
+    const results = getForwardLinks(store, "isolated");
+    expect(results).toHaveLength(0);
+  });
+
+  it("results are frozen", () => {
+    insertWithKnownId("B-id", "target");
+    store.insert(
+      { content: "links to [[B-id]]", source: "manual", skipDedup: true },
+      zeroEmbedding(),
+    );
+
+    const backlinks = getBacklinks(store, "B-id");
+    expect(Object.isFrozen(backlinks)).toBe(true);
+    expect(Object.isFrozen(backlinks[0])).toBe(true);
+
+    const links = db.prepare("SELECT source_id FROM memory_links LIMIT 1").get() as { source_id: string };
+    const forwards = getForwardLinks(store, links.source_id);
+    expect(Object.isFrozen(forwards)).toBe(true);
+    expect(Object.isFrozen(forwards[0])).toBe(true);
+  });
+
+  it("results are ordered by created_at DESC", () => {
+    insertWithKnownId("target-id", "the target");
+
+    // Insert two memories linking to target at different times
+    // Use direct SQL to control created_at ordering
+    const oldTime = "2024-01-01T00:00:00Z";
+    const newTime = "2025-01-01T00:00:00Z";
+    db.prepare(
+      `INSERT INTO memories (id, content, source, importance, access_count, tags, created_at, updated_at, accessed_at, tier)
+       VALUES (?, ?, 'manual', 0.5, 0, '[]', ?, ?, ?, 'warm')`,
+    ).run("old-linker", "links to [[target-id]]", oldTime, oldTime, oldTime);
+    db.prepare("INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)").run("old-linker", zeroEmbedding());
+    db.prepare("INSERT INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)").run(
+      "old-linker", "target-id", "target-id", oldTime,
+    );
+
+    db.prepare(
+      `INSERT INTO memories (id, content, source, importance, access_count, tags, created_at, updated_at, accessed_at, tier)
+       VALUES (?, ?, 'manual', 0.5, 0, '[]', ?, ?, ?, 'warm')`,
+    ).run("new-linker", "also links to [[target-id]]", newTime, newTime, newTime);
+    db.prepare("INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)").run("new-linker", zeroEmbedding());
+    db.prepare("INSERT INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)").run(
+      "new-linker", "target-id", "target-id", newTime,
+    );
+
+    const results = getBacklinks(store, "target-id");
+    expect(results).toHaveLength(2);
+    // DESC order: newest first
+    expect(results[0].memory.id).toBe("new-linker");
+    expect(results[1].memory.id).toBe("old-linker");
   });
 });
