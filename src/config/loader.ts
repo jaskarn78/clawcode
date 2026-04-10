@@ -72,7 +72,9 @@ export function resolveAgentConfig(
     name: s.name,
     command: s.command,
     args: [...s.args],
-    env: { ...s.env },
+    env: Object.fromEntries(
+      Object.entries(s.env ?? {}).map(([k, v]) => [k, resolveEnvVars(v)])
+    ),
   }));
 
   return {
@@ -136,6 +138,19 @@ export async function resolveContent(value: string): Promise<string> {
 export function resolveAllAgents(config: Config): ResolvedAgentConfig[] {
   const sharedMcpServers = config.mcpServers ?? {};
   return config.agents.map((agent) => resolveAgentConfig(agent, config.defaults, sharedMcpServers));
+}
+
+/**
+ * Resolve ${VAR_NAME} patterns in a string against process.env.
+ * Unresolvable vars become empty string (no throw).
+ *
+ * @param value - String potentially containing ${VAR_NAME} patterns
+ * @returns String with all ${...} patterns replaced by env values
+ */
+export function resolveEnvVars(value: string): string {
+  return value.replace(/\$\{([^}]+)\}/g, (_match, varName: string) => {
+    return process.env[varName] ?? "";
+  });
 }
 
 /**
