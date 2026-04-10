@@ -64,7 +64,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 - [x] **Phase 37: On-Demand Memory Loading** - Agents retrieve memories via tool calls instead of eager context stuffing (completed 2026-04-10)
 - [x] **Phase 38: Graph Intelligence** - Graph-augmented search and automatic link discovery (completed 2026-04-10)
 - [x] **Phase 39: Model Tiering & Escalation** - Haiku default with smart escalation to sonnet/opus (completed 2026-04-10)
-- [ ] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement
+- [x] **Phase 40: Cost Optimization & Budgets** - Token tracking, importance scoring, and escalation budget enforcement (completed 2026-04-10)
 - [ ] **Phase 41: Context Assembly Pipeline** - Modular context composition with per-source token budgets
 
 ## Phase Details
@@ -134,9 +134,9 @@ Plans:
   2. New memories receive automatic importance scores based on content heuristics (length, entity density, recency)
   3. Per-agent escalation budgets enforce daily/weekly token limits for upgraded models
   4. Discord alerts fire when an agent approaches or exceeds its escalation budget
-**Plans:** 2/2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 40-01-PLAN.md — Cost tracking, pricing map, importance scoring, CLI + dashboard (COST-01, COST-02)
+- [x] 40-01-PLAN.md — Cost tracking, pricing map, importance scoring, CLI + dashboard (COST-01, COST-02)
 - [ ] 40-02-PLAN.md — Escalation budgets with Discord alerts (TIER-04)
 
 
@@ -174,5 +174,5 @@ Plans:
 | 37. On-Demand Memory Loading | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 38. Graph Intelligence | v1.5 | 0/2 | Complete    | 2026-04-10 |
 | 39. Model Tiering & Escalation | v1.5 | 1/2 | Complete    | 2026-04-10 |
-| 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
+| 40. Cost Optimization & Budgets | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |

@@ -24,13 +24,13 @@
 - [x] **TIER-01**: Default agent model is haiku instead of sonnet
 - [x] **TIER-02**: Agent can escalate to a more capable model (sonnet/opus) when task complexity exceeds haiku's capability
 - [x] **TIER-03**: Agent can call opus as an advisor tool for hard decisions without switching sessions
-- [ ] **TIER-04**: Per-agent escalation budgets enforce daily/weekly token limits for upgraded models with Discord alerts
+- [x] **TIER-04**: Per-agent escalation budgets enforce daily/weekly token limits for upgraded models with Discord alerts
 - [x] **TIER-05**: Discord slash command allows operator to set/change default model for an agent
 
 ### Cost Optimization (COST)
 
-- [ ] **COST-01**: Per-agent, per-model token usage is tracked in SQLite and viewable via CLI and dashboard
-- [ ] **COST-02**: New memories receive automatic importance scoring based on content heuristics
+- [x] **COST-01**: Per-agent, per-model token usage is tracked in SQLite and viewable via CLI and dashboard
+- [x] **COST-02**: New memories receive automatic importance scoring based on content heuristics
 
 ## Future Requirements
 
@@ -60,10 +60,10 @@
 | TIER-01 | Phase 39 | Complete |
 | TIER-02 | Phase 39 | Complete |
 | TIER-03 | Phase 39 | Complete |
-| TIER-04 | Phase 40 | Pending |
+| TIER-04 | Phase 40 | Complete |
 | TIER-05 | Phase 39 | Complete |
-| COST-01 | Phase 40 | Pending |
-| COST-02 | Phase 40 | Pending |
+| COST-01 | Phase 40 | Complete |
+| COST-02 | Phase 40 | Complete |
 
 ---
 *14 requirements | 4 categories | Created 2026-04-10*
