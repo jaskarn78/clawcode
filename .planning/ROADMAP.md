@@ -122,8 +122,8 @@ Plans:
   5. Escalated sessions automatically de-escalate after task completion (no permanent model drift)
 **Plans:** 2 plans
 Plans:
-- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
-- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
+- [ ] 39-01-PLAN.md — Haiku default + EscalationMonitor for fork-based escalation (TIER-01, TIER-02)
+- [ ] 39-02-PLAN.md — ask_advisor MCP tool + /model slash command (TIER-03, TIER-05)
 
 ### Phase 40: Cost Optimization & Budgets
 **Goal**: Token spend is tracked, scored, and budget-enforced across the agent fleet
@@ -169,6 +169,6 @@ Plans:
 | 36. Knowledge Graph Foundation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 37. On-Demand Memory Loading | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 38. Graph Intelligence | v1.5 | 0/2 | Complete    | 2026-04-10 |
-| 39. Model Tiering & Escalation | v1.5 | 0/? | Not started | - |
+| 39. Model Tiering & Escalation | v1.5 | 0/2 | Not started | - |
 | 40. Cost Optimization & Budgets | v1.5 | 0/? | Not started | - |
 | 41. Context Assembly Pipeline | v1.5 | 0/? | Not started | - |
