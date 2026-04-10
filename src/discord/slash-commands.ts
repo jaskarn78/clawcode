@@ -7,7 +7,6 @@
 
 import {
   Client,
-  GatewayIntentBits,
   REST,
   Routes,
   type ChatInputCommandInteraction,
@@ -36,6 +35,7 @@ export type SlashCommandHandlerConfig = {
   readonly sessionManager: SessionManager;
   readonly resolvedAgents: readonly ResolvedAgentConfig[];
   readonly botToken: string;
+  readonly client?: Client;
   readonly log?: Logger;
 };
 
@@ -61,6 +61,7 @@ export class SlashCommandHandler {
     this.sessionManager = config.sessionManager;
     this.resolvedAgents = config.resolvedAgents;
     this.botToken = config.botToken;
+    this.client = config.client ?? null;
     this.log = config.log ?? logger;
   }
 
@@ -68,22 +69,9 @@ export class SlashCommandHandler {
    * Start the handler: connect to Discord, register commands, listen for interactions.
    */
   async start(): Promise<void> {
-    // Create a dedicated Client with Guilds intent (needed for guild cache)
-    this.client = new Client({
-      intents: [GatewayIntentBits.Guilds],
-    });
-
-    // Connect to Discord
-    await this.client.login(this.botToken);
-
-    // Wait for the client to be ready (guild cache populated)
-    await new Promise<void>((resolve) => {
-      if (this.client!.isReady()) {
-        resolve();
-      } else {
-        this.client!.once("ready", () => resolve());
-      }
-    });
+    if (!this.client) {
+      throw new Error("SlashCommandHandler requires a Discord client — cannot start without Discord bridge");
+    }
 
     // Register commands for each guild
     await this.register();
@@ -172,10 +160,8 @@ export class SlashCommandHandler {
       this.interactionHandler = null;
     }
 
-    if (this.client) {
-      await this.client.destroy();
-      this.client = null;
-    }
+    // Client is shared with Discord bridge — do not destroy it here
+    this.client = null;
 
     this.log.info("slash command handler stopped");
   }

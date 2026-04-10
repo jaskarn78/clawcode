@@ -7,10 +7,17 @@ import {
 
 describe("slash-types", () => {
   describe("DEFAULT_SLASH_COMMANDS", () => {
-    it("contains exactly 6 commands: status, memory, schedule, health, compact, usage", () => {
+    it("contains exactly 6 commands with clawcode- prefix", () => {
       expect(DEFAULT_SLASH_COMMANDS).toHaveLength(6);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
-      expect(names).toEqual(["status", "memory", "schedule", "health", "compact", "usage"]);
+      expect(names).toEqual([
+        "clawcode-status",
+        "clawcode-memory",
+        "clawcode-schedule",
+        "clawcode-health",
+        "clawcode-compact",
+        "clawcode-usage",
+      ]);
     });
 
     it("each default command has name, description, claudeCommand fields (all non-empty strings)", () => {
@@ -25,7 +32,7 @@ describe("slash-types", () => {
     });
 
     it("the memory command has one required option named query of type STRING (3)", () => {
-      const memoryCmd = DEFAULT_SLASH_COMMANDS.find((cmd) => cmd.name === "memory");
+      const memoryCmd = DEFAULT_SLASH_COMMANDS.find((cmd) => cmd.name === "clawcode-memory");
       expect(memoryCmd).toBeDefined();
       expect(memoryCmd!.options).toHaveLength(1);
 
@@ -37,7 +44,7 @@ describe("slash-types", () => {
     });
 
     it("commands without options have an empty options array", () => {
-      const nonMemory = DEFAULT_SLASH_COMMANDS.filter((cmd) => cmd.name !== "memory");
+      const nonMemory = DEFAULT_SLASH_COMMANDS.filter((cmd) => cmd.name !== "clawcode-memory");
       expect(nonMemory.length).toBe(5);
       for (const cmd of nonMemory) {
         expect(cmd.options).toEqual([]);
