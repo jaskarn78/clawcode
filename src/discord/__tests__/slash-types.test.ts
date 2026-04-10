@@ -7,8 +7,8 @@ import {
 
 describe("slash-types", () => {
   describe("DEFAULT_SLASH_COMMANDS", () => {
-    it("contains exactly 6 commands with clawcode- prefix", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(6);
+    it("contains exactly 7 commands with clawcode- prefix", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(7);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
@@ -17,6 +17,7 @@ describe("slash-types", () => {
         "clawcode-health",
         "clawcode-compact",
         "clawcode-usage",
+        "clawcode-model",
       ]);
     });
 
@@ -44,11 +45,24 @@ describe("slash-types", () => {
     });
 
     it("commands without options have an empty options array", () => {
-      const nonMemory = DEFAULT_SLASH_COMMANDS.filter((cmd) => cmd.name !== "clawcode-memory");
-      expect(nonMemory.length).toBe(5);
-      for (const cmd of nonMemory) {
+      const withOptions = new Set(["clawcode-memory", "clawcode-model"]);
+      const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
+      expect(noOptionCmds.length).toBe(5);
+      for (const cmd of noOptionCmds) {
         expect(cmd.options).toEqual([]);
       }
+    });
+
+    it("the model command has one required option named model of type STRING (3)", () => {
+      const modelCmd = DEFAULT_SLASH_COMMANDS.find((cmd) => cmd.name === "clawcode-model");
+      expect(modelCmd).toBeDefined();
+      expect(modelCmd!.options).toHaveLength(1);
+
+      const modelOpt = modelCmd!.options[0];
+      expect(modelOpt.name).toBe("model");
+      expect(modelOpt.type).toBe(3);
+      expect(modelOpt.required).toBe(true);
+      expect(modelOpt.description).toBeTruthy();
     });
 
     it("default commands are readonly arrays", () => {
