@@ -153,8 +153,12 @@ Plans:
   3. Net system prompt size for a v1.5 agent is equal to or smaller than an equivalent v1.4 agent
 **Plans:** 2 plans
 Plans:
-- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
-- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
+- [ ] 41-01-PLAN.md — Context assembler module with TDD (LOAD-03)
+- [ ] 41-02-PLAN.md — Schema extension + buildSessionConfig refactor (LOAD-03)
+
+
+
+
 
 ## Progress
 
