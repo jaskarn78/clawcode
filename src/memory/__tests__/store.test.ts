@@ -112,14 +112,16 @@ describe("MemoryStore", () => {
       expect(vecCount.cnt).toBe(1);
     });
 
-    it("defaults importance to 0.5", () => {
+    it("auto-calculates importance when not explicitly provided", () => {
       store = createTestStore();
       const entry = store.insert(
         { content: "test", source: "system" },
         randomEmbedding(),
       );
 
-      expect(entry.importance).toBe(0.5);
+      // Short content gets low score from calculateImportance (recencyBoost + tiny lengthScore)
+      expect(entry.importance).toBeGreaterThan(0);
+      expect(entry.importance).toBeLessThan(0.5);
     });
 
     it("defaults tags to empty array", () => {

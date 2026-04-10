@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { MemoryError } from "./errors.js";
 import { checkForDuplicate, mergeMemory } from "./dedup.js";
 import { extractWikilinks } from "./graph.js";
+import { calculateImportance } from "./importance.js";
 import type {
   MemoryEntry,
   MemoryTier,
@@ -132,7 +133,9 @@ export class MemoryStore {
       // Normal insert path
       const now = new Date().toISOString();
       const id = nanoid();
-      const importance = input.importance ?? 0.5;
+      const importance = input.importance != null && input.importance !== 0.5
+        ? input.importance
+        : calculateImportance(input.content);
       const tags = input.tags ?? [];
 
       this.db.transaction(() => {
