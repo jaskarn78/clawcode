@@ -39,10 +39,20 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Discord reaction handling — forward emoji reactions to bound agents — v1.1
 - Memory search CLI — semantic search and browsing of agent memory stores — v1.1
 
+### Validated (v1.3)
+
+- Subagent thread skill — skill wrapper for Discord-visible subagent threads — v1.3
+- MCP client consumption — per-agent external MCP server config with health checks — v1.3
+
+### Validated (v1.4)
+
+- Global skill install — workspace skills auto-installed to ~/.claude/skills/ at daemon startup — v1.4
+- Standalone agent runner — `clawcode run <agent>` starts single agent without daemon — v1.4
+- OpenClaw coexistence — token hard-fail, slash command namespace, dashboard non-fatal, env var interpolation — v1.4
+
 ### Active
 
-- [ ] Subagent thread skill — wrap IPC call so agents auto-use Discord threads for subagents
-- [ ] MCP client consumption — agents connect to external MCP servers (Finnhub, Google Workspace, etc.)
+(No active requirements — next milestone not yet planned)
 
 ### Validated (v1.2)
 
@@ -69,21 +79,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Shared global memory — violates workspace isolation; per-agent memory with explicit sharing via admin
 - Visual UI for config/management — YAML config is sufficient; UI deferred
 
-## Current Milestone: v1.3 Agent Integrations
+## Current State
 
-**Goal:** Complete subagent-thread UX and enable agents to connect to external MCP servers.
+**Latest milestone:** v1.4 Agent Runtime (shipped 2026-04-10)
 
-**Target features:**
-- Subagent thread skill wrapping spawn-subagent-thread IPC for seamless Discord thread creation
-- System prompt injection guiding agents to use the skill instead of raw Agent tool
-- MCP server config per agent in clawcode.yaml (command, args, env vars)
-- Daemon passes MCP configs to agent sessions for Claude Code native activation
-- MCP tool discovery via system prompt injection
-- CLI command for MCP server status
+v1.0-v1.4 delivered 35 phases across 5 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, and agent runtime.
+
+**Next milestone:** Not yet planned. Run `/gsd:new-milestone` to start.
 
 ## Context
 
-ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0 (core infrastructure) and v1.1 (advanced intelligence) with 20 phases, 40+ plans, covering 136 TypeScript files and ~20,700 LOC.
+ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0-v1.4 with 35 phases across 5 milestones, covering 150+ TypeScript files.
 
 **Tech stack:** TypeScript, Node.js 22 LTS, better-sqlite3, sqlite-vec, @huggingface/transformers, croner, execa, discord.js 14, zod 4, pino, @modelcontextprotocol/sdk.
 
@@ -126,4 +132,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-09 after v1.3 milestone started*
+*Last updated: 2026-04-10 after v1.4 milestone*
