@@ -1,0 +1,117 @@
+import type { Command } from "commander";
+import { join } from "node:path";
+import { cliLog, cliError } from "../output.js";
+import { loadConfig, resolveAllAgents } from "../../config/loader.js";
+import { SdkSessionAdapter } from "../../manager/session-adapter.js";
+import { SessionManager } from "../../manager/session-manager.js";
+import { DiscordBridge, loadBotToken } from "../../discord/bridge.js";
+import { buildRoutingTable } from "../../discord/router.js";
+import { installWorkspaceSkills } from "../../skills/installer.js";
+import { logger } from "../../shared/logger.js";
+import { buildSessionConfig } from "../../manager/session-config.js";
+
+/**
+ * Register the `clawcode run <agent>` command.
+ *
+ * Starts a single agent in the foreground: SessionManager + Discord bridge.
+ * No daemon required (no IPC socket, registry, or heartbeat).
+ * Ctrl+C for graceful shutdown.
+ */
+export function registerRunCommand(program: Command): void {
+  program
+    .command("run <agent>")
+    .description("Run a single agent in the foreground (no daemon required)")
+    .option("-c, --config <path>", "Path to config file", "clawcode.yaml")
+    .action(async (agentName: string, opts: { config: string }) => {
+      const log = logger.child({ component: "run" });
+
+      // 1. Install workspace skills
+      await installWorkspaceSkills(join(process.cwd(), "skills"), undefined, log);
+
+      // 2. Load config and find agent
+      let config;
+      try {
+        config = await loadConfig(opts.config);
+      } catch (err) {
+        cliError(`Config error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+
+      const resolvedAgents = resolveAllAgents(config);
+      const agentConfig = resolvedAgents.find((a) => a.name === agentName);
+
+      if (!agentConfig) {
+        cliError(
+          `Agent '${agentName}' not found in config. Available: ${resolvedAgents.map((a) => a.name).join(", ")}`,
+        );
+        process.exit(1);
+      }
+
+      // 3. Build routing table (single agent only)
+      const routingTable = buildRoutingTable([agentConfig]);
+
+      // 4. Create SessionManager
+      const adapter = new SdkSessionAdapter();
+      const manager = new SessionManager({
+        adapter,
+        registryPath: join(process.env.HOME ?? "~", ".clawcode", "manager", "registry.json"),
+      });
+      manager.setAllAgentConfigs(resolvedAgents);
+
+      // 5. Load bot token and create Discord bridge
+      let botToken: string;
+      try {
+        botToken = loadBotToken();
+      } catch {
+        cliError(
+          "Discord bot token not found. Set DISCORD_BOT_TOKEN or configure in ~/.claude/channels/discord/.env",
+        );
+        process.exit(1);
+      }
+
+      const bridge = new DiscordBridge({
+        routingTable,
+        sessionManager: manager,
+        botToken,
+        log,
+      });
+
+      // 6. Build session config
+      const sessionConfig = await buildSessionConfig(agentConfig, {
+        tierManagers: new Map(),
+        skillsCatalog: new Map(),
+        allAgentConfigs: resolvedAgents,
+      });
+
+      // 7. Print startup summary
+      cliLog(`\nStarting agent: ${agentConfig.name}`);
+      cliLog(`  Model:    ${agentConfig.model}`);
+      cliLog(`  Channels: ${agentConfig.channels.join(", ") || "(none)"}`);
+      cliLog(`  Workspace: ${agentConfig.workspace}`);
+      cliLog(`\nPress Ctrl+C to stop.\n`);
+
+      // 8. Graceful shutdown
+      const shutdown = async (signal: string) => {
+        cliLog(`\n${signal} received — stopping agent...`);
+        await manager.stopAgent(agentConfig.name);
+        await bridge.stop();
+        process.exit(0);
+      };
+
+      process.on("SIGINT", () => void shutdown("SIGINT"));
+      process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+      // 9. Start bridge then agent
+      try {
+        await bridge.start();
+        await manager.startAgent(agentConfig.name, { ...agentConfig, ...sessionConfig });
+        log.info({ agent: agentConfig.name }, "agent runner started");
+
+        // Block forever — agent runs via Discord message callbacks
+        await new Promise(() => {});
+      } catch (err) {
+        cliError(`Failed to start agent: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+}
