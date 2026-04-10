@@ -49,6 +49,8 @@ import { parseSecurityMd } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
 import { startDashboardServer } from "../dashboard/server.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
+import { EscalationMonitor } from "./escalation.js";
+import type { EscalationConfig } from "./escalation.js";
 
 /**
  * Base directory for manager runtime files.
@@ -185,6 +187,14 @@ export async function startDaemon(
     log,
   });
 
+  // 6a. Create EscalationMonitor for transparent model escalation
+  const escalationMonitor = new EscalationMonitor(manager, {
+    errorThreshold: 3,
+    escalationModel: "sonnet",
+    keywordTriggers: ["this needs opus"],
+  });
+  log.info("escalation monitor initialized");
+
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
 
@@ -293,7 +303,7 @@ export async function startDaemon(
 
   // 9. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor);
   };
 
   // 10. Create IPC server
@@ -533,6 +543,7 @@ async function routeMethod(
   allowlistMatchers: Map<string, AllowlistMatcher>,
   approvalLog: ApprovalLog,
   securityPolicies: Map<string, SecurityPolicy>,
+  escalationMonitor: EscalationMonitor,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -659,6 +670,33 @@ async function routeMethod(
       const inboxDir = join(targetConfig.workspace, "inbox");
       const message = createMessage(from, to, content, priority as "normal" | "high" | "urgent");
       await writeMessage(inboxDir, message);
+
+      // If target agent is running, send directly and check for escalation
+      const running = manager.getRunningAgents();
+      if (running.includes(to)) {
+        try {
+          let response = await manager.sendToAgent(to, content);
+
+          // Error detection heuristic: check for common failure indicators
+          const ERROR_INDICATORS = [
+            "i can't", "i'm unable", "i don't have the capability",
+            "tool_use_error", "error executing",
+          ];
+          const lowerResponse = response.toLowerCase();
+          const isError = ERROR_INDICATORS.some((indicator) => lowerResponse.includes(indicator));
+
+          // Check if escalation is needed
+          if (escalationMonitor.shouldEscalate(to, response, isError)) {
+            response = await escalationMonitor.escalate(to, content);
+            return { ok: true, messageId: message.id, response, escalated: true };
+          }
+
+          return { ok: true, messageId: message.id, response, escalated: false };
+        } catch {
+          // Direct send failed -- inbox write already succeeded, return ok
+          return { ok: true, messageId: message.id };
+        }
+      }
 
       return { ok: true, messageId: message.id };
     }
