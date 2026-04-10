@@ -134,10 +134,14 @@ Plans:
   2. New memories receive automatic importance scores based on content heuristics (length, entity density, recency)
   3. Per-agent escalation budgets enforce daily/weekly token limits for upgraded models
   4. Discord alerts fire when an agent approaches or exceeds its escalation budget
-**Plans:** 2 plans
+**Plans:** 2/2 plans
 Plans:
-- [ ] 36-01-PLAN.md — Wikilink parsing, graph schema, link-aware insert/merge (GRAPH-01)
-- [ ] 36-02-PLAN.md — Backlink/forward-link queries, re-warm edge restoration (GRAPH-02)
+- [ ] 40-01-PLAN.md — Cost tracking, pricing map, importance scoring, CLI + dashboard (COST-01, COST-02)
+- [ ] 40-02-PLAN.md — Escalation budgets with Discord alerts (TIER-04)
+
+
+
+
 
 ### Phase 41: Context Assembly Pipeline
 **Goal**: Identity, memories, graph results, and tools are composed into context with explicit per-source token budgets
