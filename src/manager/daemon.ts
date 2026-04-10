@@ -410,12 +410,13 @@ export async function startDaemon(
     log.info("subagent thread spawner initialized");
   }
 
-  // 11c. Initialize slash command handler
+  // 11c. Initialize slash command handler (requires Discord bridge client — no fallback)
   const slashHandler = new SlashCommandHandler({
     routingTable,
     sessionManager: manager,
     resolvedAgents,
     botToken,
+    client: discordBridge?.discordClient,
     log,
   });
   if (botToken) {

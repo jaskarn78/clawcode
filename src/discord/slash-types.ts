@@ -47,7 +47,7 @@ export type SlashCommandDef = {
  */
 export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
-    name: "status",
+    name: "clawcode-status",
     description: "Get the agent's current status",
     claudeCommand: `Report your status in EXACTLY this compact format (replace values with your actual state). Use emoji line prefixes. Keep it concise — no extra text:
 
@@ -61,7 +61,7 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     options: [],
   },
   {
-    name: "memory",
+    name: "clawcode-memory",
     description: "Search the agent's memory",
     claudeCommand: "Search your memory for: {query}",
     options: [
@@ -74,25 +74,25 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "schedule",
+    name: "clawcode-schedule",
     description: "Show the agent's scheduled tasks",
     claudeCommand: "Show your current scheduled tasks and their next run times",
     options: [],
   },
   {
-    name: "health",
+    name: "clawcode-health",
     description: "Get the agent's health status",
     claudeCommand: "Report your health status including context usage and memory stats",
     options: [],
   },
   {
-    name: "compact",
+    name: "clawcode-compact",
     description: "Trigger context compaction",
     claudeCommand: "Trigger context compaction now and report the result",
     options: [],
   },
   {
-    name: "usage",
+    name: "clawcode-usage",
     description: "Show token usage and costs",
     claudeCommand: "Report your usage statistics: session totals and this week's usage. Include tokens in/out, cost, turns, and duration.",
     options: [],

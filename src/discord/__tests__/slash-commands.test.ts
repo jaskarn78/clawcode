@@ -59,13 +59,13 @@ describe("resolveAgentCommands", () => {
 
   it("overrides default command when agent defines one with the same name", () => {
     const customStatus: SlashCommandDef = {
-      name: "status",
+      name: "clawcode-status",
       description: "Custom status",
       claudeCommand: "Custom status report",
       options: [],
     };
     const result = resolveAgentCommands([customStatus]);
-    const statusCmd = result.find((c) => c.name === "status");
+    const statusCmd = result.find((c) => c.name === "clawcode-status");
     expect(statusCmd).toBeDefined();
     expect(statusCmd!.description).toBe("Custom status");
     expect(statusCmd!.claudeCommand).toBe("Custom status report");
