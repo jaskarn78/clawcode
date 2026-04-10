@@ -83,9 +83,10 @@ Recent decisions affecting current work:
 | 260409-wdc | Configure all 14 OpenClaw MCP servers in clawcode.yaml | 2026-04-09 | 37137cc | [260409-wdc](./quick/260409-wdc-configure-all-openclaw-mcp-servers-in-cl/) |
 | 260409-whx | Fix stale test fixture type definitions (53 errors across 23 files) | 2026-04-09 | a56dee4 | [260409-whx](./quick/260409-whx-fix-stale-test-fixture-type-definitions-/) |
 | 260409-x58 | Wire up dashboard CLI command and agent create wizard | 2026-04-09 | 9da521d | [260409-x58](./quick/260409-x58-wire-up-dashboard-cli-command-and-agent-/) |
+| 260410-01x | Migrate workspace-general to test-agent (11 MCP servers, soul, identity, 111 memory files) | 2026-04-10 | e110678 | [260410-01x](./quick/260410-01x-migrate-workspace-general-from-openclaw-/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-09
-Stopped at: Completed dashboard CLI + agent-create wizard
+Last activity: 2026-04-10
+Stopped at: Migrated workspace-general to test-agent (Clawdy)
 Resume file: None
