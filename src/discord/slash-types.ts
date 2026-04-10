@@ -97,4 +97,17 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     claudeCommand: "Report your usage statistics: session totals and this week's usage. Include tokens in/out, cost, turns, and duration.",
     options: [],
   },
+  {
+    name: "clawcode-model",
+    description: "Set the default model for an agent",
+    claudeCommand: "Set my model to {model}",
+    options: [
+      {
+        name: "model",
+        type: 3,
+        description: "Model to use (haiku, sonnet, opus)",
+        required: true,
+      },
+    ],
+  },
 ] as const;

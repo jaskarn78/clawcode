@@ -53,6 +53,8 @@ import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
 import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
+import { modelSchema } from "../config/schema.js";
+import type { ResolvedAgentConfig } from "../shared/types.js";
 
 /**
  * Base directory for manager runtime files.
@@ -1117,8 +1119,42 @@ async function routeMethod(
     }
 
     case "set-model": {
-      // Placeholder -- implemented in Task 2
-      throw new ManagerError("set-model not yet implemented");
+      const agentName = validateStringParam(params, "agent");
+      const modelParam = validateStringParam(params, "model");
+
+      // Validate model name
+      const parsed = modelSchema.safeParse(modelParam);
+      if (!parsed.success) {
+        throw new ManagerError(
+          `Invalid model '${modelParam}'. Must be one of: haiku, sonnet, opus`,
+        );
+      }
+      const newModel = parsed.data;
+
+      // Find agent config
+      const idx = configs.findIndex((c) => c.name === agentName);
+      if (idx === -1) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+
+      const existingConfig = configs[idx];
+      const oldModel = existingConfig.model;
+
+      // Create new frozen config with updated model (immutability per CLAUDE.md)
+      const updatedConfig = Object.freeze({ ...existingConfig, model: newModel });
+
+      // Replace in configs array (mutable array, readonly elements)
+      (configs as ResolvedAgentConfig[])[idx] = updatedConfig;
+
+      // Update SessionManager's reference so next session uses new model
+      manager.setAllAgentConfigs(configs);
+
+      return {
+        agent: agentName,
+        old_model: oldModel,
+        new_model: newModel,
+        note: "Takes effect on next session",
+      };
     }
 
     default:
