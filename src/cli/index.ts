@@ -30,6 +30,7 @@ import { registerSpawnThreadCommand } from "./commands/spawn-thread.js";
 import { registerMcpServersCommand } from "./commands/mcp-servers.js";
 import { registerDashboardCommand } from "./commands/dashboard.js";
 import { registerAgentCreateCommand } from "./commands/agent-create.js";
+import { registerRunCommand } from "./commands/run.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -140,6 +141,7 @@ registerSpawnThreadCommand(program);
 registerMcpServersCommand(program);
 registerDashboardCommand(program);
 registerAgentCreateCommand(program);
+registerRunCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests)
 const isDirectRun =
