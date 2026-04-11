@@ -176,6 +176,29 @@ export class SubagentThreadSpawner {
       "subagent thread spawned",
     );
 
+    // 12. Send initial prompt and post response to thread (fire-and-forget)
+    const initialPrompt = config.systemPrompt
+      ? `You've been spawned as a subagent in thread "${config.threadName}". Your task:\n\n${config.systemPrompt}\n\nBegin working on this immediately. Post your findings and progress in this thread.`
+      : `You've been spawned as a subagent in thread "${config.threadName}". Introduce yourself and wait for instructions.`;
+
+    void (async () => {
+      try {
+        const response = await this.sessionManager.sendToAgent(sessionName, initialPrompt);
+        if (response && thread.sendable) {
+          // Split long responses for Discord's 2000 char limit
+          const MAX = 2000;
+          for (let i = 0; i < response.length; i += MAX) {
+            await thread.send(response.slice(i, i + MAX));
+          }
+        }
+      } catch (err) {
+        this.log.warn(
+          { sessionName, error: (err as Error).message },
+          "failed to send initial prompt to subagent",
+        );
+      }
+    })();
+
     return {
       threadId: thread.id,
       sessionName,

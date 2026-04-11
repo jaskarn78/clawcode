@@ -281,7 +281,18 @@ export class DiscordBridge {
           void message.channel.sendTyping();
         }
 
-        await this.sessionManager.forwardToAgent(sessionName, formattedMessage);
+        // Send message and post response back to thread
+        try {
+          const response = await this.sessionManager.sendToAgent(sessionName, formattedMessage);
+          if (response) {
+            const MAX = 2000;
+            for (let i = 0; i < response.length; i += MAX) {
+              await message.channel.send(response.slice(i, i + MAX));
+            }
+          }
+        } catch (err) {
+          this.log.warn({ sessionName, error: (err as Error).message }, "thread agent response failed");
+        }
         this.log.info({ sessionName, threadId: message.channelId }, "message routed to thread session");
         return;
       }
