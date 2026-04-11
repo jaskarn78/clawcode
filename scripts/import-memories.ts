@@ -180,7 +180,7 @@ async function main() {
           {
             id,
             content: chunk,
-            source: "import",
+            source: "manual",
             importance,
             tags,
             createdAt,
