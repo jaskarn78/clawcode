@@ -379,11 +379,10 @@ export async function startDaemon(
     if (raw.startsWith("op://")) {
       try {
         botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000 }).trim();
-      } catch {
-        throw new Error(
-          "Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. " +
-          "Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken"
-        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error({ error: msg }, "Failed to resolve Discord bot token from 1Password — Discord bridge disabled. Fix: install 1Password CLI (op) and authenticate, or set a literal token in clawcode.yaml");
+        botToken = "";
       }
     } else {
       botToken = raw;
