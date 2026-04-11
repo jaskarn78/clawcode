@@ -14,8 +14,11 @@ ClawCode turns Claude Code into a multi-agent platform. Each agent is a persiste
 - **Inter-agent messaging** through filesystem-based inboxes
 - **Model escalation** — agents on Sonnet can escalate to Opus when they need it
 - **Budget enforcement** — per-agent token limits with Discord alerts
-- **Health monitoring** — context fill tracking, automatic zone alerts
+- **Health monitoring** — context fill tracking, automatic zone alerts to Discord
 - **Web dashboard** — real-time agent status via SSE
+- **MCP tools auto-injected** — every agent gets `memory_lookup`, `spawn_subagent_thread`, `ask_advisor` out of the box
+- **1Password integration** — auto-injected when `OP_SERVICE_ACCOUNT_TOKEN` is set
+- **Self-updating** — `clawcode update` pulls, rebuilds, and restarts from git
 
 ## Architecture
 
@@ -47,7 +50,7 @@ Each agent gets an isolated workspace at `~/.clawcode/agents/<name>/` with its o
 ### Prerequisites
 
 - Node.js 22 LTS
-- [Claude Code CLI](https://claude.ai/code) installed
+- [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude login`)
 - Discord bot token (optional, for Discord integration)
 
 ### Install
@@ -59,13 +62,52 @@ npm install
 npm run build
 ```
 
-### Configure
+### Create an Agent
 
-Create a `clawcode.yaml` in the project root:
+The interactive wizard walks through everything:
+
+```bash
+clawcode agent-create
+```
+
+```
+  ClawCode Agent Setup
+  ====================
+
+Agent name: assistant
+Discord channel ID: 1234567890123456
+Soul/personality: You are a helpful assistant with a dry wit.
+Model (sonnet/opus/haiku) [sonnet]:
+Display name: Assistant
+Emoji: 🤖
+Workspace path [~/.clawcode/agents/assistant]:
+
+  Optional features:
+  Add scheduled tasks (cron)? [y/N]:
+  Enable model escalation (Sonnet → Opus)? [y/N]: y
+    Daily Opus token limit [50000]:
+  Make this an admin agent? [y/N]:
+  Use webhook identity? [y/N]: y
+    Webhook display name [Assistant]:
+    Avatar URL:
+  Bind to additional channels? [y/N]:
+
+Agent 'assistant' added to clawcode.yaml
+Initializing workspace...
+  Created: ~/.clawcode/agents/assistant
+    - SOUL.md
+    - IDENTITY.md
+
+  Start with:
+    clawcode start assistant
+```
+
+Or configure manually in `clawcode.yaml`:
 
 ```yaml
 discord:
-  botToken: "your-discord-bot-token"
+  botToken: "op://vault/item/field"  # 1Password reference
+  # botToken: "your-token"           # or literal (not recommended)
 
 defaults:
   model: sonnet
@@ -76,7 +118,6 @@ agents:
   - name: assistant
     model: sonnet
     channels: ["DISCORD_CHANNEL_ID"]
-    workspace: ~/.clawcode/agents/assistant
     soul: |
       You are a helpful assistant with a dry wit.
       You remember conversations and learn from them.
@@ -84,7 +125,6 @@ agents:
   - name: researcher
     model: sonnet
     channels: ["ANOTHER_CHANNEL_ID"]
-    workspace: ~/.clawcode/agents/researcher
     escalationBudget:
       daily:
         opus: 100000
@@ -113,6 +153,7 @@ clawcode status
 | Command | Description |
 |---------|-------------|
 | `clawcode init` | Initialize agent workspaces from config |
+| `clawcode agent-create` | Interactive agent setup wizard |
 | `clawcode start <name>` | Start a single agent |
 | `clawcode start-all` | Start daemon with all agents |
 | `clawcode stop <name>` | Stop an agent |
@@ -132,8 +173,43 @@ clawcode status
 | `clawcode security` | Manage channel access policies |
 | `clawcode dashboard` | Launch web dashboard |
 | `clawcode mcp` | Start MCP server (for agent-to-agent tools) |
-| `clawcode agent-create` | Scaffold a new agent config |
 | `clawcode run <agent> <prompt>` | One-shot: send prompt and exit |
+| `clawcode update` | Pull latest from git, rebuild, optionally restart |
+
+## Authentication
+
+ClawCode uses **Claude Code's own authentication** — no separate Anthropic API key needed. Run `claude login` before starting the daemon.
+
+For Discord, set the bot token in `clawcode.yaml`:
+- **1Password (recommended):** `botToken: "op://vault/item/field"` — resolved via `op read` at startup
+- **Literal:** `botToken: "your-token"` — stored in plaintext (not recommended for production)
+
+## MCP Servers
+
+Two MCP servers are **auto-injected** for every agent — no configuration needed:
+
+| Server | Condition | Tools Provided |
+|--------|-----------|----------------|
+| `clawcode` | Always | `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `agent_status`, `send_message` |
+| `1password` | When `OP_SERVICE_ACCOUNT_TOKEN` is set | Secure credential access via 1Password |
+
+Add custom MCP servers in `clawcode.yaml`:
+
+```yaml
+# Shared definitions (referenced by name in agent configs)
+mcpServers:
+  finnhub:
+    name: finnhub
+    command: node
+    args: ["/path/to/finnhub-mcp/server.js"]
+    env:
+      API_KEY: "op://vault/Finnhub/api-key"
+
+agents:
+  - name: trader
+    mcpServers: ["finnhub"]  # Reference shared definition
+    # ...
+```
 
 ## Memory System
 
@@ -149,6 +225,7 @@ Each agent has a local SQLite database with vector search powered by [sqlite-vec
 - Daily/weekly/monthly consolidation
 - Relevance decay over time
 - Wikilink-style knowledge graph between memories
+- Context zone alerts delivered to Discord when memory fills up
 
 ## Deployment (Ubuntu)
 
@@ -164,15 +241,32 @@ This installs Node.js 22, Claude Code CLI, builds the project, creates a `clawco
 # Authenticate (Claude Code handles auth — no separate API key needed)
 sudo -u clawcode claude login
 
-# Configure
-sudo editor /etc/clawcode/clawcode.yaml  # Configure agents
+# Configure agents
+sudo editor /etc/clawcode/clawcode.yaml
 
-# Run
+# Or use the interactive wizard
+sudo -u clawcode clawcode agent-create -c /etc/clawcode/clawcode.yaml
+
+# Start and enable on boot
 sudo systemctl start clawcode
 sudo systemctl enable clawcode
 
-# Logs
+# View logs
 journalctl -u clawcode -f
+```
+
+### Updating
+
+Pull the latest code, rebuild, and restart:
+
+```bash
+clawcode update --restart
+```
+
+Or without restart (apply on next daemon start):
+
+```bash
+clawcode update
 ```
 
 ## Tech Stack
@@ -229,6 +323,8 @@ src/
   bootstrap/    # First-run agent initialization
   dashboard/    # Web UI with SSE real-time updates
   shared/       # Logger, errors, types, utilities
+scripts/
+  install.sh    # Ubuntu deployment installer
 ```
 
 ## License
