@@ -59,13 +59,18 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
 
 /**
  * Base directory for manager runtime files.
+ * Overridable via CLAWCODE_HOME env var for cross-user access.
  */
-export const MANAGER_DIR = join(homedir(), ".clawcode", "manager");
+export const MANAGER_DIR = join(
+  process.env.CLAWCODE_HOME ?? join(homedir(), ".clawcode"),
+  "manager",
+);
 
 /**
  * Path to the Unix domain socket.
+ * Overridable via CLAWCODE_SOCKET env var for cross-user CLI access.
  */
-export const SOCKET_PATH = join(MANAGER_DIR, "clawcode.sock");
+export const SOCKET_PATH = process.env.CLAWCODE_SOCKET ?? join(MANAGER_DIR, "clawcode.sock");
 
 /**
  * Path to the PID file.
@@ -637,6 +642,19 @@ async function routeMethod(
     case "start-all": {
       await manager.startAll(configs);
       return { ok: true };
+    }
+
+    case "stop-all": {
+      await manager.stopAll();
+      return { ok: true };
+    }
+
+    case "shutdown": {
+      // Respond first, then shut down (so the IPC response gets sent)
+      setTimeout(() => {
+        process.kill(process.pid, "SIGTERM");
+      }, 100);
+      return { ok: true, message: "Daemon shutting down" };
     }
 
     case "status": {

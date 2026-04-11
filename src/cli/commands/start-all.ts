@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { startDaemon, SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
@@ -71,20 +72,28 @@ export function registerStartAllCommand(program: Command): void {
           }
 
           // Spawn daemon as detached child process.
-          // Use cwd-relative path since the bundled CLI's import.meta.dirname
-          // resolves to dist/cli/ which breaks the relative path to source.
-          const entryScript = resolve(
-            process.cwd(),
-            "src/manager/daemon-entry.ts",
-          );
+          // Prefer the built daemon entry (node dist/...) over npx tsx for production.
+          const scriptDir = dirname(resolve(process.argv[1]));
+          const projectRoot = resolve(scriptDir, "..", "..");
+          const builtEntry = resolve(projectRoot, "dist", "cli", "index.js");
+          const sourceEntry = resolve(projectRoot, "src", "manager", "daemon-entry.ts");
 
-          const child = spawn(
-            "npx",
-            ["tsx", entryScript, "--config", opts.config],
-            {
+          let cmd: string;
+          let args: string[];
+          if (existsSync(builtEntry)) {
+            // Production: use node with the built CLI entry + start-all --foreground
+            cmd = process.execPath;
+            args = [builtEntry, "start-all", "--foreground", "--config", opts.config];
+          } else {
+            // Development: fall back to npx tsx with daemon-entry
+            cmd = "npx";
+            args = ["tsx", sourceEntry, "--config", opts.config];
+          }
+
+          const child = spawn(cmd, args, {
               detached: true,
               stdio: "ignore",
-              cwd: process.cwd(),
+              cwd: projectRoot,
               env: (() => {
                 const { ANTHROPIC_API_KEY: _, ...rest } = process.env;
                 return rest;

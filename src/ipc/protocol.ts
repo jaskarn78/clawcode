@@ -9,6 +9,8 @@ export const IPC_METHODS = [
   "stop",
   "restart",
   "start-all",
+  "stop-all",
+  "shutdown",
   "status",
   "routes",
   "rate-limit-status",
