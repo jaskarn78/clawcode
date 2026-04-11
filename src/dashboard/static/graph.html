@@ -270,12 +270,88 @@
     .conn-item:hover { background: var(--bg-hover); }
     .conn-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--purple); flex-shrink: 0; }
     .conn-text { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ─── Mobile menu toggle ─── */
+    .mobile-bar {
+      display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      height: 44px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+      align-items: center; justify-content: space-between; padding: 0 14px;
+    }
+    .mobile-bar-logo {
+      font-family: "JetBrains Mono", monospace; font-weight: 700;
+      font-size: 0.9rem; color: var(--text); text-decoration: none;
+    }
+    .mobile-bar-logo span { color: var(--purple); }
+    .mobile-bar-btns { display: flex; gap: 8px; }
+    .mobile-btn {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-dim); font-size: 1rem; width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+    }
+    .mobile-btn:hover { color: var(--text); border-color: var(--purple); }
+
+    /* Sidebar overlay on mobile */
+    .sidebar-overlay {
+      display: none; position: fixed; inset: 0; z-index: 180;
+      background: rgba(0,0,0,0.6);
+    }
+
+    /* ─── Responsive: Tablet ─── */
+    @media (max-width: 1024px) {
+      .sidebar { width: 180px; }
+      .detail.open { width: 50%; min-width: 280px; }
+    }
+
+    /* ─── Responsive: Mobile ─── */
+    @media (max-width: 768px) {
+      body { flex-direction: column; }
+
+      .mobile-bar { display: flex; }
+
+      .sidebar {
+        position: fixed; top: 44px; left: 0; bottom: 0; z-index: 190;
+        width: 240px; transform: translateX(-100%);
+        transition: transform 0.2s ease;
+      }
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-overlay.open { display: block; }
+
+      .sidebar-header { display: none; } /* logo in mobile bar instead */
+
+      .graph-area { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; }
+      .graph-stats { top: 8px; left: 8px; font-size: 0.6rem; }
+
+      .detail {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        width: 100% !important; min-width: 0 !important; max-width: none !important;
+        z-index: 210; transform: translateX(100%);
+        border-left: none;
+      }
+      .detail.open { transform: translateX(0); width: 100% !important; }
+
+      .detail-content { padding: 16px; font-size: 0.84rem; }
+      .meta-grid { grid-template-columns: repeat(2, 1fr); }
+
+      .tooltip { display: none !important; } /* touch devices don't hover */
+
+      .sidebar-controls { padding: 8px 12px; }
+      .ctrl-slider { width: 70px; }
+    }
   </style>
 </head>
 <body>
 
+  <!-- MOBILE TOP BAR -->
+  <div class="mobile-bar">
+    <a class="mobile-bar-logo" href="/"><span>{/}</span> ClawCode</a>
+    <div class="mobile-bar-btns">
+      <button class="mobile-btn" id="mobile-agents" title="Agents">&#9776;</button>
+    </div>
+  </div>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
   <!-- LEFT SIDEBAR -->
-  <nav class="sidebar">
+  <nav class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <a class="sidebar-logo" href="/"><span>{/}</span> ClawCode</a>
       <a class="sidebar-back" href="/">&larr; Dashboard</a>
@@ -528,6 +604,25 @@ async function init() {
   renderAgentList(agents);
   loadAgent(agents[0]);
 }
+
+// ─── Mobile sidebar toggle ───
+function toggleSidebar() {
+  document.getElementById("sidebar").classList.toggle("open");
+  document.getElementById("sidebar-overlay").classList.toggle("open");
+}
+function closeSidebar() {
+  document.getElementById("sidebar").classList.remove("open");
+  document.getElementById("sidebar-overlay").classList.remove("open");
+}
+document.getElementById("mobile-agents").addEventListener("click", toggleSidebar);
+document.getElementById("sidebar-overlay").addEventListener("click", closeSidebar);
+
+// Close sidebar when agent is selected on mobile
+const origLoadAgent = loadAgent;
+loadAgent = async function(name) {
+  closeSidebar();
+  await origLoadAgent(name);
+};
 
 document.addEventListener("DOMContentLoaded", init);
 </script>
