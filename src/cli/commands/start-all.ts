@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { sendIpcRequest } from "../../ipc/client.js";
 import { startDaemon, SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
@@ -9,9 +9,10 @@ import { formatStatusTable } from "./status.js";
 import type { RegistryEntry } from "../../manager/types.js";
 import { cliLog, cliError } from "../output.js";
 
-/** Resolve project root from the running binary's location. */
+/** Resolve project root — follows symlinks (e.g. /usr/bin/clawcode -> /opt/clawcode/dist/cli/index.js). */
 function resolveProjectRoot(): string {
-  const scriptDir = dirname(resolve(process.argv[1]));
+  const realScript = realpathSync(process.argv[1]);
+  const scriptDir = dirname(realScript);
   return resolve(scriptDir, "..", "..");
 }
 

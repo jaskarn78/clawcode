@@ -1,15 +1,17 @@
 import type { Command } from "commander";
 import { execSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { cliLog, cliError } from "../output.js";
 
 /**
  * Resolve the ClawCode project root from the running binary's location.
- * Works whether invoked as `dist/cli/index.js`, `src/cli/index.ts` via tsx,
- * or a symlinked `clawcode` binary.
+ * Follows symlinks (e.g. /usr/bin/clawcode -> /opt/clawcode/dist/cli/index.js)
+ * then goes up two levels from cli/index.{ts,js} to reach the project root.
  */
 function resolveProjectRoot(): string {
-  const scriptDir = dirname(resolve(process.argv[1]));
+  const realScript = realpathSync(process.argv[1]);
+  const scriptDir = dirname(realScript);
   return resolve(scriptDir, "..", "..");
 }
 
