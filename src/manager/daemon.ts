@@ -365,6 +365,9 @@ export async function startDaemon(
   // 9. Await embedding warmup before accepting IPC requests
   await manager.warmupEmbeddings();
 
+  // 9a. Create routingTableRef early so IPC handler closure can access it
+  const routingTableRef = { current: routingTable };
+
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, configPath);
@@ -523,7 +526,6 @@ export async function startDaemon(
 
   // 11d. Initialize config hot-reload
   const auditTrailPath = join(MANAGER_DIR, "config-audit.jsonl");
-  const routingTableRef = { current: routingTable };
 
   const configReloader = new ConfigReloader({
     sessionManager: manager,
