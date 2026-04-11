@@ -9,6 +9,9 @@ let eventSource = null;
 /** @type {{ delivered: number; totalEnqueued: number } | null} */
 let lastDeliveryStats = null;
 
+/** @type {string} */
+let lastAgentHash = "";
+
 /**
  * Format uptime from a startedAt timestamp.
  * @param {number | null} startedAt - Unix timestamp in ms
@@ -150,9 +153,20 @@ function renderAgentCards(agents) {
   if (!grid) return;
 
   if (!agents || agents.length === 0) {
-    grid.innerHTML = '<div class="panel-placeholder">No agents registered</div>';
+    if (lastAgentHash !== "empty") {
+      grid.innerHTML = '<div class="panel-placeholder">No agents registered</div>';
+      lastAgentHash = "empty";
+    }
     return;
   }
+
+  // Only re-render when data actually changes (prevents flicker from SSE polling)
+  const hash = JSON.stringify(agents.map(a => ({
+    n: a.name, s: a.status, r: a.restartCount, z: a.zone,
+    f: a.fillPercentage, e: a.lastError,
+  })));
+  if (hash === lastAgentHash) return;
+  lastAgentHash = hash;
 
   grid.innerHTML = agents.map((agent, i) => createAgentCard(agent, i)).join("");
 }
