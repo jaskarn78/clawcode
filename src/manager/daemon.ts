@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import {
   mkdir,
   writeFile,
@@ -394,7 +394,9 @@ export async function startDaemon(
             }
           } catch { /* env file may not exist or be unreadable */ }
         }
-        botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000, env: process.env }).trim();
+        // Use full path to op CLI — /bin/sh in detached processes may not have /usr/bin in PATH
+        const opPath = existsSync("/usr/bin/op") ? "/usr/bin/op" : "op";
+        botToken = execSync(`${opPath} read "${raw}"`, { encoding: "utf-8", timeout: 10_000, env: process.env }).trim();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error({ error: msg }, "Failed to resolve Discord bot token from 1Password — Discord bridge disabled. Fix: install 1Password CLI (op) and authenticate, or set a literal token in clawcode.yaml");
