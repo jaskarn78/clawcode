@@ -53,6 +53,7 @@ import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
 import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
+import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 
@@ -191,13 +192,45 @@ export async function startDaemon(
     log,
   });
 
-  // 6a. Create EscalationMonitor for transparent model escalation
+  // 6a. Create escalation budget tracker (shared SQLite DB in manager dir)
+  const escalationBudgetDb = new Database(join(MANAGER_DIR, "escalation-budget.db"));
+  const escalationBudget = new EscalationBudget(escalationBudgetDb);
+
+  // Build per-agent budget configs from resolved configs
+  const budgetConfigs = new Map<string, import("../usage/budget.js").AgentBudgetConfig>();
+  for (const agentConfig of resolvedAgents) {
+    if (agentConfig.escalationBudget) {
+      budgetConfigs.set(agentConfig.name, agentConfig.escalationBudget);
+    }
+  }
+
+  // Create EscalationMonitor with budget enforcement and Discord alerts
   const escalationMonitor = new EscalationMonitor(manager, {
     errorThreshold: 3,
     escalationModel: "sonnet",
     keywordTriggers: ["this needs opus"],
+  }, {
+    budget: escalationBudget,
+    budgetConfigs,
+    alertCallback: discordBridge
+      ? (agent, model, threshold) => {
+          const agentConfig = resolvedAgents.find(a => a.name === agent);
+          const channelId = agentConfig?.channels[0];
+          if (channelId && discordBridge) {
+            const config = budgetConfigs.get(agent);
+            discordBridge.sendBudgetAlert(channelId, {
+              agent,
+              model,
+              tokensUsed: 0,
+              tokenLimit: 0,
+              percentage: threshold === "warning" ? 80 : 100,
+              period: "daily",
+            }).catch(err => log.warn({ err, agent }, "failed to send budget alert"));
+          }
+        }
+      : undefined,
   });
-  log.info("escalation monitor initialized");
+  log.info("escalation monitor initialized with budget enforcement");
 
   // 6a2. Create advisor budget tracker (shared SQLite DB in manager dir)
   const advisorBudgetDb = new Database(join(MANAGER_DIR, "advisor-budget.db"));

@@ -78,6 +78,16 @@ export type ResolvedAgentConfig = {
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;
   }[];
+  readonly escalationBudget?: {
+    readonly daily?: {
+      readonly sonnet?: number;
+      readonly opus?: number;
+    };
+    readonly weekly?: {
+      readonly sonnet?: number;
+      readonly opus?: number;
+    };
+  };
   readonly contextBudgets?: {
     readonly identity: number;
     readonly hotMemories: number;
