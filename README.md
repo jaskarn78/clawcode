@@ -174,7 +174,10 @@ clawcode status
 | `clawcode dashboard` | Launch web dashboard |
 | `clawcode mcp` | Start MCP server (for agent-to-agent tools) |
 | `clawcode run <agent> <prompt>` | One-shot: send prompt and exit |
-| `clawcode update` | Pull latest from git, rebuild, optionally restart |
+| `clawcode update` | Pull latest or specific release, rebuild, restart |
+| `clawcode update --list` | List available releases |
+| `clawcode update --check` | Check for updates without applying |
+| `clawcode update --version v1.0.0` | Update to a specific release |
 
 ## Authentication
 
@@ -257,17 +260,30 @@ journalctl -u clawcode -f
 
 ### Updating
 
-Pull the latest code, rebuild, and restart:
-
 ```bash
+# Check for updates
+clawcode update --check
+
+# Update to latest and restart
 clawcode update --restart
+
+# Update to a specific release
+clawcode update --version v1.0.0 --restart
+
+# List available releases
+clawcode update --list
 ```
 
-Or without restart (apply on next daemon start):
+### Creating Releases
 
 ```bash
-clawcode update
+bash scripts/release.sh patch    # v0.1.0 → v0.1.1
+bash scripts/release.sh minor    # v0.1.0 → v0.2.0
+bash scripts/release.sh major    # v0.1.0 → v1.0.0
+bash scripts/release.sh v2.0.0   # explicit version
 ```
+
+Tags are pushed to GitHub and a release is created automatically via GitHub Actions with an auto-generated changelog.
 
 ## Tech Stack
 
