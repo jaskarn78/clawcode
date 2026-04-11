@@ -147,13 +147,15 @@ install_clawcode() {
 
   cd "$CLAWCODE_DIR"
 
+  # Set ownership before npm operations so git/npm work as clawcode user
+  chown -R "$CLAWCODE_USER:$CLAWCODE_USER" "$CLAWCODE_DIR"
+
   info "Installing npm dependencies..."
-  log_cmd npm ci --omit=dev
+  log_cmd su -s /bin/bash "$CLAWCODE_USER" -c "cd '$CLAWCODE_DIR' && npm ci --omit=dev"
 
   info "Building..."
-  log_cmd npm run build
+  log_cmd su -s /bin/bash "$CLAWCODE_USER" -c "cd '$CLAWCODE_DIR' && npm run build"
 
-  chown -R "$CLAWCODE_USER:$CLAWCODE_USER" "$CLAWCODE_DIR"
   ok "ClawCode installed at ${CLAWCODE_DIR}"
 }
 
