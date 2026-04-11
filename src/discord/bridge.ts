@@ -264,11 +264,14 @@ export class DiscordBridge {
     if (this.threadManager && message.channel.isThread()) {
       const sessionName = await this.threadManager.routeMessage(message.channelId);
       if (sessionName) {
-        // Download attachments for thread messages the same way as channel messages
+        // Download attachments for thread messages using agent workspace (not /tmp)
         let downloadResults: readonly DownloadResult[] | undefined;
         if (message.attachments.size > 0) {
+          const agentConfig = this.sessionManager.getAgentConfig(sessionName);
+          const workspace = agentConfig?.workspace ?? "/tmp";
+          const attachDir = join(workspace, "inbox", "attachments");
           const attachments = extractAttachments(message.attachments);
-          downloadResults = await downloadAllAttachments(attachments, "/tmp/thread-attachments", this.log);
+          downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
         }
 
         const formattedMessage = formatDiscordMessage(message, downloadResults);

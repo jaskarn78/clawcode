@@ -192,6 +192,9 @@ export async function startDaemon(
     log,
   });
 
+  // Mutable ref so closures created before discordBridge initialization can still access it
+  const discordBridgeRef: { current: DiscordBridge | null } = { current: null };
+
   // 6a. Create escalation budget tracker (shared SQLite DB in manager dir)
   const escalationBudgetDb = new Database(join(MANAGER_DIR, "escalation-budget.db"));
   const escalationBudget = new EscalationBudget(escalationBudgetDb);
@@ -212,23 +215,24 @@ export async function startDaemon(
   }, {
     budget: escalationBudget,
     budgetConfigs,
-    alertCallback: discordBridge
-      ? (agent, model, threshold) => {
-          const agentConfig = resolvedAgents.find(a => a.name === agent);
-          const channelId = agentConfig?.channels[0];
-          if (channelId && discordBridge) {
-            const config = budgetConfigs.get(agent);
-            discordBridge.sendBudgetAlert(channelId, {
-              agent,
-              model,
-              tokensUsed: 0,
-              tokenLimit: 0,
-              percentage: threshold === "warning" ? 80 : 100,
-              period: "daily",
-            }).catch(err => log.warn({ err, agent }, "failed to send budget alert"));
-          }
-        }
-      : undefined,
+    alertCallback: (agent, model, threshold) => {
+      const bridge = discordBridgeRef.current;
+      if (!bridge) return;
+      const agentConfig = resolvedAgents.find(a => a.name === agent);
+      const channelId = agentConfig?.channels[0];
+      if (!channelId) return;
+      const config = budgetConfigs.get(agent);
+      const dailyLimit = config?.daily?.[model as keyof typeof config.daily] ?? 0;
+      const tokensUsed = escalationBudget.getUsageForPeriod(agent, model, "daily");
+      bridge.sendBudgetAlert(channelId, {
+        agent,
+        model,
+        tokensUsed,
+        tokenLimit: dailyLimit as number,
+        threshold,
+        period: "daily",
+      }).catch(err => log.warn({ err, agent }, "failed to send budget alert"));
+    },
   });
   log.info("escalation monitor initialized with budget enforcement");
 
@@ -266,12 +270,21 @@ export async function startDaemon(
     },
     notificationCallback: async (agentName: string, transition: ZoneTransition) => {
       const pct = Math.round(transition.fillPercentage * 100);
-      // TODO: Wire to Discord delivery queue (Phase 26) when available.
-      // For now, log the notification intent at info level.
       log.info(
         { agent: agentName, from: transition.from, to: transition.to, fillPercentage: pct },
         `[Context Health] Agent '${agentName}' zone: ${transition.from} -> ${transition.to} (${pct}%)`,
       );
+      // Deliver zone transition alerts to the agent's Discord channel
+      const agentConfig = resolvedAgents.find(a => a.name === agentName);
+      const channelId = agentConfig?.channels[0];
+      if (channelId) {
+        const emoji = transition.to === "red" ? "🔴" : transition.to === "yellow" ? "🟡" : "🟢";
+        deliveryQueue.enqueue(
+          agentName,
+          channelId,
+          `${emoji} **Context Health** — zone changed: ${transition.from} → ${transition.to} (${pct}% filled)`,
+        );
+      }
     },
   });
   await heartbeatRunner.initialize();
@@ -439,6 +452,7 @@ export async function startDaemon(
     });
     try {
       await discordBridge.start();
+      discordBridgeRef.current = discordBridge;
       log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord bridge started");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

@@ -33,6 +33,7 @@ export class TaskScheduler {
   private readonly sessionManager: SessionManager;
   private readonly log: Logger;
   private readonly jobs: Map<string, Cron[]> = new Map();
+  private readonly jobScheduleNames: Map<Cron, string> = new Map();
   private readonly statuses: Map<string, MutableStatus[]> = new Map();
   private readonly locks: Map<string, boolean> = new Map();
   private readonly triggers: Map<string, Map<string, TriggerCallback>> = new Map();
@@ -108,7 +109,7 @@ export class TaskScheduler {
           this.locks.set(agentName, false);
 
           // Update nextRun from the cron job
-          const job = agentJobs.find((j) => (j as any)._scheduleName === schedule.name);
+          const job = agentJobs.find((j) => this.jobScheduleNames.get(j) === schedule.name);
           if (job) {
             status.nextRun = job.nextRun()?.getTime() ?? null;
           }
@@ -120,8 +121,8 @@ export class TaskScheduler {
         void triggerHandler();
       });
 
-      // Tag the job so we can find it later for nextRun updates
-      (job as any)._scheduleName = schedule.name;
+      // Track job-to-schedule-name mapping for nextRun updates
+      this.jobScheduleNames.set(job, schedule.name);
 
       // Set initial nextRun
       status.nextRun = job.nextRun()?.getTime() ?? null;

@@ -175,7 +175,7 @@ export class EscalationBudget {
   /**
    * Get current token usage for an agent+model in the specified period.
    */
-  private getUsageForPeriod(
+  getUsageForPeriod(
     agent: string,
     model: string,
     periodType: "daily" | "weekly",

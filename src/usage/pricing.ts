@@ -30,10 +30,22 @@ export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = Object.free
  * @returns Estimated cost in USD, or 0 if model is unknown
  */
 export function estimateCost(model: string, tokensIn: number, tokensOut: number): number {
-  const pricing = MODEL_PRICING[model];
+  const pricing = lookupPricing(model);
   if (!pricing) return 0;
 
   const inputCost = (tokensIn / 1_000_000) * pricing.inputPerMillion;
   const outputCost = (tokensOut / 1_000_000) * pricing.outputPerMillion;
   return inputCost + outputCost;
+}
+
+/** Look up pricing by exact key first, then by prefix match (e.g. "claude-sonnet-4-5" → sonnet). */
+function lookupPricing(model: string): ModelPricing | undefined {
+  const exact = MODEL_PRICING[model];
+  if (exact) return exact;
+
+  const lower = model.toLowerCase();
+  for (const key of Object.keys(MODEL_PRICING)) {
+    if (lower.includes(key)) return MODEL_PRICING[key];
+  }
+  return undefined;
 }
