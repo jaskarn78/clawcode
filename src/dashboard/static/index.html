@@ -34,7 +34,10 @@
 
   <main class="dashboard">
     <section id="agents-panel" class="panel panel--wide">
-      <h2 class="panel-heading">Agents</h2>
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <h2 class="panel-heading" style="margin-bottom: 0;">Agents</h2>
+        <button class="action-btn" onclick="openAddAgentModal()" style="flex: none; width: auto; padding: 5px 14px;">+ ADD AGENT</button>
+      </div>
       <div id="agent-grid" class="agent-grid">
         <div class="panel-placeholder">Connecting to daemon...</div>
       </div>
@@ -77,6 +80,42 @@
       </section>
     </aside>
   </main>
+
+  <!-- Add Agent Modal -->
+  <div id="add-agent-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); display:none; align-items:center; justify-content:center;">
+    <div style="background:var(--bg-surface); border:1px solid rgba(255,51,102,0.2); border-radius:8px; padding:24px; width:400px; max-width:90vw;">
+      <h3 style="font-family:'JetBrains Mono',monospace; font-size:0.9rem; color:var(--text-primary); margin-bottom:16px; border-left:3px solid var(--accent-primary); padding-left:10px;">New Agent</h3>
+      <form id="add-agent-form" style="display:flex; flex-direction:column; gap:12px;">
+        <input id="aa-name" placeholder="Agent name" required style="font-family:'JetBrains Mono',monospace; font-size:0.8rem; background:var(--bg-elevated); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:8px 12px; outline:none;">
+        <input id="aa-channel" placeholder="Discord channel ID" style="font-family:'JetBrains Mono',monospace; font-size:0.8rem; background:var(--bg-elevated); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:8px 12px; outline:none;">
+        <select id="aa-model" style="font-family:'JetBrains Mono',monospace; font-size:0.8rem; background:var(--bg-elevated); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:8px 12px; outline:none;">
+          <option value="sonnet">sonnet</option>
+          <option value="opus">opus</option>
+          <option value="haiku">haiku</option>
+        </select>
+        <textarea id="aa-soul" placeholder="Soul / personality description" rows="4" style="font-family:'IBM Plex Sans',sans-serif; font-size:0.8rem; background:var(--bg-elevated); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:8px 12px; outline:none; resize:vertical;"></textarea>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button type="button" class="action-btn danger" onclick="closeAddAgentModal()" style="width:auto; padding:5px 16px;">Cancel</button>
+          <button type="submit" class="action-btn" style="width:auto; padding:5px 16px;">Create</button>
+        </div>
+        <div id="aa-result" style="font-family:'JetBrains Mono',monospace; font-size:0.75rem; display:none;"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Message History Modal -->
+  <div id="msg-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); align-items:center; justify-content:center;">
+    <div style="background:var(--bg-surface); border:1px solid rgba(255,51,102,0.2); border-radius:8px; padding:24px; width:600px; max-width:90vw; max-height:80vh; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+        <h3 id="msg-title" style="font-family:'JetBrains Mono',monospace; font-size:0.9rem; color:var(--text-primary); border-left:3px solid var(--accent-primary); padding-left:10px;">Messages</h3>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <select id="msg-date" style="font-family:'JetBrains Mono',monospace; font-size:0.72rem; background:var(--bg-elevated); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:4px 8px; outline:none;"></select>
+          <button onclick="closeMsgModal()" style="background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer;">&times;</button>
+        </div>
+      </div>
+      <div id="msg-body" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px;"></div>
+    </div>
+  </div>
 
   <script src="/app.js" defer></script>
 </body>

@@ -366,7 +366,7 @@ export async function startDaemon(
 
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, configPath);
   };
 
   // 11. Create IPC server
@@ -610,6 +610,7 @@ async function routeMethod(
   securityPolicies: Map<string, SecurityPolicy>,
   escalationMonitor: EscalationMonitor,
   advisorBudget: AdvisorBudget,
+  configPath: string,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -935,26 +936,24 @@ async function routeMethod(
 
       const embedder = manager.getEmbedder();
       const embedding = await embedder.embed(content);
-      const { nanoid } = await import("nanoid");
-      const id = nanoid();
-      const now = new Date().toISOString();
 
-      store.insert({ id, content, source: "conversation", importance, tags, createdAt: now }, embedding);
+      const entry = store.insert({ content, source: "conversation", importance, tags }, embedding);
 
       // Extract and store wikilinks
       const { extractWikilinks } = await import("../memory/graph.js");
       const wikilinks = extractWikilinks(content);
       if (wikilinks.length > 0) {
         const graphStmts = store.getGraphStatements();
+        const now = new Date().toISOString();
         for (const targetId of wikilinks) {
           const exists = graphStmts.checkMemoryExists.get(targetId);
           if (exists) {
-            try { graphStmts.insertLink.run(id, targetId, targetId, now); } catch { /* skip */ }
+            try { graphStmts.insertLink.run(entry.id, targetId, targetId, now); } catch { /* skip */ }
           }
         }
       }
 
-      return { id };
+      return { id: entry.id };
     }
 
     case "memory-list": {
@@ -1341,6 +1340,95 @@ async function routeMethod(
         }
       }
       return { period, costs: results };
+    }
+
+    case "message-history": {
+      const agentName = validateStringParam(params, "agent");
+      const limit = typeof params.limit === "number" ? params.limit : 50;
+      const date = typeof params.date === "string" ? params.date : undefined;
+
+      const config = configs.find(c => c.name === agentName);
+      if (!config) {
+        return { messages: [], dates: [] };
+      }
+
+      const memoryDir = join(config.workspace, "memory");
+      const { readdir, readFile } = await import("node:fs/promises");
+
+      // List available log dates
+      let logFiles: string[] = [];
+      try {
+        const files = await readdir(memoryDir);
+        logFiles = files
+          .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+          .sort()
+          .reverse();
+      } catch { /* no logs yet */ }
+
+      const dates = logFiles.map(f => f.replace(".md", ""));
+
+      // Read the requested date (or most recent)
+      const targetDate = date ?? dates[0];
+      if (!targetDate) {
+        return { messages: [], dates };
+      }
+
+      const filePath = join(memoryDir, `${targetDate}.md`);
+      let content = "";
+      try {
+        content = await readFile(filePath, "utf-8");
+      } catch {
+        return { messages: [], dates };
+      }
+
+      // Parse markdown log into messages
+      const messages: Array<{ time: string; role: string; content: string }> = [];
+      const sections = content.split(/^## /m).filter(Boolean);
+      for (const section of sections) {
+        const match = section.match(/^(\d{2}:\d{2}:\d{2})\s+\[(user|assistant)\]\n([\s\S]*)/);
+        if (match) {
+          messages.push({
+            time: match[1],
+            role: match[2],
+            content: match[3].trim(),
+          });
+        }
+      }
+
+      // Apply limit (most recent messages)
+      const trimmed = messages.slice(-limit);
+
+      return { messages: trimmed, dates, currentDate: targetDate };
+    }
+
+    case "create-agent": {
+      const name = validateStringParam(params, "name");
+      const channelId = typeof params.channelId === "string" ? params.channelId : "";
+      const soul = typeof params.soul === "string" ? params.soul : "";
+      const model = typeof params.model === "string" ? params.model : "sonnet";
+
+      // Check for duplicate
+      if (configs.find(c => c.name === name)) {
+        throw new ManagerError(`Agent '${name}' already exists`);
+      }
+
+      // Read and update config file
+      const { readFile, writeFile: writeF } = await import("node:fs/promises");
+      const { parse, stringify } = await import("yaml");
+
+      // Resolve config path from the daemon's startup
+      const configContent = await readFile(configPath, "utf-8");
+      const parsed = parse(configContent) as { agents: Array<Record<string, unknown>> };
+
+      const newAgent: Record<string, unknown> = { name };
+      if (channelId) newAgent.channels = [channelId];
+      if (soul) newAgent.soul = soul;
+      if (model !== "sonnet") newAgent.model = model;
+
+      parsed.agents.push(newAgent);
+      await writeF(configPath, stringify(parsed, { lineWidth: 120 }));
+
+      return { ok: true, name, message: `Agent '${name}' added to config. Restart daemon to activate.` };
     }
 
     default:

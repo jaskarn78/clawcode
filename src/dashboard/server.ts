@@ -128,6 +128,16 @@ export async function startDashboardServer(config: DashboardServerConfig): Promi
   });
 }
 
+/** Read request body as string. */
+function readRequestBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
 /**
  * Route incoming HTTP requests.
  */
@@ -223,6 +233,41 @@ async function handleRequest(
         sendJson(res, 200, data);
       } catch {
         sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
+    // Message history endpoint: GET /api/messages/:agent?date=YYYY-MM-DD
+    if (
+      method === "GET" &&
+      segments.length === 3 &&
+      segments[0] === "api" &&
+      segments[1] === "messages"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const date = queryParams.get("date") ?? undefined;
+      try {
+        const data = await sendIpcRequest(socketPath, "message-history", { agent: agentName, date });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message, messages: [], dates: [] });
+      }
+      return;
+    }
+
+    // Create agent endpoint: POST /api/agents/create
+    if (method === "POST" && pathname === "/api/agents/create") {
+      try {
+        const body = await readRequestBody(req);
+        const params = JSON.parse(body);
+        const data = await sendIpcRequest(socketPath, "create-agent", params);
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 400, { error: message });
       }
       return;
     }

@@ -28,6 +28,8 @@ describe("IPC_METHODS", () => {
       "memory-graph",
       "memory-save",
       "memory-list",
+      "message-history",
+      "create-agent",
       "threads",
       "usage",
       "context-zone-status",
