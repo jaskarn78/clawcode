@@ -14,7 +14,7 @@ export type ProgressiveEditorOptions = {
   readonly maxLength?: number;       // Default 2000 (Discord limit)
 };
 
-const DEFAULT_EDIT_INTERVAL_MS = 1500;
+const DEFAULT_EDIT_INTERVAL_MS = 800;
 const DEFAULT_MAX_LENGTH = 2000;
 
 /**
