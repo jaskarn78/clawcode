@@ -98,9 +98,7 @@ export function registerStartAllCommand(program: Command): void {
           const entries = await waitForDaemon();
 
           if (entries !== null) {
-            cliLog(
-              `Manager started. Booting ${entries.length} agent(s)...`,
-            );
+            cliLog(`Manager started with ${entries.length} agent(s).`);
             cliLog("");
             cliLog(formatStatusTable(entries));
           } else {
