@@ -22,6 +22,7 @@ export const IPC_METHODS = [
   "webhooks",
   "fork-session",
   "memory-search",
+  "memory-lookup",
   "memory-graph",
   "memory-save",
   "memory-list",
@@ -35,6 +36,9 @@ export const IPC_METHODS = [
   "spawn-subagent-thread",
   "cleanup-subagent-thread",
   "mcp-servers",
+  "update-security",
+  "ask-advisor",
+  "costs",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
