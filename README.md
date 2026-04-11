@@ -176,6 +176,8 @@ clawcode status
 | `clawcode dashboard` | Launch web dashboard |
 | `clawcode mcp` | Start MCP server (for agent-to-agent tools) |
 | `clawcode run <agent> <prompt>` | One-shot: send prompt and exit |
+| `clawcode clear` | Remove stale thread/subagent entries from registry |
+| `clawcode clear --all` | Delete all registry files for a clean start |
 | `clawcode update` | Pull latest or specific release, rebuild, restart |
 | `clawcode update --list` | List available releases |
 | `clawcode update --check` | Check for updates without applying |
@@ -231,6 +233,38 @@ Each agent has a local SQLite database with vector search powered by [sqlite-vec
 - Relevance decay over time
 - Wikilink-style knowledge graph between memories
 - Context zone alerts delivered to Discord when memory fills up
+
+## Dashboard & Knowledge Graph
+
+The web dashboard runs on port 3100 and provides real-time monitoring:
+
+- **Main dashboard** (`/`) — agent cards with status, uptime, context fill, start/stop/restart controls, health checks, schedules, delivery queue stats, memory tier distribution
+- **Knowledge graph** (`/graph`) — Obsidian-style force-directed visualization of agent memory connections
+
+### Knowledge Graph Features
+
+- Nodes sized by importance score + connection count
+- Color-coded by memory tier: hot (pink glow), warm (gold), cold (gray)
+- Hover highlights connected nodes and fades the rest
+- Tooltip shows memory content, tags, tier, importance, link count
+- Full drag, zoom, and pan interaction
+- Agent selector dropdown to switch between agents
+- Live stats showing total memories, links, and tier breakdown
+
+Access the dashboard over Tailscale or SSH tunnel:
+
+```bash
+# Via Tailscale
+http://your-hostname:3100
+
+# Via SSH tunnel
+ssh -L 3100:localhost:3100 user@your-server
+# Then open http://localhost:3100
+```
+
+Environment variables:
+- `CLAWCODE_DASHBOARD_PORT` — default `3100`
+- `CLAWCODE_DASHBOARD_HOST` — default `0.0.0.0` (all interfaces)
 
 ## Deployment (Ubuntu)
 
