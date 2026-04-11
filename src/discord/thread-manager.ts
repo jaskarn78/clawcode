@@ -35,8 +35,8 @@ export class ThreadManager {
   private readonly registryPath: string;
   private readonly log: Logger;
 
-  /** Thread IDs currently being spawned by SubagentThreadSpawner — skip auto-spawn for these. */
-  private readonly pendingSpawns: Set<string> = new Set();
+  /** Channel IDs where a subagent spawn is in progress — skip auto-spawn for threads in these channels. */
+  private readonly pendingChannels: Set<string> = new Set();
 
   constructor(config: ThreadManagerConfig) {
     this.sessionManager = config.sessionManager;
@@ -46,18 +46,19 @@ export class ThreadManager {
   }
 
   /**
-   * Mark a thread ID as being spawned externally (e.g., by SubagentThreadSpawner).
-   * Prevents the threadCreate event from creating a duplicate session.
+   * Mark a channel as having a pending subagent spawn.
+   * Call BEFORE creating the Discord thread to prevent the threadCreate
+   * event from racing and creating a duplicate session.
    */
-  markPendingSpawn(threadId: string): void {
-    this.pendingSpawns.add(threadId);
+  markPendingSpawn(channelId: string): void {
+    this.pendingChannels.add(channelId);
   }
 
   /**
    * Clear a pending spawn marker after the external spawn completes or fails.
    */
-  clearPendingSpawn(threadId: string): void {
-    this.pendingSpawns.delete(threadId);
+  clearPendingSpawn(channelId: string): void {
+    this.pendingChannels.delete(channelId);
   }
 
   /**
@@ -71,9 +72,9 @@ export class ThreadManager {
     threadName: string,
     parentChannelId: string,
   ): Promise<boolean> {
-    // 0. Skip if this thread is being spawned externally (SubagentThreadSpawner)
-    if (this.pendingSpawns.has(threadId)) {
-      this.log.debug({ threadId }, "thread is pending external spawn, skipping auto-spawn");
+    // 0. Skip if a subagent spawn is in progress for this channel
+    if (this.pendingChannels.has(parentChannelId)) {
+      this.log.debug({ threadId, parentChannelId }, "channel has pending subagent spawn, skipping auto-spawn");
       return false;
     }
 

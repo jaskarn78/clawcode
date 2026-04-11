@@ -92,13 +92,13 @@ export class SubagentThreadSpawner {
     // 4. Fetch Discord channel and create thread
     const channel = await this.discordClient.channels.fetch(channelId) as TextChannel;
 
-    // Pre-create: tell ThreadManager to ignore the threadCreate event for this thread
-    // (prevents duplicate spawn from the Discord event racing with our binding write)
+    // Mark channel BEFORE creating thread — prevents threadCreate event from racing
+    this.threadManager?.markPendingSpawn(channelId);
+
     const thread = await channel.threads.create({
       name: config.threadName,
       autoArchiveDuration: 1440,
     });
-    this.threadManager?.markPendingSpawn(thread.id);
 
     // 5. Build session name
     const shortId = nanoid(6);
@@ -161,7 +161,7 @@ export class SubagentThreadSpawner {
       const rollbackRegistry = await readThreadRegistry(this.registryPath);
       const cleaned = removeBinding(rollbackRegistry, thread.id);
       await writeThreadRegistry(this.registryPath, cleaned);
-      this.threadManager?.clearPendingSpawn(thread.id);
+      this.threadManager?.clearPendingSpawn(channelId);
       this.log.error(
         { threadId: thread.id, sessionName, error: (error as Error).message },
         "subagent session start failed — binding rolled back",
@@ -169,7 +169,7 @@ export class SubagentThreadSpawner {
       throw error;
     }
 
-    this.threadManager?.clearPendingSpawn(thread.id);
+    this.threadManager?.clearPendingSpawn(channelId);
 
     this.log.info(
       { threadId: thread.id, threadName: config.threadName, parentAgent: config.parentAgentName, sessionName },
