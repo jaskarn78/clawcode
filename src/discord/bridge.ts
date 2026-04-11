@@ -281,16 +281,47 @@ export class DiscordBridge {
           void message.channel.sendTyping();
         }
 
-        // Send message and post response back to thread
+        // Stream response back to thread with progressive editing
+        const threadChannel = message.channel;
+        const threadMsgRef: { current: Message | null } = { current: null };
+        const threadEditor = new ProgressiveMessageEditor({
+          editFn: async (content: string) => {
+            if (!threadMsgRef.current) {
+              if ("send" in threadChannel && typeof threadChannel.send === "function") {
+                threadMsgRef.current = await threadChannel.send(content);
+              }
+            } else {
+              await threadMsgRef.current.edit(content);
+            }
+          },
+        });
+
+        const threadTyping = setInterval(() => {
+          if ("sendTyping" in threadChannel && typeof threadChannel.sendTyping === "function") {
+            void threadChannel.sendTyping();
+          }
+        }, 8000);
+
         try {
-          const response = await this.sessionManager.sendToAgent(sessionName, formattedMessage);
-          if (response) {
+          const response = await this.sessionManager.streamFromAgent(
+            sessionName, formattedMessage,
+            (accumulated) => threadEditor.update(accumulated),
+          );
+          clearInterval(threadTyping);
+          await threadEditor.flush();
+
+          if (response && response.length > 2000 && threadMsgRef.current) {
+            try { await threadMsgRef.current.delete(); } catch { /* best effort */ }
             const MAX = 2000;
             for (let i = 0; i < response.length; i += MAX) {
-              await message.channel.send(response.slice(i, i + MAX));
+              await threadChannel.send(response.slice(i, i + MAX));
             }
+          } else if (response && threadMsgRef.current) {
+            await threadMsgRef.current.edit(response);
           }
         } catch (err) {
+          clearInterval(threadTyping);
+          threadEditor.dispose();
           this.log.warn({ sessionName, error: (err as Error).message }, "thread agent response failed");
         }
         this.log.info({ sessionName, threadId: message.channelId }, "message routed to thread session");

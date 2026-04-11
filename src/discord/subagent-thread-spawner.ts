@@ -176,20 +176,43 @@ export class SubagentThreadSpawner {
       "subagent thread spawned",
     );
 
-    // 12. Send initial prompt and post response to thread (fire-and-forget)
+    // 12. Send initial prompt and stream response to thread (fire-and-forget)
     const initialPrompt = config.systemPrompt
       ? `You've been spawned as a subagent in thread "${config.threadName}". Your task:\n\n${config.systemPrompt}\n\nBegin working on this immediately. Post your findings and progress in this thread.`
       : `You've been spawned as a subagent in thread "${config.threadName}". Introduce yourself and wait for instructions.`;
 
     void (async () => {
       try {
-        const response = await this.sessionManager.sendToAgent(sessionName, initialPrompt);
-        if (response && thread.sendable) {
-          // Split long responses for Discord's 2000 char limit
-          const MAX = 2000;
-          for (let i = 0; i < response.length; i += MAX) {
-            await thread.send(response.slice(i, i + MAX));
+        let sentMsg: any = null;
+
+        const response = await this.sessionManager.streamFromAgent(
+          sessionName,
+          initialPrompt,
+          async (accumulated) => {
+            // Progressive editing: create message on first chunk, edit on subsequent
+            const truncated = accumulated.length > 2000 ? accumulated.slice(0, 1997) + "..." : accumulated;
+            if (!sentMsg && thread.sendable) {
+              sentMsg = await thread.send(truncated);
+            } else if (sentMsg) {
+              try { await sentMsg.edit(truncated); } catch { /* rate limit or deleted */ }
+            }
+          },
+        );
+
+        // Final edit with complete response
+        if (response && sentMsg) {
+          if (response.length > 2000) {
+            // Delete streaming preview and send split messages
+            try { await (sentMsg as any).delete?.(); } catch { /* best effort */ }
+            const MAX = 2000;
+            for (let i = 0; i < response.length; i += MAX) {
+              await thread.send(response.slice(i, i + MAX));
+            }
+          } else {
+            await sentMsg.edit(response);
           }
+        } else if (response && !sentMsg && thread.sendable) {
+          await thread.send(response.slice(0, 2000));
         }
       } catch (err) {
         this.log.warn(
