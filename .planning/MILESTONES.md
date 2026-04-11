@@ -1,5 +1,25 @@
 # Milestones: ClawCode
 
+## v1.5 Smart Memory & Model Tiering (Shipped: 2026-04-11)
+
+**Phases completed:** 6 phases, 12 plans, 18 tasks
+
+**Key accomplishments:**
+
+- Wikilink parser with regex matchAll, SQLite adjacency table with CASCADE foreign keys, and link-aware insert/merge in MemoryStore
+- Backlink and forward-link query functions with frozen results, plus re-warm edge restoration and lifecycle CASCADE verification
+- memory_lookup MCP tool with IPC-to-SemanticSearch routing and SOUL.md fingerprint extraction for compact identity summaries
+- findByTag:
+- Background auto-linker heartbeat check discovers semantically similar unlinked memories and creates bidirectional graph edges with cosineSimilarity utility
+- Haiku default model with fork-based transparent escalation to sonnet on 3+ consecutive errors or keyword trigger
+- ask_advisor MCP tool for one-shot opus consultations with daily budget enforcement, plus /model slash command for runtime model override
+- 1. [Rule 1 - Bug] Updated existing store test
+- Per-agent daily/weekly token budget enforcement with Discord alert embeds at 80%/100% thresholds
+- Pure assembleContext function with per-source token budgets, line-boundary truncation for memories, and pass-through for discord/summary sections
+- Wired assembleContext into buildSessionConfig with per-agent contextBudgets schema, maintaining full backward compatibility
+
+---
+
 ## v1.4 Agent Runtime (Shipped: 2026-04-10)
 
 **Phases completed:** 0 phases, 0 plans, 0 tasks

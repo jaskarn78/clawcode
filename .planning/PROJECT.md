@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A multi-agent orchestration system built natively on Claude Code that runs multiple persistent AI agents, each with their own identity, workspace, Discord channel, memory, and skills. Each agent is a full Claude Code session bound to a Discord channel, managed by a central daemon with advanced memory management, task scheduling, inter-agent collaboration, and Discord-native features.
+A multi-agent orchestration system built natively on Claude Code that runs multiple persistent AI agents, each with their own identity, workspace, Discord channel, memory, and skills. Each agent is a full Claude Code session bound to a Discord channel, managed by a central daemon with advanced memory management (knowledge graph, on-demand loading), intelligent model tiering, task scheduling, inter-agent collaboration, and Discord-native features.
 
 ## Core Value
 
@@ -38,36 +38,6 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - MCP bridge — expose ClawCode tools to external Claude Code sessions — v1.1
 - Discord reaction handling — forward emoji reactions to bound agents — v1.1
 - Memory search CLI — semantic search and browsing of agent memory stores — v1.1
-
-### Validated (v1.3)
-
-- Subagent thread skill — skill wrapper for Discord-visible subagent threads — v1.3
-- MCP client consumption — per-agent external MCP server config with health checks — v1.3
-
-### Validated (v1.4)
-
-- Global skill install — workspace skills auto-installed to ~/.claude/skills/ at daemon startup — v1.4
-- Standalone agent runner — `clawcode run <agent>` starts single agent without daemon — v1.4
-- OpenClaw coexistence — token hard-fail, slash command namespace, dashboard non-fatal, env var interpolation — v1.4
-
-### Active
-
-(Requirements defined in REQUIREMENTS.md for v1.5)
-
-## Current Milestone: v1.5 Smart Memory & Model Tiering
-
-**Goal:** Reduce context bloat by loading memory/personality on-demand (Obsidian-style knowledge graph), and default agents to haiku with intelligent escalation to sonnet/opus.
-
-**Target features:**
-- On-demand memory loading — agents pull relevant context when needed instead of stuffing everything into the prompt
-- Knowledge graph structure — Obsidian-like linked notes with backlinks and semantic connections
-- Personality retention — agent identity/soul loaded efficiently without burning context
-- Model tiering — haiku as default model for all agents
-- Smart escalation — agents detect when a task needs sonnet or opus and upgrade automatically
-- Cost optimization — track and minimize token spend across the agent fleet
-
-### Validated (v1.2)
-
 - Subagent spawning auto-creates Discord subthreads with webhook identity — v1.2
 - Discord delivery queue with retry and failed message logging — v1.2
 - Context health zones (green/yellow/orange/red alerts with auto-snapshot) — v1.2
@@ -78,7 +48,21 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Config audit trail (JSONL log of changes) — v1.2
 - Agent bootstrap/first-run system — v1.2
 - Per-agent SECURITY.md channel ACLs — v1.2
-- Tech debt: attachment cleanup, logger consistency, session-manager splitting, test fixes — v1.2
+- Subagent thread skill — skill wrapper for Discord-visible subagent threads — v1.3
+- MCP client consumption — per-agent external MCP server config with health checks — v1.3
+- Global skill install — workspace skills auto-installed to ~/.claude/skills/ at daemon startup — v1.4
+- Standalone agent runner — `clawcode run <agent>` starts single agent without daemon — v1.4
+- OpenClaw coexistence — token hard-fail, slash command namespace, dashboard non-fatal, env var interpolation — v1.4
+- Knowledge graph — wikilink-based memory linking with backlinks and graph traversal — v1.5
+- On-demand memory loading — memory_lookup MCP tool, personality fingerprint, SOUL.md as retrievable memory — v1.5
+- Graph intelligence — graph-enriched search with 1-hop neighbors, auto-linker heartbeat — v1.5
+- Model tiering — haiku default, fork-based escalation, opus advisor tool, /model command — v1.5
+- Cost optimization — per-agent/per-model cost tracking CLI/dashboard, importance scoring, escalation budgets — v1.5
+- Context assembly pipeline — per-source token budgets with configurable ceiling — v1.5
+
+### Active
+
+(No active milestone — run `/gsd:new-milestone` to start next)
 
 ### Out of Scope
 
@@ -89,37 +73,42 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Voice/TTS integration — not in scope
 - Synchronous agent-to-agent RPC — async inbox pattern is simpler and more reliable
 - Shared global memory — violates workspace isolation; per-agent memory with explicit sharing via admin
-- Visual UI for config/management — YAML config is sufficient; UI deferred
+- Full graph visualization UI — use CLI DOT output + Graphviz instead
+- Real-time model switching mid-turn — not possible with Claude Code sessions
+- Shared knowledge graph across agents — violates workspace isolation
+- Automatic personality evolution — identity drift is a feature-killing bug
+- LLM-powered entity/relation extraction — doubles token cost on writes
 
 ## Current State
 
-**Latest shipped milestone:** v1.4 Agent Runtime (shipped 2026-04-10)
+**Latest shipped milestone:** v1.5 Smart Memory & Model Tiering (shipped 2026-04-11)
 
-v1.0-v1.4 delivered 35 phases across 5 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, and agent runtime.
-
-**Current milestone:** v1.5 Smart Memory & Model Tiering — All 6 phases complete, ready for milestone lifecycle
+v1.0-v1.5 delivered 41 phases across 6 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, and smart memory with model tiering.
 
 ## Context
 
-ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0-v1.4 with 35 phases across 5 milestones, covering 150+ TypeScript files.
+ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0-v1.5 with 41 phases across 6 milestones, covering 170+ TypeScript files.
 
 **Tech stack:** TypeScript, Node.js 22 LTS, better-sqlite3, sqlite-vec, @huggingface/transformers, croner, execa, discord.js 14, zod 4, pino, @modelcontextprotocol/sdk.
 
 **Current state:** Fully functional multi-agent system with:
-- Self-maintaining memory (consolidation, decay, dedup, tiered hot/warm/cold)
+- Knowledge graph memory (wikilink edges, backlinks, graph-enriched search, auto-linker)
+- On-demand memory loading (memory_lookup MCP tool, personality fingerprint, context assembly pipeline)
+- Intelligent model tiering (haiku default, fork-based escalation, opus advisor, cost tracking)
+- Self-maintaining memory (consolidation, decay, dedup, tiered hot/warm/cold, importance scoring)
 - Task scheduling (croner-based cron within persistent sessions)
 - Skills registry with per-agent assignment
 - Inter-agent collaboration (async messaging, subagent spawning, admin oversight)
-- Rich Discord integration (slash commands, attachments, threads, reactions, webhooks)
-- Session management (forking, context summaries on resume)
+- Rich Discord integration (slash commands, attachments, threads, reactions, webhooks, budget alerts)
+- Session management (forking, context summaries on resume, escalation monitoring)
 - MCP bridge for external tool access
-- CLI tooling (status, schedules, skills, threads, webhooks, fork, memory search)
+- CLI tooling (status, schedules, skills, threads, webhooks, fork, memory search, costs)
+- Web dashboard with SSE live updates and cost visibility
 
 **Known tech debt:**
-- ~~DATT-06: No periodic cleanup for downloaded attachment temp files~~ — resolved (heartbeat check exists at src/heartbeat/checks/attachment-cleanup.ts)
-- ~~Some test fixtures have stale type definitions~~ — resolved (260409-whx: fixed all 23 files, zero tsc errors)
 - 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)
-- Phases 14-20 requirement IDs not tracked in REQUIREMENTS.md (docs only)
+- cosineSimilarity duplicated in graph-search.ts and similarity.ts
+- /model slash command uses indirect claudeCommand routing through agent LLM
 
 ## Key Decisions
 
@@ -134,6 +123,10 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 | File-based inbox for cross-agent messaging | Simple, reliable, works with heartbeat pattern | Good — no message broker needed |
 | Webhook-based agent identities | Per-agent display names/avatars in Discord without sharing bot token | Good — clean separation per agent |
 | Cold archive as markdown + base64 embedding | Human-readable archives that can be re-warmed without re-embedding from scratch | Good — lossless cold storage |
+| Knowledge graph as SQLite adjacency list | Zero new dependencies, standard relational graph modeling, CASCADE cleanup | Good — efficient backlink queries |
+| Fork-based model escalation | Stateless harness swapping per managed agents pattern, ephemeral escalated sessions | Good — no permanent model drift |
+| Hybrid hot-tier + on-demand loading | Pure on-demand causes confabulation, hybrid keeps critical context in prompt | Good — balanced context efficiency |
+| Context assembly pipeline | Per-source token budgets prevent any single source from starving others | Good — deterministic, configurable |
 
 ## Constraints
 
@@ -144,4 +137,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-10 after Phase 41 completion (v1.5 all phases complete)*
+*Last updated: 2026-04-11 after v1.5 milestone completion*
