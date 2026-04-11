@@ -48,7 +48,7 @@ export class EmbeddingService {
       const truncated = truncateText(text);
       const output = await this.pipeline!(truncated, {
         pooling: "mean",
-        normalize: "true" as unknown as boolean,
+        normalize: true,
       });
       const data = output.tolist()[0] as number[];
       return new Float32Array(data);
