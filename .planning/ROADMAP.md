@@ -201,13 +201,14 @@ Plans:
 
 ### Phase 44: Agent-to-agent Discord communication
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Agents can send visible, auditable messages to each other through Discord via an MCP tool that posts webhook embeds to target agent channels
+**Requirements**: A2A-01, A2A-02, A2A-03, A2A-04, A2A-05, A2A-06
 **Depends on:** Phase 43
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 44 to break down)
+- [ ] 44-01-PLAN.md — MCP tool, IPC handler, webhook embed delivery, inbox fallback (A2A-01, A2A-02, A2A-05, A2A-06)
+- [ ] 44-02-PLAN.md — Bridge bot-filter modification for agent webhook routing + context prefix (A2A-03, A2A-04)
 
 ### Phase 45: Memory auto-linking on save
 
