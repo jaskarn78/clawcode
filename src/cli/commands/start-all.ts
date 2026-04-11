@@ -9,6 +9,22 @@ import { formatStatusTable } from "./status.js";
 import type { RegistryEntry } from "../../manager/types.js";
 import { cliLog, cliError } from "../output.js";
 
+/** Resolve project root from the running binary's location. */
+function resolveProjectRoot(): string {
+  const scriptDir = dirname(resolve(process.argv[1]));
+  return resolve(scriptDir, "..", "..");
+}
+
+/** Resolve config path: if default and not found at cwd, try project root. */
+function resolveConfigPath(configOpt: string): string {
+  if (existsSync(configOpt)) return resolve(configOpt);
+  if (configOpt === "clawcode.yaml") {
+    const fromRoot = resolve(resolveProjectRoot(), "clawcode.yaml");
+    if (existsSync(fromRoot)) return fromRoot;
+  }
+  return resolve(configOpt);
+}
+
 /**
  * Check if the daemon is already running by sending a status request.
  * Returns the status entries if running, null if not.
@@ -55,12 +71,13 @@ export function registerStartAllCommand(program: Command): void {
     .option("-c, --config <path>", "Path to config file", "clawcode.yaml")
     .option("--foreground", "Run daemon in foreground (for development)", false)
     .action(async (opts: { config: string; foreground: boolean }) => {
+      const configPath = resolveConfigPath(opts.config);
       try {
         if (opts.foreground) {
           cliLog(
             "Manager running in foreground. Press Ctrl+C to stop.",
           );
-          await startDaemon(opts.config);
+          await startDaemon(configPath);
           // startDaemon returns when server is created; block forever
           await new Promise(() => {});
         } else {
@@ -83,11 +100,11 @@ export function registerStartAllCommand(program: Command): void {
           if (existsSync(builtEntry)) {
             // Production: use node with the built CLI entry + start-all --foreground
             cmd = process.execPath;
-            args = [builtEntry, "start-all", "--foreground", "--config", opts.config];
+            args = [builtEntry, "start-all", "--foreground", "--config", configPath];
           } else {
             // Development: fall back to npx tsx with daemon-entry
             cmd = "npx";
-            args = ["tsx", sourceEntry, "--config", opts.config];
+            args = ["tsx", sourceEntry, "--config", configPath];
           }
 
           const child = spawn(cmd, args, {
