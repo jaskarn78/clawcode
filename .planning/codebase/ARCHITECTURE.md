@@ -1,284 +1,257 @@
 # Architecture
 
-**Analysis Date:** 2026-04-10
+**Analysis Date:** 2026-04-11
 
 ## Pattern Overview
 
-**Overall:** Daemon-centric multi-agent orchestration with a layered process model
+**Overall:** Daemon-centric multi-agent orchestration with adapter-pattern session management
 
 **Key Characteristics:**
-- A long-running daemon process owns all agent sessions, IPC surface, Discord bridge, heartbeat, scheduler, and registry
-- Each Claude Code agent session is managed via the `@anthropic-ai/claude-agent-sdk` query() API, with per-turn resume for session continuity
-- A Unix domain socket (JSON-RPC 2.0 over newline-delimited JSON) is the sole control plane between CLI commands and the daemon
-- Discord acts as the user-facing communication channel; messages are routed by channel ID to the named agent that owns that channel
-- An alternative `clawcode run <agent>` path runs a single agent in the foreground without any daemon infrastructure
+- A single long-running daemon process (`startDaemon` in `src/manager/daemon.ts`) owns all agent sessions, Discord routing, heartbeat monitoring, and task scheduling
+- All external control surfaces (CLI, MCP server, Dashboard) communicate with the daemon exclusively via a Unix domain socket (JSON-RPC 2.0 IPC)
+- Each agent session is a persistent Claude Agent SDK query loop; sessions are identified by a stable `sessionId` and can be resumed across daemon restarts
+- Agents are isolated by workspace directory (`~/.clawcode/agents/<name>/`); each gets its own SQLite memory database, skills directory, and identity files
+- `SessionAdapter` interface decouples session lifecycle from the Claude SDK, enabling `MockSessionAdapter` for tests and `SdkSessionAdapter` for production
 
 ## Layers
 
-**CLI Layer:**
-- Purpose: User entry points — init, start, stop, status, send, fork, memory, usage, etc.
-- Location: `src/cli/index.ts`, `src/cli/commands/`
-- Contains: Commander command registrations, one file per command
-- Depends on: IPC client (`src/ipc/client.ts`) for all runtime control; config loader for init
-- Used by: End user via `clawcode` binary
+**Configuration Layer:**
+- Purpose: Load, validate, and resolve agent configurations from `clawcode.yaml`
+- Location: `src/config/`
+- Contains: `loader.ts` (YAML parsing + Zod validation), `schema.ts` (Zod schemas), `defaults.ts` (default values), `watcher.ts` (chokidar file watch), `differ.ts` (config diff), `audit-trail.ts`
+- Depends on: `zod`, `yaml`, `chokidar`
+- Used by: `src/manager/daemon.ts`, `src/cli/index.ts`
 
-**IPC Layer:**
-- Purpose: JSON-RPC 2.0 transport over Unix domain socket at `~/.clawcode/manager/clawcode.sock`
-- Location: `src/ipc/server.ts`, `src/ipc/client.ts`, `src/ipc/protocol.ts`
-- Contains: Socket server (daemon side) and client (CLI side)
-- Depends on: Nothing from the app layer — pure transport
-- Used by: CLI commands (client side), daemon (server side), MCP server (`src/mcp/server.ts`)
-
-**Daemon Layer:**
-- Purpose: Central orchestrator — owns all subsystems, started once, runs persistently
-- Location: `src/manager/daemon.ts`, `src/manager/daemon-entry.ts`
-- Contains: `startDaemon()` function wiring all subsystems; `SOCKET_PATH`, `PID_PATH`, `REGISTRY_PATH` constants
-- Depends on: All subsystems below
-- Used by: `clawcode start-all` (spawns as background process via `daemon-entry.ts`)
+**Agent Workspace Layer:**
+- Purpose: Create and initialize isolated per-agent filesystem workspaces
+- Location: `src/agent/`
+- Contains: `workspace.ts` (creates `memory/`, `skills/`, `SOUL.md`, `IDENTITY.md`), `runner.ts`
+- Depends on: `src/config/`, `src/shared/`
+- Used by: CLI `init` command, daemon startup
 
 **Session Management Layer:**
-- Purpose: Lifecycle management of individual Claude Code agent sessions
-- Location: `src/manager/session-manager.ts`
-- Contains: `SessionManager` class — start, stop, restart, reconcile, fork, send, stream
-- Depends on: `SessionAdapter` interface, `AgentMemoryManager`, `SessionRecoveryManager`, `buildSessionConfig`, registry functions
-- Used by: Daemon, IPC handler dispatch, `clawcode run` command
+- Purpose: Agent lifecycle — start, stop, restart, fork, crash recovery, registry persistence
+- Location: `src/manager/`
+- Key files: `session-manager.ts` (orchestrates lifecycle), `session-adapter.ts` (SDK abstraction), `session-memory.ts` (per-agent memory init), `session-recovery.ts` (backoff/restart), `session-config.ts` (build SDK options), `registry.ts` (JSON registry), `fork.ts` (session forking), `escalation.ts` (model escalation), `daemon.ts` (top-level bootstrap), `daemon-entry.ts` (process entry point)
+- Depends on: all other layers
+- Used by: daemon, IPC handler, CLI commands via IPC
 
-**Session Adapter Layer:**
-- Purpose: Abstracts the Claude Agent SDK behind a stable interface; enables mock injection in tests
-- Location: `src/manager/session-adapter.ts`
-- Contains: `SessionAdapter` interface, `SessionHandle` type, `SdkSessionAdapter` (production), `MockSessionAdapter` (tests)
-- Key pattern: Each `send`/`sendAndCollect`/`sendAndStream` call issues a fresh `sdk.query()` with `resume: sessionId` for per-turn continuity
-- Depends on: `@anthropic-ai/claude-agent-sdk` (dynamic import, cached after first load)
-- Used by: `SessionManager`
-
-**Config Layer:**
-- Purpose: Load, validate, and resolve agent configs from `clawcode.yaml`
-- Location: `src/config/`
-- Contains: `schema.ts` (Zod schemas), `loader.ts` (YAML parse + validation + defaults merge), `watcher.ts` (chokidar file watching), `differ.ts` (config diff), `audit-trail.ts`
-- Key type: `ResolvedAgentConfig` in `src/shared/types.ts` — the canonical agent config after defaults merge
-- Depends on: `zod`, `yaml`, `chokidar`
-- Used by: Daemon startup, CLI init command, `ConfigReloader`
+**IPC Layer:**
+- Purpose: JSON-RPC 2.0 over Unix domain socket — CLI and MCP server talk to daemon
+- Location: `src/ipc/`
+- Contains: `server.ts` (newline-delimited JSON socket server), `client.ts` (send request + await response), `protocol.ts` (Zod schema for request/response)
+- Socket path: `~/.clawcode/manager/clawcode.sock`
+- Used by: daemon (server side), CLI commands (client side), MCP server (client side), dashboard (client side)
 
 **Discord Layer:**
-- Purpose: Bot connection, message routing, webhook delivery, slash commands, thread management
+- Purpose: Discord bot integration — receive messages, route to agents, deliver responses
 - Location: `src/discord/`
-- Contains:
-  - `bridge.ts` — `DiscordBridge` class using `discord.js`; connects to Discord, listens for messages, routes to agents, sends responses
-  - `router.ts` — builds an immutable `RoutingTable` (channelId → agentName, agentName → channelIds[])
-  - `delivery-queue.ts` — async delivery queue for ordered message dispatch
-  - `thread-manager.ts` — Discord thread lifecycle for subagent thread sessions
-  - `webhook-manager.ts` — per-agent webhook identities for rich Discord personas
-  - `slash-commands.ts` — Discord slash command registration and dispatch
-  - `rate-limiter.ts` — per-channel rate limiting
-  - `streaming.ts` — `ProgressiveMessageEditor` for streaming response edits
-  - `attachments.ts` — attachment download and metadata formatting
-- Depends on: `discord.js`, `SessionManager`, `RoutingTable`
-- Used by: Daemon, `clawcode run` command
+- Key files: `bridge.ts` (discord.js Client, message routing), `router.ts` (channelId → agentName mapping), `thread-manager.ts` (Discord thread sessions), `webhook-manager.ts` (per-agent webhook identities), `delivery-queue.ts` (reliable outbound delivery), `slash-commands.ts`, `streaming.ts` (progressive message editing), `rate-limiter.ts`, `subagent-thread-spawner.ts`, `attachments.ts`, `reactions.ts`
+- Depends on: `discord.js`, `src/manager/session-manager.ts`, `src/security/`
+- Used by: daemon startup
 
 **Memory Layer:**
-- Purpose: Persistent per-agent semantic memory using SQLite + sqlite-vec
+- Purpose: Per-agent persistent memory with vector search, tiering, consolidation, and episodic storage
 - Location: `src/memory/`
-- Contains:
-  - `store.ts` — `MemoryStore`, opens per-agent SQLite DB, loads `sqlite-vec`, CRUD + vector operations
-  - `embedder.ts` — `EmbeddingService` using `@huggingface/transformers` (all-MiniLM-L6-v2, 384-dim, local ONNX)
-  - `search.ts` — `SemanticSearch`, KNN queries over sqlite-vec
-  - `tiers.ts` / `tier-manager.ts` — hot/warm/cold memory tiering
-  - `consolidation.ts` — time-based memory consolidation (daily/weekly/monthly)
-  - `compaction.ts` — context fill management; `CharacterCountFillProvider`
-  - `session-log.ts` — per-session interaction logging
-  - `decay.ts` — relevance decay scoring
-  - `dedup.ts` — duplicate detection on insert
-  - `episode-store.ts` / `episode-archival.ts` — episodic memory archival
-- Depends on: `better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`, `nanoid`
-- Used by: `AgentMemoryManager` in `src/manager/session-memory.ts`
+- Key files: `store.ts` (SQLite + sqlite-vec CRUD), `embedder.ts` (`@huggingface/transformers` ONNX, all-MiniLM-L6-v2), `search.ts` (semantic KNN), `tier-manager.ts` (hot/warm/cold tier transitions), `tiers.ts` (promotion/demotion rules), `consolidation.ts` (daily/weekly/monthly compaction), `decay.ts` (relevance decay), `dedup.ts` (similarity deduplication), `graph.ts` (wikilink graph), `graph-search.ts` (graph traversal), `compaction.ts` (context fill), `episode-store.ts`, `session-log.ts`
+- DB path per agent: `~/.clawcode/agents/<name>/memory/memories.db`
+- Depends on: `better-sqlite3`, `sqlite-vec`, `@huggingface/transformers`
+- Used by: `src/manager/session-memory.ts`, heartbeat checks, MCP tools
 
 **Heartbeat Layer:**
-- Purpose: Periodic health checks for running agents; context-fill monitoring; zone-based snapshots
+- Purpose: Periodic health checks for each running agent; context zone tracking; triggers snapshots
 - Location: `src/heartbeat/`
-- Contains:
-  - `runner.ts` — `HeartbeatRunner` — setInterval-based check executor
-  - `discovery.ts` — dynamically discovers check modules from `src/heartbeat/checks/`
-  - `context-zones.ts` — `ContextZoneTracker` — tracks green/yellow/orange/red fill zones, triggers snapshot callbacks
-  - `checks/` — pluggable check modules: `consolidation.ts`, `context-fill.ts`, `inbox.ts`, `tier-maintenance.ts`, `thread-idle.ts`, `attachment-cleanup.ts`
-- Depends on: `SessionManager`, registry
-- Used by: Daemon
+- Key files: `runner.ts` (interval timer, check dispatch), `discovery.ts` (dynamic check module loading), `context-zones.ts` (green/yellow/orange/red zone tracker), `checks/` (pluggable check modules: `context-fill.ts`, `consolidation.ts`, `tier-maintenance.ts`, `auto-linker.ts`, `inbox.ts`, `thread-idle.ts`, `attachment-cleanup.ts`)
+- Depends on: `src/manager/session-manager.ts`
+- Used by: daemon
 
 **Scheduler Layer:**
-- Purpose: Cron-triggered agent prompts using `croner`
+- Purpose: Cron-based scheduled prompts sent to agents
 - Location: `src/scheduler/`
-- Contains: `TaskScheduler` — registers croner jobs per agent, sends scheduled prompts via `SessionManager`
-- Depends on: `croner`, `SessionManager`
-- Used by: Daemon
-
-**Security Layer:**
-- Purpose: Channel ACLs, allowlist matching, approval audit log
-- Location: `src/security/`
-- Contains: `acl-parser.ts` (parses SECURITY.md per workspace), `allowlist-matcher.ts`, `approval-log.ts`
-- Used by: Daemon startup, Discord bridge message routing
-
-**MCP Server Layer:**
-- Purpose: Expose daemon control surface as an MCP tool server (for Claude Code tool use)
-- Location: `src/mcp/`
-- Contains: `server.ts` — `McpServer` using `@modelcontextprotocol/sdk`; tools delegate to daemon IPC
-- Depends on: `src/ipc/client.ts`, `@modelcontextprotocol/sdk`
-- Used by: External Claude Code sessions via stdio MCP protocol
-
-**Dashboard Layer:**
-- Purpose: Web UI for real-time agent status via SSE + REST
-- Location: `src/dashboard/`
-- Contains: `server.ts` (Node.js `http` server, no framework), `sse.ts` (`SseManager`), `static/` (HTML/CSS/JS)
-- Depends on: `src/ipc/client.ts` for data, no HTTP framework
-- Used by: Daemon (started alongside IPC server)
+- Contains: `scheduler.ts` (croner integration), `types.ts`
+- Depends on: `croner`, `src/manager/session-manager.ts`
+- Used by: daemon
 
 **Skills Layer:**
-- Purpose: Skill file management — scanning, linking into agent workspaces, installing to `~/.claude/skills/`
+- Purpose: Scan, catalog, link, and install SKILL.md files into agent workspaces
 - Location: `src/skills/`
-- Contains: `scanner.ts`, `linker.ts`, `installer.ts`
-- Workspace skills directory: `skills/` at project root
+- Contains: `scanner.ts` (catalog SKILL.md files), `linker.ts` (symlink into agent workspace), `installer.ts` (install workspace skills globally), `types.ts`
+- Used by: daemon startup, CLI `skills` command
 
-**Bootstrap Layer:**
-- Purpose: Detect first-run agents needing workspace setup; inject walkthrough prompt
-- Location: `src/bootstrap/`
-- Contains: `detector.ts` (`detectBootstrapNeeded`), `prompt-builder.ts`, `writer.ts`
-- Used by: `buildSessionConfig` in `src/manager/session-config.ts`
+**Security Layer:**
+- Purpose: Channel ACL enforcement and allowlist/approval-log management
+- Location: `src/security/`
+- Contains: `acl-parser.ts` (parse SECURITY.md), `allowlist-matcher.ts` (pattern matching), `approval-log.ts` (persist allow-always decisions), `types.ts`
+- Used by: `src/discord/bridge.ts`, daemon
 
 **Collaboration Layer:**
-- Purpose: Inter-agent filesystem inbox for async message delivery
+- Purpose: Filesystem-based inter-agent messaging via inbox directories
 - Location: `src/collaboration/`
-- Contains: `inbox.ts` — write messages to agent workspace `inbox/` directories
+- Contains: `inbox.ts` (atomic JSON write to `<workspace>/inbox/`), `types.ts`
+- Pattern: atomic write (write `.tmp`, rename to final) prevents partial reads
+- Used by: daemon IPC handler for `send-message` method
+
+**Usage Layer:**
+- Purpose: Track token/cost usage per agent session; enforce escalation budgets; advisor budget for Opus queries
+- Location: `src/usage/`
+- Contains: `tracker.ts` (SQLite usage log per agent), `budget.ts` (`EscalationBudget`, SQLite), `advisor-budget.ts` (`AdvisorBudget`, rate-limits Opus advisor calls), `pricing.ts`, `types.ts`
+- Used by: `src/manager/session-manager.ts`, `src/manager/escalation.ts`, daemon
+
+**MCP Server Layer:**
+- Purpose: Expose ClawCode daemon tools to Claude Code sessions via MCP
+- Location: `src/mcp/`
+- Contains: `server.ts` (MCP tool definitions bridging to IPC), `health.ts`
+- Exposes tools: `agent_status`, `send_message`, `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, etc.
+- Used by: agents that load `clawcode` as an MCP server in their session config
+
+**Bootstrap Layer:**
+- Purpose: Detect when an agent needs a first-run bootstrap prompt and build it
+- Location: `src/bootstrap/`
+- Contains: `detector.ts` (checks for existing memories/SOUL.md), `prompt-builder.ts`, `writer.ts`, `types.ts`
+- Used by: `src/manager/session-manager.ts` on `startAgent`
+
+**Dashboard Layer:**
+- Purpose: Web UI for agent status monitoring via SSE + REST
+- Location: `src/dashboard/`
+- Contains: `server.ts` (Node.js `http` module, no framework), `sse.ts` (Server-Sent Events), `static/` (HTML/CSS/JS)
+- Port: configurable, default via `dashboard` command
+- Used by: daemon
+
+**CLI Layer:**
+- Purpose: User-facing command interface, communicates with daemon via IPC
+- Location: `src/cli/`
+- Contains: `index.ts` (Commander root + `init` action), `commands/` (one file per subcommand), `output.ts` (logging helpers)
+- All commands (except `init`) send IPC requests to the running daemon
 
 ## Data Flow
 
-**Daemon Startup Flow:**
+**Discord Message to Agent Response:**
 
-1. `clawcode start-all` spawns `daemon-entry.ts` as a detached background process
-2. `startDaemon()` in `src/manager/daemon.ts` runs: creates manager dir, cleans stale socket, writes PID, loads config, installs skills
-3. Resolves all `ResolvedAgentConfig` objects from `clawcode.yaml` via `loadConfig` + `resolveAllAgents`
-4. Creates `SessionManager` with `SdkSessionAdapter`, scans skills catalog, builds routing table
-5. Calls `manager.reconcileRegistry()` — resumes any sessions that were running before restart, schedules recovery for crashed ones
-6. Starts heartbeat runner, task scheduler, thread manager, webhook manager, security matchers, dashboard server
-7. Creates IPC server (Unix socket), starts Discord bridge
-8. IPC server begins accepting commands from CLI
+1. `DiscordBridge` receives `messageCreate` event from discord.js
+2. `checkChannelAccess` verifies security policy for the channel
+3. `buildRoutingTable` lookup: `channelId → agentName` via `src/discord/router.ts`
+4. Attachments downloaded via `src/discord/attachments.ts`
+5. `SessionManager.streamFromAgent(agentName, message, onChunk)` called
+6. `SdkSessionAdapter` calls `sdk.query({ prompt, options: { resume: sessionId } })`
+7. Claude Agent SDK streams assistant messages back; `onChunk` callback called per chunk
+8. `ProgressiveMessageEditor` in `src/discord/streaming.ts` edits Discord message in place as chunks arrive
+9. Rate limiter (`src/discord/rate-limiter.ts`) enforces per-channel limits
+10. `DeliveryQueue` ensures reliable final message delivery
 
-**Agent Start Flow:**
+**Agent Session Start:**
 
-1. CLI sends `agent.start` via `sendIpcRequest()` to daemon's Unix socket
-2. IPC server routes to `SessionManager.startAgent(name, config)`
-3. `AgentMemoryManager.initMemory()` opens per-agent SQLite DB, initializes `MemoryStore`, `EmbeddingService`, `TierManager`, `SessionLogger`, `UsageTracker`
-4. `detectBootstrapNeeded()` checks if workspace SOUL.md/IDENTITY.md exist
-5. `buildSessionConfig()` assembles `AgentSessionConfig`: reads SOUL.md + IDENTITY.md, injects hot-tier memories, skills list, Discord channel bindings, admin roster, context summary
-6. `SdkSessionAdapter.createSession()` calls `sdk.query()` to establish the Claude Code session; extracts `session_id` from first result message
-7. `SessionHandle` is stored in `sessions` Map; `onError` handler wired to crash recovery
-8. Registry entry updated to `running` with `sessionId`
+1. CLI `start <name>` sends IPC `start` request to daemon
+2. Daemon IPC handler calls `SessionManager.startAgent(name, config)`
+3. `detectBootstrapNeeded` checks workspace state (`src/bootstrap/detector.ts`)
+4. `buildSessionConfig` assembles system prompt: identity + hot memories + tool definitions + graph context + discord bindings + context summary (via `src/manager/context-assembler.ts`)
+5. `TierManager.refreshHotTier()` promotes relevant memories to hot tier
+6. `SdkSessionAdapter.createSession(sessionConfig)` calls `sdk.query({ prompt: "Session initialized." })`
+7. Initial query drained to extract `sessionId`
+8. `handle.onError` registered for crash detection → `SessionRecoveryManager.handleCrash`
+9. Registry updated to `running` with `sessionId`
 
-**Discord Message Flow:**
+**Memory Write (on compaction tick):**
 
-1. `DiscordBridge` receives Discord message event via `discord.js` Client
-2. `AllowlistMatcher` / security ACL check against channel and user
-3. `router.getAgentForChannel(table, channelId)` looks up agent name
-4. Rate limiter checked; attachments downloaded if present
-5. If thread message: `ThreadManager` routes to subagent session
-6. `SessionManager.streamFromAgent(name, message, onChunk)` calls `sdk.query()` with `resume: sessionId`
-7. `ProgressiveMessageEditor` streams response chunks back to Discord as live edits
-8. Final response sent; usage recorded via `UsageTracker`
+1. `HeartbeatRunner` fires `context-fill` check
+2. If fill % exceeds threshold, `CompactionManager` triggers
+3. Conversation turns extracted from `SessionLogger`
+4. New memories written to `MemoryStore` via `store.add()` with embedding
+5. `dedup.checkForDuplicate` consulted before insert (cosine similarity threshold 0.85)
+6. `TierManager.runMaintenance()` promotes/demotes/archives memories
+7. Cold memories written as YAML+markdown to `<workspace>/memory/cold/`
 
-**IPC Command Flow:**
+**IPC Request Routing:**
 
-1. CLI calls `sendIpcRequest(SOCKET_PATH, method, params)` in `src/ipc/client.ts`
-2. Unix socket client connects, writes newline-delimited JSON-RPC request, reads response
-3. `createIpcServer` in `src/ipc/server.ts` buffers incoming bytes, splits on newlines, parses JSON-RPC
-4. Validated request dispatched to `IpcHandler` function in daemon
-5. Handler routes by method name to `SessionManager` or other subsystem
-6. JSON-RPC response written back to socket
+1. CLI client writes JSON-RPC 2.0 request to Unix socket (`~/.clawcode/manager/clawcode.sock`)
+2. `createIpcServer` in `src/ipc/server.ts` reads newline-delimited JSON
+3. `routeMethod` in daemon dispatches to the appropriate subsystem (SessionManager, HeartbeatRunner, TaskScheduler, etc.)
+4. Response written back to socket
 
 **State Management:**
-- Agent lifecycle state: `~/.clawcode/manager/registry.json` (atomic rename writes)
-- Session handles: in-memory `Map<string, SessionHandle>` in `SessionManager`
-- Memory: per-agent SQLite DB at `{workspace}/memory/memory.db`
-- Thread registry: `~/.clawcode/manager/thread-registry.json`
-- Security approval log: `~/.clawcode/manager/approval-audit.jsonl`
+- Agent lifecycle state: `~/.clawcode/manager/registry.json` (immutable updates via `updateEntry`)
+- Per-agent memory: `~/.clawcode/agents/<name>/memory/memories.db` (SQLite)
+- Discord thread bindings: `~/.clawcode/manager/thread-registry.json`
+- Escalation budget: `~/.clawcode/manager/escalation-budget.db`
+- Advisor budget: `~/.clawcode/manager/advisor-budget.db`
+- Delivery queue: `~/.clawcode/manager/delivery-queue.db`
+- Approval log: `~/.clawcode/manager/approval-audit.jsonl`
+- Inter-agent messages: `~/.clawcode/agents/<name>/inbox/*.json`
 
 ## Key Abstractions
 
-**SessionAdapter / SessionHandle:**
-- Purpose: Decouple session creation from SDK internals; enable test mocking
+**SessionAdapter:**
+- Purpose: Decouples session create/resume from Claude SDK; enables testability
 - Files: `src/manager/session-adapter.ts`
-- Pattern: Interface + two implementations (`SdkSessionAdapter`, `MockSessionAdapter`); `SessionHandle` is a plain object with `send`, `sendAndCollect`, `sendAndStream`, `close`, `onError`, `onEnd`
+- Pattern: Interface with `SdkSessionAdapter` (production) and `MockSessionAdapter` (tests)
 
-**ResolvedAgentConfig:**
-- Purpose: Single canonical config type after defaults merge; passed everywhere
-- File: `src/shared/types.ts`
-- Pattern: Readonly object; produced by `resolveAgentConfig()` in `src/config/loader.ts`
-
-**RoutingTable:**
-- Purpose: Bidirectional map: channelId ↔ agentName
-- File: `src/discord/types.ts`, built by `src/discord/router.ts`
-- Pattern: Two immutable Maps; validated for duplicate channel claims on construction
-
-**Registry / RegistryEntry:**
-- Purpose: Persistent agent status store; survives daemon restarts
-- File: `src/manager/types.ts`, operations in `src/manager/registry.ts`
-- Pattern: Immutable records; atomic rename writes; all updates produce new objects
-
-**IpcHandler:**
-- Purpose: Single dispatch function — `(method, params) => Promise<unknown>`
-- File: `src/ipc/server.ts` (type), `src/manager/daemon.ts` (implementation)
-- Pattern: Big routing switch inside daemon; all subsystem access goes through this
+**SessionHandle:**
+- Purpose: Represents one active agent session; provides `send`, `sendAndCollect`, `sendAndStream`, `close`, `onError`, `onEnd`
+- Files: `src/manager/session-adapter.ts`
+- Pattern: Per-turn query pattern — each `send*` call creates a fresh `sdk.query({ resume: sessionId })` rather than holding a persistent stream
 
 **MemoryStore:**
-- Purpose: Per-agent SQLite + sqlite-vec storage for memories and session logs
-- File: `src/memory/store.ts`
-- Pattern: Prepared statements, WAL mode, dedup on insert, vector embedding stored alongside text
+- Purpose: SQLite-backed CRUD for memories with vector index via sqlite-vec
+- Files: `src/memory/store.ts`
+- Pattern: Synchronous better-sqlite3 with prepared statements; `sqlite-vec` extension loaded via `db.loadExtension()`
+
+**RoutingTable:**
+- Purpose: Bidirectional map of `channelId ↔ agentName`; built at daemon start from config
+- Files: `src/discord/router.ts`, `src/discord/types.ts`
+- Pattern: Immutable Maps built once; throws on duplicate channel bindings
+
+**CheckModule:**
+- Purpose: Pluggable heartbeat check interface
+- Files: `src/heartbeat/types.ts`, `src/heartbeat/checks/`
+- Pattern: `{ name, execute(context): Promise<CheckResult>, interval?, timeout? }` — discovered dynamically via `src/heartbeat/discovery.ts`
+
+**ResolvedAgentConfig:**
+- Purpose: Fully merged agent config (agent + defaults); source of truth for all agent behavior
+- Files: `src/shared/types.ts`
+- Pattern: All fields concrete (no optionals except `soul`, `identity`, `webhook`, `escalationBudget`, `contextBudgets`); produced by `resolveAgentConfig` in `src/config/loader.ts`
 
 ## Entry Points
 
-**CLI Binary:**
-- Location: `src/cli/index.ts` → compiled to `dist/cli/index.js` → `bin/clawcode`
-- Triggers: User running `clawcode <command>`
-- Responsibilities: Parses args via Commander, delegates to registered command handlers
-
 **Daemon Entry:**
 - Location: `src/manager/daemon-entry.ts`
-- Triggers: Spawned as child process by `clawcode start-all`
-- Responsibilities: Parses `--config` flag, calls `startDaemon()`
+- Triggers: `node dist/manager/daemon-entry.js --config clawcode.yaml` (spawned by `start-all` CLI command)
+- Responsibilities: Parse `--config` arg, call `startDaemon()`, handle fatal errors
 
-**`clawcode run <agent>`:**
-- Location: `src/cli/commands/run.ts`
-- Triggers: User runs foreground single-agent mode
-- Responsibilities: Creates `SessionManager` + `DiscordBridge` directly, no IPC socket or daemon needed
+**CLI Entry:**
+- Location: `src/cli/index.ts` (bin: `clawcode`)
+- Triggers: User runs `clawcode <command>`
+- Responsibilities: Commander root, `init` action (workspace creation), register all subcommands
 
-**MCP Server:**
+**MCP Server Entry:**
 - Location: `src/mcp/server.ts`
-- Triggers: Started by Claude Code as an MCP tool server (stdio transport)
-- Responsibilities: Exposes `agent_status`, `send_message`, `spawn_subagent_thread`, etc. as Claude tools; proxies to daemon via IPC
+- Triggers: Claude Agent SDK loads it as an MCP server (`stdio` transport) within an agent session
+- Responsibilities: Expose IPC methods as MCP tools; agents call `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, etc.
 
-**Public API:**
+**Public API Entry:**
 - Location: `src/index.ts`
-- Triggers: Programmatic import by consumers
-- Responsibilities: Re-exports core types, `SessionManager`, config functions, errors for library usage
+- Triggers: Programmatic consumers (`import { SessionManager } from 'clawcode'`)
+- Responsibilities: Re-export core types, errors, `SessionManager`, `startDaemon`, `loadConfig`, `createWorkspace`
 
 ## Error Handling
 
-**Strategy:** Typed error classes in `src/shared/errors.ts`; errors propagate through layers and are caught at CLI boundaries (process.exit) or IPC boundaries (JSON-RPC error response)
+**Strategy:** Typed error classes extending `Error`; errors bubble to CLI output or IPC error responses; heartbeat timeouts return `critical` `CheckResult` rather than throwing
 
 **Patterns:**
-- `ConfigFileNotFoundError` / `ConfigValidationError` — thrown by config loader, caught in CLI action handlers
-- `SessionError` — thrown by `SessionManager` for invalid state transitions
-- `ManagerError` — thrown by daemon for startup failures
-- `ManagerNotRunningError` — thrown by IPC client when socket is not reachable
-- `IpcError` — wraps daemon-side errors for transport back to CLI client
-- Crash recovery: `SessionRecoveryManager` (`src/manager/session-recovery.ts`) handles exponential backoff restarts; after `maxRetries` exhausted, status set to `failed`
+- `ConfigValidationError`, `ConfigFileNotFoundError`, `WorkspaceError`, `ManagerError`, `SessionError`, `IpcError` defined in `src/shared/errors.ts`
+- Agent crashes handled by `SessionRecoveryManager` — exponential backoff (1s base, 300s max, 10 retries); terminal `failed` status after max retries
+- IPC errors return JSON-RPC error objects (code -32603 for handler errors, -32600 for invalid requests)
+- Usage extraction errors in `SdkSessionAdapter` are swallowed with try/catch — never break the send flow
+- `MemoryError`, `EmbeddingError` in `src/memory/errors.ts`
 
 ## Cross-Cutting Concerns
 
-**Logging:** `pino` via `src/shared/logger.ts`; structured JSON; each subsystem creates a child logger with `component` field
+**Logging:** pino (`src/shared/logger.ts`); structured JSON; each component creates a `logger.child({ component: '...' })`; heartbeat results written to NDJSON `<workspace>/memory/heartbeat.log`
 
-**Validation:** Zod v4 schemas in `src/config/schema.ts` and `src/ipc/protocol.ts`; all external input validated at boundaries
+**Validation:** Zod v4 at config load (`src/config/schema.ts`), IPC request parsing (`src/ipc/protocol.ts`), and memory entry creation (`src/memory/schema.ts`)
 
-**Authentication:** Discord bot token loaded from `~/.claude/channels/discord/.env` or `DISCORD_BOT_TOKEN` env var; 1Password `op://` references supported in `clawcode.yaml`
+**Authentication:** Discord bot token loaded from `~/.claude/channels/discord/.env` or `DISCORD_BOT_TOKEN` env var; 1Password `op://` references resolved via `op read` CLI at daemon startup
 
-**Immutability:** All shared types are `readonly`; registry updates produce new objects via `updateEntry()`; configs never mutated in place
+**Immutability:** All config types use `readonly`; registry updates produce new objects via `updateEntry` (never mutate in place); `ResolvedAgentConfig` is fully readonly
 
 ---
 
-*Architecture analysis: 2026-04-10*
+*Architecture analysis: 2026-04-11*

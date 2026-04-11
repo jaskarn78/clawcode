@@ -1,148 +1,192 @@
 # External Integrations
 
-**Analysis Date:** 2026-04-10
+**Analysis Date:** 2026-04-11
 
-## APIs & External Services
+## Claude AI (Anthropic)
 
-**Claude / Anthropic:**
-- Claude Agent SDK (`@anthropic-ai/claude-agent-sdk` ^0.2.97) — spawns persistent Claude Code sessions per agent
-  - Client: `src/manager/session-adapter.ts` → `SdkSessionAdapter`
-  - Auth: OAuth subscription auth (Claude Code session). `ANTHROPIC_API_KEY` is explicitly stripped from subprocess env in `buildCleanEnv()` to force OAuth
-  - Models: `sonnet`, `opus`, `haiku` (selectable per agent in `clawcode.yaml`)
+**Agent Sessions:**
+- SDK: `@anthropic-ai/claude-agent-sdk` ^0.2.97
+- Used in: `src/manager/session-adapter.ts` (`SdkSessionAdapter`)
+- Integration: `query()` API with `resume: sessionId` for multi-turn session continuity. Each `send`/`sendAndCollect`/`sendAndStream` call creates a new query with `resume` option.
+- Auth: OAuth subscription auth (no `ANTHROPIC_API_KEY`). The adapter explicitly strips `ANTHROPIC_API_KEY` from the subprocess env via `buildCleanEnv()` in `src/manager/session-adapter.ts`.
+- Models: `haiku` (default), `sonnet`, `opus` — defined in `src/config/schema.ts` `modelSchema`.
+- Session options: `permissionMode: "bypassPermissions"`, `settingSources: ["project"]`, per-agent `systemPrompt`, `cwd` (agent workspace), optional `mcpServers`.
 
-**Discord:**
-- discord.js 14.x — connects each agent to Discord channels
-  - Client: `src/discord/bridge.ts` → `DiscordBridge`
-  - Auth: Bot token loaded from `~/.claude/channels/discord/.env` (key: `DISCORD_BOT_TOKEN`) or env var `DISCORD_BOT_TOKEN`
-  - Gateway intents: Guilds, GuildMessages, MessageContent, DirectMessages, GuildMessageReactions
-  - Slash commands registered via `src/discord/slash-commands.ts`
-  - Webhook delivery (custom display names per agent): `src/discord/webhook-manager.ts`
+**Advisor Feature:**
+- An agent can ask `opus` for advice without switching sessions via the `ask_advisor` MCP tool.
+- Budget enforcement: `src/usage/advisor-budget.ts` limits advisor invocations.
+- Implemented in `src/manager/daemon.ts` via `AdvisorBudget` and `EscalationBudget`.
 
-**MCP Servers (configured per agent in `clawcode.yaml`):**
-The `mcpServers` section defines external tools passed to Claude Code sessions. Configured servers in `clawcode.yaml`:
+**Model Escalation:**
+- `src/manager/escalation.ts` (`EscalationMonitor`) — Monitors agent responses for capability failures and transparently forks to a higher-tier model.
+- Keyword trigger: `"this needs opus"` in response causes escalation.
+- Error threshold: 3 consecutive errors triggers escalation.
+- Budget cap: `EscalationBudget` in `src/usage/budget.ts` enforces daily/weekly token limits per model tier per agent.
 
-| Server | Command | Auth env var (1Password path) |
-|--------|---------|-------------------------------|
-| finnhub | `node /home/jjagpal/clawd/mcp-servers/finnhub/server.js` | `FINNHUB_API_KEY` via `op://clawdbot/Finnhub/api-key` |
-| finmentum-db | `mcporter serve mysql` | `MYSQL_PASSWORD` via `op://clawdbot/Finmentum DB/password` |
-| google-workspace | `node .../google-workspace-mcp/dist/index.js` | No token (uses gcloud auth) |
-| homeassistant | `python3 homeassistant.py` | `HA_TOKEN` via `op://clawdbot/HA Access Token/Access Token` |
-| strava | `python3 strava.py` | `STRAVA_*` tokens via `op://clawdbot/Strava OAuth Tokens/...` |
-| openai | `python3 openai_server.py` | `OPENAI_API_KEY` via `${OPENAI_API_KEY}` |
-| anthropic | `python3 anthropic_server.py` | `ANTHROPIC_API_KEY` via `${ANTHROPIC_API_KEY}` |
-| brave-search | `python3 brave_search.py` | `BRAVE_API_KEY` via `${BRAVE_API_KEY}` |
-| elevenlabs | `python3 elevenlabs.py` | `ELEVENLABS_API_KEY` via `${ELEVENLABS_API_KEY}` |
-| ollama | `python3 ollama.py` | `OLLAMA_URL` (local Tailscale IP `100.117.64.85:11434`) |
-| browserless | `python3 browserless.py` | `BROWSERLESS_URL` (local Tailscale IP `100.117.64.85:3000`) |
-| chatterbox-tts | `python3 chatterbox_tts.py` | `CHATTERBOX_URL` (local Tailscale IP `100.117.64.85:4123`) |
-| fal-ai | `python3 fal_ai.py` | `FAL_API_KEY` via `op://clawdbot/fal.ai Admin API Credentials/credential` |
-| finmentum-content | `python3 finmentum_content.py` | Multiple via 1Password: HeyGen, Pexels, Jamendo, MySQL |
+**Usage Tracking:**
+- `src/usage/tracker.ts` (`UsageTracker`) — SQLite-backed per-agent usage event storage.
+- Cost reported by SDK `result` message fields: `total_cost_usd`, `usage.input_tokens`, `usage.output_tokens`, `num_turns`, `duration_ms`, `model`.
+- Pricing constants in `src/usage/pricing.ts`: haiku $0.25/$1.25 per M, sonnet $3/$15 per M, opus $15/$75 per M.
 
-MCP server configs are resolved in `src/config/loader.ts` → `resolveAgentConfig()` and passed to the SDK in `src/manager/session-adapter.ts` → `transformMcpServersForSdk()`.
+## Discord
+
+**Primary Bot Client:**
+- SDK: `discord.js` ^14.26.2
+- Used in: `src/discord/bridge.ts` (`DiscordBridge`), `src/discord/webhook-manager.ts`, `src/discord/slash-commands.ts`, `src/discord/thread-manager.ts`
+- Auth token location: `~/.claude/channels/discord/.env` (primary) or `DISCORD_BOT_TOKEN` env var (fallback). Loaded by `loadBotToken()` in `src/discord/bridge.ts`.
+
+**Gateway Intents Used:**
+- `Guilds`, `GuildMessages`, `MessageContent`, `DirectMessages`, `GuildMessageReactions`
+- Partials: `Channel`, `Message`, `Reaction`
+
+**Message Routing:**
+- Channel-to-agent routing table built at startup from `clawcode.yaml` agent `channels` array.
+- Router: `src/discord/router.ts`, types in `src/discord/types.ts`.
+- Thread routing: `src/discord/thread-manager.ts` handles `threadCreate` events and routes thread messages to ephemeral sessions.
+
+**Webhooks:**
+- `src/discord/webhook-manager.ts` (`WebhookManager`) — Uses `discord.js` `WebhookClient` for per-agent custom display names/avatars.
+- Config: `webhook.webhookUrl`, `webhook.displayName`, `webhook.avatarUrl` per agent in `clawcode.yaml`.
+
+**Slash Commands:**
+- `src/discord/slash-commands.ts` (`SlashCommandHandler`) — Registers and handles Discord application commands.
+- Commands defined per-agent in `clawcode.yaml` `slashCommands` array. Discord option types 1-11.
+
+**Reactions:**
+- Bridge listens to `messageReactionAdd` / `messageReactionRemove` events and forwards to agent session. Toggleable per agent via `reactions: bool` in config.
+
+**Security/ACL:**
+- `src/security/acl-parser.ts` — Parses `SECURITY.md` allowlists for per-channel user access control.
+- Checked in `DiscordBridge.handleMessage()` before routing. Silent ignore on block.
+
+**Delivery Queue:**
+- `src/discord/delivery-queue.ts` (`DeliveryQueue`) — Async queue for reliable Discord message delivery with retry on failure.
+
+**Rate Limiter:**
+- `src/discord/rate-limiter.ts` (`createRateLimiter`) — Per-channel rate limiting. Default config from `src/discord/types.ts`.
+
+**Attachment Handling:**
+- `src/discord/attachments.ts` — Downloads Discord attachments to agent workspace `inbox/attachments/` directory. Images include multimodal reading hints for agents.
+
+**Streaming Responses:**
+- `src/discord/streaming.ts` (`ProgressiveMessageEditor`) — Sends initial message then edits in-place as agent streams output. Falls back to split messages when response exceeds 2000 chars.
+
+## MCP (Model Context Protocol)
 
 **ClawCode as MCP Server:**
-- ClawCode exposes itself as an MCP server at `src/mcp/server.ts` using `@modelcontextprotocol/sdk` ^1.29.0
-- Transport: stdio (`StdioServerTransport`)
-- Tools exposed: `agent_status`, `list_agents`, `send_message`, `list_schedules`, `list_webhooks`, `spawn_subagent_thread`
-- All tools delegate to the daemon via Unix socket IPC (`src/ipc/client.ts`)
+- `src/mcp/server.ts` — Exposes ClawCode daemon capabilities as MCP tools that agents can call.
+- SDK: `@modelcontextprotocol/sdk` 1.29.0 (transitive via claude-agent-sdk), transport: `StdioServerTransport`.
+- Tools: `agent_status`, `list_agents`, `send_message`, `list_schedules`, `list_webhooks`, `spawn_subagent_thread`, `memory_lookup`, `ask_advisor`.
+- Each tool delegates to daemon via IPC (Unix socket).
 
-## Secret Management
-
-**1Password CLI (`op://`):**
-- All production secrets referenced via 1Password URIs (e.g., `op://clawdbot/Finnhub/api-key`)
-- The `clawcode.yaml` config file uses `op://` paths that are resolved at runtime by the 1Password CLI
-- Vault: `clawdbot`
-- Discord bot token: `op://clawdbot/Clawdbot Discord Token/credential`
+**Agent MCP Clients:**
+- Agents can be configured with external MCP servers via the `mcpServers` array per agent in `clawcode.yaml`.
+- Config schema: `src/config/schema.ts` `mcpServerSchema` — `name`, `command`, `args`, `env`.
+- Passed to SDK `query()` as `mcpServers` option. Transformed via `transformMcpServersForSdk()` in `src/manager/session-adapter.ts`.
 
 ## Data Storage
 
-**Databases (SQLite via better-sqlite3):**
-- Memory store: `~/.clawcode/agents/{agent-name}/memory.db`
-  - Tables: `memories`, `session_logs`, `vec_memories` (virtual, sqlite-vec)
-  - WAL mode, `busy_timeout = 5000`, `synchronous = NORMAL`
-  - Vector schema: 384-dim float32 cosine distance
-  - Implemented in `src/memory/store.ts`
-- Usage tracking: `~/.clawcode/agents/{agent-name}/usage.db` (inferred from `UsageTracker` in `src/usage/tracker.ts`)
-- Registry: `~/.clawcode/manager/registry.json` (JSON file, not SQLite — `src/manager/registry.ts`)
+**Databases:**
+- Per-agent memory: `~/.clawcode/agents/<name>/memory.db` — better-sqlite3 with sqlite-vec extension.
+- Per-agent usage: `~/.clawcode/agents/<name>/usage.db` — better-sqlite3 (no vector).
+- Thread registry: SQLite via `THREAD_REGISTRY_PATH` from `src/discord/thread-types.ts`.
+- Approval log: `src/security/approval-log.ts` — SQLite-backed audit log for command approvals.
+- Config audit trail: `src/config/audit-trail.ts` — SQLite-backed diff history for config changes.
+
+**Memory Schema:**
+- Tables: `memories`, `vec_memories` (virtual, vec0), `session_logs`, `memory_links`
+- Vector index: `float[384]` with `distance_metric=cosine` in `vec0` virtual table.
+- Tiers: `hot`, `warm`, `cold` (column on `memories` table).
 
 **File Storage:**
-- Agent workspaces: `~/.clawcode/agents/{agent-name}/` (SOUL.md, IDENTITY.md, memory, attachments)
-- Inbox attachments: `{workspace}/inbox/attachments/` (Discord attachment downloads)
-- Thread attachments: `/tmp/thread-attachments/`
-- Skills: `~/.clawcode/skills/` (symlinked from workspace `skills/`)
+- Local filesystem only. Attachment downloads to agent workspace `inbox/attachments/`.
+- Agent workspaces: `~/.clawcode/agents/<name>/` (default base path from config `defaults.basePath`).
 
-**Local Embeddings:**
-- Model: `Xenova/all-MiniLM-L6-v2` (384 dimensions, ONNX via `@huggingface/transformers`)
-- Cache: `~/.cache/huggingface/` (~23MB, downloaded on first warmup)
-- No external API calls for embeddings
+**Caching:**
+- `~/.cache/huggingface` — HuggingFace model cache for `all-MiniLM-L6-v2` (23MB, downloaded on first warmup).
 
-## Authentication & Identity
+## IPC (Inter-Process Communication)
 
-**Claude Code OAuth:**
-- Agent sessions use Claude Code's OAuth subscription auth (not API key)
-- `ANTHROPIC_API_KEY` stripped from SDK subprocess env in `src/manager/session-adapter.ts`
+**Daemon Socket:**
+- Unix domain socket at `SOCKET_PATH` (defined in `src/manager/daemon.ts`).
+- Protocol: newline-delimited JSON-RPC 2.0.
+- Server: `src/ipc/server.ts`, Client: `src/ipc/client.ts`.
+- CLI commands communicate with daemon via this socket.
 
-**Discord Bot:**
-- Token loaded from `~/.claude/channels/discord/.env` (line: `DISCORD_BOT_TOKEN=...`)
-- Fallback: `DISCORD_BOT_TOKEN` environment variable
-- Bot permissions: read messages, send messages, manage reactions, create threads
+**Collaboration Inbox:**
+- `src/collaboration/inbox.ts` — Filesystem-based agent-to-agent messaging via JSON files in agent workspace `inbox/` directory.
+- Watched by heartbeat check `src/heartbeat/checks/inbox.ts`.
 
-## IPC (Internal)
+## File Watching
 
-**Unix Domain Socket:**
-- Path: defined in `src/manager/daemon.ts` as `SOCKET_PATH`
-- Protocol: newline-delimited JSON-RPC 2.0
-- Server: `src/ipc/server.ts`
-- Client: `src/ipc/client.ts`
-- Used by CLI commands and the MCP server to communicate with the running daemon
+**Config Hot-Reload:**
+- `chokidar` ^5.0.0 watches `clawcode.yaml` for changes.
+- `src/config/watcher.ts` (`ConfigWatcher`) — Debounced (500ms default) reload, diff computation, audit trail recording, daemon notification.
+- `src/manager/config-reloader.ts` (`ConfigReloader`) — Applies config diffs to running sessions.
 
 ## Dashboard
 
 **HTTP Server:**
-- Built with raw `node:http` (no framework)
-- Port: `CLAWCODE_DASHBOARD_PORT` env var, default 3100
-- Implemented in `src/dashboard/server.ts`
-- SSE endpoint for real-time agent status: `src/dashboard/sse.ts`
-- Static files served from `src/dashboard/static/`
+- Built-in `node:http` — no external HTTP framework.
+- `src/dashboard/server.ts` — serves static files from `src/dashboard/static/`, SSE endpoint, REST API for agent control.
+- SSE: `src/dashboard/sse.ts` (`SseManager`) — real-time status push to browser.
+- Static: `src/dashboard/static/index.html`, `app.js`, `styles.css`.
+
+## Authentication & Identity
+
+**Discord:**
+- Bot token auth. Token stored at `~/.claude/channels/discord/.env` outside the project.
+
+**Claude:**
+- OAuth subscription auth (Claude Code CLI login). API key intentionally stripped from subprocess env.
+
+**No external auth provider** — security is handled by Discord channel ACLs (`src/security/acl-parser.ts`) and per-agent command allowlists (`src/security/allowlist-matcher.ts`).
 
 ## Monitoring & Observability
 
-**Error Tracking:** None
+**Error Tracking:**
+- No external error tracking service. Errors logged via `pino` to stdout.
 
 **Logs:**
-- pino structured JSON to stdout
-- Log level: `CLAWCODE_LOG_LEVEL` env var (default: `info`)
-- Shared logger instance: `src/shared/logger.ts`
-- Child loggers per component (e.g., `logger.child({ component: "ipc-server" })`)
+- `pino` ^9 JSON logs. Singleton in `src/shared/logger.ts`. Level via `CLAWCODE_LOG_LEVEL` (default: `"info"`).
+- Log level options: `trace`, `debug`, `info`, `warn`, `error`, `fatal`.
+
+**Heartbeat:**
+- `src/heartbeat/runner.ts` (`HeartbeatRunner`) — Periodic health checks for each agent session.
+- Checks: context fill zones, memory consolidation, tier maintenance, inbox processing, thread idle cleanup, attachment cleanup, auto-linker.
+- Config: `heartbeat.intervalSeconds` (default 60) and `heartbeat.checkTimeoutSeconds` (default 10) per agent.
+
+**Budget Alerts:**
+- `DiscordBridge.sendBudgetAlert()` posts Discord embeds when token budgets hit warning/exceeded thresholds.
 
 ## CI/CD & Deployment
 
-**Hosting:** Not detected (self-hosted, runs on developer machine)
+**Hosting:**
+- Local process. Daemon runs as background process on developer machine.
+- No cloud hosting detected.
 
-**CI Pipeline:** Not detected (no GitHub Actions or CI config files present)
-
-## Environment Variables Summary
-
-| Variable | Purpose | Source |
-|----------|---------|--------|
-| `CLAWCODE_LOG_LEVEL` | Pino log level | `src/shared/logger.ts` |
-| `CLAWCODE_DASHBOARD_PORT` | Dashboard HTTP port | `src/manager/daemon.ts` |
-| `DISCORD_BOT_TOKEN` | Discord bot auth | `src/discord/bridge.ts` |
-| `OPENAI_API_KEY` | OpenAI MCP server | `clawcode.yaml` |
-| `ANTHROPIC_API_KEY` | Anthropic MCP server | `clawcode.yaml` |
-| `BRAVE_API_KEY` | Brave Search MCP server | `clawcode.yaml` |
-| `ELEVENLABS_API_KEY` | ElevenLabs MCP server | `clawcode.yaml` |
-
-Most secrets use 1Password `op://` URIs in `clawcode.yaml` rather than env vars.
+**CI Pipeline:**
+- None detected in repository.
 
 ## Webhooks & Callbacks
 
-**Incoming:** None detected
+**Incoming:**
+- None. Discord events are received via WebSocket gateway (discord.js manages reconnection).
 
 **Outgoing:**
-- Discord webhooks (per-agent custom identity) — `src/discord/webhook-manager.ts`
-- Webhook URLs configured per agent in `clawcode.yaml` via `webhook.webhookUrl`
+- Discord webhook delivery: `WebhookClient` in `src/discord/webhook-manager.ts` — agents post messages to Discord with custom identity via webhook URLs.
+- Budget alert embeds sent to agent Discord channels.
+
+## Environment Configuration
+
+**Required env vars (runtime):**
+- `DISCORD_BOT_TOKEN` — Only if `~/.claude/channels/discord/.env` is absent.
+- `CLAWCODE_LOG_LEVEL` — Optional, defaults to `"info"`.
+
+**Secrets location:**
+- Discord bot token: `~/.claude/channels/discord/.env` (outside project, not committed)
+- Claude auth: Claude Code CLI OAuth session (managed by `claude` CLI)
 
 ---
 
-*Integration audit: 2026-04-10*
+*Integration audit: 2026-04-11*

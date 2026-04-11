@@ -1,190 +1,207 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-04-10
+**Analysis Date:** 2026-04-11
 
 ## Test Framework
 
 **Runner:**
-- Vitest 4.x
-- Config: `vitest.config.ts` (minimal — only sets `globals: false`)
-- No coverage thresholds configured
+- vitest v4.1.3
+- Config: `vitest.config.ts` (minimal — `globals: false` is the only setting)
 
 **Assertion Library:**
-- Vitest built-in (`expect` from `"vitest"`)
+- vitest built-in (`expect`) — no separate assertion library
 
 **Run Commands:**
 ```bash
-npm test                  # Run all tests (vitest run --reporter=verbose)
-npx vitest                # Watch mode
-npx vitest run --coverage # Coverage (no threshold enforced)
-npm run typecheck         # Type check without running tests
+npm test                    # Run all tests once, verbose reporter
+npm run typecheck           # TypeScript compile check (no emit)
 ```
+
+No watch mode script defined in `package.json`. Run `npx vitest` for watch mode.
+
+No coverage script configured — coverage is not enforced.
 
 ## Test File Organization
 
-**Two co-location patterns used:**
+**Two co-location patterns are mixed:**
 
-**Pattern 1 — `__tests__/` subdirectory (dominant pattern):**
-```
-src/memory/
-├── store.ts
-├── search.ts
-├── errors.ts
-└── __tests__/
-    ├── store.test.ts
-    ├── search.test.ts
-    ├── compaction.test.ts
-    └── ...
-```
-Used by: `src/memory/`, `src/config/`, `src/bootstrap/`, `src/agent/`, `src/scheduler/`, `src/skills/`, `src/manager/`
+1. `__tests__/` subdirectory — used in `src/memory/`, `src/config/`, `src/discord/`, `src/agent/`, `src/bootstrap/`, `src/cli/`, `src/dashboard/`, `src/scheduler/`, `src/skills/`, `src/manager/`:
+   ```
+   src/memory/
+   ├── store.ts
+   ├── decay.ts
+   └── __tests__/
+       ├── store.test.ts
+       └── decay.test.ts
+   ```
 
-**Pattern 2 — Co-located in same directory:**
-```
-src/cli/commands/
-├── send.ts
-├── send.test.ts
-├── memory.ts
-├── memory.test.ts
-```
-Used by: `src/cli/commands/`, `src/security/`, `src/mcp/`, `src/memory/` (some files), `src/usage/`
+2. Sibling co-location — used in `src/cli/commands/`, `src/security/`, `src/usage/`, `src/mcp/`, `src/manager/`:
+   ```
+   src/usage/
+   ├── budget.ts
+   └── budget.test.ts
+   ```
 
 **Naming:** Always `<module-name>.test.ts`. No `.spec.ts` files.
 
+**Import style in tests:** Named imports from vitest with explicit list:
+```typescript
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+```
+
+`globals: false` means test globals (`describe`, `it`, `expect`) must always be imported explicitly.
+
 ## Test Structure
 
-**Suite Organization:**
+**Suite organization:**
 ```typescript
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-// No globals — all imports explicit (vitest.config.ts: globals: false)
+describe("ClassName or functionName", () => {
+  let subject: SubjectType;
 
-describe("ClassName or module", () => {
-  describe("methodName()", () => {
-    it("does X when Y", () => { /* ... */ });
-    it("returns Z for edge case", () => { /* ... */ });
+  beforeEach(() => {
+    subject = createTestSubject();
   });
-});
-```
-
-**Lifecycle hooks pattern:**
-```typescript
-describe("MemoryStore", () => {
-  let store: MemoryStore;
 
   afterEach(() => {
-    store?.close();  // Optional chaining — safe if test failed before assignment
+    subject?.close();  // cleanup with optional chaining
   });
-  // ...
+
+  describe("methodName", () => {
+    it("describes the expected behavior in plain English", () => {
+      // arrange
+      // act
+      // assert
+    });
+  });
 });
 ```
 
-For filesystem tests:
+**Nested describes:** Used to group tests by method or scenario — typical depth is 2 levels (`describe("Class") > describe("method") > it()`).
+
+**Multiple top-level describes per file:** Common when testing multiple exported functions from one module:
 ```typescript
-describe("detectBootstrapNeeded", () => {
-  const tempDirs: string[] = [];
+// From src/config/__tests__/loader.test.ts
+describe("resolveAgentConfig", () => { ... });
+describe("resolveAgentConfig - mcpServers", () => { ... });
+describe("resolveContent", () => { ... });
+describe("loadConfig", () => { ... });
+describe("resolveEnvVars", () => { ... });
+```
 
-  async function makeTempWorkspace(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "bootstrap-test-"));
-    tempDirs.push(dir);
-    return dir;
+**Test names:** Written as expected behaviors: `"returns entry and increments access_count"`, `"does not mutate input agent object"`, `"merges near-duplicate embedding instead of creating two entries"`.
+
+## Cleanup Patterns
+
+**SQLite in-memory stores:** Closed in `afterEach`:
+```typescript
+afterEach(() => {
+  store?.close();
+});
+```
+
+**Temporary filesystem directories:** Created in `beforeEach`, removed in `afterEach`:
+```typescript
+beforeEach(async () => {
+  tempDir = await mkdtemp(join(tmpdir(), "clawcode-test-"));
+});
+
+afterEach(async () => {
+  await rm(tempDir, { recursive: true, force: true });
+});
+```
+
+**Environment variables:** Saved and restored manually:
+```typescript
+beforeEach(() => {
+  savedEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+});
+afterEach(() => {
+  for (const [key, val] of Object.entries(savedEnv)) {
+    if (val === undefined) delete process.env[key];
+    else process.env[key] = val;
   }
-
-  afterEach(async () => {
-    for (const dir of tempDirs) {
-      await rm(dir, { recursive: true, force: true });
-    }
-    tempDirs.length = 0;
-  });
 });
 ```
 
 ## Mocking
 
-**Framework:** `vi` from `"vitest"` — no additional mocking libraries.
-
-**Factory functions for mocks** (preferred over inline mocks):
+**Module mocking** — `vi.mock()` at top of file, before imports:
 ```typescript
-function createMockSessionManager() {
-  return {
-    sendToAgent: vi.fn().mockResolvedValue("Task completed"),
-  } as any;
-}
-
-function createMockLogger() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-    child: vi.fn().mockReturnThis(),
-  } as any;
-}
-```
-
-**Interface-based mock classes** for complex dependencies — production interfaces have `Mock*` implementations in the same source file, exported for test use:
-- `MockSessionAdapter` — tracks all created sessions in a `Map`, exposed as `adapter.sessions`
-- `MockSessionHandle` — exposes `simulateCrash()` and `simulateEnd()` to trigger lifecycle callbacks
-- Both exported from `src/manager/session-adapter.ts`
-
-```typescript
-// From src/agent/__tests__/runner.test.ts
-import { MockSessionAdapter, MockSessionHandle } from "../../manager/session-adapter.js";
-
-adapter = new MockSessionAdapter();
-// Simulate crash to test recovery:
-const firstHandle = [...adapter.sessions.values()][0] as MockSessionHandle;
-firstHandle.simulateCrash();
-```
-
-**`vi.fn()` for simple stubs:**
-```typescript
-const noopBridge = {
-  start: vi.fn().mockResolvedValue(undefined),
-  stop: vi.fn().mockResolvedValue(undefined),
-};
-```
-
-**`vi.spyOn()` for verifying calls on real objects:**
-```typescript
-const closeSpy = vi.spyOn(handle, "close");
-await runner.stop();
-expect(closeSpy).toHaveBeenCalledOnce();
-```
-
-**Reset between tests:**
-```typescript
-beforeEach(() => {
-  vi.clearAllMocks();
+// From src/memory/__tests__/embedder.test.ts
+// Mock the @huggingface/transformers module to avoid 23MB model download
+vi.mock("@huggingface/transformers", () => {
+  const mockPipeline = vi.fn(async () => {
+    return async (_text: string, _opts?: Record<string, unknown>) => ({
+      tolist: () => {
+        const vec = Array.from({ length: 384 }, (_, i) => i / 384);
+        return [vec];
+      },
+    });
+  });
+  return { pipeline: mockPipeline };
 });
 ```
 
-## Fixtures and Factories
-
-**Factory functions** for test data (not file-based fixtures):
-
+**Inline object mocks** — factory functions that return typed mock objects via `as unknown as T`:
 ```typescript
-// Minimal config factory with overrides
-function makeConfig(
-  workspace: string,
-  overrides: Partial<ResolvedAgentConfig> = {},
-): ResolvedAgentConfig {
+// From src/memory/__tests__/compaction.test.ts
+function mockMemoryStore(): MemoryStore {
   return {
-    name: "test-agent",
-    workspace,
-    channels: ["general"],
-    model: "sonnet",
-    skills: [],
-    // ... defaults
-    ...overrides,
-  } as ResolvedAgentConfig;
+    insert: vi.fn().mockReturnValue({ id: "mem-1", content: "test", ... }),
+    recordSessionLog: vi.fn().mockReturnValue({ ... }),
+    close: vi.fn(),
+  } as unknown as MemoryStore;
 }
 
-// Embedding factories for deterministic vector tests
+function mockEmbedder(): EmbeddingService {
+  return {
+    embed: vi.fn().mockResolvedValue(new Float32Array(384)),
+    warmup: vi.fn().mockResolvedValue(undefined),
+    isReady: vi.fn().mockReturnValue(true),
+  } as unknown as EmbeddingService;
+}
+```
+
+**vi.spyOn** — used for partial mocking of real instances:
+```typescript
+vi.spyOn(store, "updateTier").mockImplementation((id, tier) => { ... });
+```
+
+**vi.mocked()** — used to access mock-specific API on mocked imports:
+```typescript
+vi.mocked(pipeline).mockResolvedValueOnce(mockExtractor as ...);
+```
+
+**vi.clearAllMocks()** — called in `beforeEach` when module mocks are in use to reset call history.
+
+**What to mock:**
+- `@huggingface/transformers` — avoid 23MB model download
+- `EmbeddingService`, `SessionLogger`, `MemoryStore` — when testing orchestration logic
+- `Logger` (pino) — silence output and verify log calls
+- External filesystem for integration boundary tests
+
+**What NOT to mock:**
+- `better-sqlite3` — use `:memory:` database for real SQLite behavior in all store tests
+- Domain logic in pure functions — test directly without mocking
+
+## Test Data Patterns
+
+**SQLite in-memory databases:** All store tests use `:memory:` database path:
+```typescript
+function createTestStore(): MemoryStore {
+  return new MemoryStore(":memory:");
+}
+```
+
+**Embeddings for vector tests:** Random 384-dim Float32Array helpers:
+```typescript
 function randomEmbedding(): Float32Array {
   const arr = new Float32Array(384);
   for (let i = 0; i < 384; i++) arr[i] = Math.random() * 2 - 1;
   return arr;
 }
 
+// Directional embedding for predictable similarity tests
 function directionalEmbedding(dim: number, value: number): Float32Array {
   const arr = new Float32Array(384);
   arr[dim] = value;
@@ -194,113 +211,36 @@ function directionalEmbedding(dim: number, value: number): Float32Array {
 }
 ```
 
-**In-memory SQLite** for database tests — avoids file I/O and cleanup:
+**Injected clocks:** For time-sensitive tests (rate limiter, token bucket), a clock function is injected:
 ```typescript
-function createTestStore(): MemoryStore {
-  return new MemoryStore(":memory:");
+const now = 1000000;
+const clock = () => now;
+const limiter = createRateLimiter(DEFAULT_RATE_LIMITER_CONFIG, clock);
+// ...
+now += 1000;  // advance time
+```
+
+**Builder helpers for typed test data:** Minimal `makeAgent()` factories that return valid typed objects:
+```typescript
+function makeAgent(name: string, channels: string[] = []): ResolvedAgentConfig {
+  return {
+    name,
+    workspace: `/tmp/agents/${name}`,
+    channels,
+    model: "sonnet",
+    // ... all required fields with sane defaults
+  };
 }
 ```
 
-**Temporary directories** for filesystem tests using `mkdtemp`:
-```typescript
-beforeEach(async () => {
-  tmpDir = await mkdtemp(join(tmpdir(), "bootstrap-int-"));
-  await mkdir(join(tmpDir, "memory"), { recursive: true });
-});
-afterEach(async () => {
-  await rm(tmpDir, { recursive: true, force: true });
-});
-```
+**Deps objects:** Tests construct `CompactionDeps`, `ConsolidationDeps` etc. from mock factories then pass to the function under test — this is the primary pattern for testing functions with multiple dependencies.
 
-**Location:** All factories are defined inline within the test file that uses them. No shared fixture directory.
+## Assertions
 
-## Coverage
-
-**Requirements:** No coverage threshold enforced.
-
-**Configuration:** No `coverage` block in `vitest.config.ts`. Coverage must be requested manually.
-
-```bash
-npx vitest run --coverage
-```
-
-## Test Types
-
-**Unit Tests (dominant):**
-- Pure function testing: Zod schema validation, config resolution, memory tier logic, decay calculations
-- Class method testing with mocked dependencies
-- SQLite in-memory database for store operations (effectively integration but contained)
-- Examples: `src/memory/__tests__/store.test.ts`, `src/config/__tests__/schema.test.ts`, `src/scheduler/__tests__/scheduler.test.ts`
-
-**Integration Tests:**
-- Real filesystem with temp directories
-- Tests that cross multiple layers (e.g., config loading + workspace creation + session config building)
-- File: `src/manager/__tests__/bootstrap-integration.test.ts` — exercises `buildSessionConfig` with real file I/O
-- Files: `src/bootstrap/__tests__/detector.test.ts`, `src/bootstrap/__tests__/writer.test.ts`
-
-**E2E Tests:** Not present. No Playwright, Cypress, or similar.
-
-## Common Patterns
-
-**Async Testing:**
-```typescript
-it("creates session via the adapter", async () => {
-  const runner = new AgentRunner({ ... });
-  await runner.start();
-  expect(adapter.sessions.size).toBe(1);
-  await runner.stop();
-});
-```
-
-**Error Testing:**
-```typescript
-it("throws if already running", async () => {
-  await runner.start();
-  await expect(runner.start()).rejects.toThrow("already running");
-  await runner.stop();
-});
-
-it("rejects invalid source values", () => {
-  expect(() =>
-    store.insert({ content: "test", source: "invalid" as any }, randomEmbedding()),
-  ).toThrow();
-});
-```
-
-**Zod Schema Testing** — use `safeParse` to inspect success/failure without throwing:
-```typescript
-it("validates a complete MCP server config", () => {
-  const result = mcpServerSchema.safeParse({ name: "finnhub", command: "npx", args: [], env: {} });
-  expect(result.success).toBe(true);
-  if (result.success) {
-    expect(result.data.name).toBe("finnhub");
-  }
-});
-
-it("rejects missing name", () => {
-  const result = mcpServerSchema.safeParse({ command: "npx" });
-  expect(result.success).toBe(false);
-});
-```
-
-**Timing-dependent crash recovery** — uses `backoffBaseMs: 0` and short `setTimeout` waits in tests:
-```typescript
-const runner = new AgentRunner({
-  sessionConfig,
-  sessionAdapter: adapter,
-  discordBridge: noopBridge,
-  maxRestarts: 2,
-  backoffBaseMs: 0,  // Disable backoff in tests
-});
-firstHandle.simulateCrash();
-await new Promise((resolve) => setTimeout(resolve, 20));  // Allow crash handler to run
-expect(adapter.sessions.size).toBeGreaterThan(1);
-```
-
-**Immutability assertions** — tests actively verify frozen objects:
+**Immutability assertions:** Actively tested as a first-class behavior:
 ```typescript
 it("returns a frozen (readonly) entry", () => {
-  const entry = store.insert({ content: "test", source: "manual" }, randomEmbedding());
+  const entry = store.insert({ ... }, randomEmbedding());
   expect(Object.isFrozen(entry)).toBe(true);
 });
 
@@ -310,6 +250,67 @@ it("returns frozen array", () => {
 });
 ```
 
+**Error type assertions:**
+```typescript
+await expect(loadConfig(missingPath)).rejects.toThrow(ConfigFileNotFoundError);
+
+// For checking error message contents:
+try {
+  await loadConfig(configPath);
+  expect.fail("Should have thrown");
+} catch (err) {
+  expect(err).toBeInstanceOf(ConfigValidationError);
+  expect((err as ConfigValidationError).message).toContain("researcher");
+}
+```
+
+**Null assertions:** Using non-null assertion `!` after checking for null:
+```typescript
+const found = store.getById(created.id);
+expect(found).not.toBeNull();
+expect(found!.content).toBe("findme");
+```
+
+**Numeric precision:** `toBeCloseTo(value, decimalPlaces)` for floating-point comparisons:
+```typescript
+expect(result).toBeCloseTo(0.8, 5);
+expect(result).toBeCloseTo(0.4, 1);
+```
+
+## Coverage
+
+**Requirements:** None enforced — no `coverage` script in `package.json`, no thresholds in `vitest.config.ts`.
+
+**Actual coverage:** Well-tested areas:
+- `src/memory/` — comprehensive tests for all public methods of all 15+ modules
+- `src/config/` — loader, schema, differ, watcher, audit-trail all tested
+- `src/discord/` — rate-limiter, router, slash-commands, attachments, threads tested
+- `src/security/` — acl-parser, allowlist-matcher, approval-log tested
+- `src/usage/` — budget, tracker, advisor-budget tested
+- `src/scheduler/` — scheduler and schema tested
+
+**Notable gaps** (no test files found):
+- `src/manager/daemon.ts` — 1240 lines, no test (hardest to test — process lifecycle)
+- `src/manager/session-adapter.ts` — 467 lines, no test (SDK wrapper)
+- `src/manager/session-recovery.ts` — no test
+- `src/discord/bridge.ts` — 635 lines, no test (Discord integration)
+- `src/ipc/server.ts` and `src/ipc/client.ts` — no tests (Unix socket IPC)
+- `src/collaboration/inbox.ts` — no test
+- `src/heartbeat/checks/` — individual check functions untested
+- `src/cli/commands/` — start, stop, restart, health, run untested (CLI side effects)
+- `src/dashboard/sse.ts` — no test
+
+## Test Types
+
+**Unit Tests:**
+- All tests are unit tests — no integration tests or e2e tests present
+- External dependencies (embedder, LLM, Discord API) are mocked
+- SQLite is the only external dependency used without mocking (`:memory:` database)
+
+**Integration Tests:** Not present.
+
+**E2E Tests:** Not present.
+
 ---
 
-*Testing analysis: 2026-04-10*
+*Testing analysis: 2026-04-11*
