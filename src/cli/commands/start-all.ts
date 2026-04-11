@@ -126,7 +126,9 @@ export function registerStartAllCommand(program: Command): void {
               cwd: projectRoot,
               env: (() => {
                 const { ANTHROPIC_API_KEY: _, ...rest } = process.env;
-                return { ...rest, CLAWCODE_LOG_FILE: logPath };
+                // Ensure PATH includes standard bin dirs for detached process
+                const path = rest.PATH || "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+                return { ...rest, PATH: path, CLAWCODE_LOG_FILE: logPath };
               })(),
             },
           );

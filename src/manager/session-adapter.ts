@@ -168,6 +168,10 @@ export function createMockAdapter(): MockSessionAdapter {
  */
 function buildCleanEnv(): Record<string, string | undefined> {
   const { ANTHROPIC_API_KEY: _stripped, ...rest } = process.env;
+  // Ensure PATH includes standard bin dirs (detached daemon may inherit stripped PATH)
+  if (!rest.PATH || !rest.PATH.includes("/usr/bin")) {
+    rest.PATH = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${rest.PATH ? `:${rest.PATH}` : ""}`;
+  }
   return rest;
 }
 
