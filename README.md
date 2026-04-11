@@ -48,7 +48,6 @@ Each agent gets an isolated workspace at `~/.clawcode/agents/<name>/` with its o
 
 - Node.js 22 LTS
 - [Claude Code CLI](https://claude.ai/code) installed
-- Anthropic API key
 - Discord bot token (optional, for Discord integration)
 
 ### Install
@@ -162,8 +161,10 @@ sudo bash scripts/install.sh
 This installs Node.js 22, Claude Code CLI, builds the project, creates a `clawcode` system user, and sets up a systemd service with security hardening.
 
 ```bash
+# Authenticate (Claude Code handles auth — no separate API key needed)
+sudo -u clawcode claude login
+
 # Configure
-sudo editor /etc/clawcode/env           # Set ANTHROPIC_API_KEY
 sudo editor /etc/clawcode/clawcode.yaml  # Configure agents
 
 # Run

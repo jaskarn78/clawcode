@@ -167,10 +167,10 @@ setup_config() {
   if [[ ! -f "$CLAWCODE_CONFIG" ]]; then
     cat > "$CLAWCODE_CONFIG" <<'YAML'
 # ClawCode configuration
-# See docs for full reference: https://github.com/your-org/clawcode
+# See docs for full reference: https://github.com/jaskarn78/clawcode
 #
-# Required: Set your Anthropic API key
-#   export ANTHROPIC_API_KEY=sk-ant-...
+# Authentication: Claude Code handles auth — no Anthropic API key needed here.
+# Run `claude login` as the clawcode user before starting the service.
 #
 # Required: Set your Discord bot token (or use 1Password reference)
 #   discord:
@@ -249,12 +249,12 @@ SyslogIdentifier=clawcode
 WantedBy=multi-user.target
 EOF
 
-  # Create env file for secrets
+  # Create env file for optional overrides
   if [[ ! -f /etc/clawcode/env ]]; then
     cat > /etc/clawcode/env <<'ENV'
-# ClawCode environment variables
-# ANTHROPIC_API_KEY=sk-ant-...
-# DISCORD_BOT_TOKEN=...
+# ClawCode environment variables (optional overrides)
+# Auth is handled by Claude Code — run `claude login` as the clawcode user.
+# CLAWCODE_LOG_LEVEL=info
 ENV
     chmod 600 /etc/clawcode/env
     chown "$CLAWCODE_USER:$CLAWCODE_USER" /etc/clawcode/env
@@ -292,11 +292,11 @@ print_summary() {
   echo "  Log:           ${LOG_FILE}"
   echo ""
   echo "  Next steps:"
-  echo "  1. Set your API key:    sudo editor /etc/clawcode/env"
-  echo "  2. Configure agents:    sudo editor ${CLAWCODE_CONFIG}"
-  echo "  3. Start the daemon:    sudo systemctl start clawcode"
-  echo "  4. Enable on boot:      sudo systemctl enable clawcode"
-  echo "  5. View logs:           journalctl -u clawcode -f"
+  echo "  1. Authenticate Claude:  sudo -u ${CLAWCODE_USER} claude login"
+  echo "  2. Configure agents:     sudo editor ${CLAWCODE_CONFIG}"
+  echo "  3. Start the daemon:     sudo systemctl start clawcode"
+  echo "  4. Enable on boot:       sudo systemctl enable clawcode"
+  echo "  5. View logs:            journalctl -u clawcode -f"
   echo ""
 }
 
