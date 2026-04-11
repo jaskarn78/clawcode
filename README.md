@@ -157,6 +157,8 @@ clawcode status
 | `clawcode start <name>` | Start a single agent |
 | `clawcode start-all` | Start daemon with all agents |
 | `clawcode stop <name>` | Stop an agent |
+| `clawcode stop-all` | Stop all agents (daemon stays up) |
+| `clawcode stop-all --shutdown` | Stop all agents and kill daemon |
 | `clawcode restart <name>` | Restart an agent |
 | `clawcode status` | Show all agent statuses |
 | `clawcode send <to> <message>` | Send a message to an agent |
@@ -256,6 +258,23 @@ sudo systemctl enable clawcode
 
 # View logs
 journalctl -u clawcode -f
+```
+
+### Cross-User CLI Access
+
+The daemon runs as the `clawcode` user, but you can control it from your own user by setting the socket path:
+
+```bash
+# Add to your ~/.bashrc
+export CLAWCODE_SOCKET=/home/clawcode/.clawcode/manager/clawcode.sock
+```
+
+Then all commands work from your user:
+
+```bash
+clawcode status          # See running agents
+clawcode stop-all        # Stop all agents
+clawcode stop-all --shutdown  # Kill the daemon
 ```
 
 ### Updating
