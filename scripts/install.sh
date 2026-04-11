@@ -215,11 +215,12 @@ Group=${CLAWCODE_USER}
 WorkingDirectory=${CLAWCODE_DIR}
 
 # Core command
-ExecStart=${CLAWCODE_DIR}/dist/cli/index.js daemon --config ${CLAWCODE_CONFIG}
+ExecStart=/usr/bin/node ${CLAWCODE_DIR}/dist/cli/index.js start-all --foreground --config ${CLAWCODE_CONFIG}
 
 # Environment
 Environment=NODE_ENV=production
 Environment=HOME=/home/${CLAWCODE_USER}
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=-/etc/clawcode/env
 
 # Restart policy
