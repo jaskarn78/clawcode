@@ -365,16 +365,7 @@ export async function startDaemon(
   // 9. Await embedding warmup before accepting IPC requests
   await manager.warmupEmbeddings();
 
-  // 9a. Create routingTableRef early so IPC handler closure can access it
   const routingTableRef = { current: routingTable };
-
-  // 10. Create IPC handler
-  const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, configPath);
-  };
-
-  // 11. Create IPC server
-  const server = createIpcServer(SOCKET_PATH, handler);
 
   // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token)
   let botToken: string;
@@ -524,7 +515,13 @@ export async function startDaemon(
     }
   }
 
-  // 11d. Initialize config hot-reload
+  // 11d. Create IPC handler and server — AFTER all subsystems are initialized
+  const handler: IpcHandler = async (method, params) => {
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, configPath);
+  };
+  const server = createIpcServer(SOCKET_PATH, handler);
+
+  // 11e. Initialize config hot-reload
   const auditTrailPath = join(MANAGER_DIR, "config-audit.jsonl");
 
   const configReloader = new ConfigReloader({
