@@ -35,11 +35,29 @@ export class ThreadManager {
   private readonly registryPath: string;
   private readonly log: Logger;
 
+  /** Thread IDs currently being spawned by SubagentThreadSpawner — skip auto-spawn for these. */
+  private readonly pendingSpawns: Set<string> = new Set();
+
   constructor(config: ThreadManagerConfig) {
     this.sessionManager = config.sessionManager;
     this.routingTable = config.routingTable;
     this.registryPath = config.registryPath;
     this.log = config.log ?? logger;
+  }
+
+  /**
+   * Mark a thread ID as being spawned externally (e.g., by SubagentThreadSpawner).
+   * Prevents the threadCreate event from creating a duplicate session.
+   */
+  markPendingSpawn(threadId: string): void {
+    this.pendingSpawns.add(threadId);
+  }
+
+  /**
+   * Clear a pending spawn marker after the external spawn completes or fails.
+   */
+  clearPendingSpawn(threadId: string): void {
+    this.pendingSpawns.delete(threadId);
   }
 
   /**
@@ -53,6 +71,12 @@ export class ThreadManager {
     threadName: string,
     parentChannelId: string,
   ): Promise<boolean> {
+    // 0. Skip if this thread is being spawned externally (SubagentThreadSpawner)
+    if (this.pendingSpawns.has(threadId)) {
+      this.log.debug({ threadId }, "thread is pending external spawn, skipping auto-spawn");
+      return false;
+    }
+
     // 1. Check if parent channel is bound to an agent
     const agentName = this.routingTable.channelToAgent.get(parentChannelId);
     if (!agentName) {

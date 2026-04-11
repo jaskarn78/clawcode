@@ -472,6 +472,7 @@ export async function startDaemon(
         sessionManager: manager,
         registryPath: THREAD_REGISTRY_PATH,
         discordClient: discordBridge.discordClient,
+        threadManager,
         log,
       })
     : null;

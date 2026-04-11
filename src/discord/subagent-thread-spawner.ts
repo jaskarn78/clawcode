@@ -24,6 +24,7 @@ export type SubagentThreadSpawnerConfig = {
   readonly sessionManager: SessionManager;
   readonly registryPath: string;
   readonly discordClient: Client;
+  readonly threadManager?: import("./thread-manager.js").ThreadManager;
   readonly log?: Logger;
 };
 
@@ -35,12 +36,14 @@ export class SubagentThreadSpawner {
   private readonly sessionManager: SessionManager;
   private readonly registryPath: string;
   private readonly discordClient: Client;
+  private readonly threadManager?: import("./thread-manager.js").ThreadManager;
   private readonly log: Logger;
 
   constructor(config: SubagentThreadSpawnerConfig) {
     this.sessionManager = config.sessionManager;
     this.registryPath = config.registryPath;
     this.discordClient = config.discordClient;
+    this.threadManager = config.threadManager;
     this.log = config.log ?? logger;
   }
 
@@ -88,10 +91,14 @@ export class SubagentThreadSpawner {
 
     // 4. Fetch Discord channel and create thread
     const channel = await this.discordClient.channels.fetch(channelId) as TextChannel;
+
+    // Pre-create: tell ThreadManager to ignore the threadCreate event for this thread
+    // (prevents duplicate spawn from the Discord event racing with our binding write)
     const thread = await channel.threads.create({
       name: config.threadName,
       autoArchiveDuration: 1440,
     });
+    this.threadManager?.markPendingSpawn(thread.id);
 
     // 5. Build session name
     const shortId = nanoid(6);
@@ -154,12 +161,15 @@ export class SubagentThreadSpawner {
       const rollbackRegistry = await readThreadRegistry(this.registryPath);
       const cleaned = removeBinding(rollbackRegistry, thread.id);
       await writeThreadRegistry(this.registryPath, cleaned);
+      this.threadManager?.clearPendingSpawn(thread.id);
       this.log.error(
         { threadId: thread.id, sessionName, error: (error as Error).message },
         "subagent session start failed — binding rolled back",
       );
       throw error;
     }
+
+    this.threadManager?.clearPendingSpawn(thread.id);
 
     this.log.info(
       { threadId: thread.id, threadName: config.threadName, parentAgent: config.parentAgentName, sessionName },
