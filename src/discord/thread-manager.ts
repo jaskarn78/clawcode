@@ -73,12 +73,22 @@ export class ThreadManager {
       return false;
     }
 
-    // 3. Check maxThreadSessions limit
+    // 3. Skip if a binding already exists (e.g., created by SubagentThreadSpawner)
+    let registry = await readThreadRegistry(this.registryPath);
+    const existingBinding = getBindingForThread(registry, threadId);
+    if (existingBinding) {
+      this.log.debug(
+        { threadId, sessionName: existingBinding.sessionName },
+        "thread binding already exists, skipping auto-spawn",
+      );
+      return false;
+    }
+
+    // 4. Check maxThreadSessions limit
     const maxSessions =
       parentConfig.threads?.maxThreadSessions ??
       DEFAULT_THREAD_CONFIG.maxThreadSessions;
 
-    let registry = await readThreadRegistry(this.registryPath);
     const agentBindings = getBindingsForAgent(registry, agentName);
 
     if (agentBindings.length >= maxSessions) {
@@ -109,10 +119,7 @@ export class ThreadManager {
       soul: (parentConfig.soul ?? "") + threadContext,
     };
 
-    // 6. Start the thread session
-    await this.sessionManager.startAgent(sessionName, threadSessionConfig);
-
-    // 7. Create and persist binding
+    // 6. Persist binding first so routeMessage can find it immediately
     const now = Date.now();
     const binding: ThreadBinding = {
       threadId,
@@ -126,6 +133,20 @@ export class ThreadManager {
     registry = await readThreadRegistry(this.registryPath);
     const updatedRegistry = addBinding(registry, binding);
     await writeThreadRegistry(this.registryPath, updatedRegistry);
+
+    // 7. Start the thread session — rollback binding on failure
+    try {
+      await this.sessionManager.startAgent(sessionName, threadSessionConfig);
+    } catch (error) {
+      const rollbackRegistry = await readThreadRegistry(this.registryPath);
+      const cleaned = removeBinding(rollbackRegistry, threadId);
+      await writeThreadRegistry(this.registryPath, cleaned);
+      this.log.error(
+        { threadId, sessionName, error: (error as Error).message },
+        "thread session start failed — binding rolled back",
+      );
+      return false;
+    }
 
     this.log.info(
       { threadId, threadName, agentName, sessionName },

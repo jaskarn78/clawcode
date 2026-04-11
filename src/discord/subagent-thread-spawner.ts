@@ -131,10 +131,7 @@ export class SubagentThreadSpawner {
       webhook,
     };
 
-    // 10. Start agent session
-    await this.sessionManager.startAgent(sessionName, subagentConfig);
-
-    // 11. Persist thread binding
+    // 10. Persist thread binding FIRST so routeMessage can find it immediately
     const now = Date.now();
     const binding: ThreadBinding = {
       threadId: thread.id,
@@ -148,6 +145,21 @@ export class SubagentThreadSpawner {
     const currentRegistry = await readThreadRegistry(this.registryPath);
     const updatedRegistry = addBinding(currentRegistry, binding);
     await writeThreadRegistry(this.registryPath, updatedRegistry);
+
+    // 11. Start agent session — rollback binding on failure
+    try {
+      await this.sessionManager.startAgent(sessionName, subagentConfig);
+    } catch (error) {
+      // Rollback: remove the binding we just wrote
+      const rollbackRegistry = await readThreadRegistry(this.registryPath);
+      const cleaned = removeBinding(rollbackRegistry, thread.id);
+      await writeThreadRegistry(this.registryPath, cleaned);
+      this.log.error(
+        { threadId: thread.id, sessionName, error: (error as Error).message },
+        "subagent session start failed — binding rolled back",
+      );
+      throw error;
+    }
 
     this.log.info(
       { threadId: thread.id, threadName: config.threadName, parentAgent: config.parentAgentName, sessionName },
