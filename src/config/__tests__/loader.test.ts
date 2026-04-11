@@ -216,20 +216,22 @@ describe("resolveAgentConfig - mcpServers", () => {
   it("resolves string references from shared definitions", () => {
     const agent = { ...baseAgent, mcpServers: ["finnhub"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
-    expect(resolved.mcpServers).toHaveLength(1);
-    expect(resolved.mcpServers[0].name).toBe("finnhub");
-    expect(resolved.mcpServers[0].command).toBe("npx");
-    expect(resolved.mcpServers[0].args).toEqual(["-y", "finnhub-mcp"]);
-    expect(resolved.mcpServers[0].env).toEqual({ API_KEY: "xxx" });
+    const finnhub = resolved.mcpServers.find(s => s.name === "finnhub");
+    expect(finnhub).toBeDefined();
+    expect(finnhub!.command).toBe("npx");
+    expect(finnhub!.args).toEqual(["-y", "finnhub-mcp"]);
+    expect(finnhub!.env).toEqual({ API_KEY: "xxx" });
+    // Also has auto-injected clawcode
+    expect(resolved.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
   });
 
   it("passes inline MCP server objects through unchanged", () => {
     const inline = { name: "custom", command: "my-server", args: ["--port", "3000"], env: { KEY: "val" } };
     const agent = { ...baseAgent, mcpServers: [inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
-    expect(resolved.mcpServers).toHaveLength(1);
-    expect(resolved.mcpServers[0].name).toBe("custom");
-    expect(resolved.mcpServers[0].command).toBe("my-server");
+    const custom = resolved.mcpServers.find(s => s.name === "custom");
+    expect(custom).toBeDefined();
+    expect(custom!.command).toBe("my-server");
   });
 
   it("merges inline and refs, inline wins on name collision", () => {
@@ -237,8 +239,9 @@ describe("resolveAgentConfig - mcpServers", () => {
     const agent = { ...baseAgent, mcpServers: ["finnhub", inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     // Later entry wins on name collision
-    expect(resolved.mcpServers).toHaveLength(1);
-    expect(resolved.mcpServers[0].command).toBe("custom-finnhub");
+    const finnhub = resolved.mcpServers.find(s => s.name === "finnhub");
+    expect(finnhub).toBeDefined();
+    expect(finnhub!.command).toBe("custom-finnhub");
   });
 
   it("throws when string reference not found in shared definitions", () => {
@@ -248,17 +251,20 @@ describe("resolveAgentConfig - mcpServers", () => {
     );
   });
 
-  it("returns empty mcpServers array when agent has none", () => {
+  it("auto-injects clawcode MCP server when agent has none", () => {
     const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
-    expect(resolved.mcpServers).toEqual([]);
+    const clawcode = resolved.mcpServers.find(s => s.name === "clawcode");
+    expect(clawcode).toBeDefined();
+    expect(clawcode!.command).toBe("clawcode");
+    expect(clawcode!.args).toEqual(["mcp"]);
   });
 
   it("resolves multiple string references", () => {
     const agent = { ...baseAgent, mcpServers: ["finnhub", "google"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
-    expect(resolved.mcpServers).toHaveLength(2);
-    expect(resolved.mcpServers[0].name).toBe("finnhub");
-    expect(resolved.mcpServers[1].name).toBe("google");
+    expect(resolved.mcpServers.find(s => s.name === "finnhub")).toBeDefined();
+    expect(resolved.mcpServers.find(s => s.name === "google")).toBeDefined();
+    expect(resolved.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
   });
 });
 
@@ -553,15 +559,17 @@ agents:
     const resolved = resolveAllAgents(config);
     expect(resolved).toHaveLength(2);
 
-    // plain-agent has no mcpServers
+    // plain-agent gets auto-injected clawcode MCP
     const plainAgent = resolved.find((a) => a.name === "plain-agent");
     expect(plainAgent).toBeDefined();
-    expect(plainAgent!.mcpServers).toEqual([]);
+    expect(plainAgent!.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
+    // No user-defined MCP servers
+    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password")).toEqual([]);
 
-    // mcp-agent has 3 resolved servers from string references
+    // mcp-agent has 3 resolved servers from string references + auto-injected ones
     const mcpAgent = resolved.find((a) => a.name === "mcp-agent");
     expect(mcpAgent).toBeDefined();
-    expect(mcpAgent!.mcpServers).toHaveLength(3);
+    expect(mcpAgent!.mcpServers.length).toBeGreaterThanOrEqual(4);
 
     const serverNames = mcpAgent!.mcpServers.map((s) => s.name);
     expect(serverNames).toContain("finnhub");

@@ -356,12 +356,15 @@ export async function startDaemon(
   }
   log.info({ agents: securityPolicies.size }, "security policies loaded");
 
-  // 9. Create IPC handler
+  // 9. Await embedding warmup before accepting IPC requests
+  await manager.warmupEmbeddings();
+
+  // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget);
   };
 
-  // 10. Create IPC server
+  // 11. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
   // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token)

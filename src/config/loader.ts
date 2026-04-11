@@ -68,6 +68,28 @@ export function resolveAgentConfig(
       resolvedMcpMap.set(entry.name, entry);
     }
   }
+  // Auto-inject the clawcode MCP server so every agent gets memory_lookup,
+  // spawn_subagent_thread, ask_advisor, etc. — unless explicitly overridden.
+  if (!resolvedMcpMap.has("clawcode")) {
+    resolvedMcpMap.set("clawcode", {
+      name: "clawcode",
+      command: "clawcode",
+      args: ["mcp"],
+      env: {},
+    });
+  }
+
+  // Auto-inject 1Password MCP when OP_SERVICE_ACCOUNT_TOKEN is available,
+  // giving agents secure credential access without hardcoded secrets.
+  if (!resolvedMcpMap.has("1password") && process.env.OP_SERVICE_ACCOUNT_TOKEN) {
+    resolvedMcpMap.set("1password", {
+      name: "1password",
+      command: "npx",
+      args: ["-y", "@1password/mcp-server@latest"],
+      env: { OP_SERVICE_ACCOUNT_TOKEN: process.env.OP_SERVICE_ACCOUNT_TOKEN },
+    });
+  }
+
   const mcpServers = [...resolvedMcpMap.values()].map((s) => ({
     name: s.name,
     command: s.command,
