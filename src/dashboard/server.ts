@@ -92,7 +92,8 @@ export async function startDashboardServer(config: DashboardServerConfig): Promi
 
   return new Promise((resolve, reject) => {
     server.on("error", reject);
-    server.listen(config.port, "127.0.0.1", () => {
+    const host = process.env.CLAWCODE_DASHBOARD_HOST ?? "0.0.0.0";
+    server.listen(config.port, host, () => {
       log.info({ port: config.port }, "Dashboard server started");
       resolve({
         server,
