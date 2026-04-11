@@ -94,8 +94,9 @@ export async function buildSessionConfig(
     }
   }
 
-  // Inject agent name and memory_lookup guidance (LOAD-01)
-  identityStr += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
+  // Inject agent name and memory guidance (LOAD-01)
+  identityStr += `Your name is ${config.name}. When using memory_lookup or memory_save, pass '${config.name}' as the agent parameter.\n`;
+  identityStr += `Use memory_lookup to recall past conversations, decisions, and knowledge. Use memory_save to store important things you learn for future sessions.\n`;
 
   // --- Collect hot memories source ---
   let hotMemoriesStr = "";

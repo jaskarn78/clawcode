@@ -31,8 +31,8 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 8 tools defined", () => {
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(8);
+  it("has exactly 9 tools defined", () => {
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(9);
   });
 
   it("defines ask_advisor tool", () => {

@@ -23,6 +23,7 @@ export const IPC_METHODS = [
   "fork-session",
   "memory-search",
   "memory-graph",
+  "memory-save",
   "memory-list",
   "threads",
   "usage",

@@ -922,6 +922,41 @@ async function routeMethod(
       return { agent: agentName, period, ...aggregate };
     }
 
+    case "memory-save": {
+      const agentName = validateStringParam(params, "agent");
+      const content = validateStringParam(params, "content");
+      const tags = Array.isArray(params.tags) ? params.tags as string[] : [];
+      const importance = typeof params.importance === "number" ? params.importance : 0.7;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(`Memory store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const embedder = manager.getEmbedder();
+      const embedding = await embedder.embed(content);
+      const { nanoid } = await import("nanoid");
+      const id = nanoid();
+      const now = new Date().toISOString();
+
+      store.insert({ id, content, source: "conversation", importance, tags, createdAt: now }, embedding);
+
+      // Extract and store wikilinks
+      const { extractWikilinks } = await import("../memory/graph.js");
+      const wikilinks = extractWikilinks(content);
+      if (wikilinks.length > 0) {
+        const graphStmts = store.getGraphStatements();
+        for (const targetId of wikilinks) {
+          const exists = graphStmts.checkMemoryExists.get(targetId);
+          if (exists) {
+            try { graphStmts.insertLink.run(id, targetId, targetId, now); } catch { /* skip */ }
+          }
+        }
+      }
+
+      return { id };
+    }
+
     case "memory-list": {
       const agentName = validateStringParam(params, "agent");
       const limit = typeof params.limit === "number" ? params.limit : 20;
