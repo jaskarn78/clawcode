@@ -5,295 +5,305 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark">
   <title>Knowledge Graph — ClawCode</title>
-
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-
-  <!-- D3.js for force-directed graph -->
   <script src="https://d3js.org/d3.v7.min.js"></script>
-
   <style>
     :root {
-      --bg-deep: #0a0a0f;
-      --bg-surface: #12121a;
-      --bg-elevated: #1a1a2e;
-      --text-primary: #e8e6e3;
-      --text-secondary: #8a8a9a;
-      --accent-primary: #ff3366;
-      --accent-secondary: #00e5ff;
-      --node-hot: #ff3366;
-      --node-warm: #ffc400;
-      --node-cold: #616161;
-      --link-color: rgba(0, 229, 255, 0.15);
-      --link-hover: rgba(0, 229, 255, 0.6);
+      /* Obsidian-inspired palette */
+      --bg-canvas: #000000;
+      --bg-panel: #1e1e1e;
+      --bg-hover: #2a2a2a;
+      --text-primary: #dcddde;
+      --text-muted: #999;
+      --text-faint: #555;
+      --node-default: #7f6df2; /* Obsidian purple */
+      --node-highlight: #a88bfa;
+      --node-tag: #48c774;
+      --node-orphan: #555;
+      --link-default: rgba(255, 255, 255, 0.08);
+      --link-highlight: rgba(127, 109, 242, 0.7);
+      --accent: #7f6df2;
+      --border: rgba(255, 255, 255, 0.06);
     }
 
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: "IBM Plex Sans", system-ui, sans-serif;
-      background: var(--bg-deep);
+      font-family: "IBM Plex Sans", -apple-system, sans-serif;
+      background: var(--bg-canvas);
       color: var(--text-primary);
-      overflow: hidden;
-      height: 100vh;
+      overflow: hidden; height: 100vh;
     }
 
-    /* Header */
+    /* ─── Minimal top bar ─── */
     .top-bar {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      height: 56px; display: flex; align-items: center; justify-content: space-between;
-      padding: 0 24px;
-      background: var(--bg-surface);
-      border-bottom: 1px solid rgba(255, 51, 102, 0.2);
+      height: 40px; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 16px;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
     }
-
     .logo {
       display: flex; align-items: center; gap: 4px;
-      font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 1.3rem;
-      user-select: none; cursor: pointer; text-decoration: none;
+      font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 1rem;
+      user-select: none; cursor: pointer; text-decoration: none; color: var(--text-primary);
     }
-    .logo-bracket { color: var(--accent-primary); }
-    .logo-slash { color: var(--accent-secondary); }
-    .logo-text { color: var(--text-primary); margin-left: 6px; letter-spacing: -0.02em; }
-
-    .header-controls {
-      display: flex; align-items: center; gap: 16px;
-    }
-
-    .agent-select {
-      font-family: "JetBrains Mono", monospace; font-size: 0.8rem;
-      background: var(--bg-elevated); color: var(--text-primary);
-      border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 4px;
-      padding: 6px 12px; cursor: pointer; outline: none;
-    }
-    .agent-select:focus { border-color: var(--accent-secondary); }
-    .agent-select option { background: var(--bg-surface); }
-
+    .logo-accent { color: var(--accent); }
+    .header-controls { display: flex; align-items: center; gap: 12px; }
     .graph-stats {
+      font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
+      color: var(--text-muted); display: flex; gap: 14px;
+    }
+    .stat-val { color: var(--accent); font-weight: 600; }
+    .agent-select {
       font-family: "JetBrains Mono", monospace; font-size: 0.75rem;
-      color: var(--text-secondary); display: flex; gap: 16px;
+      background: var(--bg-panel); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 10px; cursor: pointer; outline: none;
     }
-    .stat-val { color: var(--accent-secondary); font-weight: 700; }
+    .agent-select option { background: var(--bg-panel); }
 
-    /* Graph canvas */
+    /* ─── Canvas ─── */
     #graph-container {
-      position: absolute; top: 56px; left: 0; right: 0; bottom: 0;
-      background: var(--bg-deep);
-      background-image:
-        radial-gradient(ellipse at 30% 40%, rgba(255, 51, 102, 0.04) 0%, transparent 50%),
-        radial-gradient(ellipse at 70% 60%, rgba(0, 229, 255, 0.03) 0%, transparent 50%);
+      position: absolute; top: 40px; left: 0; right: 0; bottom: 0;
+      background: var(--bg-canvas);
     }
-
     #graph-container svg { width: 100%; height: 100%; }
 
-    /* Tooltip */
+    /* ─── Settings panel (Obsidian-style top-right) ─── */
+    .settings-toggle {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-muted); font-size: 1rem; cursor: pointer;
+      width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .settings-toggle:hover { color: var(--text-primary); border-color: var(--accent); }
+
+    .settings-panel {
+      position: fixed; top: 48px; right: 12px; z-index: 120;
+      width: 240px; background: var(--bg-panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+      display: none; flex-direction: column; gap: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    }
+    .settings-panel.open { display: flex; }
+
+    .settings-group-title {
+      font-family: "JetBrains Mono", monospace; font-size: 0.65rem;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--text-faint); margin-bottom: 2px;
+    }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .settings-label {
+      font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;
+    }
+    .settings-slider {
+      -webkit-appearance: none; appearance: none;
+      width: 100px; height: 4px; border-radius: 2px;
+      background: rgba(255, 255, 255, 0.1); outline: none;
+    }
+    .settings-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--accent); cursor: pointer;
+    }
+
+    /* ─── Node label (Obsidian-style) ─── */
+    .node-label {
+      font-family: "IBM Plex Sans", sans-serif; font-size: 11px;
+      fill: var(--text-muted); pointer-events: none;
+      text-anchor: middle; dominant-baseline: hanging;
+      transition: opacity 0.15s;
+    }
+
+    /* ─── Tooltip ─── */
     .graph-tooltip {
       position: fixed; pointer-events: none; z-index: 200;
-      background: var(--bg-surface); border: 1px solid rgba(0, 229, 255, 0.3);
-      border-radius: 6px; padding: 12px 16px; max-width: 360px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-      opacity: 0; transition: opacity 0.15s ease;
-      font-size: 0.8rem;
+      background: var(--bg-panel); border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 14px; max-width: 320px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+      opacity: 0; transition: opacity 0.12s; font-size: 0.78rem;
     }
     .graph-tooltip.visible { opacity: 1; }
-
-    .tooltip-id {
+    .tooltip-title {
       font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
-      color: var(--accent-secondary); margin-bottom: 4px;
+      color: var(--accent); margin-bottom: 4px;
     }
-    .tooltip-content {
+    .tooltip-body {
       color: var(--text-primary); line-height: 1.4;
-      max-height: 120px; overflow: hidden;
-      display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
+      max-height: 80px; overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
     }
     .tooltip-meta {
-      display: flex; gap: 12px; margin-top: 8px;
-      font-family: "JetBrains Mono", monospace; font-size: 0.68rem;
-      color: var(--text-secondary);
-    }
-    .tooltip-tier {
-      padding: 1px 6px; border-radius: 3px; font-size: 0.65rem;
-      text-transform: uppercase; letter-spacing: 0.05em;
-    }
-    .tooltip-tier.hot { background: rgba(255, 51, 102, 0.2); color: var(--node-hot); }
-    .tooltip-tier.warm { background: rgba(255, 196, 0, 0.2); color: var(--node-warm); }
-    .tooltip-tier.cold { background: rgba(97, 97, 97, 0.2); color: var(--node-cold); }
-
-    .tooltip-tags {
-      display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
-    }
-    .tooltip-tag {
-      font-family: "JetBrains Mono", monospace; font-size: 0.62rem;
-      padding: 1px 5px; border-radius: 3px;
-      background: var(--bg-elevated); color: var(--accent-primary);
-      border: 1px solid rgba(255, 51, 102, 0.2);
+      display: flex; gap: 10px; margin-top: 6px;
+      font-family: "JetBrains Mono", monospace; font-size: 0.65rem; color: var(--text-faint);
     }
 
-    /* Loading */
-    .loading-overlay {
-      position: absolute; inset: 0; display: flex;
-      align-items: center; justify-content: center;
-      background: var(--bg-deep); z-index: 50;
-    }
-    .loading-text {
-      font-family: "JetBrains Mono", monospace; font-size: 0.9rem;
-      color: var(--text-secondary);
-      animation: pulse 1.5s ease-in-out infinite;
-    }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-    /* Empty state */
-    .empty-state {
-      position: absolute; inset: 0; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 12px;
-    }
-    .empty-state-icon { font-size: 3rem; opacity: 0.3; }
-    .empty-state-text {
-      font-family: "JetBrains Mono", monospace; font-size: 0.85rem;
-      color: var(--text-secondary);
-    }
-
-    /* Legend */
-    .graph-legend {
-      position: fixed; bottom: 20px; left: 20px; z-index: 100;
-      background: var(--bg-surface); border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 6px; padding: 12px 16px;
-      font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
-      display: flex; flex-direction: column; gap: 6px;
-    }
-    .legend-title {
-      text-transform: uppercase; letter-spacing: 0.08em;
-      color: var(--text-secondary); font-size: 0.65rem; margin-bottom: 2px;
-    }
-    .legend-item { display: flex; align-items: center; gap: 8px; }
-    .legend-dot {
-      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
-    }
-    .legend-label { color: var(--text-secondary); }
-
-    /* Detail Panel — slide-out on click */
+    /* ─── Detail Panel ─── */
     .detail-panel {
-      position: fixed; top: 56px; right: 0; bottom: 0; width: 420px;
-      background: var(--bg-surface); border-left: 1px solid rgba(255, 51, 102, 0.2);
+      position: fixed; top: 40px; right: 0; bottom: 0; width: 400px;
+      background: var(--bg-panel); border-left: 1px solid var(--border);
       z-index: 150; transform: translateX(100%);
-      transition: transform 0.25s ease; overflow-y: auto;
-      padding: 24px; display: flex; flex-direction: column; gap: 16px;
+      transition: transform 0.2s ease; overflow-y: auto;
+      padding: 20px; display: flex; flex-direction: column; gap: 14px;
     }
     .detail-panel.open { transform: translateX(0); }
 
     .detail-close {
-      position: absolute; top: 12px; right: 12px;
-      background: none; border: 1px solid rgba(255, 255, 255, 0.1);
-      color: var(--text-secondary); font-size: 1.2rem; cursor: pointer;
-      width: 28px; height: 28px; border-radius: 4px;
-      display: flex; align-items: center; justify-content: center;
-      transition: border-color 0.2s, color 0.2s;
+      position: absolute; top: 10px; right: 10px;
+      background: none; border: none; color: var(--text-faint);
+      font-size: 1.2rem; cursor: pointer; transition: color 0.15s;
     }
-    .detail-close:hover { border-color: var(--accent-primary); color: var(--text-primary); }
-
-    .detail-tier-badge {
-      display: inline-block; padding: 2px 10px; border-radius: 12px;
-      font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
-      font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;
-    }
-    .detail-tier-badge.hot { background: rgba(255, 51, 102, 0.15); color: var(--node-hot); border: 1px solid rgba(255, 51, 102, 0.3); }
-    .detail-tier-badge.warm { background: rgba(255, 196, 0, 0.15); color: var(--node-warm); border: 1px solid rgba(255, 196, 0, 0.3); }
-    .detail-tier-badge.cold { background: rgba(97, 97, 97, 0.15); color: var(--node-cold); border: 1px solid rgba(97, 97, 97, 0.3); }
+    .detail-close:hover { color: var(--text-primary); }
 
     .detail-header {
       display: flex; align-items: center; justify-content: space-between;
-      padding-right: 36px;
+      padding-right: 30px;
+    }
+    .detail-tier {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-family: "JetBrains Mono", monospace; font-size: 0.65rem;
+      font-weight: 500; text-transform: uppercase;
+      background: rgba(127, 109, 242, 0.15); color: var(--accent);
+      border: 1px solid rgba(127, 109, 242, 0.3);
     }
     .detail-id {
-      font-family: "JetBrains Mono", monospace; font-size: 0.75rem;
-      color: var(--accent-secondary); word-break: break-all;
+      font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
+      color: var(--text-faint); word-break: break-all;
     }
 
-    .detail-section-title {
-      font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
+    .detail-section {
+      font-family: "JetBrains Mono", monospace; font-size: 0.65rem;
       text-transform: uppercase; letter-spacing: 0.08em;
-      color: var(--text-secondary); padding-left: 10px;
-      border-left: 3px solid var(--accent-primary); margin-top: 4px;
+      color: var(--text-faint); padding-left: 8px;
+      border-left: 2px solid var(--accent);
     }
 
     .detail-content {
-      font-family: "IBM Plex Sans", sans-serif; font-size: 0.85rem;
+      font-family: "IBM Plex Sans", sans-serif; font-size: 0.82rem;
       color: var(--text-primary); line-height: 1.6;
       white-space: pre-wrap; word-break: break-word;
-      background: var(--bg-elevated); border-radius: 6px; padding: 16px;
-      max-height: 400px; overflow-y: auto;
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.03); border-radius: 6px; padding: 14px;
+      max-height: 350px; overflow-y: auto;
     }
 
-    .detail-meta {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    .detail-meta-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
     }
-    .detail-meta-item {
-      display: flex; flex-direction: column; gap: 2px;
-      padding: 8px 10px; background: var(--bg-elevated);
-      border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.05);
+    .detail-meta-card {
+      display: flex; flex-direction: column; gap: 1px;
+      padding: 6px 8px; background: rgba(255, 255, 255, 0.03); border-radius: 4px;
     }
-    .detail-meta-label {
-      font-family: "JetBrains Mono", monospace; font-size: 0.62rem;
-      text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary);
+    .detail-meta-key {
+      font-family: "JetBrains Mono", monospace; font-size: 0.6rem;
+      text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint);
     }
-    .detail-meta-value {
-      font-family: "JetBrains Mono", monospace; font-size: 0.8rem;
-      color: var(--text-primary); font-weight: 500;
+    .detail-meta-val {
+      font-family: "JetBrains Mono", monospace; font-size: 0.78rem;
+      color: var(--text-primary);
     }
 
-    .detail-tags {
-      display: flex; flex-wrap: wrap; gap: 6px;
-    }
+    .detail-tags { display: flex; flex-wrap: wrap; gap: 4px; }
     .detail-tag {
-      font-family: "JetBrains Mono", monospace; font-size: 0.7rem;
-      padding: 3px 8px; border-radius: 4px;
-      background: var(--bg-elevated); color: var(--accent-primary);
-      border: 1px solid rgba(255, 51, 102, 0.2);
+      font-family: "JetBrains Mono", monospace; font-size: 0.65rem;
+      padding: 2px 7px; border-radius: 3px;
+      background: rgba(72, 199, 116, 0.12); color: var(--node-tag);
     }
 
-    .detail-links-list {
-      display: flex; flex-direction: column; gap: 6px;
+    .detail-link-list { display: flex; flex-direction: column; gap: 4px; }
+    .detail-link {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; border-radius: 4px; cursor: pointer;
+      background: rgba(255, 255, 255, 0.02);
+      transition: background 0.15s; font-size: 0.72rem;
     }
-    .detail-link-item {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 10px; background: var(--bg-elevated);
-      border-radius: 4px; cursor: pointer;
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      transition: border-color 0.2s;
-      font-size: 0.75rem;
+    .detail-link:hover { background: rgba(127, 109, 242, 0.1); }
+    .detail-link-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent); flex-shrink: 0;
     }
-    .detail-link-item:hover { border-color: var(--accent-secondary); }
-    .detail-link-arrow { color: var(--accent-secondary); font-size: 0.8rem; }
-    .detail-link-preview {
+    .detail-link-text {
       color: var(--text-primary); flex: 1;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .detail-link-type {
-      font-family: "JetBrains Mono", monospace; font-size: 0.6rem;
-      color: var(--text-secondary);
+
+    /* ─── Loading/Empty ─── */
+    .loading-overlay {
+      position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center;
+      background: var(--bg-canvas); z-index: 50;
+    }
+    .loading-text {
+      font-family: "JetBrains Mono", monospace; font-size: 0.85rem;
+      color: var(--text-faint);
+      animation: fade 1.5s ease-in-out infinite;
+    }
+    @keyframes fade { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .empty-state {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 8px;
+    }
+    .empty-state-text {
+      font-family: "JetBrains Mono", monospace; font-size: 0.8rem; color: var(--text-faint);
     }
   </style>
 </head>
 <body>
-
   <header class="top-bar">
     <a class="logo" href="/">
-      <span class="logo-bracket">{</span><span class="logo-slash">/</span><span class="logo-bracket">}</span>
-      <span class="logo-text">ClawCode</span>
+      <span class="logo-accent">{/}</span>
+      <span>ClawCode</span>
     </a>
     <div class="header-controls">
       <div class="graph-stats" id="graph-stats"></div>
-      <select class="agent-select" id="agent-select">
-        <option value="">Loading agents...</option>
-      </select>
+      <select class="agent-select" id="agent-select"><option>Loading...</option></select>
+      <button class="settings-toggle" id="settings-btn" title="Graph settings">&#9881;</button>
     </div>
   </header>
 
+  <!-- Obsidian-style settings panel -->
+  <div class="settings-panel" id="settings-panel">
+    <div>
+      <div class="settings-group-title">Display</div>
+      <div class="settings-row">
+        <span class="settings-label">Node size</span>
+        <input type="range" class="settings-slider" id="sl-node-size" min="1" max="20" value="6">
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Link opacity</span>
+        <input type="range" class="settings-slider" id="sl-link-opacity" min="1" max="100" value="15">
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Label threshold</span>
+        <input type="range" class="settings-slider" id="sl-label-threshold" min="0" max="20" value="4">
+      </div>
+    </div>
+    <div>
+      <div class="settings-group-title">Forces</div>
+      <div class="settings-row">
+        <span class="settings-label">Center force</span>
+        <input type="range" class="settings-slider" id="sl-center" min="0" max="100" value="30">
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Repel force</span>
+        <input type="range" class="settings-slider" id="sl-repel" min="10" max="500" value="120">
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Link distance</span>
+        <input type="range" class="settings-slider" id="sl-link-dist" min="20" max="200" value="60">
+      </div>
+    </div>
+  </div>
+
   <div id="graph-container">
     <div class="loading-overlay" id="loading">
-      <span class="loading-text">Loading knowledge graph...</span>
+      <span class="loading-text">Loading graph...</span>
     </div>
   </div>
 
@@ -304,367 +314,322 @@
     <div id="detail-content"></div>
   </div>
 
-  <div class="graph-legend">
-    <div class="legend-title">Memory Tier</div>
-    <div class="legend-item">
-      <span class="legend-dot" style="background: var(--node-hot); box-shadow: 0 0 6px rgba(255, 51, 102, 0.5);"></span>
-      <span class="legend-label">Hot (in context)</span>
-    </div>
-    <div class="legend-item">
-      <span class="legend-dot" style="background: var(--node-warm);"></span>
-      <span class="legend-label">Warm (searchable)</span>
-    </div>
-    <div class="legend-item">
-      <span class="legend-dot" style="background: var(--node-cold);"></span>
-      <span class="legend-label">Cold (archived)</span>
-    </div>
-    <div class="legend-title" style="margin-top: 8px;">Size = importance</div>
-  </div>
-
 <script>
-const TIER_COLORS = { hot: "#ff3366", warm: "#ffc400", cold: "#616161" };
-const TIER_GLOW = { hot: "rgba(255, 51, 102, 0.6)", warm: "rgba(255, 196, 0, 0.3)", cold: "none" };
-
+// ─── State ───
 let simulation = null;
 let currentAgent = null;
 let graphData = { nodes: [], links: [] };
+let nodeElements = null;
+let linkElements = null;
+let labelElements = null;
 
-function escapeDetailHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
+// ─── Settings ───
+const settings = {
+  nodeSize: 6,
+  linkOpacity: 0.15,
+  labelThreshold: 4, // show labels for nodes with >= N connections
+  centerForce: 0.3,
+  repelForce: 120,
+  linkDistance: 60,
+};
+
+// ─── Helpers ───
+function esc(str) {
+  const d = document.createElement("div"); d.textContent = str; return d.innerHTML;
 }
 
-function openDetailPanel(d) {
+function nodeColor(d) {
+  if (d.linkCount === 0) return "var(--node-orphan)";
+  if (d.tier === "hot") return "#e06c75"; // warm red for hot
+  return "var(--node-default)";
+}
+
+function nodeRadius(d) {
+  return settings.nodeSize * (0.6 + d.importance * 0.8 + Math.min(d.linkCount, 12) * 0.08);
+}
+
+// ─── Settings panel ───
+document.getElementById("settings-btn").addEventListener("click", () => {
+  document.getElementById("settings-panel").classList.toggle("open");
+});
+
+function wireSlider(id, key, transform, onUpdate) {
+  const el = document.getElementById(id);
+  el.addEventListener("input", () => {
+    settings[key] = transform(Number(el.value));
+    if (onUpdate) onUpdate();
+  });
+}
+
+wireSlider("sl-node-size", "nodeSize", v => v, () => {
+  if (nodeElements) nodeElements.attr("r", nodeRadius);
+});
+wireSlider("sl-link-opacity", "linkOpacity", v => v / 100, () => {
+  if (linkElements) linkElements.attr("stroke-opacity", settings.linkOpacity);
+});
+wireSlider("sl-label-threshold", "labelThreshold", v => v, () => {
+  if (labelElements) labelElements.attr("opacity", d => d.linkCount >= settings.labelThreshold ? 0.8 : 0);
+});
+wireSlider("sl-center", "centerForce", v => v / 100, () => {
+  if (simulation) {
+    simulation.force("center", d3.forceCenter(0, 0).strength(settings.centerForce));
+    simulation.alpha(0.3).restart();
+  }
+});
+wireSlider("sl-repel", "repelForce", v => v, () => {
+  if (simulation) {
+    simulation.force("charge", d3.forceManyBody().strength(-settings.repelForce).distanceMax(500));
+    simulation.alpha(0.3).restart();
+  }
+});
+wireSlider("sl-link-dist", "linkDistance", v => v, () => {
+  if (simulation) {
+    simulation.force("link").distance(settings.linkDistance);
+    simulation.alpha(0.3).restart();
+  }
+});
+
+// ─── Detail panel ───
+function openDetail(d) {
   const panel = document.getElementById("detail-panel");
-  const content = document.getElementById("detail-content");
+  const el = document.getElementById("detail-content");
 
-  // Find connected links
   const connected = graphData.links.filter(l => {
-    const sid = typeof l.source === "object" ? l.source.id : l.source;
-    const tid = typeof l.target === "object" ? l.target.id : l.target;
-    return sid === d.id || tid === d.id;
+    const s = typeof l.source === "object" ? l.source.id : l.source;
+    const t = typeof l.target === "object" ? l.target.id : l.target;
+    return s === d.id || t === d.id;
   });
 
-  // Build connected nodes list
-  const linkedNodes = connected.map(l => {
-    const sid = typeof l.source === "object" ? l.source.id : l.source;
-    const tid = typeof l.target === "object" ? l.target.id : l.target;
-    const otherId = sid === d.id ? tid : sid;
-    const otherNode = graphData.nodes.find(n => n.id === otherId);
-    const preview = otherNode ? otherNode.content.slice(0, 80) : otherId;
-    return { id: otherId, text: l.text, preview };
+  const linked = connected.map(l => {
+    const s = typeof l.source === "object" ? l.source.id : l.source;
+    const t = typeof l.target === "object" ? l.target.id : l.target;
+    const oid = s === d.id ? t : s;
+    const on = graphData.nodes.find(n => n.id === oid);
+    return { id: oid, preview: on ? on.content.slice(0, 60) : oid };
   });
 
-  const tags = (d.tags || []).map(t => `<span class="detail-tag">${escapeDetailHtml(t)}</span>`).join("");
+  const tags = (d.tags || []).map(t => `<span class="detail-tag">${esc(t)}</span>`).join("");
+  const linksHtml = linked.length > 0
+    ? linked.map(ln => `<div class="detail-link" onclick="navNode('${ln.id}')"><span class="detail-link-dot"></span><span class="detail-link-text">${esc(ln.preview)}</span></div>`).join("")
+    : '<div style="color:var(--text-faint);font-size:0.72rem">No connections</div>';
 
-  const linksHtml = linkedNodes.length > 0
-    ? linkedNodes.map(ln => `
-        <div class="detail-link-item" onclick="navigateToNode('${ln.id}')">
-          <span class="detail-link-arrow">&#8594;</span>
-          <span class="detail-link-preview">${escapeDetailHtml(ln.preview)}</span>
-          <span class="detail-link-type">${escapeDetailHtml(ln.text)}</span>
-        </div>
-      `).join("")
-    : '<div style="color: var(--text-secondary); font-size: 0.75rem;">No connections</div>';
-
-  content.innerHTML = `
+  el.innerHTML = `
     <div class="detail-header">
-      <div class="detail-id">${escapeDetailHtml(d.id)}</div>
-      <span class="detail-tier-badge ${d.tier}">${d.tier}</span>
+      <div class="detail-id">${esc(d.id)}</div>
+      <span class="detail-tier">${d.tier}</span>
     </div>
-
-    <div class="detail-section-title">Content</div>
-    <div class="detail-content">${escapeDetailHtml(d.content)}</div>
-
-    <div class="detail-section-title">Metadata</div>
-    <div class="detail-meta">
-      <div class="detail-meta-item">
-        <span class="detail-meta-label">Importance</span>
-        <span class="detail-meta-value">${d.importance.toFixed(2)}</span>
-      </div>
-      <div class="detail-meta-item">
-        <span class="detail-meta-label">Access Count</span>
-        <span class="detail-meta-value">${d.accessCount}</span>
-      </div>
-      <div class="detail-meta-item">
-        <span class="detail-meta-label">Source</span>
-        <span class="detail-meta-value">${d.source}</span>
-      </div>
-      <div class="detail-meta-item">
-        <span class="detail-meta-label">Created</span>
-        <span class="detail-meta-value">${d.createdAt ? d.createdAt.slice(0, 10) : "--"}</span>
-      </div>
+    <div class="detail-section">Content</div>
+    <div class="detail-content">${esc(d.content)}</div>
+    <div class="detail-section">Metadata</div>
+    <div class="detail-meta-grid">
+      <div class="detail-meta-card"><span class="detail-meta-key">Importance</span><span class="detail-meta-val">${d.importance.toFixed(2)}</span></div>
+      <div class="detail-meta-card"><span class="detail-meta-key">Access</span><span class="detail-meta-val">${d.accessCount}</span></div>
+      <div class="detail-meta-card"><span class="detail-meta-key">Source</span><span class="detail-meta-val">${d.source}</span></div>
+      <div class="detail-meta-card"><span class="detail-meta-key">Created</span><span class="detail-meta-val">${d.createdAt ? d.createdAt.slice(0, 10) : "--"}</span></div>
     </div>
-
-    ${tags ? `<div class="detail-section-title">Tags</div><div class="detail-tags">${tags}</div>` : ""}
-
-    <div class="detail-section-title">Connections (${linkedNodes.length})</div>
-    <div class="detail-links-list">${linksHtml}</div>
+    ${tags ? `<div class="detail-section">Tags</div><div class="detail-tags">${tags}</div>` : ""}
+    <div class="detail-section">Connections (${linked.length})</div>
+    <div class="detail-link-list">${linksHtml}</div>
   `;
-
   panel.classList.add("open");
 }
 
-function closeDetailPanel() {
-  document.getElementById("detail-panel").classList.remove("open");
-}
+function closeDetail() { document.getElementById("detail-panel").classList.remove("open"); }
+function navNode(id) { const n = graphData.nodes.find(n => n.id === id); if (n) openDetail(n); }
+document.getElementById("detail-close").addEventListener("click", closeDetail);
 
-function navigateToNode(nodeId) {
-  const node = graphData.nodes.find(n => n.id === nodeId);
-  if (node) openDetailPanel(node);
-}
-
-document.getElementById("detail-close").addEventListener("click", closeDetailPanel);
-
+// ─── Data ───
 async function fetchAgents() {
   try {
-    const res = await fetch("/api/status");
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.agents || []).map(a => a.name).filter(n => !n.includes("-thread-") && !n.includes("-sub-"));
+    const r = await fetch("/api/status"); if (!r.ok) return [];
+    const d = await r.json();
+    return (d.agents || []).map(a => a.name).filter(n => !n.includes("-thread-") && !n.includes("-sub-"));
   } catch { return []; }
 }
 
 async function fetchGraph(agent) {
-  const res = await fetch(`/api/graph/${encodeURIComponent(agent)}`);
-  if (!res.ok) throw new Error("Failed to load graph");
-  return res.json();
+  const r = await fetch(`/api/graph/${encodeURIComponent(agent)}`);
+  if (!r.ok) throw new Error("Failed to load graph"); return r.json();
 }
 
 function updateStats(nodes, links) {
-  const el = document.getElementById("graph-stats");
-  const hot = nodes.filter(n => n.tier === "hot").length;
-  const warm = nodes.filter(n => n.tier === "warm").length;
-  el.innerHTML = `
-    <span><span class="stat-val">${nodes.length}</span> memories</span>
-    <span><span class="stat-val">${links.length}</span> links</span>
-    <span><span class="stat-val">${hot}</span> hot</span>
-    <span><span class="stat-val">${warm}</span> warm</span>
+  document.getElementById("graph-stats").innerHTML = `
+    <span><span class="stat-val">${nodes.length}</span> nodes</span>
+    <span><span class="stat-val">${links.length}</span> edges</span>
   `;
 }
 
-function showTooltip(event, d) {
-  const tip = document.getElementById("tooltip");
-  const tags = (d.tags || []).map(t => `<span class="tooltip-tag">${t}</span>`).join("");
-  const truncId = d.id.length > 12 ? d.id.slice(0, 12) + "..." : d.id;
-  const truncContent = d.content.length > 200 ? d.content.slice(0, 200) + "..." : d.content;
-
-  tip.innerHTML = `
-    <div class="tooltip-id">${truncId}</div>
-    <div class="tooltip-content">${truncContent}</div>
-    <div class="tooltip-meta">
-      <span class="tooltip-tier ${d.tier}">${d.tier}</span>
-      <span>imp: ${d.importance.toFixed(2)}</span>
-      <span>links: ${d.linkCount}</span>
-    </div>
-    ${tags ? `<div class="tooltip-tags">${tags}</div>` : ""}
-  `;
-
-  tip.style.left = (event.clientX + 16) + "px";
-  tip.style.top = (event.clientY - 10) + "px";
-  tip.classList.add("visible");
-}
-
-function hideTooltip() {
-  document.getElementById("tooltip").classList.remove("visible");
-}
-
+// ─── Render ───
 function renderGraph(data) {
   const container = document.getElementById("graph-container");
-  const loading = document.getElementById("loading");
-
-  // Clear previous
-  container.querySelectorAll("svg, .empty-state").forEach(el => el.remove());
-  if (loading) loading.style.display = "none";
+  container.querySelectorAll("svg, .empty-state").forEach(e => e.remove());
+  const ld = document.getElementById("loading"); if (ld) ld.style.display = "none";
 
   const nodes = data.nodes || [];
   const links = (data.links || []).map(l => ({ source: l.source, target: l.target, text: l.text }));
-
-  // Store for detail panel access
   graphData = { nodes, links };
 
   if (nodes.length === 0) {
-    container.innerHTML += `
-      <div class="empty-state">
-        <div class="empty-state-icon">&#x1f578;</div>
-        <div class="empty-state-text">No memories yet for this agent</div>
-      </div>
-    `;
-    updateStats([], []);
-    return;
+    container.innerHTML += '<div class="empty-state"><div class="empty-state-text">No memories</div></div>';
+    updateStats([], []); return;
   }
 
-  // Count links per node
-  const linkCounts = {};
-  links.forEach(l => {
-    linkCounts[l.source] = (linkCounts[l.source] || 0) + 1;
-    linkCounts[l.target] = (linkCounts[l.target] || 0) + 1;
-  });
-  nodes.forEach(n => { n.linkCount = linkCounts[n.id] || 0; });
-
+  // Link counts
+  const lc = {};
+  links.forEach(l => { lc[l.source] = (lc[l.source] || 0) + 1; lc[l.target] = (lc[l.target] || 0) + 1; });
+  nodes.forEach(n => { n.linkCount = lc[n.id] || 0; });
   updateStats(nodes, links);
 
-  const width = container.clientWidth;
-  const height = container.clientHeight;
+  const w = container.clientWidth, h = container.clientHeight;
+  const svg = d3.select(container).append("svg").attr("viewBox", [0, 0, w, h]);
 
-  const svg = d3.select(container).append("svg")
-    .attr("viewBox", [0, 0, width, height]);
-
-  // Defs for glow filter
+  // Glow filter
   const defs = svg.append("defs");
-  const filter = defs.append("filter").attr("id", "glow");
-  filter.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "coloredBlur");
-  const feMerge = filter.append("feMerge");
-  feMerge.append("feMergeNode").attr("in", "coloredBlur");
-  feMerge.append("feMergeNode").attr("in", "SourceGraphic");
+  const glow = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+  glow.append("feGaussianBlur").attr("stdDeviation", "4").attr("result", "blur");
+  const merge = glow.append("feMerge");
+  merge.append("feMergeNode").attr("in", "blur");
+  merge.append("feMergeNode").attr("in", "SourceGraphic");
 
   const g = svg.append("g");
 
   // Zoom
-  const zoom = d3.zoom()
-    .scaleExtent([0.1, 8])
-    .on("zoom", (event) => g.attr("transform", event.transform));
+  const zoom = d3.zoom().scaleExtent([0.05, 10]).on("zoom", e => g.attr("transform", e.transform));
   svg.call(zoom);
-  svg.on("click", () => closeDetailPanel());
+  svg.on("click", closeDetail);
 
-  // Initial zoom to fit
-  const initialScale = Math.min(width, height) / 800;
-  svg.call(zoom.transform, d3.zoomIdentity
-    .translate(width / 2, height / 2)
-    .scale(Math.max(0.3, Math.min(1.2, initialScale))));
+  const s0 = Math.min(w, h) / 900;
+  svg.call(zoom.transform, d3.zoomIdentity.translate(w / 2, h / 2).scale(Math.max(0.25, Math.min(1, s0))));
 
   // Links
-  const link = g.append("g")
-    .selectAll("line")
-    .data(links)
-    .join("line")
-    .attr("stroke", "var(--link-color)")
-    .attr("stroke-width", 1)
-    .attr("stroke-opacity", 0.4);
+  linkElements = g.append("g").selectAll("line").data(links).join("line")
+    .attr("stroke", "var(--link-default)")
+    .attr("stroke-width", 0.5)
+    .attr("stroke-opacity", settings.linkOpacity);
 
   // Nodes
-  const nodeRadius = (d) => 4 + d.importance * 12 + Math.min(d.linkCount, 10) * 0.5;
-
-  const node = g.append("g")
-    .selectAll("circle")
-    .data(nodes)
-    .join("circle")
+  nodeElements = g.append("g").selectAll("circle").data(nodes).join("circle")
     .attr("r", nodeRadius)
-    .attr("fill", d => TIER_COLORS[d.tier] || TIER_COLORS.warm)
-    .attr("stroke", d => d.tier === "hot" ? TIER_GLOW.hot : "rgba(255,255,255,0.1)")
-    .attr("stroke-width", d => d.tier === "hot" ? 2 : 0.5)
-    .style("filter", d => d.tier === "hot" ? "url(#glow)" : "none")
+    .attr("fill", nodeColor)
+    .attr("stroke", "none")
     .style("cursor", "pointer")
-    .on("click", function(event, d) {
-      event.stopPropagation();
-      openDetailPanel(d);
-    })
-    .on("mouseover", function(event, d) {
-      // Highlight connected nodes and links
-      const connected = new Set();
+    .on("click", (e, d) => { e.stopPropagation(); openDetail(d); })
+    .on("mouseover", function(e, d) {
+      // Obsidian-style: highlight node + connections, fade rest
+      const conn = new Set([d.id]);
       links.forEach(l => {
-        const sid = typeof l.source === "object" ? l.source.id : l.source;
-        const tid = typeof l.target === "object" ? l.target.id : l.target;
-        if (sid === d.id) connected.add(tid);
-        if (tid === d.id) connected.add(sid);
-      });
-      connected.add(d.id);
-
-      node.attr("opacity", n => connected.has(n.id) ? 1 : 0.1);
-      link.attr("stroke-opacity", l => {
-        const sid = typeof l.source === "object" ? l.source.id : l.source;
-        const tid = typeof l.target === "object" ? l.target.id : l.target;
-        return (sid === d.id || tid === d.id) ? 0.8 : 0.03;
-      }).attr("stroke", l => {
-        const sid = typeof l.source === "object" ? l.source.id : l.source;
-        const tid = typeof l.target === "object" ? l.target.id : l.target;
-        return (sid === d.id || tid === d.id) ? "var(--link-hover)" : "var(--link-color)";
+        const s = typeof l.source === "object" ? l.source.id : l.source;
+        const t = typeof l.target === "object" ? l.target.id : l.target;
+        if (s === d.id) conn.add(t); if (t === d.id) conn.add(s);
       });
 
-      d3.select(this).attr("r", nodeRadius(d) * 1.4);
-      showTooltip(event, d);
-    })
-    .on("mousemove", function(event, d) {
+      nodeElements.transition().duration(100)
+        .attr("opacity", n => conn.has(n.id) ? 1 : 0.06)
+        .attr("r", n => n.id === d.id ? nodeRadius(n) * 1.5 : nodeRadius(n));
+
+      linkElements.transition().duration(100)
+        .attr("stroke-opacity", l => {
+          const s = typeof l.source === "object" ? l.source.id : l.source;
+          const t = typeof l.target === "object" ? l.target.id : l.target;
+          return (s === d.id || t === d.id) ? 0.7 : 0.01;
+        })
+        .attr("stroke", l => {
+          const s = typeof l.source === "object" ? l.source.id : l.source;
+          const t = typeof l.target === "object" ? l.target.id : l.target;
+          return (s === d.id || t === d.id) ? "var(--link-highlight)" : "var(--link-default)";
+        })
+        .attr("stroke-width", l => {
+          const s = typeof l.source === "object" ? l.source.id : l.source;
+          const t = typeof l.target === "object" ? l.target.id : l.target;
+          return (s === d.id || t === d.id) ? 1.5 : 0.5;
+        });
+
+      if (labelElements) labelElements.transition().duration(100)
+        .attr("opacity", n => conn.has(n.id) ? 0.9 : 0);
+
+      // Show tooltip
       const tip = document.getElementById("tooltip");
-      tip.style.left = (event.clientX + 16) + "px";
-      tip.style.top = (event.clientY - 10) + "px";
+      const preview = d.content.length > 150 ? d.content.slice(0, 150) + "..." : d.content;
+      tip.innerHTML = `
+        <div class="tooltip-title">${esc(d.tags[0] || d.id.slice(0, 12))}</div>
+        <div class="tooltip-body">${esc(preview)}</div>
+        <div class="tooltip-meta">
+          <span>${d.tier}</span>
+          <span>imp ${d.importance.toFixed(1)}</span>
+          <span>${d.linkCount} links</span>
+        </div>
+      `;
+      tip.style.left = (e.clientX + 14) + "px";
+      tip.style.top = (e.clientY - 8) + "px";
+      tip.classList.add("visible");
     })
-    .on("mouseout", function(event, d) {
-      node.attr("opacity", 1);
-      link.attr("stroke-opacity", 0.4).attr("stroke", "var(--link-color)");
-      d3.select(this).attr("r", nodeRadius(d));
-      hideTooltip();
+    .on("mousemove", (e) => {
+      const tip = document.getElementById("tooltip");
+      tip.style.left = (e.clientX + 14) + "px";
+      tip.style.top = (e.clientY - 8) + "px";
+    })
+    .on("mouseout", () => {
+      nodeElements.transition().duration(200).attr("opacity", 1).attr("r", nodeRadius);
+      linkElements.transition().duration(200)
+        .attr("stroke-opacity", settings.linkOpacity)
+        .attr("stroke", "var(--link-default)")
+        .attr("stroke-width", 0.5);
+      if (labelElements) labelElements.transition().duration(200)
+        .attr("opacity", d => d.linkCount >= settings.labelThreshold ? 0.8 : 0);
+      document.getElementById("tooltip").classList.remove("visible");
     })
     .call(d3.drag()
-      .on("start", (event, d) => {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x; d.fy = d.y;
-      })
-      .on("drag", (event, d) => { d.fx = event.x; d.fy = event.y; })
-      .on("end", (event, d) => {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null; d.fy = null;
-      })
+      .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
     );
 
-  // Force simulation
+  // Labels (Obsidian-style: only visible for well-connected nodes)
+  labelElements = g.append("g").selectAll("text").data(nodes).join("text")
+    .attr("class", "node-label")
+    .attr("dy", d => nodeRadius(d) + 12)
+    .attr("opacity", d => d.linkCount >= settings.labelThreshold ? 0.8 : 0)
+    .text(d => {
+      // Use first tag or first few words as label
+      if (d.tags.length > 0) return d.tags[0];
+      return d.content.split(/\s+/).slice(0, 4).join(" ");
+    });
+
+  // Simulation
   simulation = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(d => d.id).distance(80).strength(0.3))
-    .force("charge", d3.forceManyBody().strength(-150).distanceMax(400))
-    .force("center", d3.forceCenter(0, 0))
-    .force("collision", d3.forceCollide().radius(d => nodeRadius(d) + 2))
+    .force("link", d3.forceLink(links).id(d => d.id).distance(settings.linkDistance).strength(0.2))
+    .force("charge", d3.forceManyBody().strength(-settings.repelForce).distanceMax(500))
+    .force("center", d3.forceCenter(0, 0).strength(settings.centerForce))
+    .force("collision", d3.forceCollide().radius(d => nodeRadius(d) + 1))
+    .alphaDecay(0.02) // Slower settle like Obsidian (~5s)
     .on("tick", () => {
-      link
-        .attr("x1", d => d.source.x)
-        .attr("y1", d => d.source.y)
-        .attr("x2", d => d.target.x)
-        .attr("y2", d => d.target.y);
-      node
-        .attr("cx", d => d.x)
-        .attr("cy", d => d.y);
+      linkElements.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+      nodeElements.attr("cx", d => d.x).attr("cy", d => d.y);
+      labelElements.attr("x", d => d.x).attr("y", d => d.y);
     });
 }
 
-async function loadAgent(agentName) {
-  if (!agentName) return;
-  currentAgent = agentName;
-
-  const loading = document.getElementById("loading");
-  if (loading) { loading.style.display = "flex"; }
-
-  try {
-    const data = await fetchGraph(agentName);
-    renderGraph(data);
-  } catch (err) {
-    console.error("Failed to load graph:", err);
-    const container = document.getElementById("graph-container");
-    if (loading) loading.style.display = "none";
-    container.innerHTML += `
-      <div class="empty-state">
-        <div class="empty-state-icon">&#x26a0;</div>
-        <div class="empty-state-text">Failed to load graph: ${err.message}</div>
-      </div>
-    `;
+// ─── Init ───
+async function loadAgent(name) {
+  if (!name) return;
+  currentAgent = name;
+  const ld = document.getElementById("loading");
+  if (ld) ld.style.display = "flex";
+  try { renderGraph(await fetchGraph(name)); }
+  catch (err) {
+    if (ld) ld.style.display = "none";
+    document.getElementById("graph-container").innerHTML +=
+      `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
   }
 }
 
 async function init() {
-  const select = document.getElementById("agent-select");
+  const sel = document.getElementById("agent-select");
   const agents = await fetchAgents();
-
-  if (agents.length === 0) {
-    select.innerHTML = '<option value="">No agents found</option>';
-    return;
-  }
-
-  select.innerHTML = agents.map(name =>
-    `<option value="${name}">${name}</option>`
-  ).join("");
-
-  select.addEventListener("change", () => loadAgent(select.value));
-
-  // Load first agent
+  if (agents.length === 0) { sel.innerHTML = '<option>No agents</option>'; return; }
+  sel.innerHTML = agents.map(n => `<option value="${n}">${n}</option>`).join("");
+  sel.addEventListener("change", () => loadAgent(sel.value));
   loadAgent(agents[0]);
 }
 
