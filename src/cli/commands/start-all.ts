@@ -109,30 +109,31 @@ export function registerStartAllCommand(program: Command): void {
           }
 
           // Clean stale socket/pid before spawning
-          const { SOCKET_PATH: sockPath } = await import("../../manager/daemon.js");
-          const { unlink: unlinkFile } = await import("node:fs/promises");
+          const { SOCKET_PATH: sockPath, MANAGER_DIR: managerDir } = await import("../../manager/daemon.js");
+          const { unlink: unlinkFile, mkdir: mkdirAsync, open: openFile } = await import("node:fs/promises");
+          const { join: joinPath } = await import("node:path");
           for (const stale of [sockPath, sockPath.replace(".sock", ".pid")]) {
             try { await unlinkFile(stale); } catch { /* may not exist */ }
           }
 
+          // Create log file for daemon output
+          await mkdirAsync(managerDir, { recursive: true });
+          const logPath = joinPath(managerDir, "daemon.log");
+          const logFd = await openFile(logPath, "a");
+
           const child = spawn(cmd, args, {
               detached: true,
-              stdio: ["ignore", "ignore", "pipe"],
+              stdio: ["ignore", logFd.fd, logFd.fd],
               cwd: projectRoot,
               env: (() => {
                 const { ANTHROPIC_API_KEY: _, ...rest } = process.env;
-                return rest;
+                return { ...rest, CLAWCODE_LOG_FILE: logPath };
               })(),
             },
           );
 
-          // Capture stderr for error reporting
-          let stderrOutput = "";
-          if (child.stderr) {
-            child.stderr.on("data", (chunk: Buffer) => {
-              stderrOutput += chunk.toString();
-            });
-          }
+          // Close our fd handle — child process inherited the fd
+          await logFd.close();
 
           child.unref();
 
@@ -162,14 +163,9 @@ export function registerStartAllCommand(program: Command): void {
               cliLog(formatStatusTable(entries));
             }
           } else {
-            cliError(
-              "Manager failed to start.",
-            );
-            if (stderrOutput) {
-              cliError(stderrOutput.trim());
-            } else {
-              cliError("Run 'clawcode start-all --foreground' to see the error.");
-            }
+            cliError("Manager failed to start.");
+            cliError(`Check logs: tail -20 ${logPath}`);
+            cliError("Or run: clawcode start-all --foreground");
             process.exit(1);
           }
         }
