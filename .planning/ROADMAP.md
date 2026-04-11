@@ -142,7 +142,6 @@ Plans:
 
 
 
-
 ### Phase 41: Context Assembly Pipeline
 **Goal**: Identity, memories, graph results, and tools are composed into context with explicit per-source token budgets
 **Depends on**: Phase 38, Phase 39, Phase 40
@@ -155,7 +154,6 @@ Plans:
 Plans:
 - [x] 41-01-PLAN.md — Context assembler module with TDD (LOAD-03)
 - [ ] 41-02-PLAN.md — Schema extension + buildSessionConfig refactor (LOAD-03)
-
 
 
 
@@ -180,3 +178,83 @@ Plans:
 | 39. Model Tiering & Escalation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 40. Cost Optimization & Budgets | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 41. Context Assembly Pipeline | v1.5 | 1/2 | Complete    | 2026-04-10 |
+
+### Phase 42: Auto-start agents on daemon boot
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 41
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 42 to break down)
+
+### Phase 43: Systemd production integration
+
+**Goal:** Fix the systemd unit file so the clawcode service starts reliably in production with correct ExecStart, PATH, and env var loading
+**Requirements**: SYSINT-01, SYSINT-02, SYSINT-03
+**Depends on:** Phase 42
+**Plans:** 1 plan
+
+Plans:
+- [ ] 43-01-PLAN.md — Fix systemd unit template in install.sh (ExecStart, PATH, EnvironmentFile)
+
+### Phase 44: Agent-to-agent Discord communication
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 43
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 44 to break down)
+
+### Phase 45: Memory auto-linking on save
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 44
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 45 to break down)
+
+### Phase 46: Scheduled memory consolidation
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 45
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 46 to break down)
+
+### Phase 47: Discord slash commands for control
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 46
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 47 to break down)
+
+### Phase 48: Webhook identity per agent
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 47
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 48 to break down)
+
+### Phase 49: RAG over documents
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 48
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 49 to break down)
