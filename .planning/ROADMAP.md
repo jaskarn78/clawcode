@@ -194,10 +194,10 @@ Plans:
 **Goal:** Fix the systemd unit file so the clawcode service starts reliably in production with correct ExecStart, PATH, and env var loading
 **Requirements**: SYSINT-01, SYSINT-02, SYSINT-03
 **Depends on:** Phase 42
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 43-01-PLAN.md — Fix systemd unit template in install.sh (ExecStart, PATH, EnvironmentFile)
+- [x] 43-01-PLAN.md — Fix systemd unit template in install.sh (ExecStart, PATH, EnvironmentFile)
 
 ### Phase 44: Agent-to-agent Discord communication
 

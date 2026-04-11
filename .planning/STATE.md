@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
-status: Ready to plan
-stopped_at: Completed 42-01-PLAN.md
-last_updated: "2026-04-11T23:37:31.973Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 43-01-PLAN.md
+last_updated: "2026-04-11T23:40:07.818Z"
 last_activity: 2026-04-11
 progress:
   total_phases: 14
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 42 — auto-start-agents-on-daemon-boot
+**Current focus:** Phase 43 — systemd-production-integration
 
 ## Current Position
 
-Phase: 43
-Plan: Not started
+Phase: 43 (systemd-production-integration) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Recent decisions affecting current work:
 - [Phase 41]: Bullet-list truncation drops whole lines; section headers not counted against budget
 - [Phase 41]: Unified Available Tools header replaces individual section headers for skills, MCP, admin, subagent in assembled context
 - [Phase 42]: CLI message updated to reflect daemon-managed boot (no Booting... since daemon handles it)
+- [Phase 43]: No new code changes needed -- prior commit 298e0bc already applied all systemd unit fixes
 
 ### Pending Todos
 
@@ -107,9 +108,10 @@ None yet.
 | Phase 41 P01 | 3min | 1 tasks | 2 files |
 | Phase 41 P02 | 4min | 2 tasks | 5 files |
 | Phase 42 P01 | 94s | 2 tasks | 1 files |
+| Phase 43 P01 | 64s | 2 tasks | 1 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-11
-Stopped at: Completed 42-01-PLAN.md
+Stopped at: Completed 43-01-PLAN.md
 Resume file: None
