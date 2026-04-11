@@ -219,6 +219,8 @@ export async function buildSessionConfig(
     systemPrompt: systemPrompt.trim(),
     channels,
     contextSummary,
+    thinking: config.thinking ?? "adaptive",
+    effort: config.effort ?? "high",
     mcpServers: config.mcpServers ?? [],
   };
 }

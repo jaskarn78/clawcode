@@ -187,6 +187,12 @@ export class SdkSessionAdapter implements SessionAdapter {
   async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
+    const thinkingConfig = config.thinking === "adaptive"
+      ? { type: "adaptive" as const }
+      : config.thinking === "disabled"
+        ? { type: "disabled" as const }
+        : { type: "adaptive" as const }; // "enabled" also maps to adaptive for simplicity
+
     const baseOptions: SdkQueryOptions = {
       model: config.model,
       cwd: config.workspace,
@@ -194,6 +200,8 @@ export class SdkSessionAdapter implements SessionAdapter {
       permissionMode: "bypassPermissions",
       settingSources: ["project"],
       env: buildCleanEnv(),
+      thinking: thinkingConfig,
+      effort: config.effort ?? "high",
       ...(mcpServers ? { mcpServers } : {}),
     };
 

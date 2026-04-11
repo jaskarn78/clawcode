@@ -113,6 +113,8 @@ export function resolveAgentConfig(
     schedules: agent.schedules,
     admin: agent.admin ?? false,
     subagentModel: agent.subagentModel,
+    thinking: agent.thinking ?? "adaptive",
+    effort: agent.effort ?? "high",
     threads: agent.threads ?? defaults.threads,
     webhook: agent.webhook ?? undefined,
     reactions: agent.reactions ?? true,

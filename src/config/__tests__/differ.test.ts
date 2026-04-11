@@ -39,6 +39,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         slashCommands: [],
         reactions: true,
         mcpServers: [],
+        thinking: "adaptive" as const,
+        effort: "high" as const,
       },
     ],
     ...overrides,

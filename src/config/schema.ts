@@ -168,6 +168,8 @@ export const agentSchema = z.object({
   schedules: z.array(scheduleEntrySchema).default([]),
   admin: z.boolean().default(false),
   subagentModel: modelSchema.optional(),
+  thinking: z.enum(["adaptive", "enabled", "disabled"]).optional(),
+  effort: z.enum(["low", "medium", "high", "max"]).optional(),
   slashCommands: z.array(slashCommandEntrySchema).default([]),
   threads: threadsConfigSchema.optional(),
   webhook: webhookConfigSchema.optional(),

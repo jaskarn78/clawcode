@@ -56,6 +56,8 @@ export type AgentSessionConfig = {
   readonly systemPrompt: string;
   readonly channels: readonly string[];
   readonly contextSummary?: string;
+  readonly thinking?: "adaptive" | "enabled" | "disabled";
+  readonly effort?: "low" | "medium" | "high" | "max";
   readonly mcpServers?: readonly {
     readonly name: string;
     readonly command: string;

@@ -47,6 +47,9 @@ export type SdkQueryOptions = {
   readonly sessionId?: string;
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly thinking?: { readonly type: "adaptive" } | { readonly type: "enabled"; readonly budgetTokens: number } | { readonly type: "disabled" };
+  readonly effort?: "low" | "medium" | "high" | "max";
+  readonly maxTurns?: number;
 };
 
 /**
