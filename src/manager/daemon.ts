@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import {
   mkdir,
   writeFile,
@@ -378,7 +379,22 @@ export async function startDaemon(
     const raw = config.discord.botToken;
     if (raw.startsWith("op://")) {
       try {
-        botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000 }).trim();
+        // Load OP_SERVICE_ACCOUNT_TOKEN from /etc/clawcode/env if not already set
+        if (!process.env.OP_SERVICE_ACCOUNT_TOKEN) {
+          try {
+            const envContent = readFileSync("/etc/clawcode/env", "utf-8");
+            for (const line of envContent.split("\n")) {
+              const trimmed = line.trim();
+              if (trimmed && !trimmed.startsWith("#")) {
+                const eqIdx = trimmed.indexOf("=");
+                if (eqIdx > 0) {
+                  process.env[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
+                }
+              }
+            }
+          } catch { /* env file may not exist or be unreadable */ }
+        }
+        botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000, env: process.env }).trim();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error({ error: msg }, "Failed to resolve Discord bot token from 1Password — Discord bridge disabled. Fix: install 1Password CLI (op) and authenticate, or set a literal token in clawcode.yaml");
