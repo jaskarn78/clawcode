@@ -22,6 +22,7 @@ export const IPC_METHODS = [
   "webhooks",
   "fork-session",
   "memory-search",
+  "memory-graph",
   "memory-list",
   "threads",
   "usage",

@@ -946,6 +946,59 @@ async function routeMethod(
       };
     }
 
+    case "memory-graph": {
+      const agentName = validateStringParam(params, "agent");
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        return { nodes: [], links: [] };
+      }
+
+      const db = store.getDatabase();
+
+      // Fetch all memories (nodes)
+      const memories = db.prepare(`
+        SELECT id, content, source, importance, access_count, tags,
+               created_at, tier
+        FROM memories
+        ORDER BY created_at DESC
+        LIMIT 500
+      `).all() as Array<{
+        id: string; content: string; source: string; importance: number;
+        access_count: number; tags: string; created_at: string; tier: string;
+      }>;
+
+      const nodeIds = new Set(memories.map(m => m.id));
+
+      // Fetch all links between existing nodes
+      const allLinks = db.prepare(`
+        SELECT source_id, target_id, link_text
+        FROM memory_links
+        WHERE source_id IN (${[...nodeIds].map(() => "?").join(",")})
+          AND target_id IN (${[...nodeIds].map(() => "?").join(",")})
+      `).all(...[...nodeIds], ...[...nodeIds]) as Array<{
+        source_id: string; target_id: string; link_text: string;
+      }>;
+
+      return {
+        nodes: memories.map(m => ({
+          id: m.id,
+          content: m.content,
+          source: m.source,
+          importance: m.importance,
+          accessCount: m.access_count,
+          tags: JSON.parse(m.tags) as string[],
+          createdAt: m.created_at,
+          tier: m.tier ?? "warm",
+        })),
+        links: allLinks.map(l => ({
+          source: l.source_id,
+          target: l.target_id,
+          text: l.link_text,
+        })),
+      };
+    }
+
     case "episode-list": {
       const agentName = validateStringParam(params, "agent");
       const limit = typeof params.limit === "number" ? params.limit : 20;
