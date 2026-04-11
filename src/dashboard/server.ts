@@ -6,13 +6,32 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, dirname } from "node:path";
 import pino from "pino";
 import { sendIpcRequest } from "../ipc/client.js";
 import { SseManager } from "./sse.js";
 import type { DashboardServerConfig } from "./types.js";
 
-const STATIC_DIR = join(import.meta.dirname, "static");
+/**
+ * Resolve static files directory. In development, import.meta.dirname points
+ * to src/dashboard/. In production (tsup bundle), it points to dist/cli/ —
+ * so we check the project root's src/dashboard/static/ as a fallback.
+ */
+function resolveStaticDir(): string {
+  const devPath = join(import.meta.dirname, "static");
+  if (existsSync(join(devPath, "index.html"))) return devPath;
+  // Bundled: resolve from project root via process.argv[1] symlink
+  try {
+    const realScript = realpathSync(process.argv[1]);
+    const projectRoot = join(dirname(realScript), "..", "..");
+    const prodPath = join(projectRoot, "src", "dashboard", "static");
+    if (existsSync(join(prodPath, "index.html"))) return prodPath;
+  } catch { /* fallback */ }
+  return devPath;
+}
+
+const STATIC_DIR = resolveStaticDir();
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 
