@@ -151,7 +151,7 @@ install_clawcode() {
   chown -R "$CLAWCODE_USER:$CLAWCODE_USER" "$CLAWCODE_DIR"
 
   info "Installing npm dependencies..."
-  log_cmd su -s /bin/bash "$CLAWCODE_USER" -c "cd '$CLAWCODE_DIR' && npm ci --omit=dev"
+  log_cmd su -s /bin/bash "$CLAWCODE_USER" -c "cd '$CLAWCODE_DIR' && npm ci"
 
   info "Building..."
   log_cmd su -s /bin/bash "$CLAWCODE_USER" -c "cd '$CLAWCODE_DIR' && npm run build"

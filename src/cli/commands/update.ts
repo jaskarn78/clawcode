@@ -125,7 +125,7 @@ export function registerUpdateCommand(program: Command): void {
         }
 
         cliLog("\nInstalling dependencies...");
-        run("npm ci --omit=dev", projectRoot);
+        run("npm ci", projectRoot);
         cliLog("Dependencies installed.");
 
         cliLog("\nBuilding...");
