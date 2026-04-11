@@ -131,6 +131,19 @@ export class SessionManager {
         });
       }
     });
+
+    // Auto-stop subagent sessions when the SDK session naturally ends
+    handle.onEnd(() => {
+      const endCallback = this.sessionEndCallbacks.get(name);
+      if (endCallback) {
+        this.log.info({ agent: name }, "session ended naturally — invoking cleanup");
+        this.sessionEndCallbacks.delete(name);
+        void this.stopAgent(name).catch((err) => {
+          this.log.warn({ agent: name, error: (err as Error).message }, "auto-stop after session end failed");
+        });
+      }
+    });
+
     this.recovery.setStabilityTimer(name);
 
     registry = await readRegistry(this.registryPath);

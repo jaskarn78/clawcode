@@ -36,9 +36,12 @@ const threadIdleCheck: CheckModule = {
       };
     }
 
-    const idleTimeoutMinutes =
+    const parentIdleMinutes =
       agentConfig.threads?.idleTimeoutMinutes ??
       DEFAULT_THREAD_CONFIG.idleTimeoutMinutes;
+
+    // Subagent threads use a shorter idle timeout (10 min) to avoid lingering
+    const SUBAGENT_IDLE_MINUTES = 10;
 
     // 2. Read thread registry and get bindings for this agent
     const registry = await readThreadRegistry(THREAD_REGISTRY_PATH);
@@ -54,10 +57,13 @@ const threadIdleCheck: CheckModule = {
 
     // 3. Check each binding for idle timeout
     const now = Date.now();
-    const idleThresholdMs = idleTimeoutMinutes * 60 * 1000;
     let cleaned = 0;
 
     for (const binding of bindings) {
+      // Subagent sessions (name contains "-sub-") get a shorter idle timeout
+      const isSubagent = binding.sessionName.includes("-sub-");
+      const idleMinutes = isSubagent ? SUBAGENT_IDLE_MINUTES : parentIdleMinutes;
+      const idleThresholdMs = idleMinutes * 60 * 1000;
       const idleDuration = now - binding.lastActivity;
       if (idleDuration >= idleThresholdMs) {
         try {
