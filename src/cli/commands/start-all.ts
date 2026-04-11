@@ -91,8 +91,7 @@ export function registerStartAllCommand(program: Command): void {
 
           // Spawn daemon as detached child process.
           // Prefer the built daemon entry (node dist/...) over npx tsx for production.
-          const scriptDir = dirname(resolve(process.argv[1]));
-          const projectRoot = resolve(scriptDir, "..", "..");
+          const projectRoot = resolveProjectRoot();
           const builtEntry = resolve(projectRoot, "dist", "cli", "index.js");
           const sourceEntry = resolve(projectRoot, "src", "manager", "daemon-entry.ts");
 
