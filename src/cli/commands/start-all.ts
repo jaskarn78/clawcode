@@ -108,9 +108,16 @@ export function registerStartAllCommand(program: Command): void {
             args = ["tsx", sourceEntry, "--config", configPath];
           }
 
+          // Clean stale socket/pid before spawning
+          const { SOCKET_PATH: sockPath } = await import("../../manager/daemon.js");
+          const { unlink: unlinkFile } = await import("node:fs/promises");
+          for (const stale of [sockPath, sockPath.replace(".sock", ".pid")]) {
+            try { await unlinkFile(stale); } catch { /* may not exist */ }
+          }
+
           const child = spawn(cmd, args, {
               detached: true,
-              stdio: "ignore",
+              stdio: ["ignore", "ignore", "pipe"],
               cwd: projectRoot,
               env: (() => {
                 const { ANTHROPIC_API_KEY: _, ...rest } = process.env;
@@ -119,21 +126,50 @@ export function registerStartAllCommand(program: Command): void {
             },
           );
 
+          // Capture stderr for error reporting
+          let stderrOutput = "";
+          if (child.stderr) {
+            child.stderr.on("data", (chunk: Buffer) => {
+              stderrOutput += chunk.toString();
+            });
+          }
+
           child.unref();
 
-          // Wait for daemon to become responsive
-          const entries = await waitForDaemon();
+          // Wait for daemon to become responsive (more retries for slow startup)
+          const entries = await waitForDaemon(15, 1000);
 
           if (entries !== null) {
             cliLog(
               `Manager started. Booting ${entries.length} agent(s)...`,
             );
-            cliLog("");
-            cliLog(formatStatusTable(entries));
+
+            // Auto-start all configured agents
+            if (entries.length > 0 && entries.every((e) => e.status !== "running")) {
+              try {
+                await sendIpcRequest(sockPath, "start-all", {});
+                const updated = await waitForDaemon(5, 1000);
+                if (updated) {
+                  cliLog("");
+                  cliLog(formatStatusTable(updated));
+                }
+              } catch {
+                cliLog("");
+                cliLog(formatStatusTable(entries));
+              }
+            } else {
+              cliLog("");
+              cliLog(formatStatusTable(entries));
+            }
           } else {
             cliError(
-              "Manager failed to start. Check logs at ~/.clawcode/manager/",
+              "Manager failed to start.",
             );
+            if (stderrOutput) {
+              cliError(stderrOutput.trim());
+            } else {
+              cliError("Run 'clawcode start-all --foreground' to see the error.");
+            }
             process.exit(1);
           }
         }
