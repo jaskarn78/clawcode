@@ -34,6 +34,7 @@ import { registerRunCommand } from "./commands/run.js";
 import { registerCostsCommand } from "./commands/costs.js";
 import { registerUpdateCommand } from "./commands/update.js";
 import { registerStopAllCommand } from "./commands/stop-all.js";
+import { registerClearCommand } from "./commands/clear-registry.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -148,6 +149,7 @@ registerRunCommand(program);
 registerCostsCommand(program);
 registerUpdateCommand(program);
 registerStopAllCommand(program);
+registerClearCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,

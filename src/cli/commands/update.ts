@@ -79,6 +79,13 @@ export function registerUpdateCommand(program: Command): void {
         cliLog(`Updating ClawCode at ${projectRoot}...`);
         cliLog("");
 
+        // Stash any local changes to prevent merge conflicts
+        const dirtyCheck = run("git status --porcelain", projectRoot);
+        if (dirtyCheck) {
+          cliLog("Stashing local changes...");
+          run("git stash --include-untracked", projectRoot);
+        }
+
         if (targetVersion) {
           // Update to specific version tag
           const tag = targetVersion.startsWith("v") ? targetVersion : `v${targetVersion}`;
