@@ -375,6 +375,7 @@ document.getElementById("settings-btn").addEventListener("click", () => {
 
 function wireSlider(id, key, transform, onUpdate) {
   const el = document.getElementById(id);
+  if (!el) return;
   el.addEventListener("input", () => {
     settings[key] = transform(Number(el.value));
     if (onUpdate) onUpdate();
@@ -386,9 +387,6 @@ wireSlider("sl-node-size", "nodeSize", v => v, () => {
 });
 wireSlider("sl-link-opacity", "linkOpacity", v => v / 100, () => {
   if (linkElements) linkElements.attr("stroke-opacity", settings.linkOpacity);
-});
-wireSlider("sl-label-threshold", "labelThreshold", v => v, () => {
-  if (labelElements) labelElements.attr("opacity", d => d.linkCount >= settings.labelThreshold ? 0.8 : 0);
 });
 wireSlider("sl-center", "centerForce", v => v / 100, () => {
   if (simulation) {
