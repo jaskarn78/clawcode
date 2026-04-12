@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
-status: Ready to execute
-stopped_at: Completed 49-01-PLAN.md
-last_updated: "2026-04-12T03:13:46.641Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 49-02-PLAN.md
+last_updated: "2026-04-12T03:18:29.341Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 14
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 22
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -84,6 +84,8 @@ Recent decisions affecting current work:
 - [Phase 48]: Post-construction setter for WebhookManager on bridge to break circular dependency with provisioner
 - [Phase 48]: Manual webhookUrl always takes precedence over auto-provisioned URLs
 - [Phase 49]: Word-count heuristic (1 token ~ 0.75 words) for chunk sizing; DocumentStore takes Database instance for DB reuse; vec deletion by chunk ID lookup
+- [Phase 49]: DocumentStore shares per-agent SQLite DB via store.getDatabase() -- no separate DB file
+- [Phase 49]: search_documents formats results with similarity scores and context chunks for readability
 
 ### Pending Todos
 
@@ -127,9 +129,10 @@ None yet.
 | Phase 47 P01 | 284s | 2 tasks | 4 files |
 | Phase 48 P01 | 164s | 2 tasks | 4 files |
 | Phase 49 P01 | 197s | 2 tasks | 6 files |
+| Phase 49 P02 | 150s | 2 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-12
-Stopped at: Completed 49-01-PLAN.md
+Stopped at: Completed 49-02-PLAN.md
 Resume file: None
