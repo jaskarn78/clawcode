@@ -232,13 +232,15 @@ Plans:
 
 ### Phase 47: Discord slash commands for control
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Operators can manage the agent fleet via Discord slash commands (start, stop, restart, fleet status) that bypass agent sessions and go directly to the daemon via IPC
+**Requirements**: CTRL-01, CTRL-02, CTRL-03, CTRL-04
 **Depends on:** Phase 46
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 47 to break down)
+- [ ] 47-01-PLAN.md — Control slash commands (type ext, IPC routing, fleet embed)
+
+
 
 ### Phase 48: Webhook identity per agent
 
