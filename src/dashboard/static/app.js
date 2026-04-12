@@ -9,6 +9,9 @@ let eventSource = null;
 /** @type {{ delivered: number; totalEnqueued: number } | null} */
 let lastDeliveryStats = null;
 
+/** @type {string} */
+let lastAgentHash = "";
+
 /**
  * Format uptime from a startedAt timestamp.
  * @param {number | null} startedAt - Unix timestamp in ms
@@ -136,6 +139,7 @@ function createAgentCard(agent, index) {
         <button class="action-btn" onclick="agentAction('${escapeAttr(agent.name)}', 'start')">Start</button>
         <button class="action-btn danger" onclick="agentAction('${escapeAttr(agent.name)}', 'stop')">Stop</button>
         <button class="action-btn" onclick="agentAction('${escapeAttr(agent.name)}', 'restart')">Restart</button>
+        <button class="action-btn" onclick="openMsgModal('${escapeAttr(agent.name)}')" style="border-color:rgba(255,51,102,0.3);color:var(--accent-primary)">Messages</button>
       </div>
     </div>
   `;
@@ -150,9 +154,20 @@ function renderAgentCards(agents) {
   if (!grid) return;
 
   if (!agents || agents.length === 0) {
-    grid.innerHTML = '<div class="panel-placeholder">No agents registered</div>';
+    if (lastAgentHash !== "empty") {
+      grid.innerHTML = '<div class="panel-placeholder">No agents registered</div>';
+      lastAgentHash = "empty";
+    }
     return;
   }
+
+  // Only re-render when data actually changes (prevents flicker from SSE polling)
+  const hash = JSON.stringify(agents.map(a => ({
+    n: a.name, s: a.status, r: a.restartCount, z: a.zone,
+    f: a.fillPercentage, e: a.lastError,
+  })));
+  if (hash === lastAgentHash) return;
+  lastAgentHash = hash;
 
   grid.innerHTML = agents.map((agent, i) => createAgentCard(agent, i)).join("");
 }
@@ -566,6 +581,125 @@ async function init() {
 
   // Start SSE
   connectSSE();
+}
+
+// ─── Add Agent Modal ───
+
+function openAddAgentModal() {
+  const modal = document.getElementById("add-agent-modal");
+  modal.style.display = "flex";
+  document.getElementById("aa-name").value = "";
+  document.getElementById("aa-channel").value = "";
+  document.getElementById("aa-model").value = "sonnet";
+  document.getElementById("aa-soul").value = "";
+  document.getElementById("aa-result").style.display = "none";
+}
+
+function closeAddAgentModal() {
+  document.getElementById("add-agent-modal").style.display = "none";
+}
+
+document.getElementById("add-agent-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("aa-result");
+  const name = document.getElementById("aa-name").value.trim();
+  const channelId = document.getElementById("aa-channel").value.trim();
+  const model = document.getElementById("aa-model").value;
+  const soul = document.getElementById("aa-soul").value.trim();
+
+  if (!name) { result.textContent = "Name is required."; result.style.color = "var(--status-error)"; result.style.display = "block"; return; }
+
+  try {
+    const res = await fetch("/api/agents/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, channelId, model, soul }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      result.textContent = data.message || "Agent created! Restart daemon to activate.";
+      result.style.color = "var(--status-running)";
+      result.style.display = "block";
+      setTimeout(closeAddAgentModal, 2000);
+    } else {
+      result.textContent = data.error || "Failed to create agent.";
+      result.style.color = "var(--status-error)";
+      result.style.display = "block";
+    }
+  } catch (err) {
+    result.textContent = "Request failed: " + err.message;
+    result.style.color = "var(--status-error)";
+    result.style.display = "block";
+  }
+});
+
+// ─── Message History Modal ───
+
+/** @type {string} */
+let currentMsgAgent = "";
+
+async function openMsgModal(agentName) {
+  currentMsgAgent = agentName;
+  const modal = document.getElementById("msg-modal");
+  modal.style.display = "flex";
+  document.getElementById("msg-title").textContent = `${agentName} — Messages`;
+  document.getElementById("msg-body").innerHTML = '<div class="panel-placeholder">Loading...</div>';
+
+  await loadMessages(agentName);
+}
+
+function closeMsgModal() {
+  document.getElementById("msg-modal").style.display = "none";
+}
+
+async function loadMessages(agentName, date) {
+  const url = date
+    ? `/api/messages/${encodeURIComponent(agentName)}?date=${date}`
+    : `/api/messages/${encodeURIComponent(agentName)}`;
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+
+    // Populate date selector
+    const dateSelect = document.getElementById("msg-date");
+    dateSelect.innerHTML = (data.dates || []).map(d =>
+      `<option value="${d}" ${d === data.currentDate ? "selected" : ""}>${d}</option>`
+    ).join("");
+    dateSelect.onchange = () => loadMessages(agentName, dateSelect.value);
+
+    // Render messages
+    const body = document.getElementById("msg-body");
+    const messages = data.messages || [];
+
+    if (messages.length === 0) {
+      body.innerHTML = '<div class="panel-placeholder">No messages for this date</div>';
+      return;
+    }
+
+    body.innerHTML = messages.map(m => {
+      const isUser = m.role === "user";
+      const align = isUser ? "flex-end" : "flex-start";
+      const bg = isUser ? "rgba(0, 229, 255, 0.08)" : "rgba(255, 51, 102, 0.06)";
+      const border = isUser ? "rgba(0, 229, 255, 0.2)" : "rgba(255, 51, 102, 0.15)";
+      const roleColor = isUser ? "var(--accent-secondary)" : "var(--accent-primary)";
+      const truncated = m.content.length > 500 ? m.content.slice(0, 500) + "..." : m.content;
+
+      return `<div style="align-self:${align}; max-width:85%; background:${bg}; border:1px solid ${border}; border-radius:8px; padding:10px 14px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:0.68rem; color:${roleColor}; font-weight:600; text-transform:uppercase;">${escapeHtml(m.role)}</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:0.65rem; color:var(--text-secondary);">${escapeHtml(m.time)}</span>
+        </div>
+        <div style="font-family:'IBM Plex Sans',sans-serif; font-size:0.8rem; color:var(--text-primary); line-height:1.5; white-space:pre-wrap; word-break:break-word;">${escapeHtml(truncated)}</div>
+      </div>`;
+    }).join("");
+
+    // Scroll to bottom
+    body.scrollTop = body.scrollHeight;
+  } catch (err) {
+    document.getElementById("msg-body").innerHTML =
+      `<div class="panel-placeholder">Error: ${escapeHtml(err.message)}</div>`;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);

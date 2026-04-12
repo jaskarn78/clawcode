@@ -26,6 +26,7 @@
       <span class="logo-text">ClawCode</span>
     </div>
     <div class="header-right">
+      <a href="/graph" style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--accent-secondary); text-decoration: none; padding: 4px 10px; border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 4px; transition: background 0.2s;" onmouseover="this.style.background='rgba(0,229,255,0.1)'" onmouseout="this.style.background='transparent'">GRAPH</a>
       <span class="connection-label">daemon</span>
       <span id="connection-dot" class="connection-dot disconnected" title="SSE connection status"></span>
     </div>
@@ -76,6 +77,20 @@
       </section>
     </aside>
   </main>
+
+  <!-- Message History Modal -->
+  <div id="msg-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); align-items:center; justify-content:center;">
+    <div style="background:var(--bg-surface); border:1px solid rgba(255,51,102,0.2); border-radius:8px; padding:24px; width:600px; max-width:90vw; max-height:80vh; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+        <h3 id="msg-title" style="font-family:'JetBrains Mono',monospace; font-size:0.9rem; color:var(--text-primary); border-left:3px solid var(--accent-primary); padding-left:10px;">Messages</h3>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <select id="msg-date" style="font-family:'JetBrains Mono',monospace; font-size:0.72rem; background:var(--bg-elevated); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:4px 8px; outline:none;"></select>
+          <button onclick="closeMsgModal()" style="background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer;">&times;</button>
+        </div>
+      </div>
+      <div id="msg-body" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px;"></div>
+    </div>
+  </div>
 
   <script src="/app.js" defer></script>
 </body>

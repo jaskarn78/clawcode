@@ -1508,6 +1508,59 @@ async function routeMethod(
       return { sources: [...sources], total_chunks: totalChunks };
     }
 
+    case "message-history": {
+      const agentName = validateStringParam(params, "agent");
+      const limit = typeof params.limit === "number" ? params.limit : 50;
+      const date = typeof params.date === "string" ? params.date : undefined;
+
+      const config = configs.find(c => c.name === agentName);
+      if (!config) {
+        return { messages: [], dates: [] };
+      }
+
+      const memoryDir = join(config.workspace, "memory");
+      const { readdir, readFile } = await import("node:fs/promises");
+
+      let logFiles: string[] = [];
+      try {
+        const files = await readdir(memoryDir);
+        logFiles = files
+          .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+          .sort()
+          .reverse();
+      } catch { /* no logs yet */ }
+
+      const dates = logFiles.map(f => f.replace(".md", ""));
+      const targetDate = date ?? dates[0];
+      if (!targetDate) {
+        return { messages: [], dates };
+      }
+
+      const filePath = join(memoryDir, `${targetDate}.md`);
+      let content = "";
+      try {
+        content = await readFile(filePath, "utf-8");
+      } catch {
+        return { messages: [], dates };
+      }
+
+      const messages: Array<{ time: string; role: string; content: string }> = [];
+      const sections = content.split(/^## /m).filter(Boolean);
+      for (const section of sections) {
+        const match = section.match(/^(\d{2}:\d{2}:\d{2})\s+\[(user|assistant)\]\n([\s\S]*)/);
+        if (match) {
+          messages.push({
+            time: match[1],
+            role: match[2],
+            content: match[3].trim(),
+          });
+        }
+      }
+
+      const trimmed = messages.slice(-limit);
+      return { messages: trimmed, dates, currentDate: targetDate };
+    }
+
     case "read-thread": {
       const threadId = validateStringParam(params, "threadId");
       const limit = typeof params.limit === "number"

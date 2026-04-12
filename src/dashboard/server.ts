@@ -146,6 +146,27 @@ async function handleRequest(
       return;
     }
 
+    // Message history: GET /api/messages/:agent?date=YYYY-MM-DD
+    if (
+      method === "GET" &&
+      segments.length === 3 &&
+      segments[0] === "api" &&
+      segments[1] === "messages"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const date = queryParams.get("date") ?? undefined;
+      try {
+        const data = await sendIpcRequest(socketPath, "message-history", { agent: agentName, date });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message, messages: [], dates: [] });
+      }
+      return;
+    }
+
     // Knowledge graph data: GET /api/graph/:agent
     if (
       method === "GET" &&
