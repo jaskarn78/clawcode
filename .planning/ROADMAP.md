@@ -256,10 +256,11 @@ Plans:
 
 ### Phase 49: RAG over documents
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Agents can ingest documents (text, markdown, PDF), chunk and embed them, then search over chunks using semantic similarity via MCP tools
+**Requirements**: RAG-CHUNK, RAG-STORE, RAG-PDF, RAG-INGEST, RAG-SEARCH, RAG-DELETE
 **Depends on:** Phase 48
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 49 to break down)
+- [ ] 49-01-PLAN.md — Document chunker, types, and DocumentStore with schema/ingest/search/delete (RAG-CHUNK, RAG-STORE, RAG-PDF)
+- [ ] 49-02-PLAN.md — MCP tools and IPC handlers for ingest, search, delete, list (RAG-INGEST, RAG-SEARCH, RAG-DELETE)
