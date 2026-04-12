@@ -255,8 +255,17 @@ export class DiscordBridge {
    * Routes to the correct agent based on channel binding.
    */
   private async handleMessage(message: Message): Promise<void> {
-    // Ignore bot messages (including our own)
+    // Handle bot messages: allow agent-to-agent webhooks, ignore everything else
     if (message.author.bot) {
+      // Webhook messages from known agents are allowed through
+      if (message.webhookId && this.webhookManager) {
+        const senderAgent = this.extractAgentSender(message);
+        if (senderAgent) {
+          await this.handleAgentMessage(message, senderAgent);
+          return;
+        }
+      }
+      // All other bot messages (including our own) are ignored
       return;
     }
 
@@ -421,6 +430,54 @@ export class DiscordBridge {
       } catch (err) {
         this.log.debug({ error: (err as Error).message }, "failed to add error reaction");
       }
+    }
+  }
+
+  /**
+   * Extract the sender agent name from a webhook message's embed footer.
+   * Agent-to-agent messages have footer text: "Agent-to-agent message from {agentName}"
+   * Returns the sender agent name or undefined if not an agent message.
+   */
+  private extractAgentSender(message: Message): string | undefined {
+    if (!message.embeds || message.embeds.length === 0) return undefined;
+    const footer = message.embeds[0].footer?.text;
+    if (!footer) return undefined;
+    const match = footer.match(/^Agent-to-agent message from (.+)$/);
+    return match ? match[1] : undefined;
+  }
+
+  /**
+   * Handle an incoming agent-to-agent webhook message.
+   * Extracts content from the embed, prefixes with sender context, and forwards to the bound agent.
+   */
+  private async handleAgentMessage(message: Message, senderAgent: string): Promise<void> {
+    const channelId = message.channelId;
+    const agentName = this.routingTable.channelToAgent.get(channelId);
+    if (!agentName) {
+      this.log.debug({ channelId, senderAgent }, "agent webhook message in unbound channel -- ignoring");
+      return;
+    }
+
+    // Extract content from the embed description
+    const embedContent = message.embeds[0]?.description ?? message.content ?? "";
+
+    // Format with agent message prefix per user decision (A2A-04)
+    const prefixedContent = `[Agent Message from ${senderAgent}]\n${embedContent}`;
+
+    this.log.info(
+      { from: senderAgent, to: agentName, channel: channelId, messageId: message.id },
+      "routing agent-to-agent message",
+    );
+
+    try {
+      await this.sessionManager.forwardToAgent(agentName, prefixedContent);
+      this.log.info({ from: senderAgent, to: agentName }, "agent-to-agent message forwarded");
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.log.error(
+        { from: senderAgent, to: agentName, error: errorMsg },
+        "failed to forward agent-to-agent message",
+      );
     }
   }
 
