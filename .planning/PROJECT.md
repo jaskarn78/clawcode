@@ -59,6 +59,14 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Model tiering — haiku default, fork-based escalation, opus advisor tool, /model command — v1.5
 - Cost optimization — per-agent/per-model cost tracking CLI/dashboard, importance scoring, escalation budgets — v1.5
 - Context assembly pipeline — per-source token budgets with configurable ceiling — v1.5
+- Auto-start agents on daemon boot — no separate IPC start-all call needed — v1.6
+- Systemd production integration — correct ExecStart, PATH, EnvironmentFile — v1.6
+- Agent-to-agent Discord communication — MCP tool + webhook embeds + bridge routing — v1.6
+- Memory auto-linking on save — eager KNN neighbor edges instead of 6h heartbeat — v1.6
+- Scheduled memory consolidation — configurable cron via TaskScheduler handler entries — v1.6
+- Discord slash commands for control — /clawcode-start, /stop, /restart, /fleet — v1.6
+- Webhook auto-provisioning — daemon creates Discord webhooks per agent channel on startup — v1.6
+- RAG over documents — text/markdown/PDF ingestion, chunking, KNN search via 4 MCP tools — v1.6
 
 ### Active
 
