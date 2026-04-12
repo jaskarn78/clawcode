@@ -35,6 +35,7 @@ export type SdkUserMessage = {
 export type SdkQueryOptions = {
   readonly cwd?: string;
   readonly model?: string;
+  readonly effort?: "low" | "medium" | "high" | "max";
   readonly systemPrompt?: string;
   readonly permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
   readonly mcpServers?: Record<string, {

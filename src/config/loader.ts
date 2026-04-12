@@ -104,6 +104,7 @@ export function resolveAgentConfig(
     workspace: agent.workspace ?? join(expandHome(defaults.basePath), agent.name),
     channels: agent.channels,
     model: agent.model ?? defaults.model,
+    effort: agent.effort ?? defaults.effort,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

@@ -52,6 +52,7 @@ export type BackoffConfig = {
 export type AgentSessionConfig = {
   readonly name: string;
   readonly model: "sonnet" | "opus" | "haiku";
+  readonly effort: "low" | "medium" | "high" | "max";
   readonly workspace: string;
   readonly systemPrompt: string;
   readonly channels: readonly string[];

@@ -6,6 +6,7 @@ import type { AgentSessionConfig } from "../../manager/types.js";
 const makeSessionConfig = (): AgentSessionConfig => ({
   name: "test-agent",
   model: "sonnet",
+  effort: "low",
   workspace: "/tmp/test",
   systemPrompt: "Be helpful.",
   channels: ["123456"],

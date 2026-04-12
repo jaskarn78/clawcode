@@ -54,6 +54,7 @@ export async function buildSessionConfig(
     return {
       name: config.name,
       model: config.model,
+      effort: config.effort,
       workspace: config.workspace,
       systemPrompt: systemPrompt.trim(),
       channels,
@@ -214,6 +215,7 @@ export async function buildSessionConfig(
   return {
     name: config.name,
     model: config.model,
+    effort: config.effort,
     workspace: config.workspace,
     systemPrompt: systemPrompt.trim(),
     channels,

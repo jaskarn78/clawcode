@@ -26,6 +26,8 @@ export type SessionHandle = {
   close: () => Promise<void>;
   onError: (handler: (error: Error) => void) => void;
   onEnd: (handler: () => void) => void;
+  setEffort: (level: "low" | "medium" | "high" | "max") => void;
+  getEffort: () => "low" | "medium" | "high" | "max";
 };
 
 /**
@@ -51,6 +53,7 @@ export class MockSessionHandle implements SessionHandle {
   private errorHandler: ((error: Error) => void) | null = null;
   private endHandler: (() => void) | null = null;
   private closed = false;
+  private effort: "low" | "medium" | "high" | "max" = "low";
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -89,6 +92,14 @@ export class MockSessionHandle implements SessionHandle {
 
   onEnd(handler: () => void): void {
     this.endHandler = handler;
+  }
+
+  setEffort(level: "low" | "medium" | "high" | "max"): void {
+    this.effort = level;
+  }
+
+  getEffort(): "low" | "medium" | "high" | "max" {
+    return this.effort;
   }
 
   /**
@@ -185,6 +196,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
     const baseOptions: SdkQueryOptions = {
       model: config.model,
+      effort: config.effort,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
@@ -209,6 +221,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
     const baseOptions: SdkQueryOptions = {
       model: config.model,
+      effort: config.effort,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
       permissionMode: "bypassPermissions",
@@ -328,15 +341,17 @@ function wrapSdkQuery(
   usageCallback?: UsageCallback,
 ): SessionHandle {
   let sessionId = initialSessionId;
+  let currentEffort = baseOptions.effort ?? "low";
   const errorHandlers: Array<(error: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
   let closed = false;
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
+   * Uses the current (possibly runtime-updated) effort level.
    */
   function turnOptions(): SdkQueryOptions {
-    return { ...baseOptions, resume: sessionId };
+    return { ...baseOptions, effort: currentEffort, resume: sessionId };
   }
 
   /**
@@ -462,6 +477,14 @@ function wrapSdkQuery(
 
     onEnd(handler: () => void): void {
       endHandlers.push(handler);
+    },
+
+    setEffort(level: "low" | "medium" | "high" | "max"): void {
+      currentEffort = level;
+    },
+
+    getEffort(): "low" | "medium" | "high" | "max" {
+      return currentEffort;
     },
   };
 }
