@@ -154,12 +154,45 @@ export class SubagentThreadSpawner {
       "subagent thread spawned",
     );
 
+    // 12. Fire off an async intro post so the thread isn't silent.
+    // Deliberately not awaited — return the result immediately so the MCP
+    // caller doesn't wait on the intro LLM roundtrip. Errors are logged.
+    void this.postIntro(thread, sessionName, config.threadName);
+
     return {
       threadId: thread.id,
       sessionName,
       parentAgent: config.parentAgentName,
       channelId,
     };
+  }
+
+  /**
+   * Ask the subagent to introduce itself and post the response to the thread.
+   * Failures are logged, never thrown -- the spawn has already succeeded by the
+   * time this runs.
+   */
+  private async postIntro(
+    thread: { send: (content: string) => Promise<unknown> },
+    sessionName: string,
+    threadName: string,
+  ): Promise<void> {
+    try {
+      const prompt =
+        `You've just been spawned in a Discord thread titled "${threadName}". ` +
+        `Introduce yourself in 1-2 short sentences based on your soul and state what you're ready to do. ` +
+        `No filler, no meta-commentary about being an AI.`;
+      const reply = await this.sessionManager.streamFromAgent(sessionName, prompt, () => {});
+      const text = reply.trim();
+      if (text) {
+        await thread.send(text.slice(0, 2000));
+      }
+    } catch (err) {
+      this.log.warn(
+        { sessionName, error: (err as Error).message },
+        "subagent intro post failed",
+      );
+    }
   }
 
   /**
