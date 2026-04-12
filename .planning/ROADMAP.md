@@ -215,10 +215,10 @@ Plans:
 **Goal:** New/updated memories get graph edges to similar memories immediately on save instead of waiting for the 6-hour heartbeat cycle
 **Requirements**: AUTOLINK-01
 **Depends on:** Phase 44
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 45-01-PLAN.md — autoLinkMemory function + store.ts insert hook (AUTOLINK-01)
+- [x] 45-01-PLAN.md — autoLinkMemory function + store.ts insert hook (AUTOLINK-01)
 
 ### Phase 46: Scheduled memory consolidation
 
