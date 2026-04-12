@@ -39,6 +39,7 @@ export const IPC_METHODS = [
   // Subagent threads
   "spawn-subagent-thread",
   "cleanup-subagent-thread",
+  "read-thread",
   // Security (Phase 27)
   "approve-command",
   "deny-command",

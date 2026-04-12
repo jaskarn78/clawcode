@@ -1508,6 +1508,48 @@ async function routeMethod(
       return { sources: [...sources], total_chunks: totalChunks };
     }
 
+    case "read-thread": {
+      const threadId = validateStringParam(params, "threadId");
+      const limit = typeof params.limit === "number"
+        ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+        : 20;
+
+      const bridge = discordBridgeRef.current;
+      if (!bridge) {
+        throw new ManagerError("Discord bridge not available");
+      }
+      const channel = await bridge.discordClient.channels.fetch(threadId);
+      if (!channel || !channel.isThread()) {
+        throw new ManagerError(`Channel '${threadId}' is not a Discord thread`);
+      }
+
+      const collection = await channel.messages.fetch({ limit });
+      const messages = [...collection.values()]
+        .map((m) => {
+          const embedContent = m.embeds?.[0]?.description;
+          const embedFooter = m.embeds?.[0]?.footer?.text;
+          return {
+            id: m.id,
+            author: m.author.username,
+            authorId: m.author.id,
+            bot: m.author.bot,
+            webhookId: m.webhookId ?? null,
+            content: m.content || embedContent || "",
+            embedFooter: embedFooter ?? null,
+            createdAt: m.createdAt.toISOString(),
+            attachmentCount: m.attachments.size,
+          };
+        })
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+      return {
+        threadId,
+        threadName: "name" in channel ? channel.name : null,
+        messageCount: messages.length,
+        messages,
+      };
+    }
+
     case "memory-save": {
       const agentName = validateStringParam(params, "agent");
       const content = validateStringParam(params, "content");

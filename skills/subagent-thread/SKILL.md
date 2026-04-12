@@ -25,10 +25,20 @@ Call it with:
 
 The tool returns:
 - Thread URL (shareable Discord link)
+- **Thread ID** (save this — you need it to read the thread later)
 - Session name (for tracking)
 - Parent agent and channel info
 
 **Rule of thumb:** if the user asked you to "spawn a subagent to do X", pass X as `task`. That's the whole point — hand off once, don't ping-pong.
+
+## Reading back what the subagent posted
+
+Once the subagent has had time to work, use the `read_thread` MCP tool with the threadId you saved:
+
+- `threadId`: the thread ID from spawn_subagent_thread (required)
+- `limit`: how many recent messages to return (1-100, default 20)
+
+This returns every message in the thread — the subagent's work, your own follow-ups, attachments. Use it to summarize subagent output back to the user without them having to paste anything.
 
 ## Alternatively via CLI
 

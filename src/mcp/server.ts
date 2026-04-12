@@ -33,6 +33,10 @@ export const TOOL_DEFINITIONS = {
     description: "Spawn a subagent in a new Discord thread",
     ipcMethod: "spawn-subagent-thread",
   },
+  read_thread: {
+    description: "Read recent messages from a Discord thread (your subagent's work)",
+    ipcMethod: "read-thread",
+  },
   memory_lookup: {
     description: "Search your memory for relevant context, past decisions, and knowledge",
     ipcMethod: "memory-lookup",
@@ -212,6 +216,52 @@ export function createMcpServer(): McpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
+      }
+    },
+  );
+
+  // Tool: read_thread
+  server.tool(
+    "read_thread",
+    "Read recent messages from a Discord thread. Use this after spawning a subagent with spawn_subagent_thread to see what it has posted. Returns messages oldest-first.",
+    {
+      threadId: z.string().describe("Discord thread ID (from spawn_subagent_thread result)"),
+      limit: z.number().int().min(1).max(100).default(20).describe("Max messages to return (1-100, default 20)"),
+    },
+    async ({ threadId, limit }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "read-thread", {
+          threadId,
+          limit,
+        })) as {
+          threadId: string;
+          threadName: string | null;
+          messageCount: number;
+          messages: ReadonlyArray<{
+            id: string;
+            author: string;
+            bot: boolean;
+            webhookId: string | null;
+            content: string;
+            embedFooter: string | null;
+            createdAt: string;
+            attachmentCount: number;
+          }>;
+        };
+        if (result.messages.length === 0) {
+          return { content: [{ type: "text" as const, text: `Thread '${result.threadName ?? result.threadId}' has no messages yet.` }] };
+        }
+        const header = `Thread: ${result.threadName ?? result.threadId} (${result.messageCount} messages)\n${"─".repeat(60)}`;
+        const body = result.messages.map((m) => {
+          const who = m.embedFooter ?? (m.bot ? `${m.author} [bot]` : m.author);
+          const ts = m.createdAt.slice(0, 19).replace("T", " ");
+          const attach = m.attachmentCount > 0 ? `  [${m.attachmentCount} attachment${m.attachmentCount === 1 ? "" : "s"}]` : "";
+          return `[${ts}] ${who}:${attach}\n${m.content}`;
+        }).join("\n\n");
+        return { content: [{ type: "text" as const, text: `${header}\n${body}` }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Failed to read thread: ${msg}` }], isError: true };
       }
     },
   );
