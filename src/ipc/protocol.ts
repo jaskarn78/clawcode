@@ -10,6 +10,7 @@ export const IPC_METHODS = [
   "stop",
   "restart",
   "start-all",
+  "stop-all",
   "status",
   // Observability
   "routes",

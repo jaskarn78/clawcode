@@ -697,12 +697,29 @@ async function routeMethod(
       if (!config) {
         throw new ManagerError(`Agent '${name}' not found in config`);
       }
-      await manager.restartAgent(name, config);
+      // If the agent is already stopped, restartAgent() throws from its
+      // internal stopAgent() call. Fall back to a plain start so
+      // "restart" works uniformly regardless of current state.
+      try {
+        await manager.restartAgent(name, config);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/not running|no such session|requireSession/i.test(msg)) {
+          await manager.startAgent(name, config);
+        } else {
+          throw err;
+        }
+      }
       return { ok: true };
     }
 
     case "start-all": {
       await manager.startAll(configs);
+      return { ok: true };
+    }
+
+    case "stop-all": {
+      await manager.stopAll();
       return { ok: true };
     }
 
