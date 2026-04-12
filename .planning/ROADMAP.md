@@ -222,13 +222,13 @@ Plans:
 
 ### Phase 46: Scheduled memory consolidation
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Memory consolidation runs on a configurable cron schedule per agent via TaskScheduler instead of the fixed 24h heartbeat check
+**Requirements**: CONSOL-01
 **Depends on:** Phase 45
-**Plans:** 0 plans
+**Plans:** 1 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 46 to break down)
+- [ ] 46-01-PLAN.md — Schema + scheduler handler support, daemon wiring, heartbeat deprecation (CONSOL-01)
 
 ### Phase 47: Discord slash commands for control
 
