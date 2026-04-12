@@ -15,6 +15,7 @@ import { DEFAULT_TIER_CONFIG } from "../memory/tiers.js";
 import { saveSummary } from "../memory/context-summary.js";
 import { UsageTracker } from "../usage/tracker.js";
 import { EpisodeStore } from "../memory/episode-store.js";
+import { DocumentStore } from "../documents/store.js";
 
 /**
  * Manages per-agent memory lifecycle: initialization, cleanup, and accessors.
@@ -31,6 +32,7 @@ export class AgentMemoryManager {
   readonly tierManagers: Map<string, TierManager> = new Map();
   readonly usageTrackers: Map<string, UsageTracker> = new Map();
   readonly episodeStores: Map<string, EpisodeStore> = new Map();
+  readonly documentStores: Map<string, DocumentStore> = new Map();
   readonly embedder: EmbeddingService = new EmbeddingService();
 
   constructor(private readonly log: Logger) {}
@@ -87,6 +89,10 @@ export class AgentMemoryManager {
       const episodeStore = new EpisodeStore(store, this.embedder);
       this.episodeStores.set(name, episodeStore);
 
+      // Create DocumentStore for this agent (shares same SQLite DB)
+      const documentStore = new DocumentStore(store.getDatabase());
+      this.documentStores.set(name, documentStore);
+
       // Create UsageTracker for this agent
       const usageDbPath = join(memoryDir, "usage.db");
       const usageTracker = new UsageTracker(usageDbPath);
@@ -122,6 +128,7 @@ export class AgentMemoryManager {
     this.sessionLoggers.delete(name);
     this.contextFillProviders.delete(name);
     this.tierManagers.delete(name);
+    this.documentStores.delete(name);
 
     const usageTracker = this.usageTrackers.get(name);
     if (usageTracker) {

@@ -15,6 +15,7 @@ import type { TierManager } from "../memory/tier-manager.js";
 import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
 import type { UsageTracker } from "../usage/tracker.js";
+import type { DocumentStore } from "../documents/store.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
@@ -155,6 +156,19 @@ export class SessionManager {
     const response = await handle.sendAndStream(message, onChunk);
     this.log.info({ agent: name, responseLength: response.length }, "agent stream complete");
     return response;
+  }
+
+  /** Set the reasoning effort level for a running agent. Takes effect on next turn. */
+  setEffortForAgent(name: string, level: "low" | "medium" | "high" | "max"): void {
+    const handle = this.requireSession(name);
+    handle.setEffort(level);
+    this.log.info({ agent: name, effort: level }, "effort level updated");
+  }
+
+  /** Get the current reasoning effort level for a running agent. */
+  getEffortForAgent(name: string): "low" | "medium" | "high" | "max" {
+    const handle = this.requireSession(name);
+    return handle.getEffort();
   }
 
   /** @throws SessionError if the agent is not running */
@@ -301,6 +315,7 @@ export class SessionManager {
   getTierManager(agentName: string): TierManager | undefined { return this.memory.tierManagers.get(agentName); }
   getUsageTracker(agentName: string): UsageTracker | undefined { return this.memory.usageTrackers.get(agentName); }
   getEpisodeStore(agentName: string) { return this.memory.episodeStores.get(agentName); }
+  getDocumentStore(agentName: string): DocumentStore | undefined { return this.memory.documentStores.get(agentName); }
 
   async saveContextSummary(agentName: string, summary: string): Promise<void> {
     const config = this.configs.get(agentName);

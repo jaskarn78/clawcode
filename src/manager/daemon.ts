@@ -7,6 +7,7 @@ import {
   unlink,
   access,
   stat,
+  readFile,
 } from "node:fs/promises";
 import { connect, type Server } from "node:net";
 import { logger } from "../shared/logger.js";
@@ -38,6 +39,7 @@ import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manag
 import { provisionWebhooks } from "../discord/webhook-provisioner.js";
 import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
+import { chunkText, chunkPdf } from "../documents/chunker.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { startOfWeek } from "date-fns";
 import { ConfigWatcher } from "../config/watcher.js";
@@ -1415,6 +1417,89 @@ async function routeMethod(
         }
       }
       return { period, costs: results };
+    }
+
+    case "ingest-document": {
+      const agentName = validateStringParam(params, "agent");
+      const filePath = validateStringParam(params, "file_path");
+      const source = typeof params.source === "string" && params.source.length > 0 ? params.source : filePath;
+
+      const docStore = manager.getDocumentStore(agentName);
+      if (!docStore) {
+        throw new ManagerError(`Document store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const fileBuffer = await readFile(filePath);
+      const chunks = filePath.endsWith(".pdf")
+        ? await chunkPdf(fileBuffer)
+        : chunkText(fileBuffer.toString("utf-8"));
+
+      if (chunks.length === 0) {
+        return { ok: true, source, chunks_created: 0, total_chars: 0 };
+      }
+
+      const embedder = manager.getEmbedder();
+      const embeddings: Float32Array[] = [];
+      for (const chunk of chunks) {
+        embeddings.push(await embedder.embed(chunk.content));
+      }
+
+      const result = docStore.ingest(source, chunks, embeddings);
+      return { ok: true, source, chunks_created: result.chunksCreated, total_chars: result.totalChars };
+    }
+
+    case "search-documents": {
+      const agentName = validateStringParam(params, "agent");
+      const query = validateStringParam(params, "query");
+      const limit = typeof params.limit === "number" ? Math.min(Math.max(params.limit, 1), 20) : 5;
+      const source = typeof params.source === "string" && params.source.length > 0 ? params.source : undefined;
+
+      const docStore = manager.getDocumentStore(agentName);
+      if (!docStore) {
+        throw new ManagerError(`Document store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const embedder = manager.getEmbedder();
+      const queryEmbedding = await embedder.embed(query);
+      const results = docStore.search(queryEmbedding, limit, source);
+
+      return {
+        results: results.map((r) => ({
+          chunk_id: r.chunkId,
+          source: r.source,
+          chunk_index: r.chunkIndex,
+          content: r.content,
+          similarity: r.similarity,
+          context_before: r.contextBefore,
+          context_after: r.contextAfter,
+        })),
+      };
+    }
+
+    case "delete-document": {
+      const agentName = validateStringParam(params, "agent");
+      const source = validateStringParam(params, "source");
+
+      const docStore = manager.getDocumentStore(agentName);
+      if (!docStore) {
+        throw new ManagerError(`Document store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const count = docStore.deleteDocument(source);
+      return { ok: true, source, chunks_deleted: count };
+    }
+
+    case "list-documents": {
+      const agentName = validateStringParam(params, "agent");
+
+      const docStore = manager.getDocumentStore(agentName);
+      if (!docStore) {
+        throw new ManagerError(`Document store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const sources = docStore.listSources();
+      const totalChunks = docStore.getChunkCount();
+      return { sources: [...sources], total_chunks: totalChunks };
     }
 
     default:
