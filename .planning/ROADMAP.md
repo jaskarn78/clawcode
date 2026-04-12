@@ -247,10 +247,10 @@ Plans:
 **Goal:** Auto-provision Discord webhooks for each agent's bound channel on daemon startup, eliminating manual webhookUrl configuration
 **Requirements**: WEBHOOK-AUTO-01
 **Depends on:** Phase 47
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 48-01-PLAN.md — Webhook provisioner + daemon wiring (WEBHOOK-AUTO-01)
+- [x] 48-01-PLAN.md — Webhook provisioner + daemon wiring (WEBHOOK-AUTO-01)
 
 
 
