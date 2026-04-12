@@ -235,10 +235,10 @@ Plans:
 **Goal:** Operators can manage the agent fleet via Discord slash commands (start, stop, restart, fleet status) that bypass agent sessions and go directly to the daemon via IPC
 **Requirements**: CTRL-01, CTRL-02, CTRL-03, CTRL-04
 **Depends on:** Phase 46
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 47-01-PLAN.md — Control slash commands (type ext, IPC routing, fleet embed)
+- [x] 47-01-PLAN.md — Control slash commands (type ext, IPC routing, fleet embed)
 
 
 
