@@ -148,7 +148,8 @@ describe("MemoryStore graph integration", () => {
       zeroEmbedding(),
     );
 
-    const links = db.prepare("SELECT * FROM memory_links").all() as LinkRow[];
+    // Filter to wikilink-created edges (auto:similar edges also created by eager auto-linker)
+    const links = db.prepare("SELECT * FROM memory_links WHERE link_text != 'auto:similar'").all() as LinkRow[];
     expect(links).toHaveLength(2);
     const targetIds = links.map((l) => l.target_id).sort();
     expect(targetIds).toEqual([memB.id, memC.id].sort());

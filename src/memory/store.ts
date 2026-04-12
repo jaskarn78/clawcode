@@ -6,6 +6,7 @@ import { MemoryError } from "./errors.js";
 import { checkForDuplicate, mergeMemory } from "./dedup.js";
 import { extractWikilinks } from "./graph.js";
 import { calculateImportance } from "./importance.js";
+import { autoLinkMemory } from "./similarity.js";
 import type {
   MemoryEntry,
   MemoryTier,
@@ -119,6 +120,13 @@ export class MemoryStore {
             }
           })();
 
+          // Eager auto-link after merge
+          try {
+            autoLinkMemory(this, dedupResult.existingId);
+          } catch {
+            // Non-fatal: heartbeat auto-linker will catch missed links
+          }
+
           const merged = this.getById(dedupResult.existingId);
           if (!merged) {
             throw new MemoryError(
@@ -160,6 +168,13 @@ export class MemoryStore {
           }
         }
       })();
+
+      // Eager auto-link: discover similar memories and create edges
+      try {
+        autoLinkMemory(this, id);
+      } catch {
+        // Non-fatal: heartbeat auto-linker will catch missed links
+      }
 
       return Object.freeze({
         id,
