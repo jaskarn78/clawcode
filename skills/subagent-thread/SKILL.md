@@ -19,13 +19,16 @@ You have an MCP tool available: `spawn_subagent_thread`
 Call it with:
 - `agent`: Your agent name (required)
 - `threadName`: A descriptive name for the thread (required)
+- `task`: **(Strongly recommended)** The work you're handing off. When provided, the subagent starts working immediately and posts its response in the thread — you do **not** need to send a follow-up message. Omit only when you want a blank thread for interactive back-and-forth.
 - `model`: Optional model override ("sonnet", "opus", "haiku")
-- `systemPrompt`: Optional custom instructions for the subagent
+- `systemPrompt`: Optional personality/role override (not the task itself — use `task` for that)
 
 The tool returns:
 - Thread URL (shareable Discord link)
 - Session name (for tracking)
 - Parent agent and channel info
+
+**Rule of thumb:** if the user asked you to "spawn a subagent to do X", pass X as `task`. That's the whole point — hand off once, don't ping-pong.
 
 ## Alternatively via CLI
 

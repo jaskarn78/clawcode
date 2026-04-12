@@ -1155,12 +1155,14 @@ async function routeMethod(
       const parentAgent = validateStringParam(params, "parentAgent");
       const threadName = validateStringParam(params, "threadName");
       const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
+      const task = typeof params.task === "string" ? params.task : undefined;
       const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
       const result = await subagentThreadSpawner.spawnInThread({
         parentAgentName: parentAgent,
         threadName,
         systemPrompt,
         model,
+        task,
       });
       // Register session end callback for automatic cleanup (SATH-04)
       manager.registerSessionEndCallback(result.sessionName, async () => {

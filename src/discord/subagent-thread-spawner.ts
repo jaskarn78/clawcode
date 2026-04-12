@@ -154,10 +154,11 @@ export class SubagentThreadSpawner {
       "subagent thread spawned",
     );
 
-    // 12. Fire off an async intro post so the thread isn't silent.
-    // Deliberately not awaited — return the result immediately so the MCP
-    // caller doesn't wait on the intro LLM roundtrip. Errors are logged.
-    void this.postIntro(thread, sessionName, config.threadName);
+    // 12. Kick off the initial prompt async -- either the handoff task (if
+    // provided) or a generic intro. Deliberately not awaited so the MCP
+    // caller gets the thread URL back immediately; the LLM roundtrip runs
+    // in the background and posts directly to the thread. Errors are logged.
+    void this.postInitialMessage(thread, sessionName, config.threadName, config.task);
 
     return {
       threadId: thread.id,
@@ -168,20 +169,23 @@ export class SubagentThreadSpawner {
   }
 
   /**
-   * Ask the subagent to introduce itself and post the response to the thread.
-   * Failures are logged, never thrown -- the spawn has already succeeded by the
-   * time this runs.
+   * Send the first prompt to the subagent and post its response to the thread.
+   * If `task` is provided, the subagent starts working on it immediately.
+   * If not, a brief intro prompt is sent so the thread isn't silent.
+   * Failures are logged, never thrown -- the spawn has already succeeded.
    */
-  private async postIntro(
+  private async postInitialMessage(
     thread: { send: (content: string) => Promise<unknown> },
     sessionName: string,
     threadName: string,
+    task: string | undefined,
   ): Promise<void> {
     try {
-      const prompt =
-        `You've just been spawned in a Discord thread titled "${threadName}". ` +
-        `Introduce yourself in 1-2 short sentences based on your soul and state what you're ready to do. ` +
-        `No filler, no meta-commentary about being an AI.`;
+      const prompt = task
+        ? task
+        : `You've just been spawned in a Discord thread titled "${threadName}". ` +
+          `Introduce yourself in 1-2 short sentences based on your soul and state what you're ready to do. ` +
+          `No filler, no meta-commentary about being an AI.`;
       const reply = await this.sessionManager.streamFromAgent(sessionName, prompt, () => {});
       const text = reply.trim();
       if (text) {
@@ -189,8 +193,8 @@ export class SubagentThreadSpawner {
       }
     } catch (err) {
       this.log.warn(
-        { sessionName, error: (err as Error).message },
-        "subagent intro post failed",
+        { sessionName, error: (err as Error).message, hadTask: Boolean(task) },
+        "subagent initial message failed",
       );
     }
   }

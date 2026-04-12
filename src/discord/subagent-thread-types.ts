@@ -6,6 +6,13 @@ export type SubagentThreadConfig = {
   readonly threadName: string;
   readonly systemPrompt?: string;
   readonly model?: "sonnet" | "opus" | "haiku";
+  /**
+   * Initial task for the subagent. When provided, the spawner sends this as
+   * the first user message after the session starts and streams the response
+   * into the Discord thread. When absent, the spawner falls back to an intro
+   * prompt so the thread isn't silent.
+   */
+  readonly task?: string;
 };
 
 /**

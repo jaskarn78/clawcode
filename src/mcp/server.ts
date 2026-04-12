@@ -179,20 +179,22 @@ export function createMcpServer(): McpServer {
   // Tool: spawn_subagent_thread
   server.tool(
     "spawn_subagent_thread",
-    "Spawn a subagent in a new Discord thread",
+    "Spawn a subagent in a new Discord thread. If you pass `task`, the subagent starts working on it immediately and posts its response in the thread — you do NOT need to send a follow-up message.",
     {
       agent: z.string().describe("Parent agent name"),
       threadName: z.string().describe("Name for the Discord thread"),
       model: z.enum(["sonnet", "opus", "haiku"]).optional().describe("Model for the subagent"),
-      systemPrompt: z.string().optional().describe("Custom system prompt"),
+      systemPrompt: z.string().optional().describe("Custom system prompt (personality/role override; not the task)"),
+      task: z.string().optional().describe("The task for the subagent to perform. When provided, the subagent starts working immediately and posts its response in the thread — no separate prompt needed."),
     },
-    async ({ agent, threadName, model, systemPrompt }) => {
+    async ({ agent, threadName, model, systemPrompt, task }) => {
       try {
         const result = (await sendIpcRequest(SOCKET_PATH, "spawn-subagent-thread", {
           parentAgent: agent,
           threadName,
           model,
           systemPrompt,
+          task,
         })) as { threadId: string; sessionName: string; parentAgent: string; channelId: string };
 
         const text = [
