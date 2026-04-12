@@ -22,10 +22,11 @@ function makeConfig(name: string): ResolvedAgentConfig {
     workspace: "/tmp/test-workspace",
     channels: ["#general"],
     model: "sonnet",
+    effort: "low",
     skills: [],
     soul: undefined,
     identity: undefined,
-    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4 }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
     schedules: [],
     heartbeat: {
       enabled: true,

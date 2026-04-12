@@ -393,6 +393,7 @@ describe("Consolidation Pipeline", () => {
         enabled: true,
         weeklyThreshold: 7,
         monthlyThreshold: 4,
+        schedule: "0 3 * * *",
       };
 
       // First run
@@ -414,6 +415,7 @@ describe("Consolidation Pipeline", () => {
         enabled: true,
         weeklyThreshold: 7,
         monthlyThreshold: 4,
+        schedule: "0 3 * * *",
       };
 
       // Create enough weekly digests to trigger monthly, plus daily logs for weekly
@@ -459,6 +461,7 @@ describe("Consolidation Pipeline", () => {
         enabled: true,
         weeklyThreshold: 7,
         monthlyThreshold: 4,
+        schedule: "0 3 * * *",
       };
 
       const result = await runConsolidation(deps, config);

@@ -7,6 +7,7 @@ export type ResolvedAgentConfig = {
   readonly workspace: string;
   readonly channels: readonly string[];
   readonly model: "sonnet" | "opus" | "haiku";
+  readonly effort: "low" | "medium" | "high" | "max";
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;
@@ -18,6 +19,7 @@ export type ResolvedAgentConfig = {
       readonly weeklyThreshold: number;
       readonly monthlyThreshold: number;
       readonly summaryModel?: "sonnet" | "opus" | "haiku";
+      readonly schedule: string;
     };
     readonly decay: {
       readonly halfLifeDays: number;

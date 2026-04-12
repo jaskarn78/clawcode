@@ -19,6 +19,7 @@ function makeAgentConfig(
     workspace: "/tmp/agent-a",
     channels: ["channel-1"],
     model: "sonnet",
+    effort: "low",
     skills: [],
     soul: "You are a test agent.",
     identity: "Test identity.",
@@ -29,6 +30,7 @@ function makeAgentConfig(
         enabled: false,
         weeklyThreshold: 7,
         monthlyThreshold: 4,
+        schedule: "0 3 * * *",
       },
       decay: {
         halfLifeDays: 30,

@@ -57,6 +57,8 @@ import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-bud
 import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+import { runConsolidation } from "../memory/consolidation.js";
+import type { ScheduleEntry } from "../scheduler/types.js";
 
 /**
  * Base directory for manager runtime files.
@@ -299,11 +301,39 @@ export async function startDaemon(
     log,
   });
   for (const agentConfig of resolvedAgents) {
-    if (agentConfig.schedules.length > 0) {
-      taskScheduler.addAgent(agentConfig.name, agentConfig.schedules);
+    const schedules: ScheduleEntry[] = [...agentConfig.schedules];
+
+    // Inject consolidation schedule if enabled (Phase 46)
+    const consolidationConfig = agentConfig.memory?.consolidation ?? {
+      enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *",
+    };
+    if (consolidationConfig.enabled) {
+      const memoryStore = manager.getMemoryStore(agentConfig.name);
+      const embedder = manager.getEmbedder();
+      const memoryDir = join(agentConfig.workspace, "memory");
+
+      schedules.push({
+        name: "memory-consolidation",
+        cron: consolidationConfig.schedule ?? "0 3 * * *",
+        enabled: true,
+        handler: async () => {
+          if (!memoryStore) return;
+          const deps = {
+            memoryDir,
+            memoryStore,
+            embedder,
+            summarize: (prompt: string) => manager.sendToAgent(agentConfig.name, prompt),
+          };
+          await runConsolidation(deps, consolidationConfig);
+        },
+      });
+    }
+
+    if (schedules.length > 0) {
+      taskScheduler.addAgent(agentConfig.name, schedules);
     }
   }
-  log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0).length }, "task scheduler initialized");
+  log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0 || a.memory?.consolidation?.enabled !== false).length }, "task scheduler initialized");
 
   // 8c. Create ThreadManager for Discord thread session lifecycle
   const threadManager = new ThreadManager({
