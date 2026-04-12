@@ -1,14 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_SLASH_COMMANDS,
+  CONTROL_COMMANDS,
   type SlashCommandDef,
   type SlashCommandOption,
 } from "../slash-types.js";
 
 describe("slash-types", () => {
   describe("DEFAULT_SLASH_COMMANDS", () => {
-    it("contains exactly 7 commands with clawcode- prefix", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(7);
+    it("contains exactly 8 commands with clawcode- prefix", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(8);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
@@ -18,6 +19,7 @@ describe("slash-types", () => {
         "clawcode-compact",
         "clawcode-usage",
         "clawcode-model",
+        "clawcode-effort",
       ]);
     });
 
@@ -45,7 +47,7 @@ describe("slash-types", () => {
     });
 
     it("commands without options have an empty options array", () => {
-      const withOptions = new Set(["clawcode-memory", "clawcode-model"]);
+      const withOptions = new Set(["clawcode-memory", "clawcode-model", "clawcode-effort"]);
       const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
       expect(noOptionCmds.length).toBe(5);
       for (const cmd of noOptionCmds) {
@@ -71,6 +73,55 @@ describe("slash-types", () => {
       for (const cmd of DEFAULT_SLASH_COMMANDS) {
         expect(Array.isArray(cmd.options)).toBe(true);
       }
+    });
+  });
+
+  describe("CONTROL_COMMANDS", () => {
+    it("contains exactly 4 control commands", () => {
+      expect(CONTROL_COMMANDS).toHaveLength(4);
+    });
+
+    it("all control commands have control: true and a valid ipcMethod", () => {
+      const validMethods = ["start", "stop", "restart", "status"];
+      for (const cmd of CONTROL_COMMANDS) {
+        expect(cmd.control).toBe(true);
+        expect(validMethods).toContain(cmd.ipcMethod);
+      }
+    });
+
+    it("all control commands have empty claudeCommand", () => {
+      for (const cmd of CONTROL_COMMANDS) {
+        expect(cmd.claudeCommand).toBe("");
+      }
+    });
+
+    it("start, stop, restart each have a required agent option", () => {
+      const agentCmds = CONTROL_COMMANDS.filter(
+        (c) => c.name !== "clawcode-fleet",
+      );
+      expect(agentCmds).toHaveLength(3);
+      for (const cmd of agentCmds) {
+        expect(cmd.options).toHaveLength(1);
+        expect(cmd.options[0].name).toBe("agent");
+        expect(cmd.options[0].type).toBe(3);
+        expect(cmd.options[0].required).toBe(true);
+      }
+    });
+
+    it("fleet command has no options", () => {
+      const fleet = CONTROL_COMMANDS.find(
+        (c) => c.name === "clawcode-fleet",
+      );
+      expect(fleet).toBeDefined();
+      expect(fleet!.options).toHaveLength(0);
+    });
+
+    it("includes all expected command names", () => {
+      const names = CONTROL_COMMANDS.map((c) => c.name);
+      expect(names).toContain("clawcode-start");
+      expect(names).toContain("clawcode-stop");
+      expect(names).toContain("clawcode-restart");
+      expect(names).toContain("clawcode-fleet");
     });
   });
 

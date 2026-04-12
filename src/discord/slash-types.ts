@@ -39,6 +39,8 @@ export type SlashCommandDef = {
   readonly description: string;
   readonly claudeCommand: string;
   readonly options: readonly SlashCommandOption[];
+  readonly control?: boolean;
+  readonly ipcMethod?: string;
 };
 
 /**
@@ -109,5 +111,63 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
         required: true,
       },
     ],
+  },
+  {
+    name: "clawcode-effort",
+    description: "Set reasoning effort level (low/medium/high/max)",
+    claudeCommand: "__effort__{level}",
+    options: [
+      {
+        name: "level",
+        type: 3,
+        description: "Effort level: low (fastest), medium, high, max (deepest thinking)",
+        required: true,
+      },
+    ],
+  },
+] as const;
+
+/**
+ * Control commands that route directly to the daemon via IPC.
+ * These bypass agent sessions entirely — the daemon handles start/stop/restart/status.
+ */
+export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
+  {
+    name: "clawcode-start",
+    description: "Start an agent",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "start",
+    options: [
+      { name: "agent", type: 3, description: "Agent name to start", required: true },
+    ],
+  },
+  {
+    name: "clawcode-stop",
+    description: "Stop an agent",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "stop",
+    options: [
+      { name: "agent", type: 3, description: "Agent name to stop", required: true },
+    ],
+  },
+  {
+    name: "clawcode-restart",
+    description: "Restart an agent",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "restart",
+    options: [
+      { name: "agent", type: 3, description: "Agent name to restart", required: true },
+    ],
+  },
+  {
+    name: "clawcode-fleet",
+    description: "Show fleet status",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "status",
+    options: [],
   },
 ] as const;
