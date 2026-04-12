@@ -39,6 +39,101 @@ const DEFAULT_CONFIG: AutoLinkConfig = {
 };
 
 /**
+ * Auto-link a single memory to its semantically similar neighbors.
+ *
+ * Finds KNN neighbors for the given memory, filters by tier and threshold,
+ * and creates bidirectional 'auto:similar' edges for qualifying pairs.
+ * Returns a frozen AutoLinkResult.
+ *
+ * Designed to be called eagerly after insert/merge so new memories
+ * get graph edges immediately instead of waiting for the 6h heartbeat.
+ */
+export function autoLinkMemory(
+  store: MemoryStore,
+  memoryId: string,
+  config?: Partial<AutoLinkConfig>,
+): AutoLinkResult {
+  const merged: AutoLinkConfig = { ...DEFAULT_CONFIG, ...config };
+  const embedding = store.getEmbedding(memoryId);
+
+  if (!embedding) {
+    return Object.freeze({ linksCreated: 0, pairsScanned: 0, skippedExisting: 0 });
+  }
+
+  const db = store.getDatabase();
+
+  let linksCreated = 0;
+  let pairsScanned = 0;
+  let skippedExisting = 0;
+
+  const run = db.transaction(() => {
+    // KNN search via sqlite-vec (k=6 to account for self-match)
+    let neighbors: ReadonlyArray<{ memory_id: string; distance: number }>;
+    try {
+      neighbors = db
+        .prepare(
+          `SELECT memory_id, distance FROM vec_memories
+           WHERE embedding MATCH ? AND k = 6
+           ORDER BY distance`,
+        )
+        .all(embedding) as ReadonlyArray<{ memory_id: string; distance: number }>;
+    } catch {
+      // vec_memories may not have enough entries for KNN
+      return;
+    }
+
+    const checkTierStmt = db.prepare(
+      "SELECT tier FROM memories WHERE id = ?",
+    );
+    const checkEdgeStmt = db.prepare(
+      `SELECT 1 FROM memory_links
+       WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)`,
+    );
+    const insertLinkStmt = db.prepare(
+      "INSERT OR IGNORE INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)",
+    );
+
+    for (const neighbor of neighbors) {
+      // Skip self
+      if (neighbor.memory_id === memoryId) continue;
+
+      pairsScanned++;
+
+      // Skip cold-tier neighbors
+      const neighborRow = checkTierStmt.get(neighbor.memory_id) as { tier: string } | undefined;
+      if (neighborRow?.tier === "cold") continue;
+
+      // Convert cosine distance to similarity (sqlite-vec cosine metric returns 1 - similarity)
+      const similarity = 1 - neighbor.distance;
+      if (similarity < merged.similarityThreshold) continue;
+
+      // Check if edge already exists (either direction)
+      const existingEdge = checkEdgeStmt.get(
+        memoryId,
+        neighbor.memory_id,
+        neighbor.memory_id,
+        memoryId,
+      );
+
+      if (existingEdge) {
+        skippedExisting++;
+        continue;
+      }
+
+      // Create bidirectional edges
+      const now = new Date().toISOString();
+      insertLinkStmt.run(memoryId, neighbor.memory_id, "auto:similar", now);
+      insertLinkStmt.run(neighbor.memory_id, memoryId, "auto:similar", now);
+      linksCreated += 2;
+    }
+  });
+
+  run();
+
+  return Object.freeze({ linksCreated, pairsScanned, skippedExisting });
+}
+
+/**
  * Discover and create bidirectional edges between semantically similar unlinked memories.
  *
  * Algorithm:
