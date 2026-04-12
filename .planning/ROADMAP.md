@@ -225,10 +225,10 @@ Plans:
 **Goal:** Memory consolidation runs on a configurable cron schedule per agent via TaskScheduler instead of the fixed 24h heartbeat check
 **Requirements**: CONSOL-01
 **Depends on:** Phase 45
-**Plans:** 1 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 46-01-PLAN.md — Schema + scheduler handler support, daemon wiring, heartbeat deprecation (CONSOL-01)
+- [x] 46-01-PLAN.md — Schema + scheduler handler support, daemon wiring, heartbeat deprecation (CONSOL-01)
 
 ### Phase 47: Discord slash commands for control
 
