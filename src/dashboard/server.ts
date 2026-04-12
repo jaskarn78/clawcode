@@ -90,10 +90,11 @@ export async function startDashboardServer(config: DashboardServerConfig): Promi
 
   sseManager.start();
 
+  const host = config.host ?? "127.0.0.1";
   return new Promise((resolve, reject) => {
     server.on("error", reject);
-    server.listen(config.port, "127.0.0.1", () => {
-      log.info({ port: config.port }, "Dashboard server started");
+    server.listen(config.port, host, () => {
+      log.info({ port: config.port, host }, "Dashboard server started");
       resolve({
         server,
         sseManager,

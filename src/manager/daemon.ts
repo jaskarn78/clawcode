@@ -580,13 +580,14 @@ export async function startDaemon(
 
   // 11d. Start dashboard server (non-fatal — daemon continues if port is taken)
   const dashboardPort = Number(process.env.CLAWCODE_DASHBOARD_PORT) || 3100;
+  const dashboardHost = process.env.CLAWCODE_DASHBOARD_HOST ?? "127.0.0.1";
   let dashboard: Awaited<ReturnType<typeof startDashboardServer>> | null = null;
   try {
-    dashboard = await startDashboardServer({ port: dashboardPort, socketPath: SOCKET_PATH });
-    log.info({ port: dashboardPort }, "dashboard server started");
+    dashboard = await startDashboardServer({ port: dashboardPort, host: dashboardHost, socketPath: SOCKET_PATH });
+    log.info({ port: dashboardPort, host: dashboardHost }, "dashboard server started");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn({ port: dashboardPort, error: msg }, "dashboard server failed to start — continuing without dashboard");
+    log.warn({ port: dashboardPort, host: dashboardHost, error: msg }, "dashboard server failed to start — continuing without dashboard");
   }
 
   // 12. Register signal handlers per D-15

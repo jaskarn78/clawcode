@@ -9,6 +9,14 @@ export type DashboardServerConfig = {
   readonly port: number;
   readonly socketPath: string;
   readonly pollIntervalMs?: number;
+  /**
+   * Interface to bind the HTTP listener to. Defaults to "127.0.0.1"
+   * (localhost only). Set to "0.0.0.0" to expose on all interfaces --
+   * only safe when the host is behind a private network boundary
+   * (Tailscale, VPN, LAN with firewall). Never expose to the public
+   * internet without adding authentication first.
+   */
+  readonly host?: string;
 };
 
 /**
