@@ -7,7 +7,8 @@
 - :white_check_mark: **v1.2 Production Hardening & Platform Parity** - Phases 21-30 (shipped 2026-04-09)
 - :white_check_mark: **v1.3 Agent Integrations** - Phases 31-32 (shipped 2026-04-09)
 - :white_check_mark: **v1.4 Agent Runtime** - Phases 33-35 (shipped 2026-04-10)
-- :construction: **v1.5 Smart Memory & Model Tiering** - Phases 36-41 (in progress)
+- :white_check_mark: **v1.5 Smart Memory & Model Tiering** - Phases 36-41 (shipped 2026-04-10)
+- :white_check_mark: **v1.6 Platform Operations & RAG** - Phases 42-49 (shipped 2026-04-12)
 
 ## Phases
 
@@ -56,7 +57,7 @@ Phases 33-35 delivered: global skill install (workspace skills auto-installed to
 
 </details>
 
-### :construction: v1.5 Smart Memory & Model Tiering (In Progress)
+### v1.5 Smart Memory & Model Tiering (SHIPPED 2026-04-10)
 
 **Milestone Goal:** Reduce context bloat by loading memory on-demand via a knowledge graph, and default agents to haiku with intelligent escalation to sonnet/opus.
 
@@ -178,6 +179,29 @@ Plans:
 | 39. Model Tiering & Escalation | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 40. Cost Optimization & Budgets | v1.5 | 1/2 | Complete    | 2026-04-10 |
 | 41. Context Assembly Pipeline | v1.5 | 1/2 | Complete    | 2026-04-10 |
+| 42. Auto-start agents on daemon boot | v1.6 | 1/1 | Complete | 2026-04-11 |
+| 43. Systemd production integration | v1.6 | 1/1 | Complete | 2026-04-11 |
+| 44. Agent-to-agent Discord communication | v1.6 | 2/2 | Complete | 2026-04-12 |
+| 45. Memory auto-linking on save | v1.6 | 1/1 | Complete | 2026-04-12 |
+| 46. Scheduled memory consolidation | v1.6 | 1/1 | Complete | 2026-04-12 |
+| 47. Discord slash commands for control | v1.6 | 1/1 | Complete | 2026-04-12 |
+| 48. Webhook identity per agent | v1.6 | 1/1 | Complete | 2026-04-12 |
+| 49. RAG over documents | v1.6 | 2/2 | Complete | 2026-04-12 |
+
+### v1.6 Platform Operations & RAG (SHIPPED 2026-04-12)
+
+**Milestone Goal:** Production-ready agent operations (auto-start, systemd, control commands, webhook auto-provisioning) and document RAG capabilities for agent knowledge augmentation.
+
+- [x] **Phase 42: Auto-start agents on daemon boot** (completed 2026-04-11)
+- [x] **Phase 43: Systemd production integration** (completed 2026-04-11)
+- [x] **Phase 44: Agent-to-agent Discord communication** (completed 2026-04-12)
+- [x] **Phase 45: Memory auto-linking on save** (completed 2026-04-12)
+- [x] **Phase 46: Scheduled memory consolidation** (completed 2026-04-12)
+- [x] **Phase 47: Discord slash commands for control** (completed 2026-04-12)
+- [x] **Phase 48: Webhook identity per agent** (completed 2026-04-12)
+- [x] **Phase 49: RAG over documents** (completed 2026-04-12)
+
+## Phase Details (v1.6)
 
 ### Phase 42: Auto-start agents on daemon boot
 
