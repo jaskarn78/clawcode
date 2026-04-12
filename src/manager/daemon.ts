@@ -868,9 +868,8 @@ async function routeMethod(
           delivered = true;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          log.warn(
-            { from, to, error: errMsg },
-            "webhook delivery failed, inbox fallback used",
+          console.warn(
+            `[send-to-agent] webhook delivery failed from=${from} to=${to} error=${errMsg} — inbox fallback used`,
           );
         }
       }

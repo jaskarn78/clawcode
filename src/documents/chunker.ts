@@ -77,9 +77,14 @@ export async function chunkPdf(
   targetTokens = 500,
   overlapTokens = 50,
 ): Promise<readonly ChunkInput[]> {
-  const pdfParse = (await import("pdf-parse")).default;
-  const data = await pdfParse(buffer);
-  return chunkText(data.text, targetTokens, overlapTokens);
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const result = await parser.getText();
+    return chunkText(result.text, targetTokens, overlapTokens);
+  } finally {
+    await parser.destroy();
+  }
 }
 
 /**
