@@ -1,5 +1,6 @@
 import type { AgentSessionConfig } from "./types.js";
 import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./sdk-types.js";
+import { resolveModelId } from "./model-resolver.js";
 
 /**
  * Callback invoked after each SDK send/sendAndCollect with usage data
@@ -195,7 +196,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
     const baseOptions: SdkQueryOptions = {
-      model: config.model,
+      model: resolveModelId(config.model),
       effort: config.effort,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
@@ -220,7 +221,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
     const baseOptions: SdkQueryOptions = {
-      model: config.model,
+      model: resolveModelId(config.model),
       effort: config.effort,
       cwd: config.workspace,
       systemPrompt: config.systemPrompt,
