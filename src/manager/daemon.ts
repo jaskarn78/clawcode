@@ -1508,6 +1508,23 @@ async function routeMethod(
       return { sources: [...sources], total_chunks: totalChunks };
     }
 
+    case "memory-save": {
+      const agentName = validateStringParam(params, "agent");
+      const content = validateStringParam(params, "content");
+      const tags = Array.isArray(params.tags) ? params.tags as string[] : [];
+      const importance = typeof params.importance === "number" ? params.importance : 0.7;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(`Memory store not found for agent '${agentName}' (agent may not be running)`);
+      }
+
+      const embedder = manager.getEmbedder();
+      const embedding = await embedder.embed(content);
+      const entry = store.insert({ content, source: "conversation", importance, tags }, embedding);
+      return { id: entry.id };
+    }
+
     case "memory-graph": {
       const agentName = validateStringParam(params, "agent");
       const store = manager.getMemoryStore(agentName);

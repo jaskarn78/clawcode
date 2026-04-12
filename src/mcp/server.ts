@@ -37,6 +37,10 @@ export const TOOL_DEFINITIONS = {
     description: "Search your memory for relevant context, past decisions, and knowledge",
     ipcMethod: "memory-lookup",
   },
+  memory_save: {
+    description: "Save knowledge, decisions, or important context to long-term memory",
+    ipcMethod: "memory-save",
+  },
   ask_advisor: {
     description: "Ask opus for advice on a complex decision without switching sessions",
     ipcMethod: "ask-advisor",
@@ -239,6 +243,37 @@ export function createMcpServer(): McpServer {
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result.results, null, 2) }],
       };
+    },
+  );
+
+  // Tool: memory_save
+  server.tool(
+    "memory_save",
+    "Save a piece of knowledge, decision, or important context to your long-term memory for future recall",
+    {
+      content: z.string().describe("The knowledge or context to remember"),
+      tags: z.array(z.string()).default([]).describe("Tags for categorization (e.g. ['project', 'decision'])"),
+      importance: z.number().min(0).max(1).default(0.7).describe("Importance score: 0.0 (trivial) to 1.0 (critical)"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ content, tags, importance, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "memory-save", {
+          agent,
+          content,
+          tags,
+          importance,
+        })) as { id: string };
+        return {
+          content: [{ type: "text" as const, text: `Memory saved (id: ${result.id})` }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to save memory: ${msg}` }],
+          isError: true,
+        };
+      }
     },
   );
 

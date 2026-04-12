@@ -35,6 +35,7 @@ export const IPC_METHODS = [
   "memory-lookup",
   "memory-list",
   "memory-graph",
+  "memory-save",
   // Subagent threads
   "spawn-subagent-thread",
   "cleanup-subagent-thread",
