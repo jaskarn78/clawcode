@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Smart Memory & Model Tiering
-status: Ready to plan
-stopped_at: Completed 48-01-PLAN.md
-last_updated: "2026-04-12T02:53:10.065Z"
+status: Ready to execute
+stopped_at: Completed 49-01-PLAN.md
+last_updated: "2026-04-12T03:13:46.641Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 14
   completed_phases: 13
-  total_plans: 20
-  completed_plans: 20
+  total_plans: 22
+  completed_plans: 21
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 48 — webhook-identity-per-agent
+**Current focus:** Phase 49 — rag-over-documents
 
 ## Current Position
 
-Phase: 49
-Plan: Not started
+Phase: 49 (rag-over-documents) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -83,6 +83,7 @@ Recent decisions affecting current work:
 - [Phase 47]: buildFleetEmbed returns plain object (not EmbedBuilder) for testability
 - [Phase 48]: Post-construction setter for WebhookManager on bridge to break circular dependency with provisioner
 - [Phase 48]: Manual webhookUrl always takes precedence over auto-provisioned URLs
+- [Phase 49]: Word-count heuristic (1 token ~ 0.75 words) for chunk sizing; DocumentStore takes Database instance for DB reuse; vec deletion by chunk ID lookup
 
 ### Pending Todos
 
@@ -125,9 +126,10 @@ None yet.
 | Phase 46 P01 | 387s | 2 tasks | 20 files |
 | Phase 47 P01 | 284s | 2 tasks | 4 files |
 | Phase 48 P01 | 164s | 2 tasks | 4 files |
+| Phase 49 P01 | 197s | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-12
-Stopped at: Completed 48-01-PLAN.md
+Stopped at: Completed 49-01-PLAN.md
 Resume file: None
