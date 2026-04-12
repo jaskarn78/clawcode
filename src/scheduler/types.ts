@@ -8,7 +8,8 @@ import type { Logger } from "pino";
 export type ScheduleEntry = {
   readonly name: string;
   readonly cron: string;
-  readonly prompt: string;
+  readonly prompt?: string;
+  readonly handler?: () => Promise<void>;
   readonly enabled: boolean;
 };
 

@@ -23,6 +23,7 @@ export const consolidationConfigSchema = z.object({
   weeklyThreshold: z.number().int().min(1).default(7),
   monthlyThreshold: z.number().int().min(1).default(4),
   summaryModel: z.enum(["sonnet", "opus", "haiku"]).optional(),
+  schedule: z.string().default("0 3 * * *"),
 });
 
 /** Schema for relevance decay configuration. */
@@ -69,6 +70,7 @@ export const memoryConfigSchema = z.object({
     enabled: true,
     weeklyThreshold: 7,
     monthlyThreshold: 4,
+    schedule: "0 3 * * *",
   })),
   decay: decayConfigSchema.default(() => ({
     halfLifeDays: 30,

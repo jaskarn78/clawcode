@@ -158,6 +158,36 @@ describe("TaskScheduler", () => {
     expect(sessionManager.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("handler-based schedule calls handler instead of sendToAgent", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const schedules: readonly ScheduleEntry[] = [
+      { name: "consolidation", cron: "0 3 * * *", handler, enabled: true },
+    ];
+
+    scheduler.addAgent("alice", schedules);
+    await scheduler._triggerForTest("alice", "consolidation");
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(sessionManager.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it("handler error records error status", async () => {
+    const handler = vi.fn().mockRejectedValue(new Error("Consolidation failed"));
+    const schedules: readonly ScheduleEntry[] = [
+      { name: "failing-handler", cron: "0 3 * * *", handler, enabled: true },
+    ];
+
+    scheduler.addAgent("alice", schedules);
+    await scheduler._triggerForTest("alice", "failing-handler");
+
+    const statuses = scheduler.getAgentStatuses("alice");
+    const failedStatus = statuses.find((s) => s.name === "failing-handler");
+    expect(failedStatus).toBeDefined();
+    expect(failedStatus!.lastStatus).toBe("error");
+    expect(failedStatus!.lastError).toBe("Consolidation failed");
+    expect(failedStatus!.lastRun).toBeTypeOf("number");
+  });
+
   it("successful task updates status to success with lastRun", async () => {
     const schedules: readonly ScheduleEntry[] = [
       { name: "good-task", cron: "0 9 * * *", prompt: "Do something", enabled: true },

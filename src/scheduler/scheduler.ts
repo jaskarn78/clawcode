@@ -86,7 +86,11 @@ export class TaskScheduler {
             "executing scheduled task",
           );
 
-          await this.sessionManager.sendToAgent(agentName, schedule.prompt);
+          if (schedule.handler) {
+            await schedule.handler();
+          } else {
+            await this.sessionManager.sendToAgent(agentName, schedule.prompt!);
+          }
 
           status.lastRun = Date.now();
           status.lastStatus = "success";
