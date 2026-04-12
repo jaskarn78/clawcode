@@ -16,7 +16,10 @@ import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { SlashCommandDef } from "./slash-types.js";
-import { DEFAULT_SLASH_COMMANDS } from "./slash-types.js";
+import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
+import { sendIpcRequest } from "../ipc/client.js";
+import { SOCKET_PATH } from "../manager/daemon.js";
+import type { RegistryEntry } from "../manager/types.js";
 import { getAgentForChannel } from "./router.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import type { Logger } from "pino";
@@ -122,6 +125,14 @@ export class SlashCommandHandler {
         }
       }
 
+      // Add control commands (daemon-direct, not agent-routed)
+      for (const cmd of CONTROL_COMMANDS) {
+        if (!seenNames.has(cmd.name)) {
+          seenNames.add(cmd.name);
+          allCommands.push(cmd);
+        }
+      }
+
       // Convert to Discord API format
       const body = allCommands.map((cmd) => ({
         name: cmd.name,
@@ -176,6 +187,13 @@ export class SlashCommandHandler {
     const channelId = interaction.channelId;
     const commandName = interaction.commandName;
 
+    // Check if this is a control command (daemon-direct, no agent needed)
+    const controlCmd = CONTROL_COMMANDS.find((c) => c.name === commandName);
+    if (controlCmd) {
+      await this.handleControlCommand(interaction, controlCmd);
+      return;
+    }
+
     // Look up agent for this channel
     const agentName = getAgentForChannel(this.routingTable, channelId);
 
@@ -227,6 +245,29 @@ export class SlashCommandHandler {
           options.set(opt.name, raw);
         }
       }
+    }
+
+    // Handle /effort directly — no need to route through the agent
+    if (commandName === "clawcode-effort") {
+      const level = options.get("level");
+      const validLevels = ["low", "medium", "high", "max"];
+      if (typeof level !== "string" || !validLevels.includes(level)) {
+        try {
+          await interaction.editReply(`Invalid effort level. Use: ${validLevels.join(", ")}`);
+        } catch { /* expired */ }
+        return;
+      }
+      try {
+        this.sessionManager.setEffortForAgent(
+          agentName,
+          level as "low" | "medium" | "high" | "max",
+        );
+        await interaction.editReply(`Effort set to **${level}** for ${agentName}`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        await interaction.editReply(`Failed to set effort: ${msg}`);
+      }
+      return;
     }
 
     // Format the command message
@@ -291,6 +332,65 @@ export class SlashCommandHandler {
         await interaction.editReply(`Command failed: ${msg}`);
       } catch {
         // Interaction may have expired
+      }
+    }
+  }
+
+  /**
+   * Handle a control command by routing to the daemon via IPC.
+   * Control commands defer with ephemeral (except fleet which is public)
+   * and communicate directly with the daemon — no agent session involved.
+   */
+  private async handleControlCommand(
+    interaction: ChatInputCommandInteraction,
+    cmd: SlashCommandDef,
+  ): Promise<void> {
+    const isFleet = cmd.name === "clawcode-fleet";
+
+    try {
+      await interaction.deferReply({ ephemeral: !isFleet });
+    } catch (error) {
+      this.log.error(
+        { command: cmd.name, error: (error as Error).message },
+        "failed to defer control reply",
+      );
+      return;
+    }
+
+    const ipcMethod = cmd.ipcMethod ?? cmd.name;
+    const agentName = interaction.options.getString("agent");
+
+    try {
+      if (isFleet) {
+        const result = (await sendIpcRequest(SOCKET_PATH, "status", {})) as {
+          entries: RegistryEntry[];
+        };
+        const embed = buildFleetEmbed(result.entries, this.resolvedAgents);
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        if (!agentName) {
+          await interaction.editReply("Agent name is required.");
+          return;
+        }
+        await sendIpcRequest(SOCKET_PATH, ipcMethod, { name: agentName });
+        const verb =
+          ipcMethod === "start"
+            ? "started"
+            : ipcMethod === "stop"
+              ? "stopped"
+              : "restarted";
+        await interaction.editReply(`Agent **${agentName}** ${verb}.`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.log.error(
+        { command: cmd.name, agent: agentName, error: msg },
+        "control command failed",
+      );
+      try {
+        await interaction.editReply(`Command failed: ${msg}`);
+      } catch {
+        /* expired */
       }
     }
   }
@@ -361,4 +461,79 @@ export function resolveAgentCommands(
   const extras = [...customByName.values()];
 
   return [...merged, ...extras];
+}
+
+/**
+ * Format a duration in milliseconds to a compact "Xd Xh Xm" string.
+ */
+export function formatUptime(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || days > 0) parts.push(`${hours}h`);
+  parts.push(`${minutes}m`);
+
+  return parts.join(" ");
+}
+
+/**
+ * Build a Discord embed data object for fleet status display.
+ * Returns a plain object (not EmbedBuilder) for testability.
+ *
+ * Color coding:
+ * - Green (0x00ff00): all agents running
+ * - Red (0xff0000): any agent stopped, crashed, or failed
+ * - Yellow (0xffff00): mixed statuses
+ * - Gray (0x808080): no agents
+ */
+export function buildFleetEmbed(
+  entries: readonly RegistryEntry[],
+  configs: readonly ResolvedAgentConfig[],
+): {
+  title: string;
+  color: number;
+  fields: Array<{ name: string; value: string; inline: boolean }>;
+  timestamp: string;
+} {
+  const fields = entries.map((entry) => {
+    const config = configs.find((c) => c.name === entry.name);
+    const statusEmoji =
+      entry.status === "running"
+        ? "\u{1F7E2}"
+        : entry.status === "stopped" || entry.status === "crashed" || entry.status === "failed"
+          ? "\u{1F534}"
+          : "\u{1F7E1}";
+    const model = config?.model ?? "unknown";
+    const uptime = entry.startedAt
+      ? formatUptime(Date.now() - entry.startedAt)
+      : "\u2014";
+    const lastActivity = entry.lastStableAt
+      ? new Date(entry.lastStableAt).toISOString().slice(0, 16).replace("T", " ")
+      : "\u2014";
+    return {
+      name: entry.name,
+      value: `${statusEmoji} ${entry.status} \u00B7 ${model} \u00B7 up ${uptime} \u00B7 last ${lastActivity}`,
+      inline: false,
+    };
+  });
+
+  const allRunning = entries.every((e) => e.status === "running");
+  const anyDown = entries.some(
+    (e) =>
+      e.status === "stopped" || e.status === "crashed" || e.status === "failed",
+  );
+  const color =
+    entries.length === 0
+      ? 0x808080
+      : allRunning
+        ? 0x00ff00
+        : anyDown
+          ? 0xff0000
+          : 0xffff00;
+
+  return { title: "Fleet Status", color, fields, timestamp: new Date().toISOString() };
 }
