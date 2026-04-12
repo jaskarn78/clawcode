@@ -141,6 +141,29 @@ async function handleRequest(
       return;
     }
 
+    if (method === "GET" && pathname === "/graph") {
+      await serveStatic(res, "graph.html", MIME_TYPES[".html"]!);
+      return;
+    }
+
+    // Knowledge graph data: GET /api/graph/:agent
+    if (
+      method === "GET" &&
+      segments.length === 3 &&
+      segments[0] === "api" &&
+      segments[1] === "graph"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "memory-graph", { agent: agentName });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message, nodes: [], links: [] });
+      }
+      return;
+    }
+
     // SSE endpoint
     if (method === "GET" && pathname === "/api/events") {
       sseManager.addClient(res);
