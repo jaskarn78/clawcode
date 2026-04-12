@@ -35,6 +35,7 @@ import { DiscordBridge } from "../discord/bridge.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
+import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { startOfWeek } from "date-fns";
@@ -361,7 +362,7 @@ export async function startDaemon(
 
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef);
   };
 
   // 11. Create IPC server
@@ -580,6 +581,16 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
+  // Auto-start all configured agents on daemon boot
+  void (async () => {
+    try {
+      await manager.startAll(resolvedAgents);
+      log.info({ agents: resolvedAgents.length }, "all agents auto-started");
+    } catch (err) {
+      log.error({ error: (err as Error).message }, "failed to auto-start agents");
+    }
+  })();
+
   return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
@@ -605,6 +616,7 @@ async function routeMethod(
   securityPolicies: Map<string, SecurityPolicy>,
   escalationMonitor: EscalationMonitor,
   advisorBudget: AdvisorBudget,
+  discordBridgeRef: { current: DiscordBridge | null },
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -760,6 +772,125 @@ async function routeMethod(
       }
 
       return { ok: true, messageId: message.id };
+    }
+
+    case "send-to-agent": {
+      const from = validateStringParam(params, "from");
+      const to = validateStringParam(params, "to");
+      const message = validateStringParam(params, "message");
+
+      // Validate target agent exists
+      const targetConfig = configs.find((c) => c.name === to);
+      if (!targetConfig) {
+        throw new ManagerError(`Target agent '${to}' not found`);
+      }
+
+      // 1. Always write to filesystem inbox (fallback/record)
+      const inboxDir = join(targetConfig.workspace, "inbox");
+      const inboxMsg = createMessage(from, to, message, "normal");
+      await writeMessage(inboxDir, inboxMsg);
+
+      // 2. Post webhook embed to target's Discord channel
+      let delivered = false;
+      const targetChannels = routingTableRef.current.agentToChannels.get(to);
+      if (
+        targetChannels &&
+        targetChannels.length > 0 &&
+        webhookManager.hasWebhook(to)
+      ) {
+        try {
+          const senderConfig = configs.find((c) => c.name === from);
+          const senderDisplayName =
+            senderConfig?.webhook?.displayName ?? from;
+          const senderAvatarUrl = senderConfig?.webhook?.avatarUrl;
+          const embed = buildAgentMessageEmbed(
+            from,
+            senderDisplayName,
+            message,
+          );
+          await webhookManager.sendAsAgent(
+            to,
+            senderDisplayName,
+            senderAvatarUrl,
+            embed,
+          );
+          delivered = true;
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log.warn(
+            { from, to, error: errMsg },
+            "webhook delivery failed, inbox fallback used",
+          );
+        }
+      }
+
+      return { delivered, messageId: inboxMsg.id };
+    }
+
+    case "set-effort": {
+      const name = validateStringParam(params, "name");
+      const level = validateStringParam(params, "level");
+      const validLevels = ["low", "medium", "high", "max"];
+      if (!validLevels.includes(level)) {
+        throw new ManagerError(`Invalid effort level '${level}'. Valid: ${validLevels.join(", ")}`);
+      }
+      manager.setEffortForAgent(name, level as "low" | "medium" | "high" | "max");
+      return { ok: true, agent: name, effort: level };
+    }
+
+    case "get-effort": {
+      const name = validateStringParam(params, "name");
+      const level = manager.getEffortForAgent(name);
+      return { ok: true, agent: name, effort: level };
+    }
+
+    case "send-attachment": {
+      const agentName = validateStringParam(params, "agent");
+      const filePath = validateStringParam(params, "file_path");
+      const message = typeof params.message === "string" ? params.message : undefined;
+
+      // Verify file exists
+      try {
+        await access(filePath);
+      } catch {
+        throw new ManagerError(`File not found: ${filePath}`);
+      }
+
+      // Verify file size (Discord limit: 25MB for standard, 8MB without boost)
+      const fileStat = await stat(filePath);
+      if (fileStat.size > 25 * 1024 * 1024) {
+        throw new ManagerError(`File too large (${fileStat.size} bytes). Discord limit is 25MB.`);
+      }
+
+      // Find the agent's channel(s)
+      const agentConfig = configs.find((c) => c.name === agentName);
+      if (!agentConfig) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+      const channels = agentConfig.channels;
+      if (channels.length === 0) {
+        throw new ManagerError(`Agent '${agentName}' has no Discord channels configured`);
+      }
+
+      // Send via Discord client
+      const bridge = discordBridgeRef.current;
+      if (!bridge) {
+        throw new ManagerError("Discord bridge not available");
+      }
+
+      const client = bridge.discordClient;
+      const targetChannelId = typeof params.channel_id === "string" ? params.channel_id : channels[0];
+      const channel = await client.channels.fetch(targetChannelId);
+      if (!channel || !("send" in channel) || typeof channel.send !== "function") {
+        throw new ManagerError(`Cannot send to channel ${targetChannelId}`);
+      }
+
+      await (channel as { send: (opts: { content?: string; files: string[] }) => Promise<unknown> }).send({
+        ...(message ? { content: message } : {}),
+        files: [filePath],
+      });
+
+      return { ok: true, agent: agentName, channel: targetChannelId, file: filePath };
     }
 
     case "slash-commands": {
