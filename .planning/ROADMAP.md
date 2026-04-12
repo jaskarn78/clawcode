@@ -212,13 +212,13 @@ Plans:
 
 ### Phase 45: Memory auto-linking on save
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** New/updated memories get graph edges to similar memories immediately on save instead of waiting for the 6-hour heartbeat cycle
+**Requirements**: AUTOLINK-01
 **Depends on:** Phase 44
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 45 to break down)
+- [ ] 45-01-PLAN.md — autoLinkMemory function + store.ts insert hook (AUTOLINK-01)
 
 ### Phase 46: Scheduled memory consolidation
 
