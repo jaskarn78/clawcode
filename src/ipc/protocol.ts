@@ -5,30 +5,58 @@ import { z } from "zod/v4";
  * Maps to D-05: start, stop, restart, start-all, status.
  */
 export const IPC_METHODS = [
+  // Lifecycle
   "start",
   "stop",
   "restart",
   "start-all",
   "status",
+  // Observability
   "routes",
   "rate-limit-status",
   "heartbeat-status",
   "schedules",
   "skills",
-  "send-message",
-  "slash-commands",
-  "webhooks",
-  "fork-session",
-  "memory-search",
-  "memory-list",
   "threads",
   "usage",
   "context-zone-status",
   "episode-list",
   "delivery-queue-status",
+  "mcp-servers",
+  // Messaging
+  "send-message",
+  "send-to-agent",
+  "send-attachment",
+  "slash-commands",
+  "webhooks",
+  "fork-session",
+  // Memory
+  "memory-search",
+  "memory-lookup",
+  "memory-list",
+  // Subagent threads
   "spawn-subagent-thread",
   "cleanup-subagent-thread",
-  "mcp-servers",
+  // Security (Phase 27)
+  "approve-command",
+  "deny-command",
+  "allow-always",
+  "check-command",
+  "update-security",
+  "security-status",
+  // Model tiering (Phase 39)
+  "ask-advisor",
+  "set-model",
+  // Cost tracking (Phase 40)
+  "costs",
+  // Effort (reasoning level)
+  "set-effort",
+  "get-effort",
+  // Document RAG (Phase 49)
+  "ingest-document",
+  "search-documents",
+  "delete-document",
+  "list-documents",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
