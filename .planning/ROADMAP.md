@@ -244,13 +244,15 @@ Plans:
 
 ### Phase 48: Webhook identity per agent
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Auto-provision Discord webhooks for each agent's bound channel on daemon startup, eliminating manual webhookUrl configuration
+**Requirements**: WEBHOOK-AUTO-01
 **Depends on:** Phase 47
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 48 to break down)
+- [ ] 48-01-PLAN.md — Webhook provisioner + daemon wiring (WEBHOOK-AUTO-01)
+
+
 
 ### Phase 49: RAG over documents
 
