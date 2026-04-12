@@ -8,7 +8,8 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsup",
+    "build": "tsup && npm run copy-assets",
+    "copy-assets": "mkdir -p dist/dashboard/static && cp -r src/dashboard/static/. dist/dashboard/static/",
     "test": "vitest run --reporter=verbose",
     "typecheck": "tsc --noEmit"
   },

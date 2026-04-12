@@ -12,7 +12,9 @@ import { sendIpcRequest } from "../ipc/client.js";
 import { SseManager } from "./sse.js";
 import type { DashboardServerConfig } from "./types.js";
 
-const STATIC_DIR = join(import.meta.dirname, "static");
+// Runtime lives in dist/cli/ after bundling; static assets are copied to
+// dist/dashboard/static by the build script.
+const STATIC_DIR = join(import.meta.dirname, "..", "dashboard", "static");
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 
