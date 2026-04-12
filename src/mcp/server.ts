@@ -41,6 +41,14 @@ export const TOOL_DEFINITIONS = {
     description: "Ask opus for advice on a complex decision without switching sessions",
     ipcMethod: "ask-advisor",
   },
+  send_attachment: {
+    description: "Send a file attachment to your Discord channel (images, PDFs, media, etc.)",
+    ipcMethod: "send-attachment",
+  },
+  send_to_agent: {
+    description: "Send a message to another agent via their Discord channel",
+    ipcMethod: "send-to-agent",
+  },
 } as const;
 
 /**
@@ -241,6 +249,72 @@ export function createMcpServer(): McpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text" as const, text: `Advisor error: ${message}` }] };
+      }
+    },
+  );
+
+  // Tool: send_attachment
+  server.tool(
+    "send_attachment",
+    "Send a file attachment to your Discord channel (images, PDFs, media, etc.)",
+    {
+      agent: z.string().describe("Your agent name (pass your own name)"),
+      file_path: z.string().describe("Absolute path to the file to send"),
+      message: z.string().optional().describe("Optional text message to include with the file"),
+      channel_id: z.string().optional().describe("Target channel ID (defaults to your primary channel)"),
+    },
+    async ({ agent, file_path, message, channel_id }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "send-attachment", {
+          agent,
+          file_path,
+          message,
+          channel_id,
+        })) as { ok: boolean; agent: string; channel: string; file: string };
+
+        return {
+          content: [{ type: "text" as const, text: `File sent to channel ${result.channel}: ${result.file}` }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Failed to send attachment: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: send_to_agent
+  server.tool(
+    "send_to_agent",
+    "Send a message to another agent via their Discord channel",
+    {
+      from: z.string().describe("Your agent name (pass your own name)"),
+      to: z.string().describe("Target agent name"),
+      message: z.string().describe("Message content to send"),
+    },
+    async ({ from, to, message }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "send-to-agent", {
+          from,
+          to,
+          message,
+        })) as { delivered: boolean; messageId: string };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.delivered
+                ? `Message delivered to ${to} (id: ${result.messageId})`
+                : `Message queued for ${to} (id: ${result.messageId})`,
+            },
+          ],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            { type: "text" as const, text: `Failed to send to ${to}: ${msg}` },
+          ],
+        };
       }
     },
   );
