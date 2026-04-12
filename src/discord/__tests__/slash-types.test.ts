@@ -77,12 +77,12 @@ describe("slash-types", () => {
   });
 
   describe("CONTROL_COMMANDS", () => {
-    it("contains exactly 4 control commands", () => {
-      expect(CONTROL_COMMANDS).toHaveLength(4);
+    it("contains exactly 5 control commands", () => {
+      expect(CONTROL_COMMANDS).toHaveLength(5);
     });
 
     it("all control commands have control: true and a valid ipcMethod", () => {
-      const validMethods = ["start", "stop", "restart", "status"];
+      const validMethods = ["start", "stop", "restart", "status", "agent-create"];
       for (const cmd of CONTROL_COMMANDS) {
         expect(cmd.control).toBe(true);
         expect(validMethods).toContain(cmd.ipcMethod);
@@ -97,7 +97,7 @@ describe("slash-types", () => {
 
     it("start, stop, restart each have a required agent option", () => {
       const agentCmds = CONTROL_COMMANDS.filter(
-        (c) => c.name !== "clawcode-fleet",
+        (c) => c.ipcMethod === "start" || c.ipcMethod === "stop" || c.ipcMethod === "restart",
       );
       expect(agentCmds).toHaveLength(3);
       for (const cmd of agentCmds) {
