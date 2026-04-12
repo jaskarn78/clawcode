@@ -149,9 +149,20 @@ export class DiscordBridge {
       void this.handleMessage(message);
     });
 
-    // Thread creation listener -- spawns thread sessions for bound channels
+    // Thread creation listener -- spawns thread sessions for bound channels.
+    // Threads the bot creates itself (via SubagentThreadSpawner) are already
+    // handled end-to-end by that path; handling them here too races on the
+    // binding registry and produces duplicate threads.
     this.client.on("threadCreate", (thread) => {
       if (!this.threadManager) return;
+      const botUserId = this.client.user?.id;
+      if (botUserId && thread.ownerId === botUserId) {
+        this.log.debug(
+          { threadId: thread.id, threadName: thread.name },
+          "threadCreate from own bot, ignoring (handled by SubagentThreadSpawner)",
+        );
+        return;
+      }
       this.log.info(
         { threadId: thread.id, threadName: thread.name, parentId: thread.parentId },
         "threadCreate event received",
