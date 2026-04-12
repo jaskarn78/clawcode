@@ -33,6 +33,8 @@ import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
 import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
 import { DiscordBridge } from "../discord/bridge.js";
+import { ChannelType, type CategoryChannel, type GuildTextBasedChannel, type TextChannel } from "discord.js";
+import { provisionAgent } from "./agent-provisioner.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
@@ -395,7 +397,7 @@ export async function startDaemon(
 
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath);
   };
 
   // 11. Create IPC server
@@ -668,6 +670,8 @@ async function routeMethod(
   escalationMonitor: EscalationMonitor,
   advisorBudget: AdvisorBudget,
   discordBridgeRef: { current: DiscordBridge | null },
+  configPath: string,
+  agentsBasePath: string,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -1499,6 +1503,63 @@ async function routeMethod(
       const sources = docStore.listSources();
       const totalChunks = docStore.getChunkCount();
       return { sources: [...sources], total_chunks: totalChunks };
+    }
+
+    case "agent-create": {
+      const name = validateStringParam(params, "name");
+      const soul = validateStringParam(params, "soul");
+      const parentChannelId = validateStringParam(params, "parentChannelId");
+      const invokerUserId = validateStringParam(params, "invokerUserId");
+      const model = typeof params.model === "string" ? params.model : undefined;
+
+      const adminIds = (process.env.CLAWCODE_ADMIN_DISCORD_USER_IDS ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (adminIds.length === 0 || !adminIds.includes(invokerUserId)) {
+        throw new ManagerError("Not authorized to create agents");
+      }
+
+      const bridge = discordBridgeRef.current;
+      if (!bridge) {
+        throw new ManagerError("Discord bridge not available");
+      }
+      const client = bridge.discordClient;
+
+      const parent = await client.channels.fetch(parentChannelId);
+      if (!parent || parent.type !== ChannelType.GuildText) {
+        throw new ManagerError("Invocation channel is not a guild text channel");
+      }
+      const guild = (parent as TextChannel).guild;
+      const categoryId = (parent as TextChannel).parentId ?? undefined;
+      const category = categoryId
+        ? ((await client.channels.fetch(categoryId).catch(() => null)) as CategoryChannel | null)
+        : null;
+
+      const newChannel = await guild.channels.create({
+        name,
+        type: ChannelType.GuildText,
+        parent: category?.id ?? null,
+        topic: `ClawCode agent: ${name}`,
+      });
+
+      try {
+        const result = await provisionAgent(
+          { name, soul, model, channelId: newChannel.id },
+          { configPath, agentsBasePath },
+        );
+        return {
+          ok: true,
+          name: result.name,
+          model: result.model,
+          channelId: newChannel.id,
+          channelUrl: `https://discord.com/channels/${guild.id}/${newChannel.id}`,
+          workspace: result.workspace,
+        };
+      } catch (err) {
+        await (newChannel as GuildTextBasedChannel).delete(`agent-create failed: ${(err as Error).message}`).catch(() => {});
+        throw err;
+      }
     }
 
     default:

@@ -170,4 +170,16 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
     ipcMethod: "status",
     options: [],
   },
+  {
+    name: "clawcode-agent-create",
+    description: "Provision a new agent with its own Discord channel",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "agent-create",
+    options: [
+      { name: "name", type: 3, description: "Agent name (lowercase, alphanumeric, hyphens)", required: true },
+      { name: "soul", type: 3, description: "Personality / system prompt — use \\n for line breaks", required: true },
+      { name: "model", type: 3, description: "Model: sonnet (default), opus, or haiku", required: false },
+    ],
+  },
 ] as const;

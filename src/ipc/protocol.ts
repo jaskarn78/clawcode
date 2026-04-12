@@ -57,6 +57,8 @@ export const IPC_METHODS = [
   "search-documents",
   "delete-document",
   "list-documents",
+  // Agent provisioning
+  "agent-create",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

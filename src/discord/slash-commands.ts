@@ -367,6 +367,24 @@ export class SlashCommandHandler {
         };
         const embed = buildFleetEmbed(result.entries, this.resolvedAgents);
         await interaction.editReply({ embeds: [embed] });
+      } else if (ipcMethod === "agent-create") {
+        const name = interaction.options.getString("name");
+        const soul = interaction.options.getString("soul");
+        const model = interaction.options.getString("model") ?? undefined;
+        if (!name || !soul) {
+          await interaction.editReply("Both `name` and `soul` are required.");
+          return;
+        }
+        const result = (await sendIpcRequest(SOCKET_PATH, "agent-create", {
+          name,
+          soul: soul.replaceAll("\\n", "\n"),
+          model,
+          parentChannelId: interaction.channelId,
+          invokerUserId: interaction.user.id,
+        })) as { name: string; model: string; channelId: string; channelUrl: string };
+        await interaction.editReply(
+          `Agent **${result.name}** created on \`${result.model}\`. Channel: ${result.channelUrl}`,
+        );
       } else {
         if (!agentName) {
           await interaction.editReply("Agent name is required.");
