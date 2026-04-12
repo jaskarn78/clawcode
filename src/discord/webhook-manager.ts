@@ -1,4 +1,4 @@
-import { WebhookClient } from "discord.js";
+import { WebhookClient, type EmbedBuilder } from "discord.js";
 import type { WebhookIdentity } from "./webhook-types.js";
 import { logger } from "../shared/logger.js";
 import type { Logger } from "pino";
@@ -70,6 +70,43 @@ export class WebhookManager {
       { agent: agentName, chunks: chunks.length },
       "webhook message sent",
     );
+  }
+
+  /**
+   * Send an embed to a target agent's channel using the sender's identity.
+   * Used for agent-to-agent messages where the embed appears in the target's channel
+   * but shows the sender's display name and avatar.
+   *
+   * @param targetAgent - Name of the target agent whose channel receives the embed
+   * @param senderDisplayName - Display name shown as the webhook username
+   * @param senderAvatarUrl - Avatar URL for the webhook message (optional)
+   * @param embed - The EmbedBuilder to send
+   * @returns The Discord message ID
+   * @throws Error if target agent has no webhook configured
+   */
+  async sendAsAgent(
+    targetAgent: string,
+    senderDisplayName: string,
+    senderAvatarUrl: string | undefined,
+    embed: EmbedBuilder,
+  ): Promise<string> {
+    const identity = this.identities.get(targetAgent);
+    if (!identity) {
+      throw new Error(
+        `No webhook identity configured for target agent '${targetAgent}'`,
+      );
+    }
+    const client = this.getOrCreateClient(targetAgent, identity.webhookUrl);
+    const result = await client.send({
+      embeds: [embed],
+      username: senderDisplayName,
+      avatarURL: senderAvatarUrl ?? undefined,
+    });
+    this.log.info(
+      { target: targetAgent, sender: senderDisplayName },
+      "agent-to-agent embed sent",
+    );
+    return typeof result === "string" ? result : result.id;
   }
 
   /**
