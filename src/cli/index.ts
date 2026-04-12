@@ -95,7 +95,7 @@ export async function initAction(options: InitOptions): Promise<void> {
 const program = new Command()
   .name("clawcode")
   .description("Multi-agent orchestration for Claude Code")
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("init")
