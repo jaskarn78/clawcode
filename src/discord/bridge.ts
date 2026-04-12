@@ -88,7 +88,7 @@ export class DiscordBridge {
   private readonly routingTable: RoutingTable;
   private readonly sessionManager: SessionManager;
   private readonly threadManager: ThreadManager | undefined;
-  private readonly webhookManager: WebhookManager | undefined;
+  private webhookManager: WebhookManager | undefined;
   private readonly deliveryQueue: DeliveryQueue | undefined;
   private readonly securityPolicies: ReadonlyMap<string, SecurityPolicy> | undefined;
   private readonly botToken: string;
@@ -101,6 +101,14 @@ export class DiscordBridge {
    */
   get discordClient(): Client {
     return this.client;
+  }
+
+  /**
+   * Set the webhook manager after construction.
+   * Used when webhooks are auto-provisioned after the Client connects.
+   */
+  setWebhookManager(wm: WebhookManager): void {
+    this.webhookManager = wm;
   }
 
   constructor(config: BridgeConfig) {

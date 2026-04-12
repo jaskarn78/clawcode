@@ -55,7 +55,7 @@ export async function provisionWebhooks(
       const channel = await client.channels.fetch(channelId);
 
       // Verify channel supports webhooks (text-based guild channel)
-      if (!channel || !("fetchWebhooks" in channel) || typeof (channel as Record<string, unknown>).fetchWebhooks !== "function") {
+      if (!channel || !("fetchWebhooks" in channel) || typeof (channel as unknown as Record<string, unknown>).fetchWebhooks !== "function") {
         log.warn(
           { agent: agent.name, channelId },
           "channel does not support webhooks, skipping auto-provision",

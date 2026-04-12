@@ -35,6 +35,7 @@ import { DiscordBridge } from "../discord/bridge.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
+import { provisionWebhooks } from "../discord/webhook-provisioner.js";
 import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
 import { GraphSearch } from "../memory/graph-search.js";
@@ -345,10 +346,10 @@ export async function startDaemon(
   heartbeatRunner.setThreadManager(threadManager);
   log.info("thread manager initialized");
 
-  // 8d. Create WebhookManager for agent webhook identities
-  const webhookIdentities = buildWebhookIdentities(resolvedAgents);
-  const webhookManager = new WebhookManager({ identities: webhookIdentities, log });
-  log.info({ webhooks: webhookIdentities.size }, "webhook manager initialized");
+  // 8d. Build manual webhook identities (from config webhookUrl fields)
+  const manualWebhookIdentities = buildWebhookIdentities(resolvedAgents);
+  let webhookManager: WebhookManager;
+  log.info({ manualWebhooks: manualWebhookIdentities.size }, "manual webhook identities loaded");
 
   // 8e. Initialize security: approval log, allowlist matchers, security policies
   const approvalLog = new ApprovalLog({
@@ -478,7 +479,6 @@ export async function startDaemon(
       routingTable,
       sessionManager: manager,
       threadManager,
-      webhookManager,
       deliveryQueue,
       securityPolicies,
       botToken,
@@ -488,13 +488,32 @@ export async function startDaemon(
       await discordBridge.start();
       discordBridgeRef.current = discordBridge;
       log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord bridge started");
+
+      // Auto-provision webhooks for agents without manual webhookUrl
+      const allWebhookIdentities = await provisionWebhooks({
+        client: discordBridge.discordClient,
+        agents: resolvedAgents,
+        manualIdentities: manualWebhookIdentities,
+        log,
+      });
+      webhookManager = new WebhookManager({ identities: allWebhookIdentities, log });
+      discordBridge.setWebhookManager(webhookManager);
+      log.info(
+        { total: allWebhookIdentities.size, manual: manualWebhookIdentities.size, autoProvisioned: allWebhookIdentities.size - manualWebhookIdentities.size },
+        "webhook manager initialized with auto-provisioned identities",
+      );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       log.error({ error: msg }, "Discord bridge failed to start");
       discordBridge = null;
+      // Fallback: create webhook manager with manual-only identities
+      webhookManager = new WebhookManager({ identities: manualWebhookIdentities, log });
+      log.info({ webhooks: manualWebhookIdentities.size }, "webhook manager initialized (manual only, bridge failed)");
     }
   } else {
     log.warn("Discord bridge not started (no bot token or no channel bindings)");
+    webhookManager = new WebhookManager({ identities: manualWebhookIdentities, log });
+    log.info({ webhooks: manualWebhookIdentities.size }, "webhook manager initialized (manual only, no bridge)");
   }
 
   // 11b2. Create SubagentThreadSpawner for IPC-driven subagent thread creation
