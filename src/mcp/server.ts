@@ -49,6 +49,22 @@ export const TOOL_DEFINITIONS = {
     description: "Send a message to another agent via their Discord channel",
     ipcMethod: "send-to-agent",
   },
+  ingest_document: {
+    description: "Ingest a document from your workspace for RAG search (text, markdown, or PDF)",
+    ipcMethod: "ingest-document",
+  },
+  search_documents: {
+    description: "Search across ingested documents for relevant content",
+    ipcMethod: "search-documents",
+  },
+  delete_document: {
+    description: "Delete all chunks for an ingested document",
+    ipcMethod: "delete-document",
+  },
+  list_documents: {
+    description: "List all ingested document sources and total chunk count",
+    ipcMethod: "list-documents",
+  },
 } as const;
 
 /**
@@ -316,6 +332,103 @@ export function createMcpServer(): McpServer {
           ],
         };
       }
+    },
+  );
+
+  // Tool: ingest_document
+  server.tool(
+    "ingest_document",
+    "Ingest a document from your workspace for RAG search (supports .txt, .md, .pdf)",
+    {
+      agent: z.string().describe("Your agent name"),
+      file_path: z.string().describe("Absolute path to the document file"),
+      source: z.string().optional().describe("Custom source identifier (defaults to file path)"),
+    },
+    async ({ agent, file_path, source }) => {
+      try {
+        const result = await sendIpcRequest(SOCKET_PATH, "ingest-document", {
+          agent, file_path, source,
+        });
+        const r = result as { ok: boolean; source: string; chunks_created: number; total_chars: number };
+        return {
+          content: [{ type: "text" as const, text: `Ingested "${r.source}": ${r.chunks_created} chunks (${r.total_chars} chars)` }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Ingest failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: search_documents
+  server.tool(
+    "search_documents",
+    "Search across ingested documents for relevant content",
+    {
+      agent: z.string().describe("Your agent name"),
+      query: z.string().describe("Search query"),
+      limit: z.number().int().min(1).max(20).default(5).describe("Max results (default 5)"),
+      source: z.string().optional().describe("Filter to a specific document source"),
+    },
+    async ({ agent, query, limit, source }) => {
+      const result = await sendIpcRequest(SOCKET_PATH, "search-documents", {
+        agent, query, limit, source,
+      });
+      const r = result as { results: readonly { chunk_id: string; source: string; chunk_index: number; content: string; similarity: number; context_before: string | null; context_after: string | null }[] };
+      if (r.results.length === 0) {
+        return { content: [{ type: "text" as const, text: "No matching documents found." }] };
+      }
+      const formatted = r.results.map((hit, i) => {
+        const parts = [
+          `--- Result ${i + 1} (similarity: ${hit.similarity.toFixed(3)}) ---`,
+          `Source: ${hit.source} [chunk ${hit.chunk_index}]`,
+        ];
+        if (hit.context_before) parts.push(`[...] ${hit.context_before}`);
+        parts.push(hit.content);
+        if (hit.context_after) parts.push(`${hit.context_after} [...]`);
+        return parts.join("\n");
+      }).join("\n\n");
+      return { content: [{ type: "text" as const, text: formatted }] };
+    },
+  );
+
+  // Tool: delete_document
+  server.tool(
+    "delete_document",
+    "Delete all chunks for an ingested document",
+    {
+      agent: z.string().describe("Your agent name"),
+      source: z.string().describe("Document source identifier to delete"),
+    },
+    async ({ agent, source }) => {
+      try {
+        const result = await sendIpcRequest(SOCKET_PATH, "delete-document", { agent, source });
+        const r = result as { ok: boolean; source: string; chunks_deleted: number };
+        return {
+          content: [{ type: "text" as const, text: `Deleted "${r.source}": ${r.chunks_deleted} chunks removed` }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Delete failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: list_documents
+  server.tool(
+    "list_documents",
+    "List all ingested document sources and total chunk count",
+    {
+      agent: z.string().describe("Your agent name"),
+    },
+    async ({ agent }) => {
+      const result = await sendIpcRequest(SOCKET_PATH, "list-documents", { agent });
+      const r = result as { sources: readonly string[]; total_chunks: number };
+      if (r.sources.length === 0) {
+        return { content: [{ type: "text" as const, text: "No documents ingested." }] };
+      }
+      const text = [`Documents (${r.total_chunks} total chunks):`, ...r.sources.map(s => `  - ${s}`)].join("\n");
+      return { content: [{ type: "text" as const, text }] };
     },
   );
 
