@@ -99,7 +99,12 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
   2. `clawcode latency <agent>` CLI prints p50 / p95 / p99 for end-to-end, first-token, context-assemble, and tool-call segments
   3. The web dashboard shows a per-agent latency panel with the same percentile breakdown updated from the trace store
   4. Traces persist across daemon restarts and are retained for at least a configurable window (default 7 days)
-**Plans**: TBD
+**Plans:** 4 plans
+Plans:
+- [ ] 50-00-PLAN.md — Wave 0: test scaffolding (red state) for trace-collector, trace-store, percentiles, latency CLI, retention heartbeat, dashboard server
+- [ ] 50-01-PLAN.md — Wave 1: src/performance/ subsystem (TraceStore + TraceCollector + percentile SQL + types) + perf.traceRetentionDays config
+- [ ] 50-02-PLAN.md — Wave 2: hook points (receive, first_token, tool_call, end_to_end, context_assemble) + retention heartbeat check
+- [ ] 50-03-PLAN.md — Wave 3: `clawcode latency` CLI + IPC route + dashboard REST endpoint + Latency panel
 
 ### Phase 51: SLOs & Regression Gate
 **Goal**: Latency wins are defended automatically — regressions break the build
@@ -188,7 +193,7 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 50. Latency Instrumentation | 0/0 | Not started | — |
+| 50. Latency Instrumentation | 0/4 | Planned | — |
 | 51. SLOs & Regression Gate | 0/0 | Not started | — |
 | 52. Prompt Caching | 0/0 | Not started | — |
 | 53. Context & Token Budget Tuning | 0/0 | Not started | — |
