@@ -178,14 +178,55 @@ describe("Dashboard Server", () => {
 // New "latency endpoint" describe block. Existing tests above remain untouched.
 
 function makeLatencyReport() {
+  // Phase 51 Plan 03: the daemon's `latency` IPC handler now augments every
+  // segment row with `slo_status`, `slo_threshold_ms`, and `slo_metric`. The
+  // REST endpoint is a passthrough so the fields flow through to the client
+  // unchanged. Fixture mirrors that shape so tests assert the augmented
+  // contract, not the stale Phase 50 one.
   return {
     agent: "alpha",
     since: "2026-04-12T00:00:00.000Z",
     segments: [
-      { segment: "end_to_end", p50: 1000, p95: 2000, p99: 3000, count: 10 },
-      { segment: "first_token", p50: 400, p95: 800, p99: 1200, count: 10 },
-      { segment: "context_assemble", p50: 50, p95: 100, p99: 150, count: 10 },
-      { segment: "tool_call", p50: 75, p95: 150, p99: 225, count: 20 },
+      {
+        segment: "end_to_end",
+        p50: 1000,
+        p95: 2000,
+        p99: 3000,
+        count: 10,
+        slo_status: "healthy",
+        slo_threshold_ms: 6000,
+        slo_metric: "p95",
+      },
+      {
+        segment: "first_token",
+        p50: 400,
+        p95: 800,
+        p99: 1200,
+        count: 10,
+        slo_status: "healthy",
+        slo_threshold_ms: 2000,
+        slo_metric: "p50",
+      },
+      {
+        segment: "context_assemble",
+        p50: 50,
+        p95: 100,
+        p99: 150,
+        count: 10,
+        slo_status: "healthy",
+        slo_threshold_ms: 300,
+        slo_metric: "p95",
+      },
+      {
+        segment: "tool_call",
+        p50: 75,
+        p95: 150,
+        p99: 225,
+        count: 20,
+        slo_status: "healthy",
+        slo_threshold_ms: 1500,
+        slo_metric: "p95",
+      },
     ],
   };
 }
@@ -226,6 +267,50 @@ describe("latency endpoint", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as unknown;
     expect(body).toEqual(makeLatencyReport());
+  });
+
+  it("latency: segment rows carry slo_threshold_ms (number|null) and slo_metric (string|null) alongside slo_status", async () => {
+    // Phase 51 Plan 03 contract: the REST endpoint is a passthrough over the
+    // augmented IPC response. Each segment row MUST carry the three new
+    // fields so the dashboard renders cell color + "SLO target" subtitle
+    // directly from the response (no client-side SLO mirror). We assert the
+    // field types permissively (number OR null, string OR null) to stay
+    // forward-compatible with segments that have no configured SLO.
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      segments: Array<{
+        segment: string;
+        slo_status?: string;
+        slo_threshold_ms: number | null;
+        slo_metric: string | null;
+      }>;
+    };
+
+    expect(Array.isArray(body.segments)).toBe(true);
+    expect(body.segments.length).toBeGreaterThan(0);
+
+    for (const seg of body.segments) {
+      expect(seg).toEqual(
+        expect.objectContaining({
+          segment: expect.any(String),
+          slo_status: expect.stringMatching(/^(healthy|breach|no_data)$/),
+        }),
+      );
+      expect(
+        typeof seg.slo_threshold_ms === "number" || seg.slo_threshold_ms === null,
+      ).toBe(true);
+      expect(
+        typeof seg.slo_metric === "string" || seg.slo_metric === null,
+      ).toBe(true);
+    }
   });
 
   it("latency: defaults since to 24h when query param absent", async () => {

@@ -64,9 +64,80 @@ import { modelSchema } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
-import type { LatencyReport } from "../performance/types.js";
+import type { LatencyReport, PercentileRow } from "../performance/types.js";
 import { sinceToIso } from "../performance/percentiles.js";
+import {
+  DEFAULT_SLOS,
+  evaluateSloStatus,
+  mergeSloOverrides,
+  type SloEntry,
+} from "../performance/slos.js";
 import { nanoid } from "nanoid";
+
+/**
+ * Augment a LatencyReport's segments with `slo_status`, `slo_threshold_ms`,
+ * and `slo_metric` per row, using `DEFAULT_SLOS` merged with per-agent
+ * `perf.slos?` overrides.
+ *
+ * The threshold + metric are emitted ALONGSIDE the status so the dashboard
+ * can render the "SLO target" subtitle directly from the response — single
+ * source of truth stays server-side (no client mirror of DEFAULT_SLOS). An
+ * agent overriding `end_to_end` to 4000ms will see both the cell tint AND
+ * the subtitle reflect that value, never the default.
+ *
+ * A segment with no configured SLO passes through with `slo_threshold_ms:
+ * null` and `slo_metric: null`; the dashboard falls back to the no-data
+ * cell class and omits the subtitle. `slo_status` is intentionally left
+ * unset on that branch — there's nothing to evaluate against.
+ *
+ * Pure; safe to call with `undefined` override array. Exported for unit
+ * testing in `src/manager/__tests__/daemon-latency-slo.test.ts`.
+ *
+ * @param segments - Percentile rows from TraceStore.getPercentiles.
+ * @param agentSlos - Per-agent `perf.slos?` overrides (may be undefined).
+ * @returns Frozen array of rows with SLO fields populated.
+ */
+export function augmentWithSloStatus(
+  segments: readonly PercentileRow[],
+  agentSlos: readonly SloEntry[] | undefined,
+): readonly PercentileRow[] {
+  const effectiveSlos =
+    agentSlos && agentSlos.length > 0
+      ? mergeSloOverrides(DEFAULT_SLOS, agentSlos)
+      : DEFAULT_SLOS;
+
+  // First match wins per segment — matches the semantics of the dashboard's
+  // "tint the cell for the server-reported metric" rendering path. If a
+  // future revision adds multiple metrics per segment (e.g. p50 AND p95
+  // first_token), this helper picks the first; the dashboard can be taught
+  // to render both at that point.
+  const slosBySeg = new Map<string, SloEntry>();
+  for (const s of effectiveSlos) {
+    if (!slosBySeg.has(s.segment)) slosBySeg.set(s.segment, s);
+  }
+
+  return Object.freeze(
+    segments.map((segRow) => {
+      const slo = slosBySeg.get(segRow.segment);
+      if (!slo) {
+        // No SLO configured for this segment — emit nulls so the response
+        // shape is consistent across rows. Dashboard falls back to no-data
+        // cell styling and omits the subtitle.
+        return Object.freeze({
+          ...segRow,
+          slo_threshold_ms: null,
+          slo_metric: null,
+        });
+      }
+      return Object.freeze({
+        ...segRow,
+        slo_status: evaluateSloStatus(segRow, slo.thresholdMs, slo.metric),
+        slo_threshold_ms: slo.thresholdMs,
+        slo_metric: slo.metric,
+      });
+    }),
+  );
+}
 
 /**
  * Base directory for manager runtime files.
@@ -1127,7 +1198,9 @@ async function routeMethod(
         for (const agentName of agents) {
           const store = manager.getTraceStore(agentName);
           if (!store) continue; // skip agents without a store (race at startup)
-          const segments = store.getPercentiles(agentName, sinceIso);
+          const rawSegments = store.getPercentiles(agentName, sinceIso);
+          const agentConfig = configs.find((c) => c.name === agentName);
+          const segments = augmentWithSloStatus(rawSegments, agentConfig?.perf?.slos);
           reports.push(Object.freeze({ agent: agentName, since: sinceIso, segments }));
         }
         return reports;
@@ -1140,7 +1213,9 @@ async function routeMethod(
           `Trace store not found for agent '${agentName}' (agent may not be running)`,
         );
       }
-      const segments = store.getPercentiles(agentName, sinceIso);
+      const rawSegments = store.getPercentiles(agentName, sinceIso);
+      const agentConfig = configs.find((c) => c.name === agentName);
+      const segments = augmentWithSloStatus(rawSegments, agentConfig?.perf?.slos);
       return Object.freeze({ agent: agentName, since: sinceIso, segments }) satisfies LatencyReport;
     }
 

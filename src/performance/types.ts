@@ -71,9 +71,31 @@ export const CANONICAL_SEGMENTS: readonly CanonicalSegment[] = Object.freeze([
 ]);
 
 /**
+ * SLO evaluation status for a percentile row.
+ *
+ * Moved here (from slos.ts) in Phase 51 Plan 03 so `PercentileRow` can
+ * reference `SloStatus`/`SloMetric` without a circular import between
+ * `types.ts` and `slos.ts`. `src/performance/slos.ts` re-exports both.
+ */
+export type SloStatus = "healthy" | "breach" | "no_data";
+
+/**
+ * Which percentile an SLO is measured against. Mirrors the shape consumed by
+ * `evaluateSloStatus(row, thresholdMs, metric)` in `src/performance/slos.ts`.
+ * Moved here alongside `SloStatus` to break the potential circular import.
+ */
+export type SloMetric = "p50" | "p95" | "p99";
+
+/**
  * One row per canonical segment returned by getPercentiles.
  *
  * p-values are `null` only when count === 0 (no matching spans in window).
+ *
+ * Phase 51 Plan 03 adds three OPTIONAL SLO-related fields. They are populated
+ * by the daemon's `latency` IPC handler via `augmentWithSloStatus` (which
+ * merges per-agent `perf.slos?` overrides with `DEFAULT_SLOS`). Producers on
+ * the Phase 50 timeline may omit them entirely — consumers MUST treat all
+ * three as optional.
  */
 export type PercentileRow = {
   readonly segment: CanonicalSegment;
@@ -81,6 +103,26 @@ export type PercentileRow = {
   readonly p95: number | null;
   readonly p99: number | null;
   readonly count: number;
+  /**
+   * Added in Phase 51 Plan 03. `undefined` on producers that do not augment.
+   * Computed by `augmentWithSloStatus` from the merged SLO table.
+   */
+  readonly slo_status?: SloStatus;
+  /**
+   * Added in Phase 51 Plan 03. Threshold in milliseconds the server
+   * evaluated this row against (after merging per-agent overrides).
+   * `null` when no SLO is configured for this segment. The dashboard reads
+   * this to render the "SLO target" subtitle — single source of truth
+   * stays server-side (no client mirror of DEFAULT_SLOS).
+   */
+  readonly slo_threshold_ms?: number | null;
+  /**
+   * Added in Phase 51 Plan 03. Which percentile column the SLO is measured
+   * against (mirrors the merged `SloEntry.metric`). `null` when no SLO is
+   * configured for this segment. The dashboard reads this for the subtitle
+   * text AND to know which cell to tint.
+   */
+  readonly slo_metric?: SloMetric | null;
 };
 
 /** Shape returned by the `latency` IPC method + `clawcode latency` CLI. */

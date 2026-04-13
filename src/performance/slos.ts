@@ -22,13 +22,14 @@ import {
   CANONICAL_SEGMENTS,
   type CanonicalSegment,
   type PercentileRow,
+  type SloMetric,
+  type SloStatus,
 } from "./types.js";
 
-/** Which percentile this SLO watches. */
-export type SloMetric = "p50" | "p95" | "p99";
-
-/** Status of a percentile row vs its SLO threshold. */
-export type SloStatus = "healthy" | "breach" | "no_data";
+// `SloMetric` + `SloStatus` were moved to `./types.ts` in Phase 51 Plan 03 so
+// `PercentileRow` can reference them without a circular import. Re-export here
+// so existing callers that import from `./slos.js` keep working unchanged.
+export type { SloMetric, SloStatus };
 
 /**
  * A single SLO target: which segment, which percentile, and the maximum
