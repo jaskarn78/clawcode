@@ -79,6 +79,7 @@ import {
   type SloEntry,
 } from "../performance/slos.js";
 import type { TraceStore } from "../performance/trace-store.js";
+import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-summary-cron.js";
 import { nanoid } from "nanoid";
 
 /**
@@ -671,6 +672,18 @@ export async function startDaemon(
     log.warn({ port: dashboardPort, host: dashboardHost, error: msg }, "dashboard server failed to start — continuing without dashboard");
   }
 
+  // 11e. Phase 52 Plan 03 (CACHE-03): daily cost + cache hit-rate summary
+  // cron. Fires at 09:00 UTC and posts one Discord embed per running agent
+  // carrying the previous 24h cost totals AND `💾 Cache: {hitRate}% over
+  // {turns} turns` when turns > 0 (suppressed on idle days per BLOCKER-1).
+  // Shutdown handler below calls `.stop()` to clean up the timer.
+  const dailySummaryCron: DailySummaryCronHandle = scheduleDailySummaryCron({
+    manager,
+    webhookManager,
+    log,
+  });
+  log.info({ pattern: "0 9 * * *" }, "daily summary cron scheduled (09:00 UTC)");
+
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
@@ -685,6 +698,7 @@ export async function startDaemon(
     await slashHandler.stop();
     taskScheduler.stop();
     heartbeatRunner.stop();
+    dailySummaryCron.stop();
     // Clean up all subagent thread bindings before stopping agents
     if (subagentThreadSpawner) {
       const subBindings = await subagentThreadSpawner.getSubagentBindings();
