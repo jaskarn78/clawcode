@@ -224,3 +224,59 @@ describe("assembleContext", () => {
     expect(exceedsCeiling(result)).toBe(false);
   });
 });
+
+// ── APPENDED BY Phase 50-00 Wave 0 scaffolding ───────────────────────────────
+// New "context_assemble tracing" describe block. Existing tests above remain
+// untouched. Wave 2 Task 2 will add the `assembleContextTraced` export that
+// makes these tests green.
+
+import { vi } from "vitest";
+// @ts-expect-error - Wave 2 will add this export; Wave 0 leaves it missing for RED state.
+import { assembleContextTraced } from "../context-assembler.js";
+
+describe("context_assemble tracing", () => {
+  function makeTurnStub() {
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({ end: spanEnd }));
+    return { turn: { startSpan, end: vi.fn() }, spanEnd, startSpan };
+  }
+
+  it("tracing: assembleContextTraced opens a context_assemble span before assembling and ends it after (finally)", () => {
+    const { turn, startSpan, spanEnd } = makeTurnStub();
+    const sources = makeSources({ identity: "I am an agent" });
+
+    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, turn);
+
+    expect(startSpan).toHaveBeenCalledWith("context_assemble");
+    expect(spanEnd).toHaveBeenCalledTimes(1);
+    // Result should still match the untraced assembleContext output.
+    expect(result).toBe(assembleContext(sources, DEFAULT_BUDGETS));
+  });
+
+  it("tracing: ends the context_assemble span even when assembleContext throws", () => {
+    const { turn, startSpan, spanEnd } = makeTurnStub();
+
+    // Build a proxy that triggers inside assembleContextTraced. Since we can't
+    // easily force the inner assembleContext to throw without mocking the
+    // module graph, we use a deliberately malformed sources object cast to the
+    // expected type — assembleContextTraced should still end the span via its
+    // finally block.
+    const thrower = {
+      get identity() {
+        throw new Error("boom");
+      },
+    } as unknown as ContextSources;
+
+    expect(() => (assembleContextTraced as any)(thrower, DEFAULT_BUDGETS, turn)).toThrow();
+
+    expect(startSpan).toHaveBeenCalledWith("context_assemble");
+    expect(spanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracing: no-op when turn is undefined (does not call startSpan)", () => {
+    const sources = makeSources({ identity: "I am an agent" });
+    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined);
+    // Result equals the untraced output.
+    expect(result).toBe(assembleContext(sources, DEFAULT_BUDGETS));
+  });
+});

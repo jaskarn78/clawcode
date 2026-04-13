@@ -206,3 +206,81 @@ describe("TaskScheduler", () => {
     expect(afterStatuses[0].lastRun).toBeTypeOf("number");
   });
 });
+
+// ── APPENDED BY Phase 50-00 Wave 0 scaffolding ───────────────────────────────
+// New "scheduler tracing" describe block. Existing tests above remain
+// untouched. Wave 2 Task 3 will add:
+//   - scheduler-prefixed turn IDs (`scheduler:<nanoid>`)
+//   - TraceCollector invocation on each scheduled trigger
+// These tests fail today because the current scheduler does not touch any
+// tracing surface.
+
+describe("scheduler tracing", () => {
+  let tracedSessionManager: ReturnType<typeof createMockSessionManager>;
+  let tracedLog: ReturnType<typeof createMockLogger>;
+  let tracedScheduler: TaskScheduler;
+
+  let startTurn: ReturnType<typeof vi.fn>;
+  let turnEnd: ReturnType<typeof vi.fn>;
+  let turnStartSpan: ReturnType<typeof vi.fn>;
+  let mockCollector: { startTurn: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    turnStartSpan = vi.fn(() => ({ end: vi.fn() }));
+    turnEnd = vi.fn();
+    startTurn = vi.fn(() => ({ startSpan: turnStartSpan, end: turnEnd }));
+    mockCollector = { startTurn };
+
+    tracedSessionManager = createMockSessionManager();
+    // Wave 2 will add getTraceCollector to SessionManager; we stub it here.
+    (tracedSessionManager as any).getTraceCollector = vi.fn().mockReturnValue(mockCollector);
+
+    tracedLog = createMockLogger();
+    tracedScheduler = new TaskScheduler({ sessionManager: tracedSessionManager, log: tracedLog });
+  });
+
+  it("trace: scheduled turns produce turnId prefixed with 'scheduler:'", async () => {
+    const schedules: readonly ScheduleEntry[] = [
+      { name: "trace-me", cron: "0 9 * * *", prompt: "Scheduled prompt", enabled: true },
+    ];
+    tracedScheduler.addAgent("alice", schedules);
+    await tracedScheduler._triggerForTest("alice", "trace-me");
+
+    expect(startTurn).toHaveBeenCalled();
+    const turnId = startTurn.mock.calls[0]![0] as string;
+    expect(turnId).toMatch(/^scheduler:/);
+  });
+
+  it("trace: scheduler turns are created with null channelId (non-Discord)", async () => {
+    const schedules: readonly ScheduleEntry[] = [
+      { name: "no-channel", cron: "0 9 * * *", prompt: "p", enabled: true },
+    ];
+    tracedScheduler.addAgent("alice", schedules);
+    await tracedScheduler._triggerForTest("alice", "no-channel");
+
+    const args = startTurn.mock.calls[0]!;
+    expect(args[1]).toBe("alice");
+    expect(args[2]).toBeNull();
+  });
+
+  it("trace: scheduler turn.end('success') fires when sendToAgent resolves", async () => {
+    const schedules: readonly ScheduleEntry[] = [
+      { name: "ok", cron: "0 9 * * *", prompt: "p", enabled: true },
+    ];
+    tracedScheduler.addAgent("alice", schedules);
+    await tracedScheduler._triggerForTest("alice", "ok");
+
+    expect(turnEnd).toHaveBeenCalledWith("success");
+  });
+
+  it("trace: scheduler turn.end('error') fires when sendToAgent throws", async () => {
+    tracedSessionManager.sendToAgent.mockRejectedValueOnce(new Error("offline"));
+    const schedules: readonly ScheduleEntry[] = [
+      { name: "bad", cron: "0 9 * * *", prompt: "p", enabled: true },
+    ];
+    tracedScheduler.addAgent("alice", schedules);
+    await tracedScheduler._triggerForTest("alice", "bad");
+
+    expect(turnEnd).toHaveBeenCalledWith("error");
+  });
+});
