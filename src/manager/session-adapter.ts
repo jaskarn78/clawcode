@@ -463,6 +463,38 @@ function wrapSdkQuery(
         if (msg.type === "result") {
           if (msg.session_id) sessionId = msg.session_id;
           extractUsage(msg, usageCallback);
+          // Phase 52 Plan 01: capture cache telemetry snapshot from msg.usage
+          // onto the parent Turn. Caller-owned lifecycle preserved — we call
+          // recordCacheUsage, NEVER turn.end() (50-02 invariant).
+          //
+          // Missing usage fields default to 0 (not NaN / undefined) so the
+          // hit-rate denominator cannot become invalid downstream.
+          //
+          // Wrapped in try/catch — cache capture MUST NEVER break the message
+          // path (same observational-only contract as Phase 50 spans, mirrors
+          // extractUsage's silent-swallow pattern above).
+          if (turn) {
+            try {
+              const u = msg.usage ?? {};
+              const cacheRead =
+                typeof u.cache_read_input_tokens === "number"
+                  ? u.cache_read_input_tokens
+                  : 0;
+              const cacheCreation =
+                typeof u.cache_creation_input_tokens === "number"
+                  ? u.cache_creation_input_tokens
+                  : 0;
+              const input =
+                typeof u.input_tokens === "number" ? u.input_tokens : 0;
+              turn.recordCacheUsage({
+                cacheReadInputTokens: cacheRead,
+                cacheCreationInputTokens: cacheCreation,
+                inputTokens: input,
+              });
+            } catch {
+              // Never break the send flow due to cache-capture failure.
+            }
+          }
           closeAllSpans();
           // Prefer the result.result field if non-empty
           if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {

@@ -66,6 +66,11 @@ export type SdkAssistantMessage = {
 
 /**
  * A successful result message from the SDK stream.
+ *
+ * Phase 52 Plan 01: `usage` is extended with `cache_creation_input_tokens`
+ * and `cache_read_input_tokens` — BetaUsage (snake_case) as reported by the
+ * SDK. session-adapter reads these to populate the per-turn cache telemetry
+ * snapshot via `Turn.recordCacheUsage`.
  */
 export type SdkResultSuccess = {
   readonly type: "result";
@@ -76,6 +81,8 @@ export type SdkResultSuccess = {
   readonly usage?: {
     readonly input_tokens?: number;
     readonly output_tokens?: number;
+    readonly cache_creation_input_tokens?: number;
+    readonly cache_read_input_tokens?: number;
   };
   readonly num_turns?: number;
   readonly duration_ms?: number;
@@ -86,6 +93,9 @@ export type SdkResultSuccess = {
 
 /**
  * An error result message from the SDK stream.
+ *
+ * Phase 52 Plan 01: `usage` extended with cache fields (same shape as
+ * SdkResultSuccess). Error results can still carry partial token counts.
  */
 export type SdkResultError = {
   readonly type: "result";
@@ -96,6 +106,8 @@ export type SdkResultError = {
   readonly usage?: {
     readonly input_tokens?: number;
     readonly output_tokens?: number;
+    readonly cache_creation_input_tokens?: number;
+    readonly cache_read_input_tokens?: number;
   };
   readonly num_turns?: number;
   readonly duration_ms?: number;

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  CACHE_HIT_RATE_SLO,
   DEFAULT_SLOS,
+  evaluateCacheHitRateStatus,
   evaluateSloStatus,
   mergeSloOverrides,
   type SloEntry,
@@ -115,5 +117,41 @@ describe("mergeSloOverrides", () => {
       4500,
     );
     expect(Object.isFrozen(merged)).toBe(true);
+  });
+});
+
+describe("CACHE_HIT_RATE_SLO (Phase 52)", () => {
+  it("CACHE_HIT_RATE_SLO has healthy ≥ 0.60, breach < 0.30 per CONTEXT", () => {
+    expect(CACHE_HIT_RATE_SLO).toEqual({
+      healthyMin: 0.6,
+      breachMax: 0.3,
+    });
+    expect(Object.isFrozen(CACHE_HIT_RATE_SLO)).toBe(true);
+  });
+
+  it("evaluateCacheHitRateStatus returns no_data when turns === 0", () => {
+    expect(evaluateCacheHitRateStatus(0.5, 0)).toBe("no_data");
+    expect(evaluateCacheHitRateStatus(0.9, 0)).toBe("no_data");
+    expect(evaluateCacheHitRateStatus(0.0, 0)).toBe("no_data");
+  });
+
+  it("evaluateCacheHitRateStatus returns healthy when hitRate >= 0.60", () => {
+    expect(evaluateCacheHitRateStatus(0.6, 5)).toBe("healthy");
+    expect(evaluateCacheHitRateStatus(0.75, 50)).toBe("healthy");
+    expect(evaluateCacheHitRateStatus(0.99, 100)).toBe("healthy");
+    expect(evaluateCacheHitRateStatus(1.0, 1)).toBe("healthy");
+  });
+
+  it("evaluateCacheHitRateStatus returns breach when hitRate < 0.30", () => {
+    expect(evaluateCacheHitRateStatus(0.29, 10)).toBe("breach");
+    expect(evaluateCacheHitRateStatus(0.1, 50)).toBe("breach");
+    expect(evaluateCacheHitRateStatus(0.0, 10)).toBe("breach");
+  });
+
+  it("evaluateCacheHitRateStatus returns no_data (neutral) in the 0.30-0.60 gray zone", () => {
+    // Gray zone → warming up → neutral tint. Neither green nor red.
+    expect(evaluateCacheHitRateStatus(0.45, 10)).toBe("no_data");
+    expect(evaluateCacheHitRateStatus(0.3, 10)).toBe("no_data");
+    expect(evaluateCacheHitRateStatus(0.59, 100)).toBe("no_data");
   });
 });

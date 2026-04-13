@@ -20,6 +20,7 @@
 
 import {
   CANONICAL_SEGMENTS,
+  type CacheHitRateStatus,
   type CanonicalSegment,
   type PercentileRow,
   type SloMetric,
@@ -29,7 +30,7 @@ import {
 // `SloMetric` + `SloStatus` were moved to `./types.ts` in Phase 51 Plan 03 so
 // `PercentileRow` can reference them without a circular import. Re-export here
 // so existing callers that import from `./slos.js` keep working unchanged.
-export type { SloMetric, SloStatus };
+export type { CacheHitRateStatus, SloMetric, SloStatus };
 
 /**
  * A single SLO target: which segment, which percentile, and the maximum
@@ -159,6 +160,52 @@ export function mergeSloOverrides(
   }
 
   return Object.freeze(result);
+}
+
+/**
+ * Phase 52 Plan 01: cache-hit-rate SLO bands.
+ *
+ * Separate from `DEFAULT_SLOS` because cache hit rate is a ratio (0..1), not a
+ * millisecond threshold. Per Phase 52 CONTEXT D-03 surfacing decision:
+ *   - healthy ≥ 0.60
+ *   - breach  < 0.30
+ *   - gray zone (0.30..0.60) → `no_data` = warming up, neutral tint
+ *
+ * Values are verbatim from the CONTEXT file and MUST NOT be edited casually —
+ * they are surfaced on the dashboard and drive operator attention bandwidth.
+ */
+export type CacheHitRateSloEntry = {
+  readonly healthyMin: number;
+  readonly breachMax: number;
+};
+
+export const CACHE_HIT_RATE_SLO: CacheHitRateSloEntry = Object.freeze({
+  healthyMin: 0.6,
+  breachMax: 0.3,
+});
+
+/**
+ * Evaluate a cache hit-rate observation against `CACHE_HIT_RATE_SLO`.
+ *
+ * Pure function. Returns:
+ *   - `"no_data"` when `turns === 0` (no observations in window).
+ *   - `"healthy"` when `hitRate >= CACHE_HIT_RATE_SLO.healthyMin` (0.60).
+ *   - `"breach"`  when `hitRate <  CACHE_HIT_RATE_SLO.breachMax`  (0.30).
+ *   - `"no_data"` in the gray zone (0.30..0.60) — warming up, neither green
+ *     nor red. The dashboard renders a neutral tint so operators are not
+ *     distracted while the cache is establishing its prefix.
+ *
+ * @param hitRate - Observed hit rate in [0..1].
+ * @param turns   - Number of turns that contributed to the hit rate.
+ */
+export function evaluateCacheHitRateStatus(
+  hitRate: number,
+  turns: number,
+): CacheHitRateStatus {
+  if (turns === 0) return "no_data";
+  if (hitRate >= CACHE_HIT_RATE_SLO.healthyMin) return "healthy";
+  if (hitRate < CACHE_HIT_RATE_SLO.breachMax) return "breach";
+  return "no_data";
 }
 
 // Re-export for downstream symmetry (so callers don't need a second import to

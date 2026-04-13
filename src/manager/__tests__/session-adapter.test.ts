@@ -26,6 +26,7 @@ import { createTracedSessionHandle } from "../session-adapter.js";
 type MockTurn = {
   startSpan: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
+  recordCacheUsage: ReturnType<typeof vi.fn>;
 };
 
 type MockSpan = {
@@ -43,7 +44,8 @@ function createMockTurn(): { turn: MockTurn; spansByName: Map<string, MockSpan[]
     return span;
   });
   const end = vi.fn();
-  return { turn: { startSpan, end }, spansByName };
+  const recordCacheUsage = vi.fn();
+  return { turn: { startSpan, end, recordCacheUsage }, spansByName };
 }
 
 /**
@@ -226,5 +228,120 @@ describe("SdkSessionAdapter tracing", () => {
     const endToEndSpans = spansByName.get("end_to_end") ?? [];
     expect(endToEndSpans.length).toBe(1);
     expect(endToEndSpans[0]!.end).toHaveBeenCalled();
+  });
+});
+
+describe("cache usage capture (Phase 52)", () => {
+  let mockSdk: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdk = { query: vi.fn() };
+  });
+
+  it("calls turn.recordCacheUsage with cache_read/creation/input tokens from the SDK result message", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "hi" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: "hi",
+        session_id: "sess-cache-1",
+        usage: {
+          input_tokens: 50,
+          cache_creation_input_tokens: 100,
+          cache_read_input_tokens: 500,
+          output_tokens: 200,
+        },
+      },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "sess-cache-1",
+      turn,
+    });
+
+    await handle.sendAndCollect("hi");
+
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(1);
+    expect(turn.recordCacheUsage).toHaveBeenCalledWith({
+      cacheReadInputTokens: 500,
+      cacheCreationInputTokens: 100,
+      inputTokens: 50,
+    });
+  });
+
+  it("does not throw when turn is undefined (no-turn path is a compile-time no-op)", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "hi" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: "hi",
+        session_id: "sess-cache-2",
+        usage: {
+          input_tokens: 50,
+          cache_creation_input_tokens: 100,
+          cache_read_input_tokens: 500,
+        },
+      },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    // No `turn` in opts → bound turn is undefined. Call must not throw.
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "sess-cache-2",
+    });
+
+    await expect(handle.sendAndCollect("hi")).resolves.toBe("hi");
+  });
+
+  it("treats missing usage fields as 0 (not NaN / undefined)", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "hi" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: "hi",
+        session_id: "sess-cache-3",
+        usage: {}, // empty — all fields missing
+      },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "sess-cache-3",
+      turn,
+    });
+
+    await handle.sendAndCollect("hi");
+
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(1);
+    expect(turn.recordCacheUsage).toHaveBeenCalledWith({
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      inputTokens: 0,
+    });
   });
 });
