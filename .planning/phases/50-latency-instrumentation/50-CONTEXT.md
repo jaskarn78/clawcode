@@ -21,7 +21,8 @@ Scope lines:
 ### Trace Storage & Retention
 - **Location:** New per-agent `traces.db` SQLite file at `~/.clawcode/agents/<name>/traces.db`. Mirrors the existing `usage.db` / `memory.db` isolation pattern.
 - **Schema:** Two tables — `traces` (one row per turn: `id`, `agent`, `started_at`, `ended_at`, `total_ms`, `discord_channel_id`, `status`) and `trace_spans` (many rows per turn: `turn_id`, `name`, `started_at`, `duration_ms`, `metadata_json`). Indexed on `(agent, started_at)` and `(turn_id, name)` for percentile queries.
-- **Retention mechanism:** New heartbeat check `src/heartbeat/checks/trace-retention.ts` — runs `DELETE FROM traces WHERE started_at < ?` and `DELETE FROM trace_spans WHERE turn_id NOT IN (SELECT id FROM traces)` on each tick. Follows the `attachment-cleanup.ts` precedent (auto-discovered by `src/heartbeat/discovery.ts`).
+- **Retention mechanism:** New heartbeat check `src/heartbeat/checks/trace-retention.ts` — runs `DELETE FROM traces WHERE started_at < ?`. Child rows in `trace_spans` are removed automatically via `PRAGMA foreign_keys = ON` + `ON DELETE CASCADE` on the `trace_spans.turn_id → traces(id)` foreign key. Follows the `attachment-cleanup.ts` precedent (auto-discovered by `src/heartbeat/discovery.ts`).
+  - *Addendum (2026-04-13, research-driven):* An earlier draft used a two-query cleanup (`DELETE FROM traces ... AND DELETE FROM trace_spans WHERE turn_id NOT IN (SELECT id FROM traces)`). Research Pitfall 4 flagged that the orphan-span query races with in-flight turns under 14-agent concurrency. CASCADE deletion makes retention atomic at the parent level and eliminates the race. Accepted.
 - **Default retention:** 7 days. Exposed as `perf.traceRetentionDays` in `src/config/schema.ts` config; overridable per agent.
 
 ### Instrumentation Mechanism
