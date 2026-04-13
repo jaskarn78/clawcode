@@ -68,8 +68,8 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 
 | ID | Description | Phase | Status |
 |----|-------------|-------|--------|
-| PERF-01 | Phase-level latency tracing per turn | Phase 50 | [ ] |
-| PERF-02 | p50/p95/p99 latency report per agent | Phase 50 | [ ] |
+| PERF-01 | Phase-level latency tracing per turn | Phase 50 | [x] |
+| PERF-02 | p50/p95/p99 latency report per agent | Phase 50 | [x] |
 | PERF-03 | SLO targets documented and surfaced | Phase 51 | [ ] |
 | PERF-04 | CI regression gate on p95 | Phase 51 | [ ] |
 | CACHE-01 | cache_control on stable system prefix | Phase 52 | [ ] |

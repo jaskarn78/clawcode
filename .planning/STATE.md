@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: Completed 50-00-PLAN.md — Wave 0 RED tests scaffolded (19 RED, 34 pre-existing green)
-last_updated: "2026-04-13T17:29:30.784Z"
+stopped_at: Completed 50-01-PLAN.md — TraceStore + TraceCollector primitives green (25 Wave 0 tests, 1171 in-scope)
+last_updated: "2026-04-13T17:42:52.683Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 50 (latency-instrumentation) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 
 ## Performance Metrics
 
@@ -92,6 +92,11 @@ Recent decisions affecting current work:
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 00 - Dedicated trace-store-persistence.test.ts for daemon-restart semantic (PERF-01 success criterion #4)
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 00 - Wave 2 export sentinels (createTracedSessionHandle, assembleContextTraced) used as @ts-expect-error RED markers in scaffolded tests
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 00 - APPEND-only edits to server.test.ts / context-assembler.test.ts / scheduler.test.ts preserved all 34 pre-existing tests
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - Retention via CASCADE only (no orphan-span query); ratifies CONTEXT addendum
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - Named bind params for DELETE/percentile SQL (@cutoff/@agent/@since/@span_name); positional for INSERT
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - perf config added to BOTH agent schema and defaults schema (fleet-wide retention defaults + per-agent override)
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - Turn identity fields exposed as public readonly (id/agent/channelId); no getters, matches readonly convention
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - Metadata serialization truncates at 1000 chars with '...' sentinel rather than throwing (traces observational, never fail parent message path)
 
 ### Roadmap Evolution
 
@@ -144,9 +149,10 @@ None yet.
 | Phase 49 P01 | 197s | 2 tasks | 6 files |
 | Phase 49 P02 | 150s | 2 tasks | 4 files |
 | Phase 50 P00 | 573s | 3 tasks | 11 files |
+| Phase 50-latency-instrumentation P01 | 8min | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 50-00-PLAN.md — Wave 0 RED tests scaffolded (19 RED, 34 pre-existing green)
+Stopped at: Completed 50-01-PLAN.md — TraceStore + TraceCollector primitives green (25 Wave 0 tests, 1171 in-scope)
 Resume file: None
