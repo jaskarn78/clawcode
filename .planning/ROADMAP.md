@@ -116,7 +116,11 @@ Plans:
   2. A CI benchmark command runs a fixed prompt set against a local daemon and produces a reproducible latency report
   3. The CI job fails when any tracked p95 regresses beyond a configurable threshold vs. a stored baseline
   4. Updating the baseline is an explicit, auditable operator action (not automatic on every run)
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 51-01-PLAN.md — SLO source of truth + bench report/baseline Zod schemas + thresholds loader
+- [ ] 51-02-PLAN.md — clawcode bench CLI + isolated daemon harness + bench-run-prompt IPC method
+- [ ] 51-03-PLAN.md — Dashboard SLO indicators + starter prompts.yaml / thresholds.yaml / README + .github/workflows/bench.yml (includes human-verify checkpoint)
 
 ### Phase 52: Prompt Caching
 **Goal**: Stable prefixes hit Anthropic prompt cache, cutting input tokens and first-token latency
@@ -195,7 +199,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 50. Latency Instrumentation | 5/5 | Complete    | 2026-04-13 |
-| 51. SLOs & Regression Gate | 0/0 | Not started | — |
+| 51. SLOs & Regression Gate | 0/3 | Ready to execute | — |
 | 52. Prompt Caching | 0/0 | Not started | — |
 | 53. Context & Token Budget Tuning | 0/0 | Not started | — |
 | 54. Streaming & Typing Indicator | 0/0 | Not started | — |
