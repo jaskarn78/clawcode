@@ -13,6 +13,33 @@ export const modelSchema = z.enum(["sonnet", "opus", "haiku"]);
 export const effortSchema = z.enum(["low", "medium", "high", "max"]);
 
 /**
+ * Canonical latency segment names — mirrored from src/performance/types.ts
+ * `CANONICAL_SEGMENTS`. Kept inline (not imported) to avoid a config -> performance
+ * dependency cycle and to keep schema parsing self-contained.
+ */
+const sloSegmentEnum = z.enum([
+  "end_to_end",
+  "first_token",
+  "context_assemble",
+  "tool_call",
+]);
+
+/**
+ * Per-entry SLO override allowed in clawcode.yaml under `perf.slos`.
+ * The Zod parse output is consumed by the daemon (Plan 51-03) via the
+ * `ResolvedAgentConfig.perf.slos` TS type and merged with `DEFAULT_SLOS`
+ * through `mergeSloOverrides` (src/performance/slos.ts).
+ */
+export const sloOverrideSchema = z.object({
+  segment: sloSegmentEnum,
+  metric: z.enum(["p50", "p95", "p99"]),
+  thresholdMs: z.number().int().positive(),
+});
+
+/** Inferred SLO override type. */
+export type SloOverrideConfig = z.infer<typeof sloOverrideSchema>;
+
+/**
  * Memory configuration schema for compaction and search settings.
  * Re-exported from the memory module for config-level use.
  */
@@ -195,6 +222,7 @@ export const agentSchema = z.object({
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
+      slos: z.array(sloOverrideSchema).optional(),
     })
     .optional(),
 });
@@ -230,6 +258,7 @@ export const defaultsSchema = z.object({
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
+      slos: z.array(sloOverrideSchema).optional(),
     })
     .optional(),
 });

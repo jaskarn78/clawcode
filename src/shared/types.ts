@@ -109,6 +109,15 @@ export type ResolvedAgentConfig = {
   }[];
   readonly perf?: {
     readonly traceRetentionDays?: number;
+    readonly slos?: readonly {
+      readonly segment:
+        | "end_to_end"
+        | "first_token"
+        | "context_assemble"
+        | "tool_call";
+      readonly metric: "p50" | "p95" | "p99";
+      readonly thresholdMs: number;
+    }[];
   };
 };
 

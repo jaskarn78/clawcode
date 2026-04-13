@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { configSchema, mcpServerSchema } from "../schema.js";
+import { agentSchema, configSchema, defaultsSchema, mcpServerSchema } from "../schema.js";
 
 describe("mcpServerSchema", () => {
   it("validates a complete MCP server config", () => {
@@ -263,5 +263,73 @@ describe("configSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("agentSchema perf.slos override", () => {
+  it("accepts a perf.slos array with a single canonical-segment override", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        slos: [{ segment: "end_to_end", metric: "p95", thresholdMs: 5000 }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.slos).toHaveLength(1);
+      expect(result.data.perf?.slos?.[0]).toEqual({
+        segment: "end_to_end",
+        metric: "p95",
+        thresholdMs: 5000,
+      });
+    }
+  });
+
+  it("rejects a perf.slos override using a non-canonical segment name", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        slos: [{ segment: "garbage", metric: "p95", thresholdMs: 5000 }],
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(" | ");
+      // Zod enum issues mention the invalid value or expected options
+      expect(messages.toLowerCase()).toMatch(/garbage|end_to_end|enum|invalid/);
+    }
+  });
+
+  it("accepts perf.traceRetentionDays alongside perf.slos (additive, no field collision)", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        traceRetentionDays: 14,
+        slos: [
+          { segment: "first_token", metric: "p50", thresholdMs: 1500 },
+          { segment: "tool_call", metric: "p99", thresholdMs: 4000 },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.traceRetentionDays).toBe(14);
+      expect(result.data.perf?.slos).toHaveLength(2);
+    }
+  });
+
+  it("accepts perf.slos on the defaults schema (fleet-wide override path)", () => {
+    const result = defaultsSchema.safeParse({
+      perf: {
+        traceRetentionDays: 30,
+        slos: [
+          { segment: "context_assemble", metric: "p95", thresholdMs: 250 },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.slos?.[0]?.thresholdMs).toBe(250);
+    }
   });
 });
