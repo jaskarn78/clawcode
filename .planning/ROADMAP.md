@@ -132,7 +132,11 @@ Plans:
   3. The dashboard and daily summary report per-agent cache hit rate (cached input tokens / total input tokens) with trend over time
   4. Editing identity, soul, hot-tier memory, or the skill set demonstrably evicts the stale prefix on the next turn and the telemetry reflects the drop and recovery
   5. Measured first-token latency improves on cache-hit turns versus cache-miss turns by a margin visible in the Phase 50 telemetry
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 52-01-PLAN.md — Wave 1: traces schema (ALTER TABLE 5 cols) + Turn.recordCacheUsage + TraceStore.getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter usage capture
+- [ ] 52-02-PLAN.md — Wave 2: two-block context assembly (stablePrefix / mutableSuffix) + SDK preset+append wiring + hot-tier stable_token + per-session prefixHash + cacheEvictionExpected
+- [ ] 52-03-PLAN.md — Wave 3: clawcode cache CLI + cache IPC method + dashboard Prompt Cache panel + cache_effect_ms metric + human-verify checkpoint
 
 ### Phase 53: Context & Token Budget Tuning
 **Goal**: Per-turn payload shrinks without measurable response-quality loss
@@ -200,7 +204,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 50. Latency Instrumentation | 5/5 | Complete    | 2026-04-13 |
 | 51. SLOs & Regression Gate | 3/3 | Complete    | 2026-04-13 |
-| 52. Prompt Caching | 0/0 | Not started | — |
+| 52. Prompt Caching | 0/3 | Not started | — |
 | 53. Context & Token Budget Tuning | 0/0 | Not started | — |
 | 54. Streaming & Typing Indicator | 0/0 | Not started | — |
 | 55. Tool-Call Overhead | 0/0 | Not started | — |
