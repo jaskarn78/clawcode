@@ -81,7 +81,7 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
 **Goal:** Reduce end-to-end latency from Discord message arrival to agent reply across the ClawCode fleet.
 
 - [x] **Phase 50: Latency Instrumentation** - Phase-level timing trace for every Discord turn + per-agent latency report (completed 2026-04-13)
-- [ ] **Phase 51: SLOs & Regression Gate** - Documented SLO targets surfaced on dashboard + CI benchmark fails on p95 regression
+- [x] **Phase 51: SLOs & Regression Gate** - Documented SLO targets surfaced on dashboard + CI benchmark fails on p95 regression (completed 2026-04-13)
 - [ ] **Phase 52: Prompt Caching** - Apply Anthropic cache_control to stable prefixes, surface hit-rate, verify invalidation
 - [ ] **Phase 53: Context & Token Budget Tuning** - Audit payload size by section, tighten budgets, lazy-load skills, shrink resume summary
 - [ ] **Phase 54: Streaming & Typing Indicator** - First-token metric, tighter Discord chunk cadence, typing indicator within 500ms
@@ -116,11 +116,11 @@ Plans:
   2. A CI benchmark command runs a fixed prompt set against a local daemon and produces a reproducible latency report
   3. The CI job fails when any tracked p95 regresses beyond a configurable threshold vs. a stored baseline
   4. Updating the baseline is an explicit, auditable operator action (not automatic on every run)
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 51-01-PLAN.md — SLO source of truth + bench report/baseline Zod schemas + thresholds loader
 - [x] 51-02-PLAN.md — clawcode bench CLI + isolated daemon harness + bench-run-prompt IPC method
-- [ ] 51-03-PLAN.md — Dashboard SLO indicators + starter prompts.yaml / thresholds.yaml / README + .github/workflows/bench.yml (includes human-verify checkpoint)
+- [x] 51-03-PLAN.md — Dashboard SLO indicators + starter prompts.yaml / thresholds.yaml / README + .github/workflows/bench.yml (includes human-verify checkpoint)
 
 ### Phase 52: Prompt Caching
 **Goal**: Stable prefixes hit Anthropic prompt cache, cutting input tokens and first-token latency
@@ -199,7 +199,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 50. Latency Instrumentation | 5/5 | Complete    | 2026-04-13 |
-| 51. SLOs & Regression Gate | 2/3 | In Progress|  |
+| 51. SLOs & Regression Gate | 3/3 | Complete   | 2026-04-13 |
 | 52. Prompt Caching | 0/0 | Not started | — |
 | 53. Context & Token Budget Tuning | 0/0 | Not started | — |
 | 54. Streaming & Typing Indicator | 0/0 | Not started | — |
