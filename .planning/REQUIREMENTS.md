@@ -19,10 +19,10 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 
 ### Prompt Caching (CACHE)
 
-- [ ] **CACHE-01**: Anthropic `cache_control` markers applied to the stable system prompt prefix (identity, soul, skills header)
-- [ ] **CACHE-02**: Memory hot-tier and skills/tool definitions included in the cached prefix when stable across turns; mutable sections placed after the cache boundary
+- [x] **CACHE-01**: Anthropic `cache_control` markers applied to the stable system prompt prefix (identity, soul, skills header)
+- [x] **CACHE-02**: Memory hot-tier and skills/tool definitions included in the cached prefix when stable across turns; mutable sections placed after the cache boundary
 - [x] **CACHE-03**: Per-agent cache hit-rate telemetry (cached input tokens / total input tokens) surfaced in the dashboard and daily summary
-- [ ] **CACHE-04**: Cache invalidation is correct — changing identity, soul, hot-tier memory, or skill set evicts stale prefixes and is observable in telemetry
+- [x] **CACHE-04**: Cache invalidation is correct — changing identity, soul, hot-tier memory, or skill set evicts stale prefixes and is observable in telemetry
 
 ### Context / Token Budget Tuning (CTX)
 

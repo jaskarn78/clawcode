@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: "Completed 52-01 (2 commits: 74cb674 + b46a09c) — schema migration + getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter cache capture; 17 new tests GREEN, 271 total GREEN"
-last_updated: "2026-04-13T22:45:56.659Z"
+stopped_at: "Completed 52-02 (2 commits: 9c7fa20 + fe21c34) — two-block context assembly + SDK preset+append + hot-tier stable_token + per-turn prefixHash + CACHE-04 eviction integration test; 29 new tests GREEN, 641 total GREEN"
+last_updated: "2026-04-13T23:23:21.397Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 52 (prompt-caching) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -126,6 +126,13 @@ Recent decisions affecting current work:
 - [Phase 52]: Phase 52 Plan 01 - CACHE_HIT_RATE_SLO is separate export (not in DEFAULT_SLOS) because cache hit rate is ratio 0..1 not ms threshold; gray zone 0.30-0.60 returns no_data for warming-up neutral tint
 - [Phase 52]: Phase 52 Plan 01 - session-adapter cache-capture block between extractUsage and closeAllSpans inside iterateWithTracing result branch; wrapped in try/catch mirroring extractUsage silent-swallow (observational capture MUST NEVER break message path)
 - [Phase 52]: Phase 52 Plan 01 - Caller-owned Turn lifecycle invariant from Phase 50 Plan 02 preserved: zero turn.end() invocations in session-adapter.ts (4 grep matches all in doc comments)
+- [Phase 52]: Phase 52 Plan 02 - AssembledContext { stablePrefix, mutableSuffix, hotStableToken } replaces single-string return; all 30 existing context-assembler tests migrated via joinAssembled helper reconstructing pre-52 single-string for legacy assertions
+- [Phase 52]: Phase 52 Plan 02 - systemPrompt emits { type: 'preset', preset: 'claude_code', append: stablePrefix } when non-empty, preset-only form when empty; buildSystemPromptOption helper enforces single source of truth for both createSession and resumeSession
+- [Phase 52]: Phase 52 Plan 02 - PrefixHashProvider is a 2-method interface (get/persist) NOT a callback pair; test mocks supply plain objects, production uses SessionManager.makePrefixHashProvider(agent) closure capturing 3 per-agent Maps
+- [Phase 52]: Phase 52 Plan 02 - per-turn prefixHash comparison (CONTEXT D-04) inside iterateWithTracing; double try/catch around provider.get()+persist() preserves silent-swallow observational invariant; first-turn convention: probe.last===undefined -> cacheEvictionExpected=false
+- [Phase 52]: Phase 52 Plan 02 - hot-tier stable_token placement decision lives INSIDE assembleContext (priorHotStableToken param), NOT session-config; context-assembler is single source of truth for stable vs mutable placement
+- [Phase 52]: Phase 52 Plan 02 - cache-eviction integration test uses REAL TraceStore + REAL iterateWithTracing + REAL createTracedSessionHandle; ONLY sdk.query is mocked; 4-scenario coverage (fresh/swap/unchanged/skills-hot-reload) enforces CONTEXT D-04 verbatim
+- [Phase 52]: Phase 52 Plan 02 - caller-owned Turn lifecycle invariant from Phase 50-02 preserved: zero turn.end() call sites in session-adapter.ts (4 grep matches all in doc comments)
 
 ### Roadmap Evolution
 
@@ -185,9 +192,10 @@ None yet.
 | Phase 51-slos-regression-gate P02 | 13min | 3 tasks | 15 files |
 | Phase 51-slos-regression-gate P03 | 6 | 3 tasks | 12 files |
 | Phase 52 P01 | 8m 22s | 2 tasks | 10 files |
+| Phase 52 P02 | 19m 43s | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 52-01 (2 commits: 74cb674 + b46a09c) — schema migration + getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter cache capture; 17 new tests GREEN, 271 total GREEN
+Stopped at: Completed 52-02 (2 commits: 9c7fa20 + fe21c34) — two-block context assembly + SDK preset+append + hot-tier stable_token + per-turn prefixHash + CACHE-04 eviction integration test; 29 new tests GREEN, 641 total GREEN
 Resume file: None
