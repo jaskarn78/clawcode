@@ -811,3 +811,38 @@ body {
 .latency-table tbody tr:last-child td {
   border-bottom: none;
 }
+
+/* Phase 51 Plan 03: SLO status highlights. The SLO-metric cell is tinted
+   per status. Cyan = healthy, red = breach, gray = no_data. Colors pulled
+   from the existing --accent-* / --status-* / --text-secondary tokens so
+   the panel stays on-palette with the rest of the dashboard. The subtitle
+   renders under each segment name, showing the server-emitted
+   slo_threshold_ms + slo_metric — per-agent overrides surface here
+   because the daemon already merged them into the response. */
+.latency-cell-healthy {
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--accent-secondary, #00e5ff);
+  font-weight: 600;
+}
+
+.latency-cell-breach {
+  background: rgba(255, 51, 102, 0.12);
+  color: var(--status-error, #ff3366);
+  font-weight: 700;
+}
+
+.latency-cell-no-data {
+  color: var(--text-secondary, #888);
+}
+
+.latency-segment-name {
+  font-weight: 600;
+}
+
+.latency-subtitle {
+  margin-top: 2px;
+  font-size: 0.70rem;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--text-secondary, #888);
+  letter-spacing: 0.02em;
+}

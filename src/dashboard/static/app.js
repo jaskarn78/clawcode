@@ -29,6 +29,26 @@ const SEGMENT_DISPLAY_ORDER = Object.freeze([
 ]);
 
 /**
+ * Map an slo_status string to a CSS cell class.
+ *
+ * Threshold values and metric labels come from the server response
+ * (`row.slo_threshold_ms` and `row.slo_metric`) — there is intentionally
+ * NO client-side threshold mirror constant. Single source of truth lives
+ * in `src/performance/slos.ts` and flows through the daemon's latency
+ * handler; the dashboard is a dumb renderer. Keeping it that way means
+ * per-agent `perf.slos?` overrides always surface in BOTH the cell color
+ * AND the subtitle text — no client/server drift.
+ *
+ * @param {string | undefined} status - The slo_status value from the row.
+ * @returns {string} - A CSS class name.
+ */
+function sloCellClass(status) {
+  if (status === "healthy") return "latency-cell-healthy";
+  if (status === "breach") return "latency-cell-breach";
+  return "latency-cell-no-data";
+}
+
+/**
  * Format a millisecond value with thousand separators and " ms" suffix.
  * Null / undefined renders as `—` (em dash), matching the CLI.
  * @param {number | null | undefined} value
@@ -227,16 +247,44 @@ async function fetchAgentLatency(agentName) {
       `/api/agents/${encodeURIComponent(agentName)}/latency?since=24h`,
     );
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    /** @type {{ agent: string, since: string, segments: Array<{ segment: string, p50: number|null, p95: number|null, p99: number|null, count: number }> }} */
+    /** @type {{ agent: string, since: string, segments: Array<{ segment: string, p50: number|null, p95: number|null, p99: number|null, count: number, slo_status?: "healthy"|"breach"|"no_data", slo_threshold_ms?: number|null, slo_metric?: "p50"|"p95"|"p99"|null }> }} */
     const report = await resp.json();
     const bySeg = new Map((report.segments || []).map((r) => [r.segment, r]));
     const rows = SEGMENT_DISPLAY_ORDER.map((seg) => {
-      const row = bySeg.get(seg) || { segment: seg, p50: null, p95: null, p99: null, count: 0 };
+      const row = bySeg.get(seg) || {
+        segment: seg,
+        p50: null,
+        p95: null,
+        p99: null,
+        count: 0,
+        slo_status: undefined,
+        slo_threshold_ms: null,
+        slo_metric: null,
+      };
+      // If the server didn't compute slo_status (old daemon / unknown
+      // segment), fall back to "no_data" when the count is 0 — keeps the
+      // gray tint consistent with the "no data yet" visual language.
+      const status = row.slo_status || (row.count === 0 ? "no_data" : undefined);
+      const cellClass = sloCellClass(status);
+      // Subtitle is driven EXCLUSIVELY by server-emitted fields. Per-agent
+      // overrides already merged by the daemon, so color + text always agree.
+      const hasSloInfo =
+        typeof row.slo_threshold_ms === "number" &&
+        typeof row.slo_metric === "string";
+      const subtitle = hasSloInfo
+        ? `<div class="latency-subtitle">SLO target: ${row.slo_threshold_ms.toLocaleString()} ms ${escapeHtml(row.slo_metric)}</div>`
+        : "";
+      // Tint ONLY the cell whose percentile matches the server-reported SLO
+      // metric. Other percentile columns render plain so the eye is drawn to
+      // the one metric the SLO actually watches.
+      const p50Class = row.slo_metric === "p50" ? cellClass : "";
+      const p95Class = row.slo_metric === "p95" ? cellClass : "";
+      const p99Class = row.slo_metric === "p99" ? cellClass : "";
       return `<tr>
-        <td>${escapeHtml(row.segment)}</td>
-        <td>${escapeHtml(formatMs(row.p50))}</td>
-        <td>${escapeHtml(formatMs(row.p95))}</td>
-        <td>${escapeHtml(formatMs(row.p99))}</td>
+        <td><div class="latency-segment-name">${escapeHtml(row.segment)}</div>${subtitle}</td>
+        <td class="${p50Class}">${escapeHtml(formatMs(row.p50))}</td>
+        <td class="${p95Class}">${escapeHtml(formatMs(row.p95))}</td>
+        <td class="${p99Class}">${escapeHtml(formatMs(row.p99))}</td>
         <td>${row.count.toLocaleString()}</td>
       </tr>`;
     }).join("");
