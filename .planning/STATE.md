@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: Completed 50-01-PLAN.md — TraceStore + TraceCollector primitives green (25 Wave 0 tests, 1171 in-scope)
-last_updated: "2026-04-13T17:42:52.683Z"
+stopped_at: Completed 50-02-PLAN.md — SdkSessionAdapter tracing GREEN (first_token/tool_call/end_to_end + subagent filter); 208 session-manager tests still GREEN
+last_updated: "2026-04-13T18:14:21.995Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 50 (latency-instrumentation) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 
 ## Performance Metrics
 
@@ -97,6 +97,11 @@ Recent decisions affecting current work:
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - perf config added to BOTH agent schema and defaults schema (fleet-wide retention defaults + per-agent override)
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - Turn identity fields exposed as public readonly (id/agent/channelId); no getters, matches readonly convention
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 01 - Metadata serialization truncates at 1000 chars with '...' sentinel rather than throwing (traces observational, never fail parent message path)
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - Case A context_assemble wiring: grep-verified session-scoped (buildSessionConfig only); no per-turn plumbing in this plan; assembleContextTraced exported for future (Phase 52 cache_control)
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - Caller-owned Turn lifecycle locked: SessionManager + SessionHandle never call turn.end() (grep-verified 0 matches); bridge/scheduler (50-02b) own lifecycle
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - Single iterateWithTracing helper inside wrapSdkQuery closure shared by all three send variants (Pitfall 2 resolved by construction — divergence impossible)
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - Subagent filter via parent_tool_use_id !== null on assistant messages (Pitfall 6); subagent text never ends parent Turn's first_token
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - createTracedSessionHandle factory delegates to wrapSdkQuery with boundTurn parameter (zero duplication with production)
 
 ### Roadmap Evolution
 
@@ -150,9 +155,10 @@ None yet.
 | Phase 49 P02 | 150s | 2 tasks | 4 files |
 | Phase 50 P00 | 573s | 3 tasks | 11 files |
 | Phase 50-latency-instrumentation P01 | 8min | 2 tasks | 7 files |
+| Phase 50-latency-instrumentation P02 | 25min | 2 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 50-01-PLAN.md — TraceStore + TraceCollector primitives green (25 Wave 0 tests, 1171 in-scope)
+Stopped at: Completed 50-02-PLAN.md — SdkSessionAdapter tracing GREEN (first_token/tool_call/end_to_end + subagent filter); 208 session-manager tests still GREEN
 Resume file: None

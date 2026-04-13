@@ -99,11 +99,11 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
   2. `clawcode latency <agent>` CLI prints p50 / p95 / p99 for end-to-end, first-token, context-assemble, and tool-call segments
   3. The web dashboard shows a per-agent latency panel with the same percentile breakdown updated from the trace store
   4. Traces persist across daemon restarts and are retained for at least a configurable window (default 7 days)
-**Plans:** 2/5 plans executed
+**Plans:** 3/5 plans executed
 Plans:
 - [x] 50-00-PLAN.md — Wave 0: test scaffolding (red state) for trace-collector, trace-store, trace-store-persistence, percentiles, latency CLI, retention heartbeat, dashboard server, bridge, session-adapter, context-assembler (append), scheduler (append)
 - [x] 50-01-PLAN.md — Wave 1: src/performance/ subsystem (TraceStore + TraceCollector + percentile SQL + types) + perf.traceRetentionDays config
-- [ ] 50-02-PLAN.md — Wave 2: SDK-side instrumentation — per-agent TraceStore lifecycle + SessionManager accessors + SdkSessionAdapter spans (first_token, tool_call, end_to_end) + ContextAssembler assembleContextTraced
+- [x] 50-02-PLAN.md — Wave 2: SDK-side instrumentation — per-agent TraceStore lifecycle + SessionManager accessors + SdkSessionAdapter spans (first_token, tool_call, end_to_end) + ContextAssembler assembleContextTraced
 - [ ] 50-02b-PLAN.md — Wave 2: Caller-side wiring — DiscordBridge receive span + Turn lifecycle ownership + Scheduler turnId prefix + auto-discovered retention heartbeat check (CASCADE-only)
 - [ ] 50-03-PLAN.md — Wave 3: `clawcode latency` CLI + IPC route + dashboard REST endpoint + Latency panel
 
@@ -194,7 +194,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 50. Latency Instrumentation | 2/5 | In Progress|  |
+| 50. Latency Instrumentation | 3/5 | In Progress|  |
 | 51. SLOs & Regression Gate | 0/0 | Not started | — |
 | 52. Prompt Caching | 0/0 | Not started | — |
 | 53. Context & Token Budget Tuning | 0/0 | Not started | — |
