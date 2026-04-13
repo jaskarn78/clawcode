@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: Completed 50-02-PLAN.md — SdkSessionAdapter tracing GREEN (first_token/tool_call/end_to_end + subagent filter); 208 session-manager tests still GREEN
-last_updated: "2026-04-13T18:14:21.995Z"
+stopped_at: Completed 50-02b-PLAN.md - DiscordBridge + scheduler caller-owned Turn lifecycle wired; auto-discovered trace-retention heartbeat check (CASCADE-only); all 14 Wave 0 tracing tests GREEN
+last_updated: "2026-04-13T18:34:42.728Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 50 (latency-instrumentation) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 
 ## Performance Metrics
 
@@ -102,6 +102,11 @@ Recent decisions affecting current work:
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - Single iterateWithTracing helper inside wrapSdkQuery closure shared by all three send variants (Pitfall 2 resolved by construction — divergence impossible)
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - Subagent filter via parent_tool_use_id !== null on assistant messages (Pitfall 6); subagent text never ends parent Turn's first_token
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 02 - createTracedSessionHandle factory delegates to wrapSdkQuery with boundTurn parameter (zero duplication with production)
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - Bridge passes Turn as 4th arg to streamFromAgent (caller-owned lifecycle); turn.end success after post-processing, turn.end error inside catch BEFORE message.react attempt
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - Receive span ended just before streamAndPostResponse on BOTH channel and thread routing branches (tracing parity)
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - Scheduler conditional sendToAgent invocation (2-arg vs 3-arg) preserves historical test assertion shape while still passing Turn when tracing wired
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - Defensive duck-typing on getTraceCollector/getTraceStore in scheduler+retention check so older SessionManager builds degrade gracefully
+- [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - CASCADE-only retention ratified: zero secondary DELETE FROM trace_spans statements (grep verified 0); ON DELETE CASCADE FK alone clears child rows
 
 ### Roadmap Evolution
 
@@ -156,9 +161,10 @@ None yet.
 | Phase 50 P00 | 573s | 3 tasks | 11 files |
 | Phase 50-latency-instrumentation P01 | 8min | 2 tasks | 7 files |
 | Phase 50-latency-instrumentation P02 | 25min | 2 tasks | 4 files |
+| Phase 50-latency-instrumentation P02b | 15min | 2 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 50-02-PLAN.md — SdkSessionAdapter tracing GREEN (first_token/tool_call/end_to_end + subagent filter); 208 session-manager tests still GREEN
+Stopped at: Completed 50-02b-PLAN.md - DiscordBridge + scheduler caller-owned Turn lifecycle wired; auto-discovered trace-retention heartbeat check (CASCADE-only); all 14 Wave 0 tracing tests GREEN
 Resume file: None
