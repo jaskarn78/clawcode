@@ -210,7 +210,18 @@ export async function buildSessionConfig(
     discordBindings: discordBindingsStr,
     contextSummary: contextSummaryStr,
   };
-  const systemPrompt = assembleContext(sources, budgets);
+  // Phase 52 Plan 02 — assembleContext now returns AssembledContext
+  // ({ stablePrefix, mutableSuffix, hotStableToken }). This task (52-02
+  // Task 1) only reshapes the assembler; Task 2 rewires buildSessionConfig
+  // to propagate the split through AgentSessionConfig. For now, concatenate
+  // the two blocks so the existing single-string systemPrompt contract is
+  // preserved — downstream consumers get the identical bytes they got
+  // pre-52.
+  const assembled = assembleContext(sources, budgets);
+  const systemPrompt =
+    assembled.stablePrefix && assembled.mutableSuffix
+      ? `${assembled.stablePrefix}\n\n${assembled.mutableSuffix}`
+      : assembled.stablePrefix || assembled.mutableSuffix;
 
   return {
     name: config.name,

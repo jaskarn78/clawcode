@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import {
   assembleContext,
   DEFAULT_BUDGETS,
@@ -7,6 +8,21 @@ import {
   type ContextBudgets,
   type ContextSources,
 } from "../context-assembler.js";
+
+/**
+ * Phase 52 Plan 02: `assembleContext` now returns `AssembledContext`, an
+ * object with `stablePrefix`, `mutableSuffix`, and `hotStableToken`. The
+ * existing pre-52 tests were written against the single-string return and
+ * have been surgically updated to assert on the joined stable+mutable
+ * string so intent is preserved.
+ */
+function joinAssembled(result: unknown): string {
+  const a = result as { stablePrefix: string; mutableSuffix: string };
+  if (a.stablePrefix && a.mutableSuffix) {
+    return `${a.stablePrefix}\n\n${a.mutableSuffix}`;
+  }
+  return a.stablePrefix || a.mutableSuffix;
+}
 
 function makeSources(overrides: Partial<ContextSources> = {}): ContextSources {
   return {
@@ -71,7 +87,7 @@ describe("assembleContext", () => {
       contextSummary: "## Context Summary\nprevious session info",
     });
 
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
 
     const identityIdx = result.indexOf("I am an agent");
     const memoriesIdx = result.indexOf("## Key Memories");
@@ -92,7 +108,7 @@ describe("assembleContext", () => {
     const longIdentity = "a".repeat(5000);
     const sources = makeSources({ identity: longIdentity });
 
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
 
     // Identity budget is 1000 tokens = 4000 chars max
     // Truncated text should be <= 4000 chars + "..." suffix
@@ -109,7 +125,7 @@ describe("assembleContext", () => {
     ).join("\n");
 
     const sources = makeSources({ hotMemories: bullets });
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
 
     // Should contain the header
     expect(result).toContain("## Key Memories");
@@ -133,7 +149,7 @@ describe("assembleContext", () => {
       hotMemories: "- some memory",
     });
 
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
 
     // Should start with the memories section, no empty identity
     expect(result).toContain("## Key Memories");
@@ -146,13 +162,13 @@ describe("assembleContext", () => {
       graphContext: "",
     });
 
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
     expect(result).not.toContain("## Related Context");
   });
 
   it("returns empty string when all sources are empty", () => {
     const sources = makeSources();
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
     expect(result).toBe("");
   });
 
@@ -169,7 +185,7 @@ describe("assembleContext", () => {
       hotMemories: "- short\n- also short",
     });
 
-    const result = assembleContext(sources, tinyBudgets);
+    const result = joinAssembled(assembleContext(sources, tinyBudgets));
 
     // Identity should be truncated to ~20 chars (5 tokens * 4) + "..."
     const identityEnd = result.indexOf("\n\n## Key Memories");
@@ -182,16 +198,27 @@ describe("assembleContext", () => {
     const longBindings = "## Discord\n" + "x".repeat(50000);
     const sources = makeSources({ discordBindings: longBindings });
 
-    const result = assembleContext(sources);
-    expect(result).toBe(longBindings);
+    // Phase 52 Plan 02: discord bindings live in mutableSuffix now, not the
+    // top-level string. Assert the mutable half equals the input.
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+      mutableSuffix: string;
+    };
+    expect(result.mutableSuffix).toBe(longBindings);
+    expect(result.stablePrefix).toBe("");
   });
 
   it("context summary is pass-through (no truncation)", () => {
     const longSummary = "## Summary\n" + "y".repeat(50000);
     const sources = makeSources({ contextSummary: longSummary });
 
-    const result = assembleContext(sources);
-    expect(result).toBe(longSummary);
+    // Phase 52 Plan 02: context summary lives in mutableSuffix.
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+      mutableSuffix: string;
+    };
+    expect(result.mutableSuffix).toBe(longSummary);
+    expect(result.stablePrefix).toBe("");
   });
 
   it("section headers are NOT counted against the source budget", () => {
@@ -206,7 +233,7 @@ describe("assembleContext", () => {
     const shortMemory = "- a short bullet"; // 16 chars = 4 tokens, well within budget
     const sources = makeSources({ hotMemories: shortMemory });
 
-    const result = assembleContext(sources, customBudgets);
+    const result = joinAssembled(assembleContext(sources, customBudgets));
 
     // The full memory content should be preserved (within budget)
     expect(result).toContain(shortMemory);
@@ -218,7 +245,7 @@ describe("assembleContext", () => {
     const hugeIdentity = "x".repeat(40000);
     const sources = makeSources({ identity: hugeIdentity });
 
-    const result = assembleContext(sources);
+    const result = joinAssembled(assembleContext(sources));
     // Even though identity is huge, it gets truncated to budget
     // So the result should not exceed ceiling
     expect(exceedsCeiling(result)).toBe(false);
@@ -231,7 +258,6 @@ describe("assembleContext", () => {
 // makes these tests green.
 
 import { vi } from "vitest";
-// @ts-expect-error - Wave 2 will add this export; Wave 0 leaves it missing for RED state.
 import { assembleContextTraced } from "../context-assembler.js";
 
 describe("context_assemble tracing", () => {
@@ -245,12 +271,12 @@ describe("context_assemble tracing", () => {
     const { turn, startSpan, spanEnd } = makeTurnStub();
     const sources = makeSources({ identity: "I am an agent" });
 
-    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, turn);
+    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, turn);
 
     expect(startSpan).toHaveBeenCalledWith("context_assemble");
     expect(spanEnd).toHaveBeenCalledTimes(1);
-    // Result should still match the untraced assembleContext output.
-    expect(result).toBe(assembleContext(sources, DEFAULT_BUDGETS));
+    // Result should still match the untraced assembleContext output (same shape).
+    expect(result).toEqual(assembleContext(sources, DEFAULT_BUDGETS));
   });
 
   it("tracing: ends the context_assemble span even when assembleContext throws", () => {
@@ -267,7 +293,7 @@ describe("context_assemble tracing", () => {
       },
     } as unknown as ContextSources;
 
-    expect(() => (assembleContextTraced as any)(thrower, DEFAULT_BUDGETS, turn)).toThrow();
+    expect(() => (assembleContextTraced as any)(thrower, DEFAULT_BUDGETS, undefined, turn)).toThrow();
 
     expect(startSpan).toHaveBeenCalledWith("context_assemble");
     expect(spanEnd).toHaveBeenCalledTimes(1);
@@ -275,8 +301,183 @@ describe("context_assemble tracing", () => {
 
   it("tracing: no-op when turn is undefined (does not call startSpan)", () => {
     const sources = makeSources({ identity: "I am an agent" });
-    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined);
+    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, undefined);
     // Result equals the untraced output.
-    expect(result).toBe(assembleContext(sources, DEFAULT_BUDGETS));
+    expect(result).toEqual(assembleContext(sources, DEFAULT_BUDGETS));
+  });
+});
+
+// ── Phase 52 Plan 02 — two-block assembly + hot-tier stable_token ─────────────
+
+import { computeHotStableToken, computePrefixHash } from "../context-assembler.js";
+
+describe("two-block assembly (Phase 52)", () => {
+  it("returns { stablePrefix, mutableSuffix, hotStableToken } — not a single string", () => {
+    const sources = makeSources({
+      identity: "I am an agent",
+      hotMemories: "- memory 1\n- memory 2",
+      toolDefinitions: "tool_a: does stuff",
+      discordBindings: "## Discord\nbound to #general",
+      contextSummary: "## Context Summary\nprevious session info",
+    });
+
+    const result = assembleContext(sources);
+
+    expect(typeof result).toBe("object");
+    expect(typeof (result as any).stablePrefix).toBe("string");
+    expect(typeof (result as any).mutableSuffix).toBe("string");
+    expect(typeof (result as any).hotStableToken).toBe("string");
+    expect((result as any).hotStableToken).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("stablePrefix contains identity, hotMemories, toolDefinitions — the cacheable block", () => {
+    const sources = makeSources({
+      identity: "I am an agent",
+      hotMemories: "- memory alpha",
+      toolDefinitions: "tool_a: does stuff",
+      discordBindings: "## Discord\nbound to #general",
+    });
+
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+      mutableSuffix: string;
+    };
+
+    expect(result.stablePrefix).toContain("I am an agent");
+    expect(result.stablePrefix).toContain("memory alpha");
+    expect(result.stablePrefix).toContain("tool_a");
+  });
+
+  it("mutableSuffix contains discordBindings and contextSummary — the per-turn block", () => {
+    const sources = makeSources({
+      identity: "I am an agent",
+      discordBindings: "## Discord\nbound to #channel",
+      contextSummary: "## Context Summary\nprior session",
+    });
+
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+      mutableSuffix: string;
+    };
+
+    expect(result.mutableSuffix).toContain("## Discord");
+    expect(result.mutableSuffix).toContain("## Context Summary");
+    expect(result.stablePrefix).not.toContain("## Discord");
+    expect(result.stablePrefix).not.toContain("## Context Summary");
+  });
+
+  it("when priorHotStableToken matches current hot-tier, hot-tier stays in stablePrefix", () => {
+    const sources = makeSources({
+      identity: "identity",
+      hotMemories: "- m1\n- m2",
+      discordBindings: "## Discord\nb",
+    });
+
+    // First call gets the current token, then pass it as priorHotStableToken.
+    const first = assembleContext(sources) as unknown as {
+      hotStableToken: string;
+    };
+    const result = assembleContext(sources, DEFAULT_BUDGETS, {
+      priorHotStableToken: first.hotStableToken,
+    }) as unknown as { stablePrefix: string; mutableSuffix: string };
+
+    expect(result.stablePrefix).toContain("## Key Memories");
+    expect(result.mutableSuffix).not.toContain("## Key Memories");
+  });
+
+  it("when priorHotStableToken differs, hot-tier is excluded from stablePrefix and placed in mutableSuffix", () => {
+    const sources = makeSources({
+      identity: "identity",
+      hotMemories: "- m1\n- m2",
+      discordBindings: "## Discord\nb",
+    });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS, {
+      priorHotStableToken: "0".repeat(64), // deliberately non-matching
+    }) as unknown as {
+      stablePrefix: string;
+      mutableSuffix: string;
+      hotStableToken: string;
+    };
+
+    expect(result.stablePrefix).not.toContain("## Key Memories");
+    expect(result.mutableSuffix).toContain("## Key Memories");
+    expect(result.hotStableToken).not.toBe("0".repeat(64));
+  });
+
+  it("when hotMemories is empty, hotStableToken is sha256 of '' and hot-tier is absent from both blocks", () => {
+    const sources = makeSources({
+      identity: "identity",
+      hotMemories: "",
+      discordBindings: "## Discord\nb",
+    });
+
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+      mutableSuffix: string;
+      hotStableToken: string;
+    };
+
+    const emptyHash = createHash("sha256").update("", "utf8").digest("hex");
+    expect(result.hotStableToken).toBe(emptyHash);
+    expect(result.stablePrefix).not.toContain("## Key Memories");
+    expect(result.mutableSuffix).not.toContain("## Key Memories");
+  });
+
+  it("assembleContextTraced returns AssembledContext unchanged (pass-through type-preserving wrapper)", () => {
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({ end: spanEnd }));
+    const turn = { startSpan, end: vi.fn() };
+    const sources = makeSources({
+      identity: "identity",
+      hotMemories: "- m1",
+    });
+
+    const result = (assembleContextTraced as any)(
+      sources,
+      DEFAULT_BUDGETS,
+      undefined,
+      turn,
+    );
+
+    expect(startSpan).toHaveBeenCalledWith("context_assemble");
+    expect(spanEnd).toHaveBeenCalledTimes(1);
+    expect(typeof result).toBe("object");
+    expect(typeof result.stablePrefix).toBe("string");
+    expect(typeof result.mutableSuffix).toBe("string");
+    expect(typeof result.hotStableToken).toBe("string");
+  });
+
+  it("AssembledContext is frozen (immutability contract)", () => {
+    const sources = makeSources({ identity: "x" });
+    const result = assembleContext(sources);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+});
+
+describe("computeHotStableToken / computePrefixHash (Phase 52)", () => {
+  it("computeHotStableToken returns sha256 hex over the input string", () => {
+    const input = "- mem1\n- mem2";
+    const expected = createHash("sha256").update(input, "utf8").digest("hex");
+    expect(computeHotStableToken(input)).toBe(expected);
+    expect(computeHotStableToken(input)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("computeHotStableToken returns sha256('') for empty input", () => {
+    const expected = createHash("sha256").update("", "utf8").digest("hex");
+    expect(computeHotStableToken("")).toBe(expected);
+  });
+
+  it("computePrefixHash returns sha256 hex of stablePrefix", () => {
+    const prefix = "## Identity\nCore traits: helpful";
+    const expected = createHash("sha256").update(prefix, "utf8").digest("hex");
+    expect(computePrefixHash(prefix)).toBe(expected);
+    expect(computePrefixHash(prefix)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("computePrefixHash differs between different prefixes (eviction detection)", () => {
+    const a = computePrefixHash("prefix A");
+    const b = computePrefixHash("prefix B");
+    expect(a).not.toBe(b);
   });
 });

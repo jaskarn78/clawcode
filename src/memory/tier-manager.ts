@@ -7,6 +7,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import { extractWikilinks } from "./graph.js";
@@ -290,6 +291,27 @@ export class TierManager {
     const hot = this.store.listByTier("hot", 1000);
     const sorted = [...hot].sort((a, b) => b.importance - a.importance);
     return Object.freeze(sorted);
+  }
+
+  /**
+   * Phase 52 Plan 02 — stable_token for the top-3 hot-tier memories.
+   *
+   * Returns a deterministic sha256 hex over the sorted `id:accessedAt`
+   * signatures of the top-3 hot memories. The context-assembler compares
+   * this across turns to decide whether hot-tier enters the cacheable stable
+   * prefix (token matches) or falls into the mutable suffix for one turn
+   * (token differs from the prior turn's).
+   *
+   * Empty hot-tier → sha256("") — a known constant that matches the
+   * empty-case path used by the assembler.
+   */
+  getHotMemoriesStableToken(): string {
+    const hotMems = this.getHotMemories().slice(0, 3);
+    const signature = hotMems
+      .map((m) => `${m.id}:${m.accessedAt ?? m.createdAt}`)
+      .sort()
+      .join("|");
+    return createHash("sha256").update(signature, "utf8").digest("hex");
   }
 
   /**

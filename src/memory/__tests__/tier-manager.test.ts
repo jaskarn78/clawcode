@@ -462,4 +462,63 @@ describe("TierManager", () => {
       expect(typeof result.promoted).toBe("number");
     });
   });
+
+  // ── Phase 52 Plan 02 — hot-tier stable_token for cache-prefix detection ────
+
+  describe("getHotMemoriesStableToken (Phase 52)", () => {
+    it("returns deterministic sha256 over top-3 hot memories' ids + accessedAt", () => {
+      const tm = createTierManager();
+      // Seed three hot memories.
+      const m1 = store.insert(
+        { content: "mem one", source: "conversation", importance: 1.0 },
+        randomEmbedding(),
+      );
+      const m2 = store.insert(
+        { content: "mem two", source: "conversation", importance: 0.9 },
+        randomEmbedding(),
+      );
+      const m3 = store.insert(
+        { content: "mem three", source: "conversation", importance: 0.8 },
+        randomEmbedding(),
+      );
+      // Promote all three to hot tier.
+      store.updateTier(m1.id, "hot");
+      store.updateTier(m2.id, "hot");
+      store.updateTier(m3.id, "hot");
+
+      const token1 = tm.getHotMemoriesStableToken();
+      const token2 = tm.getHotMemoriesStableToken();
+      expect(token1).toBe(token2);
+      expect(token1).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it("token changes when hot-tier composition changes", () => {
+      const tm = createTierManager();
+      const m1 = store.insert(
+        { content: "mem one", source: "conversation", importance: 1.0 },
+        randomEmbedding(),
+      );
+      store.updateTier(m1.id, "hot");
+      const before = tm.getHotMemoriesStableToken();
+
+      // Add a second hot memory — composition changed.
+      const m2 = store.insert(
+        { content: "mem two", source: "conversation", importance: 0.9 },
+        randomEmbedding(),
+      );
+      store.updateTier(m2.id, "hot");
+
+      const after = tm.getHotMemoriesStableToken();
+      expect(after).not.toBe(before);
+    });
+
+    it("returns sha256('') when no hot memories exist", () => {
+      const tm = createTierManager();
+      const token = tm.getHotMemoriesStableToken();
+      // sha256 of empty string has a known hex value.
+      const emptyHash =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+      expect(token).toBe(emptyHash);
+    });
+  });
 });
