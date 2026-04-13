@@ -70,7 +70,18 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-(No active milestone — run `/gsd:new-milestone` to start next)
+## Current Milestone: v1.7 Performance & Latency
+
+**Goal:** Reduce end-to-end latency from Discord message arrival to agent reply across the ClawCode fleet.
+
+**Target focus areas:**
+- Bottleneck audit — instrument and measure where time is actually spent in the hot path
+- Prompt caching — apply Anthropic `cache_control` to stable prefixes (system prompt, memory hot-tier, skills)
+- Context/token budget tuning — shrink per-turn payload (assembly pipeline + memory tiering)
+- Streaming — optimize first-token latency and Discord chunked delivery
+- Tool-call overhead — reduce round trips, parallelize independent calls, cache idempotent results
+- Warm-path optimizations — process warmup, embedding cache, SQLite warm statements, keep-alive
+- Concrete latency SLOs — p50/p95 targets per surface, CI regression gate
 
 ### Out of Scope
 
@@ -145,4 +156,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-11 after v1.5 milestone completion*
+*Last updated: 2026-04-13 — v1.7 Performance & Latency started*

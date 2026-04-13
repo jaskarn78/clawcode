@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.5
-milestone_name: Smart Memory & Model Tiering
-status: Milestone complete
-stopped_at: Completed 49-02-PLAN.md
-last_updated: "2026-04-12T03:21:33.998Z"
-last_activity: 2026-04-12
+milestone: v1.7
+milestone_name: Performance & Latency
+status: Defining requirements
+stopped_at: null
+last_updated: "2026-04-13T00:00:00.000Z"
+last_activity: 2026-04-13
 progress:
-  total_phases: 14
-  completed_phases: 14
-  total_plans: 22
-  completed_plans: 22
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -20,12 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 49 — rag-over-documents
+**Current focus:** Milestone v1.7 — Performance & Latency (defining requirements)
 
 ## Current Position
 
-Phase: 49
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-13 — Milestone v1.7 started
 
 ## Performance Metrics
 
@@ -86,6 +88,10 @@ Recent decisions affecting current work:
 - [Phase 49]: Word-count heuristic (1 token ~ 0.75 words) for chunk sizing; DocumentStore takes Database instance for DB reuse; vec deletion by chunk ID lookup
 - [Phase 49]: DocumentStore shares per-agent SQLite DB via store.getDatabase() -- no separate DB file
 - [Phase 49]: search_documents formats results with similarity scores and context chunks for readability
+
+### Roadmap Evolution
+
+- 2026-04-13: Milestone v1.7 Performance & Latency started (continues from v1.6 phase numbering)
 
 ### Pending Todos
 
