@@ -173,3 +173,109 @@ describe("Dashboard Server", () => {
     expect(res.headers.get("content-type")).toContain("application/javascript");
   });
 });
+
+// ── APPENDED BY Phase 50-00 Wave 0 scaffolding ───────────────────────────────
+// New "latency endpoint" describe block. Existing tests above remain untouched.
+
+function makeLatencyReport() {
+  return {
+    agent: "alpha",
+    since: "2026-04-12T00:00:00.000Z",
+    segments: [
+      { segment: "end_to_end", p50: 1000, p95: 2000, p99: 3000, count: 10 },
+      { segment: "first_token", p50: 400, p95: 800, p99: 1200, count: 10 },
+      { segment: "context_assemble", p50: 50, p95: 100, p99: 150, count: 10 },
+      { segment: "tool_call", p50: 75, p95: 150, p99: 225, count: 20 },
+    ],
+  };
+}
+
+describe("latency endpoint", () => {
+  let closeServer: (() => Promise<void>) | null = null;
+  let port: number;
+
+  beforeEach(() => {
+    port = 30_000 + Math.floor(Math.random() * 10_000);
+
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "status") return { entries: [] };
+      if (method === "context-zone-status") return { agents: {} };
+      if (method === "latency") return makeLatencyReport();
+      if (method === "start" || method === "stop" || method === "restart") return { ok: true };
+      throw new Error(`Unknown method: ${method}`);
+    });
+  });
+
+  afterEach(async () => {
+    if (closeServer) {
+      await closeServer();
+      closeServer = null;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("latency: returns 200 with LatencyReport json for valid agent", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as unknown;
+    expect(body).toEqual(makeLatencyReport());
+  });
+
+  it("latency: defaults since to 24h when query param absent", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency`);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "latency",
+      expect.objectContaining({ agent: "alpha", since: "24h" }),
+    );
+  });
+
+  it("latency: passes ?since=7d through to IPC method", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency?since=7d`);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "latency",
+      expect.objectContaining({ agent: "alpha", since: "7d" }),
+    );
+  });
+
+  it("latency: returns 500 with error message when IPC throws", async () => {
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "latency") throw new Error("daemon unreachable");
+      return {};
+    });
+
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain("daemon unreachable");
+  });
+});
