@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: Completed 51-01-PLAN.md - DEFAULT_SLOS catalog + perf.slos? Zod override on both schemas + ResolvedAgentConfig.perf.slos? TS mirror + BenchReport/Baseline schemas + loadThresholds + evaluateRegression; 27 new tests GREEN, zero tsc errors in Plan 51-01 files
-last_updated: "2026-04-13T21:11:06.214Z"
+stopped_at: Completed 51-02-PLAN.md - clawcode bench CLI + isolated daemon harness + baseline read/write/diff + bench-run-prompt IPC method (registered in BOTH protocol.ts and protocol.test.ts); 41 new tests GREEN, zero new tsc errors
+last_updated: "2026-04-13T21:30:09.889Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 51 (slos-regression-gate) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -113,6 +113,13 @@ Recent decisions affecting current work:
 - [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - mergeSloOverrides has APPEND semantics on metric divergence (a segment may carry multiple SLOs e.g. p50 AND p95 first_token)
 - [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - evaluateRegression skip rules: count===0 both sides, null p95, baseline p95===0; per-segment absolute-floor (p95MaxDeltaMs) gates ONLY when pct threshold breached
 - [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - Baseline=BenchReport.extend({updated_at, updated_by}) produces symmetric diff logic; test fixtures use explicit type annotations (not as const) to match mutable Zod-inferred shapes
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - bench-run-prompt handler owns Turn lifecycle (caller-owned end() in BOTH success+error branches), matches Phase 50 50-02b contract where SessionManager.sendToAgent is pure passthrough
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - Tempdir HOME is the isolation mechanism: MANAGER_DIR resolves at module load via homedir(), HOME override propagates to tempdir socket at <tmpHome>/.clawcode/manager/clawcode.sock with zero daemon-side changes
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - runBench teardown in finally{} (not try/catch/throw duplication); handle.stop() always runs on success AND IPC failure; verified by spy on stub harness
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - 4-canonical-segment invariant: runner maps overall_percentiles through CANONICAL_SEGMENTS backfilling count=0 rows so reports have stable 4-row shape; simplifies downstream diff + evaluateRegression
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - --update-baseline never auto-writes: confirmBaselineUpdate returns true ONLY on 'y'/'yes' (case-insensitive); empty/n/nope/EOF all return false; guarantees baseline changes stay operator-reviewed
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - IPC method dual-registration preserved by construction: bench-run-prompt added to BOTH src/ipc/protocol.ts IPC_METHODS AND src/ipc/__tests__/protocol.test.ts expected toEqual list in same commit (Phase 50 regression lesson)
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - CLI tests spy on process.stdout.write (what cliLog calls), NOT console.log; describe-level stdoutSpy silences by default, individual tests re-implement to capture chunks for assertions
 
 ### Roadmap Evolution
 
@@ -169,9 +176,10 @@ None yet.
 | Phase 50-latency-instrumentation P02 | 25min | 2 tasks | 4 files |
 | Phase 50-latency-instrumentation P02b | 15min | 2 tasks | 3 files |
 | Phase 51-slos-regression-gate P01 | 8min | 2 tasks | 9 files |
+| Phase 51-slos-regression-gate P02 | 13min | 3 tasks | 15 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 51-01-PLAN.md - DEFAULT_SLOS catalog + perf.slos? Zod override on both schemas + ResolvedAgentConfig.perf.slos? TS mirror + BenchReport/Baseline schemas + loadThresholds + evaluateRegression; 27 new tests GREEN, zero tsc errors in Plan 51-01 files
+Stopped at: Completed 51-02-PLAN.md - clawcode bench CLI + isolated daemon harness + baseline read/write/diff + bench-run-prompt IPC method (registered in BOTH protocol.ts and protocol.test.ts); 41 new tests GREEN, zero new tsc errors
 Resume file: None
