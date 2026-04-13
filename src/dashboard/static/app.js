@@ -15,6 +15,9 @@ let lastAgentHash = "";
 /** @type {number | null} — guard so the 30s latency poll is only scheduled once */
 let latencyPollIntervalId = null;
 
+/** @type {number | null} — guard so the 30s cache poll is only scheduled once */
+let cachePollIntervalId = null;
+
 /**
  * Canonical display order for the latency percentile table. Mirrors
  * SEGMENT_DISPLAY_ORDER in src/cli/commands/latency.ts so the CLI table
@@ -46,6 +49,35 @@ function sloCellClass(status) {
   if (status === "healthy") return "latency-cell-healthy";
   if (status === "breach") return "latency-cell-breach";
   return "latency-cell-no-data";
+}
+
+/**
+ * Phase 52 Plan 03: map a CacheHitRateStatus string to a CSS cell class.
+ *
+ * Healthy = cyan (accent-secondary token), breach = red (status-error),
+ * no_data = gray (text-secondary). Mirrors sloCellClass naming convention so
+ * the two panels stay visually parallel in the per-agent card.
+ *
+ * @param {string | undefined} status - The status value from the cache report.
+ * @returns {string} - A CSS class name.
+ */
+function cacheCellClass(status) {
+  if (status === "healthy") return "cache-cell-healthy";
+  if (status === "breach") return "cache-cell-breach";
+  return "cache-cell-no-data";
+}
+
+/**
+ * Phase 52 Plan 03: format a ratio [0..1] as a percentage with one decimal.
+ * `0.723` -> "72.3%". Null/undefined/NaN renders as "—" (em dash, matching
+ * the latency formatter's null convention).
+ *
+ * @param {number | null | undefined} value
+ * @returns {string}
+ */
+function formatPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 /**
@@ -184,6 +216,10 @@ function createAgentCard(agent, index) {
         <div class="latency-heading">Latency (24h)</div>
         <div class="latency-body panel-placeholder">Loading latency…</div>
       </div>
+      <div class="cache-panel" id="cache-${escapeAttr(agent.name)}">
+        <div class="cache-heading">Prompt Cache (24h)</div>
+        <div class="cache-body panel-placeholder">Loading cache…</div>
+      </div>
       ${channels ? `<div class="channel-tags">${channels}</div>` : ""}
       ${errorBlock}
       <div class="agent-actions">
@@ -222,13 +258,18 @@ function renderAgentCards(agents) {
 
   grid.innerHTML = agents.map((agent, i) => createAgentCard(agent, i)).join("");
 
-  // After the DOM is rebuilt, prime the latency panel for every visible
-  // agent. The 30s interval started by startLatencyPolling keeps things
-  // fresh; this pass just avoids waiting for the first tick.
+  // After the DOM is rebuilt, prime the latency AND cache panels for every
+  // visible agent. The 30s intervals started by startLatencyPolling /
+  // startCachePolling keep things fresh; this pass just avoids waiting for
+  // the first tick.
   agents.forEach((a) => {
-    if (a && typeof a.name === "string") fetchAgentLatency(a.name);
+    if (a && typeof a.name === "string") {
+      fetchAgentLatency(a.name);
+      fetchAgentCache(a.name);
+    }
   });
   startLatencyPolling();
+  startCachePolling();
 }
 
 /**
@@ -313,6 +354,132 @@ function startLatencyPolling() {
     });
   };
   latencyPollIntervalId = setInterval(pollAll, 30_000);
+}
+
+/**
+ * Phase 52 Plan 03: fetch and render the Prompt Cache panel for a single
+ * agent. Never throws to the console on network/IPC errors — shows a
+ * placeholder in the panel body instead so the 30s loop is resilient.
+ *
+ * Contract: GET /api/agents/:name/cache?since=24h returns the daemon's
+ * augmented CacheTelemetryReport shape:
+ *   { agent, since, totalTurns, avgHitRate, p50HitRate, p95HitRate,
+ *     totalCacheReads, totalCacheWrites, totalInputTokens, trendByDay[],
+ *     status: "healthy"|"breach"|"no_data", cache_effect_ms: number|null }
+ *
+ * @param {string} agentName
+ */
+async function fetchAgentCache(agentName) {
+  const container = document.getElementById(`cache-${agentName}`);
+  if (!container) return;
+  const body = container.querySelector(".cache-body");
+  if (!body) return;
+  try {
+    const resp = await fetch(
+      `/api/agents/${encodeURIComponent(agentName)}/cache?since=24h`,
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    /** @type {{ agent: string, since: string, totalTurns: number, avgHitRate: number, p50HitRate: number, p95HitRate: number, totalCacheReads: number, totalCacheWrites: number, totalInputTokens: number, trendByDay: Array<{date:string,turns:number,hitRate:number}>, status: "healthy"|"breach"|"no_data", cache_effect_ms: number|null }} */
+    const report = await resp.json();
+    renderCachePanel(body, report);
+  } catch {
+    body.classList.add("panel-placeholder");
+    body.textContent = "Cache data unavailable";
+  }
+}
+
+/**
+ * Phase 52 Plan 03: render the augmented CacheTelemetryReport into the
+ * panel body. Three stacked subtitle lines below the single-row table:
+ *   1. Formula disclosure: "Hit rate = cache reads / (cache reads + cache
+ *      writes + input tokens)"
+ *   2. SLO band: "SLO: healthy ≥ 60%, breach < 30%"
+ *   3. Cache effect: "Cache effect: {X}ms faster first-token on hits" when
+ *      non-null, else "Cache effect: insufficient data (< 20 turns)"
+ *
+ * @param {Element} body
+ * @param {{
+ *   agent: string,
+ *   totalTurns: number,
+ *   avgHitRate: number,
+ *   p50HitRate: number,
+ *   p95HitRate: number,
+ *   totalCacheReads: number,
+ *   totalCacheWrites: number,
+ *   totalInputTokens: number,
+ *   trendByDay: Array<{date:string,turns:number,hitRate:number}>,
+ *   status: "healthy"|"breach"|"no_data",
+ *   cache_effect_ms: number|null,
+ * }} report
+ */
+function renderCachePanel(body, report) {
+  // Empty-window fallback: no cache-aware turns in the last 24h.
+  if (!report || typeof report.totalTurns !== "number" || report.totalTurns === 0) {
+    body.classList.add("panel-placeholder");
+    body.textContent = "No cache data yet (warming up)";
+    return;
+  }
+
+  const cellClass = cacheCellClass(report.status);
+  const hitRateText = formatPercent(report.avgHitRate);
+  const p50Text = formatPercent(report.p50HitRate);
+  const p95Text = formatPercent(report.p95HitRate);
+
+  // Eviction-marker detection: annotate any trendByDay bucket whose hit rate
+  // dropped >30% vs the prior day. Small red dot + tooltip "prefix changed".
+  const trend = Array.isArray(report.trendByDay) ? report.trendByDay : [];
+  const evictionMarkers = [];
+  for (let i = 1; i < trend.length; i++) {
+    const prev = trend[i - 1];
+    const curr = trend[i];
+    if (prev && curr && typeof prev.hitRate === "number" && typeof curr.hitRate === "number") {
+      if (curr.hitRate - prev.hitRate < -0.3) {
+        evictionMarkers.push(escapeHtml(curr.date));
+      }
+    }
+  }
+  const evictionAnnotation =
+    evictionMarkers.length > 0
+      ? `<span class="cache-eviction-marker" title="prefix changed on ${evictionMarkers.join(", ")}">●</span>`
+      : "";
+
+  // Cache-effect subtitle: suppress absolute number below noise floor.
+  const effectSubtitle =
+    report.cache_effect_ms === null || report.cache_effect_ms === undefined
+      ? "Cache effect: insufficient data (< 20 turns)"
+      : `Cache effect: ${Math.round(report.cache_effect_ms)} ms faster first-token on hits`;
+
+  body.classList.remove("panel-placeholder");
+  body.innerHTML = `<table class="cache-table">
+    <thead><tr><th>Hit Rate</th><th>Cache Reads</th><th>Cache Writes</th><th>Input Tokens</th><th>Turns</th></tr></thead>
+    <tbody><tr>
+      <td class="${cellClass}">${escapeHtml(hitRateText)}${evictionAnnotation}</td>
+      <td>${report.totalCacheReads.toLocaleString()}</td>
+      <td>${report.totalCacheWrites.toLocaleString()}</td>
+      <td>${report.totalInputTokens.toLocaleString()}</td>
+      <td>${report.totalTurns.toLocaleString()}</td>
+    </tr></tbody>
+  </table>
+  <div class="cache-subtitle">Hit rate = cache reads / (cache reads + cache writes + input tokens)</div>
+  <div class="cache-subtitle">SLO: healthy &ge; 60%, breach &lt; 30% · p50 ${escapeHtml(p50Text)} · p95 ${escapeHtml(p95Text)}</div>
+  <div class="cache-subtitle">${escapeHtml(effectSubtitle)}</div>`;
+}
+
+/**
+ * Phase 52 Plan 03: start the 30-second Prompt Cache polling interval.
+ * Idempotent — guards against double-registration via cachePollIntervalId.
+ * Mirrors startLatencyPolling's shape.
+ */
+function startCachePolling() {
+  if (cachePollIntervalId !== null) return;
+  const pollAll = () => {
+    const panels = document.querySelectorAll('[id^="cache-"]');
+    panels.forEach((el) => {
+      const agentName = el.id.replace(/^cache-/, "");
+      if (agentName) fetchAgentCache(agentName);
+    });
+  };
+  cachePollIntervalId = setInterval(pollAll, 30_000);
 }
 
 /**

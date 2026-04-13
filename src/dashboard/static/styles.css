@@ -846,3 +846,105 @@ body {
   color: var(--text-secondary, #888);
   letter-spacing: 0.02em;
 }
+
+/* ---------- Prompt Cache Panel (Phase 52 Plan 03, per-agent card) ---------- */
+
+/* Mirrors .latency-panel structure so the two observability panels sit as
+   visual siblings in each agent card. Colors pulled from the existing
+   --accent-secondary / --status-error / --text-secondary tokens — no new
+   token names introduced (per Phase 51 Plan 03 single-source-of-truth rule). */
+.cache-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cache-heading {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.cache-body {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.cache-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cache-table th {
+  text-align: right;
+  padding: 3px 6px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+}
+
+.cache-table td {
+  padding: 3px 6px;
+  text-align: right;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.cache-table th:first-child,
+.cache-table td:first-child {
+  text-align: left;
+}
+
+.cache-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* SLO tinting: cyan = healthy (hit rate ≥ 60%), red = breach (< 30%),
+   gray = no_data (warming up / gray zone). Matches the latency panel's
+   visual language so operators scan both panels with the same color
+   vocabulary. */
+.cache-cell-healthy {
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--accent-secondary, #00e5ff);
+  font-weight: 600;
+}
+
+.cache-cell-breach {
+  background: rgba(255, 51, 102, 0.12);
+  color: var(--status-error, #ff3366);
+  font-weight: 700;
+}
+
+.cache-cell-no-data {
+  color: var(--text-secondary, #888);
+}
+
+/* Three stacked subtitle lines below the single-row table:
+   (1) formula disclosure, (2) SLO band + p50/p95, (3) cache-effect delta. */
+.cache-subtitle {
+  margin-top: 4px;
+  font-size: 0.70rem;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--text-secondary, #888);
+  letter-spacing: 0.02em;
+}
+
+/* Tiny eviction dot appended to the hit-rate cell when a day-over-day drop
+   exceeds 30% (indicates the stable prefix changed). Tooltip surfaces the
+   date of the drop so operators can correlate with config edits. */
+.cache-eviction-marker {
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--status-error, #ff3366);
+  font-size: 0.6rem;
+  vertical-align: middle;
+}

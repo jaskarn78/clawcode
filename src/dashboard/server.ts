@@ -192,6 +192,35 @@ async function handleRequest(
       return;
     }
 
+    // Prompt cache hit-rate: GET /api/agents/:name/cache?since=24h
+    // Phase 52 Plan 03: proxies to the daemon's `cache` IPC method which
+    // returns the augmented CacheTelemetryReport (report + status +
+    // cache_effect_ms). The dashboard renders a per-agent Prompt Cache
+    // panel adjacent to the Latency panel from this payload.
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "cache"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const since = queryParams.get("since") ?? "24h";
+      try {
+        const data = await sendIpcRequest(socketPath, "cache", {
+          agent: agentName,
+          since,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
     // Knowledge graph data: GET /api/graph/:agent
     if (
       method === "GET" &&

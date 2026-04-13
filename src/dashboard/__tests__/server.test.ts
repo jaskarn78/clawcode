@@ -364,3 +364,152 @@ describe("latency endpoint", () => {
     expect(body.error).toContain("daemon unreachable");
   });
 });
+
+// ── APPENDED BY Phase 52-03 (Cache endpoint) ─────────────────────────────────
+// New "cache endpoint" describe block. Existing tests above remain untouched.
+
+function makeCacheReport() {
+  // Phase 52 Plan 03: the daemon's `cache` IPC handler augments the raw
+  // CacheTelemetryReport with `status` (from evaluateCacheHitRateStatus) and
+  // `cache_effect_ms` (from computeCacheEffectMs / getCacheEffectStats). The
+  // REST endpoint is a passthrough so both fields flow through unchanged.
+  return {
+    agent: "alpha",
+    since: "2026-04-12T00:00:00.000Z",
+    totalTurns: 50,
+    avgHitRate: 0.72,
+    p50HitRate: 0.75,
+    p95HitRate: 0.50,
+    totalCacheReads: 5000,
+    totalCacheWrites: 1000,
+    totalInputTokens: 1000,
+    trendByDay: [],
+    status: "healthy",
+    cache_effect_ms: -650,
+  };
+}
+
+describe("cache endpoint", () => {
+  let closeServer: (() => Promise<void>) | null = null;
+  let port: number;
+
+  beforeEach(() => {
+    port = 30_000 + Math.floor(Math.random() * 10_000);
+
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "status") return { entries: [] };
+      if (method === "context-zone-status") return { agents: {} };
+      if (method === "cache") return makeCacheReport();
+      if (method === "start" || method === "stop" || method === "restart") return { ok: true };
+      throw new Error(`Unknown method: ${method}`);
+    });
+  });
+
+  afterEach(async () => {
+    if (closeServer) {
+      await closeServer();
+      closeServer = null;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("GET /api/agents/:name/cache?since=24h proxies to the cache IPC method", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(
+      `http://127.0.0.1:${port}/api/agents/alpha/cache?since=24h`,
+    );
+    expect(res.status).toBe(200);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "cache",
+      expect.objectContaining({ agent: "alpha", since: "24h" }),
+    );
+    const body = (await res.json()) as unknown;
+    expect(body).toEqual(makeCacheReport());
+  });
+
+  it("GET /api/agents/:name/cache defaults since to 24h when query missing", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    await fetch(`http://127.0.0.1:${port}/api/agents/alpha/cache`);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "cache",
+      expect.objectContaining({ agent: "alpha", since: "24h" }),
+    );
+  });
+
+  it("GET /api/agents/:name/cache passes ?since=7d through to IPC method", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    await fetch(`http://127.0.0.1:${port}/api/agents/alpha/cache?since=7d`);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "cache",
+      expect.objectContaining({ agent: "alpha", since: "7d" }),
+    );
+  });
+
+  it("GET /api/agents/:name/cache handles IPC errors with 500", async () => {
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "cache") throw new Error("daemon unreachable");
+      return {};
+    });
+
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/cache`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain("daemon unreachable");
+  });
+
+  it("GET /api/agents/:name/cache carries augmented fields (status + cache_effect_ms)", async () => {
+    // Phase 52 Plan 03 contract: the REST endpoint is a passthrough. The
+    // response MUST carry the two daemon-added fields verbatim so the
+    // dashboard Prompt Cache panel can render cell color (healthy/breach)
+    // and the cache-effect subtitle directly from the response.
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/cache`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      status: string;
+      cache_effect_ms: number | null;
+      avgHitRate: number;
+      totalTurns: number;
+    };
+    expect(body.status).toMatch(/^(healthy|breach|no_data)$/);
+    expect(
+      typeof body.cache_effect_ms === "number" || body.cache_effect_ms === null,
+    ).toBe(true);
+    expect(typeof body.avgHitRate).toBe("number");
+    expect(typeof body.totalTurns).toBe("number");
+  });
+});
