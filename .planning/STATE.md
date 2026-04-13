@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to plan
-stopped_at: "Completed 51-03 Tasks 1-3 atomic commits (ef8eb5d, 3d014c9, e208d28); Task 4 checkpoint:human-verify pending — dashboard SLO coloring + CI workflow YAML validity + optional live bench"
-last_updated: "2026-04-13T21:53:19.742Z"
+status: Ready to execute
+stopped_at: "Completed 52-01 (2 commits: 74cb674 + b46a09c) — schema migration + getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter cache capture; 17 new tests GREEN, 271 total GREEN"
+last_updated: "2026-04-13T22:45:56.659Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 11
+  completed_plans: 9
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 51 — slos-regression-gate
+**Current focus:** Phase 52 — prompt-caching
 
 ## Current Position
 
-Phase: 52
-Plan: Not started
+Phase: 52 (prompt-caching) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -120,6 +120,12 @@ Recent decisions affecting current work:
 - [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - --update-baseline never auto-writes: confirmBaselineUpdate returns true ONLY on 'y'/'yes' (case-insensitive); empty/n/nope/EOF all return false; guarantees baseline changes stay operator-reviewed
 - [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - IPC method dual-registration preserved by construction: bench-run-prompt added to BOTH src/ipc/protocol.ts IPC_METHODS AND src/ipc/__tests__/protocol.test.ts expected toEqual list in same commit (Phase 50 regression lesson)
 - [Phase 51-slos-regression-gate]: Phase 51 Plan 02 - CLI tests spy on process.stdout.write (what cliLog calls), NOT console.log; describe-level stdoutSpy silences by default, individual tests re-implement to capture chunks for assertions
+- [Phase 52]: Phase 52 Plan 01 - Idempotent ALTER TABLE via PRAGMA table_info check before each ADD COLUMN; repeated daemon restarts never fail on duplicate columns
+- [Phase 52]: Phase 52 Plan 01 - 5 nullable columns added to traces (cache_read_input_tokens, cache_creation_input_tokens, input_tokens, prefix_hash, cache_eviction_expected); Phase 50 rows land NULL and remain queryable via dual filter WHERE input_tokens IS NOT NULL AND > 0
+- [Phase 52]: Phase 52 Plan 01 - In-JS percentile math (nearest-rank sort + index) over per-turn hit-rate floats, not SQL ROW_NUMBER; N-small at agent scale makes JS pass cheaper and avoids SQLite expression-ordering quirks
+- [Phase 52]: Phase 52 Plan 01 - CACHE_HIT_RATE_SLO is separate export (not in DEFAULT_SLOS) because cache hit rate is ratio 0..1 not ms threshold; gray zone 0.30-0.60 returns no_data for warming-up neutral tint
+- [Phase 52]: Phase 52 Plan 01 - session-adapter cache-capture block between extractUsage and closeAllSpans inside iterateWithTracing result branch; wrapped in try/catch mirroring extractUsage silent-swallow (observational capture MUST NEVER break message path)
+- [Phase 52]: Phase 52 Plan 01 - Caller-owned Turn lifecycle invariant from Phase 50 Plan 02 preserved: zero turn.end() invocations in session-adapter.ts (4 grep matches all in doc comments)
 
 ### Roadmap Evolution
 
@@ -178,9 +184,10 @@ None yet.
 | Phase 51-slos-regression-gate P01 | 8min | 2 tasks | 9 files |
 | Phase 51-slos-regression-gate P02 | 13min | 3 tasks | 15 files |
 | Phase 51-slos-regression-gate P03 | 6 | 3 tasks | 12 files |
+| Phase 52 P01 | 8m 22s | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 51-03 Tasks 1-3 atomic commits (ef8eb5d, 3d014c9, e208d28); Task 4 checkpoint:human-verify pending — dashboard SLO coloring + CI workflow YAML validity + optional live bench
+Stopped at: Completed 52-01 (2 commits: 74cb674 + b46a09c) — schema migration + getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter cache capture; 17 new tests GREEN, 271 total GREEN
 Resume file: None
