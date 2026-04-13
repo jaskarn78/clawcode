@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to plan
-stopped_at: Completed 50-02b-PLAN.md - DiscordBridge + scheduler caller-owned Turn lifecycle wired; auto-discovered trace-retention heartbeat check (CASCADE-only); all 14 Wave 0 tracing tests GREEN
-last_updated: "2026-04-13T19:54:02.327Z"
+status: Ready to execute
+stopped_at: Completed 51-01-PLAN.md - DEFAULT_SLOS catalog + perf.slos? Zod override on both schemas + ResolvedAgentConfig.perf.slos? TS mirror + BenchReport/Baseline schemas + loadThresholds + evaluateRegression; 27 new tests GREEN, zero tsc errors in Plan 51-01 files
+last_updated: "2026-04-13T21:11:06.214Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 8
+  completed_plans: 6
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 50 — latency-instrumentation
+**Current focus:** Phase 51 — slos-regression-gate
 
 ## Current Position
 
-Phase: 51
-Plan: Not started
+Phase: 51 (slos-regression-gate) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -107,6 +107,12 @@ Recent decisions affecting current work:
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - Scheduler conditional sendToAgent invocation (2-arg vs 3-arg) preserves historical test assertion shape while still passing Turn when tracing wired
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - Defensive duck-typing on getTraceCollector/getTraceStore in scheduler+retention check so older SessionManager builds degrade gracefully
 - [Phase 50-latency-instrumentation]: Phase 50 Plan 02b - CASCADE-only retention ratified: zero secondary DELETE FROM trace_spans statements (grep verified 0); ON DELETE CASCADE FK alone clears child rows
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - DEFAULT_SLOS lives at src/performance/slos.ts as single source of truth for both daemon (51-03) and CI gate (51-02)
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - sloOverrideSchema duplicates canonical segment enum inline (not imported from performance/types) to avoid config->performance dep cycle
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - ResolvedAgentConfig.perf.slos? uses inline literal unions (no cross-module import) to keep src/shared/types.ts as a low-dep module
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - mergeSloOverrides has APPEND semantics on metric divergence (a segment may carry multiple SLOs e.g. p50 AND p95 first_token)
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - evaluateRegression skip rules: count===0 both sides, null p95, baseline p95===0; per-segment absolute-floor (p95MaxDeltaMs) gates ONLY when pct threshold breached
+- [Phase 51-slos-regression-gate]: Phase 51 Plan 01 - Baseline=BenchReport.extend({updated_at, updated_by}) produces symmetric diff logic; test fixtures use explicit type annotations (not as const) to match mutable Zod-inferred shapes
 
 ### Roadmap Evolution
 
@@ -162,9 +168,10 @@ None yet.
 | Phase 50-latency-instrumentation P01 | 8min | 2 tasks | 7 files |
 | Phase 50-latency-instrumentation P02 | 25min | 2 tasks | 4 files |
 | Phase 50-latency-instrumentation P02b | 15min | 2 tasks | 3 files |
+| Phase 51-slos-regression-gate P01 | 8min | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-13
-Stopped at: Completed 50-02b-PLAN.md - DiscordBridge + scheduler caller-owned Turn lifecycle wired; auto-discovered trace-retention heartbeat check (CASCADE-only); all 14 Wave 0 tracing tests GREEN
+Stopped at: Completed 51-01-PLAN.md - DEFAULT_SLOS catalog + perf.slos? Zod override on both schemas + ResolvedAgentConfig.perf.slos? TS mirror + BenchReport/Baseline schemas + loadThresholds + evaluateRegression; 27 new tests GREEN, zero tsc errors in Plan 51-01 files
 Resume file: None
