@@ -6,6 +6,8 @@
  * Discord bindings and context summary are pass-through (no budget applied).
  */
 
+import type { Turn } from "../performance/trace-collector.js";
+
 export type ContextBudgets = {
   readonly identity: number;
   readonly hotMemories: number;
@@ -139,4 +141,34 @@ export function assembleContext(
   }
 
   return sections.join("\n\n");
+}
+
+/**
+ * Traced wrapper around {@link assembleContext}.
+ *
+ * Opens a `context_assemble` span before invoking `assembleContext` and ends
+ * it in a `finally` block regardless of outcome (success or throw). When
+ * `turn` is undefined the wrapper is a pass-through — no span is started.
+ *
+ * WIRING RESOLUTION (Phase 50 Plan 02, Case A — session-scoped):
+ * All current call sites of `assembleContext` live inside `buildSessionConfig`
+ * (src/manager/session-config.ts), which runs at agent startup or session
+ * resume — NOT per turn. Threading a per-turn Turn into `buildSessionConfig`
+ * is out of scope for Phase 50; the segment row therefore reports `count=0`
+ * for context_assemble until a per-turn assembly path is introduced (future
+ * cache_control work in Phase 52). This wrapper exists so that callers with
+ * a per-turn Turn (e.g., future per-turn context refresh) can opt-in with a
+ * single-line swap — no signature changes required.
+ */
+export function assembleContextTraced(
+  sources: ContextSources,
+  budgets: ContextBudgets = DEFAULT_BUDGETS,
+  turn?: Turn,
+): string {
+  const span = turn?.startSpan("context_assemble");
+  try {
+    return assembleContext(sources, budgets);
+  } finally {
+    span?.end();
+  }
 }

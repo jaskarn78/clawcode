@@ -1,6 +1,7 @@
 import type { AgentSessionConfig } from "./types.js";
 import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./sdk-types.js";
 import { resolveModelId } from "./model-resolver.js";
+import type { Turn, Span } from "../performance/trace-collector.js";
 
 /**
  * Callback invoked after each SDK send/sendAndCollect with usage data
@@ -18,12 +19,18 @@ export type UsageCallback = (data: {
 /**
  * A handle to an active agent session.
  * Provides methods to interact with and monitor the session lifecycle.
+ *
+ * Phase 50 (50-02): send/sendAndCollect/sendAndStream accept an OPTIONAL
+ * caller-owned Turn parameter. When provided, the handle opens per-turn
+ * tracing spans (end_to_end, first_token, tool_call.<name>) inside the SDK
+ * iteration loop. The handle NEVER calls `turn.end()` — turn lifecycle is
+ * caller-owned (DiscordBridge / Scheduler, wired in 50-02b).
  */
 export type SessionHandle = {
   readonly sessionId: string;
-  send: (message: string) => Promise<void>;
-  sendAndCollect: (message: string) => Promise<string>;
-  sendAndStream: (message: string, onChunk: (accumulated: string) => void) => Promise<string>;
+  send: (message: string, turn?: Turn) => Promise<void>;
+  sendAndCollect: (message: string, turn?: Turn) => Promise<string>;
+  sendAndStream: (message: string, onChunk: (accumulated: string) => void, turn?: Turn) => Promise<string>;
   close: () => Promise<void>;
   onError: (handler: (error: Error) => void) => void;
   onEnd: (handler: () => void) => void;
@@ -60,20 +67,24 @@ export class MockSessionHandle implements SessionHandle {
     this.sessionId = sessionId;
   }
 
-  async send(_message: string): Promise<void> {
+  async send(_message: string, _turn?: Turn): Promise<void> {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
     }
   }
 
-  async sendAndCollect(_message: string): Promise<string> {
+  async sendAndCollect(_message: string, _turn?: Turn): Promise<string> {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
     }
     return `Mock response from ${this.sessionId}`;
   }
 
-  async sendAndStream(_message: string, onChunk: (accumulated: string) => void): Promise<string> {
+  async sendAndStream(
+    _message: string,
+    onChunk: (accumulated: string) => void,
+    _turn?: Turn,
+  ): Promise<string> {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
     }
@@ -340,6 +351,7 @@ function wrapSdkQuery(
   baseOptions: SdkQueryOptions,
   initialSessionId: string,
   usageCallback?: UsageCallback,
+  boundTurn?: Turn,
 ): SessionHandle {
   let sessionId = initialSessionId;
   let currentEffort = baseOptions.effort ?? "low";
@@ -368,22 +380,122 @@ function wrapSdkQuery(
     }
   }
 
+  /**
+   * Shared SDK stream iteration with optional tracing (Phase 50, Pitfall 2 guard).
+   *
+   * Called by all three send variants (send, sendAndCollect, sendAndStream) so the
+   * tracing hook points cannot diverge by construction. When `turn` is provided,
+   * opens end_to_end + first_token + tool_call.<name> spans inside the loop.
+   * Subagent-generated assistant messages (parent_tool_use_id !== null) are
+   * filtered — first_token ends on the first PARENT text block only (Pitfall 6).
+   *
+   * IMPORTANT: does NOT call turn.end() — caller owns Turn lifecycle (50-02b).
+   * Only opens and closes its own spans; the parent Turn is unaffected.
+   *
+   * @returns the resolved assistant text (msg.result if present, else collected text blocks)
+   */
+  async function iterateWithTracing(
+    q: SdkQuery,
+    turn: Turn | undefined,
+    onAssistantText: ((accumulated: string) => void) | null,
+  ): Promise<string> {
+    const endToEnd = turn?.startSpan("end_to_end", {});
+    const firstToken = turn?.startSpan("first_token", {});
+    let firstTokenEnded = false;
+    const activeTools = new Map<string, Span>();
+    const textParts: string[] = [];
+
+    const closeAllSpans = () => {
+      for (const span of activeTools.values()) span.end();
+      activeTools.clear();
+      if (!firstTokenEnded) {
+        firstToken?.end();
+        firstTokenEnded = true;
+      }
+      endToEnd?.end();
+    };
+
+    try {
+      for await (const msg of q) {
+        if (msg.type === "assistant") {
+          // Subagent filter (Pitfall 6): only PARENT messages drive first_token + tool_call.
+          const parentToolUseId =
+            (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? null;
+          if (parentToolUseId === null) {
+            // The SDK's real shape is `msg.message.content[]: BetaContentBlock[]`
+            // (not the narrowed local type where `msg.content` is a string). We
+            // inspect content blocks for text (first_token) and tool_use (span start).
+            const contentBlocks = ((msg as { message?: { content?: unknown[] } }).message?.content ?? []) as unknown[];
+            for (const raw of contentBlocks) {
+              const block = raw as { type?: string; name?: string; id?: string };
+              if (block.type === "text" && !firstTokenEnded) {
+                firstToken?.end();
+                firstTokenEnded = true;
+              }
+              if (block.type === "tool_use" && block.id && block.name) {
+                const span = turn?.startSpan(`tool_call.${block.name}`, {
+                  tool_use_id: block.id,
+                });
+                if (span) activeTools.set(block.id, span);
+              }
+            }
+          }
+          // Preserve the narrowed-type text accumulation path used today.
+          if (typeof msg.content === "string" && msg.content.length > 0) {
+            textParts.push(msg.content);
+            onAssistantText?.(textParts.join("\n"));
+          }
+        }
+
+        if (msg.type === "user") {
+          // Close the tool_call span when the matching tool_use_result arrives.
+          // SDK emits user messages with `parent_tool_use_id` set to the tool_use_id.
+          const toolUseId = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id;
+          if (toolUseId) {
+            const span = activeTools.get(toolUseId);
+            if (span) {
+              span.end();
+              activeTools.delete(toolUseId);
+            }
+          }
+        }
+
+        if (msg.type === "result") {
+          if (msg.session_id) sessionId = msg.session_id;
+          extractUsage(msg, usageCallback);
+          closeAllSpans();
+          // Prefer the result.result field if non-empty
+          if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
+            return msg.result;
+          }
+          // Check for error results
+          if (msg.subtype !== "success") {
+            if ("is_error" in msg && msg.is_error) {
+              throw new Error(`Agent error: ${msg.subtype}`);
+            }
+          }
+          return textParts.join("\n");
+        }
+      }
+      // Stream ended without a `result` message — still close spans and return whatever we collected.
+      closeAllSpans();
+      return textParts.join("\n");
+    } catch (err) {
+      closeAllSpans();
+      throw err;
+    }
+  }
+
   return {
     get sessionId(): string {
       return sessionId;
     },
 
-    async send(message: string): Promise<void> {
+    async send(message: string, turn?: Turn): Promise<void> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
         const q = sdk.query({ prompt: message, options: turnOptions() });
-        for await (const msg of q) {
-          if (msg.type === "result") {
-            if (msg.session_id) sessionId = msg.session_id;
-            extractUsage(msg, usageCallback);
-            break;
-          }
-        }
+        await iterateWithTracing(q, turn ?? boundTurn, null);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         notifyError(error);
@@ -391,35 +503,11 @@ function wrapSdkQuery(
       }
     },
 
-    async sendAndCollect(message: string): Promise<string> {
+    async sendAndCollect(message: string, turn?: Turn): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
         const q = sdk.query({ prompt: message, options: turnOptions() });
-        const textParts: string[] = [];
-        for await (const msg of q) {
-          if (msg.type === "assistant") {
-            if (typeof msg.content === "string" && msg.content.length > 0) {
-              textParts.push(msg.content);
-            }
-          }
-          if (msg.type === "result") {
-            if (msg.session_id) sessionId = msg.session_id;
-            extractUsage(msg, usageCallback);
-            // Prefer the result.result field if non-empty
-            if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
-              return msg.result;
-            }
-            // Check for error results
-            if (msg.subtype !== "success") {
-              if ("is_error" in msg && msg.is_error) {
-                throw new Error(`Agent error: ${msg.subtype}`);
-              }
-            }
-            break;
-          }
-        }
-        // Fall back to collected assistant text
-        return textParts.join("\n");
+        return await iterateWithTracing(q, turn ?? boundTurn, null);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         notifyError(error);
@@ -427,33 +515,15 @@ function wrapSdkQuery(
       }
     },
 
-    async sendAndStream(message: string, onChunk: (accumulated: string) => void): Promise<string> {
+    async sendAndStream(
+      message: string,
+      onChunk: (accumulated: string) => void,
+      turn?: Turn,
+    ): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
         const q = sdk.query({ prompt: message, options: turnOptions() });
-        const textParts: string[] = [];
-        for await (const msg of q) {
-          if (msg.type === "assistant") {
-            if (typeof msg.content === "string" && msg.content.length > 0) {
-              textParts.push(msg.content);
-              onChunk(textParts.join("\n"));
-            }
-          }
-          if (msg.type === "result") {
-            if (msg.session_id) sessionId = msg.session_id;
-            extractUsage(msg, usageCallback);
-            if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
-              return msg.result;
-            }
-            if (msg.subtype !== "success") {
-              if ("is_error" in msg && msg.is_error) {
-                throw new Error(`Agent error: ${msg.subtype}`);
-              }
-            }
-            break;
-          }
-        }
-        return textParts.join("\n");
+        return await iterateWithTracing(q, turn ?? boundTurn, onChunk);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         notifyError(error);
@@ -488,4 +558,45 @@ function wrapSdkQuery(
       return currentEffort;
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Traced factory (Phase 50) — test-friendly handle builder with bound Turn
+// ---------------------------------------------------------------------------
+
+/**
+ * Options accepted by {@link createTracedSessionHandle}.
+ *
+ * `turn` binds a caller-owned Turn into the returned handle's closure so that
+ * subsequent `send`/`sendAndCollect`/`sendAndStream` calls automatically thread
+ * it into `iterateWithTracing`. Tests use this to avoid passing the turn on
+ * every call; production code paths (SessionManager) still prefer the explicit
+ * per-call `turn?` parameter because it matches the caller-owned lifecycle.
+ */
+export type TracedSessionHandleOptions = {
+  readonly sdk: SdkModule;
+  readonly baseOptions: SdkQueryOptions;
+  readonly sessionId: string;
+  readonly turn?: Turn;
+  readonly usageCallback?: UsageCallback;
+};
+
+/**
+ * Build a SessionHandle with a pre-bound Turn and the shared iterateWithTracing
+ * stream loop. This is the Wave 2-added export that Wave 0 tests import.
+ *
+ * The returned handle threads the bound turn through every send variant unless
+ * a per-call turn is provided — in which case the per-call value wins.
+ *
+ * SessionHandle NEVER calls turn.end(); the caller owns lifecycle (50-02b).
+ */
+export function createTracedSessionHandle(opts: TracedSessionHandleOptions): SessionHandle {
+  return wrapSdkQuery(
+    undefined,
+    opts.sdk,
+    opts.baseOptions,
+    opts.sessionId,
+    opts.usageCallback,
+    opts.turn,
+  );
 }
