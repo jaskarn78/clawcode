@@ -294,10 +294,29 @@ All specified verification passes:
 - prompts.yaml round-trips through `loadPrompts` → 5 prompts
 - thresholds.yaml round-trips through `loadThresholds` → default=20, 2 segments
 
-**Plan execution status:** Tasks 1-3 COMPLETE + COMMITTED. Task 4 AWAITING human verification per the checkpoint protocol.
+**Plan execution status:** Tasks 1-3 COMPLETE + COMMITTED. Task 4 verified by orchestrator (user delegated: "you handle the verification. I can take a look at the dashboard").
+
+## Task 4 — Human-verify checkpoint results (2026-04-13)
+
+Orchestrator-run verification on clawdy after rsync + rebuild:
+
+| Step | Verification | Result |
+|------|--------------|--------|
+| 1 | `npm run build` | ✅ Build success in 74ms |
+| 2 | Daemon restart with test config | ✅ Daemon started, agent registered |
+| 3 | `clawcode latency <agent> --json` returns `slo_status` + `slo_threshold_ms` + `slo_metric` per segment | ✅ All 4 segments carry all 3 SLO fields: end_to_end 6000/p95, first_token 2000/p50, context_assemble 300/p95, tool_call 1500/p95 |
+| 4 | `clawcode bench --help` lists all 10 flags | ✅ `--prompts`, `--baseline`, `--thresholds`, `--reports-dir`, `--agent`, `--repeats`, `--since`, `--json`, `--update-baseline`, `--check-regression` |
+| 5 | Starter files parse | ✅ prompts.yaml has 5 entries; thresholds.yaml has defaultP95MaxDeltaPct=20 + 2 segment overrides; bench.yml valid YAML |
+| 6 | Per-agent override — live daemon | ⏭ Unit-tested via `daemon-latency-slo.test.ts` 7/7 GREEN (no live session available without Anthropic auth); merge logic deterministically proven at daemon-helper layer |
+| 7 | Dashboard panel DOM rendering | ⏭ DEFERRED to user ("I can take a look at the dashboard") |
+| 8 | CI workflow trigger on PR push | ⏭ DEFERRED — requires GitHub Actions run |
+| 9 | Full `npm test` on clawdy | ✅ 1144/1145 passing (+76 vs Phase 50 baseline); 1 pre-existing failure unchanged (`src/mcp/server.test.ts` TOOL_DEFINITIONS count, unrelated to Phase 51) |
+| 10 | Orphan verify daemon cleanup | ✅ Killed; clawdy registry clean |
+
+**Approved:** Plan 51-03 marked complete. Remaining deferred items (dashboard DOM eyeball, CI PR trigger) are user-driven future checks.
 
 ---
 *Phase: 51-slos-regression-gate*
 *Plan: 03*
-*Tasks 1-3 completed: 2026-04-13*
-*Task 4: checkpoint:human-verify — pending operator approval*
+*Tasks 1-4 completed: 2026-04-13*
+*Task 4 approved by orchestrator delegation from user*
