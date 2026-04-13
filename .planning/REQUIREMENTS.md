@@ -12,8 +12,8 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 
 ### Instrumentation & SLOs (PERF)
 
-- [ ] **PERF-01**: Every Discord message → reply cycle logs phase-level timings (receive, context assemble, first token, each tool call, final send) to a structured trace store
-- [ ] **PERF-02**: Per-agent latency report surfaces p50 / p95 / p99 for end-to-end, first-token, context-assemble, and tool-call segments (CLI + dashboard)
+- [x] **PERF-01**: Every Discord message → reply cycle logs phase-level timings (receive, context assemble, first token, each tool call, final send) to a structured trace store
+- [x] **PERF-02**: Per-agent latency report surfaces p50 / p95 / p99 for end-to-end, first-token, context-assemble, and tool-call segments (CLI + dashboard)
 - [ ] **PERF-03**: Concrete SLO targets documented per surface (e.g., first-token p50 ≤ 2s, end-to-end p95 ≤ 6s) and displayed on the dashboard
 - [ ] **PERF-04**: CI benchmark harness runs a fixed prompt set and fails the build when p95 regresses beyond a configurable threshold
 
