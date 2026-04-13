@@ -16,6 +16,8 @@ import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
 import type { UsageTracker } from "../usage/tracker.js";
 import type { DocumentStore } from "../documents/store.js";
+import type { TraceStore } from "../performance/trace-store.js";
+import type { TraceCollector, Turn } from "../performance/trace-collector.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
@@ -140,22 +142,42 @@ export class SessionManager {
     this.log.info({ agent: name, sessionId: handle.sessionId }, "agent started");
   }
 
-  /** @throws SessionError if the agent is not running */
-  async sendToAgent(name: string, message: string): Promise<string> {
+  /**
+   * @throws SessionError if the agent is not running
+   *
+   * Accepts an OPTIONAL pre-constructed Turn (caller-owned lifecycle, Phase 50).
+   * The caller (DiscordBridge / Scheduler) constructs the Turn via
+   * `getTraceCollector(name).startTurn(...)` and owns `turn.end()`. SessionManager
+   * is pure passthrough — it does NOT create or end Turn objects.
+   */
+  async sendToAgent(name: string, message: string, turn?: Turn): Promise<string> {
     const handle = this.requireSession(name);
     this.log.info({ agent: name, messageLength: message.length }, "sending message to agent");
-    const response = await handle.sendAndCollect(message);
+    const response = await handle.sendAndCollect(message, turn);
     this.log.info({ agent: name, responseLength: response.length }, "agent responded");
     return response;
+    // NOTE: SessionManager does NOT call turn.end() — caller owns Turn lifecycle (50-02b).
+    // If the handle throws, the exception propagates and the caller's try/catch ends the turn with 'error'.
   }
 
-  /** @throws SessionError if the agent is not running */
-  async streamFromAgent(name: string, message: string, onChunk: (accumulated: string) => void): Promise<string> {
+  /**
+   * @throws SessionError if the agent is not running
+   *
+   * Accepts an OPTIONAL pre-constructed Turn (caller-owned lifecycle, Phase 50).
+   * See sendToAgent docstring for the lifecycle contract.
+   */
+  async streamFromAgent(
+    name: string,
+    message: string,
+    onChunk: (accumulated: string) => void,
+    turn?: Turn,
+  ): Promise<string> {
     const handle = this.requireSession(name);
     this.log.info({ agent: name, messageLength: message.length }, "streaming message to agent");
-    const response = await handle.sendAndStream(message, onChunk);
+    const response = await handle.sendAndStream(message, onChunk, turn);
     this.log.info({ agent: name, responseLength: response.length }, "agent stream complete");
     return response;
+    // NOTE: SessionManager does NOT call turn.end() — caller owns Turn lifecycle (50-02b).
   }
 
   /** Set the reasoning effort level for a running agent. Takes effect on next turn. */
@@ -316,6 +338,10 @@ export class SessionManager {
   getUsageTracker(agentName: string): UsageTracker | undefined { return this.memory.usageTrackers.get(agentName); }
   getEpisodeStore(agentName: string) { return this.memory.episodeStores.get(agentName); }
   getDocumentStore(agentName: string): DocumentStore | undefined { return this.memory.documentStores.get(agentName); }
+  /** Phase 50 — per-agent trace store for latency instrumentation (retention reads via heartbeat). */
+  getTraceStore(agentName: string): TraceStore | undefined { return this.memory.traceStores.get(agentName); }
+  /** Phase 50 — per-agent trace collector; callers construct Turn via `.startTurn(...)` and own lifecycle. */
+  getTraceCollector(agentName: string): TraceCollector | undefined { return this.memory.traceCollectors.get(agentName); }
 
   async saveContextSummary(agentName: string, summary: string): Promise<void> {
     const config = this.configs.get(agentName);

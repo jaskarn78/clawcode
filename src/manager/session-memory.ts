@@ -16,6 +16,8 @@ import { saveSummary } from "../memory/context-summary.js";
 import { UsageTracker } from "../usage/tracker.js";
 import { EpisodeStore } from "../memory/episode-store.js";
 import { DocumentStore } from "../documents/store.js";
+import { TraceStore } from "../performance/trace-store.js";
+import { TraceCollector } from "../performance/trace-collector.js";
 
 /**
  * Manages per-agent memory lifecycle: initialization, cleanup, and accessors.
@@ -33,6 +35,8 @@ export class AgentMemoryManager {
   readonly usageTrackers: Map<string, UsageTracker> = new Map();
   readonly episodeStores: Map<string, EpisodeStore> = new Map();
   readonly documentStores: Map<string, DocumentStore> = new Map();
+  readonly traceStores: Map<string, TraceStore> = new Map();
+  readonly traceCollectors: Map<string, TraceCollector> = new Map();
   readonly embedder: EmbeddingService = new EmbeddingService();
 
   constructor(private readonly log: Logger) {}
@@ -98,6 +102,19 @@ export class AgentMemoryManager {
       const usageTracker = new UsageTracker(usageDbPath);
       this.usageTrackers.set(name, usageTracker);
 
+      // Create TraceStore + TraceCollector for this agent (Phase 50)
+      // Per-agent traces.db at <workspace>/traces.db mirrors usage.db isolation pattern.
+      // Turn lifecycle is caller-owned (DiscordBridge/Scheduler construct Turn via
+      // TraceCollector.startTurn) — SessionManager is pure passthrough.
+      const tracesDbPath = join(config.workspace, "traces.db");
+      const traceStore = new TraceStore(tracesDbPath);
+      this.traceStores.set(name, traceStore);
+      const traceCollector = new TraceCollector(
+        traceStore,
+        this.log.child({ agent: name, component: "trace" }),
+      );
+      this.traceCollectors.set(name, traceCollector);
+
       this.log.info({ agent: name, dbPath }, "memory initialized");
     } catch (error) {
       this.log.error(
@@ -142,6 +159,21 @@ export class AgentMemoryManager {
       }
       this.usageTrackers.delete(name);
     }
+
+    // Close TraceStore (Phase 50) — mirrors UsageTracker cleanup exactly.
+    const traceStore = this.traceStores.get(name);
+    if (traceStore) {
+      try {
+        traceStore.close();
+      } catch (error) {
+        this.log.warn(
+          { agent: name, error: (error as Error).message },
+          "failed to close trace store",
+        );
+      }
+      this.traceStores.delete(name);
+    }
+    this.traceCollectors.delete(name);
   }
 
   /**
