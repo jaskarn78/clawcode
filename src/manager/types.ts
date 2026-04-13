@@ -48,6 +48,18 @@ export type BackoffConfig = {
 
 /**
  * Configuration passed to the SessionAdapter when creating a session.
+ *
+ * Phase 52 Plan 02:
+ *   - `systemPrompt` now carries ONLY the STABLE PREFIX (identity + stable
+ *     hot-tier + tool definitions). The SDK adapter wraps it in
+ *     `{ type: "preset", preset: "claude_code", append: systemPrompt }` so
+ *     the preset's cache scaffolding kicks in.
+ *   - `mutableSuffix` is NEW — per-turn block (discord bindings, context
+ *     summary, and hot-tier when composition just drifted) that the adapter
+ *     prepends to the user message, sitting OUTSIDE the cached block.
+ *   - `hotStableToken` is NEW — sha256 of the hot-tier signature THIS turn,
+ *     carried forward by SessionManager for next-turn comparison so
+ *     hot-tier enters/exits the cacheable block without thrashing.
  */
 export type AgentSessionConfig = {
   readonly name: string;
@@ -55,6 +67,8 @@ export type AgentSessionConfig = {
   readonly effort: "low" | "medium" | "high" | "max";
   readonly workspace: string;
   readonly systemPrompt: string;
+  readonly mutableSuffix?: string;
+  readonly hotStableToken?: string;
   readonly channels: readonly string[];
   readonly contextSummary?: string;
   readonly mcpServers?: readonly {

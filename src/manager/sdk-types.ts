@@ -32,11 +32,33 @@ export type SdkUserMessage = {
  * Options passed to sdk.query().
  * Subset of SDK's Options -- only fields we actually use.
  */
+/**
+ * Phase 52 Plan 02: `systemPrompt` widened to accept the SDK's preset+append
+ * form. Matches node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:
+ *
+ *   systemPrompt?: string | {
+ *     type: 'preset';
+ *     preset: 'claude_code';
+ *     append?: string;
+ *     excludeDynamicSections?: boolean;
+ *   };
+ *
+ * SdkSessionAdapter emits the preset-object form so the SDK's claude_code
+ * preset scaffolds cache markers automatically; `append` concatenates our
+ * stable prefix (identity + soul + skills header + stable hot-tier).
+ */
 export type SdkQueryOptions = {
   readonly cwd?: string;
   readonly model?: string;
   readonly effort?: "low" | "medium" | "high" | "max";
-  readonly systemPrompt?: string;
+  readonly systemPrompt?:
+    | string
+    | {
+        readonly type: "preset";
+        readonly preset: "claude_code";
+        readonly append?: string;
+        readonly excludeDynamicSections?: boolean;
+      };
   readonly permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
   readonly mcpServers?: Record<string, {
     readonly command: string;

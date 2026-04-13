@@ -20,7 +20,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * clean RED.
  */
 
-// @ts-expect-error - Wave 2 will add this export; Wave 0 leaves it missing for RED state.
 import { createTracedSessionHandle } from "../session-adapter.js";
 
 type MockTurn = {
@@ -343,5 +342,312 @@ describe("cache usage capture (Phase 52)", () => {
       cacheCreationInputTokens: 0,
       inputTokens: 0,
     });
+  });
+});
+
+// ── Phase 52 Plan 02 — SDK preset+append + mutableSuffix + prefixHash ───────
+
+describe("SdkSessionAdapter preset+append for createSession/resumeSession (Phase 52)", () => {
+  let mockSdkModule: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdkModule = { query: vi.fn() };
+  });
+
+  function initialStream(sessionId: string) {
+    return makeSdkStream([
+      { type: "result", subtype: "success", session_id: sessionId },
+    ]);
+  }
+
+  it("createSession emits systemPrompt as { type: 'preset', preset: 'claude_code', append: <stable> }", async () => {
+    mockSdkModule.query.mockReturnValueOnce(initialStream("new-sess"));
+
+    // Use the private buildBaseOptions logic via the exported adapter class. The
+    // adapter dynamically imports the SDK, so we stub it by pre-populating the
+    // module cache via the exported createTracedSessionHandle — which constructs
+    // the same baseOptions shape. Here we use a direct build helper:
+    const { buildSystemPromptOption } = (await import(
+      "../session-adapter.js"
+    )) as unknown as {
+      buildSystemPromptOption: (prefix: string) =>
+        | { type: "preset"; preset: "claude_code"; append: string }
+        | { type: "preset"; preset: "claude_code" };
+    };
+
+    const opt = buildSystemPromptOption("stable-identity-block");
+    expect(opt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "stable-identity-block",
+    });
+  });
+
+  it("buildSystemPromptOption omits `append` when stable prefix is empty", async () => {
+    const { buildSystemPromptOption } = (await import(
+      "../session-adapter.js"
+    )) as unknown as {
+      buildSystemPromptOption: (
+        prefix: string,
+      ) =>
+        | { type: "preset"; preset: "claude_code"; append?: string }
+        | { type: "preset"; preset: "claude_code" };
+    };
+
+    const opt = buildSystemPromptOption("");
+    expect(opt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+    });
+  });
+});
+
+describe("SdkSessionAdapter systemPrompt preset wiring (Phase 52)", () => {
+  let mockSdk: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdk = { query: vi.fn() };
+  });
+
+  it("sendAndCollect prepends mutableSuffix to message when baseOptions carries it", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "ok", session_id: "s1" },
+    ];
+    mockSdk.query.mockReturnValue(makeSdkStream(messages));
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: { mutableSuffix: "## Discord\nchannel=foo" },
+      sessionId: "s1",
+    });
+
+    await handle.sendAndCollect("user question");
+
+    const call = mockSdk.query.mock.calls[0]![0];
+    expect(typeof call.prompt).toBe("string");
+    expect(call.prompt.startsWith("## Discord\nchannel=foo\n\n")).toBe(true);
+    expect(call.prompt.endsWith("user question")).toBe(true);
+  });
+
+  it("sendAndCollect passes message unchanged when baseOptions has no mutableSuffix", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "ok", session_id: "s1" },
+    ];
+    mockSdk.query.mockReturnValue(makeSdkStream(messages));
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+    });
+
+    await handle.sendAndCollect("user question");
+
+    const call = mockSdk.query.mock.calls[0]![0];
+    expect(call.prompt).toBe("user question");
+  });
+
+  it("mutableSuffix is stripped from turnOptions forwarded to sdk.query (not a real SDK option)", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "ok", session_id: "s1" },
+    ];
+    mockSdk.query.mockReturnValue(makeSdkStream(messages));
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: { mutableSuffix: "## Discord\nx" },
+      sessionId: "s1",
+    });
+
+    await handle.sendAndCollect("hi");
+
+    const call = mockSdk.query.mock.calls[0]![0];
+    expect(call.options.mutableSuffix).toBeUndefined();
+  });
+});
+
+describe("SdkSessionAdapter prefix_hash per-turn recording (Phase 52 CACHE-04)", () => {
+  let mockSdk: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdk = { query: vi.fn() };
+  });
+
+  function buildResult() {
+    return [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "ok" }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: "ok",
+        session_id: "s1",
+        usage: {
+          input_tokens: 10,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    ];
+  }
+
+  it("records prefixHash and cacheEvictionExpected=false on first turn (no prior hash)", async () => {
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+
+    let persisted: string | undefined;
+    const provider = {
+      get: () => ({ current: "a".repeat(64), last: undefined as string | undefined }),
+      persist: (h: string) => {
+        persisted = h;
+      },
+    };
+
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      turn,
+      prefixHashProvider: provider,
+    });
+
+    await handle.sendAndCollect("hi");
+
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(1);
+    const call = turn.recordCacheUsage.mock.calls[0]![0];
+    expect(call.prefixHash).toBe("a".repeat(64));
+    expect(call.cacheEvictionExpected).toBe(false);
+    expect(persisted).toBe("a".repeat(64));
+  });
+
+  it("records cacheEvictionExpected=true when prefixHash changes between consecutive turns", async () => {
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+    let lastHash: string | undefined;
+    const current = { current: "hash_A", last: undefined as string | undefined };
+    const provider = {
+      get: () => ({ ...current, last: lastHash }),
+      persist: (h: string) => {
+        lastHash = h;
+      },
+    };
+
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      turn,
+      prefixHashProvider: provider,
+    });
+
+    // Turn 1: current=hash_A, last=undefined → eviction=false
+    await handle.sendAndCollect("hi");
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(1);
+    let call = turn.recordCacheUsage.mock.calls[0]![0];
+    expect(call.prefixHash).toBe("hash_A");
+    expect(call.cacheEvictionExpected).toBe(false);
+
+    // Turn 2: simulate prefix drift — hash_B now current.
+    current.current = "hash_B";
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+    await handle.sendAndCollect("hi");
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(2);
+    call = turn.recordCacheUsage.mock.calls[1]![0];
+    expect(call.prefixHash).toBe("hash_B");
+    expect(call.cacheEvictionExpected).toBe(true);
+  });
+
+  it("records cacheEvictionExpected=false when prefixHash is unchanged between consecutive turns", async () => {
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+    let lastHash: string | undefined;
+    const current = { current: "hash_A", last: undefined as string | undefined };
+    const provider = {
+      get: () => ({ ...current, last: lastHash }),
+      persist: (h: string) => {
+        lastHash = h;
+      },
+    };
+
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      turn,
+      prefixHashProvider: provider,
+    });
+
+    await handle.sendAndCollect("hi"); // turn 1
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+    await handle.sendAndCollect("hi"); // turn 2 — same hash
+
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(2);
+    const call2 = turn.recordCacheUsage.mock.calls[1]![0];
+    expect(call2.prefixHash).toBe("hash_A");
+    expect(call2.cacheEvictionExpected).toBe(false);
+  });
+
+  it("does not throw when prefixHashProvider is absent (optional)", async () => {
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      turn,
+      // no prefixHashProvider — should still capture token counts
+    });
+
+    await expect(handle.sendAndCollect("hi")).resolves.toBe("ok");
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(1);
+    const call = turn.recordCacheUsage.mock.calls[0]![0];
+    expect(call.prefixHash).toBeUndefined();
+    expect(call.cacheEvictionExpected).toBeUndefined();
+  });
+
+  it("observational contract: provider throw does NOT break the message path (silent swallow)", async () => {
+    mockSdk.query.mockReturnValue(makeSdkStream(buildResult()));
+    const provider = {
+      get: () => {
+        throw new Error("boom");
+      },
+      persist: vi.fn(),
+    };
+    const { turn } = createMockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      turn,
+      prefixHashProvider: provider,
+    });
+
+    await expect(handle.sendAndCollect("hi")).resolves.toBe("ok");
+    // token counts still captured despite provider throwing
+    expect(turn.recordCacheUsage).toHaveBeenCalledTimes(1);
+    const call = turn.recordCacheUsage.mock.calls[0]![0];
+    expect(call.prefixHash).toBeUndefined();
+    expect(call.cacheEvictionExpected).toBeUndefined();
   });
 });

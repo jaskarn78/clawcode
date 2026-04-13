@@ -4,6 +4,27 @@ import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 
 /**
+ * Phase 52 Plan 02 — per-turn prefixHash provider contract.
+ *
+ * SessionManager constructs this closure and attaches it to the handle via
+ * `TracedSessionHandleOptions.prefixHashProvider`. On every turn inside
+ * `iterateWithTracing`, the adapter calls `.get()` to read the current
+ * stablePrefix hash AND the prior turn's hash for the same agent, computes
+ * `cacheEvictionExpected = current !== last` (false on first turn), then
+ * calls `.persist(currentHash)` so the NEXT turn can compare.
+ *
+ * The provider exists so the adapter stays framework-agnostic: tests pass a
+ * plain object; production wires SessionManager's per-agent maps.
+ *
+ * Observational contract: provider errors are swallowed inside the adapter.
+ * Cache observability MUST NEVER break the parent message path.
+ */
+export type PrefixHashProvider = {
+  get(): { current: string; last: string | undefined };
+  persist(hash: string): void;
+};
+
+/**
  * Callback invoked after each SDK send/sendAndCollect with usage data
  * extracted from the result message.
  */
@@ -42,10 +63,23 @@ export type SessionHandle = {
  * Interface for creating and resuming agent sessions.
  * Abstracts the underlying SDK so that tests can use MockSessionAdapter
  * and production uses SdkSessionAdapter.
+ *
+ * Phase 52 Plan 02 — optional `prefixHashProvider` threads per-agent
+ * prefix-hash state from SessionManager into the handle's per-turn
+ * iteration loop so CACHE-04 eviction detection can fire. Mocks ignore it.
  */
 export type SessionAdapter = {
-  createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle>;
-  resumeSession(sessionId: string, config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle>;
+  createSession(
+    config: AgentSessionConfig,
+    usageCallback?: UsageCallback,
+    prefixHashProvider?: PrefixHashProvider,
+  ): Promise<SessionHandle>;
+  resumeSession(
+    sessionId: string,
+    config: AgentSessionConfig,
+    usageCallback?: UsageCallback,
+    prefixHashProvider?: PrefixHashProvider,
+  ): Promise<SessionHandle>;
 };
 
 // ---------------------------------------------------------------------------
@@ -139,15 +173,23 @@ export class MockSessionHandle implements SessionHandle {
 export class MockSessionAdapter implements SessionAdapter {
   readonly sessions: Map<string, MockSessionHandle> = new Map();
   readonly usageCallbacks: Map<string, UsageCallback> = new Map();
+  readonly prefixHashProviders: Map<string, PrefixHashProvider> = new Map();
   private counter = 0;
 
-  async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
+  async createSession(
+    config: AgentSessionConfig,
+    usageCallback?: UsageCallback,
+    prefixHashProvider?: PrefixHashProvider,
+  ): Promise<SessionHandle> {
     this.counter += 1;
     const sessionId = `mock-${config.name}-${this.counter}`;
     const handle = new MockSessionHandle(sessionId);
     this.sessions.set(sessionId, handle);
     if (usageCallback) {
       this.usageCallbacks.set(sessionId, usageCallback);
+    }
+    if (prefixHashProvider) {
+      this.prefixHashProviders.set(sessionId, prefixHashProvider);
     }
     return handle;
   }
@@ -156,10 +198,14 @@ export class MockSessionAdapter implements SessionAdapter {
     sessionId: string,
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
+    prefixHashProvider?: PrefixHashProvider,
   ): Promise<SessionHandle> {
     const existing = this.sessions.get(sessionId);
     if (usageCallback) {
       this.usageCallbacks.set(sessionId, usageCallback);
+    }
+    if (prefixHashProvider) {
+      this.prefixHashProviders.set(sessionId, prefixHashProvider);
     }
     if (existing) {
       return existing;
@@ -195,6 +241,28 @@ function buildCleanEnv(): Record<string, string | undefined> {
 }
 
 /**
+ * Phase 52 Plan 02 — construct the SDK preset+append systemPrompt option.
+ *
+ * Always emits `{ type: "preset", preset: "claude_code" }` so the SDK's
+ * claude_code preset scaffolds automatic caching. When the stable prefix is
+ * non-empty, it is appended verbatim via the `append` key.
+ *
+ * Exported for tests + external callers; internal callers (createSession /
+ * resumeSession) use it below. NEVER replace with a raw `string` systemPrompt —
+ * that loses the preset's cache scaffolding (CONTEXT D-01 LOCKED).
+ */
+export function buildSystemPromptOption(
+  stablePrefix: string,
+):
+  | { readonly type: "preset"; readonly preset: "claude_code"; readonly append: string }
+  | { readonly type: "preset"; readonly preset: "claude_code" } {
+  if (stablePrefix.length > 0) {
+    return { type: "preset" as const, preset: "claude_code" as const, append: stablePrefix };
+  }
+  return { type: "preset" as const, preset: "claude_code" as const };
+}
+
+/**
  * SessionAdapter backed by the Claude Agent SDK query() API.
  * Uses dynamic imports so the file compiles even without the SDK installed.
  *
@@ -203,48 +271,89 @@ function buildCleanEnv(): Record<string, string | undefined> {
  * avoids complex async coordination while preserving multi-turn context.
  */
 export class SdkSessionAdapter implements SessionAdapter {
-  async createSession(config: AgentSessionConfig, usageCallback?: UsageCallback): Promise<SessionHandle> {
+  async createSession(
+    config: AgentSessionConfig,
+    usageCallback?: UsageCallback,
+    prefixHashProvider?: PrefixHashProvider,
+  ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
-    const baseOptions: SdkQueryOptions = {
+    const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       model: resolveModelId(config.model),
       effort: config.effort,
       cwd: config.workspace,
-      systemPrompt: config.systemPrompt,
+      // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
+      systemPrompt: buildSystemPromptOption(config.systemPrompt),
       permissionMode: "bypassPermissions",
       settingSources: ["project"],
       env: buildCleanEnv(),
+      ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
       ...(mcpServers ? { mcpServers } : {}),
     };
 
     // Initial query to establish the session
-    const initialQuery = sdk.query({ prompt: "Session initialized.", options: baseOptions });
+    const initialQuery = sdk.query({ prompt: "Session initialized.", options: stripHandleOnlyFields(baseOptions) });
     const { sessionId, query } = await drainInitialQuery(initialQuery);
 
-    return wrapSdkQuery(query, sdk, baseOptions, sessionId, usageCallback);
+    return wrapSdkQuery(
+      query,
+      sdk,
+      baseOptions,
+      sessionId,
+      usageCallback,
+      undefined,
+      prefixHashProvider,
+    );
   }
 
   async resumeSession(
     sessionId: string,
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
+    prefixHashProvider?: PrefixHashProvider,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
-    const baseOptions: SdkQueryOptions = {
+    const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       model: resolveModelId(config.model),
       effort: config.effort,
       cwd: config.workspace,
-      systemPrompt: config.systemPrompt,
+      // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
+      systemPrompt: buildSystemPromptOption(config.systemPrompt),
       permissionMode: "bypassPermissions",
       settingSources: ["project"],
       resume: sessionId,
       env: buildCleanEnv(),
+      ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
       ...(mcpServers ? { mcpServers } : {}),
     };
 
-    return wrapSdkQuery(undefined, sdk, baseOptions, sessionId, usageCallback);
+    return wrapSdkQuery(
+      undefined,
+      sdk,
+      baseOptions,
+      sessionId,
+      usageCallback,
+      undefined,
+      prefixHashProvider,
+    );
   }
+}
+
+/**
+ * Phase 52 Plan 02 — strip adapter-only fields before forwarding to sdk.query.
+ *
+ * `mutableSuffix` is carried in our baseOptions for per-turn prompt
+ * prepending but is NOT a real SDK option — remove it before handing
+ * options to `sdk.query` so the SDK doesn't complain about an unknown key.
+ */
+function stripHandleOnlyFields(
+  opts: SdkQueryOptions & { readonly mutableSuffix?: string },
+): SdkQueryOptions {
+  const { mutableSuffix: _mutable, ...rest } = opts as SdkQueryOptions & {
+    mutableSuffix?: string;
+  };
+  return rest;
 }
 
 /**
@@ -348,23 +457,41 @@ function extractUsage(
 function wrapSdkQuery(
   _initialQuery: SdkQuery | undefined,
   sdk: SdkModule,
-  baseOptions: SdkQueryOptions,
+  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
   initialSessionId: string,
   usageCallback?: UsageCallback,
   boundTurn?: Turn,
+  prefixHashProvider?: PrefixHashProvider,
 ): SessionHandle {
   let sessionId = initialSessionId;
   let currentEffort = baseOptions.effort ?? "low";
+  const mutableSuffix = baseOptions.mutableSuffix;
   const errorHandlers: Array<(error: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
   let closed = false;
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
-   * Uses the current (possibly runtime-updated) effort level.
+   * Uses the current (possibly runtime-updated) effort level. Strips
+   * adapter-only fields (mutableSuffix) before forwarding to sdk.query.
    */
   function turnOptions(): SdkQueryOptions {
-    return { ...baseOptions, effort: currentEffort, resume: sessionId };
+    return stripHandleOnlyFields({
+      ...baseOptions,
+      effort: currentEffort,
+      resume: sessionId,
+    });
+  }
+
+  /**
+   * Phase 52 Plan 02 — prepend the mutableSuffix to the user message when
+   * present. Sits OUTSIDE the cached stable prefix so the SDK treats it as
+   * per-turn content.
+   */
+  function promptWithMutable(message: string): string {
+    return mutableSuffix && mutableSuffix.length > 0
+      ? `${mutableSuffix}\n\n${message}`
+      : message;
   }
 
   /**
@@ -486,11 +613,54 @@ function wrapSdkQuery(
                   : 0;
               const input =
                 typeof u.input_tokens === "number" ? u.input_tokens : 0;
+
+              // Phase 52 Plan 02 — per-turn prefixHash comparison (CONTEXT D-04).
+              // Re-read the current stablePrefix hash on EVERY turn so mid-session
+              // config drift (skills hot-reload, hot-tier mutation, identity swap)
+              // is visible. Session-boundary comparison would miss all of these.
+              // Wrapped in its own try/catch so provider errors do not disturb
+              // the token-count capture — observational contract preserved.
+              let prefixHash: string | undefined;
+              let cacheEvictionExpected: boolean | undefined;
+              try {
+                if (prefixHashProvider) {
+                  const probe = prefixHashProvider.get();
+                  if (
+                    probe &&
+                    typeof probe.current === "string" &&
+                    probe.current.length > 0
+                  ) {
+                    prefixHash = probe.current;
+                    cacheEvictionExpected =
+                      probe.last === undefined
+                        ? false
+                        : probe.current !== probe.last;
+                  }
+                }
+              } catch {
+                // Provider threw — leave prefix fields undefined, continue
+                // capturing token counts. CACHE observability MUST NEVER
+                // break the message path (CONTEXT invariant from Phase 50).
+              }
+
               turn.recordCacheUsage({
                 cacheReadInputTokens: cacheRead,
                 cacheCreationInputTokens: cacheCreation,
                 inputTokens: input,
+                prefixHash,
+                cacheEvictionExpected,
               });
+
+              // Persist the new hash AFTER recordCacheUsage so the NEXT turn
+              // can compare. Wrapped in try/catch mirroring the provider-get
+              // guard — persistence failure must not disturb the message path.
+              try {
+                if (prefixHash !== undefined) {
+                  prefixHashProvider?.persist(prefixHash);
+                }
+              } catch {
+                // ignore
+              }
             } catch {
               // Never break the send flow due to cache-capture failure.
             }
@@ -526,7 +696,10 @@ function wrapSdkQuery(
     async send(message: string, turn?: Turn): Promise<void> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
-        const q = sdk.query({ prompt: message, options: turnOptions() });
+        const q = sdk.query({
+          prompt: promptWithMutable(message),
+          options: turnOptions(),
+        });
         await iterateWithTracing(q, turn ?? boundTurn, null);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
@@ -538,7 +711,10 @@ function wrapSdkQuery(
     async sendAndCollect(message: string, turn?: Turn): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
-        const q = sdk.query({ prompt: message, options: turnOptions() });
+        const q = sdk.query({
+          prompt: promptWithMutable(message),
+          options: turnOptions(),
+        });
         return await iterateWithTracing(q, turn ?? boundTurn, null);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
@@ -554,7 +730,10 @@ function wrapSdkQuery(
     ): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
-        const q = sdk.query({ prompt: message, options: turnOptions() });
+        const q = sdk.query({
+          prompt: promptWithMutable(message),
+          options: turnOptions(),
+        });
         return await iterateWithTracing(q, turn ?? boundTurn, onChunk);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
@@ -607,10 +786,20 @@ function wrapSdkQuery(
  */
 export type TracedSessionHandleOptions = {
   readonly sdk: SdkModule;
-  readonly baseOptions: SdkQueryOptions;
+  readonly baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string };
   readonly sessionId: string;
   readonly turn?: Turn;
   readonly usageCallback?: UsageCallback;
+  /**
+   * Phase 52 Plan 02 — optional per-turn prefixHash provider.
+   *
+   * Invoked from inside `iterateWithTracing` on every turn to compute
+   * `cache_eviction_expected` and attach `prefix_hash` to the buffered
+   * telemetry snapshot. `persist(hash)` is called AFTER recordCacheUsage
+   * so the next turn's comparison has a fresh baseline. SessionManager
+   * owns the per-agent map behind this closure.
+   */
+  readonly prefixHashProvider?: PrefixHashProvider;
 };
 
 /**
@@ -630,5 +819,6 @@ export function createTracedSessionHandle(opts: TracedSessionHandleOptions): Ses
     opts.sessionId,
     opts.usageCallback,
     opts.turn,
+    opts.prefixHashProvider,
   );
 }

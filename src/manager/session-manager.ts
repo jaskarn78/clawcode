@@ -22,6 +22,7 @@ import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
 import { detectBootstrapNeeded } from "../bootstrap/detector.js";
+import { computePrefixHash } from "./context-assembler.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -46,6 +47,31 @@ export class SessionManager {
   private readonly sessionEndCallbacks: Map<string, () => Promise<void>> = new Map();
   private skillsCatalog: SkillsCatalog = new Map();
   private allAgentConfigs: readonly ResolvedAgentConfig[] = [];
+  /**
+   * Phase 52 Plan 02 — per-agent prefixHash across turns.
+   *
+   * Keyed by agent name; value is the sha256 of the stable prefix assembled
+   * for that agent's most recent turn. Updated from inside the adapter's
+   * `prefixHashProvider.persist()` hook. Enables CACHE-04 eviction detection.
+   */
+  private readonly lastPrefixHashByAgent: Map<string, string> = new Map();
+  /**
+   * Phase 52 Plan 02 — per-agent hot-tier stable token across turns.
+   *
+   * Used by `buildSessionConfig` / `assembleContext` to decide hot-tier
+   * placement (stable prefix vs mutable suffix) so a single hot-tier
+   * mutation doesn't thrash the cache.
+   */
+  private readonly lastHotStableTokenByAgent: Map<string, string> = new Map();
+  /**
+   * Phase 52 Plan 02 — per-agent latest stablePrefix string.
+   *
+   * Stored at `buildSessionConfig` time (session start + hot-reload) so the
+   * per-turn `prefixHashProvider` can compute `sha256(latest)` on every
+   * iteration. Skills hot-reload updates this via `refreshStablePrefix`
+   * which triggers a fresh `buildSessionConfig` run.
+   */
+  private readonly latestStablePrefixByAgent: Map<string, string> = new Map();
 
   constructor(options: SessionManagerOptions) {
     this.adapter = options.adapter;
@@ -72,6 +98,51 @@ export class SessionManager {
 
   setAllAgentConfigs(configs: readonly ResolvedAgentConfig[]): void {
     this.allAgentConfigs = configs;
+  }
+
+  /**
+   * Phase 52 Plan 02 — read the most recent prefixHash for `agent` (or
+   * undefined on a fresh session). Used by tests + the per-turn provider
+   * closure.
+   */
+  getLastPrefixHash(agent: string): string | undefined {
+    return this.lastPrefixHashByAgent.get(agent);
+  }
+
+  /**
+   * Phase 52 Plan 02 — record the latest prefixHash for `agent`.
+   * Called by the provider closure's `persist` hook AFTER recordCacheUsage
+   * so the NEXT turn's comparison has a fresh baseline.
+   */
+  setLastPrefixHash(agent: string, hash: string): void {
+    this.lastPrefixHashByAgent.set(agent, hash);
+  }
+
+  /**
+   * Phase 52 Plan 02 — build a PrefixHashProvider closure for `agent`.
+   *
+   * On every turn, returns `{ current: sha256(latestStablePrefix), last }`
+   * where `latestStablePrefix` is the most recent stablePrefix rebuilt via
+   * buildSessionConfig (refreshed on skills hot-reload). `persist` updates
+   * the per-agent Map so the next turn can compare.
+   *
+   * Returns undefined when the agent has no cached stablePrefix — the
+   * adapter treats this as "no prefix drift signal" and records the
+   * cache telemetry snapshot without the prefix fields.
+   */
+  private makePrefixHashProvider(agent: string) {
+    return {
+      get: () => {
+        const prefix = this.latestStablePrefixByAgent.get(agent) ?? "";
+        return {
+          current: prefix.length > 0 ? computePrefixHash(prefix) : "",
+          last: this.lastPrefixHashByAgent.get(agent),
+        };
+      },
+      persist: (hash: string) => {
+        this.lastPrefixHashByAgent.set(agent, hash);
+      },
+    };
   }
 
   /**
@@ -106,7 +177,20 @@ export class SessionManager {
     const bootstrapStatus = await detectBootstrapNeeded(config);
     this.log.info({ agent: name, bootstrapStatus }, "bootstrap check");
 
-    const sessionConfig = await buildSessionConfig(config, this.configDeps(), undefined, bootstrapStatus);
+    // Phase 52 Plan 02 — thread priorHotStableToken for hot-tier placement.
+    const sessionConfig = await buildSessionConfig(
+      config,
+      this.configDeps(name),
+      undefined,
+      bootstrapStatus,
+    );
+
+    // Phase 52 Plan 02 — cache latest stablePrefix + hotStableToken for the
+    // per-turn prefixHashProvider + next buildSessionConfig respectively.
+    this.latestStablePrefixByAgent.set(name, sessionConfig.systemPrompt);
+    if (sessionConfig.hotStableToken) {
+      this.lastHotStableTokenByAgent.set(name, sessionConfig.hotStableToken);
+    }
 
     // Build usage callback
     const usageTracker = this.memory.usageTrackers.get(name);
@@ -119,7 +203,13 @@ export class SessionManager {
         }
       : undefined;
 
-    const handle = await this.adapter.createSession(sessionConfig, usageCallback);
+    // Phase 52 Plan 02 — attach per-turn prefixHash provider so the adapter
+    // can record cache_eviction_expected against the in-flight stablePrefix.
+    const handle = await this.adapter.createSession(
+      sessionConfig,
+      usageCallback,
+      this.makePrefixHashProvider(name),
+    );
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
 
@@ -228,6 +318,11 @@ export class SessionManager {
 
     await handle.close();
     this.sessions.delete(name);
+    // Phase 52 Plan 02 — drop per-agent cache-prefix state so a fresh start
+    // records cacheEvictionExpected=false on turn 1 (no prior hash).
+    this.lastPrefixHashByAgent.delete(name);
+    this.lastHotStableTokenByAgent.delete(name);
+    this.latestStablePrefixByAgent.delete(name);
 
     registry = await readRegistry(this.registryPath);
     registry = updateEntry(registry, name, { status: "stopped", sessionId: null });
@@ -292,8 +387,27 @@ export class SessionManager {
 
       if (entry.status === "running" && entry.sessionId && config) {
         try {
-          const sessionConfig = await buildSessionConfig(config, this.configDeps());
-          const handle = await this.adapter.resumeSession(entry.sessionId, sessionConfig);
+          const sessionConfig = await buildSessionConfig(
+            config,
+            this.configDeps(entry.name),
+          );
+          // Phase 52 Plan 02 — cache latest stable bits for provider + next call.
+          this.latestStablePrefixByAgent.set(
+            entry.name,
+            sessionConfig.systemPrompt,
+          );
+          if (sessionConfig.hotStableToken) {
+            this.lastHotStableTokenByAgent.set(
+              entry.name,
+              sessionConfig.hotStableToken,
+            );
+          }
+          const handle = await this.adapter.resumeSession(
+            entry.sessionId,
+            sessionConfig,
+            undefined,
+            this.makePrefixHashProvider(entry.name),
+          );
           this.sessions.set(entry.name, handle);
           this.configs.set(entry.name, config);
           handle.onError((error: Error) => {
@@ -361,8 +475,23 @@ export class SessionManager {
     return handle;
   }
 
-  private configDeps() {
-    return { tierManagers: this.memory.tierManagers, skillsCatalog: this.skillsCatalog, allAgentConfigs: this.allAgentConfigs };
+  /**
+   * Phase 52 Plan 02 — optionally thread the per-agent `priorHotStableToken`
+   * so hot-tier placement is consistent across builds. Callers without an
+   * agent name (historically: none remain after this plan) get undefined
+   * and hot-tier enters the stable prefix by default (first-turn path).
+   */
+  private configDeps(agentName?: string) {
+    const priorHotStableToken =
+      agentName !== undefined
+        ? this.lastHotStableTokenByAgent.get(agentName)
+        : undefined;
+    return {
+      tierManagers: this.memory.tierManagers,
+      skillsCatalog: this.skillsCatalog,
+      allAgentConfigs: this.allAgentConfigs,
+      priorHotStableToken,
+    };
   }
 
   private async performRestart(name: string, config: ResolvedAgentConfig): Promise<void> {

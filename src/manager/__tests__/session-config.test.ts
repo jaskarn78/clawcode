@@ -313,3 +313,77 @@ The full context of its creation spans multiple paragraphs of detail.
     expect(result.systemPrompt).not.toContain("memory_lookup");
   });
 });
+
+// ── Phase 52 Plan 02 — two-block wiring for prompt caching ──────────────────
+
+describe("buildSessionConfig — Phase 52 two-block wiring", () => {
+  it("returns systemPrompt carrying ONLY the stable prefix (identity, tools, stable hot-tier)", async () => {
+    const soulContent = "# My Soul\n\n## Soul\n- Helpful\n";
+    const config = makeConfig({
+      soul: soulContent,
+      channels: ["general"],
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+
+    // Stable block has identity derived from fingerprint.
+    expect(result.systemPrompt).toContain("## Identity");
+    expect(result.systemPrompt).toContain("My Soul");
+    // Discord bindings are MUTABLE — NOT in stable systemPrompt.
+    expect(result.systemPrompt).not.toContain("## Discord Communication");
+  });
+
+  it("returns mutableSuffix as a separate field carrying discord bindings + context summary", async () => {
+    const config = makeConfig({
+      channels: ["channel-xyz"],
+    });
+    const result = await buildSessionConfig(
+      config,
+      makeDeps(),
+      "## Context Summary\nprevious session info",
+    );
+
+    expect(result.mutableSuffix).toBeDefined();
+    expect(result.mutableSuffix).toContain("## Discord Communication");
+    expect(result.mutableSuffix).toContain("channel-xyz");
+    expect(result.mutableSuffix).toContain("## Context Summary");
+  });
+
+  it("returns hotStableToken (64-char hex) for the caller to persist for next-turn comparison", async () => {
+    const config = makeConfig();
+    const result = await buildSessionConfig(config, makeDeps());
+
+    expect(result.hotStableToken).toBeDefined();
+    expect(result.hotStableToken).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("threads priorHotStableToken from deps into assembleContext (hot-tier moves to mutable on drift)", async () => {
+    const hotMemories = [
+      makeHotMemory("user likes TS", 1.0),
+      makeHotMemory("project uses vitest", 0.9),
+    ];
+    const tierManager = makeTierManager(hotMemories);
+    const tierManagers = new Map([["test-agent", tierManager as any]]);
+    const config = makeConfig();
+
+    // Pass a priorHotStableToken that DEFINITELY does not match current hot-tier.
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({
+        tierManagers,
+        priorHotStableToken: "0".repeat(64),
+      }),
+    );
+
+    // When prior token does not match, hot-tier moves OUT of the stable
+    // systemPrompt and into the mutableSuffix.
+    expect(result.systemPrompt).not.toContain("## Key Memories");
+    expect(result.mutableSuffix ?? "").toContain("## Key Memories");
+  });
+
+  it("omits mutableSuffix field when no mutable content exists (stable-only agent)", async () => {
+    // No channels + no context summary = nothing in the mutable block.
+    const config = makeConfig({ channels: [] });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.mutableSuffix).toBeUndefined();
+  });
+});

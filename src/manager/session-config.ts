@@ -14,11 +14,16 @@ import type { ContextSources } from "./context-assembler.js";
 /**
  * Dependencies required by buildSessionConfig.
  * Passed in rather than accessed via `this` to decouple from SessionManager.
+ *
+ * Phase 52 Plan 02 — `priorHotStableToken` is threaded by SessionManager from
+ * the per-agent map it maintains across turns so hot-tier placement (stable
+ * vs mutable) decisions are stable across session-config rebuilds.
  */
 export type SessionConfigDeps = {
   readonly tierManagers: Map<string, TierManager>;
   readonly skillsCatalog: SkillsCatalog;
   readonly allAgentConfigs: readonly ResolvedAgentConfig[];
+  readonly priorHotStableToken?: string;
 };
 
 /**
@@ -210,25 +215,27 @@ export async function buildSessionConfig(
     discordBindings: discordBindingsStr,
     contextSummary: contextSummaryStr,
   };
-  // Phase 52 Plan 02 — assembleContext now returns AssembledContext
-  // ({ stablePrefix, mutableSuffix, hotStableToken }). This task (52-02
-  // Task 1) only reshapes the assembler; Task 2 rewires buildSessionConfig
-  // to propagate the split through AgentSessionConfig. For now, concatenate
-  // the two blocks so the existing single-string systemPrompt contract is
-  // preserved — downstream consumers get the identical bytes they got
-  // pre-52.
-  const assembled = assembleContext(sources, budgets);
-  const systemPrompt =
-    assembled.stablePrefix && assembled.mutableSuffix
-      ? `${assembled.stablePrefix}\n\n${assembled.mutableSuffix}`
-      : assembled.stablePrefix || assembled.mutableSuffix;
+  // Phase 52 Plan 02 — two-block assembly for prompt caching.
+  //   stablePrefix   → systemPrompt (fed to SDK preset.append, cached)
+  //   mutableSuffix  → per-turn prepend to user message (outside cache)
+  //   hotStableToken → persisted by SessionManager for next-turn comparison
+  //
+  // The `priorHotStableToken` dep controls hot-tier placement: matching
+  // token → hot-tier stays in stable block; non-matching → hot-tier falls
+  // into mutable for this turn only (cache thrashing guard, CONTEXT D-05).
+  const assembled = assembleContext(sources, budgets, {
+    priorHotStableToken: deps.priorHotStableToken,
+  });
+  const trimmedMutable = assembled.mutableSuffix.trim();
 
   return {
     name: config.name,
     model: config.model,
     effort: config.effort,
     workspace: config.workspace,
-    systemPrompt: systemPrompt.trim(),
+    systemPrompt: assembled.stablePrefix.trim(),
+    mutableSuffix: trimmedMutable.length > 0 ? trimmedMutable : undefined,
+    hotStableToken: assembled.hotStableToken,
     channels,
     contextSummary,
     mcpServers: config.mcpServers ?? [],
