@@ -126,3 +126,65 @@ describe("TraceCollector", () => {
     expect(toolSpan!.metadata).toMatchObject({ tool: "memory_lookup", len: 42 });
   });
 });
+
+describe("Turn.recordCacheUsage (Phase 52)", () => {
+  let store: TraceStore;
+  let writeTurn: ReturnType<typeof vi.fn>;
+  let collector: TraceCollector;
+
+  beforeEach(() => {
+    const mock = createMockStore();
+    store = mock.store;
+    writeTurn = mock.writeTurn;
+    collector = new TraceCollector(store, createMockLogger());
+  });
+
+  it("Turn.recordCacheUsage stores snapshot and includes it in the written TurnRecord", () => {
+    const turn = collector.startTurn("msg-cache-1", "alpha", null);
+    turn.recordCacheUsage({
+      cacheReadInputTokens: 500,
+      cacheCreationInputTokens: 100,
+      inputTokens: 50,
+    });
+    turn.end("success");
+
+    expect(writeTurn).toHaveBeenCalledTimes(1);
+    const written = writeTurn.mock.calls[0]![0] as TurnRecord;
+    expect(written.cacheReadInputTokens).toBe(500);
+    expect(written.cacheCreationInputTokens).toBe(100);
+    expect(written.inputTokens).toBe(50);
+  });
+
+  it("Turn.recordCacheUsage is idempotent — second call overwrites first", () => {
+    const turn = collector.startTurn("msg-cache-2", "alpha", null);
+    turn.recordCacheUsage({
+      cacheReadInputTokens: 100,
+      cacheCreationInputTokens: 50,
+      inputTokens: 25,
+    });
+    // Second call overwrites.
+    turn.recordCacheUsage({
+      cacheReadInputTokens: 999,
+      cacheCreationInputTokens: 1,
+      inputTokens: 1,
+    });
+    turn.end("success");
+
+    const written = writeTurn.mock.calls[0]![0] as TurnRecord;
+    expect(written.cacheReadInputTokens).toBe(999);
+    expect(written.cacheCreationInputTokens).toBe(1);
+    expect(written.inputTokens).toBe(1);
+  });
+
+  it("Turn without recordCacheUsage produces a TurnRecord with undefined cache fields", () => {
+    const turn = collector.startTurn("msg-no-cache", "alpha", null);
+    turn.end("success");
+
+    const written = writeTurn.mock.calls[0]![0] as TurnRecord;
+    expect(written.cacheReadInputTokens).toBeUndefined();
+    expect(written.cacheCreationInputTokens).toBeUndefined();
+    expect(written.inputTokens).toBeUndefined();
+    expect(written.prefixHash).toBeUndefined();
+    expect(written.cacheEvictionExpected).toBeUndefined();
+  });
+});

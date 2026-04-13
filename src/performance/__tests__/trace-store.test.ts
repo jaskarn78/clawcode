@@ -206,3 +206,236 @@ describe("TraceStore", () => {
     expect("p99" in endToEnd!).toBe(true);
   });
 });
+
+describe("TraceStore cache telemetry (Phase 52)", () => {
+  let store: TraceStore;
+  let tempDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "trace-store-cache-test-"));
+    dbPath = join(tempDir, "traces.db");
+    store = new TraceStore(dbPath);
+  });
+
+  afterEach(() => {
+    try {
+      store.close();
+    } catch {
+      // ignore close errors during teardown
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("ALTER TABLE migration is idempotent across repeated constructions", () => {
+    // First construction already happened in beforeEach. Closing and re-opening
+    // must not throw on duplicate-column errors.
+    store.close();
+
+    // Second construction on the same path — migrateSchema should be idempotent.
+    expect(() => {
+      store = new TraceStore(dbPath);
+    }).not.toThrow();
+
+    // And a third reopens — still no issue.
+    store.close();
+    expect(() => {
+      store = new TraceStore(dbPath);
+    }).not.toThrow();
+  });
+
+  it("writeTurn persists cache_read_input_tokens, cache_creation_input_tokens, input_tokens, prefix_hash, cache_eviction_expected", () => {
+    const turn: TurnRecord = Object.freeze({
+      id: "cache-turn-1",
+      agent: "agent-cache",
+      channelId: "chan-1",
+      startedAt: "2026-04-13T12:00:00.000Z",
+      endedAt: "2026-04-13T12:00:01.000Z",
+      totalMs: 1000,
+      status: "success",
+      spans: Object.freeze([]),
+      cacheReadInputTokens: 500,
+      cacheCreationInputTokens: 100,
+      inputTokens: 50,
+      prefixHash: "abc123def",
+      cacheEvictionExpected: true,
+    });
+    store.writeTurn(turn);
+
+    const inspect = new Database(dbPath);
+    const row = inspect
+      .prepare(
+        "SELECT cache_read_input_tokens, cache_creation_input_tokens, input_tokens, prefix_hash, cache_eviction_expected FROM traces WHERE id = ?",
+      )
+      .get("cache-turn-1") as {
+        cache_read_input_tokens: number;
+        cache_creation_input_tokens: number;
+        input_tokens: number;
+        prefix_hash: string;
+        cache_eviction_expected: number;
+      };
+    inspect.close();
+
+    expect(row.cache_read_input_tokens).toBe(500);
+    expect(row.cache_creation_input_tokens).toBe(100);
+    expect(row.input_tokens).toBe(50);
+    expect(row.prefix_hash).toBe("abc123def");
+    expect(row.cache_eviction_expected).toBe(1);
+  });
+
+  it("writeTurn persists turns WITHOUT cache fields (backward compat with Phase 50 turns)", () => {
+    // TurnRecord without any cache fields — should land NULLs in the new columns.
+    const turn = buildTurn({ id: "legacy-turn-1" });
+    store.writeTurn(turn);
+
+    const inspect = new Database(dbPath);
+    const row = inspect
+      .prepare(
+        "SELECT cache_read_input_tokens, cache_creation_input_tokens, input_tokens, prefix_hash, cache_eviction_expected FROM traces WHERE id = ?",
+      )
+      .get("legacy-turn-1") as {
+        cache_read_input_tokens: number | null;
+        cache_creation_input_tokens: number | null;
+        input_tokens: number | null;
+        prefix_hash: string | null;
+        cache_eviction_expected: number | null;
+      };
+    inspect.close();
+
+    expect(row.cache_read_input_tokens).toBeNull();
+    expect(row.cache_creation_input_tokens).toBeNull();
+    expect(row.input_tokens).toBeNull();
+    expect(row.prefix_hash).toBeNull();
+    expect(row.cache_eviction_expected).toBeNull();
+  });
+
+  it("getCacheTelemetry returns totalTurns / avgHitRate / p50HitRate / p95HitRate / trendByDay for the window", () => {
+    // Insert 10 turns across 3 days with varying cache ratios.
+    // Day 1 (2026-04-10): 3 turns, hit rates ~0.80, 0.85, 0.90
+    // Day 2 (2026-04-11): 4 turns, hit rates ~0.50, 0.55, 0.60, 0.65
+    // Day 3 (2026-04-12): 3 turns, hit rates ~0.10, 0.20, 0.30
+    const turns = [
+      // Day 1: high cache hit rate
+      { id: "d1-1", day: "2026-04-10T10:00:00.000Z", read: 800, creation: 150, input: 50 }, // 800/1000 = 0.80
+      { id: "d1-2", day: "2026-04-10T11:00:00.000Z", read: 850, creation: 100, input: 50 }, // 0.85
+      { id: "d1-3", day: "2026-04-10T12:00:00.000Z", read: 900, creation: 60, input: 40 },  // 0.90
+      // Day 2: medium
+      { id: "d2-1", day: "2026-04-11T10:00:00.000Z", read: 500, creation: 400, input: 100 }, // 0.50
+      { id: "d2-2", day: "2026-04-11T11:00:00.000Z", read: 550, creation: 350, input: 100 }, // 0.55
+      { id: "d2-3", day: "2026-04-11T12:00:00.000Z", read: 600, creation: 300, input: 100 }, // 0.60
+      { id: "d2-4", day: "2026-04-11T13:00:00.000Z", read: 650, creation: 250, input: 100 }, // 0.65
+      // Day 3: low
+      { id: "d3-1", day: "2026-04-12T10:00:00.000Z", read: 100, creation: 800, input: 100 }, // 0.10
+      { id: "d3-2", day: "2026-04-12T11:00:00.000Z", read: 200, creation: 700, input: 100 }, // 0.20
+      { id: "d3-3", day: "2026-04-12T12:00:00.000Z", read: 300, creation: 600, input: 100 }, // 0.30
+    ];
+    for (const t of turns) {
+      const turn: TurnRecord = Object.freeze({
+        id: t.id,
+        agent: "cache-agent",
+        channelId: "c1",
+        startedAt: t.day,
+        endedAt: t.day,
+        totalMs: 100,
+        status: "success",
+        spans: Object.freeze([]),
+        cacheReadInputTokens: t.read,
+        cacheCreationInputTokens: t.creation,
+        inputTokens: t.input,
+      });
+      store.writeTurn(turn);
+    }
+
+    const report = store.getCacheTelemetry("cache-agent", "2026-04-01T00:00:00.000Z");
+
+    expect(report.totalTurns).toBe(10);
+    // Expected avg hit rate across all 10:
+    // (0.80 + 0.85 + 0.90 + 0.50 + 0.55 + 0.60 + 0.65 + 0.10 + 0.20 + 0.30) / 10 = 0.545
+    expect(report.avgHitRate).toBeGreaterThanOrEqual(0.54);
+    expect(report.avgHitRate).toBeLessThanOrEqual(0.55);
+    expect(typeof report.p50HitRate).toBe("number");
+    expect(typeof report.p95HitRate).toBe("number");
+    expect(report.trendByDay).toHaveLength(3);
+    expect(report.trendByDay[0]).toHaveProperty("date");
+    expect(report.trendByDay[0]).toHaveProperty("turns");
+    expect(report.trendByDay[0]).toHaveProperty("hitRate");
+    // Date format YYYY-MM-DD
+    expect(report.trendByDay[0]!.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("getCacheTelemetry returns zeros and empty trend when no turns in window", () => {
+    const report = store.getCacheTelemetry("no-turns-agent", "2026-04-01T00:00:00.000Z");
+    expect(report).toEqual({
+      agent: "no-turns-agent",
+      since: "2026-04-01T00:00:00.000Z",
+      totalTurns: 0,
+      avgHitRate: 0,
+      p50HitRate: 0,
+      p95HitRate: 0,
+      totalCacheReads: 0,
+      totalCacheWrites: 0,
+      totalInputTokens: 0,
+      trendByDay: [],
+    });
+  });
+
+  it("getCacheTelemetry populates totalCacheReads / totalCacheWrites / totalInputTokens aggregates", () => {
+    // 3 turns with cache_read=100/200/300, cache_creation=50/50/50, input=10/10/10
+    const values = [
+      { id: "a-1", read: 100, creation: 50, input: 10 },
+      { id: "a-2", read: 200, creation: 50, input: 10 },
+      { id: "a-3", read: 300, creation: 50, input: 10 },
+    ];
+    for (const v of values) {
+      const turn: TurnRecord = Object.freeze({
+        id: v.id,
+        agent: "agg-agent",
+        channelId: null,
+        startedAt: "2026-04-13T10:00:00.000Z",
+        endedAt: "2026-04-13T10:00:01.000Z",
+        totalMs: 100,
+        status: "success",
+        spans: Object.freeze([]),
+        cacheReadInputTokens: v.read,
+        cacheCreationInputTokens: v.creation,
+        inputTokens: v.input,
+      });
+      store.writeTurn(turn);
+    }
+
+    const report = store.getCacheTelemetry("agg-agent", "2026-04-01T00:00:00.000Z");
+    expect(report.totalCacheReads).toBe(600);
+    expect(report.totalCacheWrites).toBe(150);
+    expect(report.totalInputTokens).toBe(30);
+  });
+
+  it("getCacheTelemetry skips turns with inputTokens=0 (no cache signal)", () => {
+    // 5 turns — 3 with real input_tokens > 0, 2 with 0. Only the 3 with > 0 should count.
+    const values = [
+      { id: "s-1", read: 100, creation: 50, input: 10 },
+      { id: "s-2", read: 200, creation: 50, input: 20 },
+      { id: "s-3", read: 300, creation: 50, input: 30 },
+      { id: "s-4", read: 0, creation: 0, input: 0 }, // no signal
+      { id: "s-5", read: 0, creation: 0, input: 0 }, // no signal
+    ];
+    for (const v of values) {
+      const turn: TurnRecord = Object.freeze({
+        id: v.id,
+        agent: "skip-agent",
+        channelId: null,
+        startedAt: "2026-04-13T10:00:00.000Z",
+        endedAt: "2026-04-13T10:00:01.000Z",
+        totalMs: 100,
+        status: "success",
+        spans: Object.freeze([]),
+        cacheReadInputTokens: v.read,
+        cacheCreationInputTokens: v.creation,
+        inputTokens: v.input,
+      });
+      store.writeTurn(turn);
+    }
+
+    const report = store.getCacheTelemetry("skip-agent", "2026-04-01T00:00:00.000Z");
+    expect(report.totalTurns).toBe(3);
+  });
+});

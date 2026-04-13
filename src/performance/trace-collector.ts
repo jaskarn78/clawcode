@@ -15,7 +15,12 @@
  */
 
 import type { Logger } from "pino";
-import type { SpanRecord, TurnRecord, TurnStatus } from "./types.js";
+import type {
+  CacheTelemetrySnapshot,
+  SpanRecord,
+  TurnRecord,
+  TurnStatus,
+} from "./types.js";
 import type { TraceStore } from "./trace-store.js";
 
 /**
@@ -65,6 +70,12 @@ export class Turn {
   private readonly spans: SpanRecord[] = [];
   private readonly startedAtMs: number;
   private committed = false;
+  /**
+   * Phase 52 Plan 01: buffered cache-telemetry snapshot attached at `end()`.
+   * Undefined when the SDK `result` message did not carry usage fields (or
+   * when the session-adapter was not threaded with this Turn).
+   */
+  private cacheSnapshot: CacheTelemetrySnapshot | undefined = undefined;
 
   constructor(
     id: string,
@@ -94,17 +105,39 @@ export class Turn {
   }
 
   /**
+   * Phase 52 Plan 01: record the SDK result-message usage fields on this Turn.
+   *
+   * Called by `SdkSessionAdapter.iterateWithTracing` on the `result` message,
+   * BEFORE the parent Turn is `end()`ed. The snapshot is buffered in-memory
+   * and spread into the TurnRecord at `end()` — no extra transaction.
+   *
+   * Idempotent: a second call overwrites the first. Calling after `end()`
+   * is a no-op (parent already committed).
+   *
+   * SECURITY: snapshot carries only token counts + sha256 `prefixHash`.
+   * NEVER prompt bodies or message contents.
+   */
+  recordCacheUsage(snapshot: CacheTelemetrySnapshot): void {
+    if (this.committed) return;
+    this.cacheSnapshot = snapshot;
+  }
+
+  /**
    * Commit the turn: build a frozen TurnRecord from all buffered spans
    * and persist it via TraceStore.writeTurn in one transaction.
    *
    * Subsequent calls are no-ops (idempotent). Write failures are logged
    * at `warn` level — trace writes never fail the parent message path.
+   *
+   * Phase 52 Plan 01: when a cache-telemetry snapshot was recorded via
+   * `recordCacheUsage`, its fields are spread into the frozen TurnRecord.
+   * Otherwise the five cache fields are `undefined` (legacy shape).
    */
   end(status: TurnStatus): void {
     if (this.committed) return;
     this.committed = true;
     const endedAtMs = Date.now();
-    const record: TurnRecord = Object.freeze({
+    const base = {
       id: this.id,
       agent: this.agent,
       channelId: this.channelId,
@@ -113,7 +146,19 @@ export class Turn {
       totalMs: endedAtMs - this.startedAtMs,
       status,
       spans: Object.freeze([...this.spans]),
-    });
+    };
+    const record: TurnRecord = Object.freeze(
+      this.cacheSnapshot
+        ? {
+            ...base,
+            cacheReadInputTokens: this.cacheSnapshot.cacheReadInputTokens,
+            cacheCreationInputTokens: this.cacheSnapshot.cacheCreationInputTokens,
+            inputTokens: this.cacheSnapshot.inputTokens,
+            prefixHash: this.cacheSnapshot.prefixHash,
+            cacheEvictionExpected: this.cacheSnapshot.cacheEvictionExpected,
+          }
+        : base,
+    );
     try {
       this.store.writeTurn(record);
       this.log.debug(

@@ -35,6 +35,13 @@ export type SpanRecord = {
  * The turn record is what TraceStore.writeTurn persists in a single
  * transaction. `id` is the Discord message id for Discord-triggered turns,
  * or a `scheduler:<nanoid>` / `subagent:<nanoid>` prefixed id otherwise.
+ *
+ * Phase 52 Plan 01 adds five OPTIONAL cache-telemetry fields. They are
+ * populated by `Turn.recordCacheUsage` when the SDK result message carries
+ * `usage.cache_read_input_tokens` / `cache_creation_input_tokens` / `input_tokens`.
+ * Producers on the Phase 50 timeline may omit them — consumers MUST treat all
+ * five as optional. `prefix_hash` + `cache_eviction_expected` remain undefined
+ * until Plan 52-02 wires the context-assembler stable-prefix split.
  */
 export type TurnRecord = {
   readonly id: string;
@@ -48,7 +55,104 @@ export type TurnRecord = {
   readonly totalMs: number;
   readonly status: TurnStatus;
   readonly spans: readonly SpanRecord[];
+  /**
+   * Phase 52 Plan 01: tokens served from the prompt cache for this turn.
+   * Populated by session-adapter from `msg.usage.cache_read_input_tokens`.
+   */
+  readonly cacheReadInputTokens?: number;
+  /**
+   * Phase 52 Plan 01: tokens written into the prompt cache for this turn
+   * (new cache entries created). Populated from
+   * `msg.usage.cache_creation_input_tokens`.
+   */
+  readonly cacheCreationInputTokens?: number;
+  /**
+   * Phase 52 Plan 01: uncached input tokens for this turn. Populated from
+   * `msg.usage.input_tokens`. Used as the denominator in the hit-rate formula.
+   */
+  readonly inputTokens?: number;
+  /**
+   * Phase 52 Plan 02: sha256 of the stable prefix string assembled for this
+   * turn. Used by dashboard to detect prefix changes between adjacent turns.
+   * SECURITY: sha256 is safe to log — never the raw prefix body.
+   */
+  readonly prefixHash?: string;
+  /**
+   * Phase 52 Plan 02: true when this turn's `prefixHash` differs from the
+   * immediately prior turn's for the same agent. An operator-facing signal
+   * that a cache eviction was expected (prompt prefix changed).
+   */
+  readonly cacheEvictionExpected?: boolean;
 };
+
+/**
+ * Phase 52 Plan 01: in-flight cache telemetry snapshot captured off the SDK
+ * `result` message and attached to the parent Turn via `recordCacheUsage`.
+ *
+ * All three token counts are REQUIRED here (the session-adapter defaults
+ * missing fields to 0 per Phase 52 D-01 decision). `prefixHash` +
+ * `cacheEvictionExpected` are OPTIONAL on the snapshot — Plan 52-01 does not
+ * compute them; Plan 52-02 supplies them once the assembler splits stable /
+ * mutable blocks.
+ */
+export type CacheTelemetrySnapshot = {
+  readonly cacheReadInputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly inputTokens: number;
+  readonly prefixHash?: string;
+  readonly cacheEvictionExpected?: boolean;
+};
+
+/**
+ * Phase 52 Plan 01: one point in the cache-hit-rate trend chart.
+ *
+ * `date` is a YYYY-MM-DD UTC day key (grouped by `substr(started_at, 1, 10)`
+ * in the SQL). `turns` is the number of cache-aware turns that day;
+ * `hitRate` is the day's arithmetic mean hit rate in [0..1].
+ */
+export type CacheTrendPoint = {
+  readonly date: string;
+  readonly turns: number;
+  readonly hitRate: number;
+};
+
+/**
+ * Phase 52 Plan 01: query result of `TraceStore.getCacheTelemetry`.
+ *
+ * Mirrors `LatencyReport` symmetry so the CLI/dashboard formatters (Plan 52-03)
+ * stay structurally aligned with `clawcode latency`.
+ *
+ * Hit-rate formula (Phase 52 D-01):
+ *   hit_rate = cache_read / (cache_read + cache_creation + input)
+ *
+ * `avgHitRate`, `p50HitRate`, `p95HitRate` all live in [0..1]. Returns 0 when
+ * the window contains no cache-signal turns (`input_tokens > 0` rows).
+ */
+export type CacheTelemetryReport = {
+  readonly agent: string;
+  /** ISO 8601 cutoff used for the query window. */
+  readonly since: string;
+  readonly totalTurns: number;
+  readonly avgHitRate: number;
+  readonly p50HitRate: number;
+  readonly p95HitRate: number;
+  /** Sum of `cache_read_input_tokens` over the window. */
+  readonly totalCacheReads: number;
+  /** Sum of `cache_creation_input_tokens` over the window. */
+  readonly totalCacheWrites: number;
+  /** Sum of `input_tokens` over the window. */
+  readonly totalInputTokens: number;
+  readonly trendByDay: readonly CacheTrendPoint[];
+};
+
+/**
+ * Phase 52 Plan 01: status of the cache-hit-rate SLO for a window.
+ *
+ * Mirrors `SloStatus` shape but is a distinct type because cache hit rate is a
+ * ratio (0..1), not a millisecond threshold — and the gray zone (0.30..0.60)
+ * maps to `no_data` to signal "warming up" on the dashboard.
+ */
+export type CacheHitRateStatus = "healthy" | "breach" | "no_data";
 
 /**
  * Canonical segment names the CLI and dashboard agree on.
