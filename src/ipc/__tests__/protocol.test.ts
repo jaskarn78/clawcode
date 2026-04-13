@@ -13,6 +13,7 @@ describe("IPC_METHODS", () => {
       "stop",
       "restart",
       "start-all",
+      "stop-all",
       "status",
       // Observability
       "routes",
@@ -37,9 +38,13 @@ describe("IPC_METHODS", () => {
       "memory-search",
       "memory-lookup",
       "memory-list",
+      "memory-graph",
+      "memory-save",
       // Subagent threads
       "spawn-subagent-thread",
       "cleanup-subagent-thread",
+      "read-thread",
+      "message-history",
       // Security (Phase 27)
       "approve-command",
       "deny-command",
@@ -52,6 +57,8 @@ describe("IPC_METHODS", () => {
       "set-model",
       // Cost tracking (Phase 40)
       "costs",
+      // Latency (Phase 50)
+      "latency",
       // Effort (reasoning level)
       "set-effort",
       "get-effort",
@@ -60,6 +67,8 @@ describe("IPC_METHODS", () => {
       "search-documents",
       "delete-document",
       "list-documents",
+      // Agent provisioning
+      "agent-create",
     ]);
   });
 });

@@ -54,6 +54,8 @@ export const IPC_METHODS = [
   "set-model",
   // Cost tracking (Phase 40)
   "costs",
+  // Latency (Phase 50)
+  "latency",
   // Effort (reasoning level)
   "set-effort",
   "get-effort",
