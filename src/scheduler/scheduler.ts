@@ -1,6 +1,8 @@
 import { Cron } from "croner";
+import { nanoid } from "nanoid";
 import type { Logger } from "pino";
 import type { SessionManager } from "../manager/session-manager.js";
+import type { Turn } from "../performance/trace-collector.js";
 import type { ScheduleEntry, ScheduleStatus, TaskSchedulerOptions } from "./types.js";
 
 /**
@@ -80,6 +82,30 @@ export class TaskScheduler {
         }
 
         this.locks.set(agentName, true);
+
+        // Phase 50: construct a caller-owned Turn for scheduler-initiated work.
+        // turnId is prefixed `scheduler:` so dashboards can filter out non-user
+        // latency from percentiles. channelId is null (non-Discord origin).
+        // Trace setup is non-fatal — never break the scheduler hot path.
+        let turn: Turn | undefined;
+        try {
+          const getCollector = (this.sessionManager as SessionManager & {
+            getTraceCollector?: (name: string) => { startTurn: (id: string, agent: string, channelId: string | null) => Turn } | undefined;
+          }).getTraceCollector;
+          if (typeof getCollector === "function") {
+            const collector = getCollector.call(this.sessionManager, agentName);
+            if (collector) {
+              const turnId = `scheduler:${nanoid(10)}`;
+              turn = collector.startTurn(turnId, agentName, null);
+            }
+          }
+        } catch (err) {
+          this.log.warn(
+            { agent: agentName, task: schedule.name, error: (err as Error).message },
+            "trace setup failed — continuing without tracing",
+          );
+        }
+
         try {
           this.log.info(
             { agent: agentName, task: schedule.name },
@@ -88,6 +114,11 @@ export class TaskScheduler {
 
           if (schedule.handler) {
             await schedule.handler();
+          } else if (turn) {
+            // Pass the Turn through only when tracing is active, so untraced
+            // callers (no TraceCollector wired) observe a 2-arg sendToAgent
+            // invocation — matches historical assertion shape.
+            await this.sessionManager.sendToAgent(agentName, schedule.prompt!, turn);
           } else {
             await this.sessionManager.sendToAgent(agentName, schedule.prompt!);
           }
@@ -95,6 +126,8 @@ export class TaskScheduler {
           status.lastRun = Date.now();
           status.lastStatus = "success";
           status.lastError = null;
+
+          try { turn?.end("success"); } catch { /* non-fatal */ }
 
           this.log.info(
             { agent: agentName, task: schedule.name },
@@ -104,6 +137,8 @@ export class TaskScheduler {
           status.lastRun = Date.now();
           status.lastStatus = "error";
           status.lastError = (error as Error).message;
+
+          try { turn?.end("error"); } catch { /* non-fatal */ }
 
           this.log.error(
             { agent: agentName, task: schedule.name, error: (error as Error).message },

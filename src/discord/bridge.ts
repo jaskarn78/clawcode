@@ -30,6 +30,7 @@ import type { WebhookManager } from "./webhook-manager.js";
 import type { DeliveryQueue } from "./delivery-queue.js";
 import { checkChannelAccess } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
+import type { Turn, Span } from "../performance/trace-collector.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -292,6 +293,24 @@ export class DiscordBridge {
     if (this.threadManager && message.channel.isThread()) {
       const sessionName = await this.threadManager.routeMessage(message.channelId);
       if (sessionName) {
+        // Phase 50: open Turn + receive span for thread-routed messages (parity with channel route)
+        let turn: Turn | undefined;
+        let receiveSpan: Span | undefined;
+        try {
+          const collector = this.sessionManager.getTraceCollector(sessionName);
+          turn = collector?.startTurn(message.id, sessionName, message.channelId);
+          receiveSpan = turn?.startSpan("receive", {
+            channel: message.channelId,
+            user: message.author.id,
+            is_thread: true,
+          });
+        } catch (err) {
+          this.log.warn(
+            { error: (err as Error).message, agent: sessionName },
+            "trace setup failed — continuing without tracing",
+          );
+        }
+
         // Download attachments for thread messages using agent workspace (not /tmp)
         let downloadResults: readonly DownloadResult[] | undefined;
         if (message.attachments.size > 0) {
@@ -303,7 +322,9 @@ export class DiscordBridge {
         }
 
         const formattedMessage = formatDiscordMessage(message, downloadResults);
-        await this.streamAndPostResponse(message, sessionName, formattedMessage);
+        // End the receive span right before dispatching to the session (end_to_end still open)
+        try { receiveSpan?.end(); } catch { /* non-fatal */ }
+        await this.streamAndPostResponse(message, sessionName, formattedMessage, turn);
         this.log.info({ sessionName, threadId: message.channelId }, "message routed to thread session");
         return;
       }
@@ -332,6 +353,25 @@ export class DiscordBridge {
       }
     }
 
+    // Phase 50: open Turn + receive span for channel-routed messages.
+    // Caller-owned lifecycle — streamAndPostResponse ends the Turn with success/error.
+    let turn: Turn | undefined;
+    let receiveSpan: Span | undefined;
+    try {
+      const collector = this.sessionManager.getTraceCollector(agentName);
+      turn = collector?.startTurn(message.id, agentName, channelId);
+      receiveSpan = turn?.startSpan("receive", {
+        channel: channelId,
+        user: message.author.id,
+        is_thread: false,
+      });
+    } catch (err) {
+      this.log.warn(
+        { error: (err as Error).message, agent: agentName },
+        "trace setup failed — continuing without tracing",
+      );
+    }
+
     this.log.info(
       {
         channel: channelId,
@@ -353,7 +393,9 @@ export class DiscordBridge {
     }
 
     const formattedMessage = formatDiscordMessage(message, downloadResults);
-    await this.streamAndPostResponse(message, agentName, formattedMessage);
+    // End the receive span right before session dispatch; end_to_end remains open
+    try { receiveSpan?.end(); } catch { /* non-fatal */ }
+    await this.streamAndPostResponse(message, agentName, formattedMessage, turn);
   }
 
   /**
@@ -366,6 +408,7 @@ export class DiscordBridge {
     message: Message,
     sessionName: string,
     formattedMessage: string,
+    turn?: Turn,
   ): Promise<void> {
     const channelId = message.channelId;
 
@@ -401,6 +444,7 @@ export class DiscordBridge {
         sessionName,
         formattedMessage,
         (accumulated) => editor!.update(accumulated),
+        turn,
       );
 
       clearInterval(typingInterval);
@@ -422,9 +466,16 @@ export class DiscordBridge {
       } else if (!messageRef.current) {
         this.log.warn({ agent: sessionName, channel: channelId }, "agent returned empty response");
       }
+
+      // Phase 50: end Turn on success after all post-processing completes
+      try { turn?.end("success"); } catch { /* non-fatal */ }
     } catch (error) {
       if (typingInterval) clearInterval(typingInterval);
       if (editor) editor.dispose();
+
+      // Phase 50: end Turn on error before the reaction attempt so the trace
+      // records the failure status even if the reaction call itself throws.
+      try { turn?.end("error"); } catch { /* non-fatal */ }
 
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error(
