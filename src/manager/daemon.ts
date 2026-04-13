@@ -64,6 +64,8 @@ import { modelSchema } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
+import type { LatencyReport } from "../performance/types.js";
+import { sinceToIso } from "../performance/percentiles.js";
 
 /**
  * Base directory for manager runtime files.
@@ -1105,6 +1107,40 @@ async function routeMethod(
       }
 
       return { agent: agentName, period, ...aggregate };
+    }
+
+    case "latency": {
+      const since = typeof params.since === "string" && params.since.length > 0 ? params.since : "24h";
+      let sinceIso: string;
+      try {
+        sinceIso = sinceToIso(since);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "invalid since duration";
+        throw new ManagerError(`Invalid since duration: ${msg}`);
+      }
+
+      const isAll = params.all === true;
+      if (isAll) {
+        const agents = manager.getRunningAgents();
+        const reports: LatencyReport[] = [];
+        for (const agentName of agents) {
+          const store = manager.getTraceStore(agentName);
+          if (!store) continue; // skip agents without a store (race at startup)
+          const segments = store.getPercentiles(agentName, sinceIso);
+          reports.push(Object.freeze({ agent: agentName, since: sinceIso, segments }));
+        }
+        return reports;
+      }
+
+      const agentName = validateStringParam(params, "agent");
+      const store = manager.getTraceStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Trace store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+      const segments = store.getPercentiles(agentName, sinceIso);
+      return Object.freeze({ agent: agentName, since: sinceIso, segments }) satisfies LatencyReport;
     }
 
     case "memory-list": {

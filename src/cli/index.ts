@@ -33,6 +33,7 @@ import { registerDashboardCommand } from "./commands/dashboard.js";
 import { registerAgentCreateCommand } from "./commands/agent-create.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerCostsCommand } from "./commands/costs.js";
+import { registerLatencyCommand } from "./commands/latency.js";
 import { registerUpdateCommand } from "./commands/update.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
@@ -147,6 +148,7 @@ registerDashboardCommand(program);
 registerAgentCreateCommand(program);
 registerRunCommand(program);
 registerCostsCommand(program);
+registerLatencyCommand(program);
 registerUpdateCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
