@@ -61,6 +61,8 @@ describe("IPC_METHODS", () => {
       "latency",
       // Bench (Phase 51)
       "bench-run-prompt",
+      // Cache (Phase 52)
+      "cache",
       // Effort (reasoning level)
       "set-effort",
       "get-effort",
@@ -212,6 +214,36 @@ describe("ipcRequestSchema bench-run-prompt", () => {
         prompt: "Say hi.",
         turnIdPrefix: "bench:no-tool-short:",
       });
+    }
+  });
+});
+
+describe("ipcRequestSchema cache", () => {
+  it("accepts a cache request with agent + since params", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "c-1",
+      method: "cache",
+      params: { agent: "atlas", since: "24h" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("cache");
+      expect(result.data.params).toEqual({ agent: "atlas", since: "24h" });
+    }
+  });
+
+  it("accepts a cache request with --all (no agent)", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "c-2",
+      method: "cache",
+      params: { all: true, since: "7d" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("cache");
+      expect(result.data.params).toEqual({ all: true, since: "7d" });
     }
   });
 });

@@ -34,6 +34,7 @@ import { registerAgentCreateCommand } from "./commands/agent-create.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerCostsCommand } from "./commands/costs.js";
 import { registerLatencyCommand } from "./commands/latency.js";
+import { registerCacheCommand } from "./commands/cache.js";
 import { registerBenchCommand } from "./commands/bench.js";
 import { registerUpdateCommand } from "./commands/update.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
@@ -150,6 +151,7 @@ registerAgentCreateCommand(program);
 registerRunCommand(program);
 registerCostsCommand(program);
 registerLatencyCommand(program);
+registerCacheCommand(program);
 registerBenchCommand(program);
 registerUpdateCommand(program);
 

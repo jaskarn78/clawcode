@@ -58,6 +58,8 @@ export const IPC_METHODS = [
   "latency",
   // Bench (Phase 51)
   "bench-run-prompt",
+  // Cache (Phase 52)
+  "cache",
   // Effort (reasoning level)
   "set-effort",
   "get-effort",

@@ -44,6 +44,37 @@ type PreparedStatements = {
   readonly cacheTelemetryRows: Statement;
   readonly cacheTelemetryAggregates: Statement;
   readonly cacheTelemetryTrend: Statement;
+  readonly cacheEffectStats: Statement;
+};
+
+/**
+ * Phase 52 Plan 03: raw row shape for the cache-effect first-token query.
+ *
+ * AVG returns NULL when the CASE WHEN filter yields no matching rows — we
+ * surface that as a `null` field so the caller can decide whether the window
+ * has enough signal (eligibleTurns >= 20) to compute a delta.
+ */
+type CacheEffectRawRow = {
+  readonly hit_avg_ms: number | null;
+  readonly miss_avg_ms: number | null;
+  readonly eligible_turns: number | null;
+};
+
+/**
+ * Phase 52 Plan 03: cache-effect first-token stats for the `cache_effect_ms`
+ * metric surfaced on the `clawcode cache` CLI and dashboard Prompt Cache
+ * panel. Both averages are `null` when the window has no eligible turns on
+ * that side (e.g. no cache-hit turns yet). `eligibleTurns` is the count of
+ * turns that had a `first_token` span AND non-NULL `cache_read_input_tokens`.
+ *
+ * Callers (daemon.ts computeCacheEffectMs) MUST gate on `eligibleTurns >= 20`
+ * before computing `hitAvgMs - missAvgMs` — 20 is the noise floor per
+ * CONTEXT D-05.
+ */
+export type CacheEffectStats = {
+  readonly hitAvgMs: number | null;
+  readonly missAvgMs: number | null;
+  readonly eligibleTurns: number;
 };
 
 /** Raw row shape from the PERCENTILE_SQL query. */
@@ -314,6 +345,56 @@ export class TraceStore {
     }
   }
 
+  /**
+   * Phase 52 Plan 03: compute the cache-effect first-token stats for the
+   * `cache_effect_ms` metric surfaced on the `clawcode cache` CLI and
+   * dashboard Prompt Cache panel.
+   *
+   * Cross-joins `traces` (cache columns) with `trace_spans` (first_token
+   * duration) over the same agent + since window. Splits the average
+   * `first_token` duration by whether `cache_read_input_tokens > 0` (hit) or
+   * `= 0` (miss). Returns both averages plus the total eligible-turn count.
+   *
+   * NULL averages bubble up when one side has no rows (e.g., a freshly
+   * started agent with no cache-hit turns yet). The caller is responsible
+   * for gating on `eligibleTurns >= 20` (CONTEXT D-05 noise floor) before
+   * computing the `hitAvgMs - missAvgMs` delta.
+   *
+   * A negative delta (hit average < miss average) means the cache is
+   * delivering first-token latency improvement — the expected signal.
+   */
+  getCacheEffectStats(agent: string, sinceIso: string): CacheEffectStats {
+    try {
+      const raw = this.stmts.cacheEffectStats.get({
+        agent,
+        since: sinceIso,
+      }) as CacheEffectRawRow | undefined;
+
+      if (!raw) {
+        return Object.freeze<CacheEffectStats>({
+          hitAvgMs: null,
+          missAvgMs: null,
+          eligibleTurns: 0,
+        });
+      }
+
+      return Object.freeze<CacheEffectStats>({
+        hitAvgMs:
+          typeof raw.hit_avg_ms === "number" ? raw.hit_avg_ms : null,
+        missAvgMs:
+          typeof raw.miss_avg_ms === "number" ? raw.miss_avg_ms : null,
+        eligibleTurns:
+          typeof raw.eligible_turns === "number" ? raw.eligible_turns : 0,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getCacheEffectStats failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
   /** Close the underlying database connection. */
   close(): void {
     this.db.close();
@@ -444,6 +525,25 @@ export class TraceStore {
           AND input_tokens > 0
         GROUP BY substr(started_at, 1, 10)
         ORDER BY date
+      `),
+      // Phase 52 Plan 03: cache-effect first-token stats.
+      // Split AVG(first_token.duration_ms) by whether the parent turn was a
+      // cache hit (cache_read_input_tokens > 0) vs miss (= 0). Both filters
+      // require cache_read_input_tokens IS NOT NULL so Phase 50 legacy turns
+      // are excluded from both sides. COUNT(*) returns the overall eligible
+      // count (any turn with cache_read_input_tokens IS NOT NULL AND a
+      // first_token span) so the caller can gate on the 20-turn noise floor.
+      cacheEffectStats: this.db.prepare(`
+        SELECT
+          AVG(CASE WHEN t.cache_read_input_tokens > 0 THEN s.duration_ms END) AS hit_avg_ms,
+          AVG(CASE WHEN t.cache_read_input_tokens = 0 THEN s.duration_ms END) AS miss_avg_ms,
+          COUNT(*) AS eligible_turns
+        FROM traces t
+        JOIN trace_spans s ON s.turn_id = t.id
+        WHERE s.name = 'first_token'
+          AND t.agent = @agent
+          AND t.started_at >= @since
+          AND t.cache_read_input_tokens IS NOT NULL
       `),
     };
   }

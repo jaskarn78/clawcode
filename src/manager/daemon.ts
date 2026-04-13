@@ -64,14 +64,21 @@ import { modelSchema } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
-import type { LatencyReport, PercentileRow } from "../performance/types.js";
+import type {
+  CacheHitRateStatus,
+  CacheTelemetryReport,
+  LatencyReport,
+  PercentileRow,
+} from "../performance/types.js";
 import { sinceToIso } from "../performance/percentiles.js";
 import {
   DEFAULT_SLOS,
+  evaluateCacheHitRateStatus,
   evaluateSloStatus,
   mergeSloOverrides,
   type SloEntry,
 } from "../performance/slos.js";
+import type { TraceStore } from "../performance/trace-store.js";
 import { nanoid } from "nanoid";
 
 /**
@@ -1219,6 +1226,91 @@ async function routeMethod(
       return Object.freeze({ agent: agentName, since: sinceIso, segments }) satisfies LatencyReport;
     }
 
+    case "cache": {
+      // Phase 52 Plan 03: CACHE_HIT_RATE_SLO-augmented cache telemetry report
+      // with optional `cache_effect_ms` first-token delta. Mirrors the shape
+      // of `case "latency"` above so the CLI + dashboard formatters stay
+      // symmetric with `clawcode latency`.
+      const since =
+        typeof params.since === "string" && params.since.length > 0
+          ? params.since
+          : "24h";
+      let sinceIso: string;
+      try {
+        sinceIso = sinceToIso(since);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "invalid since duration";
+        throw new ManagerError(`Invalid since duration: ${msg}`);
+      }
+
+      /**
+       * Build a single-agent augmented CacheTelemetryReport. Shared helper
+       * for both the single-agent and `--all` branches below.
+       *
+       * Throws `ManagerError` when the trace store is missing (agent not
+       * running) — the `--all` branch catches + filters these so a single
+       * missing store doesn't kill the fleet response.
+       */
+      const buildReport = (
+        agentName: string,
+      ): CacheTelemetryReport & {
+        readonly status: CacheHitRateStatus;
+        readonly cache_effect_ms: number | null;
+      } => {
+        const store = manager.getTraceStore(agentName);
+        if (!store) {
+          throw new ManagerError(
+            `Trace store not found for agent '${agentName}' (agent may not be running)`,
+          );
+        }
+        const report = store.getCacheTelemetry(agentName, sinceIso);
+        const status = evaluateCacheHitRateStatus(
+          report.avgHitRate,
+          report.totalTurns,
+        );
+        const effect = computeCacheEffectMs(store, agentName, sinceIso);
+        // Advisory WARN: if we have ≥ 20 eligible turns AND the delta is
+        // non-negative, the cache is NOT delivering first-token benefit.
+        // Per CONTEXT D-05 this is an operator-facing signal, not a hard
+        // failure — the metric still surfaces in the response.
+        if (effect !== null && effect >= 0 && report.totalTurns >= 20) {
+          logger.warn(
+            {
+              agent: agentName,
+              cacheEffectMs: effect,
+              totalTurns: report.totalTurns,
+            },
+            "cache delivering no first-token benefit (expected delta < 0)",
+          );
+        }
+        return Object.freeze({
+          ...report,
+          status,
+          cache_effect_ms: effect,
+        });
+      };
+
+      const isAll = params.all === true;
+      if (isAll) {
+        const agents = manager.getRunningAgents();
+        const reports = agents
+          .map((a) => {
+            try {
+              return buildReport(a);
+            } catch {
+              return null;
+            }
+          })
+          .filter(
+            (r): r is NonNullable<typeof r> => r !== null,
+          );
+        return reports;
+      }
+
+      const agentName = validateStringParam(params, "agent");
+      return buildReport(agentName);
+    }
+
     case "bench-run-prompt": {
       // Phase 51: invoked by `clawcode bench` to run a single prompt against a
       // running agent and capture a trace. Not exposed via Discord; CLI /
@@ -1906,4 +1998,29 @@ function validateStringParam(
     throw new ManagerError(`Missing required parameter: ${key}`);
   }
   return value;
+}
+
+/**
+ * Phase 52 Plan 03: compute the `cache_effect_ms` delta for the Prompt Cache
+ * panel / CLI / IPC `cache` response.
+ *
+ * Returns:
+ *   - `null` when the window has < 20 eligible turns (noise floor — CONTEXT
+ *     D-05). Model latency variance is too high below this sample size to
+ *     trust the delta.
+ *   - `null` when either the hit-average or miss-average is NULL (only one
+ *     branch of the cache-hit/miss split has data).
+ *   - `hitAvgMs - missAvgMs` otherwise. Negative values are the expected
+ *     signal (cached turns are faster). A positive value after 20+ turns
+ *     triggers a WARN log at the call site.
+ */
+export function computeCacheEffectMs(
+  store: TraceStore,
+  agentName: string,
+  sinceIso: string,
+): number | null {
+  const stats = store.getCacheEffectStats(agentName, sinceIso);
+  if (stats.eligibleTurns < 20) return null;
+  if (stats.hitAvgMs === null || stats.missAvgMs === null) return null;
+  return stats.hitAvgMs - stats.missAvgMs;
 }
