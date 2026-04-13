@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Started:** 2026-04-13
-**Phases:** TBD (continues numbering from 49)
+**Phases:** 50-56 (7 phases)
 
 ## Milestone Goal
 
@@ -68,27 +68,27 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 
 | ID | Description | Phase | Status |
 |----|-------------|-------|--------|
-| PERF-01 | Phase-level latency tracing per turn | TBD | [ ] |
-| PERF-02 | p50/p95/p99 latency report per agent | TBD | [ ] |
-| PERF-03 | SLO targets documented and surfaced | TBD | [ ] |
-| PERF-04 | CI regression gate on p95 | TBD | [ ] |
-| CACHE-01 | cache_control on stable system prefix | TBD | [ ] |
-| CACHE-02 | Hot-tier + skills inside cached prefix | TBD | [ ] |
-| CACHE-03 | Per-agent cache hit-rate telemetry | TBD | [ ] |
-| CACHE-04 | Correct cache invalidation on prefix change | TBD | [ ] |
-| CTX-01 | Per-agent context size audit script | TBD | [ ] |
-| CTX-02 | Tightened memory assembly budgets | TBD | [ ] |
-| CTX-03 | Lazy/compressed skills & tool defs | TBD | [ ] |
-| CTX-04 | Reduced session-resume summary payload | TBD | [ ] |
-| STREAM-01 | First-token latency as a first-class metric | TBD | [ ] |
-| STREAM-02 | Tighter Discord streaming cadence | TBD | [ ] |
-| STREAM-03 | Typing indicator ≤ 500ms | TBD | [ ] |
-| TOOL-01 | Parallel independent tool calls per turn | TBD | [ ] |
-| TOOL-02 | Intra-turn idempotent tool-result cache | TBD | [ ] |
-| TOOL-03 | Per-tool round-trip timing | TBD | [ ] |
-| WARM-01 | SQLite / sqlite-vec warmup at agent start | TBD | [ ] |
-| WARM-02 | Resident embedding model | TBD | [ ] |
-| WARM-03 | Session / thread keep-alive | TBD | [ ] |
-| WARM-04 | Warm-path readiness in startup health check | TBD | [ ] |
+| PERF-01 | Phase-level latency tracing per turn | Phase 50 | [ ] |
+| PERF-02 | p50/p95/p99 latency report per agent | Phase 50 | [ ] |
+| PERF-03 | SLO targets documented and surfaced | Phase 51 | [ ] |
+| PERF-04 | CI regression gate on p95 | Phase 51 | [ ] |
+| CACHE-01 | cache_control on stable system prefix | Phase 52 | [ ] |
+| CACHE-02 | Hot-tier + skills inside cached prefix | Phase 52 | [ ] |
+| CACHE-03 | Per-agent cache hit-rate telemetry | Phase 52 | [ ] |
+| CACHE-04 | Correct cache invalidation on prefix change | Phase 52 | [ ] |
+| CTX-01 | Per-agent context size audit script | Phase 53 | [ ] |
+| CTX-02 | Tightened memory assembly budgets | Phase 53 | [ ] |
+| CTX-03 | Lazy/compressed skills & tool defs | Phase 53 | [ ] |
+| CTX-04 | Reduced session-resume summary payload | Phase 53 | [ ] |
+| STREAM-01 | First-token latency as a first-class metric | Phase 54 | [ ] |
+| STREAM-02 | Tighter Discord streaming cadence | Phase 54 | [ ] |
+| STREAM-03 | Typing indicator ≤ 500ms | Phase 54 | [ ] |
+| TOOL-01 | Parallel independent tool calls per turn | Phase 55 | [ ] |
+| TOOL-02 | Intra-turn idempotent tool-result cache | Phase 55 | [ ] |
+| TOOL-03 | Per-tool round-trip timing | Phase 55 | [ ] |
+| WARM-01 | SQLite / sqlite-vec warmup at agent start | Phase 56 | [ ] |
+| WARM-02 | Resident embedding model | Phase 56 | [ ] |
+| WARM-03 | Session / thread keep-alive | Phase 56 | [ ] |
+| WARM-04 | Warm-path readiness in startup health check | Phase 56 | [ ] |
 
-**Total:** 22 requirements
+**Total:** 22 requirements — all mapped to phases 50-56.

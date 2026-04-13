@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Defining requirements
+status: Roadmap ready
 stopped_at: null
 last_updated: "2026-04-13T00:00:00.000Z"
 last_activity: 2026-04-13
 progress:
-  total_phases: 0
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,26 +20,26 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Milestone v1.7 — Performance & Latency (defining requirements)
+**Current focus:** Milestone v1.7 — Performance & Latency (roadmap ready, Phases 50-56)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Phase 50 next (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-13 — Milestone v1.7 started
+Status: Roadmap approved — ready to plan Phase 50
+Last activity: 2026-04-13 — v1.7 roadmap created with 7 phases covering 22 requirements
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 63 (v1.0: 11, v1.1: 32, v1.2: 20) + v1.3-v1.4 plans
+- Total plans completed: 63 (v1.0: 11, v1.1: 32, v1.2: 20) + v1.3-v1.6 plans
 - Average duration: ~3.5 min
 - Total execution time: ~3.7 hours
 
 **Recent Trend:**
 
-- v1.3-v1.4 plans: stable ~3min each
+- v1.6 plans: stable ~3-5min each
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -51,6 +51,9 @@ Last activity: 2026-04-13 — Milestone v1.7 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [v1.7 Roadmap]: Instrumentation (Phase 50) is the foundation — all optimization phases depend on it so wins can be proven
+- [v1.7 Roadmap]: SLO/regression gate (Phase 51) locked in before optimization phases so any later regression breaks CI
+- [v1.7 Roadmap]: Optimization phases (52-56) execute in parallel-capable order but all gated on Phase 50 telemetry being live
 - [v1.5 Roadmap]: Knowledge graph uses SQLite adjacency list (no graphology), zero new dependencies
 - [v1.5 Roadmap]: Session-level model routing for escalation (SDK does not support mid-session setModel)
 - [v1.5 Roadmap]: Hybrid hot-tier + on-demand loading (pure on-demand causes confabulation)
@@ -92,6 +95,7 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - 2026-04-13: Milestone v1.7 Performance & Latency started (continues from v1.6 phase numbering)
+- 2026-04-13: v1.7 roadmap created — 7 phases (50-56), 22 requirements mapped 1:1
 
 ### Pending Todos
 
@@ -102,6 +106,8 @@ None yet.
 - Haiku empirical viability unknown for ClawCode's complex tool sequences -- compatibility audit needed before Phase 39
 - Agent SDK advisor tool not yet available -- TIER-03 must use session-level workaround
 - 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)
+- Anthropic `cache_control` primitive exposure through Claude Agent SDK needs verification before Phase 52 planning
+- CI environment must have a working daemon + fixed prompt set for Phase 51 benchmark harness to be deterministic
 
 ### Quick Tasks Completed
 
@@ -139,6 +145,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-12
-Stopped at: Completed 49-02-PLAN.md
+Last activity: 2026-04-13
+Stopped at: v1.7 roadmap created — ready to plan Phase 50
 Resume file: None
