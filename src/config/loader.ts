@@ -122,6 +122,7 @@ export function resolveAgentConfig(
     contextBudgets: agent.contextBudgets ?? undefined,
     mcpServers,
     slashCommands: agent.slashCommands,
+    perf: agent.perf ?? defaults.perf ?? undefined,
   };
 }
 

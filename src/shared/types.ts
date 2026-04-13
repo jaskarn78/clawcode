@@ -107,6 +107,9 @@ export type ResolvedAgentConfig = {
       readonly required: boolean;
     }[];
   }[];
+  readonly perf?: {
+    readonly traceRetentionDays?: number;
+  };
 };
 
 /**

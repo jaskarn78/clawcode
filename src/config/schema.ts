@@ -192,6 +192,11 @@ export const agentSchema = z.object({
       opus: z.number().int().positive().optional(),
     }).optional(),
   }).optional(),
+  perf: z
+    .object({
+      traceRetentionDays: z.number().int().positive().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -222,6 +227,11 @@ export const defaultsSchema = z.object({
     idleTimeoutMinutes: 1440,
     maxThreadSessions: 10,
   })),
+  perf: z
+    .object({
+      traceRetentionDays: z.number().int().positive().optional(),
+    })
+    .optional(),
 });
 
 /**
