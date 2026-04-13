@@ -59,6 +59,8 @@ describe("IPC_METHODS", () => {
       "costs",
       // Latency (Phase 50)
       "latency",
+      // Bench (Phase 51)
+      "bench-run-prompt",
       // Effort (reasoning level)
       "set-effort",
       "get-effort",
@@ -187,5 +189,29 @@ describe("ipcResponseSchema", () => {
       result: { status: "ok" },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("ipcRequestSchema bench-run-prompt", () => {
+  it("accepts a bench-run-prompt request with agent, prompt, and turnIdPrefix params", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "bench-1",
+      method: "bench-run-prompt",
+      params: {
+        agent: "bench-agent",
+        prompt: "Say hi.",
+        turnIdPrefix: "bench:no-tool-short:",
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("bench-run-prompt");
+      expect(result.data.params).toEqual({
+        agent: "bench-agent",
+        prompt: "Say hi.",
+        turnIdPrefix: "bench:no-tool-short:",
+      });
+    }
   });
 });

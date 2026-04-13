@@ -56,6 +56,8 @@ export const IPC_METHODS = [
   "costs",
   // Latency (Phase 50)
   "latency",
+  // Bench (Phase 51)
+  "bench-run-prompt",
   // Effort (reasoning level)
   "set-effort",
   "get-effort",

@@ -66,6 +66,7 @@ import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
 import type { LatencyReport } from "../performance/types.js";
 import { sinceToIso } from "../performance/percentiles.js";
+import { nanoid } from "nanoid";
 
 /**
  * Base directory for manager runtime files.
@@ -1141,6 +1142,39 @@ async function routeMethod(
       }
       const segments = store.getPercentiles(agentName, sinceIso);
       return Object.freeze({ agent: agentName, since: sinceIso, segments }) satisfies LatencyReport;
+    }
+
+    case "bench-run-prompt": {
+      // Phase 51: invoked by `clawcode bench` to run a single prompt against a
+      // running agent and capture a trace. Not exposed via Discord; CLI /
+      // harness only. Caller-owned Turn lifecycle matches the Phase 50
+      // contract: SessionManager.sendToAgent NEVER calls turn.end(); this
+      // handler does, in both success and error paths.
+      const agentName = validateStringParam(params, "agent");
+      const prompt = validateStringParam(params, "prompt");
+      const turnIdPrefix =
+        typeof params.turnIdPrefix === "string" && params.turnIdPrefix.length > 0
+          ? params.turnIdPrefix
+          : "bench:";
+
+      const collector = manager.getTraceCollector(agentName);
+      if (!collector) {
+        throw new ManagerError(
+          `Trace collector not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+
+      const turnId = `${turnIdPrefix}${nanoid(10)}`;
+      const turn = collector.startTurn(turnId, agentName, null);
+      try {
+        const response = await manager.sendToAgent(agentName, prompt, turn);
+        turn.end("success");
+        return { turnId, response };
+      } catch (err) {
+        turn.end("error");
+        const msg = err instanceof Error ? err.message : "unknown bench error";
+        throw new ManagerError(`bench-run-prompt failed: ${msg}`);
+      }
     }
 
     case "memory-list": {
