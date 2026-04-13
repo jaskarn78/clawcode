@@ -12,6 +12,33 @@ let lastDeliveryStats = null;
 /** @type {string} */
 let lastAgentHash = "";
 
+/** @type {number | null} — guard so the 30s latency poll is only scheduled once */
+let latencyPollIntervalId = null;
+
+/**
+ * Canonical display order for the latency percentile table. Mirrors
+ * SEGMENT_DISPLAY_ORDER in src/cli/commands/latency.ts so the CLI table
+ * and dashboard table never disagree on segment ordering.
+ * @type {ReadonlyArray<string>}
+ */
+const SEGMENT_DISPLAY_ORDER = Object.freeze([
+  "end_to_end",
+  "first_token",
+  "context_assemble",
+  "tool_call",
+]);
+
+/**
+ * Format a millisecond value with thousand separators and " ms" suffix.
+ * Null / undefined renders as `—` (em dash), matching the CLI.
+ * @param {number | null | undefined} value
+ * @returns {string}
+ */
+function formatMs(value) {
+  if (value === null || value === undefined) return "—";
+  return `${value.toLocaleString()} ms`;
+}
+
 /**
  * Format uptime from a startedAt timestamp.
  * @param {number | null} startedAt - Unix timestamp in ms
@@ -133,6 +160,10 @@ function createAgentCard(agent, index) {
           <div class="zone-bar-fill" style="width: ${fillPct}%; background: ${zoneClr}"></div>
         </div>
       </div>
+      <div class="latency-panel" id="latency-${escapeAttr(agent.name)}">
+        <div class="latency-heading">Latency (24h)</div>
+        <div class="latency-body panel-placeholder">Loading latency…</div>
+      </div>
       ${channels ? `<div class="channel-tags">${channels}</div>` : ""}
       ${errorBlock}
       <div class="agent-actions">
@@ -170,6 +201,70 @@ function renderAgentCards(agents) {
   lastAgentHash = hash;
 
   grid.innerHTML = agents.map((agent, i) => createAgentCard(agent, i)).join("");
+
+  // After the DOM is rebuilt, prime the latency panel for every visible
+  // agent. The 30s interval started by startLatencyPolling keeps things
+  // fresh; this pass just avoids waiting for the first tick.
+  agents.forEach((a) => {
+    if (a && typeof a.name === "string") fetchAgentLatency(a.name);
+  });
+  startLatencyPolling();
+}
+
+/**
+ * Fetch and render latency percentiles for a single agent.
+ * Never throws to the console on network/IPC errors — shows a placeholder
+ * message in the panel body instead so the 30s loop is resilient.
+ * @param {string} agentName
+ */
+async function fetchAgentLatency(agentName) {
+  const container = document.getElementById(`latency-${agentName}`);
+  if (!container) return;
+  const body = container.querySelector(".latency-body");
+  if (!body) return;
+  try {
+    const resp = await fetch(
+      `/api/agents/${encodeURIComponent(agentName)}/latency?since=24h`,
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    /** @type {{ agent: string, since: string, segments: Array<{ segment: string, p50: number|null, p95: number|null, p99: number|null, count: number }> }} */
+    const report = await resp.json();
+    const bySeg = new Map((report.segments || []).map((r) => [r.segment, r]));
+    const rows = SEGMENT_DISPLAY_ORDER.map((seg) => {
+      const row = bySeg.get(seg) || { segment: seg, p50: null, p95: null, p99: null, count: 0 };
+      return `<tr>
+        <td>${escapeHtml(row.segment)}</td>
+        <td>${escapeHtml(formatMs(row.p50))}</td>
+        <td>${escapeHtml(formatMs(row.p95))}</td>
+        <td>${escapeHtml(formatMs(row.p99))}</td>
+        <td>${row.count.toLocaleString()}</td>
+      </tr>`;
+    }).join("");
+    body.classList.remove("panel-placeholder");
+    body.innerHTML = `<table class="latency-table">
+      <thead><tr><th>Segment</th><th>p50</th><th>p95</th><th>p99</th><th>Count</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch {
+    body.classList.add("panel-placeholder");
+    body.textContent = "Latency data unavailable";
+  }
+}
+
+/**
+ * Start the 30-second latency polling interval. Idempotent — guards against
+ * double-registration via the module-level latencyPollIntervalId.
+ */
+function startLatencyPolling() {
+  if (latencyPollIntervalId !== null) return;
+  const pollAll = () => {
+    const panels = document.querySelectorAll('[id^="latency-"]');
+    panels.forEach((el) => {
+      const agentName = el.id.replace(/^latency-/, "");
+      if (agentName) fetchAgentLatency(agentName);
+    });
+  };
+  latencyPollIntervalId = setInterval(pollAll, 30_000);
 }
 
 /**

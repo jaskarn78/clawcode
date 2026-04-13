@@ -755,3 +755,59 @@ body {
 .tier-cold {
   background: var(--text-secondary);
 }
+
+/* ---------- Latency Panel (per-agent card) ---------- */
+
+.latency-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.latency-heading {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.latency-body {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.latency-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.latency-table th {
+  text-align: left;
+  padding: 3px 6px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255, 51, 102, 0.15);
+}
+
+.latency-table td {
+  padding: 3px 6px;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.latency-table th:not(:first-child),
+.latency-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-table tbody tr:last-child td {
+  border-bottom: none;
+}

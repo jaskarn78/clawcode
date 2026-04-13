@@ -167,6 +167,31 @@ async function handleRequest(
       return;
     }
 
+    // Latency percentiles: GET /api/agents/:name/latency?since=24h
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "latency"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const since = queryParams.get("since") ?? "24h";
+      try {
+        const data = await sendIpcRequest(socketPath, "latency", {
+          agent: agentName,
+          since,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
     // Knowledge graph data: GET /api/graph/:agent
     if (
       method === "GET" &&
