@@ -1,0 +1,20 @@
+# Phase 51 regression thresholds. Changing this file is a policy change
+# (how strict the gate is). Changing baseline.json is a measurement change
+# (what we are gated against). Keep them reviewable independently.
+# Schema: src/benchmarks/thresholds.ts (thresholdsSchema).
+
+# Default: p95 may regress up to 20% vs baseline before CI fails.
+defaultP95MaxDeltaPct: 20
+
+segments:
+  # context_assemble is short (sub-second), so percentage regressions can
+  # be noisy. Require BOTH a 30% percentage spike AND at least 100ms
+  # absolute delta before flagging.
+  - segment: context_assemble
+    p95MaxDeltaPct: 30
+    p95MaxDeltaMs: 100
+
+  # tool_call aggregates across many tool names — allow a bit more
+  # headroom since the tool mix can shift legitimately across runs.
+  - segment: tool_call
+    p95MaxDeltaPct: 25

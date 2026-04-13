@@ -1,0 +1,34 @@
+# Phase 51 starter prompt set — exercises the representative code paths
+# that Phase 50 instrumented. Keep this list small (5 prompts x 5 repeats
+# = 25 turns per bench invocation). Schema: src/benchmarks/prompts.ts.
+#
+# Each prompt is a separate fixed string so the bench is reproducible. When
+# tuning prompts, commit the change in its own PR so baseline drift is
+# reviewable line-by-line. Do NOT edit a prompt without rolling the
+# baseline afterwards — thresholds are % deltas and will false-fire if the
+# underlying prompt changed.
+prompts:
+  - id: no-tool-reply
+    description: Plain reply with no tool calls — measures end_to_end + first_token minus tool overhead.
+    prompt: |
+      Say exactly: "bench ping". No tool calls. Reply in under 10 words.
+
+  - id: single-tool-call
+    description: One memory_lookup — measures tool_call overhead for a single tool.
+    prompt: |
+      Use the memory_lookup tool to find any memory. If no results, reply "none". Do NOT use other tools.
+
+  - id: multi-tool-chain
+    description: Two sequential tool calls (memory_lookup then search_documents).
+    prompt: |
+      First, call memory_lookup with query "bench". Second, call search_documents with query "bench". Then reply "done". Do NOT use other tools.
+
+  - id: subagent-spawn
+    description: Spawns one subagent via spawn_subagent_thread — exercises the subagent-filter path in session-adapter iterateWithTracing.
+    prompt: |
+      Use spawn_subagent_thread to start a thread named "bench-subagent". Task: "Say hello". Reply "spawned" when the subagent is running.
+
+  - id: long-context-warm-reply
+    description: Context-heavy prompt to exercise context_assemble path once Phase 52 wires per-turn context.
+    prompt: |
+      Summarize your three most recent memories in one sentence each. If fewer than three, summarize what you have.
