@@ -232,6 +232,37 @@ function statusClass(status) {
 }
 
 /**
+ * Phase 56 Plan 02 — render warm-path badge from SERVER-EMITTED fields only.
+ *
+ * Server-emit invariant: the dashboard performs ZERO threshold computation.
+ * The registry (via daemon `status` IPC) carries warm_path_ready and
+ * warm_path_readiness_ms; this function maps them to a CSS class + label.
+ * If either field is absent (legacy agents pre-Phase-56), render a neutral
+ * badge so the card layout stays aligned.
+ * @param {object} agent
+ * @returns {string}
+ */
+function renderWarmPathBadge(agent) {
+  if (
+    agent.warm_path_readiness_ms === undefined ||
+    agent.warm_path_readiness_ms === null
+  ) {
+    return '<span class="warm-path-badge unknown">\u2014</span>';
+  }
+  if (
+    typeof agent.lastError === "string" &&
+    agent.lastError.startsWith("warm-path:")
+  ) {
+    return '<span class="warm-path-badge cold">warm-path error</span>';
+  }
+  if (agent.warm_path_ready === true) {
+    const ms = Math.round(agent.warm_path_readiness_ms);
+    return `<span class="warm-path-badge warm">warm ${ms}ms</span>`;
+  }
+  return '<span class="warm-path-badge warming">warming</span>';
+}
+
+/**
  * Create an agent card HTML string.
  * @param {object} agent
  * @param {number} index
@@ -254,6 +285,7 @@ function createAgentCard(agent, index) {
       <div class="agent-card-header">
         <span class="agent-name">${escapeHtml(agent.name)}</span>
         <span class="status-badge ${statusClass(agent.status)}">${escapeHtml(agent.status)}</span>
+        ${renderWarmPathBadge(agent)}
       </div>
       <div class="agent-meta">
         <div class="agent-meta-row">
@@ -316,9 +348,12 @@ function renderAgentCards(agents) {
   }
 
   // Only re-render when data actually changes (prevents flicker from SSE polling)
+  // Phase 56 Plan 02 — include warm-path fields in the hash so the badge
+  // refreshes when the server flips ready state.
   const hash = JSON.stringify(agents.map(a => ({
     n: a.name, s: a.status, r: a.restartCount, z: a.zone,
     f: a.fillPercentage, e: a.lastError,
+    wr: a.warm_path_ready, wm: a.warm_path_readiness_ms,
   })));
   if (hash === lastAgentHash) return;
   lastAgentHash = hash;

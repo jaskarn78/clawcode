@@ -40,6 +40,26 @@ function makeStatusResponse() {
   };
 }
 
+// Phase 56 Plan 02 — registry entry with warm-path fields present.
+function makeStatusResponseWithWarmPath() {
+  return {
+    entries: [
+      {
+        name: "atlas",
+        status: "running",
+        startedAt: Date.now() - 60_000,
+        restartCount: 0,
+        lastError: null,
+        sessionId: "sess-1",
+        consecutiveFailures: 0,
+        lastStableAt: null,
+        warm_path_ready: true,
+        warm_path_readiness_ms: 150,
+      },
+    ],
+  };
+}
+
 function makeZoneResponse() {
   return {
     agents: {
@@ -115,6 +135,62 @@ describe("Dashboard Server", () => {
     const data = (await res.json()) as { agents: Array<{ name: string }> };
     expect(data.agents).toHaveLength(1);
     expect(data.agents[0]!.name).toBe("atlas");
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 56 Plan 02 — warm-path passthrough
+  // -------------------------------------------------------------------------
+
+  it("GET /api/status passes through warm_path_ready + warm_path_readiness_ms", async () => {
+    // Swap the mock to return entries with the Phase 56 fields present so we
+    // can verify the dashboard server threads them through verbatim.
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "status") return makeStatusResponseWithWarmPath();
+      if (method === "context-zone-status") return makeZoneResponse();
+      throw new Error(`Unknown method: ${method}`);
+    });
+
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/status`);
+    const data = (await res.json()) as {
+      agents: Array<{
+        name: string;
+        warm_path_ready?: boolean;
+        warm_path_readiness_ms?: number | null;
+      }>;
+    };
+    expect(data.agents[0]!.warm_path_ready).toBe(true);
+    expect(data.agents[0]!.warm_path_readiness_ms).toBe(150);
+  });
+
+  it("GET /api/status parses legacy entries (warm-path fields undefined) cleanly", async () => {
+    // Default mock — no warm-path fields in the registry entry.
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/status`);
+    expect(res.ok).toBe(true);
+    const data = (await res.json()) as {
+      agents: Array<{
+        name: string;
+        warm_path_ready?: boolean;
+        warm_path_readiness_ms?: number | null;
+      }>;
+    };
+    // Legacy entries flow through with both warm-path fields undefined.
+    expect(data.agents[0]!.name).toBe("atlas");
+    expect(data.agents[0]!.warm_path_ready).toBeUndefined();
+    expect(data.agents[0]!.warm_path_readiness_ms).toBeUndefined();
   });
 
   it("returns 404 for unknown routes", async () => {

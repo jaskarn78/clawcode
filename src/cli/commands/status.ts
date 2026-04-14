@@ -14,6 +14,9 @@ const RED_BOLD = "\x1b[1;31m";
 const YELLOW = "\x1b[33m";
 const ORANGE = "\x1b[38;5;208m";
 const DIM = "\x1b[2m";
+// Phase 56 Plan 02 — WARM-PATH column colors.
+const CYAN = "\x1b[36m";
+const GRAY = "\x1b[90m";
 
 /**
  * Zone data for an agent, from IPC heartbeat-status or context-zone-status.
@@ -88,8 +91,38 @@ function colorizeStatus(status: string): string {
 }
 
 /**
+ * Phase 56 Plan 02 — format a registry entry's warm-path state for the
+ * WARM-PATH column. Pure passthrough from server-emitted fields: the CLI
+ * does ZERO threshold computation — the server decides ready/failure and
+ * we just render the label. Preserves server-emit invariant (dashboard +
+ * CLI + Discord share the same registry source of truth).
+ */
+export function formatWarmPath(entry: RegistryEntry): string {
+  // Legacy entries from pre-Phase-56 registry have no field at all —
+  // render a dim dash so the column aligns without implying state.
+  if (
+    entry.warm_path_readiness_ms === undefined ||
+    entry.warm_path_readiness_ms === null
+  ) {
+    return `${GRAY}\u2014${RESET}`;
+  }
+  // Warm-path errors are opted-in via lastError prefix so the label fires
+  // regardless of overall status (e.g., 'failed' agents still surface the
+  // warm-path root cause).
+  if (entry.lastError?.startsWith("warm-path:")) {
+    const msg = entry.lastError.replace(/^warm-path:\s*/, "").slice(0, 20);
+    return `${RED}error: ${msg}${RESET}`;
+  }
+  if (entry.warm_path_ready === true) {
+    const ms = Math.round(entry.warm_path_readiness_ms);
+    return `${CYAN}ready ${ms}ms${RESET}`;
+  }
+  return `${YELLOW}starting${RESET}`;
+}
+
+/**
  * Format registry entries as a status table.
- * Columns: NAME, STATUS, UPTIME, RESTARTS, and optionally ZONE.
+ * Columns: NAME, STATUS, UPTIME, RESTARTS, and optionally ZONE + WARM-PATH.
  *
  * @param entries - Registry entries to display
  * @param now - Current timestamp (for testability)
@@ -107,6 +140,14 @@ export function formatStatusTable(
 
   const currentTime = now ?? Date.now();
   const hasZones = zones !== undefined && Object.keys(zones).length > 0;
+  // Phase 56 Plan 02 — show WARM-PATH column when at least one entry has
+  // the readiness timing field present. Legacy registries without the
+  // field keep the original 4-column layout unchanged.
+  const hasWarmPath = entries.some(
+    (e) =>
+      e.warm_path_readiness_ms !== undefined &&
+      e.warm_path_readiness_ms !== null,
+  );
 
   // Calculate column widths
   const nameWidth = Math.max(4, ...entries.map((e) => e.name.length));
@@ -114,6 +155,7 @@ export function formatStatusTable(
   const uptimeWidth = 10;
   const restartsWidth = 8;
   const zoneWidth = 12;
+  const warmPathWidth = 20;
 
   // Header
   const headerParts = [
@@ -124,6 +166,9 @@ export function formatStatusTable(
   ];
   if (hasZones) {
     headerParts.push("ZONE".padEnd(zoneWidth));
+  }
+  if (hasWarmPath) {
+    headerParts.push("WARM-PATH".padEnd(warmPathWidth));
   }
   const header = headerParts.join("  ");
 
@@ -150,6 +195,10 @@ export function formatStatusTable(
       } else {
         rowParts.push(`${DIM}-${RESET}`);
       }
+    }
+
+    if (hasWarmPath) {
+      rowParts.push(formatWarmPath(entry));
     }
 
     return rowParts.join("  ");

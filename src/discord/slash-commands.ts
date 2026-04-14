@@ -532,9 +532,26 @@ export function buildFleetEmbed(
     const lastActivity = entry.lastStableAt
       ? new Date(entry.lastStableAt).toISOString().slice(0, 16).replace("T", " ")
       : "\u2014";
+    // Phase 56 Plan 02 — append warm-path suffix so operators see readiness
+    // without leaving Discord. Legacy entries (no fields) get no suffix so
+    // the embed stays backward-compat.
+    let warmPathSuffix = "";
+    if (
+      entry.warm_path_readiness_ms !== undefined &&
+      entry.warm_path_readiness_ms !== null
+    ) {
+      if (entry.lastError?.startsWith("warm-path:")) {
+        warmPathSuffix = " \u00B7 warm-path error";
+      } else if (entry.warm_path_ready === true) {
+        const ms = Math.round(entry.warm_path_readiness_ms);
+        warmPathSuffix = ` \u00B7 warm ${ms}ms`;
+      } else {
+        warmPathSuffix = " \u00B7 warming";
+      }
+    }
     return {
       name: entry.name,
-      value: `${statusEmoji} ${entry.status} \u00B7 ${model} \u00B7 up ${uptime} \u00B7 last ${lastActivity}`,
+      value: `${statusEmoji} ${entry.status} \u00B7 ${model} \u00B7 up ${uptime} \u00B7 last ${lastActivity}${warmPathSuffix}`,
       inline: false,
     };
   });

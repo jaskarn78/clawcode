@@ -22,6 +22,12 @@ export type DashboardServerConfig = {
 /**
  * Agent status data as presented to the dashboard UI.
  * Merged from registry entries and context zone status.
+ *
+ * Phase 56 Plan 02 — warm-path fields flow through verbatim from the
+ * registry entry (server-emit pattern). The dashboard reads these without
+ * computing any thresholds: `warm_path_ready` toggles the badge color,
+ * `warm_path_readiness_ms` drives the label. Both are optional so legacy
+ * entries (pre-Phase-56) render a neutral '—' badge.
  */
 export type AgentStatusData = {
   readonly name: string;
@@ -34,6 +40,8 @@ export type AgentStatusData = {
   readonly fillPercentage: number | null;
   readonly model?: string;
   readonly channels?: readonly string[];
+  readonly warm_path_ready?: boolean;
+  readonly warm_path_readiness_ms?: number | null;
 };
 
 /**

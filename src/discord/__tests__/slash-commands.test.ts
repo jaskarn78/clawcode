@@ -186,4 +186,61 @@ describe("buildFleetEmbed", () => {
     const result = buildFleetEmbed(entries, []);
     expect(result.fields[0].value).toContain("unknown");
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 56 Plan 02 — warm-path suffix
+  // -------------------------------------------------------------------------
+
+  it("appends ' \u00B7 warm {ms}ms' for a ready agent with warm_path_readiness_ms", () => {
+    const entries = [
+      makeEntry({
+        name: "warm",
+        status: "running",
+        warm_path_ready: true,
+        warm_path_readiness_ms: 127,
+      }),
+    ];
+    const configs = [makeConfig({ name: "warm" })];
+    const result = buildFleetEmbed(entries, configs);
+    expect(result.fields[0].value).toContain("\u00B7 warm 127ms");
+  });
+
+  it("appends ' \u00B7 warming' when readiness_ms is set but ready=false and no warm-path error", () => {
+    const entries = [
+      makeEntry({
+        name: "warming",
+        status: "starting",
+        warm_path_ready: false,
+        warm_path_readiness_ms: 0,
+      }),
+    ];
+    const configs = [makeConfig({ name: "warming" })];
+    const result = buildFleetEmbed(entries, configs);
+    expect(result.fields[0].value).toContain("\u00B7 warming");
+  });
+
+  it("appends ' \u00B7 warm-path error' when lastError starts with warm-path:", () => {
+    const entries = [
+      makeEntry({
+        name: "broken",
+        status: "failed",
+        warm_path_ready: false,
+        warm_path_readiness_ms: 10_000,
+        lastError: "warm-path: timeout after 10000ms",
+      }),
+    ];
+    const configs = [makeConfig({ name: "broken" })];
+    const result = buildFleetEmbed(entries, configs);
+    expect(result.fields[0].value).toContain("\u00B7 warm-path error");
+  });
+
+  it("adds NO warm-path suffix for legacy entries (backward compat)", () => {
+    const entries = [makeEntry({ name: "legacy", status: "running" })];
+    const configs = [makeConfig({ name: "legacy" })];
+    const result = buildFleetEmbed(entries, configs);
+    // Suffix markers must not appear when fields are absent.
+    expect(result.fields[0].value).not.toContain("\u00B7 warm ");
+    expect(result.fields[0].value).not.toContain("\u00B7 warming");
+    expect(result.fields[0].value).not.toContain("warm-path error");
+  });
 });

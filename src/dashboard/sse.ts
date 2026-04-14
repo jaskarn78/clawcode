@@ -128,6 +128,9 @@ export class SseManager {
         startedAt: number | null;
         restartCount: number;
         lastError: string | null;
+        // Phase 56 Plan 02 — optional passthrough from the registry.
+        warm_path_ready?: boolean;
+        warm_path_readiness_ms?: number | null;
       }>;
     };
 
@@ -149,6 +152,10 @@ export class SseManager {
         lastError: entry.lastError,
         zone: zoneInfo?.zone ?? null,
         fillPercentage: zoneInfo?.fillPercentage ?? null,
+        // Phase 56 Plan 02 — warm-path fields flow verbatim from the daemon.
+        // Server-emit pattern: no client-side threshold logic anywhere.
+        warm_path_ready: entry.warm_path_ready,
+        warm_path_readiness_ms: entry.warm_path_readiness_ms,
       };
     });
 

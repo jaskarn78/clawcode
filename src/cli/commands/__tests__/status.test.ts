@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatStatusTable, formatUptime } from "../status.js";
+import { formatStatusTable, formatUptime, formatWarmPath } from "../status.js";
 import type { ZoneInfo } from "../status.js";
 import type { RegistryEntry } from "../../../manager/types.js";
 
@@ -124,3 +124,105 @@ describe("formatUptime", () => {
     expect(formatUptime(90_000_000)).toBe("1d 1h");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 56 Plan 02 — WARM-PATH column
+// ---------------------------------------------------------------------------
+
+describe("formatWarmPath", () => {
+  it("renders cyan 'ready {ms}ms' for a ready agent", () => {
+    const entry = createEntry({
+      warm_path_ready: true,
+      warm_path_readiness_ms: 127,
+    });
+    // \x1b[36m = cyan
+    expect(formatWarmPath(entry)).toBe("\x1b[36mready 127ms\x1b[0m");
+  });
+
+  it("renders yellow 'starting' when readiness_ms is set but ready=false", () => {
+    const entry = createEntry({
+      status: "starting",
+      warm_path_ready: false,
+      warm_path_readiness_ms: 0,
+    });
+    expect(formatWarmPath(entry)).toBe("\x1b[33mstarting\x1b[0m");
+  });
+
+  it("renders red 'error: <msg>' when lastError starts with warm-path:", () => {
+    const entry = createEntry({
+      status: "failed",
+      warm_path_ready: false,
+      warm_path_readiness_ms: 10_000,
+      lastError: "warm-path: timeout after 10000ms",
+    });
+    const out = formatWarmPath(entry);
+    expect(out).toMatch(/^\x1b\[31merror: /);
+    expect(out).toContain("timeout after");
+  });
+
+  it("renders gray em-dash for legacy entries (no warm-path fields)", () => {
+    const entry = createEntry();
+    // \x1b[90m = gray, \u2014 = em dash
+    expect(formatWarmPath(entry)).toBe("\x1b[90m\u2014\x1b[0m");
+  });
+});
+
+describe("formatStatusTable WARM-PATH column", () => {
+  it("adds WARM-PATH header + row value when any entry has readiness_ms", () => {
+    const now = 1_700_000_000_000;
+    const entries = [
+      createEntry({
+        name: "warm-a",
+        startedAt: now - 60_000,
+        warm_path_ready: true,
+        warm_path_readiness_ms: 127,
+      }),
+    ];
+    const output = formatStatusTable(entries, now);
+    expect(output).toContain("WARM-PATH");
+    expect(output).toContain("ready 127ms");
+  });
+
+  it("hides WARM-PATH column entirely when no entry has the field", () => {
+    const now = 1_700_000_000_000;
+    const entries = [createEntry({ startedAt: now - 60_000 })];
+    const output = formatStatusTable(entries, now);
+    expect(output).not.toContain("WARM-PATH");
+  });
+
+  it("mixed rows: ready + starting + error + legacy all render distinctly", () => {
+    const now = 1_700_000_000_000;
+    const entries = [
+      createEntry({
+        name: "r",
+        warm_path_ready: true,
+        warm_path_readiness_ms: 100,
+        startedAt: now - 60_000,
+      }),
+      createEntry({
+        name: "s",
+        status: "starting",
+        warm_path_ready: false,
+        warm_path_readiness_ms: 0,
+        startedAt: null,
+      }),
+      createEntry({
+        name: "e",
+        status: "failed",
+        warm_path_ready: false,
+        warm_path_readiness_ms: 10_000,
+        lastError: "warm-path: embedder: not ready",
+        startedAt: null,
+      }),
+      createEntry({ name: "legacy", startedAt: now - 60_000 }),
+    ];
+    const output = formatStatusTable(entries, now);
+    expect(output).toContain("WARM-PATH");
+    expect(output).toContain("ready 100ms");
+    expect(output).toContain("starting");
+    expect(output).toContain("error:");
+    // Legacy row uses em-dash in gray.
+    expect(output).toContain("\x1b[90m\u2014\x1b[0m");
+  });
+});
+
