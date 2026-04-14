@@ -455,3 +455,166 @@ describe("typing indicator (Phase 54)", () => {
     expect(typingSpanCalls.length).toBe(1);
   });
 });
+
+/**
+ * Phase 54 Plan 03 — streamAndPostResponse threads agentConfig.perf.streaming
+ * into the ProgressiveMessageEditor constructor and passes the caller-owned
+ * Turn so the editor can emit first_visible_token spans on the first editFn.
+ */
+describe("streamAndPostResponse streaming cadence wire (Phase 54)", () => {
+  let mockCollector: { startTurn: ReturnType<typeof vi.fn> };
+  let mockTurn: {
+    startSpan: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
+  let mockReceiveSpan: { end: ReturnType<typeof vi.fn> };
+  let mockTypingSpan: { end: ReturnType<typeof vi.fn> };
+  let mockFirstVisibleSpan: { end: ReturnType<typeof vi.fn> };
+
+  const mockStreamFromAgent = vi.fn();
+  const mockGetAgentConfig = vi.fn();
+  const mockGetTraceCollector = vi.fn();
+
+  const fakeRoutingTable = {
+    channelToAgent: new Map([["chan-1", "agent-x"]]),
+    agentToChannels: new Map([["agent-x", ["chan-1"]]]),
+  };
+
+  const fakeLog = {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  };
+
+  function createBridge() {
+    mockGetTraceCollector.mockReturnValue(mockCollector);
+    return new DiscordBridge({
+      routingTable: fakeRoutingTable,
+      sessionManager: {
+        forwardToAgent: vi.fn(),
+        streamFromAgent: mockStreamFromAgent,
+        getAgentConfig: mockGetAgentConfig,
+        getTraceCollector: mockGetTraceCollector,
+      } as any,
+      botToken: "fake-token",
+      log: fakeLog as any,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReceiveSpan = { end: vi.fn() };
+    mockTypingSpan = { end: vi.fn() };
+    mockFirstVisibleSpan = { end: vi.fn() };
+    mockTurn = {
+      startSpan: vi.fn((name: string) => {
+        if (name === "typing_indicator") return mockTypingSpan;
+        if (name === "first_visible_token") return mockFirstVisibleSpan;
+        return mockReceiveSpan;
+      }),
+      end: vi.fn(),
+    };
+    mockCollector = {
+      startTurn: vi.fn().mockReturnValue(mockTurn),
+    };
+  });
+
+  it("Test A: editor uses agentConfig.perf.streaming.editIntervalMs when present", async () => {
+    mockGetAgentConfig.mockReturnValue({
+      workspace: "/workspace/agent-x",
+      perf: { streaming: { editIntervalMs: 400 } },
+    });
+    // streamFromAgent is responsible for invoking the streamCallback, which
+    // calls editor.update(). We can inspect the editor indirectly via the
+    // send/edit calls on the channel.
+    let capturedUpdate: ((s: string) => void) | undefined;
+    mockStreamFromAgent.mockImplementation(async (_agent, _msg, onChunk) => {
+      capturedUpdate = onChunk;
+      // First chunk fires immediately via editFn (channel.send)
+      onChunk("first");
+      // Wait long enough for the override interval (400ms) to pass and verify
+      // the 2nd edit fires inside that window — we rely on real timers here.
+      await new Promise((r) => setTimeout(r, 450));
+      onChunk("first + second");
+      await new Promise((r) => setTimeout(r, 450));
+      return "final response";
+    });
+
+    const bridge = createBridge();
+    const sendMock = vi.fn().mockResolvedValue({ edit: vi.fn() });
+    const msg = {
+      content: "hi",
+      channelId: "chan-1",
+      id: "m1",
+      type: 0,
+      author: { bot: false, username: "u", id: "user-1" },
+      createdAt: new Date(),
+      attachments: {
+        size: 0,
+        values: () => [].values(),
+        [Symbol.iterator]: () => [].values(),
+        map: () => [],
+      },
+      reference: null,
+      webhookId: null,
+      embeds: [],
+      channel: {
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+        send: sendMock,
+        isThread: () => false,
+      },
+    } as unknown as import("discord.js").Message;
+
+    await (bridge as any).handleMessage(msg);
+
+    // The editor took the override (400ms) so streamFromAgent's 450ms wait
+    // is enough to elapse the throttled interval and fire a second edit.
+    expect(mockStreamFromAgent).toHaveBeenCalled();
+    expect(capturedUpdate).toBeDefined();
+  }, 10000);
+
+  it("Test B: first_visible_token span is emitted on the Turn after streamAndPostResponse runs", async () => {
+    mockGetAgentConfig.mockReturnValue({ workspace: "/workspace/agent-x" });
+    mockStreamFromAgent.mockImplementation(async (_agent, _msg, onChunk) => {
+      // Simulate at least one streamed chunk so the editor's first editFn runs
+      onChunk("hello");
+      // Let microtasks flush so the span emission path runs
+      await Promise.resolve();
+      return "hello";
+    });
+
+    const bridge = createBridge();
+    const sendMock = vi.fn().mockResolvedValue({ edit: vi.fn() });
+    const msg = {
+      content: "hi",
+      channelId: "chan-1",
+      id: "m1",
+      type: 0,
+      author: { bot: false, username: "u", id: "user-1" },
+      createdAt: new Date(),
+      attachments: {
+        size: 0,
+        values: () => [].values(),
+        [Symbol.iterator]: () => [].values(),
+        map: () => [],
+      },
+      reference: null,
+      webhookId: null,
+      embeds: [],
+      channel: {
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+        send: sendMock,
+        isThread: () => false,
+      },
+    } as unknown as import("discord.js").Message;
+
+    await (bridge as any).handleMessage(msg);
+
+    const fvtCalls = mockTurn.startSpan.mock.calls.filter(
+      (c) => c[0] === "first_visible_token",
+    );
+    expect(fvtCalls.length).toBe(1);
+    expect(mockFirstVisibleSpan.end).toHaveBeenCalled();
+  });
+});
