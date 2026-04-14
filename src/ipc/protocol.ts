@@ -60,6 +60,8 @@ export const IPC_METHODS = [
   "bench-run-prompt",
   // Cache (Phase 52)
   "cache",
+  // Tools (Phase 55)
+  "tools",
   // Effort (reasoning level)
   "set-effort",
   "get-effort",

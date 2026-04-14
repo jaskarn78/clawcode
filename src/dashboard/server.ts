@@ -221,6 +221,36 @@ async function handleRequest(
       return;
     }
 
+    // Tool-call latency: GET /api/agents/:name/tools?since=24h
+    // Phase 55 Plan 03: proxies to the daemon's `tools` IPC method which
+    // returns a ToolsReport with augmented ToolPercentileRow[] (each row
+    // carries slo_status + slo_threshold_ms + slo_metric). The dashboard
+    // renders a per-agent Tool Call Latency panel adjacent to the Prompt
+    // Cache panel from this payload.
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "tools"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const since = queryParams.get("since") ?? "24h";
+      try {
+        const data = await sendIpcRequest(socketPath, "tools", {
+          agent: agentName,
+          since,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
     // Knowledge graph data: GET /api/graph/:agent
     if (
       method === "GET" &&

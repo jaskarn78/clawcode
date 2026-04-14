@@ -57,8 +57,6 @@ describe("augmentToolsWithSlo (Phase 55)", () => {
     // With override threshold 100ms: p95=200 becomes a breach.
     const rows = [toolRow("memory_lookup", 200, 10, 100)];
     const augmented = augmentToolsWithSlo(rows, {
-      maxConcurrent: 10,
-      idempotent: [],
       slos: { memory_lookup: { thresholdMs: 100 } },
     });
     expect(augmented[0]!.slo_threshold_ms).toBe(100);
@@ -69,8 +67,6 @@ describe("augmentToolsWithSlo (Phase 55)", () => {
   it("per-tool override respects explicit metric field (p50 instead of default p95)", () => {
     const rows = [toolRow("memory_lookup", 5000, 10, 1500)];
     const augmented = augmentToolsWithSlo(rows, {
-      maxConcurrent: 10,
-      idempotent: [],
       slos: { memory_lookup: { thresholdMs: 1000, metric: "p50" } },
     });
     expect(augmented[0]!.slo_metric).toBe("p50");
@@ -128,8 +124,6 @@ describe("augmentToolsWithSlo (Phase 55)", () => {
       toolRow("memory_lookup", 200, 10, 100),
     ];
     const augmented = augmentToolsWithSlo(rows, {
-      maxConcurrent: 10,
-      idempotent: [],
       slos: { memory_lookup: { thresholdMs: 100 } },
     });
     // search_documents still evaluated against global 1500 (p95=1600 > 1500 → breach).

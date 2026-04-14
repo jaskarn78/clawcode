@@ -71,12 +71,14 @@ import type {
   PercentileRow,
   SloMetric,
   SloStatus,
+  ToolPercentileRow,
 } from "../performance/types.js";
 import { sinceToIso } from "../performance/percentiles.js";
 import {
   DEFAULT_SLOS,
   evaluateCacheHitRateStatus,
   evaluateSloStatus,
+  getPerToolSlo,
   mergeSloOverrides,
   type SloEntry,
 } from "../performance/slos.js";
@@ -143,6 +145,61 @@ export function augmentWithSloStatus(
       return Object.freeze({
         ...segRow,
         slo_status: evaluateSloStatus(segRow, slo.thresholdMs, slo.metric),
+        slo_threshold_ms: slo.thresholdMs,
+        slo_metric: slo.metric,
+      });
+    }),
+  );
+}
+
+/**
+ * Phase 55 Plan 03 — augmented per-tool percentile row with server-evaluated
+ * SLO fields attached. Mirrors the AugmentedToolRow shape consumed by the
+ * CLI (src/cli/commands/tools.ts) and dashboard (src/dashboard/static/app.js)
+ * so both renderers read the server truth directly without mirroring any
+ * threshold constants client-side.
+ */
+export type AugmentedToolRow = ToolPercentileRow & {
+  readonly slo_status: SloStatus;
+  readonly slo_threshold_ms: number;
+  readonly slo_metric: SloMetric;
+};
+
+/**
+ * Phase 55 Plan 03 — augment per-tool percentile rows with SLO status /
+ * threshold / metric using `getPerToolSlo` (per-tool override wins, global
+ * tool_call SLO as fallback — always yields non-null threshold + metric).
+ *
+ * The SQL query (`TraceStore.getToolPercentiles`) already sorts rows by
+ * p95 DESC (nulls last); this helper preserves that ordering so consumers
+ * render slowest-first without a client-side resort.
+ *
+ * Pure; safe to call with `undefined` perfTools. Exported for unit testing
+ * in `src/manager/__tests__/daemon-tools.test.ts`.
+ *
+ * @param rows      - Frozen per-tool percentile rows from TraceStore.
+ * @param perfTools - Optional `perf.tools` config block (only `.slos` read).
+ * @returns Frozen array of augmented rows with SLO fields populated.
+ */
+export function augmentToolsWithSlo(
+  rows: readonly ToolPercentileRow[],
+  perfTools:
+    | {
+        readonly slos?: Readonly<
+          Record<
+            string,
+            { readonly thresholdMs: number; readonly metric?: SloMetric }
+          >
+        >;
+      }
+    | undefined,
+): readonly AugmentedToolRow[] {
+  return Object.freeze(
+    rows.map((row) => {
+      const slo = getPerToolSlo(row.tool_name, perfTools);
+      return Object.freeze({
+        ...row,
+        slo_status: evaluateSloStatus(row, slo.thresholdMs, slo.metric),
         slo_threshold_ms: slo.thresholdMs,
         slo_metric: slo.metric,
       });
@@ -1444,6 +1501,63 @@ async function routeMethod(
 
       const agentName = validateStringParam(params, "agent");
       return buildReport(agentName);
+    }
+
+    case "tools": {
+      // Phase 55 Plan 03: per-tool round-trip timing surface. Returns one
+      // frozen ToolsReport (or ToolsReport[] for --all) with augmented
+      // ToolPercentileRow[] carrying slo_status/slo_threshold_ms/slo_metric
+      // per tool. Rows sorted by p95 DESC at the SQL layer so CLI + dashboard
+      // render slowest-first without a client-side resort. Mirrors the
+      // shape of `case "latency"` / `case "cache"` above.
+      const since =
+        typeof params.since === "string" && params.since.length > 0
+          ? params.since
+          : "24h";
+      let sinceIso: string;
+      try {
+        sinceIso = sinceToIso(since);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "invalid since duration";
+        throw new ManagerError(`Invalid since duration: ${msg}`);
+      }
+
+      const buildToolsReport = (
+        agentName: string,
+      ): {
+        readonly agent: string;
+        readonly since: string;
+        readonly tools: readonly AugmentedToolRow[];
+      } => {
+        const store = manager.getTraceStore(agentName);
+        if (!store) {
+          throw new ManagerError(
+            `Trace store not found for agent '${agentName}' (agent may not be running)`,
+          );
+        }
+        const rawRows = store.getToolPercentiles(agentName, sinceIso);
+        const agentConfig = configs.find((c) => c.name === agentName);
+        const tools = augmentToolsWithSlo(rawRows, agentConfig?.perf?.tools);
+        return Object.freeze({ agent: agentName, since: sinceIso, tools });
+      };
+
+      const isAll = params.all === true;
+      if (isAll) {
+        const agents = manager.getRunningAgents();
+        const reports = agents
+          .map((a) => {
+            try {
+              return buildToolsReport(a);
+            } catch {
+              return null;
+            }
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+        return reports;
+      }
+
+      const agentName = validateStringParam(params, "agent");
+      return buildToolsReport(agentName);
     }
 
     case "bench-run-prompt": {
