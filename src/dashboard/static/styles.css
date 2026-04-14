@@ -1002,3 +1002,111 @@ body {
 .first-token-card.latency-cell-no-data .first-token-value {
   color: var(--text-secondary, #888);
 }
+
+/* ---------- Tool Call Latency Panel (Phase 55 Plan 03, per-agent card) ---------- */
+
+/* Sibling of .cache-panel — shares the same margin / border-top treatment so
+   the three observability panels (Latency / Prompt Cache / Tool Call Latency)
+   stack as visual siblings in each agent card. */
+.tools-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tools-heading {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.tools-body {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.tools-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tools-table th {
+  text-align: right;
+  padding: 3px 6px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+}
+
+.tools-table td {
+  padding: 3px 6px;
+  text-align: right;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.tools-table th:first-child,
+.tools-table td:first-child {
+  text-align: left;
+}
+
+.tools-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Row-state tinting — breach = red, healthy = cyan, no_data = gray. Matches
+   the Prompt Cache panel cell-state color vocabulary so operators scan all
+   three panels with the same mental model. Tints only the tool_name column
+   so the numbers stay monochrome (eye goes to the slow name first). */
+.tool-row-slow td:first-child {
+  background: rgba(255, 51, 102, 0.12);
+  color: var(--status-error, #ff3366);
+  font-weight: 700;
+}
+
+.tool-row-healthy td:first-child {
+  color: var(--accent-secondary, #00e5ff);
+}
+
+.tool-row-no-data td:first-child {
+  color: var(--text-secondary, #888);
+}
+
+.tool-slow-sigil {
+  margin-left: 6px;
+  color: var(--status-error, #ff3366);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.tools-expand {
+  margin-top: 6px;
+  text-align: center;
+}
+
+.tools-expand button {
+  background: transparent;
+  border: 1px solid var(--text-secondary, #888);
+  color: var(--text-secondary, #888);
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.tools-expand button:hover {
+  border-color: var(--accent-secondary, #00e5ff);
+  color: var(--accent-secondary, #00e5ff);
+}

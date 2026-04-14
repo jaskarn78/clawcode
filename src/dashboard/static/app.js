@@ -18,6 +18,18 @@ let latencyPollIntervalId = null;
 /** @type {number | null} — guard so the 30s cache poll is only scheduled once */
 let cachePollIntervalId = null;
 
+/** @type {number | null} — guard so the 30s tools poll is only scheduled once (Phase 55) */
+let toolsPollIntervalId = null;
+
+/**
+ * Phase 55 Plan 03 — Tool Call Latency panel collapse thresholds. When more
+ * than EXPAND_THRESHOLD distinct tools appear in the window, only the top
+ * COLLAPSED_LIMIT rows render initially (slowest first via SQL p95 DESC
+ * sort); a "Show all N tools" button reveals the rest on click.
+ */
+const TOOLS_PANEL_COLLAPSED_LIMIT = 5;
+const TOOLS_PANEL_EXPAND_THRESHOLD = 10;
+
 /**
  * Canonical display order for the latency percentile table. Mirrors
  * SEGMENT_DISPLAY_ORDER in src/cli/commands/latency.ts so the CLI table
@@ -271,6 +283,10 @@ function createAgentCard(agent, index) {
         <div class="cache-heading">Prompt Cache (24h)</div>
         <div class="cache-body panel-placeholder">Loading cache…</div>
       </div>
+      <div class="tools-panel" id="tools-${escapeAttr(agent.name)}">
+        <div class="tools-heading">Tool Call Latency (24h)</div>
+        <div class="tools-body panel-placeholder">Loading tools…</div>
+      </div>
       ${channels ? `<div class="channel-tags">${channels}</div>` : ""}
       ${errorBlock}
       <div class="agent-actions">
@@ -317,10 +333,12 @@ function renderAgentCards(agents) {
     if (a && typeof a.name === "string") {
       fetchAgentLatency(a.name);
       fetchAgentCache(a.name);
+      fetchAgentTools(a.name);
     }
   });
   startLatencyPolling();
   startCachePolling();
+  startToolsPolling();
 }
 
 /**
@@ -544,6 +562,129 @@ function startCachePolling() {
     });
   };
   cachePollIntervalId = setInterval(pollAll, 30_000);
+}
+
+/**
+ * Phase 55 Plan 03 — fetch and render the Tool Call Latency panel for a
+ * single agent. Never throws to the console on network/IPC errors — shows
+ * a placeholder in the panel body so the 30s loop is resilient.
+ *
+ * Contract: GET /api/agents/:name/tools?since=24h returns the daemon's
+ * augmented ToolsReport shape:
+ *   { agent, since, tools: [{ tool_name, p50, p95, p99, count,
+ *     slo_status: "healthy"|"breach"|"no_data",
+ *     slo_threshold_ms: number, slo_metric: "p50"|"p95"|"p99" }] }
+ *
+ * Rows are sorted slowest-first by the SQL layer — client renders verbatim.
+ *
+ * @param {string} agentName
+ */
+async function fetchAgentTools(agentName) {
+  const container = document.getElementById(`tools-${agentName}`);
+  if (!container) return;
+  const body = container.querySelector(".tools-body");
+  if (!body) return;
+  try {
+    const resp = await fetch(
+      `/api/agents/${encodeURIComponent(agentName)}/tools?since=24h`,
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    /** @type {{ agent: string, since: string, tools: Array<{ tool_name: string, p50: number|null, p95: number|null, p99: number|null, count: number, slo_status: "healthy"|"breach"|"no_data", slo_threshold_ms: number, slo_metric: "p50"|"p95"|"p99" }> }} */
+    const report = await resp.json();
+    renderToolsPanel(body, agentName, report);
+  } catch {
+    body.classList.add("panel-placeholder");
+    body.textContent = "Tools data unavailable";
+  }
+}
+
+/**
+ * Phase 55 Plan 03 — render the augmented ToolsReport into the panel body.
+ *
+ * Visual rules:
+ *   - Per-row cell tinting via `tool-row-slow` (breach) / `tool-row-healthy`
+ *     (healthy) / `tool-row-no-data` (cold window) CSS classes.
+ *   - When tools.length > TOOLS_PANEL_EXPAND_THRESHOLD, render only the top
+ *     TOOLS_PANEL_COLLAPSED_LIMIT rows plus a "Show all N tools" button that
+ *     expands on click (sets `data-expanded` on the body to persist across
+ *     subsequent 30s polls).
+ *
+ * @param {Element} body
+ * @param {string} agentName
+ * @param {{ agent: string, since: string, tools: Array<{ tool_name: string, p50: number|null, p95: number|null, p99: number|null, count: number, slo_status: string, slo_threshold_ms: number, slo_metric: string }> }} report
+ */
+function renderToolsPanel(body, agentName, report) {
+  if (
+    !report ||
+    !Array.isArray(report.tools) ||
+    report.tools.length === 0
+  ) {
+    body.classList.add("panel-placeholder");
+    body.textContent = "No tool calls in window";
+    return;
+  }
+
+  const allTools = report.tools;
+  const expanded = body.dataset.expanded === "1";
+  const isCollapsed =
+    allTools.length > TOOLS_PANEL_EXPAND_THRESHOLD && !expanded;
+  const visibleTools = isCollapsed
+    ? allTools.slice(0, TOOLS_PANEL_COLLAPSED_LIMIT)
+    : allTools;
+
+  const rowHtml = visibleTools
+    .map((t) => {
+      const statusClass =
+        t.slo_status === "breach"
+          ? "tool-row-slow"
+          : t.slo_status === "healthy"
+          ? "tool-row-healthy"
+          : "tool-row-no-data";
+      const sigil = t.slo_status === "breach" ? ' <span class="tool-slow-sigil">[SLOW]</span>' : "";
+      return `<tr class="${statusClass}">
+        <td>${escapeHtml(t.tool_name)}${sigil}</td>
+        <td>${escapeHtml(formatMs(t.p50))}</td>
+        <td>${escapeHtml(formatMs(t.p95))}</td>
+        <td>${escapeHtml(formatMs(t.p99))}</td>
+        <td>${t.count.toLocaleString()}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const expandAffordance = isCollapsed
+    ? `<div class="tools-expand"><button type="button" data-agent="${escapeAttr(agentName)}">Show all ${allTools.length} tools</button></div>`
+    : "";
+
+  body.classList.remove("panel-placeholder");
+  body.innerHTML = `<table class="tools-table">
+    <thead><tr><th>Tool</th><th>p50</th><th>p95</th><th>p99</th><th>Count</th></tr></thead>
+    <tbody>${rowHtml}</tbody>
+  </table>${expandAffordance}`;
+
+  const btn = body.querySelector(".tools-expand button");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      body.dataset.expanded = "1";
+      renderToolsPanel(body, agentName, report);
+    });
+  }
+}
+
+/**
+ * Phase 55 Plan 03 — start the 30-second Tool Call Latency polling interval.
+ * Idempotent — guards against double-registration via toolsPollIntervalId.
+ * Mirrors startLatencyPolling / startCachePolling shape.
+ */
+function startToolsPolling() {
+  if (toolsPollIntervalId !== null) return;
+  const pollAll = () => {
+    const panels = document.querySelectorAll('[id^="tools-"]');
+    panels.forEach((el) => {
+      const agentName = el.id.replace(/^tools-/, "");
+      if (agentName) fetchAgentTools(agentName);
+    });
+  };
+  toolsPollIntervalId = setInterval(pollAll, 30_000);
 }
 
 /**
