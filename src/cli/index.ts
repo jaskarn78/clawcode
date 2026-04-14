@@ -36,6 +36,7 @@ import { registerCostsCommand } from "./commands/costs.js";
 import { registerLatencyCommand } from "./commands/latency.js";
 import { registerCacheCommand } from "./commands/cache.js";
 import { registerBenchCommand } from "./commands/bench.js";
+import { registerContextAuditCommand } from "./commands/context-audit.js";
 import { registerUpdateCommand } from "./commands/update.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
@@ -153,6 +154,7 @@ registerCostsCommand(program);
 registerLatencyCommand(program);
 registerCacheCommand(program);
 registerBenchCommand(program);
+registerContextAuditCommand(program);
 registerUpdateCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
