@@ -271,6 +271,51 @@ export class DiscordBridge {
   }
 
   /**
+   * Phase 54 Plan 02 — Discord.js Message.type === 0 (Default) or 19 (Reply)
+   * are the only message types that represent a user-authored chat message.
+   * Everything else (pin notices, thread-created system messages, channel
+   * follow adds, etc.) is NOT a user message and should NOT trigger the
+   * typing indicator.
+   *
+   * CONTEXT D-04 guard #4: "Message type is a user message (not system/pin/etc)".
+   */
+  private isUserMessageType(message: Message): boolean {
+    return message.type === 0 || message.type === 19;
+  }
+
+  /**
+   * Phase 54 Plan 02 — fire the Discord typing indicator AND record a
+   * `typing_indicator` span on the caller-owned Turn. The span opens on
+   * entry and ends synchronously right after the sendTyping() call, so
+   * its duration captures the fire latency (not any downstream work).
+   *
+   * Wrapped in try/catch so that typing failures NEVER block the response
+   * path (CONTEXT D-04: typing is observational only). A rejected
+   * sendTyping() promise is caught separately and logged at pino.debug.
+   */
+  private fireTypingIndicator(message: Message, turn: Turn | undefined): void {
+    let span: Span | undefined;
+    try {
+      span = turn?.startSpan("typing_indicator", {});
+      if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
+        void message.channel.sendTyping().catch((err) => {
+          this.log.debug(
+            { error: (err as Error).message, channelId: message.channelId },
+            "sendTyping failed — observational, non-fatal",
+          );
+        });
+      }
+    } catch (err) {
+      this.log.debug(
+        { error: (err as Error).message, channelId: message.channelId },
+        "typing indicator setup failed — observational, non-fatal",
+      );
+    } finally {
+      try { span?.end(); } catch { /* non-fatal */ }
+    }
+  }
+
+  /**
    * Handle an incoming Discord message.
    * Routes to the correct agent based on channel binding.
    */
@@ -309,6 +354,14 @@ export class DiscordBridge {
             { error: (err as Error).message, agent: sessionName },
             "trace setup failed — continuing without tracing",
           );
+        }
+
+        // Phase 54: fire typing indicator at the EARLIEST point where we know
+        // the message is ours to answer — after thread routing resolved an
+        // agent, before attachment download + session dispatch. Guard #4
+        // (user-message-type) from CONTEXT D-04 applies here.
+        if (this.isUserMessageType(message)) {
+          this.fireTypingIndicator(message, turn);
         }
 
         // Download attachments for thread messages using agent workspace (not /tmp)
@@ -372,6 +425,15 @@ export class DiscordBridge {
       );
     }
 
+    // Phase 54: fire typing indicator at the EARLIEST point where we know
+    // the message is ours to answer — after channel routing + ACL pass +
+    // non-bot author (all 3 already enforced above), before attachment
+    // download + session dispatch. Guard #4 (user-message-type) is the
+    // last check.
+    if (this.isUserMessageType(message)) {
+      this.fireTypingIndicator(message, turn);
+    }
+
     this.log.info(
       {
         channel: channelId,
@@ -412,9 +474,10 @@ export class DiscordBridge {
   ): Promise<void> {
     const channelId = message.channelId;
 
-    if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
-      void message.channel.sendTyping();
-    }
+    // Phase 54: the eager-first sendTyping() fire that used to live here was
+    // relocated to DiscordBridge.handleMessage so it fires at message arrival
+    // (before session dispatch). The 8-second re-typing heartbeat below is
+    // a separate concern (extends typing during long responses) and stays.
 
     let editor: ProgressiveMessageEditor | undefined;
     let typingInterval: ReturnType<typeof setInterval> | undefined;
