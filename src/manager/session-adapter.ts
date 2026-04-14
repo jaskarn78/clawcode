@@ -589,6 +589,12 @@ function wrapSdkQuery(
     // shape so the scan covers text that never lands in the narrowed
     // `msg.content: string` path.
     const blockTextParts: string[] = [];
+    // Token-level streaming accumulator. When the SDK emits stream_event
+    // messages (enabled via `includePartialMessages: true` on the query),
+    // text_delta events land here and we push the running total to
+    // `onAssistantText` so the Discord ProgressiveMessageEditor edits in
+    // near-real-time instead of once per complete assistant message.
+    let streamedText = "";
 
     const closeAllSpans = () => {
       for (const entry of activeTools.values()) entry.span.end();
@@ -659,9 +665,43 @@ function wrapSdkQuery(
             }
           }
           // Preserve the narrowed-type text accumulation path used today.
+          // Guard: when streaming is active (onAssistantText !== null), the
+          // token-level `stream_event` branch already emits progressive text.
+          // Pushing msg.content here would double-emit — skip.
           if (typeof msg.content === "string" && msg.content.length > 0) {
             textParts.push(msg.content);
-            onAssistantText?.(textParts.join("\n"));
+            if (onAssistantText === null) {
+              // Non-streaming path: this is the only signal we get.
+              // (Streaming path fires via stream_event above.)
+            }
+          }
+        }
+
+        // Token-level streaming via SDKPartialAssistantMessage
+        // (requires `includePartialMessages: true` on the sdk.query options).
+        // Only the PARENT session's stream events drive the editor — subagent
+        // stream_events are filtered out the same way first_token is.
+        // Cast: local SdkMessage type is narrower than the real SDK union
+        // (missing 'stream_event'); see deferred-items.md.
+        if ((msg as { type?: string }).type === "stream_event" && onAssistantText !== null) {
+          const parentToolUseId =
+            (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? null;
+          if (parentToolUseId === null) {
+            const event = (msg as { event?: { type?: string; delta?: { type?: string; text?: string } } }).event;
+            if (
+              event?.type === "content_block_delta" &&
+              event.delta?.type === "text_delta" &&
+              typeof event.delta.text === "string" &&
+              event.delta.text.length > 0
+            ) {
+              // First text_delta is the true first visible token from the model.
+              if (!firstTokenEnded) {
+                firstToken?.end();
+                firstTokenEnded = true;
+              }
+              streamedText += event.delta.text;
+              onAssistantText(streamedText);
+            }
           }
         }
 
@@ -818,12 +858,14 @@ function wrapSdkQuery(
               throw new Error(`Agent error: ${msg.subtype}`);
             }
           }
-          return textParts.join("\n");
+          // Streaming path: streamedText has the canonical token-level output.
+          // Non-streaming path: fall back to the block/content accumulator.
+          return streamedText.length > 0 ? streamedText : textParts.join("\n");
         }
       }
       // Stream ended without a `result` message — still close spans and return whatever we collected.
       closeAllSpans();
-      return textParts.join("\n");
+      return streamedText.length > 0 ? streamedText : textParts.join("\n");
     } catch (err) {
       closeAllSpans();
       throw err;
@@ -872,9 +914,17 @@ function wrapSdkQuery(
     ): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
+        // Phase 54 follow-up — token-level streaming. `includePartialMessages`
+        // tells the SDK to emit `SDKPartialAssistantMessage` (type: 'stream_event')
+        // with `content_block_delta` / `text_delta` events as the model produces
+        // tokens. iterateWithTracing forwards those deltas to `onChunk` via its
+        // stream_event branch so the Discord ProgressiveMessageEditor sees
+        // tokens progressively instead of a single complete-message callback.
+        // Cast: local SdkQueryOptions type is narrower than the real SDK
+        // type (missing includePartialMessages); see deferred-items.md.
         const q = sdk.query({
           prompt: promptWithMutable(message),
-          options: turnOptions(),
+          options: { ...turnOptions(), includePartialMessages: true } as SdkQueryOptions,
         });
         return await iterateWithTracing(q, turn ?? boundTurn, onChunk);
       } catch (err) {
