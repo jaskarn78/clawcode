@@ -64,6 +64,14 @@ export const benchReportSchema = z.object({
   node_version: z.string().min(1),
   prompt_results: z.array(promptResultSchema),
   overall_percentiles: z.array(percentileRowSchema),
+  /**
+   * Phase 53 Plan 03 — per-prompt average response length in characters.
+   * Populated only when `runBench({ captureResponses: true })` is set
+   * (used by `clawcode bench --context-audit` to diff against baseline
+   * and fail on > 15% drop). Absent in default bench runs for backward
+   * compat with Phase 51 baselines.
+   */
+  response_lengths: z.record(z.string(), z.number()).optional(),
 });
 
 /**

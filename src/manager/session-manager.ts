@@ -541,6 +541,9 @@ export class SessionManager {
       // assembler so per-section budget-exceeded events + resume-summary
       // hard-truncation events surface in structured logs.
       log: this.log,
+      // Phase 53 Plan 03 — thread the shared SkillUsageTracker so the
+      // assembler can read the per-agent usage window.
+      skillUsageTracker: this.skillUsageTracker,
     };
   }
 

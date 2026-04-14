@@ -908,9 +908,9 @@ function makeLazyCfg(
   });
 }
 
-const FULL_SEARCH_FIRST = "# Search First\n\nResearch before coding. Full content here with lots of detail about when to use this skill and what it does.";
-const FULL_CONTENT_ENGINE = "# Content Engine\n\nWrites content. Full SKILL.md body with many lines of guidance.";
-const FULL_MARKET_RESEARCH = "# Market Research\n\nResearches markets. Full body text.";
+const FULL_SEARCH_FIRST = "# Search First\n\nSkill name: search-first. Research before coding. Full content here with lots of detail about when to use this skill and what it does.";
+const FULL_CONTENT_ENGINE = "# Content Engine\n\nSkill name: content-engine. Writes content. Full SKILL.md body with many lines of guidance.";
+const FULL_MARKET_RESEARCH = "# Market Research\n\nSkill name: market-research. Researches markets. Full body text.";
 
 const SKILLS_CATALOG: readonly SkillCatalogEntry[] = Object.freeze([
   Object.freeze({

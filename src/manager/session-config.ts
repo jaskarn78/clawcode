@@ -13,8 +13,14 @@ import type { BootstrapStatus } from "../bootstrap/types.js";
 import { buildBootstrapPrompt } from "../bootstrap/prompt-builder.js";
 import { extractFingerprint, formatFingerprint } from "../memory/fingerprint.js";
 import { assembleContext, DEFAULT_BUDGETS } from "./context-assembler.js";
-import type { ContextSources, BudgetWarningEvent } from "./context-assembler.js";
+import type {
+  ContextSources,
+  BudgetWarningEvent,
+  SkillCatalogEntry,
+  ResolvedLazySkillsConfig,
+} from "./context-assembler.js";
 import type { MemoryEntry } from "../memory/types.js";
+import type { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -50,6 +56,12 @@ export type SessionConfigDeps = {
   readonly allAgentConfigs: readonly ResolvedAgentConfig[];
   readonly priorHotStableToken?: string;
   readonly log?: SessionConfigLoggerLike;
+  /**
+   * Phase 53 Plan 03 — shared in-memory SkillUsageTracker. When absent,
+   * the assembler treats the usage window as empty and the warm-up guard
+   * (turns < threshold) keeps all skills rendering full content.
+   */
+  readonly skillUsageTracker?: SkillUsageTracker;
 };
 
 /**
@@ -148,12 +160,16 @@ export async function buildSessionConfig(
     }
   }
 
-  // --- Collect skills header source (Phase 53 Plan 02) ---
+  // --- Collect skills header source (Phase 53 Plan 02 + Plan 03) ---
   //
-  // Carves skill descriptions out of the legacy `toolDefinitionsStr` so the
-  // assembler can budget this section independently. Plan 53-03 will layer
-  // lazy-skill compression on top of this isolated block.
+  // Phase 53 Plan 02 carved skill descriptions out of `toolDefinitionsStr`
+  // so the assembler could budget the section independently. Plan 53-03
+  // layers lazy-skill compression on top: we now build a per-skill catalog
+  // with `fullContent` AND the legacy bullet-line pre-rendering, then let
+  // the assembler decide which to render per skill via its decision matrix
+  // (full for recently-used / mentioned / warm-up; compressed otherwise).
   let skillsHeaderStr = "";
+  const skillsCatalogEntries: SkillCatalogEntry[] = [];
   const assignedSkills = config.skills ?? [];
   if (assignedSkills.length > 0) {
     const skillDescriptions: string[] = [];
@@ -162,8 +178,18 @@ export async function buildSessionConfig(
       if (entry) {
         const versionPart =
           entry.version !== null ? ` (v${entry.version})` : "";
-        skillDescriptions.push(
-          `- **${entry.name}**${versionPart}: ${entry.description}`,
+        const bullet = `- **${entry.name}**${versionPart}: ${entry.description}`;
+        skillDescriptions.push(bullet);
+        // Full content falls back to the description bullet when a real
+        // SKILL.md body is not wired in yet. This keeps the lazy-skill
+        // decision matrix working from day one; a follow-up can read the
+        // on-disk SKILL.md body via `entry.path` if we want maximum savings.
+        skillsCatalogEntries.push(
+          Object.freeze({
+            name: entry.name,
+            description: entry.description,
+            fullContent: bullet,
+          }),
         );
       }
     }
@@ -263,6 +289,20 @@ export async function buildSessionConfig(
 
   // --- Assemble with budgets ---
   const budgets = config.contextBudgets ?? DEFAULT_BUDGETS;
+
+  // Phase 53 Plan 03 — resolve lazySkills config + usage window. When the
+  // tracker is absent, the assembler treats usage as empty and the warm-up
+  // guard (turns < threshold) keeps all skills rendering full content.
+  const skillUsage = deps.skillUsageTracker?.getWindow(config.name);
+  const lazySkillsConfig: ResolvedLazySkillsConfig | undefined =
+    config.perf?.lazySkills
+      ? Object.freeze({
+          enabled: config.perf.lazySkills.enabled,
+          usageThresholdTurns: config.perf.lazySkills.usageThresholdTurns,
+          reinflateOnMention: config.perf.lazySkills.reinflateOnMention,
+        })
+      : undefined;
+
   const sources: ContextSources = {
     identity: identityStr,
     // Phase 53 Plan 02: SOUL.md body is currently folded into `identityStr`
@@ -271,6 +311,7 @@ export async function buildSessionConfig(
     // the current consolidation behavior. A future refactor can carve SOUL
     // out of identity and populate `sources.soul` directly.
     soul: "",
+    // Phase 53 Plan 02 legacy path — kept for the zero-skills case.
     skillsHeader: skillsHeaderStr.trim(),
     hotMemories: hotMemoriesStr,
     hotMemoriesEntries,
@@ -288,6 +329,15 @@ export async function buildSessionConfig(
     // Per-turn refresh paths (future) may populate this for accurate
     // per-turn audit.
     recentHistory: "",
+    // Phase 53 Plan 03 — lazy-skill sources.
+    skills: skillsCatalogEntries.length > 0 ? skillsCatalogEntries : undefined,
+    skillUsage,
+    lazySkillsConfig,
+    // Per-turn mention sources stay empty at session-config time. A
+    // future per-turn assembler re-call will populate these; the tests
+    // exercise them directly via `assembleContext` sources.
+    currentUserMessage: "",
+    lastAssistantMessage: "",
   };
 
   // Phase 52 Plan 02 — two-block assembly for prompt caching.

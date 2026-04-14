@@ -198,6 +198,11 @@ export function registerBenchCommand(
       "Compare against baseline + thresholds; exit 1 on regression",
       false,
     )
+    .option(
+      "--context-audit",
+      "Context-audit regression mode: fail if any prompt response-length drops > 15% vs baseline",
+      false,
+    )
     .action(
       async (opts: {
         prompts: string;
@@ -210,17 +215,34 @@ export function registerBenchCommand(
         json: boolean;
         updateBaseline: boolean;
         checkRegression: boolean;
+        contextAudit: boolean;
       }) => {
         try {
+          // Phase 53 Plan 03 — --context-audit is incompatible with
+          // --update-baseline. Check this BEFORE running bench so we fail
+          // fast on the invalid flag combo.
+          if (opts.contextAudit && opts.updateBaseline) {
+            cliError(
+              "--context-audit is incompatible with --update-baseline",
+            );
+            exit(1);
+            return;
+          }
+
           cliLog(
             `Running bench against ${opts.agent} (${opts.repeats}× per prompt)…`,
           );
+          // Phase 53 Plan 03 — capture response lengths when the operator
+          // is running context-audit (for the diff) or updating the
+          // baseline (so the future context-audit gate has baseline data).
+          const captureResponses = opts.contextAudit || opts.updateBaseline;
           const { report, reportPath } = await runBenchFn({
             promptsPath: opts.prompts,
             agent: opts.agent,
             repeats: opts.repeats,
             since: opts.since,
             reportsDir: opts.reportsDir,
+            captureResponses,
           });
           cliLog(`Report written to ${reportPath}`);
 
@@ -270,6 +292,59 @@ export function registerBenchCommand(
               return;
             }
             cliLog("No regressions detected (status: clean).");
+            return;
+          }
+
+          // Phase 53 Plan 03 — --context-audit regression gate.
+          //
+          // Compares per-prompt response_lengths baseline vs current. A
+          // drop of more than 15% on ANY prompt fails the gate. Requires
+          // both baseline and current reports to carry response_lengths
+          // (operator must have previously run `--update-baseline` after
+          // introducing this gate).
+          if (opts.contextAudit) {
+            if (!baselineForDiff) {
+              cliError(
+                `--context-audit requires a baseline at ${opts.baseline} (run --update-baseline first)`,
+              );
+              exit(1);
+              return;
+            }
+            const baselineLengths = (
+              baselineForDiff as unknown as {
+                response_lengths?: Record<string, number>;
+              }
+            ).response_lengths;
+            const currentLengths = (
+              report as unknown as {
+                response_lengths?: Record<string, number>;
+              }
+            ).response_lengths;
+            if (!baselineLengths || !currentLengths) {
+              cliError(
+                "--context-audit requires captured response_lengths on both baseline and current report; re-run --update-baseline first",
+              );
+              exit(1);
+              return;
+            }
+            const regressions: string[] = [];
+            for (const [promptId, baseLen] of Object.entries(baselineLengths)) {
+              const curLen = currentLengths[promptId];
+              if (typeof curLen !== "number" || baseLen === 0) continue;
+              const dropPct = ((baseLen - curLen) / baseLen) * 100;
+              if (dropPct > 15) {
+                regressions.push(
+                  `${promptId}: response length dropped ${dropPct.toFixed(1)}% (threshold 15%)`,
+                );
+              }
+            }
+            if (regressions.length > 0) {
+              cliError("Context-audit regression:");
+              for (const r of regressions) cliError(`  ${r}`);
+              exit(1);
+              return;
+            }
+            cliLog("No context-audit regressions detected.");
             return;
           }
 

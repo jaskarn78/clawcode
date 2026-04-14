@@ -71,6 +71,16 @@ export type RunBenchOpts = {
   readonly ipcClient?: typeof sendIpcRequest;
   /** DI hook: override the tempdir creator (tests only). */
   readonly tmpHomeFactory?: () => string;
+  /**
+   * Phase 53 Plan 03 — when true, collect the `response` text length from
+   * each `bench-run-prompt` IPC call and include a `response_lengths`
+   * map in the BenchReport (per-prompt average chars). Consumed by
+   * `clawcode bench --context-audit` to diff against baseline and enforce
+   * the 15% response-length regression gate.
+   *
+   * Default: false (preserves Phase 51 baseline schema / behavior).
+   */
+  readonly captureResponses?: boolean;
 };
 
 /** Result of a successful `runBench`. */
@@ -129,6 +139,10 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
     }
 
     const promptResults: PromptResult[] = [];
+    // Phase 53 Plan 03 — per-prompt response-length totals, averaged after
+    // the loop and attached to the report when `captureResponses === true`.
+    const responseLengthTotals = new Map<string, { sum: number; n: number }>();
+
     for (const prompt of prompts) {
       const turnIds: string[] = [];
       for (let i = 0; i < repeats; i++) {
@@ -138,6 +152,16 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
           turnIdPrefix: `bench:${prompt.id}:`,
         })) as { turnId: string; response: string };
         turnIds.push(res.turnId);
+        if (opts.captureResponses) {
+          const len = typeof res.response === "string" ? res.response.length : 0;
+          const current = responseLengthTotals.get(prompt.id) ?? {
+            sum: 0,
+            n: 0,
+          };
+          current.sum += len;
+          current.n += 1;
+          responseLengthTotals.set(prompt.id, current);
+        }
       }
 
       // After all repeats for this prompt, snapshot the percentiles for
@@ -185,6 +209,18 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
       /* not in a git checkout or git unavailable — leave "unknown" */
     }
 
+    // Phase 53 Plan 03 — compute per-prompt average response length when
+    // captureResponses was enabled. Absent key by default = backward-compat.
+    const responseLengths: Record<string, number> | undefined =
+      opts.captureResponses
+        ? Object.fromEntries(
+            [...responseLengthTotals.entries()].map(([id, { sum, n }]) => [
+              id,
+              n > 0 ? Math.round(sum / n) : 0,
+            ]),
+          )
+        : undefined;
+
     const report: BenchReport = Object.freeze({
       run_id: nanoid(12),
       started_at: new Date().toISOString(),
@@ -196,6 +232,7 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
       overall_percentiles: Object.freeze(
         overall_percentiles,
       ) as unknown as PercentileRowSchema[],
+      ...(responseLengths ? { response_lengths: responseLengths } : {}),
     });
 
     mkdirSync(opts.reportsDir, { recursive: true });

@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import type { Turn } from "../performance/trace-collector.js";
 import { countTokens } from "../performance/token-count.js";
 import type { MemoryEntry } from "../memory/types.js";
+import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 
 export type ContextBudgets = {
   readonly identity: number;
@@ -93,6 +94,80 @@ export type ContextSources = {
    * populated on the `context_assemble` span for audit reporting.
    */
   readonly recentHistory?: string;
+
+  // ── Phase 53 Plan 03 — lazy-skill compression sources ────────────────────
+
+  /**
+   * Phase 53 Plan 03 — per-skill catalog entries. When supplied (non-empty),
+   * the assembler renders the skills_header block from these entries using
+   * the lazy-skill compression decision matrix below rather than the legacy
+   * `skillsHeader` pass-through. Entries render as FULL content (fullContent
+   * verbatim) when "kept" and as a compressed one-line catalog entry
+   * (`- <name>: <description>`) when "compressed" — NEVER dropped entirely
+   * (preserves discoverability, CONTEXT.md Specifics #2).
+   */
+  readonly skills?: readonly SkillCatalogEntry[];
+  /**
+   * Phase 53 Plan 03 — usage window from SkillUsageTracker.getWindow(agent).
+   * Skills whose names appear in `recentlyUsed` render full-content; others
+   * compress. Warm-up: when `turns < lazySkillsConfig.usageThresholdTurns`,
+   * all skills render full-content regardless of membership.
+   */
+  readonly skillUsage?: SkillUsageWindow;
+  /**
+   * Phase 53 Plan 03 — current user message (re-inflate source). When
+   * `lazySkillsConfig.reinflateOnMention` is true, word-boundary matches
+   * of skill names in this text force the matching skill to render full
+   * content for THIS turn only.
+   */
+  readonly currentUserMessage?: string;
+  /**
+   * Phase 53 Plan 03 — last assistant message (re-inflate source). Same
+   * mention-based re-inflation as `currentUserMessage`.
+   */
+  readonly lastAssistantMessage?: string;
+  /**
+   * Phase 53 Plan 03 — resolved lazy-skill configuration. When absent or
+   * `enabled === false`, lazy-skill compression is disabled and all skills
+   * render full content (legacy Phase 53-02 behavior preserved).
+   */
+  readonly lazySkillsConfig?: ResolvedLazySkillsConfig;
+};
+
+// ── Phase 53 Plan 03 — lazy-skill compression types ──────────────────────
+
+/**
+ * One skill catalog entry with both the description line (compressed form)
+ * and the full SKILL.md body (uncompressed form). Session-config populates
+ * the `fullContent` field from disk at session start (or falls back to a
+ * description+version bullet line when SKILL.md reads fail).
+ */
+export type SkillCatalogEntry = {
+  readonly name: string;
+  readonly description: string;
+  readonly fullContent: string;
+};
+
+/**
+ * Usage window read from `SkillUsageTracker.getWindow(agent)`. Shape matches
+ * the tracker's frozen return verbatim except we drop the `agent` key (the
+ * assembler doesn't need it here).
+ */
+export type SkillUsageWindow = {
+  readonly turns: number;
+  readonly capacity: number;
+  readonly recentlyUsed: ReadonlySet<string>;
+};
+
+/**
+ * Resolved lazy-skill configuration (Plan 53-01 Zod output). Session-config
+ * pulls this from `agentConfig.perf.lazySkills` after schema validation has
+ * applied defaults + the `usageThresholdTurns >= 5` floor.
+ */
+export type ResolvedLazySkillsConfig = {
+  readonly enabled: boolean;
+  readonly usageThresholdTurns: number;
+  readonly reinflateOnMention: boolean;
 };
 
 export const DEFAULT_BUDGETS: ContextBudgets = Object.freeze({
@@ -441,6 +516,83 @@ function selectHotMemoriesWithinBudget(
   });
 }
 
+// ── Phase 53 Plan 03 — lazy-skill rendering helper ───────────────────────
+
+/**
+ * Decision matrix for a single skill:
+ *
+ *   - `warmUp === true`           → full content (disabled / under threshold)
+ *   - `recentlyUsed.has(name)`    → full content
+ *   - `mentioned.has(name)`       → full content (re-inflate on mention)
+ *   - otherwise                   → compressed one-liner (`- name: desc`)
+ *
+ * Compressed skills STAY in the catalog block — they are NOT dropped.
+ * This preserves discoverability (CONTEXT.md Specifics #2).
+ *
+ * Returns the rendered text alongside counts for span telemetry.
+ */
+function renderSkillsHeader(sources: ContextSources): {
+  readonly rendered: string;
+  readonly includedCount: number;
+  readonly compressedCount: number;
+} {
+  const skills = sources.skills ?? [];
+  if (skills.length === 0) {
+    // Legacy path — no lazy skills, pass-through the precomposed header.
+    return {
+      rendered: sources.skillsHeader ?? "",
+      includedCount: 0,
+      compressedCount: 0,
+    };
+  }
+
+  const cfg = sources.lazySkillsConfig;
+  const usage = sources.skillUsage;
+  // Warm-up / disabled — every skill renders full content.
+  const warmUp =
+    !cfg ||
+    !cfg.enabled ||
+    !usage ||
+    usage.turns < cfg.usageThresholdTurns;
+
+  const catalogNames = skills.map((s) => s.name);
+  let mentioned: Set<string> = new Set<string>();
+  if (cfg?.reinflateOnMention && !warmUp) {
+    const fromUser = extractSkillMentions(
+      sources.currentUserMessage ?? "",
+      catalogNames,
+    );
+    const fromAssistant = extractSkillMentions(
+      sources.lastAssistantMessage ?? "",
+      catalogNames,
+    );
+    mentioned = new Set<string>([...fromUser, ...fromAssistant]);
+  }
+
+  const lines: string[] = [];
+  let included = 0;
+  let compressed = 0;
+
+  for (const skill of skills) {
+    const isRecent = usage?.recentlyUsed.has(skill.name) === true;
+    const isMentioned = mentioned.has(skill.name);
+    const keepFull = warmUp || isRecent || isMentioned;
+    if (keepFull) {
+      lines.push(skill.fullContent);
+      included++;
+    } else {
+      lines.push(`- ${skill.name}: ${skill.description}`);
+      compressed++;
+    }
+  }
+
+  return {
+    rendered: lines.join("\n\n"),
+    includedCount: included,
+    compressedCount: compressed,
+  };
+}
+
 /**
  * Internal shared implementation returning both the public AssembledContext
  * shape and per-section token counts. The public `assembleContext` strips
@@ -451,7 +603,12 @@ function assembleContextInternal(
   sources: ContextSources,
   budgets: ContextBudgets,
   opts: AssembleOptions | undefined,
-): { readonly assembled: AssembledContext; readonly sectionTokens: SectionTokenCounts } {
+): {
+  readonly assembled: AssembledContext;
+  readonly sectionTokens: SectionTokenCounts;
+  readonly skillsIncludedCount: number;
+  readonly skillsCompressedCount: number;
+} {
   const phaseBudgets = mergeBudgets(opts?.memoryAssemblyBudgets);
   const warn = opts?.onBudgetWarning;
 
@@ -473,9 +630,11 @@ function assembleContextInternal(
     warn,
   );
 
-  // 3. skills_header — bullet-truncation
+  // 3. skills_header — Phase 53 Plan 03 lazy-skill compression, then
+  //    Phase 53 Plan 02 bullet-truncation on the rendered result.
+  const lazyOut = renderSkillsHeader(sources);
   const skillsOut = enforceBulletTruncation(
-    sources.skillsHeader ?? "",
+    lazyOut.rendered,
     "skills_header",
     phaseBudgets.skills_header,
     warn,
@@ -578,6 +737,8 @@ function assembleContextInternal(
       hotStableToken: currentHotToken,
     }),
     sectionTokens,
+    skillsIncludedCount: lazyOut.includedCount,
+    skillsCompressedCount: lazyOut.compressedCount,
   });
 }
 
@@ -646,15 +807,23 @@ export function assembleContextTraced(
 ): AssembledContext {
   const span = turn?.startSpan("context_assemble");
   try {
-    const { assembled, sectionTokens } = assembleContextInternal(
-      sources,
-      budgets,
-      opts,
-    );
+    const {
+      assembled,
+      sectionTokens,
+      skillsIncludedCount,
+      skillsCompressedCount,
+    } = assembleContextInternal(sources, budgets, opts);
     // Phase 53 Plan 02 — per-section token counts for audit aggregation.
     // Metadata key is snake_case `section_tokens` so it matches the consumer
     // shape in src/performance/context-audit.ts verbatim.
-    span?.setMetadata({ section_tokens: sectionTokens });
+    // Phase 53 Plan 03 — lazy-skill telemetry: skills_included_count +
+    // skills_compressed_count ride on the same span metadata blob so the
+    // audit aggregator can surface compression savings.
+    span?.setMetadata({
+      section_tokens: sectionTokens,
+      skills_included_count: skillsIncludedCount,
+      skills_compressed_count: skillsCompressedCount,
+    });
     return assembled;
   } finally {
     span?.end();
