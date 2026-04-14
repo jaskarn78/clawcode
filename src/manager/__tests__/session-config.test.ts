@@ -393,3 +393,133 @@ describe("buildSessionConfig — Phase 52 two-block wiring", () => {
     expect(result.mutableSuffix).toBeUndefined();
   });
 });
+
+// ── Phase 53 Plan 02 — resume summary budget + assembler budget wiring ───────
+
+describe("resume summary budget (Phase 53)", () => {
+  it("Test 9: resumeSummaryBudget on config invokes enforceSummaryBudget before assembly", async () => {
+    // Mock loadLatestSummary to return an oversized summary.
+    const { loadLatestSummary } = await import("../../memory/context-summary.js");
+    (loadLatestSummary as any).mockResolvedValueOnce(
+      Array.from({ length: 4000 }, (_, i) => `word${i}`).join(" "),
+    );
+
+    const warnings: Record<string, unknown>[] = [];
+    const stubLog = {
+      warn: (obj: Record<string, unknown>, _msg?: string) => {
+        warnings.push(obj);
+      },
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      child: () => stubLog,
+    };
+
+    const config = makeConfig({
+      channels: ["c1"],
+      perf: {
+        resumeSummaryBudget: 500, // floor — tight
+      } as any,
+    });
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({ log: stubLog as any }),
+    );
+
+    // The hard-truncated summary (ending with ...) appears in the mutable suffix
+    expect(result.mutableSuffix).toBeDefined();
+    const mutableBlob = result.mutableSuffix ?? "";
+    expect(mutableBlob).toContain("## Context Summary (from previous session)");
+    // At least one warn log fired for the oversized resume summary
+    const summaryWarn = warnings.find(
+      (w) => (w as any).budget === 500 || (w as any).section === "resume_summary",
+    );
+    expect(summaryWarn).toBeDefined();
+  });
+
+  it("Test 10: memoryAssemblyBudgets threaded through to assembler + warn fires for over-budget", async () => {
+    const warnings: Record<string, unknown>[] = [];
+    const stubLog = {
+      warn: (obj: Record<string, unknown>, _msg?: string) => {
+        warnings.push(obj);
+      },
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      child: () => stubLog,
+    };
+
+    const config = makeConfig({
+      channels: ["c1"],
+      identity: "X".repeat(10000),
+      perf: {
+        memoryAssemblyBudgets: { identity: 10 },
+      } as any,
+    });
+
+    await buildSessionConfig(config, makeDeps({ log: stubLog as any }));
+
+    const identityWarn = warnings.find((w) => (w as any).section === "identity");
+    expect(identityWarn).toBeDefined();
+    expect((identityWarn as any).strategy).toBe("warn-and-keep");
+  });
+
+  it("Test 11: onBudgetWarning logger callback receives full event payload", async () => {
+    const warnings: Record<string, unknown>[] = [];
+    const stubLog = {
+      warn: (obj: Record<string, unknown>, _msg?: string) => {
+        warnings.push(obj);
+      },
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      child: () => stubLog,
+    };
+
+    const config = makeConfig({
+      channels: [],
+      identity: "X".repeat(10000),
+      soul: "S".repeat(10000),
+      perf: {
+        memoryAssemblyBudgets: { identity: 10, soul: 5 },
+      } as any,
+    });
+
+    await buildSessionConfig(config, makeDeps({ log: stubLog as any }));
+
+    const anyAssemblyWarn = warnings.find(
+      (w) =>
+        (w as any).section &&
+        ["identity", "soul"].includes((w as any).section),
+    );
+    expect(anyAssemblyWarn).toBeDefined();
+    expect(typeof (anyAssemblyWarn as any).beforeTokens).toBe("number");
+    expect(typeof (anyAssemblyWarn as any).budgetTokens).toBe("number");
+    expect(typeof (anyAssemblyWarn as any).strategy).toBe("string");
+    expect((anyAssemblyWarn as any).agent).toBe("test-agent");
+  });
+
+  it("Test 12: new ContextSources fields populated from upstream (skillsHeader separate from toolDefinitions)", async () => {
+    // When agent has skills, the skillsHeader block is filled; MCP/admin
+    // text keeps going through toolDefinitions. Both under the unified
+    // "Available Tools" header.
+    const config = makeConfig({
+      channels: ["c1"],
+      skills: ["content-engine"],
+    });
+    const skillsCatalog = new Map([
+      [
+        "content-engine",
+        { name: "content-engine", version: null, description: "Write content" },
+      ],
+    ] as any);
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({ skillsCatalog: skillsCatalog as any }),
+    );
+
+    expect(result.systemPrompt).toContain("## Available Tools");
+    expect(result.systemPrompt).toContain("content-engine");
+    expect(result.systemPrompt).toContain("Write content");
+  });
+});
