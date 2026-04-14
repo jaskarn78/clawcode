@@ -33,7 +33,7 @@ function makeSources(overrides: Partial<ContextSources> = {}): ContextSources {
     discordBindings: "",
     contextSummary: "",
     ...overrides,
-  };
+  } as ContextSources;
 }
 
 describe("estimateTokens", () => {
@@ -479,5 +479,378 @@ describe("computeHotStableToken / computePrefixHash (Phase 52)", () => {
     const a = computePrefixHash("prefix A");
     const b = computePrefixHash("prefix B");
     expect(a).not.toBe(b);
+  });
+});
+
+// ── Phase 53 Plan 02 — per-section budget enforcement ────────────────────────
+
+import {
+  DEFAULT_PHASE53_BUDGETS,
+  type MemoryAssemblyBudgets,
+  type BudgetWarningEvent,
+} from "../context-assembler.js";
+import type { MemoryEntry } from "../../memory/types.js";
+
+function makeMemoryEntry(
+  overrides: Partial<MemoryEntry> & Pick<MemoryEntry, "content" | "importance">,
+): MemoryEntry {
+  return Object.freeze({
+    id: overrides.id ?? "mem-" + Math.random().toString(36).slice(2, 8),
+    content: overrides.content,
+    source: overrides.source ?? "manual",
+    importance: overrides.importance,
+    accessCount: overrides.accessCount ?? 0,
+    tags: Object.freeze(overrides.tags ?? []),
+    embedding: overrides.embedding ?? null,
+    createdAt: overrides.createdAt ?? "2026-04-01T00:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-01T00:00:00.000Z",
+    accessedAt: overrides.accessedAt ?? "2026-04-01T00:00:00.000Z",
+    tier: overrides.tier ?? "hot",
+  });
+}
+
+describe("assembleContext budget enforcement (Phase 53)", () => {
+  it("Test 1: identity over budget is WARN-and-keep — no truncation (D-03)", () => {
+    const longIdentity = "X".repeat(10000);
+    const warnings: BudgetWarningEvent[] = [];
+    const sources = makeSources({ identity: longIdentity });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS, {
+      memoryAssemblyBudgets: { identity: 100 },
+      onBudgetWarning: (e) => warnings.push(e),
+    }) as unknown as { stablePrefix: string };
+
+    // stablePrefix retains full identity (no truncation)
+    expect(result.stablePrefix).toContain(longIdentity);
+    // warn fired exactly once
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].section).toBe("identity");
+    expect(warnings[0].strategy).toBe("warn-and-keep");
+    expect(warnings[0].budgetTokens).toBe(100);
+    expect(warnings[0].beforeTokens).toBeGreaterThan(100);
+  });
+
+  it("Test 2: soul over budget is WARN-and-keep (D-03)", () => {
+    const longSoul = "S".repeat(10000);
+    const warnings: BudgetWarningEvent[] = [];
+    const sources = makeSources({ identity: "id", soul: longSoul });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS, {
+      memoryAssemblyBudgets: { soul: 50 },
+      onBudgetWarning: (e) => warnings.push(e),
+    }) as unknown as { stablePrefix: string };
+
+    expect(result.stablePrefix).toContain(longSoul);
+    const soulWarn = warnings.find((w) => w.section === "soul");
+    expect(soulWarn).toBeDefined();
+    expect(soulWarn!.strategy).toBe("warn-and-keep");
+  });
+
+  it("Test 3: hot_tier over budget drops LOWEST-importance rows", () => {
+    const entries: readonly MemoryEntry[] = [
+      makeMemoryEntry({ content: "alpha aaaaaa aaaaaa aaaaaa aaaaaa", importance: 0.9 }),
+      makeMemoryEntry({ content: "beta bbbbbb bbbbbb bbbbbb bbbbbb", importance: 0.8 }),
+      makeMemoryEntry({ content: "gamma cccccc cccccc cccccc cccccc", importance: 0.7 }),
+      makeMemoryEntry({ content: "delta dddddd dddddd dddddd dddddd", importance: 0.6 }),
+      makeMemoryEntry({ content: "epsilon eeeeee eeeeee eeeeee eeeeee", importance: 0.5 }),
+    ];
+    const hotRendered = entries.map((m) => `- ${m.content}`).join("\n");
+    // each bullet ~ 10 tokens; 5 bullets ~ 50 tokens; set budget to fit ~2 only
+    const warnings: BudgetWarningEvent[] = [];
+
+    const result = assembleContext(
+      makeSources({ identity: "id", hotMemories: hotRendered, hotMemoriesEntries: entries }),
+      DEFAULT_BUDGETS,
+      {
+        memoryAssemblyBudgets: { hot_tier: 25 },
+        onBudgetWarning: (e) => warnings.push(e),
+      },
+    ) as unknown as { stablePrefix: string; mutableSuffix: string };
+
+    const combined = `${result.stablePrefix}\n${result.mutableSuffix}`;
+    // Highest-importance (0.9, 0.8) kept
+    expect(combined).toContain("alpha");
+    expect(combined).toContain("beta");
+    // Lowest kept out
+    expect(combined).not.toContain("epsilon");
+
+    const hotWarn = warnings.find((w) => w.section === "hot_tier");
+    expect(hotWarn).toBeDefined();
+    expect(hotWarn!.strategy).toBe("drop-lowest-importance");
+  });
+
+  it("Test 4: recent_history is measured but not truncated by assembler", () => {
+    const historyText = "x".repeat(5000);
+    const sources = makeSources({ identity: "id", recentHistory: historyText });
+
+    // Assembler doesn't own recent_history — it only measures it for audit.
+    // We verify via exposing section_tokens through traced metadata (covered in Test 6).
+    const result = assembleContext(sources, DEFAULT_BUDGETS, {
+      memoryAssemblyBudgets: { recent_history: 10 },
+    });
+
+    // Return shape intact, no crash.
+    expect(typeof result).toBe("object");
+    expect(Object.keys(result)).toEqual(
+      expect.arrayContaining(["stablePrefix", "mutableSuffix", "hotStableToken"]),
+    );
+  });
+
+  it("Test 5: skills_header over budget truncates via bullet-line mechanism", () => {
+    const bullets = Array.from(
+      { length: 40 },
+      (_, i) => `- skill${i}: description text for skill number ${i}`,
+    ).join("\n");
+    const warnings: BudgetWarningEvent[] = [];
+
+    const result = assembleContext(
+      makeSources({ identity: "id", skillsHeader: bullets }),
+      DEFAULT_BUDGETS,
+      {
+        memoryAssemblyBudgets: { skills_header: 40 },
+        onBudgetWarning: (e) => warnings.push(e),
+      },
+    ) as unknown as { stablePrefix: string };
+
+    // Some skills dropped (truncated) but stablePrefix still contains Available Tools section
+    expect(result.stablePrefix).toContain("## Available Tools");
+    expect(result.stablePrefix).toContain("skill0");
+    // Later skills should be truncated
+    expect(result.stablePrefix).not.toContain("skill39");
+
+    const skillsWarn = warnings.find((w) => w.section === "skills_header");
+    expect(skillsWarn).toBeDefined();
+    expect(skillsWarn!.strategy).toBe("truncate-bullets");
+  });
+
+  it("Test 6: assembleContextTraced emits section_tokens metadata with all 7 canonical sections", () => {
+    let capturedMetadata: Record<string, unknown> | undefined;
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({
+      end: spanEnd,
+      setMetadata: (m: Record<string, unknown>) => {
+        capturedMetadata = m;
+      },
+    }));
+    const turn = { startSpan, end: vi.fn() };
+
+    const sources = makeSources({
+      identity: "id text",
+      soul: "soul text",
+      skillsHeader: "- skill1: desc",
+      hotMemories: "- hot mem",
+      recentHistory: "conversation history here",
+      perTurnSummary: "per-turn summary text",
+      resumeSummary: "resume summary text",
+    });
+
+    (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, turn);
+
+    expect(capturedMetadata).toBeDefined();
+    const sectionTokens = (capturedMetadata as any).section_tokens;
+    expect(sectionTokens).toBeDefined();
+    expect(typeof sectionTokens.identity).toBe("number");
+    expect(typeof sectionTokens.soul).toBe("number");
+    expect(typeof sectionTokens.skills_header).toBe("number");
+    expect(typeof sectionTokens.hot_tier).toBe("number");
+    expect(typeof sectionTokens.recent_history).toBe("number");
+    expect(typeof sectionTokens.per_turn_summary).toBe("number");
+    expect(typeof sectionTokens.resume_summary).toBe("number");
+    // Non-zero for populated sections
+    expect(sectionTokens.identity).toBeGreaterThan(0);
+    expect(sectionTokens.soul).toBeGreaterThan(0);
+  });
+
+  it("Test 6b: missing sources → section_tokens value is 0, not absent", () => {
+    let capturedMetadata: Record<string, unknown> | undefined;
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({
+      end: spanEnd,
+      setMetadata: (m: Record<string, unknown>) => {
+        capturedMetadata = m;
+      },
+    }));
+    const turn = { startSpan, end: vi.fn() };
+
+    const sources = makeSources({ identity: "id" });
+    (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, turn);
+
+    const sectionTokens = (capturedMetadata as any).section_tokens;
+    expect(sectionTokens.soul).toBe(0);
+    expect(sectionTokens.skills_header).toBe(0);
+    expect(sectionTokens.hot_tier).toBe(0);
+    expect(sectionTokens.recent_history).toBe(0);
+    expect(sectionTokens.per_turn_summary).toBe(0);
+    expect(sectionTokens.resume_summary).toBe(0);
+  });
+
+  it("Test 7: AssembledContext return shape has exactly 3 readonly fields, frozen", () => {
+    const sources = makeSources({ identity: "id", hotMemories: "- mem" });
+    const result = assembleContext(sources);
+    expect(Object.keys(result).sort()).toEqual(
+      ["hotStableToken", "mutableSuffix", "stablePrefix"].sort(),
+    );
+    expect(Object.keys(result)).toHaveLength(3);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("Test 8: budget defaults — calling assembleContext without Phase 53 budgets works", () => {
+    const sources = makeSources({ identity: "id text" });
+    // No throw, returns valid shape
+    const result = assembleContext(sources);
+    expect(result).toBeDefined();
+    expect(Object.keys(result)).toHaveLength(3);
+  });
+
+  it("Test 9: per-section budget merge — overrides take precedence over defaults", () => {
+    const entries: readonly MemoryEntry[] = [
+      makeMemoryEntry({ content: "mem-high-" + "x".repeat(200), importance: 0.9 }),
+      makeMemoryEntry({ content: "mem-low-" + "y".repeat(200), importance: 0.1 }),
+    ];
+    const hotRendered = entries.map((m) => `- ${m.content}`).join("\n");
+    const warnings: BudgetWarningEvent[] = [];
+
+    // With generous default, nothing would truncate. Override with 30 forces drop.
+    assembleContext(
+      makeSources({ identity: "id", hotMemories: hotRendered, hotMemoriesEntries: entries }),
+      DEFAULT_BUDGETS,
+      {
+        memoryAssemblyBudgets: { hot_tier: 30 },
+        onBudgetWarning: (e) => warnings.push(e),
+      },
+    );
+
+    const hotWarn = warnings.find((w) => w.section === "hot_tier");
+    expect(hotWarn).toBeDefined();
+    expect(hotWarn!.budgetTokens).toBe(30);
+  });
+
+  it("Test 10: onBudgetWarning callback invoked with correct event shape", () => {
+    const warnings: BudgetWarningEvent[] = [];
+    const entries: readonly MemoryEntry[] = [
+      makeMemoryEntry({ content: "a".repeat(500), importance: 0.9 }),
+      makeMemoryEntry({ content: "b".repeat(500), importance: 0.1 }),
+    ];
+    const rendered = entries.map((m) => `- ${m.content}`).join("\n");
+
+    assembleContext(
+      makeSources({
+        identity: "X".repeat(10000),
+        hotMemories: rendered,
+        hotMemoriesEntries: entries,
+      }),
+      DEFAULT_BUDGETS,
+      {
+        memoryAssemblyBudgets: { identity: 10, hot_tier: 10 },
+        onBudgetWarning: (e) => warnings.push(e),
+      },
+    );
+
+    // At least identity + hot_tier trigger warnings
+    const identityWarn = warnings.find((w) => w.section === "identity");
+    const hotWarn = warnings.find((w) => w.section === "hot_tier");
+    expect(identityWarn).toBeDefined();
+    expect(hotWarn).toBeDefined();
+    for (const w of warnings) {
+      expect(typeof w.section).toBe("string");
+      expect(typeof w.beforeTokens).toBe("number");
+      expect(typeof w.budgetTokens).toBe("number");
+      expect(typeof w.strategy).toBe("string");
+    }
+  });
+
+  it("Test 11: no warnings when all sources fit", () => {
+    const warnings: BudgetWarningEvent[] = [];
+    assembleContext(
+      makeSources({ identity: "short id", soul: "short soul" }),
+      DEFAULT_BUDGETS,
+      {
+        memoryAssemblyBudgets: DEFAULT_PHASE53_BUDGETS,
+        onBudgetWarning: (e) => warnings.push(e),
+      },
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("Test 12: hot-tier placement — importance-drop applies in mutable when hotInMutable", () => {
+    const entries: readonly MemoryEntry[] = [
+      makeMemoryEntry({ content: "keep-" + "x".repeat(20), importance: 0.95 }),
+      makeMemoryEntry({ content: "drop-" + "y".repeat(20), importance: 0.05 }),
+    ];
+    const rendered = entries.map((m) => `- ${m.content}`).join("\n");
+    const warnings: BudgetWarningEvent[] = [];
+
+    const result = assembleContext(
+      makeSources({
+        identity: "id",
+        hotMemories: rendered,
+        hotMemoriesEntries: entries,
+      }),
+      DEFAULT_BUDGETS,
+      {
+        priorHotStableToken: "0".repeat(64), // force mutable placement
+        memoryAssemblyBudgets: { hot_tier: 15 },
+        onBudgetWarning: (e) => warnings.push(e),
+      },
+    ) as unknown as { stablePrefix: string; mutableSuffix: string };
+
+    // Hot-tier lands in MUTABLE (not stable) yet still reflects importance drop
+    expect(result.mutableSuffix).toContain("## Key Memories");
+    expect(result.mutableSuffix).toContain("keep-");
+    expect(result.mutableSuffix).not.toContain("drop-");
+    expect(result.stablePrefix).not.toContain("## Key Memories");
+  });
+
+  it("Test 13: resumeSummary and perTurnSummary split into separate section_tokens", () => {
+    let capturedMetadata: Record<string, unknown> | undefined;
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({
+      end: spanEnd,
+      setMetadata: (m: Record<string, unknown>) => {
+        capturedMetadata = m;
+      },
+    }));
+    const turn = { startSpan, end: vi.fn() };
+
+    const sources = makeSources({
+      identity: "id",
+      perTurnSummary: "per-turn text",
+      resumeSummary: "resume text longer than per-turn here",
+    });
+
+    const result = (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, turn) as {
+      stablePrefix: string;
+      mutableSuffix: string;
+    };
+
+    const sectionTokens = (capturedMetadata as any).section_tokens;
+    expect(sectionTokens.per_turn_summary).toBeGreaterThan(0);
+    expect(sectionTokens.resume_summary).toBeGreaterThan(0);
+    // Each lands in mutable
+    expect(result.mutableSuffix).toContain("per-turn text");
+    expect(result.mutableSuffix).toContain("resume text");
+
+    // Legacy contextSummary input (no new fields) still works
+    const legacy = (assembleContextTraced as any)(
+      makeSources({ identity: "id", contextSummary: "legacy summary" }),
+      DEFAULT_BUDGETS,
+      undefined,
+      turn,
+    ) as { mutableSuffix: string };
+    expect(legacy.mutableSuffix).toContain("legacy summary");
+  });
+
+  it("Test 14: legacy 30+ joinAssembled tests — regression guard", () => {
+    // Sentinel test — if any prior assembleContext behavior changed, earlier
+    // describe blocks would fail. This just asserts DEFAULT_PHASE53_BUDGETS
+    // is shipped frozen with all canonical keys.
+    expect(Object.isFrozen(DEFAULT_PHASE53_BUDGETS)).toBe(true);
+    expect(DEFAULT_PHASE53_BUDGETS.identity).toBeGreaterThan(0);
+    expect(DEFAULT_PHASE53_BUDGETS.soul).toBeGreaterThan(0);
+    expect(DEFAULT_PHASE53_BUDGETS.skills_header).toBeGreaterThan(0);
+    expect(DEFAULT_PHASE53_BUDGETS.hot_tier).toBeGreaterThan(0);
+    expect(DEFAULT_PHASE53_BUDGETS.recent_history).toBeGreaterThan(0);
+    expect(DEFAULT_PHASE53_BUDGETS.per_turn_summary).toBeGreaterThan(0);
+    expect(DEFAULT_PHASE53_BUDGETS.resume_summary).toBeGreaterThan(0);
   });
 });
