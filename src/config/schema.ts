@@ -254,6 +254,73 @@ export const streamingConfigSchema = z.object({
 export type StreamingConfig = z.infer<typeof streamingConfigSchema>;
 
 /**
+ * Phase 55 — default whitelist of idempotent ClawCode tools safe for
+ * intra-turn caching. LOCKED verbatim per 55-CONTEXT D-02.
+ *
+ * These four tools are read-only from the agent's perspective: `memory_lookup`,
+ * `search_documents`, `memory_list`, `memory_graph`. Repeated calls with
+ * identical args within a single turn return identical results, so the intra-
+ * turn cache can return the first result safely.
+ *
+ * Non-idempotent tools (memory_save, spawn_subagent_thread, ingest_document,
+ * delete_document, send_message, send_to_agent, send_attachment, ask_advisor)
+ * MUST NOT appear here — caching them is a correctness bug. Adding a tool to
+ * this list requires a 55-CONTEXT amendment + explicit review.
+ */
+export const IDEMPOTENT_TOOL_DEFAULTS: readonly string[] = Object.freeze([
+  "memory_lookup",
+  "search_documents",
+  "memory_list",
+  "memory_graph",
+]);
+
+/**
+ * Phase 55 — per-tool SLO override for `perf.tools.slos.<tool_name>`.
+ *
+ * `thresholdMs` is required and must be a positive integer.
+ * `metric` is optional — the consumer (`getPerToolSlo` in
+ * src/performance/slos.ts) defaults it to `"p95"` when omitted so the common
+ * case stays concise in clawcode.yaml.
+ */
+export const toolSloOverrideSchema = z.object({
+  thresholdMs: z.number().int().positive(),
+  metric: z.enum(["p50", "p95", "p99"]).optional(),
+});
+
+/** Inferred per-tool SLO override type. */
+export type ToolSloOverride = z.infer<typeof toolSloOverrideSchema>;
+
+/**
+ * Phase 55 — `perf.tools` config. Three surfaces:
+ *
+ *   1. `maxConcurrent` — soft cap on concurrent tool-dispatch within a single
+ *      turn. Default 10 per 55-CONTEXT D-01. Hard floor of 1 (a value of 0
+ *      would deadlock the dispatcher).
+ *
+ *   2. `idempotent` — string[] whitelist of tools safe for intra-turn caching.
+ *      Defaults to `IDEMPOTENT_TOOL_DEFAULTS`. Consumers get the full default
+ *      whitelist automatically if they omit this field.
+ *
+ *   3. `slos` — optional `Record<tool_name, { thresholdMs, metric? }>` for
+ *      per-tool SLO overrides. Consumed by `getPerToolSlo` which falls back to
+ *      the global `tool_call` SLO (1500ms p95 — from DEFAULT_SLOS) when no
+ *      override is set for a given tool.
+ *
+ * Parse output shape:
+ *   { maxConcurrent: number; idempotent: string[]; slos?: Record<string, ToolSloOverride> }
+ */
+export const toolsConfigSchema = z.object({
+  maxConcurrent: z.number().int().min(1).default(10),
+  idempotent: z
+    .array(z.string().min(1))
+    .default([...IDEMPOTENT_TOOL_DEFAULTS]),
+  slos: z.record(z.string().min(1), toolSloOverrideSchema).optional(),
+});
+
+/** Inferred Phase 55 perf.tools config type. */
+export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -296,6 +363,7 @@ export const agentSchema = z.object({
       lazySkills: lazySkillsSchema.optional(),
       resumeSummaryBudget: resumeSummaryBudgetSchema.optional(),
       streaming: streamingConfigSchema.optional(),
+      tools: toolsConfigSchema.optional(),
     })
     .optional(),
 });
@@ -336,6 +404,7 @@ export const defaultsSchema = z.object({
       lazySkills: lazySkillsSchema.optional(),
       resumeSummaryBudget: resumeSummaryBudgetSchema.optional(),
       streaming: streamingConfigSchema.optional(),
+      tools: toolsConfigSchema.optional(),
     })
     .optional(),
 });

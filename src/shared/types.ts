@@ -137,6 +137,24 @@ export type ResolvedAgentConfig = {
       readonly editIntervalMs?: number;
       readonly maxLength?: number;
     };
+    /**
+     * Phase 55 — per-agent tool dispatch / cache / SLO overrides. Mirrors the
+     * Zod `toolsConfigSchema` parse output verbatim. Inline literal shape
+     * (no cross-module import) preserves the `src/shared/types.ts` low-dep
+     * boundary established in Phase 51 / 53 / 54.
+     *
+     * `maxConcurrent` + `idempotent` are REQUIRED when `tools` is present
+     * (the Zod schema supplies defaults), so consumers can read them without
+     * an optional-chain fallback. The whole `tools` block remains optional.
+     */
+    readonly tools?: {
+      readonly maxConcurrent: number;
+      readonly idempotent: readonly string[];
+      readonly slos?: Readonly<Record<string, {
+        readonly thresholdMs: number;
+        readonly metric?: "p50" | "p95" | "p99";
+      }>>;
+    };
   };
 };
 
