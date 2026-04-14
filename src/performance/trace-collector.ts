@@ -22,6 +22,7 @@ import type {
   TurnStatus,
 } from "./types.js";
 import type { TraceStore } from "./trace-store.js";
+import { ToolCache } from "../mcp/tool-cache.js";
 
 /**
  * TraceCollector — factory for per-turn `Turn` objects.
@@ -76,6 +77,17 @@ export class Turn {
    * when the session-adapter was not threaded with this Turn).
    */
   private cacheSnapshot: CacheTelemetrySnapshot | undefined = undefined;
+  /**
+   * Phase 55 Plan 02 — per-turn idempotent tool-result cache. Lazy-allocated
+   * on first access; the `toolCache` getter constructs the ToolCache only
+   * when a whitelisted tool handler first queries it. Most turns that never
+   * issue a duplicate whitelisted tool call never allocate a Map.
+   *
+   * LIFETIME: the cache Map is unreachable once this Turn goes out of scope
+   * (GC drops it). Explicit cleanup is theatrical — we do NOT clear the
+   * field at `end()` because the Turn itself is the GC root.
+   */
+  private _toolCache: ToolCache | undefined = undefined;
 
   constructor(
     id: string,
@@ -102,6 +114,23 @@ export class Turn {
       if (this.committed) return;
       this.spans.push(record);
     });
+  }
+
+  /**
+   * Phase 55 Plan 02 — lazy-init per-turn tool-result cache.
+   *
+   * Only constructed on first access so turns that never trigger a duplicate
+   * whitelisted tool call never allocate a Map. Subsequent reads return
+   * the same instance (stable identity for the lifetime of this Turn).
+   *
+   * The returned cache is the Turn's property — it is automatically GC'd
+   * when the Turn goes out of scope. Do NOT share this instance across
+   * Turns (doing so would violate the strictly-per-turn scope invariant
+   * that makes cross-turn leaks impossible by construction).
+   */
+  get toolCache(): ToolCache {
+    if (!this._toolCache) this._toolCache = new ToolCache();
+    return this._toolCache;
   }
 
   /**
