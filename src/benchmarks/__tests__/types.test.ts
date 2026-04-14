@@ -65,6 +65,30 @@ describe("benchReportSchema", () => {
     const result = benchReportSchema.safeParse(bad);
     expect(result.success).toBe(false);
   });
+
+  // Phase 54 Plan 03 — rate_limit_errors counter
+  it("Test 1 (Phase 54): parses a report with rate_limit_errors: 0 successfully", () => {
+    const report = { ...validReport, rate_limit_errors: 0 };
+    const result = benchReportSchema.safeParse(report);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rate_limit_errors).toBe(0);
+    }
+  });
+
+  it("Test 2 (Phase 54): parses a report WITHOUT rate_limit_errors (field is optional — backward compat)", () => {
+    const result = benchReportSchema.safeParse(validReport);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rate_limit_errors).toBeUndefined();
+    }
+  });
+
+  it("Test 3 (Phase 54): rejects rate_limit_errors: -1 (nonnegative integer required)", () => {
+    const report = { ...validReport, rate_limit_errors: -1 };
+    const result = benchReportSchema.safeParse(report);
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("baselineSchema", () => {

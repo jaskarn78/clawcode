@@ -280,6 +280,163 @@ describe("runBench", () => {
     expect(lengths!["memory-lookup"]).toBeGreaterThan(0);
   });
 
+  // ── Phase 54 Plan 03 — rate_limit_errors counter + 4-segment backward-compat filter ──
+
+  it("Test 20 (Phase 54): runBench output includes rate_limit_errors: 0 when no rate-limit events occur", async () => {
+    const promptsPath = writePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+
+    const ipcClient = vi.fn(async (_s, method) => {
+      if (method === "bench-run-prompt") {
+        return { turnId: "bench:t:abc", response: "ok", rate_limit_errors: 0 };
+      }
+      if (method === "latency") return makeLatencyResponse();
+      if (method === "start") return { ok: true };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const { report } = await runBench({
+      promptsPath,
+      agent: "bench-agent",
+      repeats: 1,
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient,
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(report.rate_limit_errors).toBe(0);
+  });
+
+  it("Test 21 (Phase 54): runBench sums rate-limit counts across prompt responses (2 prompts × 1 = 2 total)", async () => {
+    const promptsPath = writePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+
+    // Each bench-run-prompt call returns rate_limit_errors: 1
+    const ipcClient = vi.fn(async (_s, method) => {
+      if (method === "bench-run-prompt") {
+        return { turnId: "bench:t:rl", response: "ok", rate_limit_errors: 1 };
+      }
+      if (method === "latency") return makeLatencyResponse();
+      if (method === "start") return { ok: true };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const { report } = await runBench({
+      promptsPath,
+      agent: "bench-agent",
+      repeats: 1, // 2 prompts x 1 repeat = 2 calls => rate_limit_errors = 2
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient,
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(report.rate_limit_errors).toBe(2);
+  });
+
+  it("Test 22 (Phase 54): runner's overall_percentiles contains EXACTLY the 4 Phase 51 canonical segments (filters out first_visible_token + typing_indicator)", async () => {
+    const promptsPath = writePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+
+    // The daemon's latency response includes the 2 NEW Phase 54 segments
+    // (first_visible_token, typing_indicator) — runner must filter them out
+    // of overall_percentiles so baseline.json Zod parse still succeeds.
+    const ipcClient = vi.fn(async (_s, method) => {
+      if (method === "bench-run-prompt") {
+        return { turnId: "bench:t:x", response: "ok", rate_limit_errors: 0 };
+      }
+      if (method === "latency") {
+        return {
+          agent: "bench-agent",
+          since: "2026-04-13T20:00:00.000Z",
+          segments: [
+            { segment: "end_to_end", p50: 1000, p95: 2000, p99: 3000, count: 10 },
+            { segment: "first_token", p50: 400, p95: 800, p99: 1200, count: 10 },
+            { segment: "first_visible_token", p50: 420, p95: 820, p99: 1220, count: 10 }, // new Phase 54
+            { segment: "context_assemble", p50: 50, p95: 100, p99: 150, count: 10 },
+            { segment: "tool_call", p50: 75, p95: 150, p99: 225, count: 20 },
+            { segment: "typing_indicator", p50: 50, p95: 100, p99: 150, count: 10 }, // new Phase 54
+          ],
+        };
+      }
+      if (method === "start") return { ok: true };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const { report } = await runBench({
+      promptsPath,
+      agent: "bench-agent",
+      repeats: 1,
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient,
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(report.overall_percentiles).toHaveLength(4);
+    const segs = report.overall_percentiles.map((r) => r.segment);
+    expect(segs).toEqual([
+      "end_to_end",
+      "first_token",
+      "context_assemble",
+      "tool_call",
+    ]);
+    // Explicit absence checks
+    expect(segs).not.toContain("first_visible_token");
+    expect(segs).not.toContain("typing_indicator");
+  });
+
+  it("Test 23 (Phase 54): runner's per-prompt promptResults.percentiles MAY contain the 2 new segments (only overall is backward-compat filtered)", async () => {
+    const promptsPath = writePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+
+    // Per-prompt percentiles are captured verbatim from the latency IPC
+    // response — they preserve the full 6-segment shape for debugging.
+    const extendedLatency = {
+      agent: "bench-agent",
+      since: "2026-04-13T20:00:00.000Z",
+      segments: [
+        { segment: "end_to_end", p50: 1000, p95: 2000, p99: 3000, count: 10 },
+        { segment: "first_token", p50: 400, p95: 800, p99: 1200, count: 10 },
+        { segment: "first_visible_token", p50: 420, p95: 820, p99: 1220, count: 10 },
+        { segment: "context_assemble", p50: 50, p95: 100, p99: 150, count: 10 },
+        { segment: "tool_call", p50: 75, p95: 150, p99: 225, count: 20 },
+        { segment: "typing_indicator", p50: 50, p95: 100, p99: 150, count: 10 },
+      ],
+    };
+    const ipcClient = vi.fn(async (_s, method) => {
+      if (method === "bench-run-prompt") {
+        return { turnId: "bench:t:x", response: "ok", rate_limit_errors: 0 };
+      }
+      if (method === "latency") return extendedLatency;
+      if (method === "start") return { ok: true };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const { report } = await runBench({
+      promptsPath,
+      agent: "bench-agent",
+      repeats: 1,
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient,
+      tmpHomeFactory: () => tmp,
+    });
+
+    // Per-prompt percentiles are verbatim — 6 segments preserved
+    expect(report.prompt_results[0]!.percentiles).toHaveLength(6);
+    const perPromptSegs = report.prompt_results[0]!.percentiles.map(
+      (r) => r.segment,
+    );
+    expect(perPromptSegs).toContain("first_visible_token");
+    expect(perPromptSegs).toContain("typing_indicator");
+  });
+
   it("Test 19 (Phase 53): captureResponses=false (default) omits response_lengths", async () => {
     const promptsPath = writePromptsYaml(tmp);
     const reportsDir = join(tmp, "reports");

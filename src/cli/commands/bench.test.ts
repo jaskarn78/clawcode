@@ -455,6 +455,159 @@ describe("registerBenchCommand --context-audit regression mode (Phase 53)", () =
   });
 });
 
+// ── Phase 54 Plan 03 — rate_limit_errors hard-fail guard ─────────────────
+
+describe("registerBenchCommand --check-regression rate_limit_errors guard (Phase 54)", () => {
+  let program: Command;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stderrChunks: string[];
+  let stdoutChunks: string[];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    program = new Command();
+    program.exitOverride();
+    stderrChunks = [];
+    stdoutChunks = [];
+    stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stdoutChunks.push(
+          typeof chunk === "string" ? chunk : chunk.toString(),
+        );
+        return true;
+      });
+    stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrChunks.push(
+          typeof chunk === "string" ? chunk : chunk.toString(),
+        );
+        return true;
+      });
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+  });
+
+  it("Test 6 (Phase 54): --check-regression exits 0 when rate_limit_errors is 0 AND no p95 regression", async () => {
+    const exitSpy = vi.fn();
+    const report: BenchReport = { ...makeReport(), rate_limit_errors: 0 };
+    const runBenchStub = vi.fn(async () => ({
+      report,
+      reportPath: "/tmp/r.json",
+    }));
+    const readBaselineStub = vi.fn(() => makeBaseline());
+    const loadThresholdsStub = vi.fn(() => ({
+      defaultP95MaxDeltaPct: 20,
+      segments: [],
+    }));
+    const evaluateRegressionStub = vi.fn(() => ({
+      regressions: [] as Regression[],
+      status: "clean" as const,
+    }));
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      loadThresholds: loadThresholdsStub,
+      evaluateRegression: evaluateRegressionStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--check-regression",
+    ]);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("Test 7 (Phase 54): --check-regression exits 1 when rate_limit_errors > 0 even if p95 is clean", async () => {
+    const exitSpy = vi.fn();
+    const report: BenchReport = { ...makeReport(), rate_limit_errors: 3 };
+    const runBenchStub = vi.fn(async () => ({
+      report,
+      reportPath: "/tmp/r.json",
+    }));
+    const readBaselineStub = vi.fn(() => makeBaseline());
+    const loadThresholdsStub = vi.fn(() => ({
+      defaultP95MaxDeltaPct: 20,
+      segments: [],
+    }));
+    const evaluateRegressionStub = vi.fn(() => ({
+      regressions: [] as Regression[],
+      status: "clean" as const,
+    }));
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      loadThresholds: loadThresholdsStub,
+      evaluateRegression: evaluateRegressionStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--check-regression",
+    ]);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    // p95 regression evaluator should NOT have been consulted — the
+    // rate_limit_errors guard hard-fails before reaching it.
+    // (It's fine if it's called; the hard-fail guard just must fire.)
+  });
+
+  it("Test 8 (Phase 54): rate_limit_errors hard-fail error text contains the CONTEXT-specified signals", async () => {
+    const exitSpy = vi.fn();
+    const report: BenchReport = { ...makeReport(), rate_limit_errors: 7 };
+    const runBenchStub = vi.fn(async () => ({
+      report,
+      reportPath: "/tmp/r.json",
+    }));
+    const readBaselineStub = vi.fn(() => makeBaseline());
+    const loadThresholdsStub = vi.fn(() => ({
+      defaultP95MaxDeltaPct: 20,
+      segments: [],
+    }));
+    const evaluateRegressionStub = vi.fn(() => ({
+      regressions: [] as Regression[],
+      status: "clean" as const,
+    }));
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      loadThresholds: loadThresholdsStub,
+      evaluateRegression: evaluateRegressionStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--check-regression",
+    ]);
+
+    const stderrText = stderrChunks.join("");
+    expect(stderrText).toContain("Streaming cadence triggered");
+    expect(stderrText).toContain("Discord rate-limit");
+    expect(stderrText).toContain("editIntervalMs");
+    // Also include the count in the message for operator triage
+    expect(stderrText).toContain("7");
+  });
+});
+
 describe("confirmBaselineUpdate (stdinReader path)", () => {
   it("returns true on 'y'", async () => {
     const reader = async () => "y\n";
