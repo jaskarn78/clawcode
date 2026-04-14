@@ -188,3 +188,58 @@ describe("Turn.recordCacheUsage (Phase 52)", () => {
     expect(written.cacheEvictionExpected).toBeUndefined();
   });
 });
+
+describe("Turn.toolCache (Phase 55)", () => {
+  let store: TraceStore;
+  let collector: TraceCollector;
+
+  beforeEach(() => {
+    const mock = createMockStore();
+    store = mock.store;
+    collector = new TraceCollector(store, createMockLogger());
+  });
+
+  it("Test 13: toolCache getter returns the same instance across calls (lazy singleton per Turn)", () => {
+    const turn = collector.startTurn("msg-tc-1", "alpha", null);
+    const c1 = turn.toolCache;
+    const c2 = turn.toolCache;
+    expect(c1).toBe(c2);
+  });
+
+  it("Test 14: two different Turns have independent toolCache instances (no cross-turn state)", () => {
+    const turnA = collector.startTurn("msg-tc-a", "alpha", null);
+    const turnB = collector.startTurn("msg-tc-b", "alpha", null);
+    const cA = turnA.toolCache;
+    const cB = turnB.toolCache;
+    expect(cA).not.toBe(cB);
+
+    // Writes on one turn do not appear on the other.
+    cA.set("memory_lookup", { q: "foo" }, { hit: "A" });
+    expect(cB.get("memory_lookup", { q: "foo" })).toBeUndefined();
+  });
+
+  it("Test 15: after turn.end(), a NEW turn has a fresh empty toolCache — zero cross-turn leak", () => {
+    const turnA = collector.startTurn("msg-leak-a", "alpha", null);
+    turnA.toolCache.set("memory_lookup", { q: "foo" }, { hit: "value-A" });
+    expect(turnA.toolCache.get("memory_lookup", { q: "foo" })).toEqual({ hit: "value-A" });
+    turnA.end("success");
+
+    // Brand-new turn from the same collector — must have an empty cache.
+    const turnB = collector.startTurn("msg-leak-b", "alpha", null);
+    expect(turnB.toolCache.get("memory_lookup", { q: "foo" })).toBeUndefined();
+    expect(turnB.toolCache.hitCount()).toBe(0);
+  });
+
+  it("toolCache is lazy — constructing a Turn does not allocate a cache up front", () => {
+    const turn = collector.startTurn("msg-lazy", "alpha", null);
+    // We cannot directly introspect the private field without touching internals,
+    // but we can at least verify that calling the getter works even after end().
+    // (More importantly: `_toolCache` remains undefined until first read.)
+    const privateField = (turn as unknown as { _toolCache?: unknown })._toolCache;
+    expect(privateField).toBeUndefined();
+    // Now force construction
+    turn.toolCache.set("memory_lookup", { q: "x" }, 1);
+    const afterAccess = (turn as unknown as { _toolCache?: unknown })._toolCache;
+    expect(afterAccess).toBeDefined();
+  });
+});
