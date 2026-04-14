@@ -231,4 +231,83 @@ describe("runBench", () => {
     // (the latter is a valid fallback when git is unavailable).
     expect(report.git_sha).toMatch(/^(?:[a-f0-9]{40}|unknown)$/);
   });
+
+  it("Test 18 (Phase 53): captureResponses=true includes response_lengths in BenchReport", async () => {
+    const promptsPath = writePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+
+    const responses: Record<string, string[]> = {
+      "short-reply": ["hi there", "hello again friendly"],
+      "memory-lookup": ["blue is the favored color"],
+    };
+
+    const ipcClient = vi.fn(async (_s, method, params) => {
+      if (method === "bench-run-prompt") {
+        const turnIdPrefix = (params as { turnIdPrefix?: string })
+          ?.turnIdPrefix ?? "bench:t:";
+        // Extract prompt id from turnIdPrefix (format: `bench:<id>:`)
+        const match = turnIdPrefix.match(/^bench:([^:]+):/);
+        const id = match?.[1] ?? "unknown";
+        const pool = responses[id] ?? ["generic reply"];
+        const idx = Math.floor(Math.random() * pool.length);
+        const response = pool[idx]!;
+        return { turnId: `bench:t:${Math.random()}`, response };
+      }
+      if (method === "latency") return makeLatencyResponse();
+      if (method === "start") return { ok: true };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const { report } = await runBench({
+      promptsPath,
+      agent: "bench-agent",
+      repeats: 2,
+      since: "1h",
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient,
+      tmpHomeFactory: () => tmp,
+      captureResponses: true,
+    });
+
+    const lengths = (report as unknown as {
+      response_lengths?: Record<string, number>;
+    }).response_lengths;
+    expect(lengths).toBeDefined();
+    expect(typeof lengths!["short-reply"]).toBe("number");
+    expect(typeof lengths!["memory-lookup"]).toBe("number");
+    expect(lengths!["memory-lookup"]).toBeGreaterThan(0);
+  });
+
+  it("Test 19 (Phase 53): captureResponses=false (default) omits response_lengths", async () => {
+    const promptsPath = writePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+
+    const ipcClient = vi.fn(async (_s, method) => {
+      if (method === "bench-run-prompt") {
+        return { turnId: "bench:t:abc", response: "ok" };
+      }
+      if (method === "latency") return makeLatencyResponse();
+      if (method === "start") return { ok: true };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const { report } = await runBench({
+      promptsPath,
+      agent: "bench-agent",
+      repeats: 1,
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient,
+      tmpHomeFactory: () => tmp,
+      // captureResponses omitted → default false
+    });
+
+    expect(
+      (report as unknown as { response_lengths?: Record<string, number> })
+        .response_lengths,
+    ).toBeUndefined();
+  });
 });

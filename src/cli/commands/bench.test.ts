@@ -284,6 +284,177 @@ describe("registerBenchCommand", () => {
   });
 });
 
+// ── Phase 53 Plan 03 — --context-audit regression gate ─────────────────────
+
+describe("registerBenchCommand --context-audit regression mode (Phase 53)", () => {
+  let program: Command;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stderrChunks: string[];
+  let stdoutChunks: string[];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    program = new Command();
+    program.exitOverride();
+    stderrChunks = [];
+    stdoutChunks = [];
+    stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stdoutChunks.push(
+          typeof chunk === "string" ? chunk : chunk.toString(),
+        );
+        return true;
+      });
+    stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrChunks.push(
+          typeof chunk === "string" ? chunk : chunk.toString(),
+        );
+        return true;
+      });
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+  });
+
+  it("Test 14: exits 1 when any prompt's response length drops > 15% vs baseline", async () => {
+    const exitSpy = vi.fn();
+    const baseline = {
+      ...makeBaseline(),
+      response_lengths: { "prompt-1": 1000, "prompt-2": 500 },
+    };
+    const current = {
+      ...makeReport(),
+      response_lengths: { "prompt-1": 800, "prompt-2": 300 }, // 20% drop, 40% drop
+    };
+    const runBenchStub = vi.fn(async () => ({
+      report: current,
+      reportPath: "/tmp/r.json",
+    }));
+    const readBaselineStub = vi.fn(() => baseline);
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--context-audit",
+    ]);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const stderrText = stderrChunks.join("");
+    expect(stderrText).toContain("Context-audit regression");
+    expect(stderrText).toMatch(/prompt-[12]/);
+  });
+
+  it("Test 15: exits 0 when all prompt response-length drops are within threshold", async () => {
+    const exitSpy = vi.fn();
+    const baseline = {
+      ...makeBaseline(),
+      response_lengths: { "prompt-1": 1000 },
+    };
+    const current = {
+      ...makeReport(),
+      response_lengths: { "prompt-1": 920 }, // 8% drop, under 15%
+    };
+    const runBenchStub = vi.fn(async () => ({
+      report: current,
+      reportPath: "/tmp/r.json",
+    }));
+    const readBaselineStub = vi.fn(() => baseline);
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--context-audit",
+    ]);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    const stdoutText = stdoutChunks.join("");
+    expect(stdoutText).toContain("No context-audit regressions detected");
+  });
+
+  it("Test 16: --context-audit is incompatible with --update-baseline", async () => {
+    const exitSpy = vi.fn();
+    const runBenchStub = vi.fn(async () => ({
+      report: makeReport(),
+      reportPath: "/tmp/r.json",
+    }));
+    const readBaselineStub = vi.fn(() => makeBaseline());
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--context-audit",
+      "--update-baseline",
+    ]);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const stderrText = stderrChunks.join("");
+    expect(stderrText).toMatch(/incompatible|--update-baseline/);
+  });
+
+  it("Test 17: --context-audit without stored baseline emits friendly error + exit(1)", async () => {
+    const exitSpy = vi.fn();
+    const { BenchmarkConfigError } = await import(
+      "../../benchmarks/types.js"
+    );
+    const runBenchStub = vi.fn(async () => ({
+      report: makeReport(),
+      reportPath: "/tmp/r.json",
+    }));
+    // readBaseline throws a "read failed" error (matches the bench.ts catch)
+    const readBaselineStub = vi.fn(() => {
+      throw new BenchmarkConfigError(
+        "read failed: ENOENT",
+        "/tmp/missing.json",
+      );
+    });
+
+    registerBenchCommand(program, {
+      runBench: runBenchStub,
+      readBaseline: readBaselineStub,
+      exit: exitSpy,
+    });
+
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "bench",
+      "--context-audit",
+    ]);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const stderrText = stderrChunks.join("");
+    expect(stderrText).toMatch(/baseline|--update-baseline/);
+  });
+});
+
 describe("confirmBaselineUpdate (stdinReader path)", () => {
   it("returns true on 'y'", async () => {
     const reader = async () => "y\n";

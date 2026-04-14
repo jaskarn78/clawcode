@@ -529,3 +529,118 @@ describe("resume summary budget (Phase 53)", () => {
     expect(result.systemPrompt).toContain("Write content");
   });
 });
+
+// ── Phase 53 Plan 03 — lazy-skill wiring ────────────────────────────────────
+
+import { SkillUsageTracker } from "../../usage/skill-usage-tracker.js";
+
+describe("buildSessionConfig — lazy-skill wiring (Phase 53 Plan 03)", () => {
+  it("Test 11: passes lazySkills config + skill usage window through to assembler", async () => {
+    const tracker = new SkillUsageTracker({ capacity: 20 });
+    // Simulate 25 turns of usage so we're past warm-up
+    for (let i = 0; i < 25; i++) {
+      tracker.recordTurn("test-agent", {
+        mentionedSkills: ["search-first"],
+      });
+    }
+
+    const config = makeConfig({
+      skills: ["search-first", "content-engine"],
+      perf: {
+        lazySkills: {
+          enabled: true,
+          usageThresholdTurns: 20,
+          reinflateOnMention: true,
+        },
+      },
+    } as unknown as Partial<ResolvedAgentConfig>);
+    const skillsCatalog = new Map([
+      [
+        "search-first",
+        { name: "search-first", version: "1.0", description: "Research before coding", path: "/tmp/skills/search-first" },
+      ],
+      [
+        "content-engine",
+        { name: "content-engine", version: "1.0", description: "Content creation", path: "/tmp/skills/content-engine" },
+      ],
+    ] as any);
+
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({
+        skillsCatalog: skillsCatalog as any,
+        skillUsageTracker: tracker,
+      } as any),
+    );
+
+    // content-engine (not recently used, not mentioned) compresses to one-liner
+    expect(result.systemPrompt).toContain(
+      "- content-engine: Content creation",
+    );
+    // search-first (recently used) renders as full-content bullet with version
+    expect(result.systemPrompt).toContain("search-first");
+    expect(result.systemPrompt).toContain("Research before coding");
+  });
+
+  it("Test 12: sources.skills built from skillsCatalog with name/desc/fullContent", async () => {
+    const tracker = new SkillUsageTracker({ capacity: 20 });
+    const config = makeConfig({
+      skills: ["alpha-skill"],
+      perf: {
+        lazySkills: {
+          enabled: true,
+          usageThresholdTurns: 20,
+          reinflateOnMention: true,
+        },
+      },
+    } as unknown as Partial<ResolvedAgentConfig>);
+    const skillsCatalog = new Map([
+      [
+        "alpha-skill",
+        { name: "alpha-skill", version: "2.1", description: "Alpha description", path: "/tmp/skills/alpha-skill" },
+      ],
+    ] as any);
+
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({
+        skillsCatalog: skillsCatalog as any,
+        skillUsageTracker: tracker,
+      } as any),
+    );
+
+    // In warm-up (0 turns < 20 threshold), all skills render full content.
+    // The "full content" path in session-config defaults to the legacy
+    // bullet with name+version+description shape.
+    expect(result.systemPrompt).toContain("alpha-skill");
+    expect(result.systemPrompt).toContain("Alpha description");
+  });
+
+  it("Test 13: absent skillUsageTracker → no throw, skills render full-content (warm-up behavior)", async () => {
+    const config = makeConfig({
+      skills: ["search-first"],
+      perf: {
+        lazySkills: {
+          enabled: true,
+          usageThresholdTurns: 20,
+          reinflateOnMention: true,
+        },
+      },
+    } as unknown as Partial<ResolvedAgentConfig>);
+    const skillsCatalog = new Map([
+      [
+        "search-first",
+        { name: "search-first", version: "1.0", description: "Research before coding", path: "/tmp/skills/search-first" },
+      ],
+    ] as any);
+
+    // No skillUsageTracker in deps
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({ skillsCatalog: skillsCatalog as any }),
+    );
+
+    expect(result.systemPrompt).toContain("search-first");
+    expect(result.systemPrompt).toContain("Research before coding");
+  });
+});

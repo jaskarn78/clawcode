@@ -877,3 +877,297 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
     expect(DEFAULT_PHASE53_BUDGETS.resume_summary).toBeGreaterThan(0);
   });
 });
+
+// ── Phase 53 Plan 03 — lazy-skill compression ────────────────────────────────
+
+import type {
+  SkillCatalogEntry,
+  SkillUsageWindow as AssemblerSkillUsageWindow,
+  ResolvedLazySkillsConfig,
+} from "../context-assembler.js";
+
+function makeSkillUsage(
+  recentlyUsed: readonly string[],
+  turns: number,
+): AssemblerSkillUsageWindow {
+  return Object.freeze({
+    turns,
+    capacity: 20,
+    recentlyUsed: Object.freeze(new Set(recentlyUsed)) as ReadonlySet<string>,
+  });
+}
+
+function makeLazyCfg(
+  overrides: Partial<ResolvedLazySkillsConfig> = {},
+): ResolvedLazySkillsConfig {
+  return Object.freeze({
+    enabled: true,
+    usageThresholdTurns: 20,
+    reinflateOnMention: true,
+    ...overrides,
+  });
+}
+
+const FULL_SEARCH_FIRST = "# Search First\n\nResearch before coding. Full content here with lots of detail about when to use this skill and what it does.";
+const FULL_CONTENT_ENGINE = "# Content Engine\n\nWrites content. Full SKILL.md body with many lines of guidance.";
+const FULL_MARKET_RESEARCH = "# Market Research\n\nResearches markets. Full body text.";
+
+const SKILLS_CATALOG: readonly SkillCatalogEntry[] = Object.freeze([
+  Object.freeze({
+    name: "search-first",
+    description: "Research before coding",
+    fullContent: FULL_SEARCH_FIRST,
+  }),
+  Object.freeze({
+    name: "content-engine",
+    description: "Content creation",
+    fullContent: FULL_CONTENT_ENGINE,
+  }),
+  Object.freeze({
+    name: "market-research",
+    description: "Market sizing and research",
+    fullContent: FULL_MARKET_RESEARCH,
+  }),
+]);
+
+describe("assembleContext lazy-skill compression (Phase 53 Plan 03)", () => {
+  it("Test 1: recently-used skill renders FULL content; unused renders one-line entry", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage(["search-first"], 30),
+      lazySkillsConfig: makeLazyCfg(),
+    });
+
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+
+    // search-first present in full form
+    expect(result.stablePrefix).toContain("# Search First");
+    expect(result.stablePrefix).toContain("Research before coding. Full content here");
+    // content-engine compressed to one-liner
+    expect(result.stablePrefix).toContain("- content-engine: Content creation");
+    // content-engine full body NOT present
+    expect(result.stablePrefix).not.toContain("# Content Engine");
+    // market-research also compressed
+    expect(result.stablePrefix).toContain("- market-research: Market sizing and research");
+  });
+
+  it("Test 2: lazySkills.enabled=false → ALL skills render full content", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage([], 30),
+      lazySkillsConfig: makeLazyCfg({ enabled: false }),
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    expect(result.stablePrefix).toContain("# Search First");
+    expect(result.stablePrefix).toContain("# Content Engine");
+    expect(result.stablePrefix).toContain("# Market Research");
+  });
+
+  it("Test 3: warm-up (usage.turns < threshold) → ALL skills render full content", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage(["search-first"], 5), // turns 5 < 20
+      lazySkillsConfig: makeLazyCfg({ usageThresholdTurns: 20 }),
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    expect(result.stablePrefix).toContain("# Search First");
+    expect(result.stablePrefix).toContain("# Content Engine");
+    expect(result.stablePrefix).toContain("# Market Research");
+  });
+
+  it("Test 4: re-inflate on mention from current user message", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage([], 30), // nothing recently used
+      lazySkillsConfig: makeLazyCfg(),
+      currentUserMessage: "Please use content-engine for this task",
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    // content-engine re-inflates to full content
+    expect(result.stablePrefix).toContain("# Content Engine");
+    // search-first stays compressed
+    expect(result.stablePrefix).not.toContain("# Search First");
+    expect(result.stablePrefix).toContain("- search-first: Research before coding");
+  });
+
+  it("Test 5: re-inflate on mention from last assistant message", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage([], 30),
+      lazySkillsConfig: makeLazyCfg(),
+      lastAssistantMessage: "I used market-research earlier for this",
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    expect(result.stablePrefix).toContain("# Market Research");
+    expect(result.stablePrefix).not.toContain("# Search First");
+  });
+
+  it("Test 6: reinflateOnMention=false disables mention-driven re-inflation", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage([], 30),
+      lazySkillsConfig: makeLazyCfg({ reinflateOnMention: false }),
+      currentUserMessage: "use content-engine please",
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    // content-engine stays compressed despite mention
+    expect(result.stablePrefix).not.toContain("# Content Engine");
+    expect(result.stablePrefix).toContain("- content-engine: Content creation");
+  });
+
+  it("Test 7: word-boundary — substring does NOT re-inflate", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage([], 30),
+      lazySkillsConfig: makeLazyCfg(),
+      currentUserMessage: "subsearch-firstline is unrelated",
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    expect(result.stablePrefix).not.toContain("# Search First");
+    expect(result.stablePrefix).toContain("- search-first: Research before coding");
+  });
+
+  it("Test 8: span metadata carries skills_included_count + skills_compressed_count", () => {
+    let capturedMetadata: Record<string, unknown> | undefined;
+    const startSpan = vi.fn(() => ({
+      end: vi.fn(),
+      setMetadata: (m: Record<string, unknown>) => {
+        capturedMetadata = { ...capturedMetadata, ...m };
+      },
+    }));
+    const turn = { startSpan, end: vi.fn() };
+
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage(["search-first"], 30),
+      lazySkillsConfig: makeLazyCfg(),
+    });
+
+    (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, turn);
+
+    expect(capturedMetadata).toBeDefined();
+    expect((capturedMetadata as any).skills_included_count).toBe(1);
+    expect((capturedMetadata as any).skills_compressed_count).toBe(2);
+    expect((capturedMetadata as any).section_tokens).toBeDefined();
+  });
+
+  it("Test 9: section_tokens.skills_header shrinks when compression is active", () => {
+    let allFullMeta: Record<string, unknown> | undefined;
+    let compressedMeta: Record<string, unknown> | undefined;
+
+    const mkSpan = (capture: (m: Record<string, unknown>) => void) => ({
+      end: vi.fn(),
+      setMetadata: capture,
+    });
+
+    // All full (lazySkills disabled)
+    let turn1 = {
+      startSpan: vi.fn(() =>
+        mkSpan((m) => {
+          allFullMeta = { ...allFullMeta, ...m };
+        }),
+      ),
+      end: vi.fn(),
+    };
+    (assembleContextTraced as any)(
+      makeSources({
+        identity: "id",
+        skills: SKILLS_CATALOG,
+        skillUsage: makeSkillUsage([], 30),
+        lazySkillsConfig: makeLazyCfg({ enabled: false }),
+      }),
+      DEFAULT_BUDGETS,
+      undefined,
+      turn1,
+    );
+
+    // 1 full / 2 compressed
+    let turn2 = {
+      startSpan: vi.fn(() =>
+        mkSpan((m) => {
+          compressedMeta = { ...compressedMeta, ...m };
+        }),
+      ),
+      end: vi.fn(),
+    };
+    (assembleContextTraced as any)(
+      makeSources({
+        identity: "id",
+        skills: SKILLS_CATALOG,
+        skillUsage: makeSkillUsage(["search-first"], 30),
+        lazySkillsConfig: makeLazyCfg(),
+      }),
+      DEFAULT_BUDGETS,
+      undefined,
+      turn2,
+    );
+
+    const fullTokens = ((allFullMeta as any).section_tokens as { skills_header: number }).skills_header;
+    const compTokens = ((compressedMeta as any).section_tokens as { skills_header: number }).skills_header;
+    expect(fullTokens).toBeGreaterThan(compTokens);
+  });
+
+  it("Test 10: compressed skills remain in catalog (one-liner) — not dropped entirely", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage(["search-first"], 30),
+      lazySkillsConfig: makeLazyCfg(),
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    // All three skill NAMES present (either full or compressed)
+    expect(result.stablePrefix).toContain("search-first");
+    expect(result.stablePrefix).toContain("content-engine");
+    expect(result.stablePrefix).toContain("market-research");
+  });
+
+  it("Test 11: no skills array → behaves as legacy (skillsHeader pass-through)", () => {
+    const sources = makeSources({
+      identity: "id",
+      skillsHeader: "- legacy-skill: legacy desc",
+    });
+    const result = assembleContext(sources) as unknown as {
+      stablePrefix: string;
+    };
+    expect(result.stablePrefix).toContain("legacy-skill");
+  });
+
+  it("Test 12: AssembledContext return shape still has exactly 3 frozen keys", () => {
+    const sources = makeSources({
+      identity: "id",
+      skills: SKILLS_CATALOG,
+      skillUsage: makeSkillUsage(["search-first"], 30),
+      lazySkillsConfig: makeLazyCfg(),
+    });
+    const result = assembleContext(sources);
+    expect(Object.keys(result).sort()).toEqual(
+      ["hotStableToken", "mutableSuffix", "stablePrefix"].sort(),
+    );
+    expect(Object.keys(result)).toHaveLength(3);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+});
