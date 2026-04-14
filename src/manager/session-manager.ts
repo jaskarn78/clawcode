@@ -25,6 +25,7 @@ import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 import type { SkillTrackingConfig } from "./session-adapter.js";
+import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "./warm-path-check.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -268,10 +269,76 @@ export class SessionManager {
     });
     this.recovery.setStabilityTimer(name);
 
+    // Phase 56 Plan 02 — warm-path ready gate. Registry stays in 'starting'
+    // while we warm SQLite + verify embedder + probe session plumbing. On
+    // failure or timeout (10s), mark the agent 'failed' with a structured
+    // error — daemon keeps running other agents. On success, a single atomic
+    // registry write flips status -> 'running' AND records warm_path_ready +
+    // warm_path_readiness_ms in the same transaction.
+    const warmResult = await runWarmPathCheck({
+      agent: name,
+      sqliteWarm: (agentName) => this.memory.warmSqliteStores(agentName),
+      embedder: this.memory.embedder,
+      sessionProbe: async () => {
+        // Session plumbing verified by the handle existing + sessionId
+        // populated. If the handle is missing or empty, throw to record a
+        // session-scoped warm-path error.
+        if (!handle || !handle.sessionId) {
+          throw new Error("session handle not ready");
+        }
+      },
+      timeoutMs: WARM_PATH_TIMEOUT_MS,
+    });
+
     registry = await readRegistry(this.registryPath);
-    registry = updateEntry(registry, name, { status: "running", sessionId: handle.sessionId, startedAt: Date.now() });
+
+    if (!warmResult.ready) {
+      const errMsg = `warm-path: ${warmResult.errors.join("; ")}`;
+      registry = updateEntry(registry, name, {
+        status: "failed",
+        lastError: errMsg,
+        warm_path_ready: false,
+        warm_path_readiness_ms: warmResult.total_ms,
+      });
+      await writeRegistry(this.registryPath, registry);
+      this.log.error(
+        {
+          agent: name,
+          errors: warmResult.errors,
+          total_ms: warmResult.total_ms,
+          durations_ms: warmResult.durations_ms,
+        },
+        "warm-path check failed — agent marked failed",
+      );
+      // Clean up the session we just created since the agent never came
+      // ready. Close swallows any error from the mock/SDK handle.
+      this.sessions.delete(name);
+      this.recovery.clearStabilityTimer(name);
+      try {
+        await handle.close();
+      } catch {
+        /* handle may already be closed */
+      }
+      return;
+    }
+
+    registry = updateEntry(registry, name, {
+      status: "running",
+      sessionId: handle.sessionId,
+      startedAt: Date.now(),
+      warm_path_ready: true,
+      warm_path_readiness_ms: warmResult.total_ms,
+    });
     await writeRegistry(this.registryPath, registry);
-    this.log.info({ agent: name, sessionId: handle.sessionId }, "agent started");
+    this.log.info(
+      {
+        agent: name,
+        sessionId: handle.sessionId,
+        total_ms: warmResult.total_ms,
+        durations_ms: warmResult.durations_ms,
+      },
+      "warm-path ready — agent started",
+    );
   }
 
   /**

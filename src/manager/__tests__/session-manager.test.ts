@@ -353,3 +353,226 @@ describe("SessionManager", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 56 Plan 02 — warm-path ready gate
+// ---------------------------------------------------------------------------
+
+// Spy on runWarmPathCheck so we can force ready/failed/timeout shapes without
+// needing real SQLite / embedder plumbing. The test-facing signature mirrors
+// the module contract (WarmPathResult frozen object). vi.mock is hoisted to
+// the top of this file, so it applies to EVERY describe block — earlier
+// tests (startAgent / crash recovery / startAll / reconcileRegistry) still
+// get a ready result by default via the global beforeEach below.
+vi.mock("../warm-path-check.js", async () => {
+  const actual = await vi.importActual<typeof import("../warm-path-check.js")>(
+    "../warm-path-check.js",
+  );
+  return {
+    ...actual,
+    runWarmPathCheck: vi.fn(),
+  };
+});
+
+import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "../warm-path-check.js";
+
+const mockedRunWarmPathCheck = vi.mocked(runWarmPathCheck);
+
+// Global default — every test starts with warm-path check succeeding so
+// pre-Phase-56 tests keep seeing `status === "running"`. Individual tests
+// override via `mockResolvedValueOnce(...)` for failure + timeout paths.
+beforeEach(() => {
+  mockedRunWarmPathCheck.mockReset();
+  mockedRunWarmPathCheck.mockResolvedValue(
+    Object.freeze({
+      ready: true,
+      durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1 }),
+      total_ms: 131,
+      errors: Object.freeze([]) as readonly string[],
+    }),
+  );
+});
+
+function makeReadyResult(totalMs = 131) {
+  return Object.freeze({
+    ready: true,
+    durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1 }),
+    total_ms: totalMs,
+    errors: Object.freeze([]) as readonly string[],
+  });
+}
+
+function makeFailureResult(errors: readonly string[], totalMs = 85) {
+  return Object.freeze({
+    ready: false,
+    durations_ms: Object.freeze({ sqlite: 20, embedder: 65, session: 0 }),
+    total_ms: totalMs,
+    errors: Object.freeze([...errors]) as readonly string[],
+  });
+}
+
+describe("startAgent warm-path gate (Phase 56)", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    // Global beforeEach already reset + set a ready default; tests that need
+    // failure shapes use mockResolvedValueOnce.
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-warm-"));
+    registryPath = join(tmpDir, "registry.json");
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* cleanup */
+    }
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("happy path: registry flips to running + warm_path_ready=true + readiness_ms in one atomic write", async () => {
+    const config = makeConfig("warm-ok");
+    mockedRunWarmPathCheck.mockResolvedValueOnce(makeReadyResult(131));
+
+    await manager.startAgent("warm-ok", config);
+
+    const registry = await readRegistry(registryPath);
+    const entry = registry.entries.find((e) => e.name === "warm-ok");
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe("running");
+    expect(entry!.warm_path_ready).toBe(true);
+    expect(entry!.warm_path_readiness_ms).toBe(131);
+    expect(entry!.sessionId).toMatch(/^mock-warm-ok-/);
+  });
+
+  it("failure path: ready=false marks agent 'failed' with lastError prefix and removes session", async () => {
+    const config = makeConfig("warm-fail");
+    mockedRunWarmPathCheck.mockResolvedValueOnce(
+      makeFailureResult(["embedder: not ready"]),
+    );
+
+    await manager.startAgent("warm-fail", config);
+
+    const registry = await readRegistry(registryPath);
+    const entry = registry.entries.find((e) => e.name === "warm-fail");
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe("failed");
+    expect(entry!.lastError).toBe("warm-path: embedder: not ready");
+    expect(entry!.warm_path_ready).toBe(false);
+    expect(entry!.warm_path_readiness_ms).toBe(85);
+
+    // Session map must NOT retain the failed agent.
+    expect(manager.getRunningAgents()).not.toContain("warm-fail");
+  });
+
+  it("timeout path: warm-path timeout surfaces as lastError 'warm-path: timeout after 10000ms'", async () => {
+    const config = makeConfig("warm-timeout");
+    mockedRunWarmPathCheck.mockResolvedValueOnce(
+      makeFailureResult(["timeout after 10000ms"], 10_000),
+    );
+
+    await manager.startAgent("warm-timeout", config);
+
+    const registry = await readRegistry(registryPath);
+    const entry = registry.entries.find((e) => e.name === "warm-timeout");
+    expect(entry!.status).toBe("failed");
+    expect(entry!.lastError).toBe("warm-path: timeout after 10000ms");
+    expect(entry!.warm_path_readiness_ms).toBe(10_000);
+  });
+
+  it("warm-path runs AFTER createSession (session probe verifies handle)", async () => {
+    const config = makeConfig("warm-order");
+    let sawSessionInProbe = false;
+    mockedRunWarmPathCheck.mockImplementationOnce(async (deps) => {
+      // When wired, the sessionProbe depends on the already-created handle
+      // being non-empty. Simulate that by calling the probe and observing
+      // it resolves without throwing.
+      if (deps.sessionProbe) {
+        await deps.sessionProbe();
+        sawSessionInProbe = true;
+      }
+      return makeReadyResult(120);
+    });
+
+    await manager.startAgent("warm-order", config);
+    expect(sawSessionInProbe).toBe(true);
+  });
+
+  it("sqliteWarm delegates to AgentMemoryManager.warmSqliteStores with the agent name", async () => {
+    const config = makeConfig("warm-sqlite");
+    let sqliteWarmCalledWith: string | undefined;
+    mockedRunWarmPathCheck.mockImplementationOnce(async (deps) => {
+      // Call it through — but replace the body so we don't need real DBs.
+      // (In production it calls this.memory.warmSqliteStores; the mock
+      // simply verifies the agent name is threaded through.)
+      sqliteWarmCalledWith = deps.agent;
+      return makeReadyResult(90);
+    });
+
+    await manager.startAgent("warm-sqlite", config);
+    expect(sqliteWarmCalledWith).toBe("warm-sqlite");
+  });
+
+  it("calls runWarmPathCheck with timeoutMs=WARM_PATH_TIMEOUT_MS (10_000)", async () => {
+    const config = makeConfig("warm-timeout-arg");
+    mockedRunWarmPathCheck.mockResolvedValueOnce(makeReadyResult(50));
+
+    await manager.startAgent("warm-timeout-arg", config);
+    expect(mockedRunWarmPathCheck).toHaveBeenCalled();
+    const args = mockedRunWarmPathCheck.mock.calls[0]![0];
+    expect(args.timeoutMs).toBe(WARM_PATH_TIMEOUT_MS);
+    expect(WARM_PATH_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it("emits 'warm-path ready' log line with agent + total_ms + durations", async () => {
+    const infoCalls: Array<{ obj: unknown; msg: string }> = [];
+    const testLogger = {
+      info: (obj: unknown, msg?: string) => {
+        infoCalls.push({ obj, msg: msg ?? "" });
+      },
+      warn: () => undefined,
+      error: () => undefined,
+      debug: () => undefined,
+      child: () => testLogger,
+    };
+    const m = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      log: testLogger as any,
+    });
+
+    mockedRunWarmPathCheck.mockResolvedValueOnce(makeReadyResult(142));
+    await m.startAgent("warm-log", makeConfig("warm-log"));
+
+    const readyLog = infoCalls.find((c) => c.msg.includes("warm-path ready"));
+    expect(readyLog).toBeDefined();
+    const payload = readyLog!.obj as {
+      agent: string;
+      total_ms: number;
+      durations_ms: { sqlite: number; embedder: number; session: number };
+    };
+    expect(payload.agent).toBe("warm-log");
+    expect(payload.total_ms).toBe(142);
+    expect(payload.durations_ms).toEqual({
+      sqlite: 50,
+      embedder: 80,
+      session: 1,
+    });
+
+    await m.stopAll();
+  });
+});
