@@ -10,12 +10,18 @@ ClawCode turns Claude Code into a multi-agent platform. Each agent is a persiste
 - **Long-term memory** with semantic search (local embeddings, no API calls)
 - **Tiered memory management** — hot/warm/cold with automatic consolidation
 - **Discord integration** — each agent lives in its own channel, responds naturally
+- **Typing indicator + tight streaming cadence** — typing fires within 500ms; edit cadence 750ms (tunable) with rate-limit backoff
+- **Prompt caching** — Anthropic preset+append with two-block context assembly + per-turn prefix-hash eviction detection
+- **Intra-turn tool cache** — idempotent tool results (memory_lookup / search_documents / etc.) cached per turn, zero cross-turn leak
+- **Per-turn latency traces** — p50/p95/p99 tracing + SLO colors on CLI + dashboard, with CI regression gate (`clawcode bench --check-regression`)
+- **Context audit + lazy skills** — `clawcode context-audit <agent>` reports per-section token budgets; unused skills compress to one-line catalog entries
+- **Warm-path startup gate** — READ-ONLY SQLite warmup + resident embedding singleton + ready-flag before agents go live
 - **Scheduled tasks** via cron (reminders, reports, maintenance)
 - **Inter-agent messaging** through filesystem-based inboxes
 - **Model escalation** — agents on Sonnet can escalate to Opus when they need it
 - **Budget enforcement** — per-agent token limits with Discord alerts
 - **Health monitoring** — context fill tracking, automatic zone alerts to Discord
-- **Web dashboard** — real-time agent status via SSE
+- **Web dashboard** — real-time agent status via SSE + latency / prompt cache / tool-call / warm-path panels
 - **MCP tools auto-injected** — every agent gets `memory_lookup`, `spawn_subagent_thread`, `ask_advisor` out of the box
 - **1Password integration** — auto-injected when `OP_SERVICE_ACCOUNT_TOKEN` is set
 - **Self-updating** — `clawcode update` pulls, rebuilds, and restarts from git
@@ -170,6 +176,11 @@ clawcode status
 | `clawcode skills` | List available skills |
 | `clawcode usage` | Show token usage stats |
 | `clawcode costs` | Show cost breakdown by agent/model |
+| `clawcode latency <agent>` | Per-agent latency percentiles (p50/p95/p99) with SLO colors |
+| `clawcode cache <agent>` | Prompt-cache hit rate + first-token cache effect per agent |
+| `clawcode tools <agent>` | Per-tool round-trip timing with SLO status |
+| `clawcode bench` | Run latency benchmark; `--check-regression` for CI gate; `--update-baseline` to roll the baseline |
+| `clawcode context-audit <agent>` | Per-section token budget audit (identity / soul / skills / history / summary) |
 | `clawcode security` | Manage channel access policies |
 | `clawcode dashboard` | Launch web dashboard |
 | `clawcode mcp` | Start MCP server (for agent-to-agent tools) |
@@ -227,6 +238,54 @@ Each agent has a local SQLite database with vector search powered by [sqlite-vec
 - Wikilink-style knowledge graph between memories
 - Context zone alerts delivered to Discord when memory fills up
 
+## Performance & Latency (v1.7)
+
+v1.7 ships end-to-end latency optimization across the hot path. Every Discord message → reply cycle is observable, budgeted, cached, and gated:
+
+**Measurement:** Per-turn traces capture phase-level timings (`receive`, `first_token`, `first_visible_token`, `context_assemble`, `tool_call.<name>`, `typing_indicator`, `end_to_end`) in a per-agent `traces.db`. View with:
+
+```bash
+clawcode latency <agent>              # percentile table with SLO colors + First Token headline
+clawcode cache <agent>                # prompt cache hit rate + cache_effect_ms
+clawcode tools <agent>                # per-tool round-trip timing
+clawcode bench --check-regression     # CI gate: fails on p95 regression vs baseline
+```
+
+**Caching:** System prompt uses Anthropic's preset+append form so identity / soul / skills header / stable hot-tier memory sit in a cached prefix. Per-turn prefix-hash diffing catches eviction when config changes (identity / soul / skills / hot-tier). Dashboard shows per-agent hit rate; daily summary embed carries `💾 Cache: X% over N turns`.
+
+**Budgets:** Configurable per-section token budgets (identity / soul / skills_header / hot_tier / recent_history / per_turn_summary / resume_summary) with per-section truncation strategies. Unused skills compress to one-line catalog entries; usage-mention word-boundary match re-inflates. Resume summary hard-capped at 1500 tokens.
+
+**Streaming:** First-token latency is a first-class headline metric on CLI + dashboard. Typing indicator fires at message arrival (≤ 500ms before LLM work starts). Discord edit cadence defaults to 750ms with a 300ms floor + rate-limit backoff.
+
+**Tool-call overhead:** Intra-turn idempotent cache on memory_lookup / search_documents / memory_list / memory_graph (whitelist, per-turn Map GC'd at turn end, zero cross-turn leak). Per-tool latency telemetry surfaces slow tools directly.
+
+**Warm path:** SQLite + sqlite-vec handles warmed with READ-ONLY queries at agent start. Embedding model is a singleton at daemon level with a startup probe. Agent doesn't flip to `ready` in `clawcode status` / `/clawcode-fleet` until warm-path check passes (10s timeout; errors show in fleet status).
+
+**Per-agent config** — sensible defaults, customize via `clawcode.yaml`:
+
+```yaml
+agents:
+  - name: assistant
+    perf:
+      traceRetentionDays: 7                # default 7
+      streaming:
+        editIntervalMs: 750                # default 750, min 300
+      resumeSummaryBudget: 1500            # default 1500, min 500
+      memoryAssemblyBudgets:
+        hotTier: 2000
+        recentHistory: 8000
+      lazySkills:
+        enabled: true
+        usageThresholdTurns: 20            # min 5
+      slos:
+        - segment: first_token
+          metric: p50
+          thresholdMs: 1500                # override default 2000
+      tools:
+        maxConcurrent: 10
+        idempotent: [memory_lookup, search_documents, memory_list, memory_graph]
+```
+
 ## Deployment (Ubuntu)
 
 For production deployment on Ubuntu 25:
@@ -278,6 +337,7 @@ clawcode update
 | Agent SDK | @anthropic-ai/claude-agent-sdk 0.2.x |
 | Database | better-sqlite3 + sqlite-vec |
 | Embeddings | @huggingface/transformers (local ONNX) |
+| Tokenizer | @anthropic-ai/tokenizer (token counting for budgets) |
 | Discord | discord.js 14.x |
 | Scheduling | croner |
 | Validation | zod 4.x |
@@ -318,11 +378,13 @@ src/
   mcp/          # MCP server for agent-to-agent tools
   security/     # Channel ACLs, allowlists, approval log
   collaboration/# Inter-agent inbox messaging
-  usage/        # Token tracking, budgets, cost estimation
+  usage/        # Token tracking, budgets, cost estimation, daily Discord summary
   skills/       # Skill discovery, linking, installation
   bootstrap/    # First-run agent initialization
-  dashboard/    # Web UI with SSE real-time updates
-  shared/       # Logger, errors, types, utilities
+  dashboard/    # Web UI with SSE real-time updates + latency/cache/tools/warm-path panels
+  performance/  # TraceStore, TraceCollector, SLOs, percentiles, token counter (v1.7)
+  benchmarks/   # bench harness: runner, baseline, thresholds, keep-alive (v1.7)
+  shared/       # Logger, errors, types, canonicalStringify
 scripts/
   install.sh    # Ubuntu deployment installer
 ```
