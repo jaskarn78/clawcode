@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to plan
-stopped_at: "Completed 52-02 (2 commits: 9c7fa20 + fe21c34) — two-block context assembly + SDK preset+append + hot-tier stable_token + per-turn prefixHash + CACHE-04 eviction integration test; 29 new tests GREEN, 641 total GREEN"
-last_updated: "2026-04-14T00:12:00.543Z"
+status: Ready to execute
+stopped_at: "Completed 53-01 (2 commits: fe3d686 + d5a546f) — countTokens helper + perf config surface (memoryAssemblyBudgets/lazySkills/resumeSummaryBudget on both schemas) + clawcode context-audit CLI (filesystem-direct, no IPC); 28 new tests GREEN, 1457 total GREEN"
+last_updated: "2026-04-14T00:54:07.900Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 14
+  completed_plans: 12
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 52 — prompt-caching
+**Current focus:** Phase 53 — context-token-budget-tuning
 
 ## Current Position
 
-Phase: 53
-Plan: Not started
+Phase: 53 (context-token-budget-tuning) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -133,6 +133,14 @@ Recent decisions affecting current work:
 - [Phase 52]: Phase 52 Plan 02 - hot-tier stable_token placement decision lives INSIDE assembleContext (priorHotStableToken param), NOT session-config; context-assembler is single source of truth for stable vs mutable placement
 - [Phase 52]: Phase 52 Plan 02 - cache-eviction integration test uses REAL TraceStore + REAL iterateWithTracing + REAL createTracedSessionHandle; ONLY sdk.query is mocked; 4-scenario coverage (fresh/swap/unchanged/skills-hot-reload) enforces CONTEXT D-04 verbatim
 - [Phase 52]: Phase 52 Plan 02 - caller-owned Turn lifecycle invariant from Phase 50-02 preserved: zero turn.end() call sites in session-adapter.ts (4 grep matches all in doc comments)
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - @anthropic-ai/tokenizer@0.0.4 is canonical BPE token counter (tiktoken + claude.json); countTokens short-circuits empty string to 0
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - SECTION_NAMES frozen array lives in src/performance/context-audit.ts (single source of truth); schema mirrors names inline via memoryAssemblyBudgetsSchema keys
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - context-audit is filesystem-direct (D-05): readonly SQLite handle against traces.db, NO IPC method added; grep-verified 0 matches of context-audit in src/ipc/protocol.ts
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - in-JS nearest-rank percentile (sort + floor(N*p) index) mirrors Phase 52 getCacheTelemetry; N-small makes JS pass cheaper than SQL ROW_NUMBER over JSON-extracted columns
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - lazySkills.usageThresholdTurns.min(5) (D-03); resumeSummaryBudget.min(500) (D-04); defaults (20/1500) applied at consumer not at Zod to keep schema shape minimal
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - ResolvedAgentConfig.perf inline literal unions preserved (no import from performance/context-audit or config/schema); maintains Phase 51 Plan 01 low-dep boundary on src/shared/types.ts
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - malformed metadata_json + legacy rows skipped silently in aggregator (preserves Phase 50 observational invariant: audits never throw); sampledTurns counts only valid rows
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 01 - test-harness journal_mode=MEMORY + synchronous=OFF + db.transaction()-wrapped seeds to keep 100-row tests under 5s vitest timeout (was ~5s per 100 rows before fix)
 
 ### Roadmap Evolution
 
@@ -193,9 +201,10 @@ None yet.
 | Phase 51-slos-regression-gate P03 | 6 | 3 tasks | 12 files |
 | Phase 52 P01 | 8m 22s | 2 tasks | 10 files |
 | Phase 52 P02 | 19m 43s | 2 tasks | 11 files |
+| Phase 53-context-token-budget-tuning P01 | 9m 38s | 2 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 52-02 (2 commits: 9c7fa20 + fe21c34) — two-block context assembly + SDK preset+append + hot-tier stable_token + per-turn prefixHash + CACHE-04 eviction integration test; 29 new tests GREEN, 641 total GREEN
+Stopped at: Completed 53-01 (2 commits: fe3d686 + d5a546f) — countTokens helper + perf config surface (memoryAssemblyBudgets/lazySkills/resumeSummaryBudget on both schemas) + clawcode context-audit CLI (filesystem-direct, no IPC); 28 new tests GREEN, 1457 total GREEN
 Resume file: None
