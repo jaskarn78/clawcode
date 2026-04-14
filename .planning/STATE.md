@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: Completed 55-01-PLAN.md
-last_updated: "2026-04-14T04:42:33.851Z"
+stopped_at: Completed 55-02-PLAN.md
+last_updated: "2026-04-14T04:59:04.959Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 21
-  completed_plans: 19
+  completed_plans: 20
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 55 (tool-call-overhead) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -165,6 +165,8 @@ Recent decisions affecting current work:
 - [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — canonicalStringify collapses undefined/null/NaN to 'null', sorts object keys recursively (codepoint order, not locale), preserves array order; used by Plan 55-02 tool-cache for deterministic cache keys
 - [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — getToolPercentiles SQL uses ORDER BY p95 DESC NULLS LAST at SQL layer (not JS) for slowest-first rendering; SUBSTR(s.name, 11) extracts tool_name by stripping canonical 'tool_call.' prefix
 - [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — getPerToolSlo returns frozen {thresholdMs, metric}; always-valid fallback to DEFAULT_SLOS tool_call (1500ms p95) for unknown tools / undefined perTools / empty slos; consumers never null-check
+- [Phase 55-tool-call-overhead]: Phase 55 Plan 02 — ToolCache uses deep-freeze-clone on both set and get for two-direction mutation isolation; per-Turn lazy allocation with zero cross-turn leak proven by test
+- [Phase 55-tool-call-overhead]: Phase 55 Plan 02 — is_parallel derived by pre-scanning assistant message content[] for tool_use block count; cache-hit detection via hitCount delta between span open and tool_use_result arrival
 
 ### Roadmap Evolution
 
@@ -232,9 +234,10 @@ None yet.
 | Phase 54-streaming-typing-indicator P02 | 5m 5s | 1 tasks | 2 files |
 | Phase 54 P03 | 11m 11s | 2 tasks | 11 files |
 | Phase 55-tool-call-overhead P01 | 5m 15s | 2 tasks | 10 files |
+| Phase 55-tool-call-overhead P02 | 30m | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 55-01-PLAN.md
+Stopped at: Completed 55-02-PLAN.md
 Resume file: None

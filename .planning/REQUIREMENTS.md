@@ -39,8 +39,8 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 
 ### Tool-Call Overhead (TOOL)
 
-- [ ] **TOOL-01**: Independent tool calls within a single turn execute in parallel (identify and remove current serialization points)
-- [ ] **TOOL-02**: Idempotent tool results (e.g., repeated `memory_lookup` with identical args, repeated `search_documents`) are cached within a turn
+- [x] **TOOL-01**: Independent tool calls within a single turn execute in parallel (identify and remove current serialization points)
+- [x] **TOOL-02**: Idempotent tool results (e.g., repeated `memory_lookup` with identical args, repeated `search_documents`) are cached within a turn
 - [ ] **TOOL-03**: Per-tool round-trip timing logged and visible in the dashboard so slow tools are attributable
 
 ### Warm-Path Optimizations (WARM)
