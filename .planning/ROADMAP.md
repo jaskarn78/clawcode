@@ -82,7 +82,7 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
 
 - [x] **Phase 50: Latency Instrumentation** - Phase-level timing trace for every Discord turn + per-agent latency report (completed 2026-04-13)
 - [x] **Phase 51: SLOs & Regression Gate** - Documented SLO targets surfaced on dashboard + CI benchmark fails on p95 regression (completed 2026-04-13)
-- [ ] **Phase 52: Prompt Caching** - Apply Anthropic cache_control to stable prefixes, surface hit-rate, verify invalidation
+- [x] **Phase 52: Prompt Caching** - Apply Anthropic cache_control to stable prefixes, surface hit-rate, verify invalidation (completed 2026-04-14)
 - [ ] **Phase 53: Context & Token Budget Tuning** - Audit payload size by section, tighten budgets, lazy-load skills, shrink resume summary
 - [ ] **Phase 54: Streaming & Typing Indicator** - First-token metric, tighter Discord chunk cadence, typing indicator within 500ms
 - [ ] **Phase 55: Tool-Call Overhead** - Parallelize independent calls, intra-turn idempotent cache, per-tool timing telemetry
@@ -132,11 +132,11 @@ Plans:
   3. The dashboard and daily summary report per-agent cache hit rate (cached input tokens / total input tokens) with trend over time
   4. Editing identity, soul, hot-tier memory, or the skill set demonstrably evicts the stale prefix on the next turn and the telemetry reflects the drop and recovery
   5. Measured first-token latency improves on cache-hit turns versus cache-miss turns by a margin visible in the Phase 50 telemetry
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 52-01-PLAN.md — Wave 1: traces schema (ALTER TABLE 5 cols) + Turn.recordCacheUsage + TraceStore.getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter usage capture
 - [x] 52-02-PLAN.md — Wave 2: two-block context assembly (stablePrefix / mutableSuffix) + SDK preset+append wiring + hot-tier stable_token + per-session prefixHash + cacheEvictionExpected
-- [ ] 52-03-PLAN.md — Wave 3: clawcode cache CLI + cache IPC method + dashboard Prompt Cache panel + cache_effect_ms metric + human-verify checkpoint
+- [x] 52-03-PLAN.md — Wave 3: clawcode cache CLI + cache IPC method + dashboard Prompt Cache panel + cache_effect_ms metric + human-verify checkpoint
 
 ### Phase 53: Context & Token Budget Tuning
 **Goal**: Per-turn payload shrinks without measurable response-quality loss
@@ -204,7 +204,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 50. Latency Instrumentation | 5/5 | Complete    | 2026-04-13 |
 | 51. SLOs & Regression Gate | 3/3 | Complete    | 2026-04-13 |
-| 52. Prompt Caching | 2/3 | In Progress|  |
+| 52. Prompt Caching | 3/3 | Complete   | 2026-04-14 |
 | 53. Context & Token Budget Tuning | 0/0 | Not started | — |
 | 54. Streaming & Typing Indicator | 0/0 | Not started | — |
 | 55. Tool-Call Overhead | 0/0 | Not started | — |
