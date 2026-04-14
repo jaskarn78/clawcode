@@ -245,12 +245,38 @@ export type PercentileRow = {
   readonly slo_metric?: SloMetric | null;
 };
 
+/**
+ * Phase 54 Plan 04: shape of the `first_token_headline` object emitted at the
+ * top level of the `latency` IPC response. Server-evaluated so the CLI and
+ * dashboard render verbatim — no client-side SLO threshold mirror.
+ *
+ * Cold-start guard: `slo_status === "no_data"` when `count < 5` regardless of
+ * measured percentile. See `evaluateFirstTokenHeadline` in src/manager/daemon.ts.
+ *
+ * Optional on `LatencyReport` so pre-Phase-54 cached/piped consumers keep
+ * parsing. Consumers MUST treat this as optional.
+ */
+export type FirstTokenHeadline = {
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly count: number;
+  readonly slo_status: SloStatus;
+  readonly slo_threshold_ms: number | null;
+  readonly slo_metric: SloMetric | null;
+};
+
 /** Shape returned by the `latency` IPC method + `clawcode latency` CLI. */
 export type LatencyReport = {
   readonly agent: string;
   /** ISO 8601 cutoff used for the query window. */
   readonly since: string;
   readonly segments: readonly PercentileRow[];
+  /**
+   * Phase 54 Plan 04: first-token headline card shape. Optional so older
+   * consumers / pre-Phase-54 cached responses don't break parsing.
+   */
+  readonly first_token_headline?: FirstTokenHeadline;
 };
 
 /**

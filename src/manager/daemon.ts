@@ -69,6 +69,8 @@ import type {
   CacheTelemetryReport,
   LatencyReport,
   PercentileRow,
+  SloMetric,
+  SloStatus,
 } from "../performance/types.js";
 import { sinceToIso } from "../performance/percentiles.js";
 import {
@@ -146,6 +148,95 @@ export function augmentWithSloStatus(
       });
     }),
   );
+}
+
+/**
+ * Phase 54 Plan 04 — minimum first_token sample count before the headline
+ * card transitions out of "warming up" (no_data / gray). Protects operators
+ * from seeing red on a newly-started agent where a single outlier skews p50.
+ */
+export const COLD_START_MIN_TURNS = 5;
+
+/**
+ * Phase 54 Plan 04 — shape emitted as the top-level `first_token_headline`
+ * object on the `latency` IPC response.
+ *
+ * Mirrors the three SLO fields on PercentileRow so the dashboard + CLI render
+ * the headline card verbatim from the server response (no client-side SLO
+ * mirror — Phase 51 Plan 03 invariant preserved).
+ */
+export type FirstTokenHeadline = {
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly count: number;
+  readonly slo_status: SloStatus;
+  readonly slo_threshold_ms: number | null;
+  readonly slo_metric: SloMetric | null;
+};
+
+/**
+ * Phase 54 Plan 04 — evaluate the First Token headline object that appears
+ * at the top of each agent tile on the dashboard and as a block above the
+ * segments table in the CLI.
+ *
+ * Cold-start guard: when `row.count < COLD_START_MIN_TURNS`, slo_status is
+ * forced to "no_data" regardless of the measured percentile. Operators see
+ * a neutral gray "warming up" card until the 5th sample arrives.
+ *
+ * Per-agent perf.slos overrides for first_token flow through via
+ * `mergeSloOverrides`, so an agent that sets a custom threshold sees the
+ * card coloring reflect that (single source of truth stays server-side).
+ *
+ * @param row        - PercentileRow for first_token (typically from
+ *                     TraceStore.getFirstTokenPercentiles).
+ * @param agentSlos  - Per-agent overrides from `perf.slos?` (may be undefined).
+ * @returns Frozen FirstTokenHeadline.
+ */
+export function evaluateFirstTokenHeadline(
+  row: PercentileRow,
+  agentSlos: readonly SloEntry[] | undefined,
+): FirstTokenHeadline {
+  const effectiveSlos =
+    agentSlos && agentSlos.length > 0
+      ? mergeSloOverrides(DEFAULT_SLOS, agentSlos)
+      : DEFAULT_SLOS;
+  const slo = effectiveSlos.find((s) => s.segment === "first_token");
+
+  // Cold-start guard — preempts healthy/breach coloring.
+  if (row.count < COLD_START_MIN_TURNS) {
+    return Object.freeze({
+      p50: row.p50,
+      p95: row.p95,
+      p99: row.p99,
+      count: row.count,
+      slo_status: "no_data" as SloStatus,
+      slo_threshold_ms: slo?.thresholdMs ?? null,
+      slo_metric: slo?.metric ?? null,
+    });
+  }
+
+  if (!slo) {
+    return Object.freeze({
+      p50: row.p50,
+      p95: row.p95,
+      p99: row.p99,
+      count: row.count,
+      slo_status: "no_data" as SloStatus,
+      slo_threshold_ms: null,
+      slo_metric: null,
+    });
+  }
+
+  return Object.freeze({
+    p50: row.p50,
+    p95: row.p95,
+    p99: row.p99,
+    count: row.count,
+    slo_status: evaluateSloStatus(row, slo.thresholdMs, slo.metric),
+    slo_threshold_ms: slo.thresholdMs,
+    slo_metric: slo.metric,
+  });
 }
 
 /**
@@ -1223,7 +1314,23 @@ async function routeMethod(
           const rawSegments = store.getPercentiles(agentName, sinceIso);
           const agentConfig = configs.find((c) => c.name === agentName);
           const segments = augmentWithSloStatus(rawSegments, agentConfig?.perf?.slos);
-          reports.push(Object.freeze({ agent: agentName, since: sinceIso, segments }));
+          // Phase 54 Plan 04: server-emit first_token_headline so the CLI +
+          // dashboard render color/subtitle from the response (no client
+          // mirror). Cold-start guard in evaluateFirstTokenHeadline keeps
+          // newly-started agents gray until 5 samples exist.
+          const firstTokenRow = store.getFirstTokenPercentiles(agentName, sinceIso);
+          const first_token_headline = evaluateFirstTokenHeadline(
+            firstTokenRow,
+            agentConfig?.perf?.slos,
+          );
+          reports.push(
+            Object.freeze({
+              agent: agentName,
+              since: sinceIso,
+              segments,
+              first_token_headline,
+            }),
+          );
         }
         return reports;
       }
@@ -1238,7 +1345,20 @@ async function routeMethod(
       const rawSegments = store.getPercentiles(agentName, sinceIso);
       const agentConfig = configs.find((c) => c.name === agentName);
       const segments = augmentWithSloStatus(rawSegments, agentConfig?.perf?.slos);
-      return Object.freeze({ agent: agentName, since: sinceIso, segments }) satisfies LatencyReport;
+      // Phase 54 Plan 04: server-emit first_token_headline (same pattern as
+      // --all branch above — single source of truth for SLO evaluation stays
+      // here, dashboard + CLI are dumb renderers).
+      const firstTokenRow = store.getFirstTokenPercentiles(agentName, sinceIso);
+      const first_token_headline = evaluateFirstTokenHeadline(
+        firstTokenRow,
+        agentConfig?.perf?.slos,
+      );
+      return Object.freeze({
+        agent: agentName,
+        since: sinceIso,
+        segments,
+        first_token_headline,
+      }) satisfies LatencyReport;
     }
 
     case "cache": {
