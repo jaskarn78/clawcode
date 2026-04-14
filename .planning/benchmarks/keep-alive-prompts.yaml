@@ -1,0 +1,35 @@
+# Phase 56 Plan 03 — keep-alive bench prompt set (WARM-03 empirical probe).
+#
+# 5 sequential messages in a single conversational thread — each message is a
+# logical follow-up to the previous so the session has real continuity to
+# preserve. This ensures the warm-path win we measure reflects REAL session
+# reuse (prompt cache hits, hydrated context, warm subprocess) and not just
+# a cached "pong" reply to identical input.
+#
+# Assertion contract (see runner.ts → assertKeepAliveWin):
+#   messages 2-5 p50 end_to_end ≤ 0.7 × message 1 p50 end_to_end
+#
+# If the bench fails this assertion, the root cause is either (a) a cold
+# re-init defect in the SessionManager / SDK resume path, OR (b) the
+# Anthropic-side prompt cache isn't kicking in. Either way, investigate
+# before marking WARM-03 verified. See 56-AUDIT.md for the audit that
+# predicts this assertion will pass.
+#
+# Schema: src/benchmarks/prompts.ts — `prompts:` top-level key, validated by
+# promptsFileSchema. `loadPrompts()` is the single entry point.
+prompts:
+  - id: ka-01
+    prompt: "What is 2 + 2?"
+    description: "Cold first message — establish baseline end_to_end"
+  - id: ka-02
+    prompt: "Now multiply that by 3."
+    description: "Second message — session should be warm, prompt cache active"
+  - id: ka-03
+    prompt: "What if we subtract 1?"
+    description: "Third message — continued conversation context required"
+  - id: ka-04
+    prompt: "Explain in one sentence why this chain of operations matters."
+    description: "Fourth message — exercises session context retrieval"
+  - id: ka-05
+    prompt: "Now summarize the full chain in 10 words."
+    description: "Fifth message — summary requires memory of all prior turns"

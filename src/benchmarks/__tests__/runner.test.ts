@@ -3,9 +3,9 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runBench } from "../runner.js";
+import { runBench, runKeepAliveBench, assertKeepAliveWin } from "../runner.js";
 import { benchReportSchema } from "../types.js";
-import type { HarnessDeps } from "../runner.js";
+import type { HarnessDeps, KeepAliveReport } from "../runner.js";
 
 function writePromptsYaml(dir: string): string {
   const path = join(dir, "prompts.yaml");
@@ -466,5 +466,242 @@ describe("runBench", () => {
       (report as unknown as { response_lengths?: Record<string, number> })
         .response_lengths,
     ).toBeUndefined();
+  });
+});
+
+// ── Phase 56 Plan 03 — keep-alive bench (5-message same-thread warm-path probe) ──
+
+function writeKeepAlivePromptsYaml(dir: string): string {
+  const path = join(dir, "keep-alive-prompts.yaml");
+  writeFileSync(
+    path,
+    `prompts:
+  - id: ka-01
+    prompt: "What is 2 + 2?"
+    description: "Cold first message — establish baseline"
+  - id: ka-02
+    prompt: "Now multiply that by 3."
+    description: "Second message — session should be warm"
+  - id: ka-03
+    prompt: "What if we subtract 1?"
+    description: "Third message"
+  - id: ka-04
+    prompt: "Explain why this chain matters in one sentence."
+    description: "Fourth message"
+  - id: ka-05
+    prompt: "Now summarize the chain in 10 words."
+    description: "Fifth message"
+`,
+    "utf-8",
+  );
+  return path;
+}
+
+/**
+ * Build a keep-alive stub IPC client that returns controlled per-message
+ * latencies. The `latencies` array is consumed in order for each
+ * `bench-run-prompt` call — emulating wall-clock ms for that message.
+ *
+ * Uses `vi.useFakeTimers()` so we can advance Date.now by the stubbed ms
+ * inside each IPC call. Matching this with how `runKeepAliveBench` measures
+ * per-message latency (`Date.now()` diff around the IPC call) is what makes
+ * the test deterministic.
+ */
+type IpcClientFn = (
+  socketPath: string,
+  method: string,
+  params?: Record<string, unknown>,
+) => Promise<unknown>;
+
+function makeKeepAliveIpcStub(latencies: readonly number[]): IpcClientFn {
+  let idx = 0;
+  const fn = vi.fn(async (_sock: string, method: string) => {
+    if (method === "start") return { ok: true };
+    if (method === "bench-run-prompt") {
+      const ms = latencies[idx] ?? 500;
+      idx += 1;
+      // Advance fake time so the runner's Date.now() wall-clock diff picks up `ms`.
+      vi.advanceTimersByTime(ms);
+      return { turnId: `bench:ka:${idx}`, response: "ok" };
+    }
+    // latency snapshot isn't required for keep-alive (uses wall-clock), but
+    // stay defensive if runner calls it.
+    if (method === "latency") return makeLatencyResponse();
+    throw new Error(`unexpected method ${method}`);
+  });
+  return fn as unknown as IpcClientFn;
+}
+
+describe("keep-alive bench (Phase 56)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "keep-alive-test-"));
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("Test 1 (Phase 56): runKeepAliveBench captures per-message end_to_end ms in order", async () => {
+    const promptsPath = writeKeepAlivePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+    // msg 1 cold = 800ms; msgs 2-5 warm = 300ms each
+    const latencies = [800, 300, 300, 300, 300];
+
+    const report = await runKeepAliveBench({
+      promptsPath,
+      agent: "bench-agent",
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient: makeKeepAliveIpcStub(latencies),
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(report.mode).toBe("keep-alive");
+    expect(report.agent).toBe("bench-agent");
+    expect(report.per_message_ms).toHaveLength(5);
+    expect(report.per_message_ms).toEqual([800, 300, 300, 300, 300]);
+  });
+
+  it("Test 2 (Phase 56): KeepAliveReport includes warm_path_win_ratio = msgs2_5_p50 / msg1", async () => {
+    const promptsPath = writeKeepAlivePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+    // msg 1 = 800ms; msgs 2-5 p50 = 300ms → ratio = 300/800 = 0.375
+    const latencies = [800, 300, 300, 300, 300];
+
+    const report = await runKeepAliveBench({
+      promptsPath,
+      agent: "bench-agent",
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient: makeKeepAliveIpcStub(latencies),
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(report.message1_ms).toBe(800);
+    expect(report.messages2_5_p50_ms).toBe(300);
+    expect(report.warm_path_win_ratio).toBeCloseTo(0.375, 3);
+  });
+
+  it("Test 3 (Phase 56): assertKeepAliveWin passes when ratio ≤ 0.7 (happy path)", async () => {
+    const report: KeepAliveReport = Object.freeze({
+      mode: "keep-alive",
+      agent: "bench-agent",
+      per_message_ms: Object.freeze([800, 300, 300, 300, 300]) as unknown as readonly number[],
+      message1_ms: 800,
+      messages2_5_p50_ms: 300,
+      warm_path_win_ratio: 0.375,
+    });
+
+    const result = assertKeepAliveWin(report);
+    expect(result.passed).toBe(true);
+    expect(result.ratio).toBeCloseTo(0.375, 3);
+    expect(result.message1).toBe(800);
+    expect(result.messages2_5_p50).toBe(300);
+  });
+
+  it("Test 4 (Phase 56): assertKeepAliveWin throws with actionable message when ratio > 0.7 (cold-reinit path)", async () => {
+    const report: KeepAliveReport = Object.freeze({
+      mode: "keep-alive",
+      agent: "bench-agent",
+      per_message_ms: Object.freeze([800, 800, 800, 800, 800]) as unknown as readonly number[],
+      message1_ms: 800,
+      messages2_5_p50_ms: 800,
+      warm_path_win_ratio: 1.0,
+    });
+
+    expect(() => assertKeepAliveWin(report)).toThrowError(
+      /keep-alive regression/,
+    );
+    // Error message must include the ratio AND both ms values so operators
+    // can triage without re-running the bench.
+    try {
+      assertKeepAliveWin(report);
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/100(\.0)?%/);
+      expect(msg).toMatch(/800/);
+    }
+  });
+
+  it("Test 5 (Phase 56): runs a full 5-message bench end-to-end + asserts warm-path win against happy-path harness", async () => {
+    const promptsPath = writeKeepAlivePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+    // Happy path: cold msg 1 = 1000ms, warm msgs 2-5 ~= 300ms → ratio 0.3
+    const latencies = [1000, 280, 320, 290, 310];
+
+    const report = await runKeepAliveBench({
+      promptsPath,
+      agent: "bench-agent",
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient: makeKeepAliveIpcStub(latencies),
+      tmpHomeFactory: () => tmp,
+    });
+
+    // p50 of [280, 320, 290, 310] sorted: [280, 290, 310, 320] — nearest-rank
+    // at p=0.5 gives index floor(4*0.5)=2 → 310. Assert in a tolerant way.
+    expect(report.messages2_5_p50_ms).toBeGreaterThanOrEqual(290);
+    expect(report.messages2_5_p50_ms).toBeLessThanOrEqual(310);
+    expect(report.warm_path_win_ratio).toBeLessThanOrEqual(0.7);
+    const result = assertKeepAliveWin(report);
+    expect(result.passed).toBe(true);
+  });
+
+  it("Test 6 (Phase 56): divide-by-zero guard — when message 1 is 0ms, ratio is set to 1.0 (fail-safe)", async () => {
+    const promptsPath = writeKeepAlivePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+    // Synthetic: all messages 0ms (mock path). Runner must NOT divide by zero.
+    const latencies = [0, 0, 0, 0, 0];
+
+    const report = await runKeepAliveBench({
+      promptsPath,
+      agent: "bench-agent",
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient: makeKeepAliveIpcStub(latencies),
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(report.message1_ms).toBe(0);
+    expect(report.messages2_5_p50_ms).toBe(0);
+    // Divide-by-zero guard → ratio forced to 1.0 so assertKeepAliveWin
+    // catches the degenerate case rather than returning NaN.
+    expect(report.warm_path_win_ratio).toBe(1.0);
+    expect(() => assertKeepAliveWin(report)).toThrowError(
+      /keep-alive regression/,
+    );
+  });
+
+  it("Test 7 (Phase 56): KeepAliveReport shape is frozen (immutable — matches project readonly contract)", async () => {
+    const promptsPath = writeKeepAlivePromptsYaml(tmp);
+    const reportsDir = join(tmp, "reports");
+    const socketPath = join(tmp, ".clawcode", "manager", "clawcode.sock");
+    const latencies = [500, 200, 200, 200, 200];
+
+    const report = await runKeepAliveBench({
+      promptsPath,
+      agent: "bench-agent",
+      reportsDir,
+      harness: makeStubHarness({ socketPath }),
+      ipcClient: makeKeepAliveIpcStub(latencies),
+      tmpHomeFactory: () => tmp,
+    });
+
+    expect(Object.isFrozen(report)).toBe(true);
+    expect(Object.isFrozen(report.per_message_ms)).toBe(true);
+    // Attempt to mutate — strict mode throws; non-strict silently no-ops.
+    // Either way, the value after the attempt must be unchanged.
+    expect(() => {
+      (report as unknown as { mode: string }).mode = "tampered";
+    }).toThrow();
+    expect(report.mode).toBe("keep-alive");
   });
 });

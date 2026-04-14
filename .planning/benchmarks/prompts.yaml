@@ -32,3 +32,15 @@ prompts:
     description: Context-heavy prompt to exercise context_assemble path once Phase 52 wires per-turn context.
     prompt: |
       Summarize your three most recent memories in one sentence each. If fewer than three, summarize what you have.
+
+# Phase 56 Plan 03 — keep-alive bench prompt set lives in a sibling file.
+# `clawcode bench --mode keep-alive --prompts <path>` loads them via the
+# same `loadPrompts()` entry point. Keeping the 5 keep-alive prompts in a
+# dedicated file avoids conflating the regression-gate bench window with
+# the warm-path probe, and prevents accidental mixing during baseline
+# updates. See src/benchmarks/runner.ts → runKeepAliveBench + the 7 tests
+# in src/benchmarks/__tests__/runner.test.ts.
+#
+# keep_alive_prompts: .planning/benchmarks/keep-alive-prompts.yaml
+#   (5 sequential messages, same agent, same session — asserts msgs 2-5 p50
+#    end_to_end ≤ 0.7 × msg 1 p50 via assertKeepAliveWin).

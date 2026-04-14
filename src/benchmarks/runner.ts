@@ -279,3 +279,216 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
     await handle.stop();
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 56 Plan 03 — keep-alive bench mode (WARM-03 empirical probe)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Phase 56 Plan 03 — keep-alive bench report.
+ *
+ * Captures per-message end_to_end latency for a 5-message sequential burst
+ * against the SAME agent in the SAME session. The win ratio
+ * (`messages2_5_p50_ms / message1_ms`) is the empirical proof of WARM-03:
+ * if the SDK `query({ resume: sessionId })` path is actually reusing warm
+ * state, messages 2-5 ride the prompt cache + warm subprocess + hydrated
+ * session and are measurably faster than the cold first message.
+ *
+ * Default threshold (see `assertKeepAliveWin`): `ratio ≤ 0.7`. A ratio near
+ * 1.0 indicates either cold re-init per message OR bench environment noise.
+ * The 30% head-room leaves room for real-world variance while still catching
+ * actual warm-path regressions.
+ */
+export type KeepAliveReport = {
+  readonly mode: "keep-alive";
+  readonly agent: string;
+  readonly per_message_ms: readonly number[];
+  readonly message1_ms: number;
+  readonly messages2_5_p50_ms: number;
+  /**
+   * messages2_5_p50_ms / message1_ms. Clamped to 1.0 when `message1_ms === 0`
+   * (divide-by-zero guard for synthetic test paths / mocks). A real bench
+   * against live Claude will never produce msg-1 = 0ms.
+   */
+  readonly warm_path_win_ratio: number;
+};
+
+/** Options for `runKeepAliveBench`. */
+export type KeepAliveOpts = {
+  readonly promptsPath: string;
+  readonly agent?: string;
+  readonly reportsDir: string;
+  /** DI hook: override the harness layer entirely (tests only). */
+  readonly harness?: HarnessDeps;
+  /** DI hook: override `sendIpcRequest` (tests only). */
+  readonly ipcClient?: typeof sendIpcRequest;
+  /** DI hook: override the tempdir creator (tests only). */
+  readonly tmpHomeFactory?: () => string;
+};
+
+/**
+ * Nearest-rank percentile over a pre-sorted (ascending) finite-number array.
+ *
+ * Mirrors the convention used by `TraceStore.getCacheTelemetry` and
+ * `src/performance/context-audit.ts` — keeps keep-alive bench math symmetric
+ * with the rest of the warm-path telemetry surface. Returns `null` on empty
+ * input so the caller can decide how to degrade.
+ */
+function percentileNearestRank(
+  sorted: readonly number[],
+  p: number,
+): number | null {
+  if (sorted.length === 0) return null;
+  const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+  return sorted[idx] ?? null;
+}
+
+/**
+ * Phase 56 Plan 03 — Run a 5-message keep-alive bench against a SINGLE agent
+ * in the SAME session (NO daemon restart between messages, NO handle rebuild).
+ *
+ * Measures per-message wall-clock end_to_end latency (Date.now() delta around
+ * the `bench-run-prompt` IPC call). Returns a frozen `KeepAliveReport` with
+ * `message1_ms`, `messages2_5_p50_ms`, and `warm_path_win_ratio`.
+ *
+ * **Assertion contract:** `warm_path_win_ratio ≤ 0.7` means warm session reuse
+ * is happening. Use `assertKeepAliveWin(report)` to enforce it from CI or
+ * from the operator-run bench CLI.
+ *
+ * **Audit-first scope (see 56-AUDIT.md §6):** this is an empirical probe of
+ * already-written warm-path infrastructure, NOT a speculative architecture
+ * rebuild. If the audit was right, the assertion passes without any further
+ * session-manager / session-adapter changes.
+ */
+export async function runKeepAliveBench(
+  opts: KeepAliveOpts,
+): Promise<KeepAliveReport> {
+  const agentName = opts.agent ?? "bench-agent";
+  const prompts = loadPrompts(opts.promptsPath);
+  if (prompts.length < 5) {
+    throw new Error(
+      `keep-alive bench requires at least 5 prompts in ${opts.promptsPath} — got ${prompts.length}`,
+    );
+  }
+  // Truncate to exactly 5 messages (extra prompts ignored — keep-alive is
+  // defined over a 5-message window and further messages do not refine p50).
+  const keepAlivePrompts = prompts.slice(0, 5);
+
+  const tmpHome =
+    opts.tmpHomeFactory?.() ??
+    mkdtempSync(join(tmpdir(), "clawcode-keep-alive-"));
+  const harness: HarnessDeps = opts.harness ?? {
+    spawn: spawnIsolatedDaemon,
+    awaitReady: awaitDaemonReady,
+    writeConfig: writeBenchAgentConfig,
+  };
+  const client = opts.ipcClient ?? sendIpcRequest;
+
+  const configPath = await harness.writeConfig(tmpHome, {
+    agentName,
+    model: "haiku",
+  });
+  const handle: DaemonHandle = await harness.spawn({ tmpHome, configPath });
+
+  try {
+    const ready = await harness.awaitReady(handle.socketPath);
+    if (!ready) {
+      throw new Error(
+        `keep-alive bench daemon failed to become ready at ${handle.socketPath}`,
+      );
+    }
+
+    // Best-effort agent start (idempotent — daemon may have auto-started it).
+    try {
+      await client(handle.socketPath, "start", { name: agentName });
+    } catch {
+      /* already running — not fatal */
+    }
+
+    // ── Core keep-alive loop: 5 sequential messages, SAME agent, SAME session ──
+    //
+    // CRITICAL: every message goes through the SAME `handle.sendAndCollect`
+    // (driven by the daemon's `bench-run-prompt` IPC method — see
+    // src/manager/daemon.ts). The SessionManager's `sessions` Map holds a
+    // single SessionHandle across all 5 calls, which means the closure in
+    // `wrapSdkQuery` keeps the SAME `sessionId` and injects `resume: sessionId`
+    // into every `sdk.query(...)` call. This is the warm-path invariant we
+    // are empirically probing.
+    const perMessageMs: number[] = [];
+    for (const prompt of keepAlivePrompts) {
+      const startedAt = Date.now();
+      await client(handle.socketPath, "bench-run-prompt", {
+        agent: agentName,
+        prompt: prompt.prompt,
+        turnIdPrefix: `bench:ka:${prompt.id}:`,
+      });
+      const elapsedMs = Date.now() - startedAt;
+      perMessageMs.push(elapsedMs);
+    }
+
+    // ── Warm-path win ratio ──
+    //
+    // Message 1 pays the cold cost (SDK warm-up, first prompt cache miss,
+    // subprocess spin-up). Messages 2-5 ride the warm session. p50 of
+    // msgs 2-5 divided by msg 1 is the operational ratio — ≤ 0.7 means
+    // warm reuse is working; near 1.0 means cold-reinit per message.
+    const message1Ms = perMessageMs[0] ?? 0;
+    const tail = [...perMessageMs.slice(1)].sort((a, b) => a - b);
+    const tailP50 = percentileNearestRank(tail, 0.5) ?? 0;
+
+    // Divide-by-zero guard: synthetic test paths / mocks can produce msg-1 = 0,
+    // which would yield NaN / Infinity. Clamp ratio to 1.0 so `assertKeepAliveWin`
+    // reports a clean failure instead of passing a bogus result.
+    const ratio = message1Ms > 0 ? tailP50 / message1Ms : 1.0;
+
+    return Object.freeze({
+      mode: "keep-alive" as const,
+      agent: agentName,
+      per_message_ms: Object.freeze([...perMessageMs]),
+      message1_ms: message1Ms,
+      messages2_5_p50_ms: tailP50,
+      warm_path_win_ratio: ratio,
+    });
+  } finally {
+    await handle.stop();
+  }
+}
+
+/**
+ * Phase 56 Plan 03 — Assert the warm-path win against a `KeepAliveReport`.
+ *
+ * Default threshold: `ratio ≤ 0.7` (messages 2-5 p50 is at most 70% of msg 1).
+ *
+ * On pass, returns a frozen summary. On fail, throws an Error whose message
+ * includes the actual ratio (as a percentage) AND both ms values so operators
+ * can triage without re-running the bench.
+ *
+ * CI integration: invoke from `clawcode bench --mode keep-alive` (Phase 56
+ * verification step 5 — see 56-03-PLAN.md Task 3). A thrown error propagates
+ * as a non-zero exit code via the existing `cliError` path.
+ */
+export function assertKeepAliveWin(
+  report: KeepAliveReport,
+  opts: { readonly ratio: number } = { ratio: 0.7 },
+): {
+  readonly passed: boolean;
+  readonly ratio: number;
+  readonly message1: number;
+  readonly messages2_5_p50: number;
+} {
+  const passed = report.warm_path_win_ratio <= opts.ratio;
+  if (!passed) {
+    throw new Error(
+      `keep-alive regression: msgs 2-5 p50 (${Math.round(report.messages2_5_p50_ms)}ms) ` +
+        `is ${(report.warm_path_win_ratio * 100).toFixed(1)}% of msg 1 p50 ` +
+        `(${Math.round(report.message1_ms)}ms) — expected ≤ ${(opts.ratio * 100).toFixed(0)}%. ` +
+        `Warm session reuse may be broken.`,
+    );
+  }
+  return Object.freeze({
+    passed,
+    ratio: report.warm_path_win_ratio,
+    message1: report.message1_ms,
+    messages2_5_p50: report.messages2_5_p50_ms,
+  });
+}
