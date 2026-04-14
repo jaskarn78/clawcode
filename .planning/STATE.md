@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: Completed 56-01-PLAN.md
-last_updated: "2026-04-14T09:20:01.707Z"
+stopped_at: Completed 56-02-PLAN.md (warm-path ready gate + fleet surfaces)
+last_updated: "2026-04-14T09:32:35.790Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 24
-  completed_plans: 22
+  completed_plans: 23
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 56 (warm-path-optimizations) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -170,6 +170,9 @@ Recent decisions affecting current work:
 - [Phase 56]: Warm-path helper uses Promise.race 10s timeout with per-step scoped error prefixes (sqlite:/embedder:/session:) so partial failures are attributable
 - [Phase 56]: Registry schema extended via optional fields (warm_path_ready?, warm_path_readiness_ms?) — legacy registry.json files parse cleanly; consumers treat undefined as not-ready
 - [Phase 56]: Daemon startup hard-fails if embedder probe (embed('warmup probe')) throws — memory_lookup without embeddings is a broken surface, not degraded
+- [Phase 56]: warm-path ready gate wired into startAgent — registry stays 'starting' until runWarmPathCheck resolves; atomic write flips status+warm_path_ready on success
+- [Phase 56]: server-emit pattern preserved — CLI + Discord + dashboard read warm_path_* fields verbatim; zero client-side threshold logic
+- [Phase 56]: no new IPC method — status handler returns registry.entries verbatim, optional fields flow through (Phase 50 regression lesson preserved)
 
 ### Roadmap Evolution
 
@@ -239,9 +242,10 @@ None yet.
 | Phase 55-tool-call-overhead P01 | 5m 15s | 2 tasks | 10 files |
 | Phase 55-tool-call-overhead P02 | 30m | 2 tasks | 7 files |
 | Phase 56 P01 | 18min | 2 tasks | 11 files |
+| Phase 56 P02 | 7min | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 56-01-PLAN.md
+Stopped at: Completed 56-02-PLAN.md (warm-path ready gate + fleet surfaces)
 Resume file: None
