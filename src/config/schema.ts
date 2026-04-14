@@ -234,6 +234,26 @@ export type LazySkillsConfig = z.infer<typeof lazySkillsSchema>;
 export const resumeSummaryBudgetSchema = z.number().int().min(500);
 
 /**
+ * Phase 54 — per-agent Discord streaming cadence.
+ *
+ * `editIntervalMs` has a HARD FLOOR of 300 ms (CONTEXT D-02 — absolute
+ * Discord rate-limit safety net below which the 5-edits-per-5-seconds
+ * bucket drains faster than it refills). Default 750 ms is applied at
+ * the consumer (src/discord/streaming.ts ProgressiveMessageEditor in
+ * Plan 54-03), NOT at the Zod layer — keeps the schema shape minimal.
+ *
+ * `maxLength` floors at 1 and ceilings at 2000 (Discord message
+ * character limit). Default 2000 applied at consumer.
+ */
+export const streamingConfigSchema = z.object({
+  editIntervalMs: z.number().int().min(300).optional(),
+  maxLength: z.number().int().min(1).max(2000).optional(),
+});
+
+/** Inferred Phase 54 streaming config type. */
+export type StreamingConfig = z.infer<typeof streamingConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -275,6 +295,7 @@ export const agentSchema = z.object({
       memoryAssemblyBudgets: memoryAssemblyBudgetsSchema.optional(),
       lazySkills: lazySkillsSchema.optional(),
       resumeSummaryBudget: resumeSummaryBudgetSchema.optional(),
+      streaming: streamingConfigSchema.optional(),
     })
     .optional(),
 });
@@ -314,6 +335,7 @@ export const defaultsSchema = z.object({
       memoryAssemblyBudgets: memoryAssemblyBudgetsSchema.optional(),
       lazySkills: lazySkillsSchema.optional(),
       resumeSummaryBudget: resumeSummaryBudgetSchema.optional(),
+      streaming: streamingConfigSchema.optional(),
     })
     .optional(),
 });

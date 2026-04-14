@@ -133,6 +133,10 @@ export type ResolvedAgentConfig = {
       readonly reinflateOnMention: boolean;
     };
     readonly resumeSummaryBudget?: number;
+    readonly streaming?: {
+      readonly editIntervalMs?: number;
+      readonly maxLength?: number;
+    };
   };
 };
 

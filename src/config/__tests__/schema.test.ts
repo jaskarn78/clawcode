@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, configSchema, defaultsSchema, mcpServerSchema } from "../schema.js";
+import { agentSchema, configSchema, defaultsSchema, mcpServerSchema, streamingConfigSchema } from "../schema.js";
 
 describe("mcpServerSchema", () => {
   it("validates a complete MCP server config", () => {
@@ -419,6 +419,87 @@ describe("agentSchema perf.resumeSummaryBudget override (Phase 53)", () => {
       perf: { resumeSummaryBudget: 1500.5 },
     });
     expect(nonInt.success).toBe(false);
+  });
+});
+
+describe("streamingConfigSchema (Phase 54)", () => {
+  it("accepts { editIntervalMs: 750 } (inside default corridor)", () => {
+    const result = streamingConfigSchema.safeParse({ editIntervalMs: 750 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.editIntervalMs).toBe(750);
+    }
+  });
+
+  it("accepts { editIntervalMs: 300 } (exactly on the 300ms floor)", () => {
+    const result = streamingConfigSchema.safeParse({ editIntervalMs: 300 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.editIntervalMs).toBe(300);
+    }
+  });
+
+  it("rejects { editIntervalMs: 299 } with a Zod issue mentioning the 300ms floor", () => {
+    const result = streamingConfigSchema.safeParse({ editIntervalMs: 299 });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(" | ");
+      expect(messages.toLowerCase()).toMatch(/300|min|greater|>=|too_small/);
+    }
+  });
+
+  it("rejects { editIntervalMs: -1 } and { editIntervalMs: 0 }", () => {
+    const neg = streamingConfigSchema.safeParse({ editIntervalMs: -1 });
+    const zero = streamingConfigSchema.safeParse({ editIntervalMs: 0 });
+    expect(neg.success).toBe(false);
+    expect(zero.success).toBe(false);
+  });
+
+  it("accepts { maxLength: 2000 } (Discord message character limit)", () => {
+    const result = streamingConfigSchema.safeParse({ maxLength: 2000 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.maxLength).toBe(2000);
+    }
+  });
+
+  it("accepts {} (all fields optional)", () => {
+    const result = streamingConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.editIntervalMs).toBeUndefined();
+      expect(result.data.maxLength).toBeUndefined();
+    }
+  });
+
+  it("agentSchema accepts { perf: { streaming: { editIntervalMs: 500 } } }", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: { streaming: { editIntervalMs: 500 } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.streaming?.editIntervalMs).toBe(500);
+    }
+  });
+
+  it("agentSchema REJECTS { perf: { streaming: { editIntervalMs: 100 } } } (floor propagates)", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: { streaming: { editIntervalMs: 100 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("defaultsSchema accepts { perf: { streaming: { editIntervalMs: 500 } } } (fleet-wide default path)", () => {
+    const result = defaultsSchema.safeParse({
+      perf: { streaming: { editIntervalMs: 500, maxLength: 1800 } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.streaming?.editIntervalMs).toBe(500);
+      expect(result.data.perf?.streaming?.maxLength).toBe(1800);
+    }
   });
 });
 
