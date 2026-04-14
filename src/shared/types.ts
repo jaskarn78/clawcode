@@ -118,6 +118,21 @@ export type ResolvedAgentConfig = {
       readonly metric: "p50" | "p95" | "p99";
       readonly thresholdMs: number;
     }[];
+    readonly memoryAssemblyBudgets?: {
+      readonly identity?: number;
+      readonly soul?: number;
+      readonly skills_header?: number;
+      readonly hot_tier?: number;
+      readonly recent_history?: number;
+      readonly per_turn_summary?: number;
+      readonly resume_summary?: number;
+    };
+    readonly lazySkills?: {
+      readonly enabled: boolean;
+      readonly usageThresholdTurns: number;
+      readonly reinflateOnMention: boolean;
+    };
+    readonly resumeSummaryBudget?: number;
   };
 };
 

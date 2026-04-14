@@ -185,6 +185,55 @@ export const contextBudgetsSchema = z.object({
 export type ContextBudgetsConfig = z.infer<typeof contextBudgetsSchema>;
 
 /**
+ * Phase 53 — per-section assembly budgets in tokens.
+ *
+ * Section names are canonical (D-01 from 53-CONTEXT.md) and map 1:1 to
+ * the assembler blocks that Wave 2 will emit token counts for. Budgets
+ * are optional — unset means "use default" at the consumer. Positive
+ * integers only; negative or zero values are rejected.
+ */
+export const memoryAssemblyBudgetsSchema = z.object({
+  identity: z.number().int().positive().optional(),
+  soul: z.number().int().positive().optional(),
+  skills_header: z.number().int().positive().optional(),
+  hot_tier: z.number().int().positive().optional(),
+  recent_history: z.number().int().positive().optional(),
+  per_turn_summary: z.number().int().positive().optional(),
+  resume_summary: z.number().int().positive().optional(),
+});
+
+/** Inferred Phase 53 memory-assembly budgets type. */
+export type MemoryAssemblyBudgetsConfig = z.infer<
+  typeof memoryAssemblyBudgetsSchema
+>;
+
+/**
+ * Phase 53 — lazy-skill compression configuration.
+ *
+ * `usageThresholdTurns` has a hard floor of 5 (D-03 from 53-CONTEXT.md) —
+ * anything smaller compresses skills too aggressively and defeats the
+ * re-inflate cache-warming strategy.
+ */
+export const lazySkillsSchema = z.object({
+  enabled: z.boolean().default(true),
+  usageThresholdTurns: z.number().int().min(5).default(20),
+  reinflateOnMention: z.boolean().default(true),
+});
+
+/** Inferred Phase 53 lazy-skills config type. */
+export type LazySkillsConfig = z.infer<typeof lazySkillsSchema>;
+
+/**
+ * Phase 53 — session-resume summary hard token budget.
+ *
+ * Floor of 500 (D-04 from 53-CONTEXT.md) — below that the summary cannot
+ * capture enough continuity for a useful session resume. Default 1500
+ * applied at the consumer (src/memory/context-summary.ts in Wave 3),
+ * NOT in the schema — keeps the Zod parse shape minimal.
+ */
+export const resumeSummaryBudgetSchema = z.number().int().min(500);
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -223,6 +272,9 @@ export const agentSchema = z.object({
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
       slos: z.array(sloOverrideSchema).optional(),
+      memoryAssemblyBudgets: memoryAssemblyBudgetsSchema.optional(),
+      lazySkills: lazySkillsSchema.optional(),
+      resumeSummaryBudget: resumeSummaryBudgetSchema.optional(),
     })
     .optional(),
 });
@@ -259,6 +311,9 @@ export const defaultsSchema = z.object({
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
       slos: z.array(sloOverrideSchema).optional(),
+      memoryAssemblyBudgets: memoryAssemblyBudgetsSchema.optional(),
+      lazySkills: lazySkillsSchema.optional(),
+      resumeSummaryBudget: resumeSummaryBudgetSchema.optional(),
     })
     .optional(),
 });

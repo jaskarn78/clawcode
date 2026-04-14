@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.97",
+    "@anthropic-ai/tokenizer": "^0.0.4",
     "@huggingface/transformers": "^4.0.1",
     "better-sqlite3": "^12.8.0",
     "chokidar": "^5.0.0",

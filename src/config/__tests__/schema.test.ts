@@ -333,3 +333,143 @@ describe("agentSchema perf.slos override", () => {
     }
   });
 });
+
+describe("agentSchema perf.memoryAssemblyBudgets override (Phase 53)", () => {
+  it("accepts a valid memoryAssemblyBudgets object with partial sections", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        memoryAssemblyBudgets: {
+          identity: 500,
+          hot_tier: 1500,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.memoryAssemblyBudgets?.identity).toBe(500);
+      expect(result.data.perf?.memoryAssemblyBudgets?.hot_tier).toBe(1500);
+    }
+  });
+
+  it("rejects negative memoryAssemblyBudgets values", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        memoryAssemblyBudgets: { identity: -1 },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("agentSchema perf.lazySkills override (Phase 53)", () => {
+  it("accepts a valid lazySkills config with usageThresholdTurns >= 5", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        lazySkills: {
+          enabled: true,
+          usageThresholdTurns: 20,
+          reinflateOnMention: true,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.lazySkills?.usageThresholdTurns).toBe(20);
+      expect(result.data.perf?.lazySkills?.enabled).toBe(true);
+      expect(result.data.perf?.lazySkills?.reinflateOnMention).toBe(true);
+    }
+  });
+
+  it("rejects lazySkills with usageThresholdTurns below the 5-turn floor", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        lazySkills: {
+          enabled: true,
+          usageThresholdTurns: 3,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("agentSchema perf.resumeSummaryBudget override (Phase 53)", () => {
+  it("accepts resumeSummaryBudget at or above the 500-token floor and rejects below/non-integer", () => {
+    const ok = agentSchema.safeParse({
+      name: "x",
+      perf: { resumeSummaryBudget: 1500 },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect(ok.data.perf?.resumeSummaryBudget).toBe(1500);
+    }
+
+    const tooLow = agentSchema.safeParse({
+      name: "x",
+      perf: { resumeSummaryBudget: 400 },
+    });
+    expect(tooLow.success).toBe(false);
+
+    const nonInt = agentSchema.safeParse({
+      name: "x",
+      perf: { resumeSummaryBudget: 1500.5 },
+    });
+    expect(nonInt.success).toBe(false);
+  });
+});
+
+describe("agentSchema perf combined fields (Phase 53 regression)", () => {
+  it("accepts all four phases' fields simultaneously with no collision", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      perf: {
+        traceRetentionDays: 14,
+        slos: [{ segment: "end_to_end", metric: "p95", thresholdMs: 6000 }],
+        memoryAssemblyBudgets: {
+          identity: 500,
+          soul: 400,
+          skills_header: 600,
+          hot_tier: 1500,
+          recent_history: 2000,
+          per_turn_summary: 300,
+          resume_summary: 1500,
+        },
+        lazySkills: {
+          enabled: true,
+          usageThresholdTurns: 20,
+          reinflateOnMention: true,
+        },
+        resumeSummaryBudget: 1500,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.traceRetentionDays).toBe(14);
+      expect(result.data.perf?.slos).toHaveLength(1);
+      expect(result.data.perf?.memoryAssemblyBudgets?.resume_summary).toBe(1500);
+      expect(result.data.perf?.lazySkills?.enabled).toBe(true);
+      expect(result.data.perf?.resumeSummaryBudget).toBe(1500);
+    }
+  });
+
+  it("mirrors the three new fields on defaultsSchema.perf (fleet-wide path)", () => {
+    const result = defaultsSchema.safeParse({
+      perf: {
+        traceRetentionDays: 30,
+        memoryAssemblyBudgets: { identity: 500 },
+        lazySkills: { enabled: false, usageThresholdTurns: 10, reinflateOnMention: false },
+        resumeSummaryBudget: 1500,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.perf?.memoryAssemblyBudgets?.identity).toBe(500);
+      expect(result.data.perf?.lazySkills?.usageThresholdTurns).toBe(10);
+      expect(result.data.perf?.resumeSummaryBudget).toBe(1500);
+    }
+  });
+});
