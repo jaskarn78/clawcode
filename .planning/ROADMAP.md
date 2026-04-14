@@ -9,7 +9,7 @@
 - :white_check_mark: **v1.4 Agent Runtime** - Phases 33-35 (shipped 2026-04-10)
 - :white_check_mark: **v1.5 Smart Memory & Model Tiering** - Phases 36-41 (shipped 2026-04-10)
 - :white_check_mark: **v1.6 Platform Operations & RAG** - Phases 42-49 (shipped 2026-04-12)
-- :hourglass_flowing_sand: **v1.7 Performance & Latency** - Phases 50-56 (active, started 2026-04-13)
+- :white_check_mark: **v1.7 Performance & Latency** - Phases 50-56 (shipped 2026-04-14)
 
 ## Phases
 
@@ -76,133 +76,18 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
 
 </details>
 
-### v1.7 Performance & Latency (Phases 50-56) - ACTIVE
+<details>
+<summary>v1.7 Performance & Latency (Phases 50-56) - SHIPPED 2026-04-14</summary>
 
-**Goal:** Reduce end-to-end latency from Discord message arrival to agent reply across the ClawCode fleet.
+See `.planning/milestones/v1.7-ROADMAP.md` for full details.
 
-- [x] **Phase 50: Latency Instrumentation** - Phase-level timing trace for every Discord turn + per-agent latency report (completed 2026-04-13)
-- [x] **Phase 51: SLOs & Regression Gate** - Documented SLO targets surfaced on dashboard + CI benchmark fails on p95 regression (completed 2026-04-13)
-- [x] **Phase 52: Prompt Caching** - Apply Anthropic cache_control to stable prefixes, surface hit-rate, verify invalidation (completed 2026-04-14)
-- [x] **Phase 53: Context & Token Budget Tuning** - Audit payload size by section, tighten budgets, lazy-load skills, shrink resume summary (completed 2026-04-14)
-- [x] **Phase 54: Streaming & Typing Indicator** - First-token metric, tighter Discord chunk cadence, typing indicator within 500ms (completed 2026-04-14)
-- [x] **Phase 55: Tool-Call Overhead** - Parallelize independent calls, intra-turn idempotent cache, per-tool timing telemetry (completed 2026-04-14)
-- [x] **Phase 56: Warm-Path Optimizations** - SQLite/sqlite-vec warmup, resident embeddings, session keep-alive, readiness health check (completed 2026-04-14)
+Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CLI + dashboard), SLO targets + CI regression gate, Anthropic prompt caching (two-block context assembly + per-turn prefix hash), context/token budget tuning (audit CLI + lazy skills + 1500-token resume cap), streaming + typing indicator (first-token metric + 750ms cadence + ≤500ms typing fire), tool-call overhead (intra-turn cache + per-tool telemetry + concurrency gate foundation), warm-path optimizations (READ-ONLY SQLite warmup + resident embeddings + warm-session reuse + startup ready-gate).
 
-## Phase Details
-
-### Phase 50: Latency Instrumentation
-**Goal**: Operators can see exactly where time is spent in every Discord message → reply cycle
-**Depends on**: Nothing (foundation for v1.7)
-**Requirements**: PERF-01, PERF-02
-**Success Criteria** (what must be TRUE):
-  1. Every Discord turn produces a structured trace with phase-level timings (receive, context assemble, first token, each tool call, final send) in a queryable trace store
-  2. `clawcode latency <agent>` CLI prints p50 / p95 / p99 for end-to-end, first-token, context-assemble, and tool-call segments
-  3. The web dashboard shows a per-agent latency panel with the same percentile breakdown updated from the trace store
-  4. Traces persist across daemon restarts and are retained for at least a configurable window (default 7 days)
-**Plans:** 5/5 plans complete
-Plans:
-- [x] 50-00-PLAN.md — Wave 0: test scaffolding (red state) for trace-collector, trace-store, trace-store-persistence, percentiles, latency CLI, retention heartbeat, dashboard server, bridge, session-adapter, context-assembler (append), scheduler (append)
-- [x] 50-01-PLAN.md — Wave 1: src/performance/ subsystem (TraceStore + TraceCollector + percentile SQL + types) + perf.traceRetentionDays config
-- [x] 50-02-PLAN.md — Wave 2: SDK-side instrumentation — per-agent TraceStore lifecycle + SessionManager accessors + SdkSessionAdapter spans (first_token, tool_call, end_to_end) + ContextAssembler assembleContextTraced
-- [x] 50-02b-PLAN.md — Wave 2: Caller-side wiring — DiscordBridge receive span + Turn lifecycle ownership + Scheduler turnId prefix + auto-discovered retention heartbeat check (CASCADE-only)
-- [x] 50-03-PLAN.md — Wave 3: `clawcode latency` CLI + IPC route + dashboard REST endpoint + Latency panel
-
-### Phase 51: SLOs & Regression Gate
-**Goal**: Latency wins are defended automatically — regressions break the build
-**Depends on**: Phase 50
-**Requirements**: PERF-03, PERF-04
-**Success Criteria** (what must be TRUE):
-  1. Per-surface SLO targets (e.g., first-token p50 ≤ 2s, end-to-end p95 ≤ 6s) are documented in the repo and visible on the dashboard with red/green indicators against live percentiles
-  2. A CI benchmark command runs a fixed prompt set against a local daemon and produces a reproducible latency report
-  3. The CI job fails when any tracked p95 regresses beyond a configurable threshold vs. a stored baseline
-  4. Updating the baseline is an explicit, auditable operator action (not automatic on every run)
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 51-01-PLAN.md — SLO source of truth + bench report/baseline Zod schemas + thresholds loader
-- [x] 51-02-PLAN.md — clawcode bench CLI + isolated daemon harness + bench-run-prompt IPC method
-- [x] 51-03-PLAN.md — Dashboard SLO indicators + starter prompts.yaml / thresholds.yaml / README + .github/workflows/bench.yml (includes human-verify checkpoint)
-
-### Phase 52: Prompt Caching
-**Goal**: Stable prefixes hit Anthropic prompt cache, cutting input tokens and first-token latency
-**Depends on**: Phase 50
-**Requirements**: CACHE-01, CACHE-02, CACHE-03, CACHE-04
-**Success Criteria** (what must be TRUE):
-  1. The system prompt prefix (identity, soul, skills header) carries Anthropic `cache_control` markers and reliably scores as cached on repeat turns
-  2. Memory hot-tier entries and skills/tool definitions sit inside the cached prefix when stable across turns; mutable sections (recent history, per-turn summary) live after the cache boundary
-  3. The dashboard and daily summary report per-agent cache hit rate (cached input tokens / total input tokens) with trend over time
-  4. Editing identity, soul, hot-tier memory, or the skill set demonstrably evicts the stale prefix on the next turn and the telemetry reflects the drop and recovery
-  5. Measured first-token latency improves on cache-hit turns versus cache-miss turns by a margin visible in the Phase 50 telemetry
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 52-01-PLAN.md — Wave 1: traces schema (ALTER TABLE 5 cols) + Turn.recordCacheUsage + TraceStore.getCacheTelemetry + CACHE_HIT_RATE_SLO + session-adapter usage capture
-- [x] 52-02-PLAN.md — Wave 2: two-block context assembly (stablePrefix / mutableSuffix) + SDK preset+append wiring + hot-tier stable_token + per-session prefixHash + cacheEvictionExpected
-- [x] 52-03-PLAN.md — Wave 3: clawcode cache CLI + cache IPC method + dashboard Prompt Cache panel + cache_effect_ms metric + human-verify checkpoint
-
-### Phase 53: Context & Token Budget Tuning
-**Goal**: Per-turn payload shrinks without measurable response-quality loss
-**Depends on**: Phase 50
-**Requirements**: CTX-01, CTX-02, CTX-03, CTX-04
-**Success Criteria** (what must be TRUE):
-  1. A reproducible context-audit script outputs average and p95 payload sizes per section (identity, memory, skills, history, summary) per agent
-  2. Default memory assembly budgets are tightened based on the audit and the change is validated against a regression prompt set with no quality drop
-  3. Skills and MCP tool definitions load lazily or compress when not referenced in recent turns, configurable per agent, and the savings show up in the Phase 50 payload metrics
-  4. Session-resume summary carries a strict token-cost upper bound and resume payloads stay under it across the fleet
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 53-01-PLAN.md — Wave 1: @anthropic-ai/tokenizer install + countTokens helper + extended perf Zod (memoryAssemblyBudgets/lazySkills/resumeSummaryBudget) + ResolvedAgentConfig mirror + context-audit aggregator + clawcode context-audit CLI (filesystem-direct)
-- [x] 53-02-PLAN.md — Wave 2: ContextAssembler per-section budget enforcement (identity/soul WARN-and-keep, hot_tier drop-lowest-importance, skills_header bullet-truncate) + context_assemble span section_tokens metadata + resume-summary budget enforcement (1500 default / 500 floor / 2-attempt regen + hard-truncate fallback)
-- [x] 53-03-PLAN.md — Wave 3: SkillUsageTracker (in-memory ring buffer) + session-adapter mention capture + lazy-skill compression with re-inflate-on-mention + skills_included/compressed_count span metadata + clawcode bench --context-audit regression gate (15% response-length drop = fail)
-
-### Phase 54: Streaming & Typing Indicator
-**Goal**: Users see activity and tokens sooner on every Discord turn
-**Depends on**: Phase 50
-**Requirements**: STREAM-01, STREAM-02, STREAM-03
-**Success Criteria** (what must be TRUE):
-  1. First-token latency is a first-class, separately reported metric per agent in CLI, dashboard, and trace store
-  2. Discord streaming delivery uses a tighter chunk cadence (smaller batches, lower debounce) and measured first-token-visible-in-Discord latency drops versus baseline without triggering Discord rate-limit errors
-  3. The typing indicator fires within 500ms of Discord message arrival, before any LLM work starts, for every bound agent
-  4. Streaming cadence is configurable per agent with safe defaults
-**Plans:** 4/4 plans complete
-Plans:
-- [x] 54-01-PLAN.md — Wave 1: Foundations — perf.streaming Zod + TS mirror (editIntervalMs min(300), default 750 applied at consumer) + typing_indicator SLO + 6-segment canonical (first_visible_token + typing_indicator added) + TraceStore.getFirstTokenPercentiles wrapper
-- [x] 54-02-PLAN.md — Wave 2: Typing indicator relocation to DiscordBridge.handleMessage entry + typing_indicator span (4 guard conditions: routed agent + ACL + non-bot + user-message-type) + silent-swallow failure handling
-- [x] 54-03-PLAN.md — Wave 3: ProgressiveMessageEditor 750ms default + per-agent override + first_visible_token span + isDiscordRateLimitError helper + doubling backoff + bench rate_limit_errors counter + --check-regression hard-fail
-- [x] 54-04-PLAN.md — Wave 4: Surfaces — CLI First Token block above segments table + dashboard First Token headline card + 6-row Latency panel + server-emitted first_token_headline (cold-start guard count < 5) + human-verify checkpoint
-**UI hint**: yes
-
-### Phase 55: Tool-Call Overhead
-**Goal**: A turn spends less time waiting on tools
-**Depends on**: Phase 50
-**Requirements**: TOOL-01, TOOL-02, TOOL-03
-**Success Criteria** (what must be TRUE):
-  1. Independent tool calls within a single turn execute in parallel — current serialization points are identified and removed, verified by trace comparison before/after
-  2. Idempotent tool results (e.g., repeated `memory_lookup` with identical args, repeated `search_documents`) are cached within a turn and second-call latency approaches zero
-  3. Per-tool round-trip timing is logged and visible on the dashboard so slow tools are directly attributable
-  4. Cache is scoped strictly to a single turn — no stale data leaks across turns
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 55-01-PLAN.md — Wave 1: Foundations — perf.tools Zod config (maxConcurrent/idempotent/slos) + TS mirror + canonicalStringify utility + TraceStore.getToolPercentiles + getPerToolSlo helper
-- [x] 55-02-PLAN.md — Wave 2: Cache + dispatch — ToolCache per-Turn (whitelisted idempotent tools, frozen hits) + runWithConcurrencyLimit (Promise.allSettled semaphore) + MCP server wrapper injection + tool_call span metadata enrichment (tool_name, cached, is_parallel)
-- [x] 55-03-PLAN.md — Wave 3: Surfaces — new "tools" IPC method (dual-registered per Phase 50 regression lesson) + daemon handler + REST /api/agents/:name/tools + `clawcode tools` CLI + dashboard Tool Call Latency panel + human-verify checkpoint
-
-### Phase 56: Warm-Path Optimizations
-**Goal**: The hot path stays hot — no first-query penalties, no cold re-init between messages
-**Depends on**: Phase 50
-**Requirements**: WARM-01, WARM-02, WARM-03, WARM-04
-**Success Criteria** (what must be TRUE):
-  1. SQLite prepared statements and sqlite-vec handles are warmed at agent start — the first memory query after startup shows no statistically significant latency penalty vs. subsequent queries
-  2. The embedding model stays resident across turns — `memory_lookup` after an idle period has no cold-start penalty in trace data
-  3. Consecutive Discord messages in the same thread reuse a warm session (no full re-init), measurable as lower end-to-end latency on the second and later messages in a burst
-  4. Startup health check verifies warm-path readiness (SQLite, embeddings, session ready) before the agent is marked "ready" in `/clawcode-fleet` — agents never appear ready while still cold
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 56-01-PLAN.md — Wave 1: foundations — warm-path-check composite helper + READ-ONLY SQLite warmup queries + registry schema extension (warm_path_ready + warm_path_readiness_ms) + daemon embedder probe with hard-fail
-- [x] 56-02-PLAN.md — Wave 2: ready gate + surfaces — SessionManager.startAgent awaits warm-path check (10s timeout) + status IPC extension (no new method) + CLI WARM-PATH column + Discord fleet embed warm suffix + dashboard warm-path badge
-- [x] 56-03-PLAN.md — Wave 3: session keep-alive audit + 5-message keep-alive bench assertion + human-verify checkpoint against clawdy
+</details>
 
 ## Progress
 
-**Status:** v1.7 Performance & Latency active — Phases 50-56.
+**Status:** v1.7 Performance & Latency shipped 2026-04-14. All 7 milestones (v1.0–v1.7) complete.
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -213,16 +98,4 @@ Plans:
 | v1.4 | 33-35 | Complete | 2026-04-10 |
 | v1.5 | 36-41 | Complete | 2026-04-10 |
 | v1.6 | 42-49 | Complete | 2026-04-12 |
-| v1.7 | 50-56 | In progress | — |
-
-### v1.7 Phase Progress
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 50. Latency Instrumentation | 5/5 | Complete    | 2026-04-13 |
-| 51. SLOs & Regression Gate | 3/3 | Complete    | 2026-04-13 |
-| 52. Prompt Caching | 3/3 | Complete    | 2026-04-14 |
-| 53. Context & Token Budget Tuning | 3/3 | Complete    | 2026-04-14 |
-| 54. Streaming & Typing Indicator | 4/4 | Complete    | 2026-04-14 |
-| 55. Tool-Call Overhead | 3/3 | Complete    | 2026-04-14 |
-| 56. Warm-Path Optimizations | 3/3 | Complete    | 2026-04-14 |
+| v1.7 | 50-56 | Complete | 2026-04-14 |

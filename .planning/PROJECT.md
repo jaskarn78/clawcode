@@ -67,21 +67,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Discord slash commands for control — /clawcode-start, /stop, /restart, /fleet — v1.6
 - Webhook auto-provisioning — daemon creates Discord webhooks per agent channel on startup — v1.6
 - RAG over documents — text/markdown/PDF ingestion, chunking, KNN search via 4 MCP tools — v1.6
+- Phase-level latency instrumentation — per-turn traces with p50/p95/p99 via CLI + dashboard — v1.7
+- SLO targets + CI regression gate — documented thresholds, dashboard colors, bench --check-regression — v1.7
+- Prompt caching — Anthropic preset+append with two-block context assembly + hot-tier stable_token + per-turn prefix_hash — v1.7
+- Context audit + token budget tuning — per-agent audit CLI, per-section budgets, lazy-skill compression, 1500-token resume cap — v1.7
+- Streaming + typing indicator — first-token metric, 750ms cadence, ≤500ms typing fire, rate-limit backoff — v1.7
+- Tool-call overhead — intra-turn idempotent cache (Turn-scoped, per-skill whitelist), per-tool latency telemetry, ConcurrencyGate foundation — v1.7
+- Warm-path optimizations — READ-ONLY SQLite warmup, resident embedding singleton, warm-session reuse, 10s ready-gate — v1.7
 
 ### Active
 
-## Current Milestone: v1.7 Performance & Latency
-
-**Goal:** Reduce end-to-end latency from Discord message arrival to agent reply across the ClawCode fleet.
-
-**Target focus areas:**
-- Bottleneck audit — instrument and measure where time is actually spent in the hot path
-- Prompt caching — apply Anthropic `cache_control` to stable prefixes (system prompt, memory hot-tier, skills)
-- Context/token budget tuning — shrink per-turn payload (assembly pipeline + memory tiering)
-- Streaming — optimize first-token latency and Discord chunked delivery
-- Tool-call overhead — reduce round trips, parallelize independent calls, cache idempotent results
-- Warm-path optimizations — process warmup, embedding cache, SQLite warm statements, keep-alive
-- Concrete latency SLOs — p50/p95 targets per surface, CI regression gate
+(None — v1.7 shipped. Next milestone pending.)
 
 ### Out of Scope
 
@@ -100,13 +96,13 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ## Current State
 
-**Latest shipped milestone:** v1.5 Smart Memory & Model Tiering (shipped 2026-04-11)
+**Latest shipped milestone:** v1.7 Performance & Latency (shipped 2026-04-14)
 
-v1.0-v1.5 delivered 41 phases across 6 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, and smart memory with model tiering.
+v1.0-v1.7 delivered 56 phases across 8 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, and end-to-end performance + latency optimizations.
 
 ## Context
 
-ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0-v1.5 with 41 phases across 6 milestones, covering 170+ TypeScript files.
+ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0-v1.7 with 56 phases across 8 milestones, covering 180+ TypeScript files.
 
 **Tech stack:** TypeScript, Node.js 22 LTS, better-sqlite3, sqlite-vec, @huggingface/transformers, croner, execa, discord.js 14, zod 4, pino, @modelcontextprotocol/sdk.
 
