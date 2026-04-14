@@ -220,5 +220,5 @@ Plans:
 | 52. Prompt Caching | 3/3 | Complete    | 2026-04-14 |
 | 53. Context & Token Budget Tuning | 3/3 | Complete    | 2026-04-14 |
 | 54. Streaming & Typing Indicator | 4/4 | Complete    | 2026-04-14 |
-| 55. Tool-Call Overhead | 3/3 | Complete   | 2026-04-14 |
+| 55. Tool-Call Overhead | 3/3 | Complete    | 2026-04-14 |
 | 56. Warm-Path Optimizations | 0/0 | Not started | — |
