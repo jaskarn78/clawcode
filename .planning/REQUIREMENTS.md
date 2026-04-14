@@ -47,7 +47,7 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 
 - [x] **WARM-01**: SQLite prepared statements and sqlite-vec handles warmed at agent start — no first-query penalty on the hot path
 - [x] **WARM-02**: Embedding model stays resident across turns — no cold-start on `memory_lookup` after idle periods
-- [ ] **WARM-03**: Session / thread keep-alive prevents full re-init between consecutive Discord messages in the same thread
+- [x] **WARM-03**: Session / thread keep-alive prevents full re-init between consecutive Discord messages in the same thread
 - [x] **WARM-04**: Startup health check verifies warm-path readiness (SQLite, embeddings, session ready) before marking the agent "ready" in `/clawcode-fleet`
 
 ## Future Requirements
