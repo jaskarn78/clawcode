@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to plan
-stopped_at: "Completed 54-03 (4 commits: 45d40db test + 214fe90 feat + a7988b8 test + c69ac85 feat) — ProgressiveMessageEditor 750ms default + first_visible_token span + rate-limit backoff; bench rate_limit_errors counter + --check-regression hard-fail + 4-segment backward-compat filter; baseline.ts diff renderer aligned; 29 new tests GREEN (2087 / 2087 in scope)"
-last_updated: "2026-04-14T04:14:11.618Z"
+status: Ready to execute
+stopped_at: Completed 55-01-PLAN.md
+last_updated: "2026-04-14T04:42:33.851Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 18
-  completed_plans: 18
+  total_plans: 21
+  completed_plans: 19
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 54 — streaming-typing-indicator
+**Current focus:** Phase 55 — tool-call-overhead
 
 ## Current Position
 
-Phase: 55
-Plan: Not started
+Phase: 55 (tool-call-overhead) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -161,6 +161,10 @@ Recent decisions affecting current work:
 - [Phase 54]: ProgressiveMessageEditor editIntervalMs changed from readonly to mutable — rate-limit backoff doubles per turn; fresh editor per Discord message means state resets naturally without explicit cleanup
 - [Phase 54]: bench runner BACKWARD_COMPAT_BENCH_SEGMENTS + baseline.ts BENCH_DIFF_SEGMENTS keep bench universe (report + baseline + diff) on 4 names even though runtime CANONICAL_SEGMENTS has 6 — preserves committed baseline.json parseability
 - [Phase 54]: daemon.ts bench-run-prompt gains rate_limit_errors: 0 forward-compat field — bench-agent has no Discord binding today so value is always 0, but wire is ready for future bench variants that exercise the streaming pipeline; zero new IPC methods
+- [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — IDEMPOTENT_TOOL_DEFAULTS locked at 4 entries verbatim per CONTEXT D-02 (memory_lookup, search_documents, memory_list, memory_graph); tests assert exact contents AND explicit exclusion of 8 forbidden non-idempotent tools
+- [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — canonicalStringify collapses undefined/null/NaN to 'null', sorts object keys recursively (codepoint order, not locale), preserves array order; used by Plan 55-02 tool-cache for deterministic cache keys
+- [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — getToolPercentiles SQL uses ORDER BY p95 DESC NULLS LAST at SQL layer (not JS) for slowest-first rendering; SUBSTR(s.name, 11) extracts tool_name by stripping canonical 'tool_call.' prefix
+- [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — getPerToolSlo returns frozen {thresholdMs, metric}; always-valid fallback to DEFAULT_SLOS tool_call (1500ms p95) for unknown tools / undefined perTools / empty slos; consumers never null-check
 
 ### Roadmap Evolution
 
@@ -227,9 +231,10 @@ None yet.
 | Phase 54-streaming-typing-indicator P01 | 4m 33s | 2 tasks | 8 files |
 | Phase 54-streaming-typing-indicator P02 | 5m 5s | 1 tasks | 2 files |
 | Phase 54 P03 | 11m 11s | 2 tasks | 11 files |
+| Phase 55-tool-call-overhead P01 | 5m 15s | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 54-03 (4 commits: 45d40db test + 214fe90 feat + a7988b8 test + c69ac85 feat) — ProgressiveMessageEditor 750ms default + first_visible_token span + rate-limit backoff; bench rate_limit_errors counter + --check-regression hard-fail + 4-segment backward-compat filter; baseline.ts diff renderer aligned; 29 new tests GREEN (2087 / 2087 in scope)
+Stopped at: Completed 55-01-PLAN.md
 Resume file: None
