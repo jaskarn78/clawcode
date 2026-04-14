@@ -374,7 +374,18 @@ export class DiscordBridge {
           downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
         }
 
-        const formattedMessage = formatDiscordMessage(message, downloadResults);
+        // Fetch the referenced message if this is a reply, so the agent sees
+        // the quoted content (not just an opaque message_id).
+        let referencedMessage: Message | undefined;
+        if (message.reference?.messageId) {
+          try {
+            referencedMessage = (await message.fetchReference()) as Message;
+          } catch (err) {
+            this.log.debug({ err, refId: message.reference.messageId }, "fetchReference failed");
+          }
+        }
+
+        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
         // End the receive span right before dispatching to the session (end_to_end still open)
         try { receiveSpan?.end(); } catch { /* non-fatal */ }
         await this.streamAndPostResponse(message, sessionName, formattedMessage, turn);
@@ -454,7 +465,18 @@ export class DiscordBridge {
       downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
     }
 
-    const formattedMessage = formatDiscordMessage(message, downloadResults);
+    // Fetch the referenced message if this is a reply, so the agent sees
+    // the quoted content (not just an opaque message_id).
+    let referencedMessage: Message | undefined;
+    if (message.reference?.messageId) {
+      try {
+        referencedMessage = (await message.fetchReference()) as Message;
+      } catch (err) {
+        this.log.debug({ err, refId: message.reference.messageId }, "fetchReference failed");
+      }
+    }
+
+    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
     // End the receive span right before session dispatch; end_to_end remains open
     try { receiveSpan?.end(); } catch { /* non-fatal */ }
     await this.streamAndPostResponse(message, agentName, formattedMessage, turn);
@@ -756,6 +778,7 @@ export class DiscordBridge {
 export function formatDiscordMessage(
   message: Message,
   downloadResults?: readonly DownloadResult[],
+  referencedMessage?: Message,
 ): string {
   const parts = [
     `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${message.createdAt.toISOString()}">`,
@@ -792,7 +815,17 @@ export function formatDiscordMessage(
 
   // Include reply context if this is a reply
   if (message.reference?.messageId) {
-    parts.unshift(`(replying to message ${message.reference.messageId})`);
+    if (referencedMessage) {
+      const refUser = referencedMessage.author.username;
+      const refContent = referencedMessage.content || "(no text content)";
+      const refTs = referencedMessage.createdAt.toISOString();
+      parts.unshift(
+        `<replying-to message_id="${message.reference.messageId}" user="${refUser}" ts="${refTs}">\n${refContent}\n</replying-to>`,
+      );
+    } else {
+      // Fallback: ID only when fetch failed or wasn't attempted
+      parts.unshift(`(replying to message ${message.reference.messageId})`);
+    }
   }
 
   return parts.join("\n");
