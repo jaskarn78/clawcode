@@ -491,6 +491,14 @@ export class DiscordBridge {
 
       const channel = message.channel;
       const messageRef: { current: Message | null } = { current: null };
+      // Phase 54 Plan 03: per-agent streaming cadence override. When
+      // perf.streaming.editIntervalMs is present on the agent config, thread
+      // it into the editor (falls back to the 750ms default). The Turn is
+      // passed through so the editor can emit its first-visible-token span
+      // on the first editFn call. Log + agent + turnId power the single
+      // WARN per turn emitted on rate-limit detection.
+      const agentConfig = this.sessionManager.getAgentConfig(sessionName);
+      const streamingCfg = agentConfig?.perf?.streaming;
       editor = new ProgressiveMessageEditor({
         editFn: async (content: string) => {
           if (!messageRef.current) {
@@ -501,6 +509,12 @@ export class DiscordBridge {
             await messageRef.current.edit(content);
           }
         },
+        editIntervalMs: streamingCfg?.editIntervalMs,
+        maxLength: streamingCfg?.maxLength,
+        turn,
+        log: this.log,
+        agent: sessionName,
+        turnId: message.id,
       });
 
       const response = await this.sessionManager.streamFromAgent(
