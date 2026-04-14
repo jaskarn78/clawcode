@@ -9,9 +9,15 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 // Mock loadLatestSummary to return undefined (no persisted summary)
-vi.mock("../../memory/context-summary.js", () => ({
-  loadLatestSummary: vi.fn().mockResolvedValue(undefined),
-}));
+// Phase 53 Plan 02: re-export real enforceSummaryBudget so buildSessionConfig's
+// import resolves cleanly even with the mock applied.
+vi.mock("../../memory/context-summary.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../memory/context-summary.js")>();
+  return {
+    ...actual,
+    loadLatestSummary: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 // Mock buildBootstrapPrompt (not needed for these tests but imported by module)
 vi.mock("../../bootstrap/prompt-builder.js", () => ({

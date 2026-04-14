@@ -4,12 +4,32 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { AgentSessionConfig } from "./types.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import type { TierManager } from "../memory/tier-manager.js";
-import { loadLatestSummary } from "../memory/context-summary.js";
+import {
+  loadLatestSummary,
+  enforceSummaryBudget,
+  DEFAULT_RESUME_SUMMARY_BUDGET,
+} from "../memory/context-summary.js";
 import type { BootstrapStatus } from "../bootstrap/types.js";
 import { buildBootstrapPrompt } from "../bootstrap/prompt-builder.js";
 import { extractFingerprint, formatFingerprint } from "../memory/fingerprint.js";
 import { assembleContext, DEFAULT_BUDGETS } from "./context-assembler.js";
-import type { ContextSources } from "./context-assembler.js";
+import type { ContextSources, BudgetWarningEvent } from "./context-assembler.js";
+import type { MemoryEntry } from "../memory/types.js";
+
+/**
+ * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
+ *
+ * Mirrors pino's `Logger.warn` so the production code can pass its
+ * `this.log` instance directly. Declared locally so this module has no
+ * hard `pino` dependency (keeps transitive imports small).
+ *
+ * SECURITY: callers MUST NOT log prompt bodies here. `onBudgetWarning`
+ * and `enforceSummaryBudget` send only `{ agent, section, beforeTokens,
+ * budgetTokens, strategy }` — never the summary text.
+ */
+export type SessionConfigLoggerLike = {
+  readonly warn: (obj: Record<string, unknown>, msg?: string) => void;
+};
 
 /**
  * Dependencies required by buildSessionConfig.
@@ -18,12 +38,18 @@ import type { ContextSources } from "./context-assembler.js";
  * Phase 52 Plan 02 — `priorHotStableToken` is threaded by SessionManager from
  * the per-agent map it maintains across turns so hot-tier placement (stable
  * vs mutable) decisions are stable across session-config rebuilds.
+ *
+ * Phase 53 Plan 02 — `log` is optional (back-compat): when supplied, it
+ * receives pino WARN records when per-section budgets are exceeded and
+ * when the resume-summary gets hard-truncated. Production SessionManager
+ * always passes its logger; tests may omit it.
  */
 export type SessionConfigDeps = {
   readonly tierManagers: Map<string, TierManager>;
   readonly skillsCatalog: SkillsCatalog;
   readonly allAgentConfigs: readonly ResolvedAgentConfig[];
   readonly priorHotStableToken?: string;
+  readonly log?: SessionConfigLoggerLike;
 };
 
 /**
@@ -104,10 +130,17 @@ export async function buildSessionConfig(
   identityStr += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
 
   // --- Collect hot memories source ---
+  //
+  // Phase 53 Plan 02: we now track BOTH the rendered string (kept for
+  // cache-hash continuity with Phase 52) AND the raw MemoryEntry list so the
+  // assembler can apply importance-ordered truncation when hot_tier exceeds
+  // its per-section budget.
   let hotMemoriesStr = "";
+  let hotMemoriesEntries: readonly MemoryEntry[] = [];
   const agentTierManager = deps.tierManagers.get(config.name);
   if (agentTierManager) {
     const hotMemories = agentTierManager.getHotMemories().slice(0, 3);
+    hotMemoriesEntries = hotMemories;
     if (hotMemories.length > 0) {
       hotMemoriesStr = hotMemories
         .map((mem) => `- ${mem.content}`)
@@ -115,10 +148,12 @@ export async function buildSessionConfig(
     }
   }
 
-  // --- Collect tool definitions source ---
-  let toolDefinitionsStr = "";
-
-  // Skill descriptions (D-06, D-08)
+  // --- Collect skills header source (Phase 53 Plan 02) ---
+  //
+  // Carves skill descriptions out of the legacy `toolDefinitionsStr` so the
+  // assembler can budget this section independently. Plan 53-03 will layer
+  // lazy-skill compression on top of this isolated block.
+  let skillsHeaderStr = "";
   const assignedSkills = config.skills ?? [];
   if (assignedSkills.length > 0) {
     const skillDescriptions: string[] = [];
@@ -133,16 +168,19 @@ export async function buildSessionConfig(
       }
     }
     if (skillDescriptions.length > 0) {
-      toolDefinitionsStr += skillDescriptions.join("\n");
-      toolDefinitionsStr +=
+      skillsHeaderStr += skillDescriptions.join("\n");
+      skillsHeaderStr +=
         "\n\nYour skill directories are symlinked in your workspace under skills/. Read SKILL.md in each for detailed instructions.\n";
     }
   }
 
+  // --- Collect tool definitions source (MCP + admin + subagent) ---
+  let toolDefinitionsStr = "";
+
   // Subagent thread skill guidance (SASK-03)
   const hasSubagentThreadSkill = (config.skills ?? []).includes("subagent-thread");
   if (hasSubagentThreadSkill) {
-    toolDefinitionsStr += "\n\nYou have the **subagent-thread** skill. When you need to delegate work to a subagent ";
+    toolDefinitionsStr += "You have the **subagent-thread** skill. When you need to delegate work to a subagent ";
     toolDefinitionsStr += "and want the work visible in Discord, prefer the `spawn_subagent_thread` MCP tool ";
     toolDefinitionsStr += "over the raw Agent tool.\n\n";
     toolDefinitionsStr += "The `spawn_subagent_thread` tool creates a dedicated Discord thread where the subagent ";
@@ -155,7 +193,8 @@ export async function buildSessionConfig(
   // MCP tools section (MCPC-03)
   const mcpServers = config.mcpServers ?? [];
   if (mcpServers.length > 0) {
-    toolDefinitionsStr += "\n\nThe following external MCP servers are configured and available to you:\n\n";
+    toolDefinitionsStr += toolDefinitionsStr.length > 0 ? "\n\n" : "";
+    toolDefinitionsStr += "The following external MCP servers are configured and available to you:\n\n";
     for (const server of mcpServers) {
       toolDefinitionsStr += `- **${server.name}**: \`${server.command} ${server.args.join(" ")}\`\n`;
     }
@@ -168,7 +207,8 @@ export async function buildSessionConfig(
       (a) => a.name !== config.name,
     );
     if (otherAgents.length > 0) {
-      toolDefinitionsStr += "\n\nYou are the admin agent. You can read files in any agent's workspace and coordinate cross-agent tasks.\n\n";
+      toolDefinitionsStr += toolDefinitionsStr.length > 0 ? "\n\n" : "";
+      toolDefinitionsStr += "You are the admin agent. You can read files in any agent's workspace and coordinate cross-agent tasks.\n\n";
       toolDefinitionsStr += "| Agent | Workspace | Model |\n";
       toolDefinitionsStr += "|-------|-----------|-------|\n";
       for (const agent of otherAgents) {
@@ -181,7 +221,8 @@ export async function buildSessionConfig(
 
   // Subagent model guidance (per D-02, D-03)
   if (config.subagentModel) {
-    toolDefinitionsStr += `\n\nWhen spawning subagents via the Agent tool, use model: "${config.subagentModel}" unless a specific task requires a different model.\n`;
+    toolDefinitionsStr += toolDefinitionsStr.length > 0 ? "\n\n" : "";
+    toolDefinitionsStr += `When spawning subagents via the Agent tool, use model: "${config.subagentModel}" unless a specific task requires a different model.\n`;
   }
 
   // --- Collect Discord bindings source ---
@@ -196,25 +237,59 @@ export async function buildSessionConfig(
     discordBindingsStr += "Simply output your response as text and the system handles delivery.";
   }
 
-  // --- Collect context summary source ---
+  // --- Collect context summary source (Phase 53 Plan 02 — CTX-04) ---
+  //
+  // The session-resume summary gets a HARD token budget enforced BEFORE it
+  // lands in the assembler's mutable suffix. When over budget, we attempt
+  // up-to-2 regenerations (future work — no live regenerator wired today)
+  // then hard-truncate with a WARN. Default 1500, floor 500 (per D-04).
   let contextSummaryStr = "";
-  const effectiveSummary =
+  const loadedSummary =
     contextSummary ??
     (await loadLatestSummary(join(config.workspace, "memory")));
-  if (effectiveSummary) {
-    contextSummaryStr = `## Context Summary (from previous session)\n${effectiveSummary}`;
+  if (loadedSummary) {
+    const resumeBudget =
+      config.perf?.resumeSummaryBudget ?? DEFAULT_RESUME_SUMMARY_BUDGET;
+    const enforced = await enforceSummaryBudget({
+      summary: loadedSummary,
+      budget: resumeBudget,
+      log: deps.log,
+      agentName: config.name,
+      // regenerate: omitted — live LLM regeneration is future work. The
+      // hard-truncate fallback handles oversized summaries today.
+    });
+    contextSummaryStr = `## Context Summary (from previous session)\n${enforced.summary}`;
   }
 
   // --- Assemble with budgets ---
   const budgets = config.contextBudgets ?? DEFAULT_BUDGETS;
   const sources: ContextSources = {
     identity: identityStr,
+    // Phase 53 Plan 02: SOUL.md body is currently folded into `identityStr`
+    // by the fingerprint+identity concatenation above. We leave `soul: ""`
+    // here so section_tokens.soul reports 0 for this agent — accurate given
+    // the current consolidation behavior. A future refactor can carve SOUL
+    // out of identity and populate `sources.soul` directly.
+    soul: "",
+    skillsHeader: skillsHeaderStr.trim(),
     hotMemories: hotMemoriesStr,
+    hotMemoriesEntries,
     toolDefinitions: toolDefinitionsStr.trim(),
     graphContext: "",
     discordBindings: discordBindingsStr,
     contextSummary: contextSummaryStr,
+    // Phase 53 Plan 02: split summary fields. Resume summary is the loaded
+    // session-resume file; per-turn summary is a future field populated by
+    // per-turn recap logic (empty today).
+    resumeSummary: contextSummaryStr,
+    perTurnSummary: "",
+    // Recent conversation history is SDK-owned; leave empty so
+    // section_tokens.recent_history reports 0 at agent-startup time.
+    // Per-turn refresh paths (future) may populate this for accurate
+    // per-turn audit.
+    recentHistory: "",
   };
+
   // Phase 52 Plan 02 — two-block assembly for prompt caching.
   //   stablePrefix   → systemPrompt (fed to SDK preset.append, cached)
   //   mutableSuffix  → per-turn prepend to user message (outside cache)
@@ -223,8 +298,29 @@ export async function buildSessionConfig(
   // The `priorHotStableToken` dep controls hot-tier placement: matching
   // token → hot-tier stays in stable block; non-matching → hot-tier falls
   // into mutable for this turn only (cache thrashing guard, CONTEXT D-05).
+  //
+  // Phase 53 Plan 02 — per-section budgets + onBudgetWarning callback.
+  // Warnings flow to `deps.log.warn` with section/beforeTokens/budgetTokens/
+  // strategy — the full prompt body is NEVER logged (SECURITY).
+  const onBudgetWarning = deps.log
+    ? (event: BudgetWarningEvent) => {
+        deps.log!.warn(
+          {
+            agent: config.name,
+            section: event.section,
+            beforeTokens: event.beforeTokens,
+            budgetTokens: event.budgetTokens,
+            strategy: event.strategy,
+          },
+          "context-assembly budget exceeded",
+        );
+      }
+    : undefined;
+
   const assembled = assembleContext(sources, budgets, {
     priorHotStableToken: deps.priorHotStableToken,
+    memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
+    onBudgetWarning,
   });
   const trimmedMutable = assembled.mutableSuffix.trim();
 

@@ -491,6 +491,10 @@ export class SessionManager {
       skillsCatalog: this.skillsCatalog,
       allAgentConfigs: this.allAgentConfigs,
       priorHotStableToken,
+      // Phase 53 Plan 02 — thread SessionManager's pino logger into the
+      // assembler so per-section budget-exceeded events + resume-summary
+      // hard-truncation events surface in structured logs.
+      log: this.log,
     };
   }
 
