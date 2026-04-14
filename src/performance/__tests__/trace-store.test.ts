@@ -205,6 +205,76 @@ describe("TraceStore", () => {
     expect("p95" in endToEnd!).toBe(true);
     expect("p99" in endToEnd!).toBe(true);
   });
+
+  it("getPercentiles returns 6 rows (one per canonical segment — Phase 54)", () => {
+    // No data inserted — every row should be count=0 / null p-values.
+    const rows = store.getPercentiles(
+      "empty-agent",
+      "2026-04-01T00:00:00.000Z",
+    );
+    expect(rows).toHaveLength(6);
+    const segments = rows.map((r) => r.segment);
+    expect(segments).toEqual([
+      "end_to_end",
+      "first_token",
+      "first_visible_token",
+      "context_assemble",
+      "tool_call",
+      "typing_indicator",
+    ]);
+    for (const row of rows) {
+      expect(row.count).toBe(0);
+      expect(row.p50).toBeNull();
+      expect(row.p95).toBeNull();
+      expect(row.p99).toBeNull();
+    }
+  });
+
+  it("getFirstTokenPercentiles returns the first_token row when data exists", () => {
+    const nowMs = new Date("2026-04-13T00:00:00.000Z").getTime();
+    for (let i = 1; i <= 20; i++) {
+      const turn = buildTurn({
+        id: `ftp-${i}`,
+        agent: "ft-agent",
+        startedAt: new Date(nowMs + i).toISOString(),
+        endedAt: new Date(nowMs + i + 1).toISOString(),
+        totalMs: i,
+        spans: [
+          Object.freeze({
+            name: "first_token",
+            startedAt: new Date(nowMs + i).toISOString(),
+            durationMs: i * 10,
+            metadata: Object.freeze({}),
+          }),
+        ],
+      });
+      store.writeTurn(turn);
+    }
+    const row = store.getFirstTokenPercentiles(
+      "ft-agent",
+      new Date(nowMs - 1000).toISOString(),
+    );
+    expect(row.segment).toBe("first_token");
+    expect(row.count).toBe(20);
+    expect(typeof row.p50).toBe("number");
+    expect(typeof row.p95).toBe("number");
+    expect(typeof row.p99).toBe("number");
+  });
+
+  it("getFirstTokenPercentiles returns a count=0 / null-p-value row when window is empty", () => {
+    const row = store.getFirstTokenPercentiles(
+      "no-ft-agent",
+      "2026-04-01T00:00:00.000Z",
+    );
+    expect(row).toEqual({
+      segment: "first_token",
+      p50: null,
+      p95: null,
+      p99: null,
+      count: 0,
+    });
+    expect(Object.isFrozen(row)).toBe(true);
+  });
 });
 
 describe("TraceStore cache telemetry (Phase 52)", () => {

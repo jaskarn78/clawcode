@@ -159,19 +159,35 @@ export type CacheHitRateStatus = "healthy" | "breach" | "no_data";
  *
  * `tool_call` is the aggregate row across all `tool_call.<name>` spans
  * (see TraceStore.getPercentiles + PERCENTILE_SQL aggregation clause).
+ *
+ * Phase 54 additions:
+ *   - `first_visible_token` — Discord-plumbing view of first_token (measured
+ *     from `handleMessage` entry to the first `editFn` call). The delta from
+ *     `first_token` captures Discord-plumbing overhead. Debug/support metric,
+ *     intentionally NOT elevated to a headline card.
+ *   - `typing_indicator` — `handleMessage` entry → `sendTyping()` call.
+ *     Budgeted at p95 ≤ 500ms. Observational initially per CONTEXT D-03.
+ *
+ * NOTE: `src/benchmarks/types.ts` segmentEnum stays on the 4-name Phase 51
+ * shape so committed baselines remain backward-compatible. Plan 54-03 will
+ * filter the bench runner's `overall_percentiles` back to those 4 names.
  */
 export type CanonicalSegment =
   | "end_to_end"
   | "first_token"
+  | "first_visible_token"
   | "context_assemble"
-  | "tool_call";
+  | "tool_call"
+  | "typing_indicator";
 
-/** Frozen list of the four canonical segments, in display order. */
+/** Frozen list of the six canonical segments, in display order. */
 export const CANONICAL_SEGMENTS: readonly CanonicalSegment[] = Object.freeze([
   "end_to_end",
   "first_token",
+  "first_visible_token",
   "context_assemble",
   "tool_call",
+  "typing_indicator",
 ]);
 
 /**

@@ -11,8 +11,8 @@ import {
 import { CANONICAL_SEGMENTS } from "../types.js";
 
 describe("DEFAULT_SLOS", () => {
-  it("contains exactly four entries (one per canonical segment) matching CONTEXT decisions verbatim", () => {
-    expect(DEFAULT_SLOS).toHaveLength(4);
+  it("contains exactly five entries (4 Phase 51 + typing_indicator Phase 54) matching CONTEXT decisions verbatim", () => {
+    expect(DEFAULT_SLOS).toHaveLength(5);
 
     const bySegment = new Map<string, SloEntry>(
       DEFAULT_SLOS.map((e) => [e.segment, e]),
@@ -38,10 +38,27 @@ describe("DEFAULT_SLOS", () => {
       metric: "p95",
       thresholdMs: 1500,
     });
+    // Phase 54 addition — observational initially (CONTEXT D-03).
+    expect(bySegment.get("typing_indicator")).toEqual({
+      segment: "typing_indicator",
+      metric: "p95",
+      thresholdMs: 500,
+    });
 
-    // Sanity: every canonical segment is represented at least once
+    // Sanity: every canonical segment that has a default SLO is represented
+    // (first_visible_token is canonical but intentionally has no default SLO —
+    // it's the debug/support metric, not headline).
+    const withSlo: ReadonlySet<string> = new Set([
+      "end_to_end",
+      "first_token",
+      "context_assemble",
+      "tool_call",
+      "typing_indicator",
+    ]);
     for (const seg of CANONICAL_SEGMENTS) {
-      expect(bySegment.has(seg)).toBe(true);
+      if (withSlo.has(seg)) {
+        expect(bySegment.has(seg)).toBe(true);
+      }
     }
   });
 
@@ -84,7 +101,7 @@ describe("mergeSloOverrides", () => {
     const merged = mergeSloOverrides(DEFAULT_SLOS, [
       { segment: "end_to_end", metric: "p95", thresholdMs: 4000 },
     ]);
-    expect(merged).toHaveLength(4);
+    expect(merged).toHaveLength(5);
 
     const bySeg = new Map<string, SloEntry>(merged.map((e) => [e.segment, e]));
     expect(bySeg.get("end_to_end")).toEqual({
@@ -106,7 +123,7 @@ describe("mergeSloOverrides", () => {
     const merged = mergeSloOverrides(DEFAULT_SLOS, [
       { segment: "first_token", metric: "p95", thresholdMs: 4500 },
     ]);
-    expect(merged).toHaveLength(5);
+    expect(merged).toHaveLength(6);
 
     const firstTokenEntries = merged.filter((e) => e.segment === "first_token");
     expect(firstTokenEntries).toHaveLength(2);
@@ -117,6 +134,39 @@ describe("mergeSloOverrides", () => {
       4500,
     );
     expect(Object.isFrozen(merged)).toBe(true);
+  });
+});
+
+describe("Phase 54: CANONICAL_SEGMENTS + typing_indicator SLO integration", () => {
+  it("CANONICAL_SEGMENTS has 6 entries in exact canonical order", () => {
+    expect(CANONICAL_SEGMENTS).toHaveLength(6);
+    expect([...CANONICAL_SEGMENTS]).toEqual([
+      "end_to_end",
+      "first_token",
+      "first_visible_token",
+      "context_assemble",
+      "tool_call",
+      "typing_indicator",
+    ]);
+  });
+
+  it("evaluateSloStatus works against a typing_indicator row (healthy when p95 <= 500, breach when > 500)", () => {
+    const healthyRow = { p50: 120, p95: 400, p99: 480, count: 20 };
+    const breachRow = { p50: 200, p95: 650, p99: 900, count: 20 };
+    expect(evaluateSloStatus(healthyRow, 500, "p95")).toBe("healthy");
+    expect(evaluateSloStatus(breachRow, 500, "p95")).toBe("breach");
+  });
+
+  it("mergeSloOverrides accepts a typing_indicator override and replaces the thresholdMs in-place", () => {
+    const merged = mergeSloOverrides(DEFAULT_SLOS, [
+      { segment: "typing_indicator", metric: "p95", thresholdMs: 300 },
+    ]);
+    // 5 defaults, override replaces (not appends) → still 5
+    expect(merged).toHaveLength(5);
+    const typing = merged.find(
+      (e) => e.segment === "typing_indicator" && e.metric === "p95",
+    );
+    expect(typing?.thresholdMs).toBe(300);
   });
 });
 

@@ -207,9 +207,9 @@ export class TraceStore {
   /**
    * Compute p50/p95/p99/count for each canonical segment within the window.
    *
-   * Returns exactly 4 frozen rows (one per CANONICAL_SEGMENTS entry). When
-   * a segment has no matching spans in the window, its p-values are `null`
-   * and `count` is `0`.
+   * Returns one frozen row per entry in `CANONICAL_SEGMENTS` (6 rows as of
+   * Phase 54 — was 4 pre-Phase-54). When a segment has no matching spans in
+   * the window, its p-values are `null` and `count` is `0`.
    */
   getPercentiles(agent: string, sinceIso: string): readonly PercentileRow[] {
     try {
@@ -233,6 +233,32 @@ export class TraceStore {
       const msg = err instanceof Error ? err.message : "unknown";
       throw new TraceStoreError(`getPercentiles failed: ${msg}`, this.dbPath);
     }
+  }
+
+  /**
+   * Phase 54 — convenience wrapper over `getPercentiles` filtered to just the
+   * `first_token` row. Powers the CLI / dashboard First Token headline card
+   * (Plan 54-04) without forcing every caller to find-and-filter the full
+   * 6-row percentile array.
+   *
+   * Returns exactly one frozen `PercentileRow`. When the window contains no
+   * `first_token` spans, returns a count=0 / null-p-value row so the caller
+   * can render "no_data" without a null-check ladder.
+   */
+  getFirstTokenPercentiles(
+    agent: string,
+    sinceIso: string,
+  ): PercentileRow {
+    const rows = this.getPercentiles(agent, sinceIso);
+    const row = rows.find((r) => r.segment === "first_token");
+    if (row) return row;
+    return Object.freeze<PercentileRow>({
+      segment: "first_token",
+      p50: null,
+      p95: null,
+      p99: null,
+      count: 0,
+    });
   }
 
   /**

@@ -44,12 +44,21 @@ export type SloEntry = {
 
 /**
  * Default SLO targets for v1.7 — the single source of truth. Verbatim from
- * `.planning/phases/51-slos-regression-gate/51-CONTEXT.md` decisions:
+ * `.planning/phases/51-slos-regression-gate/51-CONTEXT.md` decisions plus
+ * Phase 54 streaming-and-typing-indicator additions:
  *
- *   - `end_to_end`       p95 ≤ 6000 ms
- *   - `first_token`      p50 ≤ 2000 ms
- *   - `context_assemble` p95 ≤  300 ms
- *   - `tool_call`        p95 ≤ 1500 ms
+ *   - `end_to_end`        p95 ≤ 6000 ms
+ *   - `first_token`       p50 ≤ 2000 ms
+ *   - `context_assemble`  p95 ≤  300 ms
+ *   - `tool_call`         p95 ≤ 1500 ms
+ *   - `typing_indicator`  p95 ≤  500 ms  (Phase 54 — observational initially)
+ *
+ * The `typing_indicator` 500 ms budget is deliberately aggressive. Per Phase
+ * 54 CONTEXT D-03 operators should treat it as OBSERVATIONAL for the first
+ * week of real traffic, observing p95 before treating breach as a hard gate.
+ * The `first_visible_token` canonical segment intentionally has NO default
+ * SLO — it is the debug/support metric (delta vs `first_token` captures
+ * Discord plumbing overhead), not a headline.
  *
  * Frozen at module load. Override per-agent via `clawcode.yaml`
  * `perf.slos: [...]` which feeds `mergeSloOverrides`.
@@ -74,6 +83,11 @@ export const DEFAULT_SLOS: readonly SloEntry[] = Object.freeze([
     segment: "tool_call",
     metric: "p95",
     thresholdMs: 1500,
+  }),
+  Object.freeze<SloEntry>({
+    segment: "typing_indicator",
+    metric: "p95",
+    thresholdMs: 500,
   }),
 ]);
 
