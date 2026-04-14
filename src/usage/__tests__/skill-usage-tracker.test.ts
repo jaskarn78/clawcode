@@ -68,18 +68,12 @@ describe("SkillUsageTracker", () => {
     tracker.recordTurn("agent-a", { mentionedSkills: ["skill-1"] });
     const window = tracker.getWindow("agent-a");
     expect(Object.isFrozen(window)).toBe(true);
-    // Set mutation attempts are silently ignored — but the reference's
-    // internal state should not be reachable for mutation. We verify by
-    // attempting an add — the assertion is that the getRecentlyUsed call
-    // returns a set the caller cannot use to poison the tracker's buffer.
-    const used = tracker.getRecentlyUsedSkills("agent-a");
-    // Cast to bypass ReadonlySet type; runtime adds should not leak into tracker state
-    (used as unknown as Set<string>).add = (() => {
-      throw new Error("mutated frozen set");
-    }) as unknown as Set<string>["add"];
-    // Re-read should return a fresh set unaffected by caller's tampering
-    const used2 = tracker.getRecentlyUsedSkills("agent-a");
-    expect(used2.has("skill-1")).toBe(true);
+    expect(Object.isFrozen(window.recentlyUsed)).toBe(true);
+    // Independence: subsequent recordTurn calls do not mutate the snapshot
+    // we already captured (getWindow builds a fresh Set each call).
+    tracker.recordTurn("agent-a", { mentionedSkills: ["skill-2"] });
+    expect(window.recentlyUsed.has("skill-2")).toBe(false);
+    expect(window.recentlyUsed.has("skill-1")).toBe(true);
   });
 
   it("Test 7: capacity floor — constructor throws RangeError when capacity < 5", () => {

@@ -2,6 +2,10 @@ import type { AgentSessionConfig } from "./types.js";
 import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./sdk-types.js";
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
+import {
+  type SkillUsageTracker,
+  extractSkillMentions,
+} from "../usage/skill-usage-tracker.js";
 
 /**
  * Phase 52 Plan 02 — per-turn prefixHash provider contract.
@@ -22,6 +26,24 @@ import type { Turn, Span } from "../performance/trace-collector.js";
 export type PrefixHashProvider = {
   get(): { current: string; last: string | undefined };
   persist(hash: string): void;
+};
+
+/**
+ * Phase 53 Plan 03 — per-turn skill-mention capture wiring.
+ *
+ * Threaded into the adapter so `iterateWithTracing` can record which
+ * skills appear in the assistant text + user text per turn. Lives on
+ * the handle options (not global state) so tests can pass stubs and
+ * SessionManager owns the tracker lifecycle.
+ *
+ * Observational contract (Phase 50 invariant): any error raised by
+ * the tracker is silent-swallowed. Skill-tracking MUST NEVER break
+ * the parent message path.
+ */
+export type SkillTrackingConfig = {
+  readonly skillUsageTracker: SkillUsageTracker;
+  readonly agentName: string;
+  readonly skillCatalogNames: readonly string[];
 };
 
 /**
@@ -73,12 +95,14 @@ export type SessionAdapter = {
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
+    skillTracking?: SkillTrackingConfig,
   ): Promise<SessionHandle>;
   resumeSession(
     sessionId: string,
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
+    skillTracking?: SkillTrackingConfig,
   ): Promise<SessionHandle>;
 };
 
@@ -174,12 +198,14 @@ export class MockSessionAdapter implements SessionAdapter {
   readonly sessions: Map<string, MockSessionHandle> = new Map();
   readonly usageCallbacks: Map<string, UsageCallback> = new Map();
   readonly prefixHashProviders: Map<string, PrefixHashProvider> = new Map();
+  readonly skillTrackingConfigs: Map<string, SkillTrackingConfig> = new Map();
   private counter = 0;
 
   async createSession(
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
+    skillTracking?: SkillTrackingConfig,
   ): Promise<SessionHandle> {
     this.counter += 1;
     const sessionId = `mock-${config.name}-${this.counter}`;
@@ -191,6 +217,9 @@ export class MockSessionAdapter implements SessionAdapter {
     if (prefixHashProvider) {
       this.prefixHashProviders.set(sessionId, prefixHashProvider);
     }
+    if (skillTracking) {
+      this.skillTrackingConfigs.set(sessionId, skillTracking);
+    }
     return handle;
   }
 
@@ -199,6 +228,7 @@ export class MockSessionAdapter implements SessionAdapter {
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
+    skillTracking?: SkillTrackingConfig,
   ): Promise<SessionHandle> {
     const existing = this.sessions.get(sessionId);
     if (usageCallback) {
@@ -206,6 +236,9 @@ export class MockSessionAdapter implements SessionAdapter {
     }
     if (prefixHashProvider) {
       this.prefixHashProviders.set(sessionId, prefixHashProvider);
+    }
+    if (skillTracking) {
+      this.skillTrackingConfigs.set(sessionId, skillTracking);
     }
     if (existing) {
       return existing;
@@ -275,6 +308,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
+    skillTracking?: SkillTrackingConfig,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
@@ -303,6 +337,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       usageCallback,
       undefined,
       prefixHashProvider,
+      skillTracking,
     );
   }
 
@@ -311,6 +346,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     config: AgentSessionConfig,
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
+    skillTracking?: SkillTrackingConfig,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
@@ -336,6 +372,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       usageCallback,
       undefined,
       prefixHashProvider,
+      skillTracking,
     );
   }
 }
@@ -462,6 +499,7 @@ function wrapSdkQuery(
   usageCallback?: UsageCallback,
   boundTurn?: Turn,
   prefixHashProvider?: PrefixHashProvider,
+  skillTracking?: SkillTrackingConfig,
 ): SessionHandle {
   let sessionId = initialSessionId;
   let currentEffort = baseOptions.effort ?? "low";
@@ -531,6 +569,11 @@ function wrapSdkQuery(
     let firstTokenEnded = false;
     const activeTools = new Map<string, Span>();
     const textParts: string[] = [];
+    // Phase 53 Plan 03 — per-turn skill-mention capture. We also buffer
+    // any block-level text from the SDK's `message.content[]: [{ type: 'text', text }]`
+    // shape so the scan covers text that never lands in the narrowed
+    // `msg.content: string` path.
+    const blockTextParts: string[] = [];
 
     const closeAllSpans = () => {
       for (const span of activeTools.values()) span.end();
@@ -554,10 +597,13 @@ function wrapSdkQuery(
             // inspect content blocks for text (first_token) and tool_use (span start).
             const contentBlocks = ((msg as { message?: { content?: unknown[] } }).message?.content ?? []) as unknown[];
             for (const raw of contentBlocks) {
-              const block = raw as { type?: string; name?: string; id?: string };
+              const block = raw as { type?: string; name?: string; id?: string; text?: string };
               if (block.type === "text" && !firstTokenEnded) {
                 firstToken?.end();
                 firstTokenEnded = true;
+              }
+              if (block.type === "text" && typeof block.text === "string") {
+                blockTextParts.push(block.text);
               }
               if (block.type === "tool_use" && block.id && block.name) {
                 const span = turn?.startSpan(`tool_call.${block.name}`, {
@@ -665,6 +711,37 @@ function wrapSdkQuery(
               // Never break the send flow due to cache-capture failure.
             }
           }
+
+          // Phase 53 Plan 03 — skill-mention capture per turn.
+          //
+          // Scan the assistant text we accumulated this turn against the
+          // agent's skill catalog, then record the word-boundary matches
+          // on the tracker. Wrapped in try/catch so tracker errors NEVER
+          // break the parent message path (Phase 50 observational invariant).
+          //
+          // We scan BOTH the narrowed `msg.content` text accumulator AND
+          // the block-level `message.content[].text` buffer so the capture
+          // is robust against SDK shape variance.
+          try {
+            if (skillTracking) {
+              const assistantText = [
+                ...textParts,
+                ...blockTextParts,
+              ].join("\n");
+              const mentioned = extractSkillMentions(
+                assistantText,
+                skillTracking.skillCatalogNames,
+              );
+              skillTracking.skillUsageTracker.recordTurn(
+                skillTracking.agentName,
+                { mentionedSkills: mentioned },
+              );
+            }
+          } catch {
+            // Silent-swallow — observational path MUST NEVER break message path
+            // (invariant from Phase 50, mirrored on cache capture).
+          }
+
           closeAllSpans();
           // Prefer the result.result field if non-empty
           if ("result" in msg && typeof msg.result === "string" && msg.result.length > 0) {
@@ -800,6 +877,15 @@ export type TracedSessionHandleOptions = {
    * owns the per-agent map behind this closure.
    */
   readonly prefixHashProvider?: PrefixHashProvider;
+  /**
+   * Phase 53 Plan 03 — optional skill-mention capture config.
+   *
+   * When present, `iterateWithTracing` scans the assistant text per turn
+   * against `skillCatalogNames` and records word-boundary matches on the
+   * tracker under `agentName`. Errors silent-swallowed per observational
+   * contract.
+   */
+  readonly skillTracking?: SkillTrackingConfig;
 };
 
 /**
@@ -820,5 +906,6 @@ export function createTracedSessionHandle(opts: TracedSessionHandleOptions): Ses
     opts.usageCallback,
     opts.turn,
     opts.prefixHashProvider,
+    opts.skillTracking,
   );
 }

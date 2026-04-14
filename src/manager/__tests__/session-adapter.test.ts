@@ -651,3 +651,136 @@ describe("SdkSessionAdapter prefix_hash per-turn recording (Phase 52 CACHE-04)",
     expect(call.cacheEvictionExpected).toBeUndefined();
   });
 });
+
+// ── Phase 53 Plan 03 — skill usage capture ──────────────────────────────────
+
+describe("SdkSessionAdapter skill usage capture (Phase 53)", () => {
+  let mockSdk: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdk = { query: vi.fn() };
+  });
+
+  function buildResultWithText(text: string) {
+    return [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: { content: [{ type: "text", text }] },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: text,
+        session_id: "s1",
+      },
+    ];
+  }
+
+  it("Test 10: records skill mentions found in the assistant text for the turn", async () => {
+    mockSdk.query.mockReturnValue(
+      makeSdkStream(buildResultWithText("I'll use search-first to research this.")),
+    );
+
+    const recordTurn = vi.fn();
+    const tracker = {
+      recordTurn,
+    } as unknown as import("../../usage/skill-usage-tracker.js").SkillUsageTracker;
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      skillTracking: {
+        skillUsageTracker: tracker,
+        agentName: "agent-a",
+        skillCatalogNames: ["search-first", "content-engine"],
+      },
+    });
+
+    await handle.sendAndCollect("hi");
+
+    expect(recordTurn).toHaveBeenCalledTimes(1);
+    expect(recordTurn).toHaveBeenCalledWith("agent-a", {
+      mentionedSkills: ["search-first"],
+    });
+  });
+
+  it("Test 11: tracker.recordTurn throw is silent-swallowed (observational contract)", async () => {
+    mockSdk.query.mockReturnValue(
+      makeSdkStream(buildResultWithText("using content-engine here")),
+    );
+
+    const tracker = {
+      recordTurn: vi.fn(() => {
+        throw new Error("tracker boom");
+      }),
+    } as unknown as import("../../usage/skill-usage-tracker.js").SkillUsageTracker;
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      skillTracking: {
+        skillUsageTracker: tracker,
+        agentName: "agent-a",
+        skillCatalogNames: ["content-engine"],
+      },
+    });
+
+    // Message path must not throw despite the tracker error.
+    await expect(handle.sendAndCollect("hi")).resolves.toBeDefined();
+  });
+
+  it("Test 12: no skillTracking option → zero tracker interaction (no errors, no calls)", async () => {
+    mockSdk.query.mockReturnValue(
+      makeSdkStream(buildResultWithText("search-first was mentioned")),
+    );
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      // skillTracking intentionally omitted
+    });
+
+    await expect(handle.sendAndCollect("hi")).resolves.toBeDefined();
+  });
+
+  it("Test 13: catalog filter — only configured skill names are recognized", async () => {
+    mockSdk.query.mockReturnValue(
+      makeSdkStream(
+        buildResultWithText(
+          "I'll use search-first and market-research but not noodle-soup.",
+        ),
+      ),
+    );
+
+    const recordTurn = vi.fn();
+    const tracker = {
+      recordTurn,
+    } as unknown as import("../../usage/skill-usage-tracker.js").SkillUsageTracker;
+
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s1",
+      skillTracking: {
+        skillUsageTracker: tracker,
+        agentName: "agent-a",
+        // noodle-soup is NOT in the catalog
+        skillCatalogNames: ["search-first", "market-research"],
+      },
+    });
+
+    await handle.sendAndCollect("hi");
+
+    expect(recordTurn).toHaveBeenCalledTimes(1);
+    const [agent, event] = recordTurn.mock.calls[0]!;
+    expect(agent).toBe("agent-a");
+    expect(event.mentionedSkills).toContain("search-first");
+    expect(event.mentionedSkills).toContain("market-research");
+    expect(event.mentionedSkills).not.toContain("noodle-soup");
+  });
+});

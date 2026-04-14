@@ -23,6 +23,8 @@ import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
 import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 import { computePrefixHash } from "./context-assembler.js";
+import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
+import type { SkillTrackingConfig } from "./session-adapter.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -73,6 +75,18 @@ export class SessionManager {
    */
   private readonly latestStablePrefixByAgent: Map<string, string> = new Map();
 
+  /**
+   * Phase 53 Plan 03 — shared in-memory skill-usage tracker across all
+   * agents. Per-agent isolation happens INSIDE the tracker (keyed by
+   * agent name). Capacity 20 matches Plan 53-01's default
+   * `lazySkills.usageThresholdTurns` — operators can tune per-agent
+   * thresholds downstream at the assembler; the tracker retains up to
+   * 20 turns regardless.
+   */
+  private readonly skillUsageTracker: SkillUsageTracker = new SkillUsageTracker({
+    capacity: 20,
+  });
+
   constructor(options: SessionManagerOptions) {
     this.adapter = options.adapter;
     this.registryPath = options.registryPath;
@@ -84,6 +98,31 @@ export class SessionManager {
       this.log,
       async (name, config) => this.performRestart(name, config),
     );
+  }
+
+  /**
+   * Phase 53 Plan 03 — shared SkillUsageTracker. Exposed for buildSessionConfig
+   * (so the assembler can read the per-turn usage window) and for tests.
+   */
+  getSkillUsageTracker(): SkillUsageTracker {
+    return this.skillUsageTracker;
+  }
+
+  /**
+   * Build a SkillTrackingConfig for `agent`, pulling the skill catalog names
+   * from the agent's config. Returns undefined when the agent has no skills
+   * (nothing to track).
+   */
+  private makeSkillTracking(
+    config: ResolvedAgentConfig,
+  ): SkillTrackingConfig | undefined {
+    const skills = config.skills ?? [];
+    if (skills.length === 0) return undefined;
+    return {
+      skillUsageTracker: this.skillUsageTracker,
+      agentName: config.name,
+      skillCatalogNames: [...skills],
+    };
   }
 
   // Test helpers (delegate to recovery)
@@ -205,10 +244,13 @@ export class SessionManager {
 
     // Phase 52 Plan 02 — attach per-turn prefixHash provider so the adapter
     // can record cache_eviction_expected against the in-flight stablePrefix.
+    // Phase 53 Plan 03 — attach skill-mention tracking so `iterateWithTracing`
+    // records which skills appear in each turn's assistant text.
     const handle = await this.adapter.createSession(
       sessionConfig,
       usageCallback,
       this.makePrefixHashProvider(name),
+      this.makeSkillTracking(config),
     );
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
@@ -323,6 +365,9 @@ export class SessionManager {
     this.lastPrefixHashByAgent.delete(name);
     this.lastHotStableTokenByAgent.delete(name);
     this.latestStablePrefixByAgent.delete(name);
+    // Phase 53 Plan 03 — clear per-agent skill-usage buffer so a restart
+    // warms up cleanly (no stale mentions from prior session).
+    this.skillUsageTracker.resetAgent(name);
 
     registry = await readRegistry(this.registryPath);
     registry = updateEntry(registry, name, { status: "stopped", sessionId: null });
@@ -407,6 +452,7 @@ export class SessionManager {
             sessionConfig,
             undefined,
             this.makePrefixHashProvider(entry.name),
+            this.makeSkillTracking(config),
           );
           this.sessions.set(entry.name, handle);
           this.configs.set(entry.name, config);
