@@ -29,7 +29,22 @@ import {
   type Baseline,
   type BenchReport,
 } from "./types.js";
-import { CANONICAL_SEGMENTS } from "../performance/types.js";
+
+/**
+ * Phase 54 Plan 03 — baseline.json schema (`baselineSchema.segmentEnum`)
+ * intentionally stays on 4 names for backward-compat with committed
+ * baseline files. Runtime trace segments (Phase 54 `CANONICAL_SEGMENTS`)
+ * now number 6, but the bench baseline world is frozen at 4. Render the
+ * diff table against the 4-segment baseline shape so `formatDiffTable`
+ * stays aligned with what the runner actually writes (Plan 54-03
+ * `BACKWARD_COMPAT_BENCH_SEGMENTS` in `runner.ts`).
+ */
+const BENCH_DIFF_SEGMENTS = [
+  "end_to_end",
+  "first_token",
+  "context_assemble",
+  "tool_call",
+] as const;
 
 /**
  * Read and validate `.planning/benchmarks/baseline.json`. Returns a
@@ -120,7 +135,7 @@ export function formatDiffTable(
     report.overall_percentiles.map((r) => [r.segment, r]),
   );
 
-  const dataRows: string[][] = CANONICAL_SEGMENTS.map((seg) => {
+  const dataRows: string[][] = BENCH_DIFF_SEGMENTS.map((seg) => {
     const cur = reportBySeg.get(seg);
     const base = baselineBySeg.get(seg);
     const curP95 = cur?.p95 ?? null;

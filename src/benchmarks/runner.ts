@@ -46,10 +46,28 @@ import {
   type PercentileRowSchema,
 } from "./types.js";
 import {
-  CANONICAL_SEGMENTS,
   type LatencyReport,
   type PercentileRow,
 } from "../performance/types.js";
+
+/**
+ * Phase 54 Plan 03 — bench `overall_percentiles` stays on the original 4
+ * Phase 51 segment names even though `CANONICAL_SEGMENTS` now lists 6.
+ *
+ * Rationale: `.planning/benchmarks/baseline.json` was committed against the
+ * 4-name `segmentEnum` in `src/benchmarks/types.ts`. Promoting the new 2
+ * segments into the baseline report would break Zod parse for every
+ * historical baseline. The 2 new segments (first_visible_token,
+ * typing_indicator) are still emitted in per-prompt `promptResults.percentiles`
+ * (captured verbatim from the latency IPC response) — only the aggregate
+ * `overall_percentiles` row is backward-compat filtered.
+ */
+const BACKWARD_COMPAT_BENCH_SEGMENTS = [
+  "end_to_end",
+  "first_token",
+  "context_assemble",
+  "tool_call",
+] as const;
 
 /** Dependency-injection bundle for the harness layer. */
 export type HarnessDeps = {
@@ -142,6 +160,10 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
     // Phase 53 Plan 03 — per-prompt response-length totals, averaged after
     // the loop and attached to the report when `captureResponses === true`.
     const responseLengthTotals = new Map<string, { sum: number; n: number }>();
+    // Phase 54 Plan 03 — accumulated Discord rate-limit error count across
+    // every bench-run-prompt response. Reported on BenchReport so
+    // `bench --check-regression` can hard-fail on any non-zero total.
+    let totalRateLimitErrors = 0;
 
     for (const prompt of prompts) {
       const turnIds: string[] = [];
@@ -150,8 +172,15 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
           agent: agentName,
           prompt: prompt.prompt,
           turnIdPrefix: `bench:${prompt.id}:`,
-        })) as { turnId: string; response: string };
+        })) as {
+          turnId: string;
+          response: string;
+          rate_limit_errors?: number;
+        };
         turnIds.push(res.turnId);
+        if (typeof res.rate_limit_errors === "number") {
+          totalRateLimitErrors += res.rate_limit_errors;
+        }
         if (opts.captureResponses) {
           const len = typeof res.response === "string" ? res.response.length : 0;
           const current = responseLengthTotals.get(prompt.id) ?? {
@@ -180,8 +209,10 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
       });
     }
 
-    // Final overall snapshot. Map to CANONICAL_SEGMENTS so even segments
-    // with no data emit a {count: 0} placeholder row.
+    // Final overall snapshot. Map to the 4 BACKWARD_COMPAT_BENCH_SEGMENTS
+    // so even segments with no data emit a {count: 0} placeholder row AND
+    // so Phase 54's two new canonical segments (first_visible_token,
+    // typing_indicator) are filtered out of the baseline-compatible row set.
     const overallLatency = (await client(handle.socketPath, "latency", {
       agent: agentName,
       since,
@@ -189,7 +220,7 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
     const segMap = new Map<string, PercentileRow>(
       overallLatency.segments.map((s) => [s.segment, s]),
     );
-    const overall_percentiles: PercentileRow[] = CANONICAL_SEGMENTS.map(
+    const overall_percentiles: PercentileRow[] = BACKWARD_COMPAT_BENCH_SEGMENTS.map(
       (seg) =>
         segMap.get(seg) ?? {
           segment: seg,
@@ -233,6 +264,7 @@ export async function runBench(opts: RunBenchOpts): Promise<RunBenchResult> {
         overall_percentiles,
       ) as unknown as PercentileRowSchema[],
       ...(responseLengths ? { response_lengths: responseLengths } : {}),
+      rate_limit_errors: totalRateLimitErrors,
     });
 
     mkdirSync(opts.reportsDir, { recursive: true });

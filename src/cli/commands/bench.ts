@@ -272,6 +272,21 @@ export function registerBenchCommand(
           cliLog("");
 
           if (opts.checkRegression) {
+            // Phase 54 Plan 03 — rate-limit regression hard-fail. ANY
+            // non-zero rate_limit_errors on the current report fails
+            // `--check-regression` regardless of p95 delta status. This is
+            // the safety rail for the tightened 750ms editIntervalMs
+            // default: if the new cadence is too aggressive for some
+            // agent config we catch it in bench before it ships.
+            const rateLimitErrors = report.rate_limit_errors ?? 0;
+            if (rateLimitErrors > 0) {
+              cliError(
+                `Streaming cadence triggered ${rateLimitErrors} Discord rate-limit error(s) — consider raising \`perf.streaming.editIntervalMs\` or reverting the cadence change`,
+              );
+              exit(1);
+              return;
+            }
+
             if (!baselineForDiff) {
               cliError(
                 `--check-regression requires a baseline at ${opts.baseline}`,

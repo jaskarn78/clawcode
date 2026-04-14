@@ -72,6 +72,14 @@ export const benchReportSchema = z.object({
    * compat with Phase 51 baselines.
    */
   response_lengths: z.record(z.string(), z.number()).optional(),
+  /**
+   * Phase 54 Plan 03 — count of Discord rate-limit errors observed during
+   * this bench run. A non-zero value hard-fails `--check-regression`
+   * because the tightened streaming cadence must never trigger rate-limits
+   * in the bench matrix. See CONTEXT decision "Rate-limit regression
+   * guard". Absent in pre-Phase-54 reports for backward compat.
+   */
+  rate_limit_errors: z.number().int().nonnegative().optional(),
 });
 
 /**

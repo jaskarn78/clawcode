@@ -80,6 +80,7 @@ import {
 } from "../performance/slos.js";
 import type { TraceStore } from "../performance/trace-store.js";
 import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-summary-cron.js";
+import { isDiscordRateLimitError } from "../discord/streaming.js";
 import { nanoid } from "nanoid";
 
 /**
@@ -1331,6 +1332,16 @@ async function routeMethod(
       // harness only. Caller-owned Turn lifecycle matches the Phase 50
       // contract: SessionManager.sendToAgent NEVER calls turn.end(); this
       // handler does, in both success and error paths.
+      //
+      // Phase 54 Plan 03 — response shape extended with rate_limit_errors:
+      // number. The bench harness currently runs without a Discord bridge
+      // binding (bench-agent has no channels), so rate-limit errors cannot
+      // happen on this code path today. The counter exists as a
+      // forward-compat hook — when/if a future bench variant exercises the
+      // Discord edit pipeline end-to-end, the isDiscordRateLimitError
+      // helper (imported from src/discord/streaming.js for reuse) becomes
+      // the producer. `bench --check-regression` hard-fails on any total
+      // > 0, so the shape MUST be present even at zero to wire the gate.
       const agentName = validateStringParam(params, "agent");
       const prompt = validateStringParam(params, "prompt");
       const turnIdPrefix =
@@ -1347,12 +1358,19 @@ async function routeMethod(
 
       const turnId = `${turnIdPrefix}${nanoid(10)}`;
       const turn = collector.startTurn(turnId, agentName, null);
+      let rateLimitErrors = 0;
       try {
         const response = await manager.sendToAgent(agentName, prompt, turn);
         turn.end("success");
-        return { turnId, response };
+        return { turnId, response, rate_limit_errors: rateLimitErrors };
       } catch (err) {
         turn.end("error");
+        // If the underlying send failure IS a rate-limit signal (unlikely
+        // on the non-Discord bench path but captured here for symmetry),
+        // classify it before throwing so the runner can still tally.
+        if (isDiscordRateLimitError(err)) {
+          rateLimitErrors += 1;
+        }
         const msg = err instanceof Error ? err.message : "unknown bench error";
         throw new ManagerError(`bench-run-prompt failed: ${msg}`);
       }
