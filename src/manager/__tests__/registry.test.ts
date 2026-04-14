@@ -40,6 +40,12 @@ describe("createEntry", () => {
     expect(entry.lastError).toBeNull();
     expect(entry.lastStableAt).toBeNull();
   });
+
+  it("Phase 56 — defaults warm_path_ready=false and warm_path_readiness_ms=null", () => {
+    const entry = createEntry("warm-defaults");
+    expect(entry.warm_path_ready).toBe(false);
+    expect(entry.warm_path_readiness_ms).toBeNull();
+  });
 });
 
 describe("readRegistry", () => {
@@ -148,5 +154,53 @@ describe("updateEntry", () => {
     };
     const updated = updateEntry(registry, "a", { status: "running" });
     expect(updated.entries[1]).toEqual(createEntry("b"));
+  });
+
+  it("Phase 56 — accepts warm_path_ready + warm_path_readiness_ms updates", () => {
+    const registry: Registry = {
+      entries: [createEntry("warm-target")],
+      updatedAt: 100,
+    };
+    const updated = updateEntry(registry, "warm-target", {
+      warm_path_ready: true,
+      warm_path_readiness_ms: 127,
+    });
+    expect(updated.entries[0].warm_path_ready).toBe(true);
+    expect(updated.entries[0].warm_path_readiness_ms).toBe(127);
+  });
+});
+
+describe("Phase 56 — backward compatibility for pre-warm-path registries", () => {
+  it("readRegistry parses an entry missing warm_path_* fields (undefined === not-ready)", async () => {
+    const path = join(testDir, "legacy.json");
+    // Simulate a pre-Phase-56 registry: no warm_path_ready / warm_path_readiness_ms keys.
+    const legacyJson = JSON.stringify({
+      entries: [
+        {
+          name: "legacy-agent",
+          status: "running",
+          sessionId: "sess-legacy",
+          startedAt: 1_700_000_000_000,
+          restartCount: 0,
+          consecutiveFailures: 0,
+          lastError: null,
+          lastStableAt: 1_700_000_000_000,
+        },
+      ],
+      updatedAt: 1_700_000_000_000,
+    });
+    const { writeFile: wf } = await import("node:fs/promises");
+    await wf(path, legacyJson, "utf-8");
+
+    const registry = await readRegistry(path);
+    expect(registry.entries).toHaveLength(1);
+    const entry = registry.entries[0];
+    expect(entry.name).toBe("legacy-agent");
+    // Optional fields absent → undefined, which consumers treat as not-ready.
+    expect(entry.warm_path_ready).toBeUndefined();
+    expect(entry.warm_path_readiness_ms).toBeUndefined();
+    // The Partial<RegistryEntry> contract: the type must permit absence.
+    const treatedAsReady = entry.warm_path_ready ?? false;
+    expect(treatedAsReady).toBe(false);
   });
 });

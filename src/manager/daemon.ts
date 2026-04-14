@@ -626,6 +626,25 @@ export async function startDaemon(
   // 9. Await embedding warmup before accepting IPC requests
   await manager.warmupEmbeddings();
 
+  // 9b. Phase 56 Plan 01 — embedder warmup probe. HARD FAIL on error:
+  //     memory_lookup without a working embedding pipeline is a broken
+  //     surface, not a degraded one (see 56-CONTEXT — Embedding Model
+  //     Residency). Refusing to start the IPC server here prevents the
+  //     daemon from accepting queries it cannot fulfil.
+  try {
+    await manager.getEmbedder().embed("warmup probe");
+    log.info("embedder probe succeeded");
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.error(
+      { error: msg },
+      "embedder probe failed — daemon startup HARD FAIL",
+    );
+    throw new ManagerError(
+      `embedder probe failed: ${msg} — daemon cannot start without a working embedding pipeline`,
+    );
+  }
+
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath);

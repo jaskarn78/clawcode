@@ -74,6 +74,9 @@ export function createEntry(name: string): RegistryEntry {
     consecutiveFailures: 0,
     lastError: null,
     lastStableAt: null,
+    // Phase 56 Plan 01 — warm-path fields default to pre-check state.
+    warm_path_ready: false,
+    warm_path_readiness_ms: null,
   };
 }
 

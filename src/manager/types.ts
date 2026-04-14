@@ -26,6 +26,21 @@ export type RegistryEntry = {
   readonly consecutiveFailures: number;
   readonly lastError: string | null;
   readonly lastStableAt: number | null;
+  /**
+   * Phase 56 Plan 01 — warm-path readiness flag. Flips to `true` after
+   * `runWarmPathCheck` succeeds for this agent (wired in Plan 02).
+   *
+   * OPTIONAL for backward compatibility: entries persisted before Phase 56
+   * lack this field. Consumers MUST treat `undefined` as "not ready" and
+   * re-run the warm-path check on next startup.
+   */
+  readonly warm_path_ready?: boolean;
+  /**
+   * Phase 56 Plan 01 — total warm-path duration in milliseconds for this
+   * agent's last successful readiness check. `null` while the check is
+   * pending; a number after success. `undefined` on pre-Phase-56 entries.
+   */
+  readonly warm_path_readiness_ms?: number | null;
 };
 
 /**
