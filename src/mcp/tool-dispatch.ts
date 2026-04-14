@@ -58,3 +58,83 @@ export async function runWithConcurrencyLimit<T>(
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return results;
 }
+
+/**
+ * ConcurrencyGate — per-agent semaphore for gating individual tool invocations.
+ *
+ * Motivation
+ *   The Claude Agent SDK dispatches multiple `tool_use` blocks in parallel — our
+ *   MCP handler is invoked concurrently for each. `runWithConcurrencyLimit`
+ *   above gates a known array of handlers (call-site batch), but at the MCP
+ *   transport boundary handler invocations arrive as independent async calls.
+ *   A semaphore is the natural fit: each call `await`s acquire(), runs, then
+ *   calls release() in a `finally`.
+ *
+ * Semantics
+ *   - `acquire()` resolves when in-flight count < limit; increments count.
+ *   - Returned release function decrements count and wakes the next waiter.
+ *   - FIFO fairness — waiters resolve in enqueue order.
+ *   - Reentrant-safe: each acquire returns its own release fn; double-release
+ *     on the SAME call is a no-op (idempotent).
+ *
+ * Usage
+ *   ```ts
+ *   const gate = new ConcurrencyGate(10);
+ *   const release = await gate.acquire();
+ *   try { return await rawCall(); } finally { release(); }
+ *   ```
+ */
+export class ConcurrencyGate {
+  readonly #limit: number;
+  #inFlight = 0;
+  readonly #waiters: Array<() => void> = [];
+
+  constructor(limit: number) {
+    if (limit <= 0 || !Number.isFinite(limit)) {
+      throw new Error(
+        `ConcurrencyGate: limit must be a positive finite integer (got ${limit})`,
+      );
+    }
+    this.#limit = limit;
+  }
+
+  /** Current number of in-flight acquirers. Test-only accessor. */
+  get inFlight(): number {
+    return this.#inFlight;
+  }
+
+  /** Configured concurrency limit. Test-only accessor. */
+  get limit(): number {
+    return this.#limit;
+  }
+
+  /**
+   * Acquire a slot. Returns a one-shot release function.
+   *
+   * When in-flight count < limit, resolves immediately.
+   * Otherwise queues until a slot frees up.
+   */
+  async acquire(): Promise<() => void> {
+    if (this.#inFlight < this.#limit) {
+      this.#inFlight += 1;
+      return this.#makeReleaseFn();
+    }
+
+    await new Promise<void>((resolve) => {
+      this.#waiters.push(resolve);
+    });
+    this.#inFlight += 1;
+    return this.#makeReleaseFn();
+  }
+
+  #makeReleaseFn(): () => void {
+    let released = false;
+    return () => {
+      if (released) return; // idempotent
+      released = true;
+      this.#inFlight -= 1;
+      const nextWaiter = this.#waiters.shift();
+      if (nextWaiter) nextWaiter();
+    };
+  }
+}

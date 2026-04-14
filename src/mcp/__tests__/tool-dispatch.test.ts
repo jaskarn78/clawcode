@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runWithConcurrencyLimit } from "../tool-dispatch.js";
+import { runWithConcurrencyLimit, ConcurrencyGate } from "../tool-dispatch.js";
 
 /**
  * Phase 55 Plan 02 — runWithConcurrencyLimit unit tests (Tests 8-12).
@@ -127,5 +127,98 @@ describe("runWithConcurrencyLimit (Phase 55)", () => {
     const handlers = [async () => "ok"];
     await expect(runWithConcurrencyLimit(handlers, 0)).rejects.toThrow();
     await expect(runWithConcurrencyLimit(handlers, -1)).rejects.toThrow();
+  });
+});
+
+describe("ConcurrencyGate (v1.7 cleanup)", () => {
+  it("rejects invalid limits", () => {
+    expect(() => new ConcurrencyGate(0)).toThrow(/>=\s*1|positive/i);
+    expect(() => new ConcurrencyGate(-1)).toThrow(/positive/i);
+    expect(() => new ConcurrencyGate(Infinity)).toThrow(/finite/i);
+  });
+
+  it("acquire resolves immediately when under limit", async () => {
+    const gate = new ConcurrencyGate(2);
+    expect(gate.inFlight).toBe(0);
+    const release1 = await gate.acquire();
+    expect(gate.inFlight).toBe(1);
+    const release2 = await gate.acquire();
+    expect(gate.inFlight).toBe(2);
+    release1();
+    release2();
+    expect(gate.inFlight).toBe(0);
+  });
+
+  it("acquire queues when at limit; release wakes next waiter (FIFO)", async () => {
+    const gate = new ConcurrencyGate(1);
+    const release1 = await gate.acquire();
+    expect(gate.inFlight).toBe(1);
+
+    // Second acquire should queue
+    let resolved2 = false;
+    let resolved3 = false;
+    const p2 = gate.acquire().then((r) => {
+      resolved2 = true;
+      return r;
+    });
+    const p3 = gate.acquire().then((r) => {
+      resolved3 = true;
+      return r;
+    });
+
+    // Allow microtasks to flush — neither should resolve yet
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved2).toBe(false);
+    expect(resolved3).toBe(false);
+
+    // Release first acquirer → p2 resolves (FIFO)
+    release1();
+    const release2 = await p2;
+    expect(resolved2).toBe(true);
+    expect(resolved3).toBe(false);
+    expect(gate.inFlight).toBe(1);
+
+    // Release second → p3 resolves
+    release2();
+    const release3 = await p3;
+    expect(resolved3).toBe(true);
+    expect(gate.inFlight).toBe(1);
+
+    release3();
+    expect(gate.inFlight).toBe(0);
+  });
+
+  it("release is idempotent (double-release on same call is no-op)", async () => {
+    const gate = new ConcurrencyGate(2);
+    const release = await gate.acquire();
+    expect(gate.inFlight).toBe(1);
+    release();
+    expect(gate.inFlight).toBe(0);
+    release(); // second call
+    expect(gate.inFlight).toBe(0); // still 0, not -1
+  });
+
+  it("enforces cap with 5 concurrent acquirers and limit 2", async () => {
+    const gate = new ConcurrencyGate(2);
+    const observed: number[] = [];
+
+    const task = async (id: number): Promise<void> => {
+      const release = await gate.acquire();
+      observed.push(gate.inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      release();
+    };
+
+    await Promise.all([task(1), task(2), task(3), task(4), task(5)]);
+
+    // No observation should exceed the cap
+    expect(Math.max(...observed)).toBeLessThanOrEqual(2);
+    expect(observed).toHaveLength(5);
+  });
+
+  it("exposes limit read-only", () => {
+    const gate = new ConcurrencyGate(7);
+    expect(gate.limit).toBe(7);
   });
 });

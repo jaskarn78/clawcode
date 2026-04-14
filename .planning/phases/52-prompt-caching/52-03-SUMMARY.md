@@ -11,7 +11,6 @@ commits:
   - 5708a40
 requirements_addressed:
   - CACHE-03
-  - CACHE-05
 ---
 
 # Plan 52-03 — CLI + Dashboard + Daily Summary + Checkpoint
@@ -60,14 +59,14 @@ User delegated: "Run verification (same as Phase 50)". Workspace rsynced to claw
 **Deferred to user** (dashboard visual + live Anthropic API required):
 - Browser render of the Prompt Cache panel with the 3-line subtitle
 - Live Discord turn → observe real `cache_read_input_tokens` in telemetry
-- 20+ real turns to trigger `cache_effect_ms` validation (ROADMAP criterion 5 / CACHE-05)
+- 20+ real turns to trigger `cache_effect_ms` validation (ROADMAP success criterion 5 — supporting metric for CACHE-03)
 
 All three gates behind Anthropic auth / eyeball — consistent with Phase 50 and Phase 51 deferred-verification pattern. User approved via delegation.
 
 ## Requirements
 
 - CACHE-03 — per-agent hit-rate on CLI + dashboard + daily summary — ✅ complete (daily summary was the BLOCKER-1 fix from revision pass)
-- CACHE-05 — first-token latency improvement on cache-hit vs cache-miss turns — ✅ surface + noise floor complete (20-turn threshold + advisory WARN log); live data validation deferred to operator runtime check
+- ROADMAP success criterion 5 (first-token latency improvement on cache-hit vs cache-miss turns) is a SUPPORTING METRIC for CACHE-03 — not a standalone requirement. The `cache_effect_ms` field + 20-turn noise floor + advisory WARN ship as surface; live-data validation deferred to operator runtime check.
 
 ## Phase 50 regression lesson honored
 

@@ -233,3 +233,86 @@ describe("invokeWithCache (Phase 55)", () => {
     expect(raw).toHaveBeenCalledTimes(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.7 cleanup — invokeWithCache concurrency-gate integration
+// ---------------------------------------------------------------------------
+describe("invokeWithCache + acquireToolSlot (v1.7 cleanup)", () => {
+  it("calls acquireToolSlot before rawCall and releases after, even on error", async () => {
+    const events: string[] = [];
+    const raw = async (): Promise<{ ok: true }> => {
+      events.push("raw");
+      return { ok: true };
+    };
+    const deps = {
+      acquireToolSlot: async (agent: string): Promise<() => void> => {
+        events.push(`acquire:${agent}`);
+        return () => events.push(`release:${agent}`);
+      },
+    };
+    await invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, deps);
+    expect(events).toEqual(["acquire:alpha", "raw", "release:alpha"]);
+  });
+
+  it("releases slot on error (finally semantics)", async () => {
+    const events: string[] = [];
+    const raw = async (): Promise<unknown> => {
+      events.push("raw");
+      throw new Error("boom");
+    };
+    const deps = {
+      acquireToolSlot: async (): Promise<() => void> => {
+        events.push("acquire");
+        return () => events.push("release");
+      },
+    };
+    await expect(
+      invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, deps),
+    ).rejects.toThrow("boom");
+    expect(events).toEqual(["acquire", "raw", "release"]);
+  });
+
+  it("skips acquireToolSlot entirely on cache hit (fast path)", async () => {
+    const cacheStore = new Map<string, unknown>();
+    const turn = {
+      toolCache: {
+        get: (tool: string, args: unknown) => cacheStore.get(`${tool}|${JSON.stringify(args)}`),
+        set: (tool: string, args: unknown, v: unknown) =>
+          cacheStore.set(`${tool}|${JSON.stringify(args)}`, v),
+        hitCount: () => 0,
+      },
+    } as unknown as import("../performance/trace-collector.js").Turn;
+
+    let acquireCount = 0;
+    const deps = {
+      getActiveTurn: () => turn,
+      getAgentPerfTools: () => ({
+        maxConcurrent: 10,
+        idempotent: ["memory_lookup"] as readonly string[],
+      }),
+      acquireToolSlot: async (): Promise<() => void> => {
+        acquireCount += 1;
+        return () => {};
+      },
+    };
+    const raw = vi
+      .fn<() => Promise<{ r: string }>>()
+      .mockResolvedValue({ r: "v1" });
+
+    // First call: miss → raw + acquire + release
+    await invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, deps);
+    expect(raw).toHaveBeenCalledTimes(1);
+    expect(acquireCount).toBe(1);
+
+    // Second identical call: hit → no raw, no acquire
+    await invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, deps);
+    expect(raw).toHaveBeenCalledTimes(1);
+    expect(acquireCount).toBe(1); // unchanged — cache hit bypassed gate
+  });
+
+  it("falls through without gate when acquireToolSlot is undefined (backward compat)", async () => {
+    const raw = vi.fn().mockResolvedValue({ ok: true });
+    await invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, undefined);
+    expect(raw).toHaveBeenCalledTimes(1);
+  });
+});

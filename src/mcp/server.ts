@@ -108,6 +108,17 @@ export type McpPerfTools = {
 export type McpServerDeps = {
   readonly getActiveTurn?: (agentName: string) => Turn | null;
   readonly getAgentPerfTools?: (agentName: string) => McpPerfTools | undefined;
+  /**
+   * Phase 55 v1.7 cleanup — per-agent concurrency gate for capping in-flight
+   * tool dispatches at `perf.tools.maxConcurrent`. When absent, no gate is
+   * applied (concurrency is whatever the SDK/runtime dispatches).
+   *
+   * The gate's release function is returned from acquire — callers MUST call
+   * it in a `finally` block to avoid leaks.
+   */
+  readonly acquireToolSlot?: (
+    agentName: string,
+  ) => Promise<() => void>;
 };
 
 /**
@@ -136,9 +147,9 @@ export async function invokeWithCache<R>(
   rawCall: () => Promise<R>,
   deps: McpServerDeps | undefined,
 ): Promise<R> {
-  if (!deps?.getActiveTurn) return rawCall();
+  if (!deps?.getActiveTurn) return invokeWithConcurrencyGate(agentName, rawCall, deps);
   const turn = deps.getActiveTurn(agentName);
-  if (!turn) return rawCall();
+  if (!turn) return invokeWithConcurrencyGate(agentName, rawCall, deps);
 
   const perfTools = deps.getAgentPerfTools?.(agentName);
   const idempotent = perfTools?.idempotent ?? IDEMPOTENT_TOOL_DEFAULTS;
@@ -147,15 +158,40 @@ export async function invokeWithCache<R>(
   if (isIdempotent) {
     const cached = turn.toolCache.get(toolName, args);
     if (cached !== undefined) {
+      // Cache hit: no raw call, no concurrency slot needed
       return cached as R;
     }
   }
 
-  const result = await rawCall();
+  const result = await invokeWithConcurrencyGate(agentName, rawCall, deps);
   if (isIdempotent) {
     turn.toolCache.set(toolName, args, result);
   }
   return result;
+}
+
+/**
+ * Phase 55 v1.7 cleanup — gate a raw tool call through the per-agent
+ * `ConcurrencyGate` when one is wired via `McpServerDeps.acquireToolSlot`.
+ *
+ * When `deps.acquireToolSlot` is undefined (stdio MCP path, or daemon running
+ * without the gate hook), falls through to the raw call with no gating.
+ *
+ * The release function is called in a `finally` block so exceptions never
+ * leak slots.
+ */
+async function invokeWithConcurrencyGate<R>(
+  agentName: string,
+  rawCall: () => Promise<R>,
+  deps: McpServerDeps | undefined,
+): Promise<R> {
+  if (!deps?.acquireToolSlot) return rawCall();
+  const release = await deps.acquireToolSlot(agentName);
+  try {
+    return await rawCall();
+  } finally {
+    release();
+  }
 }
 
 /**
