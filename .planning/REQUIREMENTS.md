@@ -27,9 +27,9 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 ### Context / Token Budget Tuning (CTX)
 
 - [x] **CTX-01**: Per-agent context audit report — current average and p95 payload size by section (identity, memory, skills, history, summary) documented in a reproducible script
-- [ ] **CTX-02**: Default memory assembly budgets tightened based on audit findings without a measurable response-quality regression (validated via regression prompt set)
+- [x] **CTX-02**: Default memory assembly budgets tightened based on audit findings without a measurable response-quality regression (validated via regression prompt set)
 - [ ] **CTX-03**: Skills load lazily or compress when not referenced in recent turns (configurable per agent). MCP tool-schema caching delegated to Claude Agent SDK's preset — not re-implemented in ClawCode per Phase 53 CONTEXT D-03.
-- [ ] **CTX-04**: Session-resume summary payload size reduced (strict upper bound on token cost per resume)
+- [x] **CTX-04**: Session-resume summary payload size reduced (strict upper bound on token cost per resume)
 
 ### Streaming (STREAM)
 

@@ -147,10 +147,10 @@ Plans:
   2. Default memory assembly budgets are tightened based on the audit and the change is validated against a regression prompt set with no quality drop
   3. Skills and MCP tool definitions load lazily or compress when not referenced in recent turns, configurable per agent, and the savings show up in the Phase 50 payload metrics
   4. Session-resume summary carries a strict token-cost upper bound and resume payloads stay under it across the fleet
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 Plans:
 - [x] 53-01-PLAN.md — Wave 1: @anthropic-ai/tokenizer install + countTokens helper + extended perf Zod (memoryAssemblyBudgets/lazySkills/resumeSummaryBudget) + ResolvedAgentConfig mirror + context-audit aggregator + clawcode context-audit CLI (filesystem-direct)
-- [ ] 53-02-PLAN.md — Wave 2: ContextAssembler per-section budget enforcement (identity/soul WARN-and-keep, hot_tier drop-lowest-importance, skills_header bullet-truncate) + context_assemble span section_tokens metadata + resume-summary budget enforcement (1500 default / 500 floor / 2-attempt regen + hard-truncate fallback)
+- [x] 53-02-PLAN.md — Wave 2: ContextAssembler per-section budget enforcement (identity/soul WARN-and-keep, hot_tier drop-lowest-importance, skills_header bullet-truncate) + context_assemble span section_tokens metadata + resume-summary budget enforcement (1500 default / 500 floor / 2-attempt regen + hard-truncate fallback)
 - [ ] 53-03-PLAN.md — Wave 3: SkillUsageTracker (in-memory ring buffer) + session-adapter mention capture + lazy-skill compression with re-inflate-on-mention + skills_included/compressed_count span metadata + clawcode bench --context-audit regression gate (15% response-length drop = fail)
 
 ### Phase 54: Streaming & Typing Indicator
@@ -209,7 +209,7 @@ Plans:
 | 50. Latency Instrumentation | 5/5 | Complete    | 2026-04-13 |
 | 51. SLOs & Regression Gate | 3/3 | Complete    | 2026-04-13 |
 | 52. Prompt Caching | 3/3 | Complete    | 2026-04-14 |
-| 53. Context & Token Budget Tuning | 1/3 | In Progress|  |
+| 53. Context & Token Budget Tuning | 2/3 | In Progress|  |
 | 54. Streaming & Typing Indicator | 0/0 | Not started | — |
 | 55. Tool-Call Overhead | 0/0 | Not started | — |
 | 56. Warm-Path Optimizations | 0/0 | Not started | — |
