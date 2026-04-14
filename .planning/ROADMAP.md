@@ -85,7 +85,7 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
 - [x] **Phase 52: Prompt Caching** - Apply Anthropic cache_control to stable prefixes, surface hit-rate, verify invalidation (completed 2026-04-14)
 - [x] **Phase 53: Context & Token Budget Tuning** - Audit payload size by section, tighten budgets, lazy-load skills, shrink resume summary (completed 2026-04-14)
 - [x] **Phase 54: Streaming & Typing Indicator** - First-token metric, tighter Discord chunk cadence, typing indicator within 500ms (completed 2026-04-14)
-- [ ] **Phase 55: Tool-Call Overhead** - Parallelize independent calls, intra-turn idempotent cache, per-tool timing telemetry
+- [x] **Phase 55: Tool-Call Overhead** - Parallelize independent calls, intra-turn idempotent cache, per-tool timing telemetry (completed 2026-04-14)
 - [ ] **Phase 56: Warm-Path Optimizations** - SQLite/sqlite-vec warmup, resident embeddings, session keep-alive, readiness health check
 
 ## Phase Details
@@ -179,11 +179,11 @@ Plans:
   2. Idempotent tool results (e.g., repeated `memory_lookup` with identical args, repeated `search_documents`) are cached within a turn and second-call latency approaches zero
   3. Per-tool round-trip timing is logged and visible on the dashboard so slow tools are directly attributable
   4. Cache is scoped strictly to a single turn — no stale data leaks across turns
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 55-01-PLAN.md — Wave 1: Foundations — perf.tools Zod config (maxConcurrent/idempotent/slos) + TS mirror + canonicalStringify utility + TraceStore.getToolPercentiles + getPerToolSlo helper
 - [x] 55-02-PLAN.md — Wave 2: Cache + dispatch — ToolCache per-Turn (whitelisted idempotent tools, frozen hits) + runWithConcurrencyLimit (Promise.allSettled semaphore) + MCP server wrapper injection + tool_call span metadata enrichment (tool_name, cached, is_parallel)
-- [ ] 55-03-PLAN.md — Wave 3: Surfaces — new "tools" IPC method (dual-registered per Phase 50 regression lesson) + daemon handler + REST /api/agents/:name/tools + `clawcode tools` CLI + dashboard Tool Call Latency panel + human-verify checkpoint
+- [x] 55-03-PLAN.md — Wave 3: Surfaces — new "tools" IPC method (dual-registered per Phase 50 regression lesson) + daemon handler + REST /api/agents/:name/tools + `clawcode tools` CLI + dashboard Tool Call Latency panel + human-verify checkpoint
 
 ### Phase 56: Warm-Path Optimizations
 **Goal**: The hot path stays hot — no first-query penalties, no cold re-init between messages
@@ -220,5 +220,5 @@ Plans:
 | 52. Prompt Caching | 3/3 | Complete    | 2026-04-14 |
 | 53. Context & Token Budget Tuning | 3/3 | Complete    | 2026-04-14 |
 | 54. Streaming & Typing Indicator | 4/4 | Complete    | 2026-04-14 |
-| 55. Tool-Call Overhead | 2/3 | In Progress|  |
+| 55. Tool-Call Overhead | 3/3 | Complete   | 2026-04-14 |
 | 56. Warm-Path Optimizations | 0/0 | Not started | — |
