@@ -15,10 +15,27 @@
  * cacheable block for THIS TURN ONLY and lands in the mutable suffix. The
  * NEXT turn with unchanged hot-tier re-enters the stable prefix. This
  * prevents cache thrashing on a single hot-tier update.
+ *
+ * Phase 53 Plan 02 — per-section budget enforcement + section_tokens metadata:
+ *   The assembler reads `memoryAssemblyBudgets` from `AssembleOptions` (threaded
+ *   from `agentConfig.perf.memoryAssemblyBudgets`) and applies section-specific
+ *   truncation strategies:
+ *     - identity / soul → WARN-and-keep (user persona never truncated)
+ *     - hot_tier        → drop LOWEST-importance rows
+ *     - skills_header   → truncate by bullet-line (legacy mechanism reused)
+ *     - recent_history  → measured only (SDK owns delivery)
+ *     - per_turn_summary / resume_summary → pass-through (enforced in
+ *       src/memory/context-summary.ts before the source string is built)
+ *   The return shape `{ stablePrefix, mutableSuffix, hotStableToken }` is
+ *   preserved EXACTLY — the per-section counts flow through the traced
+ *   wrapper (`assembleContextTraced`) onto the `context_assemble` span's
+ *   `metadata_json.section_tokens` key, consumed by Plan 53-01's audit CLI.
  */
 
 import { createHash } from "node:crypto";
 import type { Turn } from "../performance/trace-collector.js";
+import { countTokens } from "../performance/token-count.js";
+import type { MemoryEntry } from "../memory/types.js";
 
 export type ContextBudgets = {
   readonly identity: number;
@@ -29,11 +46,53 @@ export type ContextBudgets = {
 
 export type ContextSources = {
   readonly identity: string;
+  /**
+   * Phase 53 Plan 02 — SOUL.md body carved out from identity. When the upstream
+   * session-config already folds SOUL into identity, pass `""` here and the
+   * `soul` section_tokens reading will be `0` (accurate, not a lie).
+   */
+  readonly soul?: string;
+  /**
+   * Phase 53 Plan 02 — skill descriptions block, separated from other tool
+   * text so it becomes an individually-budgetable section. 53-03 will layer
+   * lazy-skill compression on top. Legacy callers that pass the combined
+   * skill+MCP+admin text via `toolDefinitions` keep working (no behavior
+   * change when `skillsHeader` is omitted).
+   */
+  readonly skillsHeader?: string;
   readonly hotMemories: string;
+  /**
+   * Phase 53 Plan 02 — optional raw MemoryEntry list parallel to
+   * `hotMemories`. When supplied, the assembler uses importance-ordered
+   * selection for budget enforcement (`drop-lowest-importance` strategy).
+   * When omitted, the assembler falls back to bullet-line truncation.
+   */
+  readonly hotMemoriesEntries?: readonly MemoryEntry[];
   readonly toolDefinitions: string;
   readonly graphContext: string;
   readonly discordBindings: string;
   readonly contextSummary: string;
+  /**
+   * Phase 53 Plan 02 — turn-local context recap (separate from resume summary).
+   * Both `perTurnSummary` and `resumeSummary` land in the mutable suffix.
+   * When BOTH are empty, the legacy `contextSummary` field is used as fallback
+   * for resume_summary (preserving Phase 52 behavior).
+   */
+  readonly perTurnSummary?: string;
+  /**
+   * Phase 53 Plan 02 — session-resume summary loaded from
+   * `<workspace>/memory/context-summary.md`. Budget enforcement happens in
+   * `src/memory/context-summary.ts.enforceSummaryBudget` BEFORE this field is
+   * populated; the assembler does not re-enforce here.
+   */
+  readonly resumeSummary?: string;
+  /**
+   * Phase 53 Plan 02 — recent conversation history text for MEASUREMENT only.
+   * The SDK owns history delivery, so the assembler never truncates this.
+   * The field exists solely so `section_tokens.recent_history` can be
+   * populated on the `context_assemble` span for audit reporting.
+   */
+  readonly recentHistory?: string;
 };
 
 export const DEFAULT_BUDGETS: ContextBudgets = Object.freeze({
@@ -43,15 +102,110 @@ export const DEFAULT_BUDGETS: ContextBudgets = Object.freeze({
   graphContext: 2000,
 });
 
+// ── Phase 53 Plan 02 — per-section budget surface ──────────────────────────
+
+/**
+ * Canonical section names (must match `SECTION_NAMES` in
+ * src/performance/context-audit.ts verbatim). Duplicated inline here to avoid
+ * a context-assembler -> performance/context-audit import cycle.
+ */
+export type SectionName =
+  | "identity"
+  | "soul"
+  | "skills_header"
+  | "hot_tier"
+  | "recent_history"
+  | "per_turn_summary"
+  | "resume_summary";
+
+/**
+ * Strategy applied to a section that exceeded its per-section budget.
+ *
+ *   - `warn-and-keep`          identity + soul: user persona never truncated
+ *   - `drop-lowest-importance` hot_tier: drop lowest-importance rows
+ *   - `truncate-bullets`       skills_header / fallback hot_tier: drop trailing bullets
+ *   - `passthrough`            recent_history / summaries: measured, not truncated
+ */
+export type SectionBudgetStrategy =
+  | "warn-and-keep"
+  | "drop-lowest-importance"
+  | "truncate-bullets"
+  | "passthrough";
+
+/**
+ * Event emitted on `onBudgetWarning` when a section exceeds its budget. The
+ * full prompt body is NEVER attached — only section name + counts + strategy
+ * — so log sinks never persist persona text.
+ */
+export type BudgetWarningEvent = {
+  readonly section: SectionName;
+  readonly beforeTokens: number;
+  readonly budgetTokens: number;
+  readonly strategy: SectionBudgetStrategy;
+};
+
+/**
+ * Per-section token counts emitted onto the `context_assemble` span metadata
+ * under key `section_tokens`. Consumed by Plan 53-01's audit aggregator.
+ * All 7 canonical sections ALWAYS populated (0 for absent inputs) so the
+ * audit report has a stable row shape.
+ */
+export type SectionTokenCounts = {
+  readonly identity: number;
+  readonly soul: number;
+  readonly skills_header: number;
+  readonly hot_tier: number;
+  readonly recent_history: number;
+  readonly per_turn_summary: number;
+  readonly resume_summary: number;
+};
+
+/**
+ * Phase 53 Plan 02 — per-section budget overrides. All optional; missing
+ * entries fall back to `DEFAULT_PHASE53_BUDGETS`. Mirrors
+ * `ResolvedAgentConfig.perf.memoryAssemblyBudgets` so session-config can
+ * thread the agent's config straight through.
+ */
+export type MemoryAssemblyBudgets = {
+  readonly identity?: number;
+  readonly soul?: number;
+  readonly skills_header?: number;
+  readonly hot_tier?: number;
+  readonly recent_history?: number;
+  readonly per_turn_summary?: number;
+  readonly resume_summary?: number;
+};
+
+/**
+ * Phase 53 Plan 02 — starter budget defaults (conservative per D-02). The
+ * phase ships machinery, not aggressive cuts; operators tune these after
+ * reviewing `clawcode context-audit` output.
+ */
+export const DEFAULT_PHASE53_BUDGETS: Required<MemoryAssemblyBudgets> = Object.freeze({
+  identity: 1000,
+  soul: 2000,
+  skills_header: 1500,
+  hot_tier: 3000,
+  recent_history: 8000,
+  per_turn_summary: 500,
+  resume_summary: 1500,
+});
+
 /**
  * Phase 52 Plan 02 — options for `assembleContext`.
  *
  * `priorHotStableToken` is the hot-tier `stable_token` from the PRIOR turn
  * (stored per-agent by SessionManager). When set and when the current turn's
  * token differs, hot-tier migrates from stable to mutable for this turn only.
+ *
+ * Phase 53 Plan 02 — `memoryAssemblyBudgets` threads per-section budgets
+ * from agent config; `onBudgetWarning` fires once per over-budget section
+ * so the caller can emit pino WARN logs with agent + turnId context.
  */
 export type AssembleOptions = {
   readonly priorHotStableToken?: string;
+  readonly memoryAssemblyBudgets?: MemoryAssemblyBudgets;
+  readonly onBudgetWarning?: (event: BudgetWarningEvent) => void;
 };
 
 /**
@@ -62,6 +216,9 @@ export type AssembleOptions = {
  * preamble (uncached). `hotStableToken` is the sha256 of the hot-tier
  * signature THIS turn and should be carried forward into the NEXT turn's
  * `priorHotStableToken`.
+ *
+ * Phase 53 Plan 02 — this public shape is FROZEN; per-section token counts
+ * flow through `assembleContextTraced` -> span.setMetadata instead.
  */
 export type AssembledContext = {
   readonly stablePrefix: string;
@@ -150,15 +307,289 @@ function truncateToBudget(text: string, tokenBudget: number): string {
   return text.slice(0, maxChars) + "...";
 }
 
+// ── Phase 53 Plan 02 — per-section enforcement helpers ─────────────────────
+
+function mergeBudgets(
+  overrides?: MemoryAssemblyBudgets,
+): Required<MemoryAssemblyBudgets> {
+  if (!overrides) return DEFAULT_PHASE53_BUDGETS;
+  return Object.freeze({
+    identity: overrides.identity ?? DEFAULT_PHASE53_BUDGETS.identity,
+    soul: overrides.soul ?? DEFAULT_PHASE53_BUDGETS.soul,
+    skills_header:
+      overrides.skills_header ?? DEFAULT_PHASE53_BUDGETS.skills_header,
+    hot_tier: overrides.hot_tier ?? DEFAULT_PHASE53_BUDGETS.hot_tier,
+    recent_history:
+      overrides.recent_history ?? DEFAULT_PHASE53_BUDGETS.recent_history,
+    per_turn_summary:
+      overrides.per_turn_summary ?? DEFAULT_PHASE53_BUDGETS.per_turn_summary,
+    resume_summary:
+      overrides.resume_summary ?? DEFAULT_PHASE53_BUDGETS.resume_summary,
+  });
+}
+
+/**
+ * D-03: identity / soul NEVER truncate. Emit warn event and return input
+ * unchanged. Empty string short-circuits (no warn fires).
+ */
+function enforceWarnAndKeep(
+  text: string,
+  section: SectionName,
+  budget: number,
+  warn?: (e: BudgetWarningEvent) => void,
+): string {
+  if (!text) return "";
+  const tokens = countTokens(text);
+  if (tokens > budget && warn) {
+    warn(
+      Object.freeze({
+        section,
+        beforeTokens: tokens,
+        budgetTokens: budget,
+        strategy: "warn-and-keep",
+      }),
+    );
+  }
+  return text;
+}
+
+/**
+ * Over-budget bullet-list sections (skills_header) reuse the legacy
+ * `truncateToBudget` drop-trailing-lines strategy. Fires one warn on truncation.
+ */
+function enforceBulletTruncation(
+  text: string,
+  section: SectionName,
+  budget: number,
+  warn?: (e: BudgetWarningEvent) => void,
+): string {
+  if (!text) return "";
+  const tokens = countTokens(text);
+  if (tokens <= budget) return text;
+  if (warn) {
+    warn(
+      Object.freeze({
+        section,
+        beforeTokens: tokens,
+        budgetTokens: budget,
+        strategy: "truncate-bullets",
+      }),
+    );
+  }
+  return truncateToBudget(text, budget);
+}
+
+/**
+ * Phase 53 Plan 02 — hot-tier importance-ordered truncation.
+ *
+ * When `entries` is supplied, sort by importance desc, accumulate bullet
+ * cost (in tokens) and stop as soon as adding the next entry would exceed
+ * budget (keeping at least 1 entry even if it individually exceeds budget —
+ * otherwise the section would silently disappear).
+ *
+ * When `entries` is absent (back-compat with Phase 52 callers), fall back to
+ * bullet-line truncation on `preRenderedHot`.
+ */
+function selectHotMemoriesWithinBudget(
+  preRenderedHot: string,
+  entries: readonly MemoryEntry[] | undefined,
+  budget: number,
+  warn: ((e: BudgetWarningEvent) => void) | undefined,
+): { readonly rendered: string } {
+  if (!entries || entries.length === 0) {
+    if (!preRenderedHot) return Object.freeze({ rendered: "" });
+    const tokens = countTokens(preRenderedHot);
+    if (tokens <= budget) return Object.freeze({ rendered: preRenderedHot });
+    if (warn) {
+      warn(
+        Object.freeze({
+          section: "hot_tier",
+          beforeTokens: tokens,
+          budgetTokens: budget,
+          strategy: "truncate-bullets",
+        }),
+      );
+    }
+    return Object.freeze({ rendered: truncateToBudget(preRenderedHot, budget) });
+  }
+
+  const sorted = [...entries].sort((a, b) => b.importance - a.importance);
+  const kept: MemoryEntry[] = [];
+  let running = 0;
+  for (const mem of sorted) {
+    const line = `- ${mem.content}`;
+    const cost = countTokens(line);
+    if (running + cost > budget && kept.length > 0) break;
+    kept.push(mem);
+    running += cost;
+  }
+
+  if (kept.length < sorted.length && warn) {
+    const fullText = sorted.map((m) => `- ${m.content}`).join("\n");
+    warn(
+      Object.freeze({
+        section: "hot_tier",
+        beforeTokens: countTokens(fullText),
+        budgetTokens: budget,
+        strategy: "drop-lowest-importance",
+      }),
+    );
+  }
+
+  return Object.freeze({
+    rendered: kept.map((m) => `- ${m.content}`).join("\n"),
+  });
+}
+
+/**
+ * Internal shared implementation returning both the public AssembledContext
+ * shape and per-section token counts. The public `assembleContext` strips
+ * the counts (Phase 52 shape contract); `assembleContextTraced` forwards
+ * them onto the `context_assemble` span.
+ */
+function assembleContextInternal(
+  sources: ContextSources,
+  budgets: ContextBudgets,
+  opts: AssembleOptions | undefined,
+): { readonly assembled: AssembledContext; readonly sectionTokens: SectionTokenCounts } {
+  const phaseBudgets = mergeBudgets(opts?.memoryAssemblyBudgets);
+  const warn = opts?.onBudgetWarning;
+
+  // 1. identity — WARN-and-keep (D-03)
+  const identityOut = enforceWarnAndKeep(
+    sources.identity,
+    "identity",
+    phaseBudgets.identity,
+    warn,
+  );
+
+  // 2. soul — WARN-and-keep (D-03). When the upstream folds SOUL into identity
+  //    and passes sources.soul === "" / undefined, the soul count is 0
+  //    (accurate for the current session-config behavior).
+  const soulOut = enforceWarnAndKeep(
+    sources.soul ?? "",
+    "soul",
+    phaseBudgets.soul,
+    warn,
+  );
+
+  // 3. skills_header — bullet-truncation
+  const skillsOut = enforceBulletTruncation(
+    sources.skillsHeader ?? "",
+    "skills_header",
+    phaseBudgets.skills_header,
+    warn,
+  );
+
+  // 4. hot_tier — importance-ordered drop (or fallback bullet truncation)
+  const hotInput = selectHotMemoriesWithinBudget(
+    sources.hotMemories,
+    sources.hotMemoriesEntries,
+    phaseBudgets.hot_tier,
+    warn,
+  );
+
+  // 5. recent_history — passthrough (SDK owns)
+  const recentHistoryText = sources.recentHistory ?? "";
+
+  // 6/7. per_turn_summary + resume_summary — split when new fields present,
+  //      legacy contextSummary used for resume_summary when new fields absent.
+  const perTurn = sources.perTurnSummary ?? "";
+  const resumeSum = sources.resumeSummary ?? sources.contextSummary;
+
+  // ── Placement ────────────────────────────────────────────────────────────
+  const stableParts: string[] = [];
+  const mutableParts: string[] = [];
+
+  // Identity stays in stablePrefix (no section header — fingerprint has its own formatting)
+  if (identityOut) {
+    stableParts.push(identityOut);
+  }
+
+  // Soul in stablePrefix (carved out from identity when session-config supplies it)
+  if (soulOut) {
+    stableParts.push(soulOut);
+  }
+
+  // Hot-tier placement — Phase 52 stable_token logic applied to the
+  // (possibly importance-truncated) rendered hot-tier string.
+  const currentHotToken = computeHotStableToken(hotInput.rendered);
+  if (hotInput.rendered) {
+    const hotBlock = "## Key Memories\n\n" + hotInput.rendered;
+    const priorToken = opts?.priorHotStableToken;
+    const hotInMutable =
+      priorToken !== undefined && priorToken !== currentHotToken;
+    if (hotInMutable) {
+      mutableParts.push(hotBlock);
+    } else {
+      stableParts.push(hotBlock);
+    }
+  }
+
+  // Combined "Available Tools" header: skillsHeader (Phase 53) + toolDefinitions (Phase 52).
+  // Session-config can populate either or both — the header renders once.
+  const toolsCombined = [skillsOut, sources.toolDefinitions]
+    .filter((s) => s && s.length > 0)
+    .join("\n\n");
+  if (toolsCombined) {
+    stableParts.push(
+      "## Available Tools\n\n" +
+        truncateToBudget(toolsCombined, budgets.toolDefinitions),
+    );
+  }
+
+  // Graph context (Phase 41/52) stable
+  if (sources.graphContext) {
+    stableParts.push(
+      "## Related Context\n\n" +
+        truncateToBudget(sources.graphContext, budgets.graphContext),
+    );
+  }
+
+  // Discord bindings pass-through in MUTABLE
+  if (sources.discordBindings) {
+    mutableParts.push(sources.discordBindings);
+  }
+
+  // Per-turn summary in mutable (Phase 53)
+  if (perTurn) {
+    mutableParts.push(perTurn);
+  }
+
+  // Resume summary in mutable — falls through to legacy contextSummary when new fields absent
+  if (resumeSum) {
+    mutableParts.push(resumeSum);
+  }
+
+  const sectionTokens: SectionTokenCounts = Object.freeze({
+    identity: countTokens(identityOut),
+    soul: countTokens(soulOut),
+    skills_header: countTokens(skillsOut),
+    hot_tier: countTokens(hotInput.rendered),
+    recent_history: countTokens(recentHistoryText),
+    per_turn_summary: countTokens(perTurn),
+    resume_summary: countTokens(resumeSum),
+  });
+
+  return Object.freeze({
+    assembled: Object.freeze({
+      stablePrefix: stableParts.join("\n\n"),
+      mutableSuffix: mutableParts.join("\n\n"),
+      hotStableToken: currentHotToken,
+    }),
+    sectionTokens,
+  });
+}
+
 /**
  * Assemble context into stable + mutable blocks with per-source budgets.
  *
  * Stable prefix (cacheable via SDK preset+append):
- *   identity → hotMemories (when stable) → toolDefinitions → graphContext
+ *   identity → soul → hotMemories (when stable) → toolDefinitions → graphContext
  *
  * Mutable suffix (per-turn, outside cache):
  *   [hotMemories (when hot-tier composition just changed)] → discordBindings
- *   → contextSummary
+ *   → perTurnSummary → resumeSummary
  *
  * The hot-tier placement decision:
  *   - If `opts.priorHotStableToken` is undefined → hot-tier in stable
@@ -168,74 +599,23 @@ function truncateToBudget(text: string, tokenBudget: number): string {
  *   - Otherwise → hot-tier in mutable FOR THIS TURN ONLY (composition drift
  *     on the boundary; next unchanged turn re-enters the cached block).
  *
+ * Phase 53 Plan 02 — per-section budget enforcement:
+ *   When `opts.memoryAssemblyBudgets` is supplied, over-budget sections fire
+ *   `opts.onBudgetWarning(event)` and apply their section-specific strategy:
+ *     identity/soul → warn-and-keep | hot_tier → drop-lowest-importance
+ *     skills_header → truncate-bullets
+ *   Per-section counts are measured regardless of budget state and can be
+ *   surfaced via `assembleContextTraced` on the `context_assemble` span.
+ *
  * Empty sources are omitted entirely (no empty headers).
- * Discord bindings and context summary are pass-through (no truncation).
+ * Discord bindings and summaries are pass-through (no truncation in assembler).
  */
 export function assembleContext(
   sources: ContextSources,
   budgets: ContextBudgets = DEFAULT_BUDGETS,
   opts?: AssembleOptions,
 ): AssembledContext {
-  const stableParts: string[] = [];
-  const mutableParts: string[] = [];
-
-  // Identity: no section header (fingerprint has its own formatting). Stable.
-  if (sources.identity) {
-    stableParts.push(truncateToBudget(sources.identity, budgets.identity));
-  }
-
-  // Hot memories: composition-driven placement. Always compute the current
-  // token so SessionManager can carry it forward even when hot-tier is empty
-  // (empty-case hash is the known sha256("") constant).
-  const currentHotToken = computeHotStableToken(sources.hotMemories);
-  if (sources.hotMemories) {
-    const rendered =
-      "## Key Memories\n\n" +
-      truncateToBudget(sources.hotMemories, budgets.hotMemories);
-    const priorToken = opts?.priorHotStableToken;
-    // Place in mutable ONLY when we have a prior token and it differs — the
-    // hot-tier composition boundary case. Otherwise (no prior, or matching
-    // prior) keep hot-tier in the cacheable stable block.
-    const hotInMutable =
-      priorToken !== undefined && priorToken !== currentHotToken;
-    if (hotInMutable) {
-      mutableParts.push(rendered);
-    } else {
-      stableParts.push(rendered);
-    }
-  }
-
-  // Tool definitions: stable (skills header + MCP catalog + subagent-model).
-  if (sources.toolDefinitions) {
-    stableParts.push(
-      "## Available Tools\n\n" +
-        truncateToBudget(sources.toolDefinitions, budgets.toolDefinitions),
-    );
-  }
-
-  // Graph context: stable (runtime-derived but session-scoped).
-  if (sources.graphContext) {
-    stableParts.push(
-      "## Related Context\n\n" +
-        truncateToBudget(sources.graphContext, budgets.graphContext),
-    );
-  }
-
-  // Discord bindings: pass-through in MUTABLE (per-turn context).
-  if (sources.discordBindings) {
-    mutableParts.push(sources.discordBindings);
-  }
-
-  // Context summary: pass-through in MUTABLE.
-  if (sources.contextSummary) {
-    mutableParts.push(sources.contextSummary);
-  }
-
-  return Object.freeze({
-    stablePrefix: stableParts.join("\n\n"),
-    mutableSuffix: mutableParts.join("\n\n"),
-    hotStableToken: currentHotToken,
-  });
+  return assembleContextInternal(sources, budgets, opts).assembled;
 }
 
 /**
@@ -249,7 +629,10 @@ export function assembleContext(
  * so per-turn callers that thread `priorHotStableToken` preserve the
  * hot-tier stable_token semantic.
  *
- * WIRING NOTE (Phase 50 Plan 02 Case A carried forward): all current call
+ * Phase 53 Plan 02 — forwards per-section token counts onto the span as
+ * `metadata_json.section_tokens` (consumed by the 53-01 audit CLI).
+ *
+ * WIRING NOTE (Phase 50 Plan 02 Case A carried forward): most current call
  * sites of `assembleContext` live inside `buildSessionConfig` and run at
  * agent-startup / session-resume — NOT per turn. The traced wrapper exists
  * for future per-turn refresh paths; today the segment row reports count=0
@@ -263,7 +646,16 @@ export function assembleContextTraced(
 ): AssembledContext {
   const span = turn?.startSpan("context_assemble");
   try {
-    return assembleContext(sources, budgets, opts);
+    const { assembled, sectionTokens } = assembleContextInternal(
+      sources,
+      budgets,
+      opts,
+    );
+    // Phase 53 Plan 02 — per-section token counts for audit aggregation.
+    // Metadata key is snake_case `section_tokens` so it matches the consumer
+    // shape in src/performance/context-audit.ts verbatim.
+    span?.setMetadata({ section_tokens: sectionTokens });
+    return assembled;
   } finally {
     span?.end();
   }

@@ -104,16 +104,18 @@ describe("assembleContext", () => {
     expect(summaryIdx).toBeGreaterThan(discordIdx);
   });
 
-  it("truncates identity exceeding 1000-token budget (4000+ chars)", () => {
+  it("identity exceeding 1000-token budget is WARN-and-kept (Phase 53 D-03)", () => {
+    // Phase 53 Plan 02: identity is NEVER truncated (D-03 — user persona text
+    // is warn-and-keep only). Legacy pre-53 behavior truncated to 4003 chars;
+    // that behavior is intentionally removed for identity/soul.
     const longIdentity = "a".repeat(5000);
     const sources = makeSources({ identity: longIdentity });
 
     const result = joinAssembled(assembleContext(sources));
 
-    // Identity budget is 1000 tokens = 4000 chars max
-    // Truncated text should be <= 4000 chars + "..." suffix
-    expect(result.length).toBeLessThanOrEqual(4003);
-    expect(result).toContain("...");
+    // Identity is preserved verbatim
+    expect(result).toContain(longIdentity);
+    expect(result.length).toBeGreaterThanOrEqual(5000);
   });
 
   it("truncates hotMemories at line boundaries (drops whole bullets)", () => {
@@ -172,7 +174,11 @@ describe("assembleContext", () => {
     expect(result).toBe("");
   });
 
-  it("uses custom budgets when provided", () => {
+  it("uses custom budgets when provided (legacy hotMemories path)", () => {
+    // Phase 53 Plan 02: legacy ContextBudgets still govern non-identity
+    // sections (hotMemories/toolDefinitions/graphContext). Identity itself
+    // is WARN-and-kept per D-03. This test exercises the legacy budget on
+    // tool definitions which still uses truncateToBudget.
     const tinyBudgets: ContextBudgets = {
       identity: 5,
       hotMemories: 5,
@@ -182,16 +188,17 @@ describe("assembleContext", () => {
 
     const sources = makeSources({
       identity: "a".repeat(100),
-      hotMemories: "- short\n- also short",
+      toolDefinitions: "x".repeat(100),
     });
 
     const result = joinAssembled(assembleContext(sources, tinyBudgets));
 
-    // Identity should be truncated to ~20 chars (5 tokens * 4) + "..."
-    const identityEnd = result.indexOf("\n\n## Key Memories");
-    const identityPart =
-      identityEnd >= 0 ? result.slice(0, identityEnd) : result;
-    expect(identityPart.length).toBeLessThanOrEqual(23); // 20 + "..."
+    // Identity is preserved (D-03); tool definitions truncated to ~20 chars + "..."
+    expect(result).toContain("a".repeat(100));
+    const toolsStart = result.indexOf("## Available Tools");
+    expect(toolsStart).toBeGreaterThan(0);
+    const toolsSection = result.slice(toolsStart);
+    expect(toolsSection).toContain("...");
   });
 
   it("discord bindings are pass-through (no truncation)", () => {
@@ -241,13 +248,20 @@ describe("assembleContext", () => {
     expect(result).toContain("## Key Memories");
   });
 
-  it("total assembled context respects ceiling check", () => {
-    const hugeIdentity = "x".repeat(40000);
-    const sources = makeSources({ identity: hugeIdentity });
+  it("total assembled context respects ceiling check (non-identity path)", () => {
+    // Phase 53 Plan 02: identity is WARN-and-kept (D-03), so a huge identity
+    // blows through the ceiling intentionally. Use hotMemories for the
+    // ceiling test — tool/graph sections still truncate via legacy budget.
+    const sources = makeSources({
+      identity: "short",
+      hotMemories: Array.from(
+        { length: 500 },
+        (_, i) => `- memory ${i} ` + "x".repeat(80),
+      ).join("\n"),
+    });
 
     const result = joinAssembled(assembleContext(sources));
-    // Even though identity is huge, it gets truncated to budget
-    // So the result should not exceed ceiling
+    // hotMemories truncated via DEFAULT_PHASE53_BUDGETS.hot_tier (3000 tokens)
     expect(exceedsCeiling(result)).toBe(false);
   });
 });
@@ -263,8 +277,9 @@ import { assembleContextTraced } from "../context-assembler.js";
 describe("context_assemble tracing", () => {
   function makeTurnStub() {
     const spanEnd = vi.fn();
-    const startSpan = vi.fn(() => ({ end: spanEnd }));
-    return { turn: { startSpan, end: vi.fn() }, spanEnd, startSpan };
+    const setMetadata = vi.fn();
+    const startSpan = vi.fn(() => ({ end: spanEnd, setMetadata }));
+    return { turn: { startSpan, end: vi.fn() }, spanEnd, startSpan, setMetadata };
   }
 
   it("tracing: assembleContextTraced opens a context_assemble span before assembling and ends it after (finally)", () => {
@@ -426,7 +441,8 @@ describe("two-block assembly (Phase 52)", () => {
 
   it("assembleContextTraced returns AssembledContext unchanged (pass-through type-preserving wrapper)", () => {
     const spanEnd = vi.fn();
-    const startSpan = vi.fn(() => ({ end: spanEnd }));
+    const setMetadata = vi.fn();
+    const startSpan = vi.fn(() => ({ end: spanEnd, setMetadata }));
     const turn = { startSpan, end: vi.fn() };
     const sources = makeSources({
       identity: "identity",
@@ -547,6 +563,10 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
   });
 
   it("Test 3: hot_tier over budget drops LOWEST-importance rows", () => {
+    // Each `- alpha aaaaaa aaaaaa aaaaaa aaaaaa` bullet is ~14 tokens.
+    // Budget 32 fits two bullets (14 + 14 = 28 <= 32) but blocks the third
+    // (28 + 14 = 42 > 32), which triggers drop-lowest-importance keeping
+    // the two highest-importance entries.
     const entries: readonly MemoryEntry[] = [
       makeMemoryEntry({ content: "alpha aaaaaa aaaaaa aaaaaa aaaaaa", importance: 0.9 }),
       makeMemoryEntry({ content: "beta bbbbbb bbbbbb bbbbbb bbbbbb", importance: 0.8 }),
@@ -555,14 +575,13 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
       makeMemoryEntry({ content: "epsilon eeeeee eeeeee eeeeee eeeeee", importance: 0.5 }),
     ];
     const hotRendered = entries.map((m) => `- ${m.content}`).join("\n");
-    // each bullet ~ 10 tokens; 5 bullets ~ 50 tokens; set budget to fit ~2 only
     const warnings: BudgetWarningEvent[] = [];
 
     const result = assembleContext(
       makeSources({ identity: "id", hotMemories: hotRendered, hotMemoriesEntries: entries }),
       DEFAULT_BUDGETS,
       {
-        memoryAssemblyBudgets: { hot_tier: 25 },
+        memoryAssemblyBudgets: { hot_tier: 32 },
         onBudgetWarning: (e) => warnings.push(e),
       },
     ) as unknown as { stablePrefix: string; mutableSuffix: string };
@@ -573,6 +592,8 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
     expect(combined).toContain("beta");
     // Lowest kept out
     expect(combined).not.toContain("epsilon");
+    expect(combined).not.toContain("gamma");
+    expect(combined).not.toContain("delta");
 
     const hotWarn = warnings.find((w) => w.section === "hot_tier");
     expect(hotWarn).toBeDefined();
@@ -773,6 +794,8 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
   });
 
   it("Test 12: hot-tier placement — importance-drop applies in mutable when hotInMutable", () => {
+    // keep bullet = 5 tokens; drop bullet = ~8 tokens. Budget 5 fits only
+    // the keep bullet (first accumulated), then drop (5+8 > 5) is dropped.
     const entries: readonly MemoryEntry[] = [
       makeMemoryEntry({ content: "keep-" + "x".repeat(20), importance: 0.95 }),
       makeMemoryEntry({ content: "drop-" + "y".repeat(20), importance: 0.05 }),
@@ -789,7 +812,7 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
       DEFAULT_BUDGETS,
       {
         priorHotStableToken: "0".repeat(64), // force mutable placement
-        memoryAssemblyBudgets: { hot_tier: 15 },
+        memoryAssemblyBudgets: { hot_tier: 5 },
         onBudgetWarning: (e) => warnings.push(e),
       },
     ) as unknown as { stablePrefix: string; mutableSuffix: string };

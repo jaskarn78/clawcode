@@ -194,8 +194,25 @@ export class Span {
   ) {
     this.name = name;
     this.startedAtMs = startedAtMs;
-    this.metadata = metadata;
+    this.metadata = { ...metadata };
     this.onEnd = onEnd;
+  }
+
+  /**
+   * Phase 53 Plan 02 — merge additional keys into this span's metadata record
+   * BEFORE `end()` is called. No-op when the span has already ended (prevents
+   * mutation after commit).
+   *
+   * The merge is shallow — top-level keys overwrite. Intended for small
+   * dictionaries like `{ section_tokens }` emitted by the context assembler;
+   * callers MUST NOT log full prompt bodies here (SECURITY — see phase
+   * critical_constraints).
+   */
+  setMetadata(extra: Record<string, unknown>): void {
+    if (this.ended) return;
+    for (const key of Object.keys(extra)) {
+      this.metadata[key] = extra[key];
+    }
   }
 
   /** Close the span; duration is captured as `Date.now() - startedAtMs`. */

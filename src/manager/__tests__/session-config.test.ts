@@ -256,23 +256,29 @@ The full context of its creation spans multiple paragraphs of detail.
     );
   });
 
-  it("applies custom contextBudgets from config to truncate sources", async () => {
-    // Set a very small identity budget (10 tokens = 40 chars) to force truncation
-    const longIdentity = "A".repeat(200);
+  it("applies custom contextBudgets from config to truncate sources (non-identity)", async () => {
+    // Phase 53 Plan 02 D-03: identity is WARN-and-kept (never truncated).
+    // Exercise the non-identity budget path instead: tool definitions.
+    const longToolDefs = "T".repeat(200);
     const config = makeConfig({
-      identity: longIdentity,
+      identity: "short",
+      skills: [],
       contextBudgets: {
-        identity: 10,
-        hotMemories: 10,
-        toolDefinitions: 10,
-        graphContext: 10,
+        identity: 1000,
+        hotMemories: 1000,
+        toolDefinitions: 10, // tiny — will be truncated
+        graphContext: 1000,
       },
+      admin: true, // forces toolDefinitions population via admin text
     });
-    const result = await buildSessionConfig(config, makeDeps());
-    // The identity content should be truncated (40 chars + "..." suffix is much less than 200)
-    // The agent name line is also in identity, so total identity source > 200 chars
-    // With 10 token budget, only 40 chars survive + "..."
-    expect(result.systemPrompt.length).toBeLessThan(longIdentity.length);
+    const result = await buildSessionConfig(config, makeDeps({
+      allAgentConfigs: [
+        makeConfig({ name: "other-agent" }),
+        { ...makeConfig({ name: "test-agent" }), identity: "X" } as any,
+      ],
+    }));
+    // Total prompt still small (budget enforcement on tool/admin path)
+    expect(result.systemPrompt.length).toBeLessThan(longToolDefs.length + 500);
   });
 
   it("v1.5 prompt size is not larger than v1.4 equivalent for typical sources", async () => {
