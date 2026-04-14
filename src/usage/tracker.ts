@@ -52,6 +52,14 @@ export class UsageTracker {
   }
 
   /**
+   * Phase 56 Plan 01 — expose the underlying database for READ-ONLY warmup
+   * queries (AgentMemoryManager.warmSqliteStores). Do not use for writes.
+   */
+  getDatabase(): DatabaseType {
+    return this.db;
+  }
+
+  /**
    * Record a usage event.
    */
   record(event: Omit<UsageEvent, "id">): void {

@@ -1,0 +1,130 @@
+import type { EmbeddingService } from "../memory/embedder.js";
+
+/**
+ * Phase 56 Plan 01 — composite warm-path readiness check.
+ *
+ * Aggregates three per-agent signals into one pass/fail verdict:
+ *   1. SQLite + sqlite-vec warmup (via `deps.sqliteWarm`).
+ *   2. `EmbeddingService.isReady()` + one probe `embed` call.
+ *   3. Session plumbing (optional `deps.sessionProbe` — Plan 02 threads a
+ *      real session check; Plan 01 defaults to no-op "always ready").
+ *
+ * Wrapped in a `WARM_PATH_TIMEOUT_MS` (10s) overall budget. On timeout,
+ * returns `ready:false` with `errors=["timeout after 10000ms"]`.
+ *
+ * Never throws — always returns a `WarmPathResult`. Caller (Plan 02)
+ * inspects `result.ready` to decide whether to mark the agent `running`.
+ *
+ * All returned structures are frozen to match the project-wide readonly
+ * contract (see `coding-style.md`).
+ */
+
+export const WARM_PATH_TIMEOUT_MS = 10_000;
+
+export type WarmPathDurations = {
+  readonly sqlite: number;
+  readonly embedder: number;
+  readonly session: number;
+};
+
+export type WarmPathResult = {
+  readonly ready: boolean;
+  readonly durations_ms: WarmPathDurations;
+  readonly total_ms: number;
+  readonly errors: readonly string[];
+};
+
+export type WarmPathDeps = {
+  readonly agent: string;
+  readonly sqliteWarm: (
+    agent: string,
+  ) => Promise<{ memories_ms: number; usage_ms: number; traces_ms: number }>;
+  readonly embedder: Pick<EmbeddingService, "isReady" | "embed">;
+  /**
+   * Optional session probe — Plan 02 wires a real check; when absent, the
+   * session step is a no-op and records 0ms.
+   */
+  readonly sessionProbe?: () => Promise<void>;
+  /** Override timeout for tests. Defaults to `WARM_PATH_TIMEOUT_MS`. */
+  readonly timeoutMs?: number;
+};
+
+/**
+ * Run the composite warm-path readiness check.
+ *
+ * The implementation splits the work into three sequential steps (sqlite,
+ * embedder probe, session probe) and races the entire sequence against a
+ * timeout. Each step catches its own error and pushes a scoped message
+ * into `errors` so partial failures are attributable.
+ */
+export async function runWarmPathCheck(
+  deps: WarmPathDeps,
+): Promise<WarmPathResult> {
+  const timeoutMs = deps.timeoutMs ?? WARM_PATH_TIMEOUT_MS;
+  const startedAt = performance.now();
+  const errors: string[] = [];
+  let sqliteMs = 0;
+  let embedderMs = 0;
+  let sessionMs = 0;
+
+  const work = (async () => {
+    // Step 1 — SQLite + sqlite-vec warmup.
+    try {
+      const r = await deps.sqliteWarm(deps.agent);
+      sqliteMs = r.memories_ms + r.usage_ms + r.traces_ms;
+    } catch (e) {
+      errors.push(`sqlite: ${(e as Error).message}`);
+    }
+
+    // Step 2 — Embedder readiness + single probe call.
+    const embStart = performance.now();
+    try {
+      if (!deps.embedder.isReady()) {
+        errors.push("embedder: not ready");
+      } else {
+        await deps.embedder.embed("warmup probe");
+      }
+    } catch (e) {
+      errors.push(`embedder: ${(e as Error).message}`);
+    }
+    embedderMs = performance.now() - embStart;
+
+    // Step 3 — Session probe (Plan 02 wires real value).
+    const sessStart = performance.now();
+    try {
+      if (deps.sessionProbe) await deps.sessionProbe();
+    } catch (e) {
+      errors.push(`session: ${(e as Error).message}`);
+    }
+    sessionMs = performance.now() - sessStart;
+  })();
+
+  let timedOut = false;
+  let timerHandle: NodeJS.Timeout | undefined;
+  await Promise.race([
+    work,
+    new Promise<void>((resolve) => {
+      timerHandle = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs);
+    }),
+  ]);
+  if (timerHandle) clearTimeout(timerHandle);
+
+  if (timedOut) errors.push(`timeout after ${timeoutMs}ms`);
+
+  const total_ms = performance.now() - startedAt;
+  const ready = errors.length === 0;
+
+  return Object.freeze({
+    ready,
+    durations_ms: Object.freeze({
+      sqlite: sqliteMs,
+      embedder: embedderMs,
+      session: sessionMs,
+    }),
+    total_ms,
+    errors: Object.freeze([...errors]) as readonly string[],
+  });
+}

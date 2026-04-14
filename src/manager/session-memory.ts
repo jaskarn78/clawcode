@@ -233,4 +233,100 @@ export class AgentMemoryManager {
     await this.embedder.warmup();
     this.log.info("embedding model warmed up");
   }
+
+  /**
+   * Phase 56 Plan 01 — run READ-ONLY warmup queries on the three per-agent
+   * SQLite databases (memories.db, usage.db, traces.db) to prime the page
+   * cache and prepared-statement plan cache.
+   *
+   * INVARIANT: NO INSERT/UPDATE/DELETE anywhere in this body. Warmup must
+   * never alter on-disk state operators expect untouched after a restart.
+   *
+   * Budget: ≤ 200ms per agent total on SSD (empty tables).
+   *
+   * @throws Error if the agent has no MemoryStore registered or if any
+   *         query fails; the thrown message names the offending DB so
+   *         operators can attribute the failure.
+   */
+  async warmSqliteStores(name: string): Promise<{
+    readonly memories_ms: number;
+    readonly usage_ms: number;
+    readonly traces_ms: number;
+  }> {
+    const store = this.memoryStores.get(name);
+    if (!store) {
+      throw new Error(
+        `warmSqliteStores: no MemoryStore for agent '${name}'`,
+      );
+    }
+    const usageTracker = this.usageTrackers.get(name);
+    const traceStore = this.traceStores.get(name);
+
+    // memories.db — 3 READ queries. The vec0 MATCH primes the sqlite-vec
+    // extension so the first real memory_lookup does not pay the extension
+    // boot cost.
+    const t0 = performance.now();
+    try {
+      const db = store.getDatabase();
+      db.prepare("SELECT COUNT(*) AS n FROM memories").get();
+      db.prepare(
+        "SELECT id, tier, importance FROM memories ORDER BY accessed_at DESC LIMIT 1",
+      )
+        .all();
+      db.prepare(
+        "SELECT memory_id FROM vec_memories WHERE embedding MATCH ? AND k = 1",
+      )
+        .all(new Float32Array(384));
+    } catch (e) {
+      throw new Error(
+        `warmSqliteStores[memories]: ${(e as Error).message}`,
+      );
+    }
+    const memories_ms = performance.now() - t0;
+
+    // usage.db — 2 READ queries. Uses the real `timestamp` column (ISO text).
+    const t1 = performance.now();
+    if (usageTracker) {
+      try {
+        const udb = usageTracker.getDatabase();
+        udb.prepare("SELECT COUNT(*) AS n FROM usage_events").get();
+        udb.prepare(
+          "SELECT session_id FROM usage_events WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 1",
+        )
+          .all(
+            new Date(Date.now() - 24 * 60 * 60 * 1000)
+              .toISOString()
+              .replace("Z", "")
+              .slice(0, 19),
+          );
+      } catch (e) {
+        throw new Error(
+          `warmSqliteStores[usage]: ${(e as Error).message}`,
+        );
+      }
+    }
+    const usage_ms = performance.now() - t1;
+
+    // traces.db — 3 READ queries. The LEFT JOIN primes the span retention
+    // query plan (see 50-RESEARCH.md pitfall 4).
+    const t2 = performance.now();
+    if (traceStore) {
+      try {
+        const tdb = traceStore.getDatabase();
+        tdb.prepare("SELECT COUNT(*) AS n FROM traces").get();
+        tdb.prepare("SELECT COUNT(*) AS n FROM trace_spans").get();
+        tdb.prepare(
+          "SELECT t.id FROM traces t LEFT JOIN trace_spans s ON s.turn_id = t.id LIMIT 1",
+        )
+          .all();
+      } catch (e) {
+        throw new Error(
+          `warmSqliteStores[traces]: ${(e as Error).message}`,
+        );
+      }
+    }
+    const traces_ms = performance.now() - t2;
+
+    return Object.freeze({ memories_ms, usage_ms, traces_ms });
+  }
 }

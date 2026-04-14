@@ -141,6 +141,15 @@ export class TraceStore {
   }
 
   /**
+   * Phase 56 Plan 01 — expose the underlying database for READ-ONLY warmup
+   * queries (AgentMemoryManager.warmSqliteStores). Do not use for writes —
+   * go through writeTurn/pruneOlderThan instead.
+   */
+  getDatabase(): DatabaseType {
+    return this.db;
+  }
+
+  /**
    * Persist a complete turn record: one row in `traces` + N rows in
    * `trace_spans`, all inside a single transaction.
    *
