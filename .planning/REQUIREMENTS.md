@@ -34,7 +34,7 @@ Reduce end-to-end latency from Discord message arrival to agent reply across the
 ### Streaming (STREAM)
 
 - [x] **STREAM-01**: First-token latency measured as a first-class metric (separate from end-to-end) and reported per agent
-- [ ] **STREAM-02**: Discord streaming delivery uses tighter chunk cadence (smaller batches, lower debounce) so users see tokens sooner without rate-limit regressions
+- [x] **STREAM-02**: Discord streaming delivery uses tighter chunk cadence (smaller batches, lower debounce) so users see tokens sooner without rate-limit regressions
 - [x] **STREAM-03**: Typing indicator fires within 500ms of message arrival, before any LLM work starts
 
 ### Tool-Call Overhead (TOOL)

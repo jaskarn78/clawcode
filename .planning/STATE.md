@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
 status: Ready to execute
-stopped_at: "Completed 54-02 (2 commits: 32ddcc7 test + 7103b6b feat) — typing fire relocated to handleMessage entry, typing_indicator span emitted on caller-owned Turn, old eager fire removed, 8s heartbeat preserved; 10 new bridge tests GREEN (14 total)"
-last_updated: "2026-04-14T03:20:05.803Z"
+stopped_at: "Completed 54-03 (4 commits: 45d40db test + 214fe90 feat + a7988b8 test + c69ac85 feat) — ProgressiveMessageEditor 750ms default + first_visible_token span + rate-limit backoff; bench rate_limit_errors counter + --check-regression hard-fail + 4-segment backward-compat filter; baseline.ts diff renderer aligned; 29 new tests GREEN (2087 / 2087 in scope)"
+last_updated: "2026-04-14T03:37:55.189Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 54 (streaming-typing-indicator) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 
 ## Performance Metrics
 
@@ -158,6 +158,9 @@ Recent decisions affecting current work:
 - [Phase 54-streaming-typing-indicator]: Phase 54 Plan 02: Typing fire relocated to DiscordBridge.handleMessage entry (thread + channel branches, after Turn creation) with typing_indicator span on caller-owned Turn — three-layer error boundary (try/catch + promise.catch + finally) ensures typing failures never block response path
 - [Phase 54-streaming-typing-indicator]: Phase 54 Plan 02: isUserMessageType uses numeric literals (type === 0 || 19) not discord.js MessageType enum — preserves bridge's zero-enum-dependency style; whitelist approach implicitly excludes future system message types
 - [Phase 54-streaming-typing-indicator]: Phase 54 Plan 02: typing_indicator span piggybacks on existing caller-owned Turn (no new Turn created) — keeps per-message Turn lifecycle flat; span duration captures ONLY fire latency (span.end in finally, not after streamFromAgent)
+- [Phase 54]: ProgressiveMessageEditor editIntervalMs changed from readonly to mutable — rate-limit backoff doubles per turn; fresh editor per Discord message means state resets naturally without explicit cleanup
+- [Phase 54]: bench runner BACKWARD_COMPAT_BENCH_SEGMENTS + baseline.ts BENCH_DIFF_SEGMENTS keep bench universe (report + baseline + diff) on 4 names even though runtime CANONICAL_SEGMENTS has 6 — preserves committed baseline.json parseability
+- [Phase 54]: daemon.ts bench-run-prompt gains rate_limit_errors: 0 forward-compat field — bench-agent has no Discord binding today so value is always 0, but wire is ready for future bench variants that exercise the streaming pipeline; zero new IPC methods
 
 ### Roadmap Evolution
 
@@ -223,9 +226,10 @@ None yet.
 | Phase 53-context-token-budget-tuning P03 | 32m 23s | 2 tasks | 12 files |
 | Phase 54-streaming-typing-indicator P01 | 4m 33s | 2 tasks | 8 files |
 | Phase 54-streaming-typing-indicator P02 | 5m 5s | 1 tasks | 2 files |
+| Phase 54 P03 | 11m 11s | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 54-02 (2 commits: 32ddcc7 test + 7103b6b feat) — typing fire relocated to handleMessage entry, typing_indicator span emitted on caller-owned Turn, old eager fire removed, 8s heartbeat preserved; 10 new bridge tests GREEN (14 total)
+Stopped at: Completed 54-03 (4 commits: 45d40db test + 214fe90 feat + a7988b8 test + c69ac85 feat) — ProgressiveMessageEditor 750ms default + first_visible_token span + rate-limit backoff; bench rate_limit_errors counter + --check-regression hard-fail + 4-segment backward-compat filter; baseline.ts diff renderer aligned; 29 new tests GREEN (2087 / 2087 in scope)
 Resume file: None

@@ -162,11 +162,11 @@ Plans:
   2. Discord streaming delivery uses a tighter chunk cadence (smaller batches, lower debounce) and measured first-token-visible-in-Discord latency drops versus baseline without triggering Discord rate-limit errors
   3. The typing indicator fires within 500ms of Discord message arrival, before any LLM work starts, for every bound agent
   4. Streaming cadence is configurable per agent with safe defaults
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 Plans:
 - [x] 54-01-PLAN.md — Wave 1: Foundations — perf.streaming Zod + TS mirror (editIntervalMs min(300), default 750 applied at consumer) + typing_indicator SLO + 6-segment canonical (first_visible_token + typing_indicator added) + TraceStore.getFirstTokenPercentiles wrapper
 - [x] 54-02-PLAN.md — Wave 2: Typing indicator relocation to DiscordBridge.handleMessage entry + typing_indicator span (4 guard conditions: routed agent + ACL + non-bot + user-message-type) + silent-swallow failure handling
-- [ ] 54-03-PLAN.md — Wave 3: ProgressiveMessageEditor 750ms default + per-agent override + first_visible_token span + isDiscordRateLimitError helper + doubling backoff + bench rate_limit_errors counter + --check-regression hard-fail
+- [x] 54-03-PLAN.md — Wave 3: ProgressiveMessageEditor 750ms default + per-agent override + first_visible_token span + isDiscordRateLimitError helper + doubling backoff + bench rate_limit_errors counter + --check-regression hard-fail
 - [ ] 54-04-PLAN.md — Wave 4: Surfaces — CLI First Token block above segments table + dashboard First Token headline card + 6-row Latency panel + server-emitted first_token_headline (cold-start guard count < 5) + human-verify checkpoint
 **UI hint**: yes
 
@@ -215,6 +215,6 @@ Plans:
 | 51. SLOs & Regression Gate | 3/3 | Complete    | 2026-04-13 |
 | 52. Prompt Caching | 3/3 | Complete    | 2026-04-14 |
 | 53. Context & Token Budget Tuning | 3/3 | Complete    | 2026-04-14 |
-| 54. Streaming & Typing Indicator | 2/4 | In Progress|  |
+| 54. Streaming & Typing Indicator | 3/4 | In Progress|  |
 | 55. Tool-Call Overhead | 0/0 | Not started | — |
 | 56. Warm-Path Optimizations | 0/0 | Not started | — |
