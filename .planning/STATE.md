@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to execute
-stopped_at: "Completed 53-02 (4 commits: ce53a1a + 7f54955 + e660b38 + 63ff866) — per-section budget enforcement + section_tokens span metadata + resume-summary budget + session-config wiring; 28 new tests GREEN, 1296 core tests GREEN"
-last_updated: "2026-04-14T01:21:17.457Z"
+status: Phase complete — ready for verification
+stopped_at: "Completed 53-03 (4 commits: 0e7f314 + d79155e + 70c92ee + 0ce7e2d) — lazy-skill compression with re-inflate-on-mention + bench --context-audit regression gate + SkillUsageTracker; 34 new tests GREEN, CTX-01/02/03/04 all closed, Phase 53 complete"
+last_updated: "2026-04-14T01:59:37.582Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -146,6 +146,11 @@ Recent decisions affecting current work:
 - [Phase 53-context-token-budget-tuning]: Phase 53 Plan 02 - enforceSummaryBudget hard-truncate uses bounded iterative shrink loop (max 16 iters) to handle dense-tokenizer chars/token ratio variance
 - [Phase 53-context-token-budget-tuning]: Phase 53 Plan 02 - Span.setMetadata added (shallow-merge pre-end); metadata buffer switched to mutable constructor-copy to support post-construction key appends
 - [Phase 53-context-token-budget-tuning]: Phase 53 Plan 02 - vi.mock hygiene pattern: async importOriginal spread for context-summary.js so new exports don't strip module surface
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - SkillUsageTracker is single shared instance at SessionManager scope with internal per-agent Map isolation; capacity 20 matches lazySkills.usageThresholdTurns default
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - Lazy-skill decision matrix: warm-up/recentlyUsed/mentioned render FULL, else COMPRESSED one-liner; catalog never drops (discoverability preserved CTX Specifics #2)
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - Word-boundary mention regex b<escaped>b/i scans currentUserMessage + lastAssistantMessage; escapes regex metachars; substring false-positives blocked
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - span metadata gains skills_included_count + skills_compressed_count via span.setMetadata merge (Plan 53-02 pattern reused); no new span schema
+- [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - bench --context-audit mutex with --update-baseline checked BEFORE bench run; captureResponses auto-enables for either flag so future audit runs have baseline data
 
 ### Roadmap Evolution
 
@@ -208,9 +213,10 @@ None yet.
 | Phase 52 P02 | 19m 43s | 2 tasks | 11 files |
 | Phase 53-context-token-budget-tuning P01 | 9m 38s | 2 tasks | 12 files |
 | Phase 53-context-token-budget-tuning P02 | 21m 47s | 2 tasks | 8 files |
+| Phase 53-context-token-budget-tuning P03 | 32m 23s | 2 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 53-02 (4 commits: ce53a1a + 7f54955 + e660b38 + 63ff866) — per-section budget enforcement + section_tokens span metadata + resume-summary budget + session-config wiring; 28 new tests GREEN, 1296 core tests GREEN
+Stopped at: Completed 53-03 (4 commits: 0e7f314 + d79155e + 70c92ee + 0ce7e2d) — lazy-skill compression with re-inflate-on-mention + bench --context-audit regression gate + SkillUsageTracker; 34 new tests GREEN, CTX-01/02/03/04 all closed, Phase 53 complete
 Resume file: None
