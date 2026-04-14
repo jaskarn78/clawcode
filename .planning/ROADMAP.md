@@ -194,9 +194,9 @@ Plans:
   2. The embedding model stays resident across turns — `memory_lookup` after an idle period has no cold-start penalty in trace data
   3. Consecutive Discord messages in the same thread reuse a warm session (no full re-init), measurable as lower end-to-end latency on the second and later messages in a burst
   4. Startup health check verifies warm-path readiness (SQLite, embeddings, session ready) before the agent is marked "ready" in `/clawcode-fleet` — agents never appear ready while still cold
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 Plans:
-- [ ] 56-01-PLAN.md — Wave 1: foundations — warm-path-check composite helper + READ-ONLY SQLite warmup queries + registry schema extension (warm_path_ready + warm_path_readiness_ms) + daemon embedder probe with hard-fail
+- [x] 56-01-PLAN.md — Wave 1: foundations — warm-path-check composite helper + READ-ONLY SQLite warmup queries + registry schema extension (warm_path_ready + warm_path_readiness_ms) + daemon embedder probe with hard-fail
 - [ ] 56-02-PLAN.md — Wave 2: ready gate + surfaces — SessionManager.startAgent awaits warm-path check (10s timeout) + status IPC extension (no new method) + CLI WARM-PATH column + Discord fleet embed warm suffix + dashboard warm-path badge
 - [ ] 56-03-PLAN.md — Wave 3: session keep-alive audit + 5-message keep-alive bench assertion + human-verify checkpoint against clawdy
 
@@ -225,4 +225,4 @@ Plans:
 | 53. Context & Token Budget Tuning | 3/3 | Complete    | 2026-04-14 |
 | 54. Streaming & Typing Indicator | 4/4 | Complete    | 2026-04-14 |
 | 55. Tool-Call Overhead | 3/3 | Complete    | 2026-04-14 |
-| 56. Warm-Path Optimizations | 0/3 | Planned     | — |
+| 56. Warm-Path Optimizations | 1/3 | In Progress|  |

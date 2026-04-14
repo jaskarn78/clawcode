@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to plan
-stopped_at: Completed 55-02-PLAN.md
-last_updated: "2026-04-14T05:20:35.313Z"
+status: Ready to execute
+stopped_at: Completed 56-01-PLAN.md
+last_updated: "2026-04-14T09:20:01.707Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 21
-  completed_plans: 21
+  total_plans: 24
+  completed_plans: 22
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 55 — tool-call-overhead
+**Current focus:** Phase 56 — warm-path-optimizations
 
 ## Current Position
 
-Phase: 56
-Plan: Not started
+Phase: 56 (warm-path-optimizations) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -167,6 +167,9 @@ Recent decisions affecting current work:
 - [Phase 55-tool-call-overhead]: Phase 55 Plan 01 — getPerToolSlo returns frozen {thresholdMs, metric}; always-valid fallback to DEFAULT_SLOS tool_call (1500ms p95) for unknown tools / undefined perTools / empty slos; consumers never null-check
 - [Phase 55-tool-call-overhead]: Phase 55 Plan 02 — ToolCache uses deep-freeze-clone on both set and get for two-direction mutation isolation; per-Turn lazy allocation with zero cross-turn leak proven by test
 - [Phase 55-tool-call-overhead]: Phase 55 Plan 02 — is_parallel derived by pre-scanning assistant message content[] for tool_use block count; cache-hit detection via hitCount delta between span open and tool_use_result arrival
+- [Phase 56]: Warm-path helper uses Promise.race 10s timeout with per-step scoped error prefixes (sqlite:/embedder:/session:) so partial failures are attributable
+- [Phase 56]: Registry schema extended via optional fields (warm_path_ready?, warm_path_readiness_ms?) — legacy registry.json files parse cleanly; consumers treat undefined as not-ready
+- [Phase 56]: Daemon startup hard-fails if embedder probe (embed('warmup probe')) throws — memory_lookup without embeddings is a broken surface, not degraded
 
 ### Roadmap Evolution
 
@@ -235,9 +238,10 @@ None yet.
 | Phase 54 P03 | 11m 11s | 2 tasks | 11 files |
 | Phase 55-tool-call-overhead P01 | 5m 15s | 2 tasks | 10 files |
 | Phase 55-tool-call-overhead P02 | 30m | 2 tasks | 7 files |
+| Phase 56 P01 | 18min | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 55-02-PLAN.md
+Stopped at: Completed 56-01-PLAN.md
 Resume file: None
