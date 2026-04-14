@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Ready to plan
-stopped_at: "Completed 53-03 (4 commits: 0e7f314 + d79155e + 70c92ee + 0ce7e2d) — lazy-skill compression with re-inflate-on-mention + bench --context-audit regression gate + SkillUsageTracker; 34 new tests GREEN, CTX-01/02/03/04 all closed, Phase 53 complete"
-last_updated: "2026-04-14T02:15:13.713Z"
+status: Executing Phase 54
+stopped_at: "Completed 54-01 (2 commits: 9902418 + fd7f2da) — streamingConfigSchema with 300ms floor + 6-segment CANONICAL_SEGMENTS + typing_indicator SLO + getFirstTokenPercentiles; 15 new tests GREEN, foundation ready for Plans 54-02/03/04"
+last_updated: "2026-04-14T03:08:49.959Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 14
-  completed_plans: 14
+  total_plans: 18
+  completed_plans: 15
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 53 — context-token-budget-tuning
+**Current focus:** Phase 54 — streaming-typing-indicator
 
 ## Current Position
 
-Phase: 54
-Plan: Not started
+Phase: 54 (streaming-typing-indicator) — EXECUTING
+Plan: 2 of 4
 
 ## Performance Metrics
 
@@ -151,6 +151,10 @@ Recent decisions affecting current work:
 - [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - Word-boundary mention regex b<escaped>b/i scans currentUserMessage + lastAssistantMessage; escapes regex metachars; substring false-positives blocked
 - [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - span metadata gains skills_included_count + skills_compressed_count via span.setMetadata merge (Plan 53-02 pattern reused); no new span schema
 - [Phase 53-context-token-budget-tuning]: Phase 53 Plan 03 - bench --context-audit mutex with --update-baseline checked BEFORE bench run; captureResponses auto-enables for either flag so future audit runs have baseline data
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — streamingConfigSchema with editIntervalMs.min(300) floor + default-at-consumer pattern (mirrors Phase 53 lazySkills)
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — CanonicalSegment expanded to 6 in canonical order (end_to_end, first_token, first_visible_token, context_assemble, tool_call, typing_indicator); bench segmentEnum intentionally NOT touched for baseline.json backward compat
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — typing_indicator p95 500ms SLO is observational initially per CONTEXT D-03; first_visible_token has no default SLO (debug/support metric, delta-only)
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — getFirstTokenPercentiles composes getPercentiles + Array.find with frozen count=0 no-data row for empty-window callers; zero new IPC methods (Phase 50 regression lesson preserved)
 
 ### Roadmap Evolution
 
@@ -214,9 +218,10 @@ None yet.
 | Phase 53-context-token-budget-tuning P01 | 9m 38s | 2 tasks | 12 files |
 | Phase 53-context-token-budget-tuning P02 | 21m 47s | 2 tasks | 8 files |
 | Phase 53-context-token-budget-tuning P03 | 32m 23s | 2 tasks | 12 files |
+| Phase 54-streaming-typing-indicator P01 | 4m 33s | 2 tasks | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 53-03 (4 commits: 0e7f314 + d79155e + 70c92ee + 0ce7e2d) — lazy-skill compression with re-inflate-on-mention + bench --context-audit regression gate + SkillUsageTracker; 34 new tests GREEN, CTX-01/02/03/04 all closed, Phase 53 complete
+Stopped at: Completed 54-01 (2 commits: 9902418 + fd7f2da) — streamingConfigSchema with 300ms floor + 6-segment CANONICAL_SEGMENTS + typing_indicator SLO + getFirstTokenPercentiles; 15 new tests GREEN, foundation ready for Plans 54-02/03/04
 Resume file: None
