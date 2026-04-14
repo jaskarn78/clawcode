@@ -5,6 +5,7 @@ import {
   DEFAULT_SLOS,
   evaluateCacheHitRateStatus,
   evaluateSloStatus,
+  getPerToolSlo,
   mergeSloOverrides,
   type SloEntry,
 } from "../slos.js";
@@ -167,6 +168,43 @@ describe("Phase 54: CANONICAL_SEGMENTS + typing_indicator SLO integration", () =
       (e) => e.segment === "typing_indicator" && e.metric === "p95",
     );
     expect(typing?.thresholdMs).toBe(300);
+  });
+});
+
+describe("getPerToolSlo (Phase 55)", () => {
+  it("falls back to global tool_call SLO (1500ms p95) when perTools is undefined", () => {
+    const result = getPerToolSlo("memory_lookup", undefined);
+    expect(result).toEqual({ thresholdMs: 1500, metric: "p95" });
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("returns the per-tool override with default metric p95 when metric omitted", () => {
+    const result = getPerToolSlo("memory_lookup", {
+      slos: { memory_lookup: { thresholdMs: 100 } },
+    });
+    expect(result).toEqual({ thresholdMs: 100, metric: "p95" });
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("honors explicit metric on the override", () => {
+    const result = getPerToolSlo("memory_lookup", {
+      slos: { memory_lookup: { thresholdMs: 50, metric: "p50" } },
+    });
+    expect(result).toEqual({ thresholdMs: 50, metric: "p50" });
+  });
+
+  it("unknown tools still fall back to global tool_call SLO (1500ms p95)", () => {
+    // An override map with entries for some tools but not 'unknown_tool' —
+    // the lookup must miss and return the global fallback, not null / throw.
+    const result = getPerToolSlo("unknown_tool", {
+      slos: { memory_lookup: { thresholdMs: 100 } },
+    });
+    expect(result).toEqual({ thresholdMs: 1500, metric: "p95" });
+  });
+
+  it("returns the global fallback when perTools has no slos field at all", () => {
+    const result = getPerToolSlo("any_tool", {});
+    expect(result).toEqual({ thresholdMs: 1500, metric: "p95" });
   });
 });
 

@@ -222,6 +222,54 @@ export function evaluateCacheHitRateStatus(
   return "no_data";
 }
 
+/**
+ * Phase 55 — resolve the effective SLO for a named tool with fallback to the
+ * global `tool_call` SLO.
+ *
+ * Lookup order:
+ *   1. If `perTools?.slos?.[toolName]` exists, that wins. The override's
+ *      `metric` defaults to `"p95"` when omitted so the common case stays
+ *      concise in clawcode.yaml.
+ *   2. Otherwise falls back to the `tool_call` entry in `DEFAULT_SLOS`
+ *      (1500ms p95 from 51-CONTEXT).
+ *
+ * Unknown tools (not in the override map, not in DEFAULT_SLOS) still receive
+ * the global `tool_call` fallback so the dashboard and CLI always have a
+ * threshold to render — no `null` cases for consumers to null-check.
+ *
+ * Pure function; returns a frozen `{ thresholdMs, metric }` pair.
+ *
+ * @param toolName - The tool name (e.g. `"memory_lookup"`) without the
+ *                   `tool_call.` prefix.
+ * @param perTools - Optional per-agent `perf.tools` config (the `.slos` field
+ *                   is the only one this helper reads). `undefined` falls
+ *                   through to the global SLO directly.
+ */
+export function getPerToolSlo(
+  toolName: string,
+  perTools?: {
+    readonly slos?: Readonly<
+      Record<
+        string,
+        { readonly thresholdMs: number; readonly metric?: SloMetric }
+      >
+    >;
+  },
+): { readonly thresholdMs: number; readonly metric: SloMetric } {
+  const override = perTools?.slos?.[toolName];
+  if (override) {
+    return Object.freeze({
+      thresholdMs: override.thresholdMs,
+      metric: override.metric ?? "p95",
+    });
+  }
+  const globalToolCall = DEFAULT_SLOS.find((s) => s.segment === "tool_call");
+  return Object.freeze({
+    thresholdMs: globalToolCall?.thresholdMs ?? 1500,
+    metric: globalToolCall?.metric ?? "p95",
+  });
+}
+
 // Re-export for downstream symmetry (so callers don't need a second import to
 // iterate canonical segment names).
 export { CANONICAL_SEGMENTS };

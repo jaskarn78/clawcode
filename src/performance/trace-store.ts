@@ -28,6 +28,7 @@ import {
   type CacheTrendPoint,
   type CanonicalSegment,
   type PercentileRow,
+  type ToolPercentileRow,
   type TurnRecord,
 } from "./types.js";
 import { PERCENTILE_SQL } from "./percentiles.js";
@@ -41,6 +42,7 @@ type PreparedStatements = {
   readonly insertSpan: Statement;
   readonly deleteOlderThan: Statement;
   readonly percentiles: Statement;
+  readonly perToolPercentiles: Statement;
   readonly cacheTelemetryRows: Statement;
   readonly cacheTelemetryAggregates: Statement;
   readonly cacheTelemetryTrend: Statement;
@@ -259,6 +261,57 @@ export class TraceStore {
       p99: null,
       count: 0,
     });
+  }
+
+  /**
+   * Phase 55 — per-tool percentile aggregation.
+   *
+   * Groups `trace_spans` rows by span name, filtered to `name LIKE 'tool_call.%'`,
+   * extracts the tool name via `SUBSTR(name, 11)` (strips the canonical
+   * `tool_call.` prefix — 11 characters including the trailing dot), and
+   * computes p50/p95/p99/count per tool using the same nearest-rank approach
+   * as `PERCENTILE_SQL`.
+   *
+   * Returns one frozen `ToolPercentileRow` per distinct tool observed in the
+   * window, sorted by p95 DESC (nulls last) at the SQL layer. CLI + dashboard
+   * consumers render the resulting list verbatim to highlight the slowest
+   * tool at the top without a client-side re-sort.
+   *
+   * Empty window returns `[]` (not an error, not a sentinel row).
+   */
+  getToolPercentiles(
+    agent: string,
+    sinceIso: string,
+  ): readonly ToolPercentileRow[] {
+    try {
+      const rows = this.stmts.perToolPercentiles.all({
+        agent,
+        since: sinceIso,
+      }) as ReadonlyArray<{
+        readonly tool_name: string;
+        readonly p50: number | null;
+        readonly p95: number | null;
+        readonly p99: number | null;
+        readonly count: number;
+      }>;
+      return Object.freeze(
+        rows.map((r) =>
+          Object.freeze<ToolPercentileRow>({
+            tool_name: r.tool_name,
+            p50: r.p50,
+            p95: r.p95,
+            p99: r.p99,
+            count: r.count,
+          }),
+        ),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getToolPercentiles failed: ${msg}`,
+        this.dbPath,
+      );
+    }
   }
 
   /**
@@ -510,6 +563,42 @@ export class TraceStore {
         DELETE FROM traces WHERE started_at < @cutoff
       `),
       percentiles: this.db.prepare(PERCENTILE_SQL),
+      // Phase 55 Plan 01: per-tool percentile aggregation. Groups spans whose
+      // name starts with `tool_call.` by the extracted tool name (SUBSTR
+      // strips the 10-char prefix + period = 11 chars). Nearest-rank p50/p95/p99
+      // mirrors PERCENTILE_SQL. Sorted by p95 DESC at the SQL layer so CLI /
+      // dashboard consumers render slowest-first without client-side sort.
+      // NULLS LAST — SQLite places NULLs first on ASC and last on DESC by
+      // default, but we spell it explicitly so intent is clear.
+      perToolPercentiles: this.db.prepare(`
+        WITH tool_spans AS (
+          SELECT
+            SUBSTR(s.name, 11) AS tool_name,
+            s.duration_ms
+          FROM trace_spans s
+          JOIN traces t ON t.id = s.turn_id
+          WHERE t.agent = @agent
+            AND t.started_at >= @since
+            AND s.name LIKE 'tool_call.%'
+        ),
+        ranked AS (
+          SELECT
+            tool_name,
+            duration_ms,
+            ROW_NUMBER() OVER (PARTITION BY tool_name ORDER BY duration_ms) AS rn,
+            COUNT(*) OVER (PARTITION BY tool_name) AS cnt
+          FROM tool_spans
+        )
+        SELECT
+          tool_name,
+          CAST(MIN(CASE WHEN rn >= CAST(cnt * 0.50 AS INTEGER) + 1 THEN duration_ms END) AS INTEGER) AS p50,
+          CAST(MIN(CASE WHEN rn >= CAST(cnt * 0.95 AS INTEGER) + 1 THEN duration_ms END) AS INTEGER) AS p95,
+          CAST(MIN(CASE WHEN rn >= CAST(cnt * 0.99 AS INTEGER) + 1 THEN duration_ms END) AS INTEGER) AS p99,
+          cnt AS count
+        FROM ranked
+        GROUP BY tool_name
+        ORDER BY p95 DESC NULLS LAST
+      `),
       // Phase 52 Plan 01: per-turn rows for in-JS percentile math.
       // WHERE input_tokens IS NOT NULL AND input_tokens > 0 excludes both
       // Phase 50 legacy turns (NULL) and warm-up turns (0).

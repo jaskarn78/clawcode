@@ -275,6 +275,201 @@ describe("TraceStore", () => {
     });
     expect(Object.isFrozen(row)).toBe(true);
   });
+
+  it("getToolPercentiles returns [] (empty array, not error) when window is empty", () => {
+    const result = store.getToolPercentiles(
+      "no-tools-agent",
+      "2026-04-01T00:00:00.000Z",
+    );
+    expect(result).toEqual([]);
+    expect(Array.isArray(result)).toBe(true);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("getToolPercentiles aggregates tool_call.* spans, sorted by p95 DESC", () => {
+    // 3 memory_lookup spans (100ms/200ms/300ms) + 2 search_documents (50/150ms).
+    // memory_lookup should rank first (higher p95 ≈ 300), search_documents second.
+    const nowMs = new Date("2026-04-13T00:00:00.000Z").getTime();
+    const memLookupDurations = [100, 200, 300];
+    const searchDurations = [50, 150];
+
+    memLookupDurations.forEach((d, i) => {
+      const ts = new Date(nowMs + i).toISOString();
+      const turn = buildTurn({
+        id: `ml-${i}`,
+        agent: "tool-agent",
+        startedAt: ts,
+        endedAt: ts,
+        totalMs: d,
+        spans: [
+          Object.freeze({
+            name: "tool_call.memory_lookup",
+            startedAt: ts,
+            durationMs: d,
+            metadata: Object.freeze({}),
+          }),
+        ],
+      });
+      store.writeTurn(turn);
+    });
+    searchDurations.forEach((d, i) => {
+      const ts = new Date(nowMs + 1000 + i).toISOString();
+      const turn = buildTurn({
+        id: `sd-${i}`,
+        agent: "tool-agent",
+        startedAt: ts,
+        endedAt: ts,
+        totalMs: d,
+        spans: [
+          Object.freeze({
+            name: "tool_call.search_documents",
+            startedAt: ts,
+            durationMs: d,
+            metadata: Object.freeze({}),
+          }),
+        ],
+      });
+      store.writeTurn(turn);
+    });
+
+    const rows = store.getToolPercentiles(
+      "tool-agent",
+      new Date(nowMs - 1000).toISOString(),
+    );
+    expect(rows).toHaveLength(2);
+    // memory_lookup has p95 of 300 (highest rank); search_documents has p95 of 150.
+    // Sorted by p95 DESC means memory_lookup comes first.
+    expect(rows[0]!.tool_name).toBe("memory_lookup");
+    expect(rows[1]!.tool_name).toBe("search_documents");
+    // Counts match insertion.
+    expect(rows[0]!.count).toBe(3);
+    expect(rows[1]!.count).toBe(2);
+  });
+
+  it("getToolPercentiles row shape: tool_name, p50, p95, p99, count — all frozen", () => {
+    const nowMs = new Date("2026-04-13T00:00:00.000Z").getTime();
+    const ts = new Date(nowMs).toISOString();
+    const turn = buildTurn({
+      id: "shape-turn",
+      agent: "shape-agent",
+      startedAt: ts,
+      endedAt: ts,
+      totalMs: 100,
+      spans: [
+        Object.freeze({
+          name: "tool_call.memory_lookup",
+          startedAt: ts,
+          durationMs: 100,
+          metadata: Object.freeze({}),
+        }),
+      ],
+    });
+    store.writeTurn(turn);
+
+    const rows = store.getToolPercentiles(
+      "shape-agent",
+      new Date(nowMs - 1000).toISOString(),
+    );
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    // Shape: required keys present.
+    expect(row).toHaveProperty("tool_name");
+    expect(row).toHaveProperty("p50");
+    expect(row).toHaveProperty("p95");
+    expect(row).toHaveProperty("p99");
+    expect(row).toHaveProperty("count");
+    expect(typeof row.tool_name).toBe("string");
+    expect(typeof row.count).toBe("number");
+    // Row is frozen.
+    expect(Object.isFrozen(row)).toBe(true);
+  });
+
+  it("getToolPercentiles excludes spans NOT prefixed with 'tool_call.'", () => {
+    // Insert a turn with end_to_end + first_token + tool_call.memory_lookup spans.
+    // Only tool_call.* spans should appear in the result — the other segments
+    // are the canonical latency segments and belong to getPercentiles.
+    const nowMs = new Date("2026-04-13T00:00:00.000Z").getTime();
+    const ts = new Date(nowMs).toISOString();
+    const turn = buildTurn({
+      id: "mix-turn",
+      agent: "mix-agent",
+      startedAt: ts,
+      endedAt: ts,
+      totalMs: 500,
+      spans: [
+        Object.freeze({
+          name: "end_to_end",
+          startedAt: ts,
+          durationMs: 500,
+          metadata: Object.freeze({}),
+        }),
+        Object.freeze({
+          name: "first_token",
+          startedAt: ts,
+          durationMs: 50,
+          metadata: Object.freeze({}),
+        }),
+        Object.freeze({
+          name: "context_assemble",
+          startedAt: ts,
+          durationMs: 20,
+          metadata: Object.freeze({}),
+        }),
+        Object.freeze({
+          name: "tool_call.memory_lookup",
+          startedAt: ts,
+          durationMs: 100,
+          metadata: Object.freeze({}),
+        }),
+      ],
+    });
+    store.writeTurn(turn);
+
+    const rows = store.getToolPercentiles(
+      "mix-agent",
+      new Date(nowMs - 1000).toISOString(),
+    );
+    // Only the memory_lookup tool_call should appear.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.tool_name).toBe("memory_lookup");
+    // Explicitly: non-tool_call segments MUST NOT leak into the result.
+    const names = rows.map((r) => r.tool_name);
+    expect(names).not.toContain("end_to_end");
+    expect(names).not.toContain("first_token");
+    expect(names).not.toContain("context_assemble");
+  });
+
+  it("getToolPercentiles extracts tool_name correctly (SUBSTR strips the 'tool_call.' prefix)", () => {
+    // Span name is `tool_call.memory_lookup` — after SUBSTR(name, 11) the
+    // result row should have tool_name === "memory_lookup" (NOT the full
+    // prefixed span name).
+    const nowMs = new Date("2026-04-13T00:00:00.000Z").getTime();
+    const ts = new Date(nowMs).toISOString();
+    const turn = buildTurn({
+      id: "name-turn",
+      agent: "name-agent",
+      startedAt: ts,
+      endedAt: ts,
+      totalMs: 100,
+      spans: [
+        Object.freeze({
+          name: "tool_call.memory_lookup",
+          startedAt: ts,
+          durationMs: 100,
+          metadata: Object.freeze({}),
+        }),
+      ],
+    });
+    store.writeTurn(turn);
+
+    const rows = store.getToolPercentiles(
+      "name-agent",
+      new Date(nowMs - 1000).toISOString(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.tool_name).toBe("memory_lookup");
+    expect(rows[0]!.tool_name).not.toBe("tool_call.memory_lookup");
+  });
 });
 
 describe("TraceStore cache telemetry (Phase 52)", () => {

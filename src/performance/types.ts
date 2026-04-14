@@ -246,6 +246,26 @@ export type PercentileRow = {
 };
 
 /**
+ * Phase 55 — one row per tool observed in the query window. Emitted by
+ * `TraceStore.getToolPercentiles`. Sorted by p95 DESC (nulls last) at the
+ * SQL layer so CLI / dashboard can highlight the slowest tool without a
+ * client-side re-sort.
+ *
+ * `tool_name` is extracted from the span name via `SUBSTR(name, 11)` — the
+ * canonical `tool_call.<name>` prefix is stripped so consumers see just the
+ * tool name (e.g. `memory_lookup`, not `tool_call.memory_lookup`).
+ *
+ * All rows and the enclosing array are frozen. Empty windows return `[]`.
+ */
+export type ToolPercentileRow = {
+  readonly tool_name: string;
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly count: number;
+};
+
+/**
  * Phase 54 Plan 04: shape of the `first_token_headline` object emitted at the
  * top level of the `latency` IPC response. Server-evaluated so the CLI and
  * dashboard render verbatim — no client-side SLO threshold mirror.
