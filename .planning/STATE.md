@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: Performance & Latency
-status: Executing Phase 54
-stopped_at: "Completed 54-01 (2 commits: 9902418 + fd7f2da) — streamingConfigSchema with 300ms floor + 6-segment CANONICAL_SEGMENTS + typing_indicator SLO + getFirstTokenPercentiles; 15 new tests GREEN, foundation ready for Plans 54-02/03/04"
-last_updated: "2026-04-14T03:08:49.959Z"
+status: Ready to execute
+stopped_at: "Completed 54-02 (2 commits: 32ddcc7 test + 7103b6b feat) — typing fire relocated to handleMessage entry, typing_indicator span emitted on caller-owned Turn, old eager fire removed, 8s heartbeat preserved; 10 new bridge tests GREEN (14 total)"
+last_updated: "2026-04-14T03:20:05.803Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 18
-  completed_plans: 15
+  completed_plans: 16
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 54 (streaming-typing-indicator) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 
 ## Performance Metrics
 
@@ -155,6 +155,9 @@ Recent decisions affecting current work:
 - [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — CanonicalSegment expanded to 6 in canonical order (end_to_end, first_token, first_visible_token, context_assemble, tool_call, typing_indicator); bench segmentEnum intentionally NOT touched for baseline.json backward compat
 - [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — typing_indicator p95 500ms SLO is observational initially per CONTEXT D-03; first_visible_token has no default SLO (debug/support metric, delta-only)
 - [Phase 54-streaming-typing-indicator]: Phase 54 Plan 01 — getFirstTokenPercentiles composes getPercentiles + Array.find with frozen count=0 no-data row for empty-window callers; zero new IPC methods (Phase 50 regression lesson preserved)
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 02: Typing fire relocated to DiscordBridge.handleMessage entry (thread + channel branches, after Turn creation) with typing_indicator span on caller-owned Turn — three-layer error boundary (try/catch + promise.catch + finally) ensures typing failures never block response path
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 02: isUserMessageType uses numeric literals (type === 0 || 19) not discord.js MessageType enum — preserves bridge's zero-enum-dependency style; whitelist approach implicitly excludes future system message types
+- [Phase 54-streaming-typing-indicator]: Phase 54 Plan 02: typing_indicator span piggybacks on existing caller-owned Turn (no new Turn created) — keeps per-message Turn lifecycle flat; span duration captures ONLY fire latency (span.end in finally, not after streamFromAgent)
 
 ### Roadmap Evolution
 
@@ -219,9 +222,10 @@ None yet.
 | Phase 53-context-token-budget-tuning P02 | 21m 47s | 2 tasks | 8 files |
 | Phase 53-context-token-budget-tuning P03 | 32m 23s | 2 tasks | 12 files |
 | Phase 54-streaming-typing-indicator P01 | 4m 33s | 2 tasks | 8 files |
+| Phase 54-streaming-typing-indicator P02 | 5m 5s | 1 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-14
-Stopped at: Completed 54-01 (2 commits: 9902418 + fd7f2da) — streamingConfigSchema with 300ms floor + 6-segment CANONICAL_SEGMENTS + typing_indicator SLO + getFirstTokenPercentiles; 15 new tests GREEN, foundation ready for Plans 54-02/03/04
+Stopped at: Completed 54-02 (2 commits: 32ddcc7 test + 7103b6b feat) — typing fire relocated to handleMessage entry, typing_indicator span emitted on caller-owned Turn, old eager fire removed, 8s heartbeat preserved; 10 new bridge tests GREEN (14 total)
 Resume file: None
