@@ -14,12 +14,18 @@ import type {
  * in src/dashboard/static/app.js) so CLI and dashboard never disagree on
  * segment ordering. NOT read from CANONICAL_SEGMENTS in case future work
  * extends that list with non-display segments.
+ *
+ * Phase 54 Plan 04: expanded from 4 to 6 names — first_visible_token and
+ * typing_indicator appended in logical order (first_visible_token after
+ * first_token, typing_indicator last). Matches CONTEXT Specifics #1.
  */
 const SEGMENT_DISPLAY_ORDER: readonly CanonicalSegment[] = Object.freeze([
   "end_to_end",
   "first_token",
+  "first_visible_token",
   "context_assemble",
   "tool_call",
+  "typing_indicator",
 ]);
 
 /**
@@ -32,8 +38,46 @@ function formatMs(value: number | null): string {
 }
 
 /**
+ * Phase 54 Plan 04 — render the First Token Latency block that appears ABOVE
+ * the segments table. Designed to be printed standalone above
+ * formatLatencyTable's output. Returns empty string when the report predates
+ * Phase 54 (no first_token_headline field) — backward compat.
+ *
+ * Suffix rendering:
+ *   - `slo_status === "breach"` -> ` [BREACH]`
+ *   - `slo_status === "no_data"` + count < 5 -> ` (warming up — N turns)`
+ *   - healthy -> no suffix
+ *
+ * Example output:
+ *     First Token Latency (alpha):
+ *       p50: 400 ms  p95: 800 ms  p99: 1,200 ms  (count: 10)
+ *
+ * @param report - LatencyReport with optional first_token_headline.
+ * @returns Empty string OR a 3-line block ending in a trailing blank line.
+ */
+export function formatFirstTokenBlock(report: LatencyReport): string {
+  const h = report.first_token_headline;
+  if (!h) return "";
+  const suffix =
+    h.slo_status === "breach"
+      ? " [BREACH]"
+      : h.slo_status === "no_data"
+        ? ` (warming up — ${h.count.toLocaleString()} turn${h.count === 1 ? "" : "s"})`
+        : "";
+  return [
+    `First Token Latency (${report.agent}):`,
+    `  p50: ${formatMs(h.p50)}  p95: ${formatMs(h.p95)}  p99: ${formatMs(h.p99)}  (count: ${h.count.toLocaleString()})${suffix}`,
+    "",
+  ].join("\n");
+}
+
+/**
  * Format a single-agent LatencyReport as an aligned table with header row,
  * separator, and trailing data rows. Numeric cells right-aligned.
+ *
+ * Phase 54 Plan 04: prepends a First Token Latency block (via
+ * `formatFirstTokenBlock`) when the report carries a `first_token_headline`.
+ * Pre-Phase-54 reports render identically to Phase 50/51/52 shape.
  *
  * @param report - LatencyReport from the daemon's `latency` IPC method
  * @returns Multi-line formatted table string
@@ -79,11 +123,13 @@ export function formatLatencyTable(report: LatencyReport): string {
     return idx === 0 ? `${line}\n${separator}` : line;
   });
 
-  return [
+  const firstTokenBlock = formatFirstTokenBlock(report);
+  const table = [
     `Latency for ${report.agent} (since ${report.since}):`,
     "",
     ...formatted,
   ].join("\n");
+  return firstTokenBlock ? `${firstTokenBlock}${table}` : table;
 }
 
 /**
