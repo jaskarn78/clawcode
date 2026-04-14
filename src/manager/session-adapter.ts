@@ -567,7 +567,22 @@ function wrapSdkQuery(
     const endToEnd = turn?.startSpan("end_to_end", {});
     const firstToken = turn?.startSpan("first_token", {});
     let firstTokenEnded = false;
-    const activeTools = new Map<string, Span>();
+    /**
+     * Phase 55 Plan 02 — per-active-tool tracking. Each entry carries the
+     * Span handle plus the Turn's `toolCache.hitCount()` captured at span
+     * open. When the matching `tool_use_result` arrives we compare the
+     * current hitCount to the captured baseline — if it incremented, the
+     * handler returned a cached value and we enrich the span with
+     * `cached: true` + `cache_hit_duration_ms` BEFORE calling span.end().
+     */
+    const activeTools = new Map<
+      string,
+      {
+        readonly span: Span;
+        readonly hitCountAtOpen: number;
+        readonly openedAtMs: number;
+      }
+    >();
     const textParts: string[] = [];
     // Phase 53 Plan 03 — per-turn skill-mention capture. We also buffer
     // any block-level text from the SDK's `message.content[]: [{ type: 'text', text }]`
@@ -576,7 +591,7 @@ function wrapSdkQuery(
     const blockTextParts: string[] = [];
 
     const closeAllSpans = () => {
-      for (const span of activeTools.values()) span.end();
+      for (const entry of activeTools.values()) entry.span.end();
       activeTools.clear();
       if (!firstTokenEnded) {
         firstToken?.end();
@@ -596,6 +611,16 @@ function wrapSdkQuery(
             // (not the narrowed local type where `msg.content` is a string). We
             // inspect content blocks for text (first_token) and tool_use (span start).
             const contentBlocks = ((msg as { message?: { content?: unknown[] } }).message?.content ?? []) as unknown[];
+
+            // Phase 55 Plan 02 — pre-scan for tool_use blocks in this assistant
+            // message. Multiple blocks in the SAME message == parallel dispatch
+            // by the SDK, so all tool_call spans opened below are tagged
+            // `is_parallel: true`. Single-block messages are sequential.
+            const toolUseCount = contentBlocks.filter(
+              (b) => (b as { type?: string }).type === "tool_use",
+            ).length;
+            const isParallelBatch = toolUseCount > 1;
+
             for (const raw of contentBlocks) {
               const block = raw as { type?: string; name?: string; id?: string; text?: string };
               if (block.type === "text" && !firstTokenEnded) {
@@ -606,10 +631,30 @@ function wrapSdkQuery(
                 blockTextParts.push(block.text);
               }
               if (block.type === "tool_use" && block.id && block.name) {
+                // Phase 55 Plan 02 — span metadata enrichment. No new span
+                // types; just extra keys on existing `tool_call.<name>` spans
+                // so per-tool queryability (tool_name) + parallel vs serial
+                // (is_parallel) + cache hit observability (cached) are surfaced
+                // in the trace_spans table for CLI + dashboard rendering.
                 const span = turn?.startSpan(`tool_call.${block.name}`, {
                   tool_use_id: block.id,
+                  tool_name: block.name,
+                  is_parallel: isParallelBatch,
+                  cached: false, // default — updated to true on hit (see user-message branch)
                 });
-                if (span) activeTools.set(block.id, span);
+                if (span) {
+                  // Guarded: some tests pass a minimal mock Turn without a
+                  // toolCache field. In production the Turn always has one
+                  // (see src/performance/trace-collector.ts — lazy getter).
+                  const hitCountAtOpen =
+                    (turn as { toolCache?: { hitCount: () => number } } | undefined)
+                      ?.toolCache?.hitCount() ?? 0;
+                  activeTools.set(block.id, {
+                    span,
+                    hitCountAtOpen,
+                    openedAtMs: Date.now(),
+                  });
+                }
               }
             }
           }
@@ -625,9 +670,29 @@ function wrapSdkQuery(
           // SDK emits user messages with `parent_tool_use_id` set to the tool_use_id.
           const toolUseId = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id;
           if (toolUseId) {
-            const span = activeTools.get(toolUseId);
-            if (span) {
-              span.end();
+            const entry = activeTools.get(toolUseId);
+            if (entry) {
+              // Phase 55 Plan 02 — cache-hit delta detection. If the Turn's
+              // tool-cache hit count increased while this span was open, the
+              // MCP wrapper (invokeWithCache in src/mcp/server.ts) served the
+              // call from cache. Enrich span metadata with `cached: true` +
+              // `cache_hit_duration_ms` BEFORE calling end() so the committed
+              // span record carries the enriched keys.
+              try {
+                const hitCountNow =
+                  (turn as { toolCache?: { hitCount: () => number } } | undefined)
+                    ?.toolCache?.hitCount() ?? entry.hitCountAtOpen;
+                if (hitCountNow > entry.hitCountAtOpen) {
+                  entry.span.setMetadata({
+                    cached: true,
+                    cache_hit_duration_ms: Date.now() - entry.openedAtMs,
+                  });
+                }
+              } catch {
+                // Observational path MUST NEVER break the message path
+                // (Phase 50 invariant mirrored on cache telemetry).
+              }
+              entry.span.end();
               activeTools.delete(toolUseId);
             }
           }

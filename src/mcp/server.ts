@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v4";
 import { sendIpcRequest } from "../ipc/client.js";
 import { SOCKET_PATH } from "../manager/daemon.js";
+import { IDEMPOTENT_TOOL_DEFAULTS } from "../config/schema.js";
+import type { Turn } from "../performance/trace-collector.js";
 
 /**
  * Tool definitions for the ClawCode MCP server.
@@ -76,12 +78,102 @@ export const TOOL_DEFINITIONS = {
 } as const;
 
 /**
+ * Phase 55 Plan 02 — per-agent tools config shape threaded through
+ * `createMcpServer`. Mirrors `ResolvedAgentConfig.perf.tools` verbatim but
+ * the whole block is optional (no agent context over stdio MCP transport).
+ *
+ * Inline type (no cross-module import of ToolsConfig from schema.ts) to
+ * preserve server.ts's low-dep boundary.
+ */
+export type McpPerfTools = {
+  readonly maxConcurrent: number;
+  readonly idempotent: readonly string[];
+  readonly slos?: Readonly<Record<string, {
+    readonly thresholdMs: number;
+    readonly metric?: "p50" | "p95" | "p99";
+  }>>;
+};
+
+/**
+ * Phase 55 Plan 02 — dependency-injection hooks for the cache wrapper.
+ *
+ * When `deps` is provided (daemon-hosted MCP path, where an active Turn is
+ * available), the wrapped handlers consult `getActiveTurn()` to attach
+ * cache lookups and `getAgentPerfTools()` to read the idempotent whitelist.
+ *
+ * When `deps` is undefined (stdio `clawcode mcp` path — no agent context),
+ * the wrapper short-circuits to the legacy non-cached handler path. This
+ * preserves backward compatibility with existing MCP clients.
+ */
+export type McpServerDeps = {
+  readonly getActiveTurn?: (agentName: string) => Turn | null;
+  readonly getAgentPerfTools?: (agentName: string) => McpPerfTools | undefined;
+};
+
+/**
+ * Cross-cutting helper — wrap a raw IPC handler with per-turn cache lookup
+ * for whitelisted idempotent tools.
+ *
+ * Flow:
+ *   1. If `deps` is absent OR no active Turn — run raw, no cache.
+ *   2. Resolve whitelist from `perfTools.idempotent` ?? IDEMPOTENT_TOOL_DEFAULTS.
+ *   3. If tool is whitelisted AND Turn.toolCache has a hit — return frozen
+ *      cached value (raw handler NEVER runs).
+ *   4. Else run raw handler. On SUCCESS + whitelisted — write to cache.
+ *      On FAILURE — propagate; cache stays empty so retries re-run.
+ *
+ * Span metadata enrichment (`cached: true`) is performed by session-adapter
+ * via hitCount delta detection — the wrapper has no direct span handle
+ * because MCP handlers don't receive tool_use_id.
+ *
+ * Exported for direct unit-testing (see src/mcp/server.test.ts Phase 55
+ * describe block).
+ */
+export async function invokeWithCache<R>(
+  toolName: string,
+  agentName: string,
+  args: unknown,
+  rawCall: () => Promise<R>,
+  deps: McpServerDeps | undefined,
+): Promise<R> {
+  if (!deps?.getActiveTurn) return rawCall();
+  const turn = deps.getActiveTurn(agentName);
+  if (!turn) return rawCall();
+
+  const perfTools = deps.getAgentPerfTools?.(agentName);
+  const idempotent = perfTools?.idempotent ?? IDEMPOTENT_TOOL_DEFAULTS;
+  const isIdempotent = idempotent.includes(toolName);
+
+  if (isIdempotent) {
+    const cached = turn.toolCache.get(toolName, args);
+    if (cached !== undefined) {
+      return cached as R;
+    }
+  }
+
+  const result = await rawCall();
+  if (isIdempotent) {
+    turn.toolCache.set(toolName, args, result);
+  }
+  return result;
+}
+
+/**
  * Create and configure the ClawCode MCP server.
  * Tools delegate to the daemon via the IPC client.
  *
+ * Phase 55 Plan 02 — optional `deps` hooks thread per-agent Turn + perf.tools
+ * config into the 4 whitelisted tool handlers (memory_lookup, search_documents,
+ * memory_list, memory_graph — the latter two are not yet registered, but the
+ * whitelist includes them for future-proofing). Non-whitelisted tools bypass
+ * the cache unconditionally.
+ *
+ * @param deps Optional dependency-injection hooks. When absent (e.g. stdio
+ *             MCP startMcpServer path), the wrapper falls back to the raw
+ *             non-cached handler path.
  * @returns Configured McpServer ready for transport connection
  */
-export function createMcpServer(): McpServer {
+export function createMcpServer(deps?: McpServerDeps): McpServer {
   const server = new McpServer(
     {
       name: "clawcode",
@@ -267,6 +359,10 @@ export function createMcpServer(): McpServer {
   );
 
   // Tool: memory_lookup
+  //
+  // Phase 55 Plan 02 — WHITELISTED IDEMPOTENT TOOL. Handler body runs through
+  // `invokeWithCache` so a duplicate invocation within the same Turn returns
+  // the frozen cached response without a second IPC round-trip.
   server.tool(
     "memory_lookup",
     "Search your memory for relevant context, past decisions, and knowledge",
@@ -276,23 +372,31 @@ export function createMcpServer(): McpServer {
       agent: z.string().describe("Your agent name (pass your own name)"),
     },
     async ({ query, limit, agent }) => {
-      const result = (await sendIpcRequest(SOCKET_PATH, "memory-lookup", {
+      return invokeWithCache(
+        "memory_lookup",
         agent,
-        query,
-        limit,
-      })) as {
-        results: readonly {
-          id: string;
-          content: string;
-          relevance_score: number;
-          tags: readonly string[];
-          created_at: string;
-        }[];
-      };
+        { query, limit },
+        async () => {
+          const result = (await sendIpcRequest(SOCKET_PATH, "memory-lookup", {
+            agent,
+            query,
+            limit,
+          })) as {
+            results: readonly {
+              id: string;
+              content: string;
+              relevance_score: number;
+              tags: readonly string[];
+              created_at: string;
+            }[];
+          };
 
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.results, null, 2) }],
-      };
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(result.results, null, 2) }],
+          };
+        },
+        deps,
+      );
     },
   );
 
@@ -448,6 +552,10 @@ export function createMcpServer(): McpServer {
   );
 
   // Tool: search_documents
+  //
+  // Phase 55 Plan 02 — WHITELISTED IDEMPOTENT TOOL. Handler body runs through
+  // `invokeWithCache` so identical searches within the same Turn return the
+  // frozen cached response without a second IPC round-trip.
   server.tool(
     "search_documents",
     "Search across ingested documents for relevant content",
@@ -458,24 +566,32 @@ export function createMcpServer(): McpServer {
       source: z.string().optional().describe("Filter to a specific document source"),
     },
     async ({ agent, query, limit, source }) => {
-      const result = await sendIpcRequest(SOCKET_PATH, "search-documents", {
-        agent, query, limit, source,
-      });
-      const r = result as { results: readonly { chunk_id: string; source: string; chunk_index: number; content: string; similarity: number; context_before: string | null; context_after: string | null }[] };
-      if (r.results.length === 0) {
-        return { content: [{ type: "text" as const, text: "No matching documents found." }] };
-      }
-      const formatted = r.results.map((hit, i) => {
-        const parts = [
-          `--- Result ${i + 1} (similarity: ${hit.similarity.toFixed(3)}) ---`,
-          `Source: ${hit.source} [chunk ${hit.chunk_index}]`,
-        ];
-        if (hit.context_before) parts.push(`[...] ${hit.context_before}`);
-        parts.push(hit.content);
-        if (hit.context_after) parts.push(`${hit.context_after} [...]`);
-        return parts.join("\n");
-      }).join("\n\n");
-      return { content: [{ type: "text" as const, text: formatted }] };
+      return invokeWithCache(
+        "search_documents",
+        agent,
+        { query, limit, source },
+        async () => {
+          const result = await sendIpcRequest(SOCKET_PATH, "search-documents", {
+            agent, query, limit, source,
+          });
+          const r = result as { results: readonly { chunk_id: string; source: string; chunk_index: number; content: string; similarity: number; context_before: string | null; context_after: string | null }[] };
+          if (r.results.length === 0) {
+            return { content: [{ type: "text" as const, text: "No matching documents found." }] };
+          }
+          const formatted = r.results.map((hit, i) => {
+            const parts = [
+              `--- Result ${i + 1} (similarity: ${hit.similarity.toFixed(3)}) ---`,
+              `Source: ${hit.source} [chunk ${hit.chunk_index}]`,
+            ];
+            if (hit.context_before) parts.push(`[...] ${hit.context_before}`);
+            parts.push(hit.content);
+            if (hit.context_after) parts.push(`${hit.context_after} [...]`);
+            return parts.join("\n");
+          }).join("\n\n");
+          return { content: [{ type: "text" as const, text: formatted }] };
+        },
+        deps,
+      );
     },
   );
 
@@ -525,6 +641,11 @@ export function createMcpServer(): McpServer {
 /**
  * Start the MCP server with stdio transport.
  * This is the entry point for `clawcode mcp`.
+ *
+ * Phase 55 Plan 02 — stdio transport has no agent context, so we omit
+ * `deps`. Whitelisted-tool wrappers fall back to the raw handler path;
+ * no intra-turn caching occurs on this path (correct: stdio MCP clients
+ * are external — they are not inside a ClawCode Turn).
  */
 export async function startMcpServer(): Promise<void> {
   const server = createMcpServer();

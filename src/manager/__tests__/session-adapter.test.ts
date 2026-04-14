@@ -230,6 +230,278 @@ describe("SdkSessionAdapter tracing", () => {
   });
 });
 
+// ── Phase 55 Plan 02 — tool_call span metadata enrichment ──────────────────
+
+/**
+ * Richer mock Turn for Phase 55 tests: each span exposes its initial metadata
+ * plus a setMetadata spy so we can assert `{ tool_name, is_parallel, cached }`
+ * are present at span open and updated on cache hits.
+ */
+type PhaseSpan = {
+  metadata: Record<string, unknown>;
+  setMetadata: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+  startedAtMs: number;
+};
+
+function createPhase55MockTurn(options?: {
+  readonly hitCountSequence?: readonly number[];
+}): {
+  turn: {
+    startSpan: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+    recordCacheUsage: ReturnType<typeof vi.fn>;
+    toolCache: { hitCount: () => number };
+  };
+  spansByName: Map<string, PhaseSpan[]>;
+} {
+  const spansByName = new Map<string, PhaseSpan[]>();
+  let hitCountIdx = 0;
+  const hitCountSequence = options?.hitCountSequence ?? [];
+
+  const startSpan = vi.fn((name: string, metadata: Record<string, unknown> = {}): PhaseSpan => {
+    const span: PhaseSpan = {
+      metadata: { ...metadata },
+      setMetadata: vi.fn(function (this: PhaseSpan, extra: Record<string, unknown>) {
+        Object.assign(this.metadata, extra);
+      }),
+      end: vi.fn(),
+      startedAtMs: Date.now(),
+    };
+    if (!spansByName.has(name)) spansByName.set(name, []);
+    spansByName.get(name)!.push(span);
+    return span;
+  });
+
+  const toolCache = {
+    hitCount: vi.fn(() => {
+      if (hitCountIdx < hitCountSequence.length) {
+        const v = hitCountSequence[hitCountIdx]!;
+        hitCountIdx++;
+        return v;
+      }
+      return 0;
+    }),
+  };
+
+  return {
+    turn: {
+      startSpan,
+      end: vi.fn(),
+      recordCacheUsage: vi.fn(),
+      toolCache,
+    },
+    spansByName,
+  };
+}
+
+describe("SdkSessionAdapter tool_call span metadata enrichment (Phase 55)", () => {
+  let mockSdk: { query: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdk = { query: vi.fn() };
+  });
+
+  it("Test 7: tool_call.<name> span metadata includes tool_name, cached, is_parallel", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            { type: "tool_use", id: "tu-solo", name: "memory_lookup", input: {} },
+          ],
+        },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-solo",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-solo", content: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "", session_id: "s-meta" },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    const { turn, spansByName } = createPhase55MockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s-meta",
+      turn,
+    });
+
+    await handle.sendAndStream("prompt", () => undefined);
+
+    const toolSpans = spansByName.get("tool_call.memory_lookup") ?? [];
+    expect(toolSpans.length).toBe(1);
+    const meta = toolSpans[0]!.metadata;
+    // Required keys at span open per Phase 55 CONTEXT decisions.
+    expect(meta).toMatchObject({
+      tool_name: "memory_lookup",
+      tool_use_id: "tu-solo",
+      is_parallel: false, // single tool_use block in the assistant message
+      cached: false, // no cache hit happened during the span
+    });
+  });
+
+  it("Test 8: two tool_use blocks in same assistant message dispatch in parallel — started_at within 10ms, is_parallel=true", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            { type: "tool_use", id: "tu-a", name: "memory_lookup", input: { q: "a" } },
+            { type: "tool_use", id: "tu-b", name: "memory_lookup", input: { q: "b" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-a",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-a", content: "ok" }] },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-b",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-b", content: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "", session_id: "s-par" },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    const { turn, spansByName } = createPhase55MockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s-par",
+      turn,
+    });
+
+    await handle.sendAndStream("prompt", () => undefined);
+
+    const toolSpans = spansByName.get("tool_call.memory_lookup") ?? [];
+    expect(toolSpans.length).toBe(2);
+    const [a, b] = toolSpans;
+    expect(a!.metadata.is_parallel).toBe(true);
+    expect(b!.metadata.is_parallel).toBe(true);
+    // Both spans were started within 10ms of each other (proves parallel dispatch,
+    // not serial — they were opened synchronously during the same message
+    // content[] scan).
+    expect(Math.abs(a!.startedAtMs - b!.startedAtMs)).toBeLessThanOrEqual(10);
+  });
+
+  it("Test 9: tool_call in a SEPARATE assistant message (single tool_use) is NOT is_parallel", async () => {
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            { type: "tool_use", id: "tu-1", name: "memory_lookup", input: { q: "a" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-1",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-1", content: "ok" }] },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            { type: "tool_use", id: "tu-2", name: "memory_lookup", input: { q: "b" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-2",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-2", content: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "", session_id: "s-seq" },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    const { turn, spansByName } = createPhase55MockTurn();
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s-seq",
+      turn,
+    });
+
+    await handle.sendAndStream("prompt", () => undefined);
+
+    const toolSpans = spansByName.get("tool_call.memory_lookup") ?? [];
+    expect(toolSpans.length).toBe(2);
+    for (const s of toolSpans) {
+      expect(s.metadata.is_parallel).toBe(false);
+    }
+  });
+
+  it("on cache hit (toolCache.hitCount increments during span), span is updated with cached=true + cache_hit_duration_ms", async () => {
+    // hitCountSequence: called twice per span (start, end). Span A:
+    //   start: 0  end: 1  → delta=1, cached=true
+    // Span B:
+    //   start: 1  end: 1  → delta=0, cached=false
+    const messages = [
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            { type: "tool_use", id: "tu-hit", name: "memory_lookup", input: { q: "a" } },
+            { type: "tool_use", id: "tu-miss", name: "search_documents", input: { q: "b" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-hit",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-hit", content: "ok" }] },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "tu-miss",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu-miss", content: "ok" }] },
+      },
+      { type: "result", subtype: "success", result: "", session_id: "s-cache" },
+    ];
+    mockSdk.query.mockReturnValueOnce(makeSdkStream(messages));
+
+    const { turn, spansByName } = createPhase55MockTurn({
+      // Order of toolCache.hitCount() calls:
+      //   A open → 0   (baseline for memory_lookup span)
+      //   B open → 1   (baseline for search_documents span — hit already fired for A)
+      //   A end  → 1   (delta 1 > 0 → cached=true on memory_lookup span)
+      //   B end  → 1   (delta 1 > 1 = 0 → cached stays false on search_documents span)
+      hitCountSequence: [0, 1, 1, 1],
+    });
+    const handle = (createTracedSessionHandle as any)({
+      sdk: mockSdk,
+      baseOptions: {},
+      sessionId: "s-cache",
+      turn,
+    });
+
+    await handle.sendAndStream("prompt", () => undefined);
+
+    const lookupSpans = spansByName.get("tool_call.memory_lookup") ?? [];
+    const docSpans = spansByName.get("tool_call.search_documents") ?? [];
+    expect(lookupSpans.length).toBe(1);
+    expect(docSpans.length).toBe(1);
+    // memory_lookup span: delta 0→1 → cached=true
+    expect(lookupSpans[0]!.metadata.cached).toBe(true);
+    expect(typeof lookupSpans[0]!.metadata.cache_hit_duration_ms).toBe("number");
+    // search_documents span: delta 1→1 → cached=false (no update)
+    expect(docSpans[0]!.metadata.cached).toBe(false);
+  });
+});
+
 describe("cache usage capture (Phase 52)", () => {
   let mockSdk: { query: ReturnType<typeof vi.fn> };
 
