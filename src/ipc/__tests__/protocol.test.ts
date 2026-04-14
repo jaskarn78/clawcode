@@ -63,6 +63,8 @@ describe("IPC_METHODS", () => {
       "bench-run-prompt",
       // Cache (Phase 52)
       "cache",
+      // Tools (Phase 55)
+      "tools",
       // Effort (reasoning level)
       "set-effort",
       "get-effort",
@@ -243,6 +245,36 @@ describe("ipcRequestSchema cache", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.method).toBe("cache");
+      expect(result.data.params).toEqual({ all: true, since: "7d" });
+    }
+  });
+});
+
+describe("ipcRequestSchema tools (Phase 55)", () => {
+  it("accepts a tools request with agent + since params", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "t-1",
+      method: "tools",
+      params: { agent: "atlas", since: "24h" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("tools");
+      expect(result.data.params).toEqual({ agent: "atlas", since: "24h" });
+    }
+  });
+
+  it("accepts a tools request with --all (no agent)", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "t-2",
+      method: "tools",
+      params: { all: true, since: "7d" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("tools");
       expect(result.data.params).toEqual({ all: true, since: "7d" });
     }
   });

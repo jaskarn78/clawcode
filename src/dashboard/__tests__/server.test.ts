@@ -612,3 +612,175 @@ describe("cache endpoint", () => {
     expect(typeof body.totalTurns).toBe("number");
   });
 });
+
+// ── APPENDED BY Phase 55-03 (Tools endpoint) ─────────────────────────────────
+// New "tools endpoint" describe block. Existing tests above remain untouched.
+
+function makeToolsReport() {
+  // Phase 55 Plan 03: the daemon's `tools` IPC handler augments each
+  // ToolPercentileRow with `slo_status`, `slo_threshold_ms`, and `slo_metric`
+  // via augmentToolsWithSlo. The REST endpoint is a passthrough so all three
+  // fields flow through unchanged. Rows sorted by p95 DESC (slowest first).
+  return {
+    agent: "alpha",
+    since: "2026-04-13T00:00:00.000Z",
+    tools: [
+      {
+        tool_name: "search_documents",
+        p50: 400,
+        p95: 800,
+        p99: 1200,
+        count: 12,
+        slo_status: "healthy",
+        slo_threshold_ms: 1500,
+        slo_metric: "p95",
+      },
+      {
+        tool_name: "memory_lookup",
+        p50: 80,
+        p95: 200,
+        p99: 300,
+        count: 35,
+        slo_status: "healthy",
+        slo_threshold_ms: 1500,
+        slo_metric: "p95",
+      },
+    ],
+  };
+}
+
+describe("tools endpoint (Phase 55)", () => {
+  let closeServer: (() => Promise<void>) | null = null;
+  let port: number;
+
+  beforeEach(() => {
+    port = 30_000 + Math.floor(Math.random() * 10_000);
+
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "status") return { entries: [] };
+      if (method === "context-zone-status") return { agents: {} };
+      if (method === "tools") return makeToolsReport();
+      if (method === "start" || method === "stop" || method === "restart") return { ok: true };
+      throw new Error(`Unknown method: ${method}`);
+    });
+  });
+
+  afterEach(async () => {
+    if (closeServer) {
+      await closeServer();
+      closeServer = null;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("GET /api/agents/:name/tools?since=24h proxies to the tools IPC method", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(
+      `http://127.0.0.1:${port}/api/agents/alpha/tools?since=24h`,
+    );
+    expect(res.status).toBe(200);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "tools",
+      expect.objectContaining({ agent: "alpha", since: "24h" }),
+    );
+    const body = (await res.json()) as unknown;
+    expect(body).toEqual(makeToolsReport());
+  });
+
+  it("GET /api/agents/:name/tools defaults since to 24h when query missing", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    await fetch(`http://127.0.0.1:${port}/api/agents/alpha/tools`);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "tools",
+      expect.objectContaining({ agent: "alpha", since: "24h" }),
+    );
+  });
+
+  it("GET /api/agents/:name/tools passes ?since=7d through to IPC method", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    await fetch(`http://127.0.0.1:${port}/api/agents/alpha/tools?since=7d`);
+    expect(mockedSendIpcRequest).toHaveBeenCalledWith(
+      "/tmp/test.sock",
+      "tools",
+      expect.objectContaining({ agent: "alpha", since: "7d" }),
+    );
+  });
+
+  it("GET /api/agents/:name/tools handles IPC errors with 500 + JSON error body", async () => {
+    mockedSendIpcRequest.mockImplementation(async (_socketPath, method) => {
+      if (method === "tools") throw new Error("daemon unreachable");
+      return {};
+    });
+
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/tools`);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain("daemon unreachable");
+  });
+
+  it("GET /api/agents/:name/tools carries augmented SLO fields per tool row", async () => {
+    // Phase 55 contract: each tool row carries slo_status + slo_threshold_ms
+    // + slo_metric so the dashboard renders slow/healthy cell tint directly
+    // from the server response (no client-side SLO mirror — Phase 51 Plan 03
+    // invariant preserved through Phase 55).
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/tools`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      agent: string;
+      since: string;
+      tools: Array<{
+        tool_name: string;
+        p50: number | null;
+        p95: number | null;
+        p99: number | null;
+        count: number;
+        slo_status: string;
+        slo_threshold_ms: number;
+        slo_metric: string;
+      }>;
+    };
+    expect(body.agent).toBe("alpha");
+    expect(Array.isArray(body.tools)).toBe(true);
+    expect(body.tools.length).toBeGreaterThan(0);
+    for (const row of body.tools) {
+      expect(typeof row.tool_name).toBe("string");
+      expect(row.slo_status).toMatch(/^(healthy|breach|no_data)$/);
+      expect(typeof row.slo_threshold_ms).toBe("number");
+      expect(row.slo_metric).toMatch(/^p(50|95|99)$/);
+    }
+  });
+});
