@@ -948,3 +948,57 @@ body {
   font-size: 0.6rem;
   vertical-align: middle;
 }
+
+/* ── Phase 54 Plan 04 — First Token headline card ────────────────────────
+   Sits at the top of each agent tile, above the Latency (24h) panel. Shows
+   the server-emitted first_token_headline.p50 value large, colored by
+   slo_status (healthy=cyan, breach=red, no_data/warming-up=gray). */
+.first-token-card {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+}
+
+.first-token-heading {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary, #888);
+  font-weight: 600;
+}
+
+.first-token-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.first-token-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
+
+.first-token-card.latency-cell-healthy .first-token-value {
+  color: var(--accent-secondary, #00e5ff);
+}
+
+.first-token-card.latency-cell-breach .first-token-value {
+  color: var(--status-error, #ff3366);
+}
+
+.first-token-card.latency-cell-breach {
+  border-color: rgba(255, 51, 102, 0.4);
+  background: rgba(255, 51, 102, 0.06);
+}
+
+.first-token-card.latency-cell-no-data .first-token-value {
+  color: var(--text-secondary, #888);
+}

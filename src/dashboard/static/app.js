@@ -22,13 +22,19 @@ let cachePollIntervalId = null;
  * Canonical display order for the latency percentile table. Mirrors
  * SEGMENT_DISPLAY_ORDER in src/cli/commands/latency.ts so the CLI table
  * and dashboard table never disagree on segment ordering.
+ *
+ * Phase 54 Plan 04: expanded from 4 to 6 names — first_visible_token and
+ * typing_indicator appear in their canonical slots (after first_token and at
+ * the tail respectively). Matches CONTEXT Specifics #1.
  * @type {ReadonlyArray<string>}
  */
 const SEGMENT_DISPLAY_ORDER = Object.freeze([
   "end_to_end",
   "first_token",
+  "first_visible_token",
   "context_assemble",
   "tool_call",
+  "typing_indicator",
 ]);
 
 /**
@@ -49,6 +55,50 @@ function sloCellClass(status) {
   if (status === "healthy") return "latency-cell-healthy";
   if (status === "breach") return "latency-cell-breach";
   return "latency-cell-no-data";
+}
+
+/**
+ * Phase 54 Plan 04 — render the First Token headline card at the TOP of each
+ * agent tile. Large p50 number, SLO color (cyan/red/gray), subtitle showing
+ * either the SLO target, the cold-start "warming up" copy, or a neutral
+ * "first user-visible token" fallback.
+ *
+ * Reads `slo_status` / `slo_threshold_ms` / `slo_metric` / `count` from the
+ * server-emitted `first_token_headline` object — ZERO client-side SLO
+ * threshold mirror (Phase 51 Plan 03 invariant). The server's cold-start
+ * guard sets `slo_status === "no_data"` whenever `count < 5`, so the gray
+ * tint flows through verbatim.
+ *
+ * @param {string} agentName
+ * @param {{p50: number|null, p95: number|null, p99: number|null, count: number,
+ *          slo_status: "healthy"|"breach"|"no_data",
+ *          slo_threshold_ms: number|null,
+ *          slo_metric: "p50"|"p95"|"p99"|null} | null | undefined} headline
+ * @returns {string} HTML — empty string when headline is absent (backward-compat).
+ */
+function renderFirstTokenHeadline(agentName, headline) {
+  if (!headline) return ""; // pre-Phase-54 daemon response — omit the card
+  const statusClass = sloCellClass(headline.slo_status);
+  const msText = headline.p50 === null ? "—" : `${headline.p50.toLocaleString()} ms`;
+  let subtitle;
+  if (headline.slo_status === "no_data" && headline.count < 5) {
+    // Cold-start: operator sees a neutral gray card with the warming-up copy.
+    subtitle = `warming up — ${headline.count.toLocaleString()} turn${headline.count === 1 ? "" : "s"}`;
+  } else if (
+    typeof headline.slo_threshold_ms === "number" &&
+    typeof headline.slo_metric === "string"
+  ) {
+    subtitle = `SLO target: ${headline.slo_threshold_ms.toLocaleString()} ms ${escapeHtml(headline.slo_metric)}`;
+  } else {
+    subtitle = "first user-visible token";
+  }
+  return `
+    <div class="first-token-card ${statusClass}" id="first-token-${escapeAttr(agentName)}">
+      <div class="first-token-heading">First Token</div>
+      <div class="first-token-value">${escapeHtml(msText)}</div>
+      <div class="first-token-subtitle">${escapeHtml(subtitle)}</div>
+    </div>
+  `;
 }
 
 /**
@@ -212,6 +262,7 @@ function createAgentCard(agent, index) {
           <div class="zone-bar-fill" style="width: ${fillPct}%; background: ${zoneClr}"></div>
         </div>
       </div>
+      <div class="first-token-slot" id="first-token-slot-${escapeAttr(agent.name)}"></div>
       <div class="latency-panel" id="latency-${escapeAttr(agent.name)}">
         <div class="latency-heading">Latency (24h)</div>
         <div class="latency-body panel-placeholder">Loading latency…</div>
@@ -283,13 +334,26 @@ async function fetchAgentLatency(agentName) {
   if (!container) return;
   const body = container.querySelector(".latency-body");
   if (!body) return;
+  // Phase 54 Plan 04: the First Token headline card shares the same 30s poll
+  // as the Latency panel — we render both from the one /api/agents/:name/latency
+  // response so the card + table stay in sync and we don't double the HTTP load.
+  const headlineSlot = document.getElementById(`first-token-slot-${agentName}`);
   try {
     const resp = await fetch(
       `/api/agents/${encodeURIComponent(agentName)}/latency?since=24h`,
     );
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    /** @type {{ agent: string, since: string, segments: Array<{ segment: string, p50: number|null, p95: number|null, p99: number|null, count: number, slo_status?: "healthy"|"breach"|"no_data", slo_threshold_ms?: number|null, slo_metric?: "p50"|"p95"|"p99"|null }> }} */
+    /** @type {{ agent: string, since: string, segments: Array<{ segment: string, p50: number|null, p95: number|null, p99: number|null, count: number, slo_status?: "healthy"|"breach"|"no_data", slo_threshold_ms?: number|null, slo_metric?: "p50"|"p95"|"p99"|null }>, first_token_headline?: {p50: number|null, p95: number|null, p99: number|null, count: number, slo_status: "healthy"|"breach"|"no_data", slo_threshold_ms: number|null, slo_metric: "p50"|"p95"|"p99"|null} }} */
     const report = await resp.json();
+    // Phase 54 Plan 04: render the First Token headline card from the server-
+    // emitted first_token_headline object. Backward-compat: when the daemon
+    // predates Phase 54 the field is absent and the slot stays empty.
+    if (headlineSlot) {
+      headlineSlot.innerHTML = renderFirstTokenHeadline(
+        agentName,
+        report.first_token_headline,
+      );
+    }
     const bySeg = new Map((report.segments || []).map((r) => [r.segment, r]));
     const rows = SEGMENT_DISPLAY_ORDER.map((seg) => {
       const row = bySeg.get(seg) || {

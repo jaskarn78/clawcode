@@ -183,6 +183,10 @@ function makeLatencyReport() {
   // REST endpoint is a passthrough so the fields flow through to the client
   // unchanged. Fixture mirrors that shape so tests assert the augmented
   // contract, not the stale Phase 50 one.
+  //
+  // Phase 54 Plan 04: adds first_visible_token + typing_indicator segments
+  // (6 total) AND a top-level first_token_headline object. The REST endpoint
+  // continues to passthrough — fields flow through unchanged.
   return {
     agent: "alpha",
     since: "2026-04-12T00:00:00.000Z",
@@ -208,6 +212,15 @@ function makeLatencyReport() {
         slo_metric: "p50",
       },
       {
+        segment: "first_visible_token",
+        p50: 450,
+        p95: 900,
+        p99: 1300,
+        count: 10,
+        slo_threshold_ms: null,
+        slo_metric: null,
+      },
+      {
         segment: "context_assemble",
         p50: 50,
         p95: 100,
@@ -227,7 +240,26 @@ function makeLatencyReport() {
         slo_threshold_ms: 1500,
         slo_metric: "p95",
       },
+      {
+        segment: "typing_indicator",
+        p50: 80,
+        p95: 200,
+        p99: 350,
+        count: 15,
+        slo_status: "healthy",
+        slo_threshold_ms: 500,
+        slo_metric: "p95",
+      },
     ],
+    first_token_headline: {
+      p50: 400,
+      p95: 800,
+      p99: 1200,
+      count: 10,
+      slo_status: "healthy",
+      slo_threshold_ms: 2000,
+      slo_metric: "p50",
+    },
   };
 }
 
@@ -301,9 +333,15 @@ describe("latency endpoint", () => {
       expect(seg).toEqual(
         expect.objectContaining({
           segment: expect.any(String),
-          slo_status: expect.stringMatching(/^(healthy|breach|no_data)$/),
         }),
       );
+      // Phase 54 Plan 01: `first_visible_token` has no default SLO (debug
+      // metric) — its row carries slo_threshold_ms=null and slo_metric=null
+      // with slo_status intentionally left undefined. Other segments must
+      // match a healthy/breach/no_data state.
+      if (seg.slo_threshold_ms !== null) {
+        expect(seg.slo_status).toMatch(/^(healthy|breach|no_data)$/);
+      }
       expect(
         typeof seg.slo_threshold_ms === "number" || seg.slo_threshold_ms === null,
       ).toBe(true);
@@ -343,6 +381,67 @@ describe("latency endpoint", () => {
       "latency",
       expect.objectContaining({ agent: "alpha", since: "7d" }),
     );
+  });
+
+  it("latency: response includes first_token_headline (Phase 54 passthrough)", async () => {
+    // Phase 54 Plan 04: the daemon now emits a top-level first_token_headline
+    // object on the latency response. The REST endpoint is a passthrough so
+    // the object flows through to the client unchanged.
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      first_token_headline: {
+        p50: number | null;
+        p95: number | null;
+        p99: number | null;
+        count: number;
+        slo_status: string;
+        slo_threshold_ms: number | null;
+        slo_metric: string | null;
+      };
+    };
+    expect(body.first_token_headline).toBeDefined();
+    expect(body.first_token_headline.slo_status).toMatch(
+      /^(healthy|breach|no_data)$/,
+    );
+    expect(typeof body.first_token_headline.count).toBe("number");
+    expect(
+      typeof body.first_token_headline.slo_threshold_ms === "number" ||
+        body.first_token_headline.slo_threshold_ms === null,
+    ).toBe(true);
+  });
+
+  it("latency: segments array contains 6 rows (Phase 54 expansion)", async () => {
+    // Phase 54 Plan 04: segments expands from 4 to 6 canonical rows.
+    // Regression guard: the response shape must carry all 6 so the dashboard
+    // panel renders first_visible_token + typing_indicator without gaps.
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/agents/alpha/latency`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      segments: Array<{ segment: string }>;
+    };
+    expect(body.segments).toHaveLength(6);
+    const names = body.segments.map((s) => s.segment);
+    expect(names).toContain("end_to_end");
+    expect(names).toContain("first_token");
+    expect(names).toContain("first_visible_token");
+    expect(names).toContain("context_assemble");
+    expect(names).toContain("tool_call");
+    expect(names).toContain("typing_indicator");
   });
 
   it("latency: returns 500 with error message when IPC throws", async () => {
