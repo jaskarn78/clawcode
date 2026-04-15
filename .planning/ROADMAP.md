@@ -116,7 +116,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
+- [x] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
 - [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
 
 ### Phase 58: Task Store + State Machine
@@ -134,7 +134,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   4. If the daemon is killed while a task is in `running`, the next daemon start reconciles tasks with a stale `heartbeat_at` (older than the configured threshold) into a terminal `orphaned` state — never leaves them running forever (LIFE-04).
 
 **Plans**: 3 plans
-- [ ] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
+- [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
 - [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
 - [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
 
@@ -257,7 +257,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 57. TurnDispatcher Foundation | 1/3 | In Progress|  |
+| 57. TurnDispatcher Foundation | 2/3 | In Progress|  |
 | 58. Task Store + State Machine | 0/? | Not started | - |
 | 59. Cross-Agent RPC (Handoffs) | 0/? | Not started | - |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |

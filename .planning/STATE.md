@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
 status: Ready to execute
-stopped_at: Completed 57-01-PLAN.md — ready for Plan 57-02 (trace enrichment)
-last_updated: "2026-04-15T03:47:47.159Z"
+stopped_at: Completed 57-02-PLAN.md — ready for Plan 57-03 (DiscordBridge + TaskScheduler call-site migration)
+last_updated: "2026-04-15T03:57:02.043Z"
 last_activity: 2026-04-15
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 57 (turndispatcher-foundation) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ Recent decisions affecting current work:
 - [v1.5 Roadmap]: Hybrid hot-tier + on-demand loading (pure on-demand causes confabulation)
 - [v1.5 Roadmap]: Local embeddings stay (384-dim sufficient for graph similarity)
 - [Phase 57-turndispatcher-foundation]: [Plan 57-01]: TurnDispatcher + TurnOrigin contract landed — single chokepoint wrapping SessionManager, net-zero call-site impact, deeply-frozen origin shape, Discord snowflake preservation helper in place for Plan 57-03 migration
+- [Phase 57]: [Plan 57-02]: Trace store schema + Turn lifecycle extended — turnOrigin field on TurnRecord, nullable turn_origin TEXT column with idempotent migration, Turn.recordOrigin API mirrors recordCacheUsage precedent. Plan 57-03 call-site migration now unblocked.
 
 ### Roadmap Evolution
 
@@ -93,5 +94,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-15
-Stopped at: Completed 57-01-PLAN.md — ready for Plan 57-02 (trace enrichment)
+Stopped at: Completed 57-02-PLAN.md — ready for Plan 57-03 (DiscordBridge + TaskScheduler call-site migration)
 Resume file: None
