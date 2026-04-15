@@ -258,7 +258,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
-| 58. Task Store + State Machine | 3/3 | Complete   | 2026-04-15 |
+| 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
 | 59. Cross-Agent RPC (Handoffs) | 0/? | Not started | - |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
