@@ -45,19 +45,19 @@ export type JsonSchema = Readonly<{
 export function compileJsonSchema(schema: JsonSchema, path = "#"): ZodTypeAny {
   // `enum` wins over `type` (JSON Schema convention: const-list beats declared type).
   if (schema.enum && schema.enum.length > 0) {
-    const literals = schema.enum.map((v) =>
+    const literals: ZodTypeAny[] = schema.enum.map((v) =>
       z.literal(v as string | number | boolean | null),
     );
     if (literals.length === 1) return literals[0]!;
-    return z.union(literals as [ZodTypeAny, ZodTypeAny, ...ZodTypeAny[]]);
+    return z.union(literals as unknown as [ZodTypeAny, ZodTypeAny, ...ZodTypeAny[]]);
   }
 
   if (schema.oneOf && schema.oneOf.length > 0) {
-    const compiled = schema.oneOf.map((s, i) =>
+    const compiled: ZodTypeAny[] = schema.oneOf.map((s, i) =>
       compileJsonSchema(s, `${path}/oneOf/${i}`),
     );
     if (compiled.length === 1) return compiled[0]!;
-    return z.union(compiled as [ZodTypeAny, ZodTypeAny, ...ZodTypeAny[]]);
+    return z.union(compiled as unknown as [ZodTypeAny, ZodTypeAny, ...ZodTypeAny[]]);
   }
 
   switch (schema.type) {
