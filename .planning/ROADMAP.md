@@ -154,9 +154,9 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   5. Tokens consumed by delegated turns count against the calling agent's budget by default with a documented per-task override; a failed task can be re-run idempotently via `clawcode tasks retry <task_id>` and produces the same input_digest against the same receiver (LIFE-05, LIFE-06).
 
 **Plans**: 3 plans
-- [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
+- [ ] 59-01-PLAN.md — Task schema registry + JSON-Schema→Zod compiler + typed errors + authorize.ts (Wave 1)
+- [ ] 59-02-PLAN.md — TaskManager class (delegate/cancel/completeTask/retry + deadline + cost attribution + digest) (Wave 2)
+- [ ] 59-03-PLAN.md — MCP tools + IPC + CLI tasks retry/status + daemon wiring + acceptsTasks config + AbortSignal threading (Wave 3)
 
 ### Phase 60: Trigger Engine Foundation
 
