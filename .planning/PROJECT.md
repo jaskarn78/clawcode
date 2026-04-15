@@ -75,6 +75,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Tool-call overhead — intra-turn idempotent cache (Turn-scoped, per-skill whitelist), per-tool latency telemetry, ConcurrencyGate foundation — v1.7
 - Warm-path optimizations — READ-ONLY SQLite warmup, resident embedding singleton, warm-session reuse, 10s ready-gate — v1.7
 - TurnDispatcher foundation — single chokepoint for Discord/scheduler/future-trigger/future-handoff turns with origin-prefixed turnIds and `TurnOrigin` trace metadata (net-zero refactor) — v1.8
+- Task Store + State Machine — durable `~/.clawcode/manager/tasks.db` with 15-field task rows, enforced transitions, startup orphan reconciliation, and trigger_state CRUD (LIFE-01/02/04) — v1.8
 
 ### Active
 
@@ -162,4 +163,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-15 — Phase 57 TurnDispatcher Foundation complete*
+*Last updated: 2026-04-15 — Phase 58 Task Store + State Machine complete*
