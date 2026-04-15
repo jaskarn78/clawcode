@@ -18,6 +18,11 @@ import { SessionManager } from "./session-manager.js";
 import type { SessionAdapter } from "./session-adapter.js";
 import { SdkSessionAdapter } from "./session-adapter.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+import { TaskStore } from "../tasks/store.js";
+import {
+  runStartupReconciliation,
+  ORPHAN_THRESHOLD_MS,
+} from "../tasks/reconciler.js";
 import { loadConfig, resolveAllAgents } from "../config/loader.js";
 import { readRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
@@ -377,7 +382,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -443,6 +448,36 @@ export async function startDaemon(
     log,
   });
   log.info("TurnDispatcher initialized");
+
+  // 6-ter. Create TaskStore singleton (Phase 58 Plan 03).
+  // Daemon-scoped SQLite — shared across all agents, single-writer owned by
+  // the daemon. Consumers (Phase 59 TaskManager, Phase 60 TriggerEngine,
+  // Phase 63 CLIs via READ-ONLY handle) import the instance from startDaemon's
+  // return value. Agents NEVER write directly — the single-writer invariant
+  // (STATE.md Phase 58 blockers) must be preserved.
+  const taskStore = new TaskStore({
+    dbPath: join(MANAGER_DIR, "tasks.db"),
+  });
+  log.info({ path: join(MANAGER_DIR, "tasks.db") }, "TaskStore initialized");
+
+  // Reconcile stale in-flight tasks from the previous daemon run BEFORE
+  // SessionManager.startAll fires — so any Phase 59 delegate_task on the
+  // first tick does not race against a stale row carrying a duplicate
+  // task_id (LIFE-04).
+  const reconciliation = runStartupReconciliation(
+    taskStore,
+    ORPHAN_THRESHOLD_MS,
+    log,
+  );
+  if (reconciliation.reconciledCount > 0) {
+    log.warn(
+      {
+        count: reconciliation.reconciledCount,
+        taskIds: reconciliation.reconciledTaskIds,
+      },
+      "startup reconciliation marked stale tasks orphaned",
+    );
+  }
 
   // Mutable ref so closures created before discordBridge initialization can still access it
   const discordBridgeRef: { current: DiscordBridge | null } = { current: null };
@@ -899,6 +934,13 @@ export async function startDaemon(
     advisorBudgetDb.close();
     webhookManager.destroy();
     await manager.stopAll();
+    // Close TaskStore AFTER manager.stopAll() so any in-flight agent
+    // transition that writes to the store completes first (Phase 58 Plan 03).
+    try {
+      taskStore.close();
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, "taskStore close failed");
+    }
     await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
     await unlink(PID_PATH).catch((err) => { log.debug({ path: PID_PATH, error: (err as Error).message }, "pid file cleanup failed (may not exist)"); });
   };
@@ -923,7 +965,7 @@ export async function startDaemon(
     }
   })();
 
-  return { server, manager, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
+  return { server, manager, taskStore, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
