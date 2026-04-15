@@ -45,7 +45,7 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 - [x] **LIFE-01**: Daemon-level `tasks.db` SQLite store (shared, not per-agent) tracks every inter-agent task and proactive turn with states: pending | running | awaiting_input | complete | failed | cancelled | timed_out
 - [x] **LIFE-02**: Task rows include: task_id, task_type, caller_agent, target_agent, causation_id (root trigger id), parent_task_id (nullable), depth, input_digest (hash, not raw), status, started_at, ended_at, heartbeat_at, result_digest, error, chain_token_cost
 - [ ] **LIFE-03**: Task retention defaults to 7 days matching traces.db convention; configurable via `perf.taskRetentionDays`
-- [ ] **LIFE-04**: Orphaned task reconciliation — tasks with heartbeat_at older than threshold at daemon start are marked `orphaned` (not left running forever)
+- [x] **LIFE-04**: Orphaned task reconciliation — tasks with heartbeat_at older than threshold at daemon start are marked `orphaned` (not left running forever)
 - [ ] **LIFE-05**: Cost attribution — handoff token usage counts against the calling agent's budget by default; per-task override available
 - [ ] **LIFE-06**: Retry — failed tasks can be re-run idempotently with the same input against the same receiver via a CLI command and (future) auto-retry policy
 

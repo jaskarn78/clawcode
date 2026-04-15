@@ -91,7 +91,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 **Goal:** Agents autonomously initiate actions on external triggers AND delegate structured tasks to other agents — unlocking multi-agent workflows.
 
 - [x] **Phase 57: TurnDispatcher Foundation** - Unify all agent-turn entry points (Discord, scheduler, future triggers, future tasks) behind a single `TurnDispatcher` chokepoint so the v1.8 proactive + handoff subsystems plug into one contract instead of re-inventing trace/lifecycle plumbing (completed 2026-04-15)
-- [ ] **Phase 58: Task Store + State Machine** - Ship daemon-level `tasks.db`, Zod task schema registry, canonical task state machine (pending | running | awaiting_input | complete | failed | cancelled | timed_out), and chain metadata (causation_id, parent_task_id, depth) for every inter-agent task row
+- [x] **Phase 58: Task Store + State Machine** - Ship daemon-level `tasks.db`, Zod task schema registry, canonical task state machine (pending | running | awaiting_input | complete | failed | cancelled | timed_out), and chain metadata (causation_id, parent_task_id, depth) for every inter-agent task row (completed 2026-04-15)
 - [ ] **Phase 59: Cross-Agent RPC (Handoffs)** - Expose `delegate_task` / `task_status` / `cancel_task` / `task_complete` via MCP + IPC with async-ticket semantics, receiver allowlists, cycle detection, self-handoff block, schema-validated payloads, 64 KB cap, deadline propagation, chain-token cost attribution, and manual retry
 - [ ] **Phase 60: Trigger Engine Foundation** - Stand up the TriggerEngine + source registry + policy evaluator + loop detector + causation_id propagation + 3-layer dedup, migrate the v1.6 scheduler into the first registered source, and land task retention config
 - [ ] **Phase 61: Additional Trigger Sources** - Register four more sources against the Phase 60 engine: webhook HTTP receiver (HMAC-verified), MySQL DB-change poller with `last_seen_id` watermark, inbox-arrival event (upgrade from heartbeat), and Google/ICS calendar poller with configurable offsets
@@ -136,7 +136,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 **Plans**: 3 plans
 - [x] 58-01-PLAN.md — TaskStatus + TaskRowSchema + state-machine contracts (Wave 1)
 - [x] 58-02-PLAN.md — TaskStore class with SQLite + idempotent migration + transitions (Wave 2)
-- [ ] 58-03-PLAN.md — Reconciler + daemon wiring + tasks.db creation on boot (Wave 3)
+- [x] 58-03-PLAN.md — Reconciler + daemon wiring + tasks.db creation on boot (Wave 3)
 
 ### Phase 59: Cross-Agent RPC (Handoffs)
 
@@ -258,7 +258,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
-| 58. Task Store + State Machine | 2/3 | In Progress|  |
+| 58. Task Store + State Machine | 3/3 | Complete   | 2026-04-15 |
 | 59. Cross-Agent RPC (Handoffs) | 0/? | Not started | - |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
