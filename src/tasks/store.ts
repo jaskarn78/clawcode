@@ -26,9 +26,13 @@ import type { Database as DatabaseType, Statement } from "better-sqlite3";
 
 import {
   TaskRowSchema,
+  TriggerStateRowSchema,
   type TaskRow,
+  type TriggerStateRow,
 } from "./schema.js";
-import { TaskStoreError } from "./errors.js";
+import { IN_FLIGHT_STATUSES, type TaskStatus } from "./types.js";
+import { TaskStoreError, TaskNotFoundError } from "./errors.js";
+import { assertLegalTransition, isTerminal } from "./state-machine.js";
 
 /**
  * Default reconciler threshold — 5 minutes. Matches the daemon heartbeat
@@ -39,6 +43,19 @@ export const ORPHAN_THRESHOLD_MS_DEFAULT = 5 * 60 * 1000;
 /** Constructor options — single daemon-scoped DB path. */
 export type TaskStoreOptions = {
   readonly dbPath: string;
+};
+
+/**
+ * Patch accepted by `transition`. `ended_at` optional: when omitted AND
+ * the target status is terminal, the store stamps `Date.now()`. Callers
+ * that want to preserve a pre-computed completion time (e.g. reconciler
+ * replay) supply the field explicitly.
+ */
+export type TaskTransitionPatch = {
+  readonly ended_at?: number;
+  readonly result_digest?: string | null;
+  readonly error?: string | null;
+  readonly chain_token_cost?: number;
 };
 
 /** Prepared statements used by TaskStore. */
@@ -72,6 +89,14 @@ type TaskRawRow = {
   readonly result_digest: string | null;
   readonly error: string | null;
   readonly chain_token_cost: number;
+};
+
+/** Raw row shape returned by `SELECT * FROM trigger_state`. */
+type TriggerStateRawRow = {
+  readonly source_id: string;
+  readonly last_watermark: string | null;
+  readonly cursor_blob: string | null;
+  readonly updated_at: number;
 };
 
 export class TaskStore {
@@ -196,13 +221,175 @@ export class TaskStore {
     }
   }
 
+  /**
+   * Transition a task to `newStatus` after running the LIFE-01 state-machine
+   * check. Semantics (locked in 58-02 <locked_shapes>):
+   *
+   *   1. Read the row; throw `TaskNotFoundError` if absent.
+   *   2. Call `assertLegalTransition(current.status, newStatus)` — throws
+   *      `IllegalTaskTransitionError` BEFORE any UPDATE so illegal paths
+   *      leave the row untouched (proved by Test 17).
+   *   3. Compute `heartbeat_at`: refresh to `Date.now()` iff the target is
+   *      in-flight; otherwise preserve the current value.
+   *   4. Compute `ended_at`: caller's patch wins; otherwise stamp
+   *      `Date.now()` on terminal transitions; otherwise preserve.
+   *   5. Merge the remaining patch fields (result_digest, error,
+   *      chain_token_cost) onto the current row.
+   *   6. UPDATE and re-read. Re-read is Zod-parsed before returning so
+   *      callers always receive a validated row.
+   */
+  transition(
+    taskId: string,
+    newStatus: TaskStatus,
+    patch: TaskTransitionPatch = {},
+  ): TaskRow {
+    const current = this.get(taskId);
+    if (!current) {
+      throw new TaskNotFoundError(taskId);
+    }
+
+    // LIFE-01 enforcement: reject illegal transitions before any UPDATE.
+    assertLegalTransition(current.status, newStatus);
+
+    const now = Date.now();
+    const effectiveHeartbeat = IN_FLIGHT_STATUSES.has(newStatus)
+      ? now
+      : current.heartbeat_at;
+    const effectiveEndedAt =
+      patch.ended_at !== undefined
+        ? patch.ended_at
+        : isTerminal(newStatus)
+          ? now
+          : current.ended_at;
+    const effectiveResultDigest =
+      patch.result_digest !== undefined
+        ? patch.result_digest
+        : current.result_digest;
+    const effectiveError =
+      patch.error !== undefined ? patch.error : current.error;
+    const effectiveChainTokenCost =
+      patch.chain_token_cost !== undefined
+        ? patch.chain_token_cost
+        : current.chain_token_cost;
+
+    try {
+      this.stmts.updateTaskStatus.run(
+        newStatus,
+        effectiveHeartbeat,
+        effectiveEndedAt,
+        effectiveResultDigest,
+        effectiveError,
+        effectiveChainTokenCost,
+        taskId,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`transition failed: ${msg}`, this.dbPath);
+    }
+
+    const updated = this.get(taskId);
+    if (!updated) {
+      throw new TaskStoreError(
+        `transition succeeded but row disappeared: ${taskId}`,
+        this.dbPath,
+      );
+    }
+    return updated;
+  }
+
+  /**
+   * Reconciler-only escape hatch. BYPASSES `assertLegalTransition` because
+   * the reconciler may race with natural completion — it still needs to
+   * mark a row orphaned even if the row just transitioned to a terminal
+   * status. `orphaned` is terminal in the state machine, so once set no
+   * further transitions are permitted.
+   *
+   * `heartbeat_at` is intentionally unchanged — the stale timestamp is
+   * the evidence for the reconciler's decision.
+   */
+  markOrphaned(taskId: string): TaskRow {
+    const current = this.get(taskId);
+    if (!current) {
+      throw new TaskNotFoundError(taskId);
+    }
+    try {
+      this.stmts.markOrphanedStmt.run(Date.now(), taskId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`markOrphaned failed: ${msg}`, this.dbPath);
+    }
+    const updated = this.get(taskId);
+    if (!updated) {
+      throw new TaskStoreError(
+        `markOrphaned succeeded but row disappeared: ${taskId}`,
+        this.dbPath,
+      );
+    }
+    return updated;
+  }
+
+  /**
+   * Return every in-flight task whose heartbeat is older than
+   * `Date.now() - thresholdMs`. Plan 58-03's reconciler iterates the result
+   * and flips each row via `markOrphaned`.
+   *
+   * Returns a frozen array of Zod-parsed rows — callers must not mutate.
+   */
+  listStaleRunning(thresholdMs: number): readonly TaskRow[] {
+    try {
+      const cutoff = Date.now() - thresholdMs;
+      const raws = this.stmts.listStaleRunningStmt.all(
+        cutoff,
+      ) as readonly TaskRawRow[];
+      return Object.freeze(raws.map((r) => TaskRowSchema.parse(r)));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`listStaleRunning failed: ${msg}`, this.dbPath);
+    }
+  }
+
+  /**
+   * Upsert a trigger source watermark + opaque cursor blob. Phase 60
+   * TriggerEngine calls this on every source tick with the latest
+   * observation point; `updated_at` is stamped server-side so callers
+   * never need to wall-clock.
+   */
+  upsertTriggerState(
+    sourceId: string,
+    lastWatermark: string | null,
+    cursorBlob: string | null,
+  ): void {
+    try {
+      this.stmts.upsertTriggerStateStmt.run(
+        sourceId,
+        lastWatermark,
+        cursorBlob,
+        Date.now(),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`upsertTriggerState failed: ${msg}`, this.dbPath);
+    }
+  }
+
+  /** Read a trigger source watermark; returns `null` if unseen. */
+  getTriggerState(sourceId: string): TriggerStateRow | null {
+    try {
+      const raw = this.stmts.getTriggerStateStmt.get(sourceId) as
+        | TriggerStateRawRow
+        | undefined;
+      if (!raw) return null;
+      return TriggerStateRowSchema.parse(raw);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`getTriggerState failed: ${msg}`, this.dbPath);
+    }
+  }
+
   /** Release the underlying SQLite handle. Subsequent calls throw. */
   close(): void {
     this.db.close();
   }
-
-  // Task 2 extends with: transition, markOrphaned, listStaleRunning,
-  //                     upsertTriggerState, getTriggerState.
 
   private prepareStatements(): PreparedStatements {
     return {
@@ -214,12 +401,38 @@ export class TaskStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       getTask: this.db.prepare(`SELECT * FROM tasks WHERE task_id = ?`),
-      // Task 2 replaces these five stubs with real statements.
-      updateTaskStatus: this.db.prepare(`SELECT 1`),
-      markOrphanedStmt: this.db.prepare(`SELECT 1`),
-      listStaleRunningStmt: this.db.prepare(`SELECT 1`),
-      upsertTriggerStateStmt: this.db.prepare(`SELECT 1`),
-      getTriggerStateStmt: this.db.prepare(`SELECT 1`),
+      updateTaskStatus: this.db.prepare(`
+        UPDATE tasks
+        SET status = ?,
+            heartbeat_at = ?,
+            ended_at = ?,
+            result_digest = ?,
+            error = ?,
+            chain_token_cost = ?
+        WHERE task_id = ?
+      `),
+      markOrphanedStmt: this.db.prepare(`
+        UPDATE tasks
+        SET status = 'orphaned',
+            ended_at = ?
+        WHERE task_id = ?
+      `),
+      listStaleRunningStmt: this.db.prepare(`
+        SELECT * FROM tasks
+        WHERE status IN ('running', 'awaiting_input')
+          AND heartbeat_at < ?
+      `),
+      upsertTriggerStateStmt: this.db.prepare(`
+        INSERT INTO trigger_state (source_id, last_watermark, cursor_blob, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(source_id) DO UPDATE SET
+          last_watermark = excluded.last_watermark,
+          cursor_blob = excluded.cursor_blob,
+          updated_at = excluded.updated_at
+      `),
+      getTriggerStateStmt: this.db.prepare(`
+        SELECT * FROM trigger_state WHERE source_id = ?
+      `),
     };
   }
 }
