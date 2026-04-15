@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to plan
-stopped_at: Completed 57-03-PLAN.md
-last_updated: "2026-04-15T04:20:41.996Z"
+status: Ready to execute
+stopped_at: Completed 58-01-PLAN.md
+last_updated: "2026-04-15T20:26:18.887Z"
 last_activity: 2026-04-15
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 6
+  completed_plans: 4
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 57 — turndispatcher-foundation
+**Current focus:** Phase 58 — task-store-state-machine
 
 ## Current Position
 
-Phase: 58
-Plan: Not started
+Phase: 58 (task-store-state-machine) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Recent decisions affecting current work:
 - [Phase 57]: Optional BridgeConfig.turnDispatcher + fallback preserves standalone runner (Blocker #1 resolved — src/cli/commands/run.ts compiles unchanged)
 - [Phase 57]: Discord turnId format: discord:<snowflake> (prefixed) — preserves trace-id continuity via rewrite
 - [Phase 57]: Caller-owned Turn handoff pattern (DiscordBridge) vs dispatcher-owned (TaskScheduler) — both supported by DispatchOptions.turn branch
+- [Phase 58-task-store-state-machine]: [Plan 58-01]: TaskStatus union (8 statuses) + LEGAL_TRANSITIONS map + 15-field LIFE-02 TaskRowSchema + assertLegalTransition pure-function state machine landed — pure-data foundation, zero daemon wiring, 93 tests passing (64 from exhaustive (from, to) table + 29 explicit). Plans 58-02 and 58-03 unblocked.
 
 ### Roadmap Evolution
 
@@ -97,5 +98,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-15
-Stopped at: Completed 57-03-PLAN.md
+Stopped at: Completed 58-01-PLAN.md
 Resume file: None
