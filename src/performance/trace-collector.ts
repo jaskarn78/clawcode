@@ -22,6 +22,7 @@ import type {
   TurnStatus,
 } from "./types.js";
 import type { TraceStore } from "./trace-store.js";
+import type { TurnOrigin } from "../manager/turn-origin.js";
 import { ToolCache } from "../mcp/tool-cache.js";
 
 /**
@@ -77,6 +78,13 @@ export class Turn {
    * when the session-adapter was not threaded with this Turn).
    */
   private cacheSnapshot: CacheTelemetrySnapshot | undefined = undefined;
+  /**
+   * Phase 57 Plan 02: buffered TurnOrigin blob attached via `recordOrigin`.
+   * Undefined when the caller did not go through TurnDispatcher (Phase 50/51/52
+   * legacy path — bench harness, some heartbeat checks). Spread into the
+   * frozen TurnRecord at `end()` time (no extra transaction).
+   */
+  private turnOrigin: TurnOrigin | undefined = undefined;
   /**
    * Phase 55 Plan 02 — per-turn idempotent tool-result cache. Lazy-allocated
    * on first access; the `toolCache` getter constructs the ToolCache only
@@ -152,6 +160,22 @@ export class Turn {
   }
 
   /**
+   * Phase 57 Plan 02: attach a TurnOrigin to this turn. Buffered in memory
+   * and spread into the frozen TurnRecord at `end()`. Idempotent overwrite
+   * semantics — second call replaces the first. Calling after `end()` is a
+   * no-op (parent already committed). Mirrors the precedent set by
+   * `recordCacheUsage`.
+   *
+   * Primary caller: TurnDispatcher.dispatch / dispatchStream. Downstream
+   * Phase 63 `clawcode trace` walker reads the persisted blob to stitch
+   * cross-agent causation chains.
+   */
+  recordOrigin(origin: TurnOrigin): void {
+    if (this.committed) return;
+    this.turnOrigin = origin;
+  }
+
+  /**
    * Commit the turn: build a frozen TurnRecord from all buffered spans
    * and persist it via TraceStore.writeTurn in one transaction.
    *
@@ -161,6 +185,11 @@ export class Turn {
    * Phase 52 Plan 01: when a cache-telemetry snapshot was recorded via
    * `recordCacheUsage`, its fields are spread into the frozen TurnRecord.
    * Otherwise the five cache fields are `undefined` (legacy shape).
+   *
+   * Phase 57 Plan 02: when a TurnOrigin was attached via `recordOrigin`,
+   * it is spread into the frozen TurnRecord and persisted as a JSON blob
+   * in the `turn_origin` column. Otherwise the field is absent (legacy shape)
+   * and the column lands NULL.
    */
   end(status: TurnStatus): void {
     if (this.committed) return;
@@ -176,18 +205,19 @@ export class Turn {
       status,
       spans: Object.freeze([...this.spans]),
     };
-    const record: TurnRecord = Object.freeze(
-      this.cacheSnapshot
+    const record: TurnRecord = Object.freeze({
+      ...base,
+      ...(this.cacheSnapshot
         ? {
-            ...base,
             cacheReadInputTokens: this.cacheSnapshot.cacheReadInputTokens,
             cacheCreationInputTokens: this.cacheSnapshot.cacheCreationInputTokens,
             inputTokens: this.cacheSnapshot.inputTokens,
             prefixHash: this.cacheSnapshot.prefixHash,
             cacheEvictionExpected: this.cacheSnapshot.cacheEvictionExpected,
           }
-        : base,
-    );
+        : {}),
+      ...(this.turnOrigin ? { turnOrigin: this.turnOrigin } : {}),
+    });
     try {
       this.store.writeTurn(record);
       this.log.debug(
