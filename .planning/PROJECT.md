@@ -77,7 +77,16 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-(None — v1.7 shipped. Next milestone pending.)
+## Current Milestone: v1.8 Proactive Agents + Handoffs
+
+**Goal:** Agents autonomously initiate actions on external triggers AND delegate structured tasks to other agents — unlocking multi-agent workflows.
+
+**Target features:**
+- Trigger engine — DB state changes, calendar events, inbox arrivals, webhook hits, scheduled observations initiate agent turns without a human message
+- Policy layer — declarative rules for which trigger fires which agent with what context payload
+- Cross-agent RPC — typed task handoff between agents with schema, timeout, and structured return (distinct from subagent-thread which is an ephemeral child session)
+- Task lifecycle — track in-flight inter-agent tasks, retry/cancel, audit trail, surface in dashboard + CLI
+- Discord surfaces — operator visibility into triggered actions + inter-agent task graph
 
 ### Out of Scope
 

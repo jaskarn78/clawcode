@@ -1,31 +1,33 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.7
-milestone_name: Performance & Latency
-status: v1.7 milestone complete
-stopped_at: Completed 56-02-PLAN.md (warm-path ready gate + fleet surfaces)
-last_updated: "2026-04-14T14:15:49.931Z"
-last_activity: 2026-04-14
+milestone: v1.8
+milestone_name: Proactive Agents + Handoffs
+status: Defining requirements
+stopped_at: null
+last_updated: "2026-04-15T00:00:00.000Z"
+last_activity: 2026-04-15
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 24
-  completed_plans: 24
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-10)
+See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 56 — warm-path-optimizations
+**Current focus:** Milestone v1.8 — Proactive Agents + Handoffs (defining requirements)
 
 ## Current Position
 
-Phase: 56
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-15 — Milestone v1.8 started
 
 ## Performance Metrics
 
