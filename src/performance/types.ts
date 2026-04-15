@@ -10,6 +10,8 @@
  * enforces a 1KB cap on the serialized metadata JSON per span.
  */
 
+import type { TurnOrigin } from "../manager/turn-origin.js";
+
 /** Terminal status recorded on a completed turn. */
 export type TurnStatus = "success" | "error";
 
@@ -83,6 +85,18 @@ export type TurnRecord = {
    * that a cache eviction was expected (prompt prefix changed).
    */
   readonly cacheEvictionExpected?: boolean;
+  /**
+   * Phase 57 Plan 02: provenance blob attached by TurnDispatcher. When present,
+   * identifies the source (Discord / scheduler / Phase 59 task / Phase 60 trigger),
+   * the root turn of the chain, the immediate parent, and the full chain[].
+   * Downstream Phase 63 `clawcode trace <causation_id>` walker pattern-matches
+   * on `source.kind` + `chain[]` to stitch cross-agent causation.
+   *
+   * Optional — Phase 50/51/52 legacy callers (e.g., bench harness, heartbeat
+   * checks) that open a Turn without going through TurnDispatcher omit it.
+   * Plan 57-03 migrates DiscordBridge + TaskScheduler to provide it.
+   */
+  readonly turnOrigin?: TurnOrigin;
 };
 
 /**

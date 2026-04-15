@@ -31,6 +31,11 @@ import {
   type ToolPercentileRow,
   type TurnRecord,
 } from "./types.js";
+// Phase 57 Plan 02: the `turn_origin` column stores a serialized TurnOrigin
+// as JSON text. TurnOrigin is defined on TurnRecord (see types.ts) and flows
+// through writeTurn's JSON.stringify. Consumers of the raw row revalidate via
+// TurnOriginSchema in src/manager/turn-origin.ts (Phase 63 trace walker).
+import type { TurnOrigin } from "../manager/turn-origin.js";
 import { PERCENTILE_SQL } from "./percentiles.js";
 
 /** Maximum length of the serialized metadata JSON per span. */
@@ -164,6 +169,11 @@ export class TraceStore {
         // Pass `?? null` so older callers (Phase 50 turns) land NULL in those
         // columns and remain queryable. `cache_eviction_expected` is a boolean
         // stored as 0/1 INTEGER (SQLite convention).
+        //
+        // Phase 57 Plan 02: `turn_origin` is an OPTIONAL JSON blob. When present,
+        // it round-trips through TurnOriginSchema.parse. When absent, column is
+        // NULL — legacy Phase 50/51/52 callers that do not go through
+        // TurnDispatcher remain queryable.
         this.stmts.insertTrace.run(
           t.id,
           t.agent,
@@ -181,6 +191,7 @@ export class TraceStore {
             : t.cacheEvictionExpected
               ? 1
               : 0,
+          t.turnOrigin ? JSON.stringify(t.turnOrigin) : null, // Phase 57 Plan 02
         );
         for (const span of t.spans) {
           this.stmts.insertSpan.run(
@@ -489,7 +500,7 @@ export class TraceStore {
   }
 
   /**
-   * Phase 52 Plan 01: idempotent ALTER TABLE migration.
+   * Phase 52 Plan 01 + Phase 57 Plan 02: idempotent ALTER TABLE migration.
    *
    * Reads the existing `traces` columns via `PRAGMA table_info(traces)`, then
    * issues `ALTER TABLE ... ADD COLUMN` only for columns not already present.
@@ -500,6 +511,8 @@ export class TraceStore {
    *   - input_tokens                  INTEGER (nullable)
    *   - prefix_hash                   TEXT    (nullable — set by Plan 52-02)
    *   - cache_eviction_expected       INTEGER (nullable 0/1 — set by Plan 52-02)
+   *   - turn_origin                   TEXT    (nullable JSON blob — Phase 57 Plan 02,
+   *                                            populated by TurnDispatcher in Plan 57-03)
    *
    * SQLite's `ALTER TABLE ADD COLUMN` preserves existing row values (they land
    * NULL in the new columns) so Phase 50/51 turns remain queryable.
@@ -518,6 +531,7 @@ export class TraceStore {
       ["input_tokens", "INTEGER"],
       ["prefix_hash", "TEXT"],
       ["cache_eviction_expected", "INTEGER"],
+      ["turn_origin", "TEXT"], // Phase 57 Plan 02 — nullable JSON blob
     ];
     for (const [col, type] of additions) {
       if (!existing.has(col)) {
@@ -554,14 +568,16 @@ export class TraceStore {
 
   private prepareStatements(): PreparedStatements {
     return {
-      // Phase 52 Plan 01: 12-arg positional insert (was 7-arg in Phase 50).
-      // Last 5 columns are nullable — Phase 50 callers pass NULL for them.
+      // Phase 57 Plan 02: 13-arg positional insert (was 12-arg in Phase 52 Plan 01).
+      // Last 6 columns are nullable — Phase 50 callers pass NULL for all of them,
+      // Phase 52 callers pass NULL for turn_origin. Phase 57 Plan 03 migrates
+      // DiscordBridge + TaskScheduler to provide the turn_origin JSON blob.
       insertTrace: this.db.prepare(`
         INSERT OR REPLACE INTO traces
           (id, agent, started_at, ended_at, total_ms, discord_channel_id, status,
            cache_read_input_tokens, cache_creation_input_tokens, input_tokens,
-           prefix_hash, cache_eviction_expected)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           prefix_hash, cache_eviction_expected, turn_origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertSpan: this.db.prepare(`
         INSERT INTO trace_spans
