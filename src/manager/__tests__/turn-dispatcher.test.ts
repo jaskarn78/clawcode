@@ -163,3 +163,73 @@ describe("TurnDispatcher.dispatchStream", () => {
     expect(Object.isFrozen(origin)).toBe(true);
   });
 });
+
+describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
+  it("recordOrigin is called once when caller passes options.turn", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const ownedTurn = makeMockTurn("discord:callerownedaa", "alice", null);
+    const recordOrigin = vi.fn();
+    (ownedTurn as unknown as { recordOrigin: typeof recordOrigin }).recordOrigin = recordOrigin;
+    const origin = makeRootOrigin("discord", "msg_x");
+
+    await dispatcher.dispatch(origin, "alice", "hi", { turn: ownedTurn as never });
+
+    expect(recordOrigin).toHaveBeenCalledTimes(1);
+    expect(recordOrigin).toHaveBeenCalledWith(origin);
+    expect(mock.defaultCollector.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not call turn.end() when caller owns the Turn", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const ownedTurn = makeMockTurn("discord:callerownedaa", "alice", null);
+    (ownedTurn as unknown as { recordOrigin: (o: unknown) => void }).recordOrigin = vi.fn();
+    const origin = makeRootOrigin("discord", "msg_x");
+
+    await dispatcher.dispatch(origin, "alice", "hi", { turn: ownedTurn as never });
+
+    expect(ownedTurn.end).not.toHaveBeenCalled();
+  });
+
+  it("preserves default lifecycle (opens Turn via collector) when no caller Turn passed", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const origin = makeRootOrigin("discord", "msg_x");
+
+    await dispatcher.dispatch(origin, "alice", "hi");
+
+    expect(mock.defaultCollector.startTurn).toHaveBeenCalledTimes(1);
+    expect(mock.turns).toHaveLength(1);
+    expect(mock.turns[0].end).toHaveBeenCalledWith("success");
+  });
+
+  it("re-throws without ending caller-owned Turn on session error", async () => {
+    const err = new Error("upstream boom");
+    const mock = makeMockSessionManager({ sendToAgent: vi.fn(async () => { throw err; }) });
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const ownedTurn = makeMockTurn("discord:callerownedaa", "alice", null);
+    (ownedTurn as unknown as { recordOrigin: (o: unknown) => void }).recordOrigin = vi.fn();
+    const origin = makeRootOrigin("discord", "msg_x");
+
+    await expect(
+      dispatcher.dispatch(origin, "alice", "hi", { turn: ownedTurn as never }),
+    ).rejects.toBe(err);
+    expect(ownedTurn.end).not.toHaveBeenCalled();
+  });
+
+  it("dispatchStream with caller-owned Turn: recordOrigin called, no end() from dispatcher", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const ownedTurn = makeMockTurn("discord:callerownedaa", "alice", "chan_1");
+    const recordOrigin = vi.fn();
+    (ownedTurn as unknown as { recordOrigin: typeof recordOrigin }).recordOrigin = recordOrigin;
+    const origin = makeRootOrigin("discord", "msg_x");
+
+    await dispatcher.dispatchStream(origin, "alice", "hi", () => {}, { turn: ownedTurn as never });
+
+    expect(recordOrigin).toHaveBeenCalledWith(origin);
+    expect(ownedTurn.end).not.toHaveBeenCalled();
+    expect(mock.sm.streamFromAgent).toHaveBeenCalledWith("alice", "hi", expect.any(Function), ownedTurn);
+  });
+});
