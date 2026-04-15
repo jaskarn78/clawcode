@@ -22,6 +22,7 @@ import type { Logger } from "pino";
 import { logger } from "../shared/logger.js";
 import type { SessionManager } from "./session-manager.js";
 import type { TurnOrigin } from "./turn-origin.js";
+import type { Turn } from "../performance/trace-collector.js";
 
 /** Thrown when dispatch is called with invalid arguments. */
 export class TurnDispatcherError extends Error {
@@ -38,6 +39,20 @@ export class TurnDispatcherError extends Error {
 export type DispatchOptions = {
   /** Discord channel id when this turn is Discord-originated; else null. */
   readonly channelId?: string | null;
+  /**
+   * Phase 57 Plan 03: caller-owned Turn opt-out.
+   *
+   * When provided, TurnDispatcher:
+   *   1. Does NOT open a new Turn via the TraceCollector (avoids duplicate).
+   *   2. Calls `turn.recordOrigin(origin)` exactly once to attach provenance.
+   *   3. Does NOT call `turn.end()` — caller retains lifecycle ownership
+   *      (mirrors the Phase 50 caller-owned Turn contract used by DiscordBridge
+   *      and bench-run-prompt so the caller can stamp additional spans BEFORE
+   *      the record is committed).
+   *
+   * Leave undefined to get the default lifecycle (dispatcher opens + ends Turn).
+   */
+  readonly turn?: Turn;
 };
 
 export type TurnDispatcherOptions = {
@@ -78,7 +93,19 @@ export class TurnDispatcher {
     if (agentName.length === 0) {
       throw new TurnDispatcherError("agentName must be non-empty", agentName, origin.rootTurnId);
     }
+
+    // Phase 57 Plan 03: caller-owned Turn branch. When the caller provided
+    // their own Turn (DiscordBridge pre-opens the Turn + receive-span before
+    // calling us), attach the origin and forward — caller retains end() ownership.
+    if (options.turn) {
+      try { options.turn.recordOrigin(origin); } catch { /* non-fatal — trace side-effect */ }
+      return this.sessionManager.sendToAgent(agentName, message, options.turn);
+    }
+
     const turn = this.openTurn(origin, agentName, options.channelId ?? null);
+    if (turn) {
+      try { turn.recordOrigin(origin); } catch { /* non-fatal */ }
+    }
     try {
       const response = await this.sessionManager.sendToAgent(agentName, message, turn);
       try { turn?.end("success"); } catch { /* non-fatal — trace write is best-effort */ }
@@ -103,7 +130,17 @@ export class TurnDispatcher {
     if (agentName.length === 0) {
       throw new TurnDispatcherError("agentName must be non-empty", agentName, origin.rootTurnId);
     }
+
+    // Phase 57 Plan 03: caller-owned Turn branch (see dispatch() for rationale).
+    if (options.turn) {
+      try { options.turn.recordOrigin(origin); } catch { /* non-fatal */ }
+      return this.sessionManager.streamFromAgent(agentName, message, onChunk, options.turn);
+    }
+
     const turn = this.openTurn(origin, agentName, options.channelId ?? null);
+    if (turn) {
+      try { turn.recordOrigin(origin); } catch { /* non-fatal */ }
+    }
     try {
       const response = await this.sessionManager.streamFromAgent(
         agentName,
