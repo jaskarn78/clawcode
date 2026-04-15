@@ -1,537 +1,600 @@
-# Architecture: Smart Memory & Model Tiering (v1.5)
+# Architecture Research — v1.8 Proactive Agents + Handoffs
 
-**Domain:** On-demand memory loading, knowledge graph, personality context assembly, model tiering
-**Researched:** 2026-04-10
-**Confidence:** HIGH (existing codebase well-understood), MEDIUM (advisor tool is beta)
-
-## Existing Architecture Recap
-
-```
-                          clawcode.yaml
-                               |
-                     ┌─────────▼──────────┐
-                     │     Daemon          │
-                     │  (SessionManager)   │
-                     │  (ConfigWatcher)    │
-                     │  (HeartbeatRunner)  │
-                     └──┬───┬───┬───┬─────┘
-                        │   │   │   │
-                IPC (Unix Socket)
-                        │   │   │   │
-              ┌─────────┘   │   │   └──────────┐
-              ▼             ▼   ▼              ▼
-         ┌─────────┐  ┌─────────┐  ...  ┌─────────┐
-         │ Agent A  │  │ Agent B │       │ Agent N │
-         │ (Claude  │  │ (Claude │       │ (Claude │
-         │  Code    │  │  Code   │       │  Code   │
-         │  Session)│  │  Session)│      │  Session)│
-         └────┬─────┘  └────┬────┘      └────┬────┘
-              │              │                │
-         ┌────▼─────┐  ┌────▼────┐      ┌────▼────┐
-         │ SQLite   │  │ SQLite  │      │ SQLite  │
-         │ Memory   │  │ Memory  │      │ Memory  │
-         │ + vec    │  │ + vec   │      │ + vec   │
-         └──────────┘  └─────────┘      └─────────┘
-```
-
-**Key Integration Points (what v1.5 touches):**
-
-1. **`buildSessionConfig()`** in `src/manager/session-config.ts` -- assembles the system prompt by reading SOUL.md, IDENTITY.md, hot memories, skills, admin info, context summary. This is the personality + memory injection point.
-
-2. **`TierManager`** in `src/memory/tier-manager.ts` -- manages hot/warm/cold transitions. Hot memories get injected into system prompt via `getHotMemories()`.
-
-3. **`SemanticSearch`** in `src/memory/search.ts` -- KNN search over vec_memories, re-ranked by decay. Currently only searched explicitly, not wired to on-demand retrieval.
-
-4. **`MemoryStore`** in `src/memory/store.ts` -- SQLite schema: `memories` table (id, content, source, importance, access_count, tags, timestamps, tier) + `vec_memories` virtual table (384-dim float32 cosine).
-
-5. **`SdkSessionAdapter`** in `src/manager/session-adapter.ts` -- creates Claude SDK sessions with `model`, `systemPrompt`, `permissionMode`. Currently uses a fixed model per agent from config.
-
-6. **`UsageTracker`** in `src/usage/tracker.ts` -- records per-interaction token/cost/model data.
+**Domain:** Integration of trigger engine + cross-agent RPC into existing ClawCode daemon
+**Researched:** 2026-04-13
+**Confidence:** HIGH (grounded in existing codebase; not speculative)
 
 ---
 
-## New Architecture: Three Feature Domains
+## Executive Summary
 
-### Feature 1: Knowledge Graph (Obsidian-style Links Between Memories)
+v1.8 adds two fundamentally new capabilities: (1) **non-human turn initiation** (triggers — anything other than "a Discord user typed a message" can start an agent turn) and (2) **typed inter-agent task delegation** (handoffs — durable, schema-validated, observable task objects that survive agent crashes and produce structured returns).
 
-**Problem:** Memories are flat rows with tags but no structural relationships. Searching retrieves individual memories without context about how they relate.
+**Core architectural insight:** These are two independent subsystems that share exactly one primitive — **the "turn entry point."** Today, only two things call `SessionManager.sendToAgent / streamFromAgent`: `DiscordBridge.handleMessage` (user messages) and `TaskScheduler.triggerHandler` (scheduled prompts). v1.8 adds a third and fourth: `TriggerEngine.dispatch` and `TaskRouter.deliver`.
 
-**Solution:** Add a `memory_links` table for directional edges between memories, enabling backlink traversal and graph-aware retrieval.
+**The right abstraction is to introduce a single shared `TurnOrigin` type and a `TurnDispatcher` helper** that both existing and new callers funnel through. This keeps the Phase 50 trace contract (`Turn` is caller-owned, `turnId` has origin prefix, `channelId` is nullable) intact, unifies observability, and gives the policy layer one chokepoint to enforce rules.
 
-#### New Schema
+**New subsystems:** `src/triggers/` (source registry + dispatch), `src/tasks/` (SQLite task store + state machine + lifecycle). **Heavily-modified subsystems:** `daemon.ts` (wire new subsystems + IPC routes), `session-manager.ts` (expose `dispatchTurn` helper with origin metadata), `mcp/server.ts` (new `delegate_task` + `task_status` tools), `dashboard/` (task graph panel), `scheduler.ts` (refactored to be one trigger *source* rather than a parallel hot path).
+
+---
+
+## System Overview
+
+### Target architecture (v1.8, changes highlighted)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          EXTERNAL EVENT SOURCES                           │
+│  Discord    Cron    [NEW] Webhook HTTP    [NEW] File watch               │
+│  gateway    tick     endpoint              (chokidar sinks)              │
+│  (existing) (exists) (new route in dashboard/http or separate listener)  │
+└────┬──────────┬──────────────┬──────────────────┬───────────────────────┘
+     │          │              │                  │
+     ▼          ▼              ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     INGRESS LAYER (turn producers)                       │
+│                                                                           │
+│  DiscordBridge    [NEW] TriggerEngine                                    │
+│  (existing)          ├── TriggerSourceRegistry                           │
+│                      ├── PolicyEvaluator (DSL, reads agent config)       │
+│                      ├── DebounceLimiter (per-source + per-agent)         │
+│                      └── LoopDetector (turn chain depth, cascade cap)    │
+│       │                 │                                                  │
+│       └────┬────────────┘                                                 │
+│            ▼                                                               │
+│     ┌────────────────────────────────────────────────┐                    │
+│     │ [NEW] TurnDispatcher                           │  ◄── single choke  │
+│     │  - buildTurnOrigin({ source, chain, actor })   │      point for     │
+│     │  - enforces loop cap (max chain depth)         │      ALL turns     │
+│     │  - emits origin-prefixed turnId                │                    │
+│     │  - opens caller-owned Turn + receive span      │                    │
+│     └───────────────┬────────────────────────────────┘                    │
+└─────────────────────┼───────────────────────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│           SessionManager (existing — minor extension)                    │
+│   streamFromAgent(name, message, turn?, origin?)                         │
+│   sendToAgent(name, message, turn?, origin?)                             │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│           Claude Agent SDK session loop (existing)                       │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │
+  (agent calls) │
+                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  MCP tools surface (existing + new)                       │
+│                                                                           │
+│   existing: memory_lookup, send_message (inbox), send_to_agent           │
+│             (webhook+DM), spawn_subagent_thread, ask_advisor             │
+│                                                                           │
+│   [NEW] delegate_task(agent, input_schema_name, payload, timeout_ms,     │
+│                       await_response?)                                   │
+│   [NEW] task_status(task_id)                                             │
+│   [NEW] cancel_task(task_id)                                             │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                ▼  (IPC round-trip to daemon)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  [NEW] TaskRouter (in daemon)                             │
+│   1. Validates input against schema registry                              │
+│   2. Writes Task row to global task store (pending)                      │
+│   3. Enforces policy: sender allowed to delegate to target?              │
+│   4. If target asleep: chooses cold-start vs queue policy                │
+│   5. Calls TurnDispatcher.dispatch({ source: "task", task_id, from })    │
+│      → which calls SessionManager.streamFromAgent on target              │
+│   6. Polls / listens for completion via Turn.onEnd + tool_use of          │
+│      `task_complete(task_id, output)` in target's response               │
+│   7. Retries on timeout/error per policy; records audit events            │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  STORAGE LAYER (existing + new)                           │
+│                                                                           │
+│   [NEW] ~/.clawcode/manager/tasks.db                                     │
+│         global — single daemon writer                                     │
+│         tables: tasks, task_events, task_audit, dead_letter_queue        │
+│                                                                           │
+│   Per-agent (existing): memory.db, usage.db, traces.db                   │
+│   Per-agent inbox dir (existing): used as delivery fallback              │
+│   Global registry.json (existing): extended with `lastTaskDeliveredAt`   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Component responsibilities
+
+| Component | NEW or MODIFIED | Location | Responsibility |
+|-----------|-----------------|----------|----------------|
+| **TriggerEngine** | NEW | `src/triggers/engine.ts` | Owns all non-Discord, non-inbox event sources. Stateless dispatcher + lifecycle owner for source subscribers. |
+| **TriggerSourceRegistry** | NEW | `src/triggers/sources/*.ts` | Pluggable source modules (mirrors `src/heartbeat/checks/` discovery pattern): `sources/webhook.ts`, `sources/file-watch.ts`, `sources/db-poll.ts`, `sources/inbox-arrived.ts`. Each exports `{ name, subscribe(emit): Unsubscribe }`. |
+| **PolicyEvaluator** | NEW | `src/triggers/policy.ts` | Given `{ sourceEvent, agentConfig }`, returns `{ dispatch: boolean, payload: string, reason: string }`. DSL lives in agent YAML under `triggers:` (see Data Model below). |
+| **TurnDispatcher** | NEW | `src/manager/turn-dispatcher.ts` | **The single entry point for ALL turns.** DiscordBridge, TaskScheduler, TriggerEngine, TaskRouter all route through it. Assigns origin-prefixed `turnId`, enforces cascade depth cap, opens caller-owned Turn, invokes SessionManager. |
+| **TaskRouter** | NEW | `src/tasks/router.ts` | RPC-style dispatcher for `delegate_task`. Owns task lifecycle state machine. |
+| **TaskStore** | NEW | `src/tasks/store.ts` | SQLite schema + CRUD for `~/.clawcode/manager/tasks.db`. Single-writer (daemon), readers can be other tools. |
+| **TaskSchemaRegistry** | NEW | `src/tasks/schemas.ts` | Loaded from `clawcode.yaml` — named Zod schemas for task inputs/outputs. Enables typed handoffs. |
+| **LoopDetector** | NEW | `src/triggers/loop-detector.ts` | Tracks `turnOrigin.chain[]` depth + per-agent per-source rate. Refuses dispatch when `chain.length >= maxDepth` (default 5). |
+| **TaskGraphDashboard** | NEW | `src/dashboard/static/task-graph.js` + `src/dashboard/server.ts` routes | SSE-driven task graph visualization. |
+| **SessionManager** | MODIFIED | `src/manager/session-manager.ts` | Accept optional `TurnOrigin` on `sendToAgent`/`streamFromAgent`; pass through to adapter and trace metadata. **No change to the caller-owned Turn contract.** |
+| **DiscordBridge** | MODIFIED | `src/discord/bridge.ts` | Replace direct `sessionManager.streamFromAgent` call with `turnDispatcher.dispatch({ source: "discord", ... })`. Behavior identical; gains uniform observability. |
+| **TaskScheduler** | MODIFIED | `src/scheduler/scheduler.ts` | Becomes ONE of the TriggerEngine's sources. Cron still owns timing; dispatch still goes through TurnDispatcher. Removes ~30 lines of duplicated trace setup. |
+| **MCP Server** | MODIFIED | `src/mcp/server.ts` | Adds `delegate_task`, `task_status`, `cancel_task` tool definitions; each maps to a new IPC method. |
+| **IPC Protocol** | MODIFIED | `src/ipc/protocol.ts` | Add methods: `delegate-task`, `task-status`, `cancel-task`, `tasks`, `triggers`, `trigger-fire` (manual). |
+| **Daemon** | MODIFIED | `src/manager/daemon.ts` | Wire `TriggerEngine`, `TaskRouter`, `TurnDispatcher`, `TaskStore`. Add new IPC route handlers. |
+| **Config Schema** | MODIFIED | `src/config/schema.ts` | Add `triggers` array and `delegation` block to agent schema; add `taskSchemas` top-level block. |
+| **Dashboard Server** | MODIFIED | `src/dashboard/server.ts` | Add `/api/tasks`, `/api/tasks/:id`, `/api/triggers`, `/api/task-graph` endpoints. |
+
+---
+
+## Integration Point Table (how NEW talks to EXISTING)
+
+| From (new) | To (existing) | Via | Notes |
+|------------|---------------|-----|-------|
+| TriggerEngine | SessionManager | TurnDispatcher | **Never directly.** All turns go through TurnDispatcher for uniform tracing + loop detection. |
+| TriggerEngine | ConfigWatcher | chokidar hot-reload hook | Triggers must hot-reload when YAML changes. Reuse existing `ConfigReloader` diff mechanism. |
+| PolicyEvaluator | ResolvedAgentConfig | `sessionManager.getAgentConfig(name)` | Agent config is the source of truth for what triggers apply. |
+| TaskRouter | SessionManager | TurnDispatcher | Same rule. Task dispatch is just a turn with `source: "task"`. |
+| TaskRouter | MessagesInbox | `src/collaboration/inbox.ts` `writeMessage` | **Fallback path** — when target agent is asleep AND policy says "queue don't wake", task is written as an inbox message with `x-task-id` metadata. Next time target wakes (or on its own schedule), heartbeat's inbox check delivers it. |
+| TaskRouter | TraceCollector | `sessionManager.getTraceCollector(target)` | Records `tool_call.delegate_task.<target>` on sender's Turn, AND opens a separate receiver-side Turn on target with `task:<id>` prefix linked via `parent_turn_id` metadata. Enables cross-agent trace stitching. |
+| TaskRouter | UsageTracker | existing per-agent tracker | Delegated work bills to the **target** (who executed), not the sender. Optional: add `delegated_from` column for attribution reports. |
+| TurnDispatcher | TraceCollector | existing `startTurn(id, agent, channelId)` | Replaces the turn-setup blocks currently duplicated in `bridge.ts:300-376` and `scheduler.ts:86-107`. |
+| MCP `delegate_task` | TaskRouter | IPC `delegate-task` | Agent's Claude session calls MCP tool → stdio MCP server → IPC to daemon → TaskRouter. |
+| Dashboard task-graph panel | TaskStore | IPC `tasks` with `?graph=true` query | Returns adjacency list of in-flight + recent tasks with parent/child linkage. SSE push on state change. |
+| TaskStore | MessagesInbox | filesystem write | When `taskMode: queued`, task is materialized as inbox message; TaskStore keeps the canonical record. |
+| LoopDetector | TurnOrigin chain | in-memory Map keyed by root turnId | No persistence — cascades reset at daemon restart (acceptable; runaway cascades shouldn't survive restart anyway). |
+
+---
+
+## Data Model
+
+### `TurnOrigin` (NEW shared type — `src/manager/turn-origin.ts`)
+
+Every turn now carries provenance. This is the single thing that makes uniform observability and loop detection possible.
+
+```typescript
+export type TurnSource =
+  | { kind: "discord"; channelId: string; messageId: string; userId: string; isThread: boolean }
+  | { kind: "scheduler"; scheduleName: string; cronExpr: string }
+  | { kind: "trigger"; sourceName: string; eventId: string; payload: Record<string, unknown> }
+  | { kind: "task"; taskId: string; fromAgent: string; schemaName: string }
+  | { kind: "manual"; actor: string };  // IPC send-to-agent from CLI/admin
+
+export type TurnOrigin = {
+  readonly source: TurnSource;
+  readonly rootTurnId: string;        // The turnId that started this cascade
+  readonly parentTurnId: string | null; // Immediate parent in chain
+  readonly chain: readonly string[];  // All ancestor turnIds (for depth detection)
+  readonly startedAt: number;          // epoch ms
+};
+```
+
+`turnId` format per source (preserves Phase 50 convention):
+
+| Source | `turnId` format | Example |
+|--------|-----------------|---------|
+| Discord | `<discord_message_id>` (numeric, existing) | `1234567890123456789` |
+| Scheduler | `scheduler:<nanoid10>` (existing) | `scheduler:aB3dE5fG7h` |
+| Trigger | `trigger:<source>:<nanoid10>` (NEW) | `trigger:webhook:xY9zA1bC2d` |
+| Task | `task:<nanoid10>` (NEW) | `task:pQ4rS6tU8v` |
+| Manual | `manual:<actor>:<nanoid10>` (NEW) | `manual:cli:mN3oP5qR7s` |
+
+This lets CLI `clawcode latency <agent>` and the dashboard filter by origin prefix — a regex on `turnId` already partitions user vs scheduler latency today; we extend that to five origin classes.
+
+### Task state machine
+
+```
+         ┌─────────────────────────────────────────────┐
+         │                                             │
+         ▼                                             │
+      pending  ──(target asleep + queued)──► queued    │
+         │                                    │        │
+         │ (dispatched to target)             │        │
+         ▼                                    │        │
+      running ◄───(target wakes)──────────────┘        │
+         │                                             │
+         ├──(target calls task_complete)─► complete    │
+         │                                             │
+         ├──(timeout)────────────────► timed_out       │
+         │                                  │          │
+         │                                  │ retry    │
+         │                                  └─────►────┘
+         ├──(sender calls cancel_task)─► cancelled
+         │
+         ├──(target errors/crashes)─► failed
+         │                              │ retry
+         │                              └───►────┐
+         │                                       │
+         │                                       ▼
+         │                              max retries exceeded
+         │                                       │
+         │                                       ▼
+         └───────────────────────────────► dead_letter
+```
+
+**Awaiting-handoff-response** is NOT a separate state — it's just `running` from the sender's perspective. The sender's Turn has an open `tool_call.delegate_task.<target>` span that closes when the task reaches a terminal state. This is the simplest correct model and matches how subagent-thread spans already work (parent stays open while child runs; parent ends when child ends).
+
+### TaskStore SQLite schema (sketch)
 
 ```sql
--- Add to MemoryStore.initSchema() via migration
-CREATE TABLE IF NOT EXISTS memory_links (
-  source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-  target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-  link_type TEXT NOT NULL CHECK(link_type IN ('related', 'derived', 'supersedes', 'context')),
-  strength REAL NOT NULL DEFAULT 1.0 CHECK(strength >= 0.0 AND strength <= 1.0),
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (source_id, target_id, link_type)
+-- ~/.clawcode/manager/tasks.db
+CREATE TABLE tasks (
+  id TEXT PRIMARY KEY,                     -- "task:<nanoid10>"
+  from_agent TEXT NOT NULL,
+  to_agent TEXT NOT NULL,
+  schema_name TEXT NOT NULL,               -- FK-ish to TaskSchemaRegistry
+  input_json TEXT NOT NULL,                -- validated by schema at insert time
+  output_json TEXT,                        -- populated on complete
+  state TEXT NOT NULL,                     -- pending|queued|running|complete|failed|timed_out|cancelled|dead_letter
+  attempt INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  timeout_ms INTEGER NOT NULL,
+  parent_task_id TEXT,                     -- for nested delegations
+  root_task_id TEXT NOT NULL,              -- top-level originator
+  trigger_turn_id TEXT,                    -- links to traces.db on sender side
+  execution_turn_id TEXT,                  -- links to traces.db on receiver side
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  error_message TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_memory_links_target 
-  ON memory_links(target_id);
+CREATE INDEX idx_tasks_state ON tasks(state);
+CREATE INDEX idx_tasks_to_agent_state ON tasks(to_agent, state);
+CREATE INDEX idx_tasks_root ON tasks(root_task_id);
+
+CREATE TABLE task_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,                -- created|dispatched|progress|retried|completed|failed|cancelled|dead_lettered
+  payload_json TEXT,
+  ts INTEGER NOT NULL
+);
 ```
 
-**Link types:**
-- `related` -- topically connected memories (auto-detected via embedding similarity at insert time)
-- `derived` -- consolidation output links back to source memories
-- `supersedes` -- dedup merge: new memory replaces old (existing dedup flow can populate this)
-- `context` -- episode links to relevant facts that were active during that episode
+**Why global (one db) not per-agent:** a task has TWO agents — sender and receiver. Writing it to both inboxes creates split-brain. One daemon-owned store with indexes on `from_agent`/`to_agent` gives clean queries in both directions. Single-writer (the daemon) matches existing `registry.json` / `delivery-queue.db` / `advisor-budget.db` patterns.
 
-#### New Component: `KnowledgeGraph`
+**Reads** can be exposed read-only to other processes (CLI, future admin tools) via IPC, not direct DB access.
 
-```
-src/memory/knowledge-graph.ts
-```
+### Policy DSL (agent YAML)
 
-**Responsibilities:**
-- `link(sourceId, targetId, linkType, strength)` -- create a directional edge
-- `getLinks(memoryId, direction: 'outgoing' | 'incoming' | 'both')` -- traverse
-- `getNeighborhood(memoryId, depth: number)` -- BFS to N hops, returns subgraph
-- `autoLink(newMemoryId, embedding)` -- on insert, find top-K similar existing memories and create `related` links if similarity > threshold
-- `getBacklinks(memoryId)` -- all memories that link TO this one
-
-**Integration with existing code:**
-- `MemoryStore.insert()` calls `KnowledgeGraph.autoLink()` after successful insert
-- `consolidation.ts` `writeWeeklyDigest()` creates `derived` links from source daily memories to the digest memory
-- `dedup.ts` `mergeMemory()` creates `supersedes` link from merged entry to the surviving entry
-- `SemanticSearch.search()` optionally expands results with 1-hop neighbors (configurable)
-
-#### Data Flow Change
-
-```
-BEFORE: insert -> dedup check -> embed -> SQLite insert
-AFTER:  insert -> dedup check -> embed -> SQLite insert -> autoLink (async, non-blocking)
-```
-
-The autoLink step runs after the insert transaction completes. It queries vec_memories for similar entries (reusing the existing KNN infrastructure) and creates `related` links. This is fire-and-forget -- link creation failure should not block memory insertion.
-
----
-
-### Feature 2: On-Demand Memory Loading & Personality Context Assembly
-
-**Problem:** `buildSessionConfig()` stuffs everything into the system prompt at session creation: SOUL.md, IDENTITY.md, all hot memories, all skills, admin info, context summary. This burns context on startup and never refreshes.
-
-**Solution:** Split context assembly into two layers:
-
-1. **Minimal Boot Prompt** -- identity only (compact personality summary)
-2. **On-Demand Retrieval** -- memories loaded per-turn via MCP tool or system prompt refresh
-
-#### Component: `ContextAssembler`
-
-```
-src/memory/context-assembler.ts
-```
-
-**Responsibilities:**
-- `assembleBootPrompt(config)` -- minimal identity (SOUL.md first paragraph + agent name + channel bindings). Target: <500 tokens.
-- `assembleOnDemandContext(query, agentName)` -- given a user message, retrieve relevant memories + their graph neighbors, format as context block.
-- `assembleFull(config, deps)` -- backward-compatible full assembly (for agents that opt out of on-demand mode).
-
-#### Personality Retention Strategy
-
-The existing `buildSessionConfig()` reads the full SOUL.md + IDENTITY.md. For haiku-default agents, this is wasteful -- haiku has a smaller effective context window and personality text competes with task context.
-
-**Approach: Tiered Personality Loading**
-
-```
-config.memory.personalityMode: "full" | "compact" | "on-demand"
-```
-
-- **`full`** (default, backward-compatible): Current behavior. Entire SOUL.md + IDENTITY.md in system prompt.
-- **`compact`**: First 2-3 paragraphs of SOUL.md + IDENTITY.md summary. ~200-300 tokens. Good for haiku.
-- **`on-demand`**: Boot with agent name + one-line role only. Full personality loaded via tool when agent needs to "check identity."
-
-For v1.5, implement `compact` and keep `full` as fallback. `on-demand` is experimental and deferred.
-
-#### Memory Retrieval MCP Tool
-
-Instead of hot-memory injection at boot, expose a `memory_search` MCP tool that agents can invoke per-turn.
-
-```
-src/mcp/tools/memory-search.ts
-```
-
-**Tool definition:**
-```typescript
-{
-  name: "memory_search",
-  description: "Search your memory for relevant context. Use when you need to recall past conversations, decisions, or facts.",
-  inputSchema: {
-    query: { type: "string", description: "What to search for" },
-    includeGraph: { type: "boolean", description: "Include linked memories", default: true },
-    maxResults: { type: "number", description: "Max results", default: 5 }
-  }
-}
-```
-
-**Flow:**
-```
-User message arrives
-  -> Agent receives message
-  -> Agent decides if memory lookup needed (LLM judgment)
-  -> Agent calls memory_search tool
-  -> Tool: embed query -> KNN search -> expand with graph neighbors -> format
-  -> Agent receives context, incorporates into response
-```
-
-**Integration:** The existing MCP bridge (`src/mcp/server.ts`) already exposes tools. Add `memory_search` as a new tool handler.
-
-#### Modified `buildSessionConfig()` Flow
-
-```
-BEFORE:
-  SOUL.md + IDENTITY.md + Discord + Context Summary + Hot Memories + Skills + Admin + Subagent
-
-AFTER (compact mode):
-  Compact Identity (first section of SOUL.md) + Discord + Skills Summary (names only)
-  + "You have a memory_search tool. Use it when you need to recall context."
-  + Context Summary (if resuming)
-```
-
-Hot memories are NO LONGER injected into the system prompt. They're available via `memory_search` with a boost factor so they rank higher in search results.
-
----
-
-### Feature 3: Model Tiering (Haiku Default + Advisor Escalation)
-
-**Problem:** Every agent runs at its configured model (often sonnet/opus) regardless of task complexity. Most messages are simple and could be handled by haiku at 1/60th the cost.
-
-**Solution:** Default all agents to haiku, with Anthropic's new advisor tool for automatic escalation to opus when needed.
-
-#### Anthropic Advisor Tool Integration
-
-Anthropic released the advisor tool in beta (April 2026). It's a first-class tool type in the Messages API:
-
-```json
-{
-  "type": "advisor_20260301",
-  "name": "advisor",
-  "model": "claude-opus-4-6",
-  "max_uses": 3
-}
-```
-
-The executor model (haiku/sonnet) runs the task. When it hits a decision it cannot resolve, it automatically calls the advisor (opus), which reviews context and returns guidance. Advisor tokens bill at opus rates, executor tokens at haiku/sonnet rates.
-
-**Critical constraint:** The Claude Agent SDK's `query()` API currently exposes `model` in options but does NOT expose a `tools` array for passing the advisor tool definition. The advisor tool is a Messages API feature, not a Claude Code/Agent SDK feature yet.
-
-**Implication:** We cannot use the advisor tool through the Agent SDK directly. We need a different approach.
-
-#### Practical Model Tiering Architecture
-
-Since the advisor tool is not available through the Agent SDK, implement model tiering as a **session-level model switch**:
-
-```
-src/manager/model-tier.ts
-```
-
-**Component: `ModelTierRouter`**
-
-```typescript
-type TierConfig = {
-  defaultModel: "haiku";
-  escalationModel: "sonnet";
-  advisorModel: "opus";
-  escalationTriggers: EscalationTrigger[];
-  maxEscalationsPerSession: number;
-  cooldownMinutes: number;
-};
-
-type EscalationTrigger =
-  | { type: "keyword"; patterns: string[] }      // "debug", "architect", "review"
-  | { type: "error_rate"; threshold: number }     // consecutive errors
-  | { type: "complexity"; tokenThreshold: number } // long messages
-  | { type: "explicit"; command: string }          // "/escalate"
-  | { type: "cost_budget"; maxUsdPerHour: number } // budget-based
-```
-
-**Escalation flow:**
-
-```
-Message arrives for Agent A (running haiku)
-  -> ModelTierRouter.evaluate(message, agentState)
-  -> If trigger matches:
-     -> Create new session with escalated model (sonnet or opus)
-     -> Inject context summary from current session
-     -> Route this message to the escalated session
-     -> After response, optionally de-escalate back to haiku
-  -> If no trigger:
-     -> Route to current haiku session normally
-```
-
-**Key design decision:** Escalation creates a NEW session with the higher model, not a model swap mid-session. The Agent SDK does not support changing models mid-session. The escalated session gets the same system prompt + a context summary of the current conversation.
-
-#### Integration with SessionAdapter
-
-```
-BEFORE:
-  SessionAdapter.createSession(config)  // config.model is fixed
-
-AFTER:
-  ModelTierRouter wraps SessionAdapter
-  ModelTierRouter.routeMessage(agentName, message)
-    -> checks escalation triggers
-    -> either sends to existing session OR creates escalated session
-    -> tracks escalation state per agent
-```
-
-**Modified `AgentSessionConfig`:**
-
-```typescript
-type AgentSessionConfig = {
-  // ... existing fields
-  readonly tierConfig?: {
-    readonly defaultModel: "haiku" | "sonnet" | "opus";
-    readonly escalationModel: "sonnet" | "opus";
-    readonly triggers: readonly EscalationTrigger[];
-    readonly maxEscalationsPerSession: number;
-  };
-};
-```
-
-#### Usage Tracking Integration
-
-The existing `UsageTracker` already records model per interaction. Add:
-- `cost_saved_usd` field: difference between what this interaction would have cost at the original model vs what it actually cost
-- Aggregate: `total_savings` across the fleet
-- Dashboard: cost comparison chart (haiku vs previous model spend)
-
----
-
-## Component Boundaries
-
-| Component | File | Responsibility | Communicates With |
-|-----------|------|----------------|-------------------|
-| KnowledgeGraph | `src/memory/knowledge-graph.ts` | Link CRUD, traversal, auto-linking | MemoryStore, SemanticSearch |
-| ContextAssembler | `src/memory/context-assembler.ts` | Boot prompt + on-demand context building | TierManager, KnowledgeGraph, SemanticSearch |
-| ModelTierRouter | `src/manager/model-tier.ts` | Escalation decisions, session routing | SessionAdapter, UsageTracker |
-| MemorySearchTool | `src/mcp/tools/memory-search.ts` | MCP tool for agent-initiated memory search | SemanticSearch, KnowledgeGraph |
-| TierConfig schema | `src/memory/schema.ts` (extend) | Validation for new config fields | zod |
-
-**Modified existing components:**
-
-| Component | Change |
-|-----------|--------|
-| `MemoryStore` | Add `memory_links` table migration, link CRUD methods |
-| `buildSessionConfig()` | Support `compact` personality mode, remove hot memory injection when on-demand enabled |
-| `SdkSessionAdapter` | No change (ModelTierRouter wraps it) |
-| `consolidation.ts` | Create `derived` links when writing digests |
-| `dedup.ts` | Create `supersedes` links on merge |
-| `SemanticSearch` | Optional graph expansion parameter |
-| `ResolvedAgentConfig` | Add `personalityMode` and `tierConfig` fields |
-| `UsageTracker` | Add savings tracking |
-
----
-
-## Data Flow: Complete Message Lifecycle (v1.5)
-
-```
-1. Discord message arrives
-2. Router identifies bound agent
-3. ModelTierRouter.evaluate(message, agentState)
-   ├── No escalation needed -> use current haiku session
-   └── Escalation triggered -> create sonnet/opus session with context
-4. Message sent to agent session via SessionAdapter
-5. Agent processes message:
-   a. Agent reads compact system prompt (identity + channel binding)
-   b. Agent decides if memory search needed
-   c. If yes: calls memory_search MCP tool
-      -> SemanticSearch.search(embed(query))
-      -> KnowledgeGraph.getNeighborhood(resultIds, depth=1)
-      -> Format and return context
-   d. Agent generates response with retrieved context
-6. Response delivered to Discord
-7. UsageTracker.record(event) with model, tokens, cost, savings
-8. If escalated session: de-escalation check for next message
-```
-
----
-
-## Patterns to Follow
-
-### Pattern 1: Graph-Augmented Retrieval
-**What:** After KNN search returns top-K memories, expand each result by traversing 1-hop graph neighbors. De-duplicate and re-rank the combined set.
-**When:** Agent calls `memory_search` with `includeGraph: true`
-**Why:** Retrieves contextually related memories that may not match the query embedding directly but are structurally linked.
-
-```typescript
-function graphAugmentedSearch(
-  query: Float32Array,
-  search: SemanticSearch,
-  graph: KnowledgeGraph,
-  topK: number,
-): readonly RankedSearchResult[] {
-  const directResults = search.search(query, topK);
-  const neighborIds = new Set<string>();
-  
-  for (const result of directResults) {
-    const neighbors = graph.getLinks(result.id, 'both');
-    for (const link of neighbors) {
-      neighborIds.add(link.source_id === result.id ? link.target_id : link.source_id);
-    }
-  }
-  
-  // Fetch neighbor entries, remove duplicates, re-rank
-  // Neighbors get a score penalty (e.g., 0.8x) since they're indirect matches
-  // ...
-}
-```
-
-### Pattern 2: Escalation State Machine
-**What:** Per-agent state tracking for model tier transitions
-**When:** Every message routed through ModelTierRouter
-
-```
-STATES: base -> escalated -> cooldown -> base
-TRANSITIONS:
-  base -> escalated: trigger matched
-  escalated -> cooldown: response delivered + no more triggers
-  cooldown -> base: cooldown period elapsed
-  escalated -> escalated: another trigger during escalated state (reset cooldown)
-```
-
-### Pattern 3: Compact Personality Templates
-**What:** Extract a compact identity from SOUL.md/IDENTITY.md programmatically
-**When:** Agent configured with `personalityMode: "compact"`
-
-```typescript
-function compactPersonality(soulMd: string, identityMd: string): string {
-  // Take first heading + first paragraph from SOUL.md
-  // Take full IDENTITY.md (usually short)
-  // Append: "For detailed personality guidance, search your memory for 'identity' or 'soul'"
-  const soulLines = soulMd.split('\n');
-  const firstSection = extractFirstSection(soulLines); // Up to second H1/H2
-  return `${firstSection}\n\n${identityMd}`.trim();
-}
-```
-
----
-
-## Anti-Patterns to Avoid
-
-### Anti-Pattern 1: Model Swap Mid-Session
-**What:** Attempting to change the model of an active Agent SDK session
-**Why bad:** The SDK creates a session with a fixed model. There is no `setModel()` method. Attempting to resume with a different model is undefined behavior.
-**Instead:** Create a new session with the escalated model. Inject a context summary from the previous session.
-
-### Anti-Pattern 2: Graph Traversal Without Depth Limits
-**What:** Unbounded BFS/DFS on the knowledge graph
-**Why bad:** Memory graphs grow organically. Auto-linking creates O(K) edges per insert. After 10K memories with K=3 links each, unbounded traversal can pull thousands of nodes.
-**Instead:** Always cap depth (default 1, max 2). Cap total results from graph expansion (e.g., 20 neighbors max).
-
-### Anti-Pattern 3: Eager Graph Population
-**What:** Running auto-link on all existing memories when the feature is first deployed
-**Why bad:** N memories * K nearest neighbors = O(N*K) link insertions on a potentially large database. Blocks the event loop.
-**Instead:** Auto-link only on new inserts going forward. Optionally run a background migration job during idle periods (via heartbeat).
-
-### Anti-Pattern 4: Hot Memory Injection AND On-Demand Search
-**What:** Keeping hot memories in the system prompt while also having memory_search available
-**Why bad:** Doubles context usage for the same information. Agent may get confused by duplicate context from different sources.
-**Instead:** When on-demand mode is enabled, remove hot memory injection from buildSessionConfig(). Hot memories should still be boosted in search results via their access_count and tier status.
-
----
-
-## Scalability Considerations
-
-| Concern | At 14 agents | At 50 agents | At 200 agents |
-|---------|-------------|-------------|---------------|
-| Memory links table | ~1K links/agent, negligible | Index on target_id handles it | Consider partitioning by agent |
-| Auto-link on insert | ~50ms (3 KNN queries) | Same (per-agent SQLite) | Same (isolated DBs) |
-| Compact personality | Reduces prompt by ~500-1500 tokens/agent | 25K-75K tokens saved across fleet | Significant cost reduction |
-| Model tiering (haiku default) | ~60x cost reduction per message for simple tasks | Fleet-wide savings compound | Major operational cost difference |
-| Graph-augmented search | <100ms with depth=1 | Same (per-agent) | Same (per-agent) |
-
----
-
-## Suggested Build Order
-
-The three features have clear dependency relationships:
-
-```
-Phase 1: Knowledge Graph (no dependencies on other v1.5 features)
-  └── memory_links table + KnowledgeGraph class + auto-link on insert
-  └── Modify consolidation to create derived links
-  └── Modify dedup to create supersedes links
-
-Phase 2: On-Demand Memory Loading (depends on Phase 1 for graph expansion)
-  └── ContextAssembler with compact personality mode
-  └── memory_search MCP tool (uses KnowledgeGraph for graph expansion)
-  └── Modified buildSessionConfig() for compact mode
-  └── Config schema extensions (personalityMode)
-
-Phase 3: Model Tiering (independent, but benefits from Phase 2's compact prompts)
-  └── ModelTierRouter with escalation triggers
-  └── Session creation/teardown for escalated models
-  └── Config schema extensions (tierConfig)
-  └── Usage tracking enhancements (savings calculation)
-
-Phase 4: Integration & Cost Optimization
-  └── Wire all three features together
-  └── Dashboard: cost savings visualization
-  └── CLI: memory graph inspection commands
-  └── Heartbeat: background graph maintenance
-```
-
-**Phase ordering rationale:**
-- Phase 1 is foundational -- the graph structure is needed by Phase 2's graph-augmented search
-- Phase 2 reduces context bloat, making Phase 3's haiku-default more viable (haiku works better with less context noise)
-- Phase 3 can technically be built in parallel with Phase 2, but the compact prompts from Phase 2 make haiku perform better
-- Phase 4 is integration glue that connects everything
-
----
-
-## Config Schema Changes
+Living in each agent's config (not a separate `policies.yaml`) because **triggers are agent-scoped behavior** and should version with the agent config. This matches how `schedules:` and `slashCommands:` already live per-agent.
 
 ```yaml
-# clawcode.yaml additions per agent
 agents:
-  - name: my-agent
-    model: haiku  # Now the default for all agents
-    memory:
-      personalityMode: compact  # NEW: full | compact | on-demand
-      graph:                    # NEW
-        enabled: true
-        autoLinkThreshold: 0.75  # similarity threshold for auto-linking
-        autoLinkTopK: 3          # max links per new memory
-        maxTraversalDepth: 1     # max hops in graph expansion
-      onDemandSearch: true       # NEW: enable memory_search MCP tool
-    tier:                        # NEW
-      defaultModel: haiku
-      escalationModel: sonnet
-      advisorModel: opus         # reserved for when advisor tool hits SDK
-      triggers:
-        - type: keyword
-          patterns: ["debug", "architect", "review", "complex"]
-        - type: error_rate
-          threshold: 3
-        - type: explicit
-          command: "/think-harder"
-      maxEscalationsPerSession: 5
-      cooldownMinutes: 10
+  - name: ops
+    triggers:
+      - name: error-log-watcher
+        source: file-watch
+        config:
+          paths: ["/var/log/app/errors.log"]
+          pattern: "ERROR"
+        throttle:
+          minIntervalSeconds: 60
+          maxPerHour: 10
+        payload: |
+          New errors detected in {{file}}:
+          {{lastNLines 5}}
+      - name: daily-standup-reminder
+        source: scheduler
+        config:
+          cron: "0 9 * * 1-5"
+        payload: "Time for the daily standup digest."
+    delegation:
+      acceptsFrom: ["planner", "researcher"]   # allowlist
+      acceptsSchemas: ["research-request", "code-review-request"]
+      maxConcurrent: 2
+      cooldownMs: 500
 ```
+
+**Evaluation timing:**
+1. **Subscription time** (daemon startup + config reload): TriggerEngine reads `triggers[]` from each agent config, asks source registry to subscribe.
+2. **Fire time** (event arrives): source calls `emit(event)`. PolicyEvaluator renders `payload` template + applies `throttle` + asks LoopDetector. If all pass → TurnDispatcher.
 
 ---
 
-## Risk Assessment
+## Build Order (dependency DAG)
 
-| Risk | Impact | Likelihood | Mitigation |
-|------|--------|-----------|------------|
-| Advisor tool never reaches Agent SDK | Model tiering works without it (session-level switching) | MEDIUM | Session-level switching is the primary approach; advisor is future enhancement |
-| Auto-link creates too many edges | Graph noise, slow traversal | LOW | Configurable threshold + topK cap per insert |
-| Compact personality loses agent character | Agents feel generic | MEDIUM | Careful first-section extraction; test with each agent's SOUL.md |
-| Haiku too weak for complex tasks | Poor quality responses | LOW | Escalation triggers catch this; keyword + error_rate triggers are safety nets |
-| Session churn from escalation | Latency spikes, lost context | MEDIUM | Context summary injection + cooldown period prevents thrashing |
+```
+Phase A: Foundations                 (no deps)
+  ├── TurnOrigin type + TurnDispatcher
+  ├── SessionManager accepts origin parameter (pass-through, no behavior change yet)
+  ├── Refactor DiscordBridge + TaskScheduler to use TurnDispatcher
+  │   (net-zero behavior change, pure refactor — proves the abstraction)
+  └── Verification: existing Phase 50 bench still green
+
+Phase B: Task store + state machine   (depends on A)
+  ├── TaskStore SQLite schema + CRUD + migrations
+  ├── TaskSchemaRegistry (load named Zod schemas from clawcode.yaml)
+  ├── TaskRouter state machine (pending → running → terminal)
+  │   (no MCP tool yet; unit-testable in isolation)
+  └── Verification: unit tests for state transitions, schema validation, retries
+
+Phase C: Cross-agent RPC              (depends on A + B)
+  ├── MCP tools: delegate_task, task_status, cancel_task
+  ├── IPC methods: delegate-task, task-status, cancel-task, tasks
+  ├── TaskRouter wires to TurnDispatcher for dispatch
+  ├── task_complete tool (MCP) — target agent reports completion
+  │   (this closes the sender's tool_call.delegate_task span)
+  └── Verification: agent A delegates → agent B completes → sender gets result
+
+Phase D: Trigger engine foundation   (depends on A)
+  ├── TriggerEngine + TriggerSourceRegistry (discovery pattern, like heartbeat checks)
+  ├── PolicyEvaluator + DSL Zod schema in agent config
+  ├── LoopDetector (chain depth + per-agent-per-source rate)
+  ├── One built-in source: `scheduler` (migrate TaskScheduler to be a source)
+  │   (this proves the abstraction is correct — behavior still identical)
+  └── Verification: scheduler cron still fires, latency traces unchanged
+
+Phase E: Additional trigger sources  (depends on D)
+  ├── sources/file-watch.ts (chokidar on arbitrary paths)
+  ├── sources/webhook.ts (HTTP POST endpoint on dashboard server; separate mount path)
+  ├── sources/db-poll.ts (SQL query on interval against configured DB)
+  ├── sources/inbox-arrived.ts (refactor existing inbox heartbeat check into a trigger source)
+  └── Verification: each source fires a turn end-to-end with correct TurnOrigin
+
+Phase F: Observability + operator surfaces  (depends on B + C + E)
+  ├── Dashboard: task graph panel + trigger activity panel
+  ├── CLI: `clawcode tasks`, `clawcode tasks <id>`, `clawcode triggers`
+  ├── Task retention heartbeat check (prune terminal tasks older than N days)
+  └── Verification: end-to-end operator flow — fire trigger, see task graph, drill to latency
+
+Phase G: Policy + security hardening  (depends on C + E)
+  ├── delegation.acceptsFrom allowlist enforcement
+  ├── delegation.maxConcurrent + cooldown
+  ├── Dead-letter queue surfacing + retry CLI
+  ├── LoopDetector cascade-cap alerts → Discord embed
+  └── Verification: security-reviewer agent; no cross-agent escape paths
+```
+
+**Critical ordering rule:** Phase A (TurnDispatcher refactor) MUST land first and be verified as net-zero before B-F build on top. It's the load-bearing primitive.
+
+---
+
+## Answers to the Specific Questions
+
+### 1. Where does the TRIGGER engine live?
+
+**New top-level subsystem in `src/triggers/`, owned by daemon, NOT an extension of TaskScheduler, NOT a separate process.** Rationale:
+
+- **Not TaskScheduler extension:** TaskScheduler is timing-specific. Triggers include webhook hits (HTTP request), file changes (chokidar), DB state changes (poll), inbox arrivals (filesystem watch). Conflating timing with event sources would force every future source to inherit cron semantics it doesn't need.
+- **Not separate process:** Daemon already owns Discord, MCP, heartbeat, scheduler, dashboard. All share the IPC socket and SessionManager. A trigger engine in a separate process would need its own IPC link to dispatch turns — needless complexity for a system where the daemon is the single coordination point.
+- **Top-level subsystem:** Mirrors `src/heartbeat/` structure (pluggable module discovery in subdirectory). TaskScheduler **becomes a source** under this engine, shedding its current duplicated turn-setup code.
+
+### 2. How does a trigger fire an agent turn?
+
+**Neither a pseudo-Discord message NOR a bypass path. A third path via `TurnDispatcher.dispatch({ origin, target, payload })` — the same path TaskScheduler uses after the refactor, and the same path DiscordBridge uses after its refactor.**
+
+Specifically: trigger event → PolicyEvaluator renders `payload` template → `TurnDispatcher.dispatch({ source: {kind:"trigger",...}, agent, payload, parentTurnId: null })` → `sessionManager.streamFromAgent(agent, payload, turn, origin)`.
+
+The payload is a plain string (the rendered template). To the agent's session it looks exactly like a user message, but its `TurnOrigin.source.kind` is `"trigger"`, which means:
+- It's visible to the agent via a system-generated prefix (see #3 below)
+- It's tagged in traces as trigger-originated
+- Its latency is excluded from user-facing p50/p95 by default
+
+**No Discord pseudo-message is constructed.** That would be a lie (the channel didn't receive it) and would contaminate Discord message history.
+
+### 3. How does the agent's identity/channel binding work for proactive turns?
+
+**Configurable per trigger, default: silent.**
+
+```yaml
+triggers:
+  - name: error-log-watcher
+    source: file-watch
+    announceIn: channel     # "channel" | "thread" | "silent" (default)
+    # or: announceIn: thread
+    # announceThreadName: "errors-{{date}}"
+```
+
+When `announceIn: silent`, the agent processes the trigger and only produces Discord output if it decides to — e.g., by using its existing `reply` tool or webhook post. This is the right default because many triggers ("new row in DB") don't warrant spam.
+
+When `announceIn: channel`, the PolicyEvaluator prefixes the payload with a visible system marker: `[trigger: error-log-watcher] <payload>` AND the `TurnOrigin.source.channelId` is set to the agent's bound channel so existing Discord output paths work unchanged.
+
+When `announceIn: thread`, a Discord thread is auto-created (reusing `SubagentThreadSpawner` infrastructure, which is already battle-tested for ephemeral thread sessions) with the trigger context posted as the opening message.
+
+### 4. Cross-agent RPC — new MCP tool or existing send-to-agent IPC?
+
+**NEW MCP tool: `delegate_task(agent, schema, payload, timeout_ms, await_response?)`.**
+
+The existing `send_to_agent` tool (Phase 41) is fundamentally different:
+
+| | `send_to_agent` (existing) | `delegate_task` (NEW) |
+|---|---|---|
+| Semantics | Fire-and-forget message | Typed RPC with return value |
+| Schema | Free-form string | Named Zod schema (input + output) |
+| Tracking | None (fire-forget) | Task row, state machine, audit log |
+| Retries | None | Configurable max_attempts |
+| Timeout | None | Required |
+| Return value | None (sender gets no signal) | Structured output delivered back |
+| Dashboard | Not surfaced as first-class concept | Task graph panel |
+| Cancellation | Impossible | `cancel_task(id)` |
+
+These are complementary. `send_to_agent` remains the right tool for "hey the build is broken" social messages. `delegate_task` is for "run this code review and return the verdict."
+
+**Under the hood both route through the daemon, but delegate_task goes to TaskRouter (new) while send_to_agent goes to the existing webhook+DM path.**
+
+### 5. Task state machine — who owns the state store?
+
+**TaskStore (`~/.clawcode/manager/tasks.db`), owned by daemon, single-writer.**
+
+Why global, not per-agent: a task has two parties (from/to). If it lived in the sender's DB, the receiver can't query its incoming queue. If it lived in both, every state change requires two writes and split-brain is possible. A single daemon-owned DB with indexes on both sides is the simplest correct model. Matches existing patterns for cross-cutting state: `registry.json`, `delivery-queue.db`, `advisor-budget.db`, `escalation-budget.db` — all global, all daemon-managed.
+
+**Reads** can be exposed read-only to other processes (CLI, future admin tools) via IPC, not direct DB access.
+
+### 6. How to prevent trigger loops / runaway cascades?
+
+**Four overlapping defenses, ranked by cost-to-operator:**
+
+1. **Chain depth cap (free, automatic).** Every turn carries `TurnOrigin.chain[]`. `TurnDispatcher` refuses to dispatch when `chain.length >= perf.maxTurnChainDepth` (default 5). Agent A triggers B (depth 1), B delegates to C (depth 2), C triggers D (depth 3) — chain = [A's turnId, B's turnId, C's turnId]. D→E would be depth 4, E→F depth 5, F→anything = rejected. Logged as `loop_detected` event + Discord alert via existing budget-alert infrastructure.
+
+2. **Per-agent per-source rate limit (policy-configured).** `triggers[].throttle: { minIntervalSeconds, maxPerHour }`. Applied in PolicyEvaluator before dispatch. Reuses the existing `src/discord/rate-limiter.ts` pattern.
+
+3. **Delegation allowlist (policy-configured).** `delegation.acceptsFrom: [agentNames]`. Agent B refuses tasks from agents not in its allowlist. This is the security gate — see #11 below.
+
+4. **Cooldown between deliveries to same target (policy-configured).** `delegation.cooldownMs`. Prevents flood even if allowlisted.
+
+The critical invariant: **LoopDetector runs inside TurnDispatcher, which is the single chokepoint.** Cannot be bypassed without touching the primitive itself.
+
+### 7. How to surface the inter-agent task graph?
+
+**All three: dashboard panel (primary), CLI command (scriptable), Discord embed (alerts only).**
+
+- **Dashboard (primary operator surface):** New panel at `/api/task-graph`, renders in-flight + recent-terminal tasks as a force-directed graph. Nodes = agents, edges = tasks (colored by state: running=blue, complete=green, failed=red, dead_letter=black). Click edge → drill to task detail with linked traces. SSE push on state transitions. Follows the existing dashboard patterns (static/app.js, styles.css, SSE manager).
+- **CLI:** `clawcode tasks [--agent X] [--state Y] [--since 24h] [--json]` and `clawcode tasks <id>` for detail. Mirrors `clawcode latency` shape exactly (same `--since`, `--all`, `--json` flags).
+- **Discord embed:** ONLY for anomalies — cascade cap hit, task dead-lettered, stuck-running-past-timeout. Reuses `DiscordBridge.sendBudgetAlert` pattern (embed to agent's channel). Not for normal task completion — would be spam.
+
+### 8. Policy layer data flow — where does the DSL live, when evaluated?
+
+**DSL lives per-agent in `clawcode.yaml` under `triggers:` and `delegation:` blocks (NOT in separate `policies.yaml`).**
+
+Rationale: triggers are agent-scoped behavior. They're as much part of what makes an agent "ops" vs "researcher" as `soul` or `skills` are. A separate `policies.yaml` would force operators to mentally join two files whenever they reason about a single agent. It also splits config hot-reload logic across files.
+
+**Evaluation times:**
+
+| When | What | Where |
+|------|------|-------|
+| Daemon startup | Parse + validate all trigger/delegation blocks | `src/config/schema.ts` Zod |
+| Daemon startup | Subscribe to trigger sources | `TriggerEngine.init` |
+| Config hot-reload (chokidar) | Diff old vs new, unsubscribe removed, subscribe added | `src/manager/config-reloader.ts` (extended) |
+| Trigger fires | Render payload, check throttle, check LoopDetector | `PolicyEvaluator.shouldFire` |
+| Task dispatch | Check `delegation.acceptsFrom` on target | `TaskRouter.enforcePolicy` |
+| Task dispatch | Check `delegation.maxConcurrent` on target | `TaskStore.countRunning(to_agent)` |
+
+### 9. Session keep-alive implications for delegation
+
+**Three policies, declared per-agent in `delegation.wakeBehavior`:**
+
+- `wake` (default): if target is asleep, start it. Target runs the task. Target stays warm for the usual idle period then shuts down per existing heartbeat rules. No change to session lifecycle.
+- `queue`: if target is asleep, write task to target's inbox as an InboxMessage with `x-task-id` metadata. Next time target wakes (scheduled, user message, another trigger), the inbox heartbeat check picks it up and delivers. Lower resource cost, higher latency.
+- `reject`: task immediately fails with `target_asleep`. For strict real-time workflows.
+
+**Warm-session reuse from v1.7** is compatible: a task dispatch is just a turn. The existing warm-path check + 10s ready-gate apply verbatim. No new cold-start logic.
+
+### 10. Integration with v1.7 telemetry
+
+**Yes — proactive turns get the exact same trace spans, plus origin-specific metadata.**
+
+| Phase 50 span | Behavior for proactive turn |
+|---------------|------------------------------|
+| `receive` | Opened by TurnDispatcher with `origin.source` as metadata. For triggers, `channel` metadata is null; for tasks, it's the sender agent name. |
+| `first_token` | Unchanged — still opened/closed by session-adapter. |
+| `tool_call.<name>` | Unchanged. |
+| `end_to_end` | Unchanged. |
+
+**New span:** `tool_call.delegate_task.<target>` on the **sender's** Turn, spanning from tool_use to task terminal state. This reuses the existing `tool_call.<block.name>` pattern — the MCP tool happens to be named `delegate_task`, and we augment the block name with the target agent name to make trace filtering easy.
+
+**Cross-agent trace stitching:** TaskRouter records both `trigger_turn_id` (sender) and `execution_turn_id` (receiver) on the Task row. Dashboard task-graph can render the receiver's full Turn as a child of the sender's delegate_task span.
+
+**Latency filtering:** CLI `clawcode latency <agent> --origin discord` / `--origin trigger` / `--origin task` filters by `turnId` prefix. The dashboard panel gets a matching dropdown. This finally makes the cryptic `context_assemble count=0` split meaningful — user turns vs proactive turns have different SLOs.
+
+### 11. Security — can agent A delegate to any agent B?
+
+**No. Explicit allowlist on the receiver side.** The DSL:
+
+```yaml
+delegation:
+  acceptsFrom: ["planner", "researcher"]   # explicit, not "*"
+  acceptsSchemas: ["research-request"]      # AND schema-level allowlist
+  maxConcurrent: 2
+```
+
+Default (no `delegation` block) = **rejects all delegations**. Agents must opt-in to being delegated to. This is the secure default.
+
+The reason to enforce on receiver not sender: delegation is an agreement. A sender can't unilaterally impose work on a receiver; the receiver's operator must have declared "I accept this kind of work from these sources." This matches the ACL pattern already established in `src/security/acl-parser.ts` for Discord channels — deny-by-default, explicit allow.
+
+**Schema allowlist provides fine-grained control:** agent B might accept `code-review-request` from planner but not `deploy-request`. Without schema-level gating, a compromised sender could send anything that type-checks as "a task."
+
+---
+
+## Anti-Patterns to Explicitly Avoid
+
+### Anti-pattern 1: Coupling TriggerEngine to Discord
+
+**What people do:** Make triggers construct a fake Discord Message object and hand it to `DiscordBridge.handleMessage`.
+
+**Why it's wrong:** DiscordBridge has Discord-specific logic (ACL checks, attachment download, rate limiter, thread routing, fetchReference). None of that applies to a file-watch trigger. You'd be adding guards like `if (isSyntheticMessage)` throughout, accumulating complexity forever.
+
+**Do this instead:** TurnDispatcher is Discord-agnostic. DiscordBridge becomes one of several turn producers. They all end at the same dispatcher; none of them know about each other.
+
+### Anti-pattern 2: Per-agent task DB
+
+**What people do:** Store tasks in each agent's `memory.db` because "everything agent-scoped lives there."
+
+**Why it's wrong:** A task belongs to two agents. Dual-write creates consistency bugs. Queries like "all pending work for agent X" become join nightmares across N SQLite files. Nested tasks (A → B → C) can't be traced without scanning every agent's DB.
+
+**Do this instead:** Global `~/.clawcode/manager/tasks.db`, daemon-owned, indexed on from/to/state/root. Mirrors the established pattern for cross-cutting state (registry.json, delivery-queue.db, advisor-budget.db).
+
+### Anti-pattern 3: Trigger engine as a subprocess
+
+**What people do:** Spin up a separate Node process for the trigger engine "because it touches HTTP / chokidar and might crash."
+
+**Why it's wrong:** The daemon already runs HTTP (dashboard), chokidar (config watcher + heartbeat), IPC server, Discord client, MCP server host. Adding another subprocess means another IPC link to the main daemon for every trigger fire, plus a separate lifecycle to manage. The "crash isolation" argument is weak — a trigger source crashing should be per-source (wrapped in try/catch + source-level restart), not per-process.
+
+**Do this instead:** In-daemon subsystem with per-source error isolation. Model = heartbeat checks (pluggable modules with per-module try/catch).
+
+### Anti-pattern 4: Synchronous blocking RPC
+
+**What people do:** Make `delegate_task` block the sender's turn until the target returns.
+
+**Why it's wrong:** Claude sessions are streaming query loops. Blocking the sender for minutes while the receiver thinks burns context, burns wall-clock budget, and holds MCP tool call open past reasonable timeouts. If the receiver crashes, the sender hangs.
+
+**Do this instead:** `delegate_task(await_response: false)` returns the task_id immediately. Sender continues its turn. When task completes, TaskRouter writes a delivery notification to the sender's inbox (reusing existing `src/collaboration/inbox.ts`) — next time sender wakes, it sees the result. For synchronous-feeling workflows, sender polls `task_status(id)` in a loop with its own yielding. Keep `await_response: true` as an option but strongly document the caveats.
+
+### Anti-pattern 5: Trigger fires identity-less turn
+
+**What people do:** Trigger dispatches a turn with no origin metadata ("it's just another message").
+
+**Why it's wrong:** Operators can't answer basic questions — "why did ops agent wake up at 3am?" Without `TurnOrigin`, you have to grep logs across subsystems to reconstruct causality. Loop detection is impossible.
+
+**Do this instead:** Every turn carries TurnOrigin. It's the structural change that makes everything else possible.
+
+### Anti-pattern 6: Policies in a separate file
+
+**What people do:** Create `policies.yaml` separate from `clawcode.yaml` because "policies feel like a different concern than agent config."
+
+**Why it's wrong:** An agent's triggers, accepted delegations, soul, and skills are facets of the same identity. Splitting them forces operators to keep two mental models in sync and doubles the hot-reload surface. Also: version control diffs are less meaningful when "what this agent does" is split across two files.
+
+**Do this instead:** Policies live per-agent inside `clawcode.yaml`. The schema grows; the file count stays at one. Reuses existing watcher/differ/reloader.
+
+### Anti-pattern 7: Reinventing the subagent-thread primitive for tasks
+
+**What people do:** Build `delegate_task` as a new process-spawning primitive because "we need a new agent instance per task."
+
+**Why it's wrong:** ClawCode already has **persistent** per-agent sessions. Delegating to agent B means "send B a new turn" — B's session is already alive (or should be started per wake policy). Spawning a new process per task would duplicate the entire Claude Agent SDK lifecycle machinery and destroy the memory/identity continuity that makes persistent agents the project's core value.
+
+**Subagent-thread is for ephemeral child work (existing).** `delegate_task` is for persistent-agent handoffs (new). They coexist and serve different needs. Don't conflate them.
+
+---
+
+## Scaling Considerations
+
+This is a per-operator daemon (not a SaaS). "Scale" means the single daemon handling N agents with M triggers and K in-flight tasks.
+
+| Scale | Concern | Mitigation |
+|-------|---------|------------|
+| 5-20 agents, 10 triggers/agent | Trivial | Default config works. |
+| 50+ agents, 50+ triggers total | Trigger fire storm on config reload | Staggered subscription + per-source backoff. Existing `heartbeat.intervalSeconds` per-agent pattern applies. |
+| 100+ concurrent tasks | SQLite contention on task_events writes | Task writes already single-writer (daemon). Events table WAL mode (matches traces.db). If >1000/sec: batch writes. Unlikely for this use case. |
+| Deep task graphs (A→B→C→D...) | Chain depth + trace stitching costs | Hard cap at `maxTurnChainDepth` (default 5). At depth=5, chain array is ~5 nanoid(10) strings = ~60 bytes. Negligible. |
+| Webhook source receives burst | HTTP thread starvation | Webhook source uses same rate limiter pattern as `src/discord/rate-limiter.ts`. 429 response to overage. |
+
+**First bottleneck to expect:** warm-path cost when multiple triggers fire for an asleep agent simultaneously. Mitigation: TriggerEngine coalesces — if agent X is waking AND another trigger for X fires, the second enqueues rather than starting a second wake.
+
+---
 
 ## Sources
 
-- [Anthropic Advisor Strategy](https://www.buildfastwithai.com/blogs/anthropic-advisor-strategy-claude-api) -- advisor tool API details, beta header
-- [Tiered Model Routing Guide](https://www.freecodecamp.org/news/how-to-build-a-cost-efficient-ai-agent-with-tiered-model-routing) -- complexity classification patterns
-- [Claude AI Models Compared 2026](https://ai-herald.com/claude-ai-models-compared-opus-4-6-sonnet-4-5-haiku-4-5-and-more-complete-guide-for-2026/) -- pricing, context windows
-- [Knowledge Graph Tools (Obsidian)](https://github.com/obra/knowledge-graph) -- SQLite + sqlite-vec graph implementation reference
-- [Context Engineering Guide](https://blog.supermemory.ai/what-is-context-engineering-complete-guide/) -- on-demand context loading patterns
-- [Memory for AI Agents](https://thenewstack.io/memory-for-ai-agents-a-new-paradigm-of-context-engineering/) -- JIT memory retrieval architecture
-- Existing codebase: `src/memory/`, `src/manager/session-config.ts`, `src/manager/session-adapter.ts`, `src/usage/tracker.ts`
+- `.planning/codebase/ARCHITECTURE.md` — authoritative daemon/session/IPC/memory/heartbeat structure (2026-04-11)
+- `.planning/codebase/STRUCTURE.md` — directory conventions, where-to-add-new-code patterns (2026-04-11)
+- `.planning/codebase/INTEGRATIONS.md` — Discord, MCP, IPC, storage integration details (2026-04-11)
+- `.planning/milestones/v1.7-phases/50-latency-instrumentation/50-VERIFICATION.md` — canonical TraceCollector/Turn/Span contract and per-agent traces.db pattern (2026-04-13)
+- `src/scheduler/scheduler.ts` — existing caller-owned Turn pattern that TurnDispatcher generalizes
+- `src/discord/bridge.ts:300-376` — existing Turn+receive-span setup duplicated across channel and thread routes
+- `src/collaboration/inbox.ts` + `src/heartbeat/checks/inbox.ts` — existing filesystem inbox pattern that TaskRouter reuses as "queued" fallback
+- `src/ipc/protocol.ts` — IPC_METHODS enum, the extension point for new RPC methods
+- `src/mcp/server.ts` — TOOL_DEFINITIONS pattern, the extension point for new agent tools
+- `src/manager/daemon.ts:1066-1180` — existing send-message / send-to-agent IPC handlers showing the fire-and-forget pattern that delegate_task structurally departs from
+
+---
+
+*Architecture research for: v1.8 Proactive Agents + Handoffs*
+*Researched: 2026-04-13*
