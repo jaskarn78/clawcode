@@ -17,6 +17,7 @@ import type { IpcHandler } from "../ipc/server.js";
 import { SessionManager } from "./session-manager.js";
 import type { SessionAdapter } from "./session-adapter.js";
 import { SdkSessionAdapter } from "./session-adapter.js";
+import { TurnDispatcher } from "./turn-dispatcher.js";
 import { loadConfig, resolveAllAgents } from "../config/loader.js";
 import { readRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
@@ -431,6 +432,18 @@ export async function startDaemon(
     log,
   });
 
+  // 6-bis. Create TurnDispatcher singleton (Phase 57 Plan 03).
+  // Single chokepoint for every agent-turn initiation — Discord bridge and
+  // task scheduler route through it so every persisted trace row carries a
+  // TurnOrigin JSON blob. Future Phase 59 handoffs + Phase 60 triggers plug
+  // in by calling the same dispatch/dispatchStream methods (no per-source
+  // Turn lifecycle reinvention).
+  const turnDispatcher = new TurnDispatcher({
+    sessionManager: manager,
+    log,
+  });
+  log.info("TurnDispatcher initialized");
+
   // Mutable ref so closures created before discordBridge initialization can still access it
   const discordBridgeRef: { current: DiscordBridge | null } = { current: null };
 
@@ -534,6 +547,7 @@ export async function startDaemon(
   // 8b. Initialize task scheduler (per D-08, D-10)
   const taskScheduler = new TaskScheduler({
     sessionManager: manager,
+    turnDispatcher,
     log,
   });
   for (const agentConfig of resolvedAgents) {
@@ -732,6 +746,7 @@ export async function startDaemon(
     discordBridge = new DiscordBridge({
       routingTable,
       sessionManager: manager,
+      turnDispatcher,
       threadManager,
       deliveryQueue,
       securityPolicies,

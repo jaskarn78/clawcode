@@ -1,4 +1,5 @@
 import type { SessionManager } from "../manager/session-manager.js";
+import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import type { Logger } from "pino";
 
 /**
@@ -33,5 +34,13 @@ export type ScheduleStatus = {
  */
 export type TaskSchedulerOptions = {
   readonly sessionManager: SessionManager;
+  /**
+   * Phase 57 Plan 03: required TurnDispatcher for routing cron-fired turns.
+   * Only the daemon creates TaskScheduler instances, so this is REQUIRED
+   * (not optional like BridgeConfig.turnDispatcher). The dispatcher opens
+   * the Turn, attaches a `scheduler:<nanoid>`-prefixed TurnOrigin, and
+   * ends the Turn on success/error.
+   */
+  readonly turnDispatcher: TurnDispatcher;
   readonly log: Logger;
 };

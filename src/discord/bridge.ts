@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { logger } from "../shared/logger.js";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
+import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import type { ThreadManager } from "./thread-manager.js";
 import type { Logger } from "pino";
 import type { DownloadResult } from "./attachment-types.js";
@@ -38,6 +39,21 @@ import type { Turn, Span } from "../performance/trace-collector.js";
 export type BridgeConfig = {
   readonly routingTable: RoutingTable;
   readonly sessionManager: SessionManager;
+  /**
+   * Phase 57 Plan 03: optional TurnDispatcher injection.
+   *
+   * Daemon path (`startDaemon`): ALWAYS injects — Discord turns are
+   * dispatched through TurnDispatcher.dispatchStream, which attaches the
+   * TurnOrigin blob (source.kind='discord', source.id=<snowflake>) to
+   * the caller-owned Turn so Plan 57-02's writeTurn persists it.
+   *
+   * Standalone runner (`src/cli/commands/run.ts`): does NOT inject.
+   * `handleMessage` falls back to `this.sessionManager.streamFromAgent(...)`
+   * — identical to the v1.7 path. No TurnOrigin is written (expected; the
+   * standalone runner is out of v1.8 scope). This keeps TS strict happy
+   * for existing callers and unblocks incremental rollout.
+   */
+  readonly turnDispatcher?: TurnDispatcher;
   readonly threadManager?: ThreadManager;
   readonly webhookManager?: WebhookManager;
   readonly deliveryQueue?: DeliveryQueue;

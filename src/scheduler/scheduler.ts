@@ -1,8 +1,8 @@
 import { Cron } from "croner";
-import { nanoid } from "nanoid";
 import type { Logger } from "pino";
 import type { SessionManager } from "../manager/session-manager.js";
-import type { Turn } from "../performance/trace-collector.js";
+import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
+import { makeRootOrigin } from "../manager/turn-origin.js";
 import type { ScheduleEntry, ScheduleStatus, TaskSchedulerOptions } from "./types.js";
 
 /**
@@ -33,6 +33,7 @@ type TriggerCallback = () => Promise<void>;
  */
 export class TaskScheduler {
   private readonly sessionManager: SessionManager;
+  private readonly turnDispatcher: TurnDispatcher;
   private readonly log: Logger;
   private readonly jobs: Map<string, Cron[]> = new Map();
   private readonly jobScheduleNames: Map<Cron, string> = new Map();
@@ -42,6 +43,7 @@ export class TaskScheduler {
 
   constructor(options: TaskSchedulerOptions) {
     this.sessionManager = options.sessionManager;
+    this.turnDispatcher = options.turnDispatcher;
     this.log = options.log;
   }
 
@@ -83,29 +85,6 @@ export class TaskScheduler {
 
         this.locks.set(agentName, true);
 
-        // Phase 50: construct a caller-owned Turn for scheduler-initiated work.
-        // turnId is prefixed `scheduler:` so dashboards can filter out non-user
-        // latency from percentiles. channelId is null (non-Discord origin).
-        // Trace setup is non-fatal — never break the scheduler hot path.
-        let turn: Turn | undefined;
-        try {
-          const getCollector = (this.sessionManager as SessionManager & {
-            getTraceCollector?: (name: string) => { startTurn: (id: string, agent: string, channelId: string | null) => Turn } | undefined;
-          }).getTraceCollector;
-          if (typeof getCollector === "function") {
-            const collector = getCollector.call(this.sessionManager, agentName);
-            if (collector) {
-              const turnId = `scheduler:${nanoid(10)}`;
-              turn = collector.startTurn(turnId, agentName, null);
-            }
-          }
-        } catch (err) {
-          this.log.warn(
-            { agent: agentName, task: schedule.name, error: (err as Error).message },
-            "trace setup failed — continuing without tracing",
-          );
-        }
-
         try {
           this.log.info(
             { agent: agentName, task: schedule.name },
@@ -113,21 +92,24 @@ export class TaskScheduler {
           );
 
           if (schedule.handler) {
+            // Phase 57 Plan 03: handler-based schedules do NOT go through
+            // TurnDispatcher — they don't touch the session layer. Leave this
+            // branch unchanged from v1.7 (no Turn at all).
             await schedule.handler();
-          } else if (turn) {
-            // Pass the Turn through only when tracing is active, so untraced
-            // callers (no TraceCollector wired) observe a 2-arg sendToAgent
-            // invocation — matches historical assertion shape.
-            await this.sessionManager.sendToAgent(agentName, schedule.prompt!, turn);
           } else {
-            await this.sessionManager.sendToAgent(agentName, schedule.prompt!);
+            // Phase 57 Plan 03: route through TurnDispatcher. The dispatcher
+            // opens its own Turn via the agent's TraceCollector, attaches the
+            // TurnOrigin (source.kind='scheduler', source.id=<schedule.name>)
+            // via Turn.recordOrigin, and ends the Turn on success/error. We
+            // no longer construct or end the Turn here (unifies with the
+            // Discord path — single chokepoint for all turn sources).
+            const origin = makeRootOrigin("scheduler", schedule.name);
+            await this.turnDispatcher.dispatch(origin, agentName, schedule.prompt!);
           }
 
           status.lastRun = Date.now();
           status.lastStatus = "success";
           status.lastError = null;
-
-          try { turn?.end("success"); } catch { /* non-fatal */ }
 
           this.log.info(
             { agent: agentName, task: schedule.name },
@@ -138,8 +120,6 @@ export class TaskScheduler {
           status.lastStatus = "error";
           status.lastError = (error as Error).message;
 
-          try { turn?.end("error"); } catch { /* non-fatal */ }
-
           this.log.error(
             { agent: agentName, task: schedule.name, error: (error as Error).message },
             "scheduled task failed",
@@ -147,7 +127,7 @@ export class TaskScheduler {
         } finally {
           this.locks.set(agentName, false);
 
-          // Update nextRun from the cron job
+          // Update nextRun from the cron job (UNCHANGED from v1.7)
           const job = agentJobs.find((j) => this.jobScheduleNames.get(j) === schedule.name);
           if (job) {
             status.nextRun = job.nextRun()?.getTime() ?? null;

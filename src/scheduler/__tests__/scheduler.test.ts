@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TaskScheduler } from "../scheduler.js";
+import { TurnDispatcher } from "../../manager/turn-dispatcher.js";
 import type { ScheduleEntry } from "../types.js";
 
 function createMockSessionManager() {
   return {
     sendToAgent: vi.fn().mockResolvedValue("Task completed"),
+    // Phase 57 Plan 03: TurnDispatcher calls getTraceCollector per dispatch.
+    // Tests that don't care about tracing get undefined (no collector wired),
+    // so sendToAgent is called with turn=undefined — matches pre-v1.8 shape.
+    getTraceCollector: vi.fn().mockReturnValue(undefined),
   } as any;
 }
 
@@ -26,7 +31,11 @@ describe("TaskScheduler", () => {
   beforeEach(() => {
     sessionManager = createMockSessionManager();
     log = createMockLogger();
-    scheduler = new TaskScheduler({ sessionManager, log });
+    const turnDispatcher = new TurnDispatcher({
+      sessionManager,
+      log,
+    });
+    scheduler = new TaskScheduler({ sessionManager, turnDispatcher, log });
   });
 
   it("addAgent creates cron jobs for enabled schedules only", () => {
@@ -65,7 +74,12 @@ describe("TaskScheduler", () => {
     // Manually trigger the cron callback
     await scheduler._triggerForTest("alice", "daily");
 
-    expect(sessionManager.sendToAgent).toHaveBeenCalledWith("alice", "Generate daily report");
+    // Phase 57 Plan 03: TurnDispatcher forwards sendToAgent with 3 args
+    // (agentName, message, turn). Turn is undefined here because the mock
+    // SessionManager's getTraceCollector returns undefined. Pre-v1.8 this
+    // test asserted a 2-arg call; the 3-arg shape is equivalent behavior
+    // (turn=undefined ≡ no tracing) — the assertion is rewritten to match.
+    expect(sessionManager.sendToAgent).toHaveBeenCalledWith("alice", "Generate daily report", undefined);
   });
 
   it("failed sendToAgent records error status but scheduler continues", async () => {
@@ -228,15 +242,27 @@ describe("scheduler tracing", () => {
   beforeEach(() => {
     turnStartSpan = vi.fn(() => ({ end: vi.fn() }));
     turnEnd = vi.fn();
-    startTurn = vi.fn(() => ({ startSpan: turnStartSpan, end: turnEnd }));
+    // Phase 57 Plan 03: TurnDispatcher calls turn.recordOrigin(origin) on the
+    // dispatcher-owned path; stub it so the call resolves without throwing.
+    startTurn = vi.fn(() => ({ startSpan: turnStartSpan, end: turnEnd, recordOrigin: vi.fn() }));
     mockCollector = { startTurn };
 
     tracedSessionManager = createMockSessionManager();
-    // Wave 2 will add getTraceCollector to SessionManager; we stub it here.
     (tracedSessionManager as any).getTraceCollector = vi.fn().mockReturnValue(mockCollector);
 
     tracedLog = createMockLogger();
-    tracedScheduler = new TaskScheduler({ sessionManager: tracedSessionManager, log: tracedLog });
+    // Phase 57 Plan 03: TaskScheduler now routes through TurnDispatcher.
+    // Construct a dispatcher bound to the same traced sessionManager so
+    // `getTraceCollector` is still consulted on each scheduler trigger.
+    const tracedTurnDispatcher = new TurnDispatcher({
+      sessionManager: tracedSessionManager,
+      log: tracedLog,
+    });
+    tracedScheduler = new TaskScheduler({
+      sessionManager: tracedSessionManager,
+      turnDispatcher: tracedTurnDispatcher,
+      log: tracedLog,
+    });
   });
 
   it("trace: scheduled turns produce turnId prefixed with 'scheduler:'", async () => {
