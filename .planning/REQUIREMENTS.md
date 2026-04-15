@@ -33,12 +33,12 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 ### Cross-Agent Handoff (HAND)
 
 - [ ] **HAND-01**: Each agent delegates a typed task to another agent via a new `delegate_task` MCP tool (async-ticket semantics — MCP call returns a `task_id` immediately; caller's turn ends; the eventual result arrives as a separate trigger firing the caller with the task result as context). Explicitly NOT sync RPC with `await` — prevents deadlock-from-sync-RPC (PITFALL-03) by design.
-- [ ] **HAND-02**: Task schemas are declared in a registry (`.planning/task-schemas/` YAML) with Zod validation on input and output; receiver rejects malformed inputs; payload size cap (default 64KB) enforced at validation time
+- [x] **HAND-02**: Task schemas are declared in a registry (`.planning/task-schemas/` YAML) with Zod validation on input and output; receiver rejects malformed inputs; payload size cap (default 64KB) enforced at validation time
 - [ ] **HAND-03**: Every handoff has a deadline propagated through the chain (not a per-hop timeout); receiver gets an AbortSignal; daemon kills tasks past the chain deadline
-- [ ] **HAND-04**: Handoff authorization — each receiver declares which agents are allowed to delegate to it (allowlist, default deny); violations log WARN and return a typed error
-- [ ] **HAND-05**: Cycle detection — every task carries a chain `depth` counter AND a `causation_id` (root trigger id); reject handoffs where depth exceeds `MAX_HANDOFF_DEPTH` (default 5) OR where the target appears in the causation chain (re-entry ban) to prevent runaway cascades
-- [ ] **HAND-06**: Explicit payload — only fields listed in the task schema cross the handoff boundary; no ambient context leakage between agents
-- [ ] **HAND-07**: Self-handoff (agent A delegating to agent A) blocked at the MCP tool level; returns typed error
+- [x] **HAND-04**: Handoff authorization — each receiver declares which agents are allowed to delegate to it (allowlist, default deny); violations log WARN and return a typed error
+- [x] **HAND-05**: Cycle detection — every task carries a chain `depth` counter AND a `causation_id` (root trigger id); reject handoffs where depth exceeds `MAX_HANDOFF_DEPTH` (default 5) OR where the target appears in the causation chain (re-entry ban) to prevent runaway cascades
+- [x] **HAND-06**: Explicit payload — only fields listed in the task schema cross the handoff boundary; no ambient context leakage between agents
+- [x] **HAND-07**: Self-handoff (agent A delegating to agent A) blocked at the MCP tool level; returns typed error
 
 ### Task Lifecycle (LIFE)
 

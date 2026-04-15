@@ -154,7 +154,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   5. Tokens consumed by delegated turns count against the calling agent's budget by default with a documented per-task override; a failed task can be re-run idempotently via `clawcode tasks retry <task_id>` and produces the same input_digest against the same receiver (LIFE-05, LIFE-06).
 
 **Plans**: 3 plans
-- [ ] 59-01-PLAN.md — Task schema registry + JSON-Schema→Zod compiler + typed errors + authorize.ts (Wave 1)
+- [x] 59-01-PLAN.md — Task schema registry + JSON-Schema→Zod compiler + typed errors + authorize.ts (Wave 1)
 - [ ] 59-02-PLAN.md — TaskManager class (delegate/cancel/completeTask/retry + deadline + cost attribution + digest) (Wave 2)
 - [ ] 59-03-PLAN.md — MCP tools + IPC + CLI tasks retry/status + daemon wiring + acceptsTasks config + AbortSignal threading (Wave 3)
 
@@ -259,7 +259,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 |-------|----------------|--------|-----------|
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
 | 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
-| 59. Cross-Agent RPC (Handoffs) | 0/? | Not started | - |
+| 59. Cross-Agent RPC (Handoffs) | 1/3 | In Progress|  |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
 | 62. Policy Layer + Dry-Run | 0/? | Not started | - |
