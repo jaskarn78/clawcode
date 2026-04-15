@@ -20,7 +20,7 @@ Phase 59 adds the RPC surface; Phase 60+ adds triggers that fire turns from exte
 
 - **Registration:** `delegate_task`, `task_status`, `cancel_task` registered in the shared MCP server (`src/mcp/server.ts` TOOL_DEFINITIONS) — consistent with `send_to_agent`, `ask_advisor` pattern. Not per-agent.
 - **Return shape:** `delegate_task` returns `{ task_id: string }` — minimal async-ticket per HAND-01. Richer observability fields (status URL, chain cost) land in Phase 63.
-- **Tool set shipped:** `delegate_task` + `task_status` + `cancel_task` as MCP tools so any agent can delegate, check, or cancel. `clawcode tasks retry <task_id>` (LIFE-06) is an IPC method + CLI command, not an MCP tool — retry is an operator action, not an agent action.
+- **Tool set shipped:** `delegate_task` + `task_status` + `cancel_task` + `task_complete` as MCP tools (4 tools — matches ROADMAP.md line 95; smart-discuss omitted `task_complete`, added post-research). `task_complete` is how B signals its structured result back to the daemon at the end of its turn — without it, B's result would have to be parsed from assistant text (fragile). `clawcode tasks retry <task_id>` (LIFE-06) is an IPC method + CLI command, not an MCP tool — retry is an operator action, not an agent action.
 - **Result flow back to A:** When B's task completes (or fails/times out), the daemon dispatches a fresh turn to agent A through `TurnDispatcher` with `TurnOrigin{kind:'task', id: task_id, rootTurnId, chain}`. A consumes the result via its regular turn-handling pipeline. This matches Phase 57's design and means no ad-hoc side-channel into A's session.
 
 ### Area 2 — Task Schema Registry & Authorization
@@ -37,7 +37,7 @@ Three plans matching 57/58 cadence:
 
 - **59-01 (Wave 1):** Task schema registry loader + JSON-Schema→Zod compiler + input/output validation + typed error classes (`ValidationError`, `UnauthorizedError`, `CycleDetectedError`, `DepthExceededError`, `SelfHandoffBlockedError`, `DeadlineExceededError`). Pure data/logic — no daemon state, no DB writes.
 - **59-02 (Wave 2):** `TaskManager` class — `delegate()`, `cancel()`, `retry()`, result dispatch. Implements authorization (allowlist lookup), cycle detection (scan causation_id chain), depth cap, self-handoff block, cost attribution (token totals flow to caller budget), deadline + AbortSignal propagation to B's turn, `input_digest` hashing (deterministic SHA-256 of normalized payload — same bytes round-trip same digest), and retry logic (re-dispatch with identical digest).
-- **59-03 (Wave 3):** MCP tool registration in `src/mcp/server.ts` (delegate_task / task_status / cancel_task); IPC methods (`delegate-task`, `task-status`, `cancel-task`, `task-retry`); CLI `clawcode tasks retry <task_id>` + `clawcode tasks status <task_id>`; daemon wiring of `TaskManager` singleton in `startDaemon()`; result-back-to-caller dispatch via `TurnDispatcher`.
+- **59-03 (Wave 3):** MCP tool registration in `src/mcp/server.ts` (delegate_task / task_status / cancel_task / task_complete); IPC methods (`delegate-task`, `task-status`, `cancel-task`, `task-complete`, `task-retry`); CLI `clawcode tasks retry <task_id>` + `clawcode tasks status <task_id>`; daemon wiring of `TaskManager` singleton in `startDaemon()`; result-back-to-caller dispatch via `TurnDispatcher` on `task_complete` call from B.
 
 ### Claude's Discretion (within the above)
 
