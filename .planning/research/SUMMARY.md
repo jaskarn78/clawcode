@@ -1,198 +1,180 @@
-# Project Research Summary
+# Project Research Summary — v1.8 Proactive Agents + Handoffs
 
-**Project:** ClawCode v1.5 — Smart Memory & Model Tiering
-**Domain:** Multi-agent AI orchestration — knowledge graph memory, on-demand context loading, model cost tiering
-**Researched:** 2026-04-10
-**Confidence:** HIGH
+**Project:** ClawCode v1.8 (brownfield continuation from v1.7 shipped 2026-04-14)
+**Scope:** Proactive triggers + structured cross-agent task delegation
+**Generated:** 2026-04-15 (inline synthesis — background researcher agents stalled; authored from v1.0-v1.7 substrate + established ecosystem patterns)
 
-## Executive Summary
+## What v1.8 is solving
 
-ClawCode v1.5 adds three interlocking capabilities to an already-functioning multi-agent system: a knowledge graph layer over the flat memory store, on-demand memory retrieval to replace eager context injection, and model cost tiering with haiku as the default. All three features are implementable with zero new dependencies — the existing stack (better-sqlite3, sqlite-vec, @huggingface/transformers, Claude Agent SDK) covers every requirement. The recommended approach leans on SQLite adjacency list tables for the graph (no graphology, no graph database), session-level model switching for tiering (the advisor tool is not yet available through the Agent SDK), and a hybrid hot-tier + on-demand retrieval pattern that keeps the existing working memory system intact while layering graph-augmented search on top.
+ClawCode today is REACTIVE — agents respond to Discord user messages. Cron-scheduled prompts exist but are dumb (just fire a fixed prompt at X time). Subagent-thread lets an agent spawn an ephemeral child session in a thread but there's no persistent cross-agent task delegation.
 
-The fundamental risk in v1.5 is that every new feature is designed to reduce context bloat, but if built naively, each one individually adds overhead that compounds. Graph traversal can fan out and consume more tokens than the hot-tier it replaces. Tiering instructions add 300-500 fixed tokens per turn. Personality compression requires careful extraction or agents lose character. The mitigation is strict token budget accounting from day one: assign explicit budgets (identity 500 tokens, hot memory 2,000 tokens, graph expansion 1,500 tokens, tooling 500 tokens) and measure system prompt size before and after each phase. v1.5 must produce a smaller net system prompt than v1.4, not a larger one.
+v1.8 adds two orthogonal capabilities that compound:
 
-The build order is non-negotiable due to hard dependencies: knowledge graph schema first (graph traversal code and referential integrity hooks must exist before consolidation or archival is modified), then on-demand loading (requires graph for 1-hop expansion), then model tiering (benefits from compact prompts produced by Phase 2, and haiku viability depends on the reduced context from Phase 2). A pre-Phase 3 haiku compatibility audit — running the full test suite against haiku before switching agents — is mandatory to identify which operations need simplified prompts or automatic escalation.
+1. **Triggers** — agents initiate turns on external signals (DB state changes, inbox arrivals, webhook hits, calendar events, observations) not just user messages.
+2. **Handoffs** — an agent can delegate a typed task to another agent and get a structured reply, with lifecycle tracking, retries, timeouts, and audit trail.
 
-## Key Findings
+Together these unlock autonomous workflows: fin-acquisition notices a new lead in MySQL → delegates research to fin-research → receives structured brief → posts to Discord. Today each of those arrows requires a human.
 
-### Recommended Stack
+## Stack additions (minimal set)
 
-v1.5 requires zero new npm packages. The three features map cleanly onto existing dependencies with new SQLite schema additions. The Agent SDK's `Query.setModel()` for mid-session model switching turned out to be the wrong primitive — session-level model creation (new session with context summary injection) is the correct approach because the SDK does not support changing models on an active session.
-
-**Core technologies (new additions only — no new packages):**
-- SQLite adjacency list tables (`memory_links`): knowledge graph storage — simple JOINs handle all traversal patterns needed (backlinks, forward links, 2-hop BFS). graphology rejected as overengineering for ~100-500 nodes per agent.
-- SQLite FTS5 (built-in to better-sqlite3): keyword search over note content — complements vector similarity for exact-match queries.
-- Session-level model routing (`ModelTierRouter`): haiku default with new-session escalation to sonnet/opus — NOT mid-session setModel() which is unsupported by the SDK.
-- Extended `UsageTracker` tables (`model_decisions`, `cost_budgets`): per-agent, per-model spend tracking and budget enforcement.
-
-**Critical version note:** Pin `@anthropic-ai/claude-agent-sdk` at exact version (pre-1.0). The advisor tool type (`advisor_20260301`) is a Messages API beta feature not yet available through the Agent SDK — design around session-level switching, not the advisor tool.
-
-### Expected Features
-
-**Must have (table stakes for v1.5):**
-- On-demand memory retrieval via `memory_search` MCP tool — replaces eager hot-tier context injection (Mem0 research: 90% token savings, 26% accuracy boost)
-- Knowledge graph links (`memory_links` table + auto-link on insert + backlink resolution) — structural relationships between memories
-- Haiku as default model — single config schema change, 3x cheaper than sonnet on both input and output
-- Model escalation mechanism — `ModelTierRouter` with keyword/error-rate/complexity triggers, creates new sessions at escalated model
-- Personality efficient loading — compact identity fingerprint (~200-300 tokens) in system prompt, full SOUL.md as retrievable memory
-- Token cost tracking — per-agent, per-model counters, CLI reporting, budget enforcement
-
-**Should have (differentiators):**
-- Graph-aware retrieval — 1-hop neighbor expansion after KNN search (configurable, default enabled)
-- Advisor tool integration — DEFER until SDK exposes the advisor tool type natively
-- Escalation budget controls — per-agent daily/weekly token budgets with Discord alerts at 80%
-- Context assembly pipeline — modular composer with per-source token budgets
-
-**Defer to v2+:**
-- Full graph visualization UI (DOT format CLI output is sufficient for agents)
-- Shared knowledge graph across agents (violates workspace isolation)
-- Automatic personality evolution / SOUL.md self-modification (identity drift is a feature-killing bug)
-- Complex escalation chains beyond two-tier (haiku default + opus advisor)
-- LLM-powered entity extraction on every memory write (doubles token cost per write)
-
-### Architecture Approach
-
-v1.5 adds three new components alongside existing modules without replacing them. The hot tier is NOT removed — it stays as a baseline working memory; on-demand loading layers on top as supplemental graph-augmented search. The existing `buildSessionConfig()` is modified to support compact mode but remains backward-compatible.
-
-**Major new components:**
-1. `KnowledgeGraph` (`src/memory/knowledge-graph.ts`) — edge CRUD, BFS traversal with visited-set tracking, auto-link on insert (fire-and-forget, non-blocking), orphan detection
-2. `ContextAssembler` (`src/memory/context-assembler.ts`) — compact personality extraction, token-budgeted context composition, backward-compatible `full` mode
-3. `ModelTierRouter` (`src/manager/model-tier.ts`) — escalation state machine (base → escalated → cooldown → base), trigger evaluation, new session creation for escalated models
-4. `MemorySearchTool` (`src/mcp/tools/memory-search.ts`) — MCP tool exposing graph-augmented search to agents
-
-**Modified existing components:**
-- `MemoryStore`: add `memory_links` table migration + link CRUD
-- `buildSessionConfig()`: support compact personality mode, remove hot memory injection when on-demand enabled
-- `consolidation.ts`: create `derived` links from source memories to digest
-- `dedup.ts`: create `supersedes` links on merge + merge edges from both sources
-- `UsageTracker`: add `model_decisions` and `cost_budgets` tables, savings calculation
-
-### Critical Pitfalls
-
-1. **Context explosion from graph traversal** — hub nodes fan out exponentially via backlinks, producing more tokens than the hot-tier they replace. Mitigation: token budget cap (not depth limit), relevance-gated traversal at each hop (cosine distance threshold), fan-out cap of 5-8 edges per node, BFS not DFS. Instrument token counting from day one.
-
-2. **Escalation spiral (agents permanently on opus)** — opus responses increase context complexity, making haiku struggle on subsequent turns, triggering further escalation. Mitigation: mandatory de-escalation after N turns, scoped escalation (fork context → run task → return result only), per-agent hourly cost caps with hard enforcement, escalation cooldown (min 5 turns before re-escalating).
-
-3. **Broken graph edges after consolidation/archival** — consolidation deletes source memories; graph edges become dangling references. Mitigation: pre-consolidation hook to redirect edges to the new digest node in the same transaction; soft-delete for archival (keep stub node with ID and pointer); ON DELETE CASCADE on edge table.
-
-4. **On-demand loading defeats the hot tier** — reactive pull model means agents confabulate rather than querying. Pure on-demand is not viable. Mitigation: hybrid — hot tier stays as working memory baseline (identity + active task), on-demand is supplement for deeper recall. Core identity is never on-demand.
-
-5. **v1.5 system prompt larger than v1.4** — each feature adds instructional overhead (tiering instructions, tool definitions, graph usage guidance). Mitigation: token budget accounting as design constraint before writing code; tiering decisions belong in the orchestrator not the agent prompt; merge instruction blocks; measure v1.4 vs v1.5 prompt size — v1.5 must be equal or smaller.
-
-6. **Haiku can't execute existing agent capabilities** — all prompts and tool chains were designed for sonnet. Mitigation: mandatory haiku compatibility audit (full test suite against haiku) before Phase 3 implementation. Gradual rollout: 2-3 low-complexity agents first.
-
-7. **Circular graph references cause infinite traversal** — similarity-based edge creation produces symmetric cycles. Mitigation: visited-set tracking is mandatory in the first traversal implementation (not a retrofit). Edge creation threshold must be stricter than dedup threshold.
-
-## Implications for Roadmap
-
-Research is unanimous on phase ordering — FEATURES.md, ARCHITECTURE.md, and PITFALLS.md independently arrive at the same 4-phase structure. The ordering is driven by hard dependencies.
-
-### Phase 1: Knowledge Graph Foundation
-
-**Rationale:** Everything else depends on this. Graph-aware retrieval (Phase 2) needs the graph to traverse. Referential integrity hooks for consolidation and archival must exist before any subsequent feature modifies memory lifecycle. Token budget design is a constraint that must be established here.
-
-**Delivers:** `memory_links` schema + migration, `KnowledgeGraph` class (link CRUD, BFS traversal with visited-set, fan-out cap, token-budgeted traversal), auto-link on insert, consolidation `derived` links, archival edge cleanup hooks, orphan detection.
-
-**Addresses features:** Knowledge graph links (table stakes), graph-aware retrieval groundwork.
-
-**Avoids pitfalls:** Context explosion (token budget + relevance gating designed here), stale graph edges (referential integrity hooks), circular traversal (visited-set tracking), links-in-content anti-pattern (separate edge table enforced from day one).
-
-### Phase 2: On-Demand Memory Loading
-
-**Rationale:** Depends on Phase 1 for graph expansion. Reduces context bloat before the haiku switch — haiku performs better with compact prompts. Personality efficient loading belongs here because it is part of the context assembly problem, not the model selection problem.
-
-**Delivers:** `ContextAssembler` with compact personality mode, `memory_search` MCP tool (graph-augmented search), modified `buildSessionConfig()` for compact mode, config schema additions (`personalityMode`, `onDemandSearch`), hybrid hot-tier + on-demand design.
-
-**Addresses features:** On-demand memory retrieval (table stakes), personality efficient loading (table stakes), graph-aware retrieval (differentiator).
-
-**Avoids pitfalls:** On-demand defeating hot tier (hybrid approach), personality tokens competing with memory tokens (compact fingerprint + token budget accounting).
-
-### Phase 3: Model Tiering
-
-**Rationale:** Requires compact prompts from Phase 2 to make haiku viable. Requires a pre-phase haiku compatibility audit as a mandatory spike before implementation begins.
-
-**Delivers:** Haiku as default model (config change), `ModelTierRouter` (escalation state machine, session creation for escalated models, de-escalation and cooldown), escalation triggers (keyword, error-rate, complexity, explicit command), extended `UsageTracker` (model breakdowns, budget enforcement, savings calculation), per-agent cost budgets with Discord alerts, CLI `clawcode costs [agent]`.
-
-**Addresses features:** Haiku default (table stakes), model escalation mechanism (table stakes), token cost tracking (table stakes), escalation budget controls (differentiator).
-
-**Avoids pitfalls:** Escalation spiral (mandatory de-escalation, scoped escalation, cost caps), haiku capability gap (pre-phase audit), escalation logic in prompt (orchestrator owns escalation decisions).
-
-### Phase 4: Integration and Cost Optimization
-
-**Rationale:** Wire all three features together, add monitoring, validate net prompt size is smaller than v1.4.
-
-**Delivers:** Context assembly pipeline (modular composer with per-source token budgets), semantic link discovery (background croner job), memory importance auto-scoring (heuristic-based), dashboard cost savings visualization, CLI `clawcode memory graph <agent>` (DOT format), heartbeat checks for escalation budget monitoring.
-
-**Addresses features:** Context assembly pipeline (differentiator), semantic link discovery (differentiator), memory importance auto-scoring (differentiator).
-
-**Avoids pitfalls:** System prompt net growth (final measurement gate — must verify v1.5 prompt is smaller than v1.4).
-
-### Phase Ordering Rationale
-
-- Graph schema before on-demand loading because graph-augmented search is a core capability of the memory_search tool
-- On-demand loading before model tiering because compact prompts directly improve haiku viability
-- Haiku compatibility audit sits at the Phase 2/Phase 3 boundary — treat it as a gate, not a Phase 3 task
-- Referential integrity (edge cleanup in consolidation/archival) must be Phase 1, not a later "nice to have"
-- Integration last because it composes all three features and requires them running to validate
-
-### Research Flags
-
-Phases needing deeper research during planning:
-- **Phase 3 (pre-implementation spike):** Haiku compatibility audit — empirical measurement against the actual codebase, cannot be substituted with upfront research.
-- **Phase 3:** Context summary injection design for escalated sessions — no established pattern in the codebase, needs prototyping.
-
-Phases with standard patterns (skip research-phase):
-- **Phase 1:** SQLite adjacency list pattern is well-documented; BFS with visited sets is standard graph algorithms.
-- **Phase 2:** MCP tool registration follows existing patterns in `src/mcp/server.ts`.
-- **Phase 4:** Semantic link discovery reuses existing sqlite-vec KNN and croner scheduling already in use.
-
-## Confidence Assessment
-
-| Area | Confidence | Notes |
-|------|------------|-------|
-| Stack | HIGH | Zero new dependencies — all features verified against existing packages. Agent SDK advisor tool gap is a known constraint, not a research gap. SQLite FTS5 and recursive CTEs verified as built into better-sqlite3. |
-| Features | MEDIUM-HIGH | Table stakes features are clear and consensus across research. Advisor tool (differentiator) deferred due to SDK constraint. Haiku benchmark data (70-80% of tasks) is from Anthropic third-party reports, MEDIUM confidence. |
-| Architecture | HIGH | Existing codebase well-understood. Integration points identified precisely (file names, line references). Advisor tool anti-pattern (mid-session setModel not in SDK) confirmed. Session-level escalation is the correct approach. |
-| Pitfalls | HIGH | 8 critical pitfalls identified with specific prevention steps, verification checklists, and phase-to-pitfall mapping. Most derive from codebase analysis + domain research cross-validation. |
-
-**Overall confidence:** HIGH
-
-### Gaps to Address
-
-- **Haiku empirical viability**: Research says haiku handles 70-80% of agent tasks, but ClawCode agents run complex multi-step tool sequences, memory consolidation LLM calls, and identity-sensitive conversations. The actual haiku viability percentage for this specific workload is unknown until the compatibility audit. Plan for the audit to reveal that consolidation and memory extraction prompts need haiku-specific rewrites.
-
-- **Advisor tool SDK timeline**: The Anthropic advisor tool (`advisor_20260301`) is a Messages API beta feature not exposed through the Claude Agent SDK. No public timeline for availability. The architecture correctly designs around this constraint, but the escalation architecture should include a clear extension point for when the advisor tool becomes available.
-
-- **Context summary injection for escalated sessions**: When creating an escalated session, the system must inject a context summary of the current conversation. Quality of this summary determines whether escalated sessions operate effectively. Non-trivial design problem with no established pattern in the codebase — needs prototyping in Phase 3.
-
-- **Edge auto-link threshold calibration**: The similarity threshold for auto-creating graph edges (proposed cosine distance < 0.15) has not been validated against the actual memory corpus. Too strict = sparse graph. Too loose = dense cycles and noisy traversal. Needs empirical calibration against real agent memory stores in Phase 1.
-
-## Sources
-
-### Primary (HIGH confidence)
-- [Claude Agent SDK TypeScript Reference](https://platform.claude.com/docs/en/agent-sdk/typescript) — Query interface, session management, model options
-- [Claude API Pricing](https://platform.claude.com/docs/en/about-claude/pricing) — haiku $1/$5, sonnet $3/$15, opus $5/$25 per MTok (April 2026)
-- [Mem0 Research (arXiv 2504.19413)](https://arxiv.org/abs/2504.19413) — 26% accuracy boost, 91% lower latency, 90% token savings with selective retrieval
-- [Memory in the Age of AI Agents (arXiv 2512.13564)](https://arxiv.org/abs/2512.13564) — memory taxonomy for agent systems
-- [SQLite FTS5 Documentation](https://www.sqlite.org/fts5.html) — full-text search built into better-sqlite3
-- [AI Agent Cost Tracking (Microsoft)](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/tracking-every-token-granular-cost-and-usage-metrics-for-microsoft-foundry-agent/4503143) — per-agent token telemetry patterns
-- [Tiered Model Routing (FreeCodeCamp)](https://www.freecodecamp.org/news/how-to-build-a-cost-efficient-ai-agent-with-tiered-model-routing) — complexity classification implementation
-- ClawCode codebase: `src/memory/`, `src/manager/session-config.ts`, `src/manager/session-adapter.ts`, `src/usage/tracker.ts`
-
-### Secondary (MEDIUM confidence)
-- [Anthropic Advisor Strategy (MindStudio)](https://www.mindstudio.ai/blog/anthropic-advisor-strategy-cut-ai-agent-costs) — Sonnet + Opus advisor: 2.7pp SWE-bench gain, 11.9% cost reduction
-- [Claude Haiku 4.5 Multi-Agent (Caylent)](https://caylent.com/blog/claude-haiku-4-5-deep-dive-cost-capabilities-and-the-multi-agent-opportunity) — Haiku handles 70-80% of agent tasks
-- [GAM Dual-Agent Memory (VentureBeat)](https://venturebeat.com/ai/gam-takes-aim-at-context-rot-a-dual-agent-memory-architecture-that) — JIT memory pipeline architecture
-- [Context Engineering Guide (Mem0)](https://mem0.ai/blog/context-engineering-ai-agents-guide) — modular context assembly patterns
-- [Obsidian Internal Links (DeepWiki)](https://deepwiki.com/obsidianmd/obsidian-help/4.2-internal-links-and-graph-view) — wikilink format, backlink resolution patterns
-- [Knowledge Graph for Obsidian (GitHub)](https://github.com/obra/knowledge-graph) — SQLite + sqlite-vec graph implementation reference
-- [Zep Temporal Knowledge Graph (arXiv 2501.13956)](https://arxiv.org/abs/2501.13956) — fact invalidation, temporal edges in agent memory
-- [Building AI Agents with Knowledge Graph Memory](https://medium.com/@saeedhajebi/building-ai-agents-with-knowledge-graph-memory-a-comprehensive-guide-to-graphiti-3b77e6084dec) — edge management patterns
-
-### Tertiary (LOW confidence — needs validation)
-- [Anthropic Advisor Tool Launch](https://gadgetbond.com/anthropic-claude-opus-sonnet-haiku-advisor-tool/) — advisor tool beta details (third-party reporting on official feature)
-- [Karpathy LLM Wiki Pattern](https://a2a-mcp.org/blog/andrej-karpathy-llm-knowledge-bases-obsidian-wiki) — LLM-compiled wiki with indexes
-
----
-*Research completed: 2026-04-10*
-*Ready for roadmap: yes*
+| Package | Version | Purpose | Why |
+|---|---|---|---|
+| **nanoid** | 5.x (already present) | Task correlation IDs | Already used for turnId in v1.7 — reuse for task IDs |
+| **@breejs/later** or inline parser | latest | Richer cron than croner for triggers that need "5 min after event" semantics | Optional — croner already handles fixed schedules |
+
+**What NOT to add:**
+- **Temporal.io / Inngest / Trigger.dev** — designed for multi-node workflow orchestration. ClawCode is single-process; in-process task state machine is adequate.
+- **BullMQ / bee-queue** — Redis-backed job queues. Overkill for the expected load (dozens of inter-agent tasks/day, not millions). Use SQLite per the established pattern.
+- **MySQL binlog / CDC tools** — DB-change triggers for Finmentum's MySQL will use polling-SELECT with `last_seen_id` watermarks. Binlog capture is premature optimization.
+- **Generic workflow engines (Camunda, Zeebe)** — BPMN-flavored orchestration. Wrong abstraction for LLM-driven agents.
+- **Event bus libraries (NATS, Kafka)** — no need; Unix-socket IPC + in-memory dispatch is fine at this scale.
+
+**Stack stays lean:** No new runtime deps required if we reuse croner + sqlite + IPC. One new local module for the trigger watcher + task store + policy engine.
+
+## Feature taxonomy
+
+### A. Trigger sources (TABLE STAKES)
+
+- **T1. Scheduled triggers** — cron expressions, unchanged from v1.6 but extended to pass a richer context payload (not just a prompt string). *Complexity: low.*
+- **T2. DB-change triggers** — poll a SELECT with watermark tracking; fire on new rows matching a filter. Finmentum's pipeline_clients table is the primary target. *Complexity: moderate.*
+- **T3. Webhook triggers** — inbound HTTP endpoint on the existing dashboard server (or a sibling) that receives POST, signature-validates, dispatches to an agent. *Complexity: moderate.*
+- **T4. Inbox-arrival triggers** — already have `collaboration/inbox` filesystem inbox. Elevate it from "agent checks on heartbeat" to "trigger fires on write". *Complexity: low.*
+- **T5. Calendar triggers** — via existing `google-workspace` MCP. Poll upcoming events, fire "15 min before meeting" or "at event start". *Complexity: moderate.*
+
+### B. Trigger sources (DIFFERENTIATORS)
+
+- **T6. Memory-pattern observations** — agent wakes up when a memory matches a subscribed pattern (e.g., "a new `INSIGHT` type memory was stored this week"). Leverages v1.5 memory tiering.
+- **T7. Trace-based triggers** — fire when a latency SLO breaches or cache hit rate drops (dogfood v1.7 telemetry for self-healing). Use the on-call agent pattern.
+
+### C. Trigger sources (ANTI-FEATURES — don't build)
+
+- Full in-process event bus with any source → any sink. Keep trigger shapes fixed, policy explicit.
+- File-system watchers (chokidar) across arbitrary paths. Attack surface for scope creep.
+- Email/SMS trigger sources without explicit allowlist. Security risk.
+
+### D. Cross-agent RPC (TABLE STAKES)
+
+- **H1. Delegate task** — agent A calls `delegate_task(agent: string, input: T) -> Promise<R>` via MCP tool or IPC method. Structured request/response. *Complexity: moderate.*
+- **H2. Task schema validation** — each delegated task has a Zod schema for input + output. Receiver rejects malformed inputs; sender gets typed error. *Complexity: moderate.*
+- **H3. Timeout + cancellation** — every handoff has a timeout (default 5min); caller can cancel. Receiver gets a signal. *Complexity: moderate.*
+- **H4. Task lifecycle store** — new `tasks.db` per daemon (shared, not per-agent). States: pending | running | awaiting_input | complete | failed | cancelled | timed_out. *Complexity: moderate.*
+
+### E. Cross-agent RPC (DIFFERENTIATORS)
+
+- **H5. Async handoff** — fire-and-forget with callback. Useful when the calling agent doesn't need the result immediately.
+- **H6. Batch handoffs** — delegate the same task shape to N agents, gather results with a strategy (all/any/first-to-succeed).
+- **H7. Task replay** — re-run a failed task with the same input against the same target agent (idempotent by design).
+
+### F. Cross-agent RPC (ANTI-FEATURES)
+
+- **Sync RPC with no timeout.** Deadlock risk.
+- **Caller-supplied execution environment (arbitrary code in handoff payload).** Massive security risk.
+- **Cyclic delegation** — A→B→A in the same task chain. Detect + reject.
+
+### G. Policy + observability (TABLE STAKES)
+
+- **P1. Trigger policy DSL** — declarative rules in YAML: `source → agent → payload_template → throttle/debounce`. Validated at daemon start.
+- **P2. Task graph visualization** — dashboard panel showing in-flight inter-agent tasks, completion state, duration.
+- **P3. Trigger audit log** — every trigger fire records: source, matched rule, target agent, input digest, turn_id in traces.db. Queryable via `clawcode triggers` CLI.
+- **P4. Dry-run mode** — operator can test a policy change by replaying recent trigger events without actually firing agents.
+
+### H. Policy + observability (DIFFERENTIATORS)
+
+- **P5. Handoff graph export** — DOT / mermaid diagram of which agents delegate to which, derived from recent tasks.
+- **P6. Cost attribution** — inter-agent tasks count against the calling agent's budget by default, with optional per-task override.
+
+## Architecture integration
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Triggers (NEW subsystem — src/triggers/)          │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐      │
+│  │ Scheduled  │ │ DB-change  │ │ Webhook    │ ... │
+│  └────────────┘ └────────────┘ └────────────┘      │
+│         ↓              ↓              ↓            │
+│  ┌─────────────────────────────────────────┐      │
+│  │ PolicyEngine (policies.yaml → rules)    │      │
+│  └─────────────────────────────────────────┘      │
+│         ↓ (proactive-turn dispatch)               │
+│  ┌─────────────────────────────────────────┐      │
+│  │ SessionManager.streamFromAgent          │ ← REUSE │
+│  │ (existing — no change; trigger caller   │      │
+│  │  constructs the Turn + passes it in)    │      │
+│  └─────────────────────────────────────────┘      │
+│         ↓                                         │
+│  ┌─────────────────────────────────────────┐      │
+│  │ SdkSessionAdapter.sendAndStream         │ ← REUSE │
+│  └─────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│  Handoffs (NEW subsystem — src/handoffs/)          │
+│  ┌─────────────────────────────────────────┐       │
+│  │ delegate_task MCP tool (exposed to      │       │
+│  │ each agent)                             │       │
+│  └─────────────────────────────────────────┘       │
+│              ↓ (IPC call)                          │
+│  ┌─────────────────────────────────────────┐       │
+│  │ TaskManager (new in daemon)             │       │
+│  │ - validates schema (from registry)      │       │
+│  │ - writes task row to tasks.db           │       │
+│  │ - dispatches to target agent            │       │
+│  │ - tracks lifecycle                      │       │
+│  └─────────────────────────────────────────┘       │
+│              ↓ (streamFromAgent with payload)      │
+│  ┌─────────────────────────────────────────┐       │
+│  │ SessionManager.streamFromAgent          │ ← REUSE │
+│  │ target agent sees structured input      │       │
+│  │ + special "handoff" system prompt       │       │
+│  └─────────────────────────────────────────┘       │
+│              ↓                                     │
+│  caller resumes with typed result                  │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key integration points:**
+- **Both subsystems funnel into `SessionManager.streamFromAgent`** — that's how a trigger fires a turn or a delegated task reaches the receiver. No new agent-dispatch path; the warm-path ready-gate, trace instrumentation, and caller-owned Turn lifecycle from v1.7 all carry over.
+- **Triggers are Discord-agnostic.** A proactive turn may or may not post to Discord. Decision is per-trigger-rule in the policy DSL. Default: post to agent's bound channel (so operators see what happened).
+- **Handoff inherits the calling agent's budget + cost attribution** by default. Override via per-task config.
+- **`tasks.db` is daemon-level**, not per-agent. One store holds all inter-agent tasks — needed for the graph view + cross-agent queries.
+- **New IPC methods:** `delegate-task`, `task-status`, `cancel-task`, `list-tasks`. All registered in protocol.ts + protocol.test.ts per the Phase 50 regression lesson.
+- **Policy DSL lives in `.planning/` or a separate `policies.yaml`** at the daemon root (not per-agent) since rules match against triggers, not individual agents.
+
+## Pitfalls — MUST mitigate
+
+| # | Pitfall | Mitigation |
+|---|---------|-----------|
+| 1 | **Runaway trigger cascades** (A triggers B triggers A...) | Every task carries a `depth` counter; reject handoffs where `depth > MAX_DEPTH` (default 5). Every trigger fire checks a per-agent-per-source rate limit. |
+| 2 | **Deadlock** from sync handoffs | Hard timeout on every handoff; no unbounded await. Caller can always cancel. |
+| 3 | **Silent task failures** | Task state machine never goes to "complete" without an explicit result; timeouts surface as "failed with reason". |
+| 4 | **Missed events** (polling interval too long, trigger fires while daemon was down) | Watermark-based polling with last-seen cursor persisted in `tasks.db`. Daemon startup replays missed events since last watermark (with configurable max age). |
+| 5 | **Cost amplification** from handoff chains | Every task increments the chain's cumulative token count; chain exceeding budget rejects the next handoff with a clear error. |
+| 6 | **Orphaned tasks** (daemon crash mid-task) | Task rows have a `heartbeat_at` updated by the executing agent; reconciler at daemon start marks stale tasks as `orphaned`. |
+| 7 | **Trigger storms** (one source spams N events in 1s) | Per-source debouncer + per-agent rate limiter. Tunable via policy DSL. |
+| 8 | **Scope leakage** (agent A's private context bleeding to agent B) | Handoff payload is EXPLICIT — only fields listed in the task schema pass through. No ambient context transfer. |
+| 9 | **Policy DSL ambiguity** (same trigger matches multiple agents) | Rules have explicit priority; ambiguous matches log WARN and pick by priority. Dry-run mode prints all matches. |
+| 10 | **Observability blind spots** — operators can't trace "why did agent X wake up" | Every proactive turn stores `trigger_id` in trace metadata; CLI + dashboard can trace from turn → trigger → policy rule → source event. |
+
+## Suggested build order
+
+**Phase A (foundations):** tasks.db schema + TaskManager + task schema registry + new IPC methods. No triggers yet, but handoff infrastructure is testable end-to-end by manually invoking delegate-task from CLI.
+
+**Phase B (triggers):** trigger engine (scheduled + webhook) + policy DSL + dispatch-to-streamFromAgent. Still no handoffs firing; triggers just wake agents with a context payload.
+
+**Phase C (DB + inbox + calendar triggers):** extend trigger engine with the three source types. Finmentum-specific DB change triggers gate on `pipeline_clients` updates.
+
+**Phase D (delegate_task MCP tool):** expose handoff to agents via a new MCP tool. Validate schemas. Wire caller-in-flight state so the calling agent's session stays warm until response arrives.
+
+**Phase E (observability):** `clawcode triggers list` + `clawcode tasks list` CLI + dashboard task graph + trace enrichment.
+
+**Phase F (hardening):** rate limiting + debouncing + cycle detection + cost attribution + dry-run + policy-change hot reload.
+
+This order lets each phase deliver a demo-able slice: Phase A = "manually delegate between agents via CLI"; Phase B = "agents wake up on schedule with rich context"; Phase C = "Discord turn when new Finmentum lead lands"; Phase D = "agent A autonomously delegates to agent B"; Phase E = "operator sees the graph"; Phase F = "production-ready."
+
+## Open questions for requirements
+
+1. **Handoff auth model.** Can any agent delegate to any other? Or require explicit "B accepts from A" in config? *Recommendation: allowlist per receiver; default deny.*
+2. **Task result persistence.** Should task results be queryable after completion (for audit) or purge after handoff completes? *Recommendation: persist with retention like traces (7 days default, configurable).*
+3. **Policy DSL format.** YAML with declarative fields, or embedded JS/TS code? *Recommendation: YAML. Imperative escape hatch via optional `handler: <script-path>` only if we see YAML insufficient.*
+4. **Webhook endpoint security.** HMAC signature verification per source, IP allowlist, both? *Recommendation: HMAC signatures required, IP allowlist optional.*
+5. **Cost budget surface.** Reuse Phase 40 `EscalationBudget` or new budget scope for inter-agent tasks? *Recommendation: extend `EscalationBudget` with `handoffDailyTokens`; same pattern.*
