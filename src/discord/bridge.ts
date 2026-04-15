@@ -32,6 +32,10 @@ import type { DeliveryQueue } from "./delivery-queue.js";
 import { checkChannelAccess } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
+import {
+  makeRootOriginWithTurnId,
+  DISCORD_SNOWFLAKE_PREFIX,
+} from "../manager/turn-origin.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -104,6 +108,12 @@ export class DiscordBridge {
   private readonly client: Client;
   private readonly routingTable: RoutingTable;
   private readonly sessionManager: SessionManager;
+  /**
+   * Phase 57 Plan 03: optional TurnDispatcher injected by the daemon path.
+   * Undefined in the standalone runner (`src/cli/commands/run.ts`), where
+   * handleMessage falls back to `sessionManager.streamFromAgent` directly.
+   */
+  private readonly turnDispatcher: TurnDispatcher | undefined;
   private readonly threadManager: ThreadManager | undefined;
   private webhookManager: WebhookManager | undefined;
   private readonly deliveryQueue: DeliveryQueue | undefined;
@@ -131,6 +141,7 @@ export class DiscordBridge {
   constructor(config: BridgeConfig) {
     this.routingTable = config.routingTable;
     this.sessionManager = config.sessionManager;
+    this.turnDispatcher = config.turnDispatcher;
     this.threadManager = config.threadManager;
     this.webhookManager = config.webhookManager;
     this.deliveryQueue = config.deliveryQueue;
@@ -355,11 +366,15 @@ export class DiscordBridge {
       const sessionName = await this.threadManager.routeMessage(message.channelId);
       if (sessionName) {
         // Phase 50: open Turn + receive span for thread-routed messages (parity with channel route)
+        // Phase 57 Plan 03: turnId is `discord:<snowflake>` so Turn.id matches
+        // TurnOrigin.rootTurnId (the invariant TurnDispatcher expects). Raw
+        // snowflake queries against traces.id require rewriting to
+        // `'discord:' || <snowflake>` — see 57-01-SUMMARY.md locked_shapes.
         let turn: Turn | undefined;
         let receiveSpan: Span | undefined;
         try {
           const collector = this.sessionManager.getTraceCollector(sessionName);
-          turn = collector?.startTurn(message.id, sessionName, message.channelId);
+          turn = collector?.startTurn(`${DISCORD_SNOWFLAKE_PREFIX}${message.id}`, sessionName, message.channelId);
           receiveSpan = turn?.startSpan("receive", {
             channel: message.channelId,
             user: message.author.id,
@@ -435,11 +450,13 @@ export class DiscordBridge {
 
     // Phase 50: open Turn + receive span for channel-routed messages.
     // Caller-owned lifecycle — streamAndPostResponse ends the Turn with success/error.
+    // Phase 57 Plan 03: turnId is `discord:<snowflake>` (see thread-route
+    // branch above for the trace-id continuity rationale).
     let turn: Turn | undefined;
     let receiveSpan: Span | undefined;
     try {
       const collector = this.sessionManager.getTraceCollector(agentName);
-      turn = collector?.startTurn(message.id, agentName, channelId);
+      turn = collector?.startTurn(`${DISCORD_SNOWFLAKE_PREFIX}${message.id}`, agentName, channelId);
       receiveSpan = turn?.startSpan("receive", {
         channel: channelId,
         user: message.author.id,
@@ -555,12 +572,34 @@ export class DiscordBridge {
         turnId: message.id,
       });
 
-      const response = await this.sessionManager.streamFromAgent(
-        sessionName,
-        formattedMessage,
-        (accumulated) => editor!.update(accumulated),
-        turn,
-      );
+      // Phase 57 Plan 03: route through TurnDispatcher when injected (daemon
+      // path) so the trace row carries a TurnOrigin JSON blob. Fall back to
+      // the v1.7 streamFromAgent path when the dispatcher is undefined
+      // (standalone runner — src/cli/commands/run.ts). The Turn is
+      // caller-owned on both branches: streamAndPostResponse keeps ownership
+      // of turn.end() so it can fire on success/error in the try/catch
+      // below. TurnDispatcher on the caller-owned-Turn path calls
+      // turn.recordOrigin(origin) but NOT turn.end().
+      let response: string;
+      if (this.turnDispatcher) {
+        const turnId = `${DISCORD_SNOWFLAKE_PREFIX}${message.id}`;
+        const origin = makeRootOriginWithTurnId("discord", message.id, turnId);
+        response = await this.turnDispatcher.dispatchStream(
+          origin,
+          sessionName,
+          formattedMessage,
+          (accumulated) => editor!.update(accumulated),
+          { turn, channelId },
+        );
+      } else {
+        // v1.7 fallback — preserves standalone runner (src/cli/commands/run.ts)
+        response = await this.sessionManager.streamFromAgent(
+          sessionName,
+          formattedMessage,
+          (accumulated) => editor!.update(accumulated),
+          turn,
+        );
+      }
 
       clearInterval(typingInterval);
       typingInterval = undefined;

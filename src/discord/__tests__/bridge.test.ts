@@ -130,7 +130,10 @@ describe("DiscordBridge tracing", () => {
 
     await (bridge as any).handleMessage(msg);
 
-    expect(mockCollector.startTurn).toHaveBeenCalledWith("msg-abc", "agent-x", "chan-1");
+    // Phase 57 Plan 03: turnId format is `discord:<snowflake>` so Turn.id
+    // matches TurnOrigin.rootTurnId. Pre-v1.8 tests asserted the raw
+    // snowflake — updated per Plan 57-03 Step 9.
+    expect(mockCollector.startTurn).toHaveBeenCalledWith("discord:msg-abc", "agent-x", "chan-1");
     const firstSpanCall = mockTurn.startSpan.mock.calls[0];
     expect(firstSpanCall).toBeDefined();
     expect(firstSpanCall![0]).toBe("receive");
