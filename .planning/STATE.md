@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
 status: Ready to execute
-stopped_at: Completed 58-01-PLAN.md
-last_updated: "2026-04-15T20:26:18.887Z"
+stopped_at: Completed 58-02-PLAN.md
+last_updated: "2026-04-15T20:36:10.910Z"
 last_activity: 2026-04-15
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 58 (task-store-state-machine) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Recent decisions affecting current work:
 - [Phase 57]: Discord turnId format: discord:<snowflake> (prefixed) — preserves trace-id continuity via rewrite
 - [Phase 57]: Caller-owned Turn handoff pattern (DiscordBridge) vs dispatcher-owned (TaskScheduler) — both supported by DispatchOptions.turn branch
 - [Phase 58-task-store-state-machine]: [Plan 58-01]: TaskStatus union (8 statuses) + LEGAL_TRANSITIONS map + 15-field LIFE-02 TaskRowSchema + assertLegalTransition pure-function state machine landed — pure-data foundation, zero daemon wiring, 93 tests passing (64 from exhaustive (from, to) table + 29 explicit). Plans 58-02 and 58-03 unblocked.
+- [Phase 58]: [Plan 58-02]: TaskStore SQLite persistence layer landed — 15 LIFE-02 fields + CHECK(depth>=0) + CHECK(status IN 8-value set), 4 covering indexes, idempotent CREATE-IF-NOT-EXISTS DDL, ORPHAN_THRESHOLD_MS_DEFAULT=5min. transition() asserts legality BEFORE UPDATE (LIFE-01 illegal-transition preserves row); markOrphaned() bypasses assertLegalTransition as reconciler escape hatch. 124 tests pass across src/tasks/__tests__/ (93 from 58-01 + 31 from 58-02). Plan 58-03 unblocked.
 
 ### Roadmap Evolution
 
@@ -98,5 +99,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-15
-Stopped at: Completed 58-01-PLAN.md
+Stopped at: Completed 58-02-PLAN.md
 Resume file: None

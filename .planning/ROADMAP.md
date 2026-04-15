@@ -135,7 +135,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [x] 58-01-PLAN.md — TaskStatus + TaskRowSchema + state-machine contracts (Wave 1)
-- [ ] 58-02-PLAN.md — TaskStore class with SQLite + idempotent migration + transitions (Wave 2)
+- [x] 58-02-PLAN.md — TaskStore class with SQLite + idempotent migration + transitions (Wave 2)
 - [ ] 58-03-PLAN.md — Reconciler + daemon wiring + tasks.db creation on boot (Wave 3)
 
 ### Phase 59: Cross-Agent RPC (Handoffs)
@@ -258,7 +258,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
-| 58. Task Store + State Machine | 1/3 | In Progress|  |
+| 58. Task Store + State Machine | 2/3 | In Progress|  |
 | 59. Cross-Agent RPC (Handoffs) | 0/? | Not started | - |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
