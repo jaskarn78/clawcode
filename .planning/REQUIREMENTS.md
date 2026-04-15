@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Started:** 2026-04-15
-**Phases:** TBD (roadmap pending)
+**Phases:** 7 (57-63) — roadmap ready 2026-04-15
 
 ## Milestone Goal
 
@@ -83,34 +83,48 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 
 | ID | Description | Phase | Status |
 |----|-------------|-------|--------|
-| TRIG-01 | Scheduled triggers with rich context payload | TBD | [ ] |
-| TRIG-02 | DB-change triggers (MySQL polling + watermark) | TBD | [ ] |
-| TRIG-03 | Webhook triggers with HMAC validation | TBD | [ ] |
-| TRIG-04 | Inbox-arrival triggers | TBD | [ ] |
-| TRIG-05 | Calendar triggers via google-workspace MCP | TBD | [ ] |
-| TRIG-06 | Missed event replay on daemon startup | TBD | [ ] |
-| TRIG-07 | Three-layer dedup (idempotency + debounce + DB UNIQUE) | TBD | [ ] |
-| TRIG-08 | Causation_id propagation from source event to downstream turns | TBD | [ ] |
-| POL-01 | Zod-validated policy YAML | TBD | [ ] |
-| POL-02 | Policy DSL (source/agent/template/throttle/priority) | TBD | [ ] |
-| POL-03 | Policy hot-reload without daemon restart | TBD | [ ] |
-| POL-04 | Dry-run replay against pending policy changes | TBD | [ ] |
-| HAND-01 | delegate_task MCP tool with typed input/output | TBD | [ ] |
-| HAND-02 | Task schema registry + Zod validation | TBD | [ ] |
-| HAND-03 | Handoff timeout + cancellation | TBD | [ ] |
-| HAND-04 | Receiver-declared allowlist for delegation | TBD | [ ] |
-| HAND-05 | Chain depth counter + cycle detection | TBD | [ ] |
-| HAND-06 | Explicit payload boundary (no ambient context) | TBD | [ ] |
-| LIFE-01 | Daemon-level tasks.db + state machine | TBD | [ ] |
-| LIFE-02 | Task row schema with trigger_id + chain metadata | TBD | [ ] |
-| LIFE-03 | 7-day task retention (configurable) | TBD | [ ] |
-| LIFE-04 | Orphaned task reconciliation on startup | TBD | [ ] |
-| LIFE-05 | Cost attribution to calling agent | TBD | [ ] |
-| LIFE-06 | Manual retry command for failed tasks | TBD | [ ] |
-| OBS-01 | `clawcode triggers` CLI | TBD | [ ] |
-| OBS-02 | `clawcode tasks` CLI | TBD | [ ] |
-| OBS-03 | Dashboard task graph panel with SSE updates | TBD | [ ] |
-| OBS-04 | trigger_id / task_id metadata on root trace spans | TBD | [ ] |
-| OBS-05 | Handoff chain cumulative token count visibility | TBD | [ ] |
+| TRIG-01 | Scheduled triggers with rich context payload | Phase 60 | [ ] |
+| TRIG-02 | DB-change triggers (MySQL polling + watermark) | Phase 61 | [ ] |
+| TRIG-03 | Webhook triggers with HMAC validation | Phase 61 | [ ] |
+| TRIG-04 | Inbox-arrival triggers | Phase 61 | [ ] |
+| TRIG-05 | Calendar triggers via google-workspace MCP | Phase 61 | [ ] |
+| TRIG-06 | Missed event replay on daemon startup | Phase 60 | [ ] |
+| TRIG-07 | Three-layer dedup (idempotency + debounce + DB UNIQUE) | Phase 60 | [ ] |
+| TRIG-08 | Causation_id propagation from source event to downstream turns | Phase 60 | [ ] |
+| POL-01 | Zod-validated policy YAML | Phase 62 | [ ] |
+| POL-02 | Policy DSL (source/agent/template/throttle/priority) | Phase 62 | [ ] |
+| POL-03 | Policy hot-reload without daemon restart | Phase 62 | [ ] |
+| POL-04 | Dry-run replay against pending policy changes | Phase 62 | [ ] |
+| HAND-01 | delegate_task MCP tool with typed input/output | Phase 59 | [ ] |
+| HAND-02 | Task schema registry + Zod validation | Phase 59 | [ ] |
+| HAND-03 | Handoff timeout + cancellation | Phase 59 | [ ] |
+| HAND-04 | Receiver-declared allowlist for delegation | Phase 59 | [ ] |
+| HAND-05 | Chain depth counter + cycle detection | Phase 59 | [ ] |
+| HAND-06 | Explicit payload boundary (no ambient context) | Phase 59 | [ ] |
+| HAND-07 | Self-handoff blocked at MCP tool level | Phase 59 | [ ] |
+| LIFE-01 | Daemon-level tasks.db + state machine | Phase 58 | [ ] |
+| LIFE-02 | Task row schema with trigger_id + chain metadata | Phase 58 | [ ] |
+| LIFE-03 | 7-day task retention (configurable) | Phase 60 | [ ] |
+| LIFE-04 | Orphaned task reconciliation on startup | Phase 58 | [ ] |
+| LIFE-05 | Cost attribution to calling agent | Phase 59 | [ ] |
+| LIFE-06 | Manual retry command for failed tasks | Phase 59 | [ ] |
+| OBS-01 | `clawcode triggers` CLI | Phase 63 | [ ] |
+| OBS-02 | `clawcode tasks` CLI | Phase 63 | [ ] |
+| OBS-03 | Dashboard task graph panel with SSE updates | Phase 63 | [ ] |
+| OBS-04 | trigger_id / task_id metadata on root trace spans | Phase 63 | [ ] |
+| OBS-05 | Handoff chain cumulative token count visibility | Phase 63 | [ ] |
 
-**Total:** 30 requirements — all mapped to phases during roadmap creation.
+**Total:** 30 requirements — all mapped to phases during roadmap creation (2026-04-15). Zero orphans.
+
+### Coverage by Phase
+
+| Phase | Requirements | Count |
+|-------|--------------|-------|
+| Phase 57 TurnDispatcher Foundation | (foundation — net-zero refactor) | 0 |
+| Phase 58 Task Store + State Machine | LIFE-01, LIFE-02, LIFE-04 | 3 |
+| Phase 59 Cross-Agent RPC (Handoffs) | HAND-01, HAND-02, HAND-03, HAND-04, HAND-05, HAND-06, HAND-07, LIFE-05, LIFE-06 | 9 |
+| Phase 60 Trigger Engine Foundation | TRIG-01, TRIG-06, TRIG-07, TRIG-08, LIFE-03 | 5 |
+| Phase 61 Additional Trigger Sources | TRIG-02, TRIG-03, TRIG-04, TRIG-05 | 4 |
+| Phase 62 Policy Layer + Dry-Run | POL-01, POL-02, POL-03, POL-04 | 4 |
+| Phase 63 Observability Surfaces | OBS-01, OBS-02, OBS-03, OBS-04, OBS-05 | 5 |
+| **Total** | | **30** |
