@@ -90,7 +90,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Goal:** Agents autonomously initiate actions on external triggers AND delegate structured tasks to other agents — unlocking multi-agent workflows.
 
-- [ ] **Phase 57: TurnDispatcher Foundation** - Unify all agent-turn entry points (Discord, scheduler, future triggers, future tasks) behind a single `TurnDispatcher` chokepoint so the v1.8 proactive + handoff subsystems plug into one contract instead of re-inventing trace/lifecycle plumbing
+- [x] **Phase 57: TurnDispatcher Foundation** - Unify all agent-turn entry points (Discord, scheduler, future triggers, future tasks) behind a single `TurnDispatcher` chokepoint so the v1.8 proactive + handoff subsystems plug into one contract instead of re-inventing trace/lifecycle plumbing (completed 2026-04-15)
 - [ ] **Phase 58: Task Store + State Machine** - Ship daemon-level `tasks.db`, Zod task schema registry, canonical task state machine (pending | running | awaiting_input | complete | failed | cancelled | timed_out), and chain metadata (causation_id, parent_task_id, depth) for every inter-agent task row
 - [ ] **Phase 59: Cross-Agent RPC (Handoffs)** - Expose `delegate_task` / `task_status` / `cancel_task` / `task_complete` via MCP + IPC with async-ticket semantics, receiver allowlists, cycle detection, self-handoff block, schema-validated payloads, 64 KB cap, deadline propagation, chain-token cost attribution, and manual retry
 - [ ] **Phase 60: Trigger Engine Foundation** - Stand up the TriggerEngine + source registry + policy evaluator + loop detector + causation_id propagation + 3-layer dedup, migrate the v1.6 scheduler into the first registered source, and land task retention config
@@ -117,7 +117,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 **Plans**: 3 plans
 - [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
 - [x] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
+- [x] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
 
 ### Phase 58: Task Store + State Machine
 
@@ -135,7 +135,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
+- [x] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
 - [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
 
 ### Phase 59: Cross-Agent RPC (Handoffs)
@@ -154,7 +154,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   5. Tokens consumed by delegated turns count against the calling agent's budget by default with a documented per-task override; a failed task can be re-run idempotently via `clawcode tasks retry <task_id>` and produces the same input_digest against the same receiver (LIFE-05, LIFE-06).
 
 **Plans**: 3 plans
-- [ ] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
+- [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
 - [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
 - [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
 
@@ -257,7 +257,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 57. TurnDispatcher Foundation | 2/3 | In Progress|  |
+| 57. TurnDispatcher Foundation | 3/3 | Complete   | 2026-04-15 |
 | 58. Task Store + State Machine | 0/? | Not started | - |
 | 59. Cross-Agent RPC (Handoffs) | 0/? | Not started | - |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |

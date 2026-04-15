@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to execute
-stopped_at: Completed 57-02-PLAN.md — ready for Plan 57-03 (DiscordBridge + TaskScheduler call-site migration)
-last_updated: "2026-04-15T03:57:02.043Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 57-03-PLAN.md
+last_updated: "2026-04-15T04:12:22.998Z"
 last_activity: 2026-04-15
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -66,6 +66,9 @@ Recent decisions affecting current work:
 - [v1.5 Roadmap]: Local embeddings stay (384-dim sufficient for graph similarity)
 - [Phase 57-turndispatcher-foundation]: [Plan 57-01]: TurnDispatcher + TurnOrigin contract landed — single chokepoint wrapping SessionManager, net-zero call-site impact, deeply-frozen origin shape, Discord snowflake preservation helper in place for Plan 57-03 migration
 - [Phase 57]: [Plan 57-02]: Trace store schema + Turn lifecycle extended — turnOrigin field on TurnRecord, nullable turn_origin TEXT column with idempotent migration, Turn.recordOrigin API mirrors recordCacheUsage precedent. Plan 57-03 call-site migration now unblocked.
+- [Phase 57]: Optional BridgeConfig.turnDispatcher + fallback preserves standalone runner (Blocker #1 resolved — src/cli/commands/run.ts compiles unchanged)
+- [Phase 57]: Discord turnId format: discord:<snowflake> (prefixed) — preserves trace-id continuity via rewrite
+- [Phase 57]: Caller-owned Turn handoff pattern (DiscordBridge) vs dispatcher-owned (TaskScheduler) — both supported by DispatchOptions.turn branch
 
 ### Roadmap Evolution
 
@@ -94,5 +97,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-15
-Stopped at: Completed 57-02-PLAN.md — ready for Plan 57-03 (DiscordBridge + TaskScheduler call-site migration)
+Stopped at: Completed 57-03-PLAN.md
 Resume file: None
