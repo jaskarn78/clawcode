@@ -7,6 +7,7 @@ import { ManagerNotRunningError } from "../../shared/errors.js";
 import { formatStatusTable } from "./status.js";
 import type { RegistryEntry } from "../../manager/types.js";
 import { cliLog, cliError } from "../output.js";
+import { resolveConfigPath } from "../../config/resolve-path.js";
 
 /**
  * Check if the daemon is already running by sending a status request.
@@ -54,12 +55,13 @@ export function registerStartAllCommand(program: Command): void {
     .option("-c, --config <path>", "Path to config file", "clawcode.yaml")
     .option("--foreground", "Run daemon in foreground (for development)", false)
     .action(async (opts: { config: string; foreground: boolean }) => {
+      const configPath = resolveConfigPath(opts.config);
       try {
         if (opts.foreground) {
           cliLog(
             "Manager running in foreground. Press Ctrl+C to stop.",
           );
-          await startDaemon(opts.config);
+          await startDaemon(configPath);
           // startDaemon returns when server is created; block forever
           await new Promise(() => {});
         } else {
@@ -80,7 +82,7 @@ export function registerStartAllCommand(program: Command): void {
 
           const child = spawn(
             "npx",
-            ["tsx", entryScript, "--config", opts.config],
+            ["tsx", entryScript, "--config", configPath],
             {
               detached: true,
               stdio: "ignore",

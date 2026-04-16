@@ -9,6 +9,7 @@ import { buildRoutingTable } from "../../discord/router.js";
 import { installWorkspaceSkills } from "../../skills/installer.js";
 import { logger } from "../../shared/logger.js";
 import { buildSessionConfig } from "../../manager/session-config.js";
+import { resolveConfigPath } from "../../config/resolve-path.js";
 
 /**
  * Register the `clawcode run <agent>` command.
@@ -23,6 +24,7 @@ export function registerRunCommand(program: Command): void {
     .description("Run a single agent in the foreground (no daemon required)")
     .option("-c, --config <path>", "Path to config file", "clawcode.yaml")
     .action(async (agentName: string, opts: { config: string }) => {
+      const configPath = resolveConfigPath(opts.config);
       const log = logger.child({ component: "run" });
 
       // 1. Install workspace skills
@@ -31,7 +33,7 @@ export function registerRunCommand(program: Command): void {
       // 2. Load config and find agent
       let config;
       try {
-        config = await loadConfig(opts.config);
+        config = await loadConfig(configPath);
       } catch (err) {
         cliError(`Config error: ${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);

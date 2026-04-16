@@ -7,6 +7,7 @@ import { parse, stringify } from "yaml";
 import { cliLog, cliError } from "../output.js";
 import { loadConfig, resolveAllAgents } from "../../config/loader.js";
 import { createWorkspaces } from "../../agent/workspace.js";
+import { resolveConfigPath } from "../../config/resolve-path.js";
 
 const VALID_MODELS = ["sonnet", "opus", "haiku"] as const;
 type ValidModel = (typeof VALID_MODELS)[number];
@@ -67,6 +68,7 @@ export function registerAgentCreateCommand(program: Command): void {
     .description("Create a new agent interactively")
     .option("-c, --config <path>", "Path to config file", "clawcode.yaml")
     .action(async (opts: { config: string }) => {
+      const configPath = resolveConfigPath(opts.config, { needsWrite: true });
       const rl = createInterface({
         input: process.stdin,
         output: process.stdout,
@@ -84,10 +86,10 @@ export function registerAgentCreateCommand(program: Command): void {
 
         // Check for duplicate
         try {
-          const existingConfig = await loadConfig(opts.config);
+          const existingConfig = await loadConfig(configPath);
           const existingAgents = resolveAllAgents(existingConfig);
           if (existingAgents.find((a) => a.name === name)) {
-            cliError(`Error: Agent '${name}' already exists in ${opts.config}`);
+            cliError(`Error: Agent '${name}' already exists in ${configPath}`);
             rl.close();
             process.exit(1);
             return;
@@ -241,18 +243,18 @@ export function registerAgentCreateCommand(program: Command): void {
         // --- Update config YAML ---
 
         cliLog("");
-        const content = await readFile(opts.config, "utf-8");
+        const content = await readFile(configPath, "utf-8");
         const parsed = parse(content) as { agents: Array<Record<string, unknown>> };
         parsed.agents.push(newAgent);
-        await writeFile(opts.config, stringify(parsed, { lineWidth: 120 }));
-        cliLog(`Agent '${name}' added to ${opts.config}`);
+        await writeFile(configPath, stringify(parsed, { lineWidth: 120 }));
+        cliLog(`Agent '${name}' added to ${configPath}`);
 
         // --- Initialize workspace ---
 
         cliLog("Initializing workspace...");
         await mkdir(workspace, { recursive: true });
 
-        const config = await loadConfig(opts.config);
+        const config = await loadConfig(configPath);
         const resolvedAgents = resolveAllAgents(config);
         const thisAgent = resolvedAgents.filter((a) => a.name === name);
 

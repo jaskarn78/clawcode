@@ -7,6 +7,7 @@ import {
   SessionError,
 } from "../../shared/errors.js";
 import { cliLog, cliError } from "../output.js";
+import { resolveConfigPath } from "../../config/resolve-path.js";
 
 /**
  * Register the `clawcode restart <name>` command.
@@ -18,10 +19,11 @@ export function registerRestartCommand(program: Command): void {
     .description("Restart an individual agent by name")
     .option("-c, --config <path>", "Path to config file", "clawcode.yaml")
     .action(async (name: string, opts: { config: string }) => {
+      const configPath = resolveConfigPath(opts.config);
       try {
         await sendIpcRequest(SOCKET_PATH, "restart", {
           name,
-          config: opts.config,
+          config: configPath,
         });
         cliLog(`Agent '${name}' restarted`);
       } catch (error) {
