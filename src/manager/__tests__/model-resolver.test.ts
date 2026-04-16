@@ -6,8 +6,8 @@ describe("resolveModelId", () => {
     expect(resolveModelId("sonnet")).toBe("claude-sonnet-4-6");
   });
 
-  it("maps 'opus' to the pinned Opus 4.6 ID", () => {
-    expect(resolveModelId("opus")).toBe("claude-opus-4-6");
+  it("maps 'opus' to the pinned Opus 4.7 ID", () => {
+    expect(resolveModelId("opus")).toBe("claude-opus-4-7");
   });
 
   it("maps 'haiku' to the pinned Haiku 4.5 ID", () => {

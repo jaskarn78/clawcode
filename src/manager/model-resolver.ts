@@ -10,7 +10,7 @@
 
 const MODEL_ALIAS_MAP = Object.freeze({
   sonnet: "claude-sonnet-4-6",
-  opus: "claude-opus-4-6",
+  opus: "claude-opus-4-7",
   haiku: "claude-haiku-4-5",
 }) satisfies Readonly<Record<"sonnet" | "opus" | "haiku", string>>;
 
