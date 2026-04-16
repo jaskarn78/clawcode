@@ -26,7 +26,7 @@ export function registerUpdateCommand(program: Command): void {
         }
 
         cliLog("\nInstalling dependencies...");
-        execSync("npm ci --omit=dev", {
+        execSync("npm ci", {
           encoding: "utf-8",
           stdio: ["pipe", "pipe", "pipe"],
         });
@@ -38,6 +38,16 @@ export function registerUpdateCommand(program: Command): void {
           stdio: ["pipe", "pipe", "pipe"],
         });
         cliLog("Build complete.");
+
+        try {
+          execSync("chown -R clawcode:clawcode node_modules", {
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          cliLog("Fixed node_modules ownership for service user.");
+        } catch {
+          // Non-fatal — only matters when running as systemd service
+        }
 
         if (opts.restart) {
           cliLog("\nRestarting daemon...");
