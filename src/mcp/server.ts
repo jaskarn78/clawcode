@@ -75,6 +75,23 @@ export const TOOL_DEFINITIONS = {
     description: "List all ingested document sources and total chunk count",
     ipcMethod: "list-documents",
   },
+  // Cross-agent RPC / handoffs (Phase 59)
+  delegate_task: {
+    description: "Delegate a typed task to another agent. Returns a task_id immediately; the result arrives as a new turn. Prefer over send_to_agent when you need a structured, schema-validated payload with deadline + cost attribution.",
+    ipcMethod: "delegate-task",
+  },
+  task_status: {
+    description: "Check the status of a delegated task by task_id.",
+    ipcMethod: "task-status",
+  },
+  cancel_task: {
+    description: "Cancel an in-flight delegated task by task_id.",
+    ipcMethod: "cancel-task",
+  },
+  task_complete: {
+    description: "Signal completion of a delegated task you received. Provide the structured result matching the schema's output shape. Call this at the END of your turn -- the daemon dispatches the result back to the caller.",
+    ipcMethod: "task-complete",
+  },
 } as const;
 
 /**
@@ -668,6 +685,91 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       }
       const text = [`Documents (${r.total_chunks} total chunks):`, ...r.sources.map(s => `  - ${s}`)].join("\n");
       return { content: [{ type: "text" as const, text }] };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Cross-agent RPC / handoffs (Phase 59)
+  // -------------------------------------------------------------------------
+
+  // Tool: delegate_task
+  server.tool(
+    "delegate_task",
+    "Delegate a typed task to another agent. Returns task_id immediately; the result arrives as a new turn.",
+    {
+      caller: z.string().describe("Your agent name"),
+      target: z.string().describe("Target agent name"),
+      schema: z.string().describe("Task schema name (e.g. 'research.brief')"),
+      payload: z.record(z.string(), z.unknown()).describe("Task input payload matching the named schema"),
+      deadline_ms: z.number().int().positive().optional().describe("Absolute wall-clock deadline (ms since epoch)"),
+      budgetOwner: z.string().optional().describe("Override budget attribution (default: caller)"),
+      parent_task_id: z.string().optional().describe("For nested handoffs; omit for root delegations"),
+    },
+    async ({ caller, target, schema, payload, deadline_ms, budgetOwner, parent_task_id }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "delegate-task", {
+          caller, target, schema, payload, deadline_ms, budgetOwner, parent_task_id,
+        })) as { task_id: string };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ task_id: result.task_id }) }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Delegate failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: task_status
+  server.tool(
+    "task_status",
+    "Check the status of a delegated task.",
+    { task_id: z.string().describe("Task id returned by delegate_task") },
+    async ({ task_id }) => {
+      try {
+        const result = await sendIpcRequest(SOCKET_PATH, "task-status", { task_id });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Status failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: cancel_task
+  server.tool(
+    "cancel_task",
+    "Cancel an in-flight delegated task.",
+    {
+      task_id: z.string().describe("Task id to cancel"),
+      caller: z.string().describe("Your agent name (for audit trail)"),
+    },
+    async ({ task_id, caller }) => {
+      try {
+        await sendIpcRequest(SOCKET_PATH, "cancel-task", { task_id, caller });
+        return { content: [{ type: "text" as const, text: `Task ${task_id} cancelled` }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Cancel failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: task_complete
+  server.tool(
+    "task_complete",
+    "Signal completion of a delegated task with a structured result. Call this at the END of your turn.",
+    {
+      task_id: z.string().describe("Task id you received as the delegated task"),
+      result: z.record(z.string(), z.unknown()).describe("Structured result matching the schema's output shape"),
+      chain_token_cost: z.number().int().min(0).optional().describe("Tokens consumed during this task's execution"),
+    },
+    async ({ task_id, result, chain_token_cost }) => {
+      try {
+        await sendIpcRequest(SOCKET_PATH, "task-complete", { task_id, result, chain_token_cost });
+        return { content: [{ type: "text" as const, text: `Task ${task_id} completed` }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Complete failed: ${msg}` }] };
+      }
     },
   );
 

@@ -33,8 +33,8 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 16 tools defined", () => {
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(16);
+  it("has exactly 20 tools defined", () => {
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(20);
   });
 
   it("defines ask_advisor tool", () => {
@@ -47,6 +47,27 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.spawn_subagent_thread).toBeDefined();
     expect(TOOL_DEFINITIONS.spawn_subagent_thread.description).toContain("subagent");
     expect(TOOL_DEFINITIONS.spawn_subagent_thread.ipcMethod).toBe("spawn-subagent-thread");
+  });
+
+  // Phase 59 handoff tools
+  it("defines delegate_task tool with delegate-task IPC method", () => {
+    expect(TOOL_DEFINITIONS.delegate_task).toBeDefined();
+    expect(TOOL_DEFINITIONS.delegate_task.ipcMethod).toBe("delegate-task");
+  });
+
+  it("defines task_status tool with task-status IPC method", () => {
+    expect(TOOL_DEFINITIONS.task_status).toBeDefined();
+    expect(TOOL_DEFINITIONS.task_status.ipcMethod).toBe("task-status");
+  });
+
+  it("defines cancel_task tool with cancel-task IPC method", () => {
+    expect(TOOL_DEFINITIONS.cancel_task).toBeDefined();
+    expect(TOOL_DEFINITIONS.cancel_task.ipcMethod).toBe("cancel-task");
+  });
+
+  it("defines task_complete tool with task-complete IPC method", () => {
+    expect(TOOL_DEFINITIONS.task_complete).toBeDefined();
+    expect(TOOL_DEFINITIONS.task_complete.ipcMethod).toBe("task-complete");
   });
 });
 

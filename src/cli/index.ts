@@ -39,6 +39,7 @@ import { registerToolsCommand } from "./commands/tools.js";
 import { registerBenchCommand } from "./commands/bench.js";
 import { registerContextAuditCommand } from "./commands/context-audit.js";
 import { registerUpdateCommand } from "./commands/update.js";
+import { registerTasksCommand } from "./commands/tasks.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -158,6 +159,7 @@ registerToolsCommand(program);
 registerBenchCommand(program);
 registerContextAuditCommand(program);
 registerUpdateCommand(program);
+registerTasksCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,

@@ -19,6 +19,9 @@ import type { SessionAdapter } from "./session-adapter.js";
 import { SdkSessionAdapter } from "./session-adapter.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
 import { TaskStore } from "../tasks/store.js";
+import { TaskManager } from "../tasks/task-manager.js";
+import { SchemaRegistry } from "../tasks/schema-registry.js";
+import { PayloadStore } from "../tasks/payload-store.js";
 import {
   runStartupReconciliation,
   ORPHAN_THRESHOLD_MS,
@@ -382,7 +385,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -527,6 +530,34 @@ export async function startDaemon(
   const advisorBudgetDb = new Database(join(MANAGER_DIR, "advisor-budget.db"));
   const advisorBudget = new AdvisorBudget(advisorBudgetDb);
   log.info("advisor budget initialized");
+
+  // 6-quater. Create TaskManager singleton (Phase 59 Plan 03).
+  // Depends on: taskStore (6-ter), turnDispatcher (6-bis), escalationBudget (6a),
+  // resolvedAgents (5a), and a SchemaRegistry loaded from ~/.clawcode/task-schemas/.
+  //
+  // Exposed on the daemon return value so Phase 63 observability CLIs can
+  // read task state without re-entering through IPC.
+  const payloadStore = new PayloadStore(taskStore.rawDb);
+  const schemaRegistry = await SchemaRegistry.load();
+  log.info(
+    { schemas: schemaRegistry.size(), schemaNames: schemaRegistry.names() },
+    "SchemaRegistry loaded",
+  );
+
+  const taskManager = new TaskManager({
+    store: taskStore,
+    turnDispatcher,
+    schemaRegistry,
+    escalationBudget,
+    getAgentConfig: (name) =>
+      resolvedAgents.find((c) => c.name === name) ?? null,
+    storePayload: (id, p) => payloadStore.storePayload(id, p),
+    getStoredPayload: (id) => payloadStore.getPayload(id),
+    storeResult: (id, r) => payloadStore.storeResult(id, r),
+    getStoredResult: (id) => payloadStore.getResult(id),
+    log,
+  });
+  log.info({ schemaCount: taskManager.schemaCount }, "TaskManager initialized");
 
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
@@ -696,7 +727,7 @@ export async function startDaemon(
 
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager);
   };
 
   // 11. Create IPC server
@@ -965,7 +996,9 @@ export async function startDaemon(
     }
   })();
 
-  return { server, manager, taskStore, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
+  // TaskManager owns no external resources (inflight timers .unref()'d,
+  // db handle owned by TaskStore via PayloadStore). No explicit shutdown needed.
+  return { server, manager, taskStore, taskManager, payloadStore, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
@@ -993,6 +1026,7 @@ async function routeMethod(
   discordBridgeRef: { current: DiscordBridge | null },
   configPath: string,
   agentsBasePath: string,
+  taskManager: TaskManager,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -2321,6 +2355,40 @@ async function routeMethod(
         await (newChannel as GuildTextBasedChannel).delete(`agent-create failed: ${(err as Error).message}`).catch(() => {});
         throw err;
       }
+    }
+
+    // Phase 59 — cross-agent RPC / handoff IPC cases
+    case "delegate-task": {
+      const caller = validateStringParam(params, "caller");
+      const target = validateStringParam(params, "target");
+      const schema = validateStringParam(params, "schema");
+      const payload = params.payload;
+      const deadline_ms = typeof params.deadline_ms === "number" ? params.deadline_ms : undefined;
+      const budgetOwner = typeof params.budgetOwner === "string" ? params.budgetOwner : undefined;
+      const parentTaskId = typeof params.parent_task_id === "string" ? params.parent_task_id : undefined;
+      return await taskManager.delegate({ caller, target, schema, payload, deadline_ms, budgetOwner, parentTaskId });
+    }
+    case "task-status": {
+      const task_id = validateStringParam(params, "task_id");
+      return taskManager.getStatus(task_id);
+    }
+    case "cancel-task": {
+      const task_id = validateStringParam(params, "task_id");
+      const caller = validateStringParam(params, "caller");
+      await taskManager.cancel(task_id, caller);
+      return { ok: true };
+    }
+    case "task-complete": {
+      const task_id = validateStringParam(params, "task_id");
+      const result = params.result;
+      const chain_token_cost = typeof params.chain_token_cost === "number" ? params.chain_token_cost : 0;
+      await taskManager.completeTask(task_id, result, chain_token_cost);
+      return { ok: true };
+    }
+    case "task-retry": {
+      const task_id = validateStringParam(params, "task_id");
+      const response = await taskManager.retry(task_id);
+      return response;
     }
 
     default:
