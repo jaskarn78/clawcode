@@ -18,7 +18,7 @@ import type { Logger } from "pino";
 
 import type { TriggerEvent, TriggerSource, TriggerEngineOptions } from "./types.js";
 import { DedupLayer } from "./dedup.js";
-import { evaluatePolicy } from "./policy-evaluator.js";
+import { PolicyEvaluator, evaluatePolicy } from "./policy-evaluator.js";
 import { TriggerSourceRegistry } from "./source-registry.js";
 import { makeRootOriginWithCausation } from "../manager/turn-origin.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
@@ -32,16 +32,19 @@ export class TriggerEngine {
   private readonly dedup: DedupLayer;
   private readonly _registry: TriggerSourceRegistry;
   private configuredAgents: ReadonlySet<string>;
+  private evaluator: PolicyEvaluator | undefined;
 
   constructor(
     options: TriggerEngineOptions,
     configuredAgents: ReadonlySet<string> = new Set(),
+    evaluator?: PolicyEvaluator,
   ) {
     this.turnDispatcher = options.turnDispatcher;
     this.taskStore = options.taskStore;
     this.log = options.log.child({ component: "TriggerEngine" });
     this.config = options.config;
     this.configuredAgents = configuredAgents;
+    this.evaluator = evaluator;
     this._registry = new TriggerSourceRegistry();
     this.dedup = new DedupLayer({
       db: options.taskStore.rawDb,
@@ -94,10 +97,14 @@ export class TriggerEngine {
       return; // collapsed into a pending timer
     }
 
-    // Layer 3 — SQLite UNIQUE safety net
+    // Layer 3 — SQLite UNIQUE safety net (extended with sourceKind + payload for dry-run)
     const inserted = this.dedup.insertTriggerEvent(
       debounced.sourceId,
       debounced.idempotencyKey,
+      debounced.sourceKind,
+      typeof debounced.payload === "string"
+        ? debounced.payload
+        : JSON.stringify(debounced.payload),
     );
     if (!inserted) {
       this.log.debug(
@@ -107,8 +114,10 @@ export class TriggerEngine {
       return;
     }
 
-    // Policy check
-    const decision = evaluatePolicy(debounced, this.configuredAgents);
+    // Policy check — use PolicyEvaluator class if available, fallback to legacy wrapper
+    const decision = this.evaluator
+      ? this.evaluator.evaluate(debounced)
+      : evaluatePolicy(debounced, this.configuredAgents);
     if (!decision.allow) {
       this.log.info(
         { sourceId: debounced.sourceId, targetAgent: debounced.targetAgent, reason: decision.reason },
@@ -127,14 +136,10 @@ export class TriggerEngine {
       causationId,
     );
 
-    // Format payload
-    const payloadStr =
-      typeof debounced.payload === "string"
-        ? debounced.payload
-        : JSON.stringify(debounced.payload);
+    // Dispatch via TurnDispatcher — use policy-rendered payload when evaluator is active
+    const payloadStr = decision.payload;
 
-    // Dispatch via TurnDispatcher
-    await this.turnDispatcher.dispatch(origin, debounced.targetAgent, payloadStr);
+    await this.turnDispatcher.dispatch(origin, decision.targetAgent, payloadStr);
 
     // Update watermark
     this.taskStore.upsertTriggerState(
@@ -219,5 +224,17 @@ export class TriggerEngine {
   /** Update the set of configured agents (for config hot-reload). */
   updateConfiguredAgents(agents: ReadonlySet<string>): void {
     this.configuredAgents = agents;
+    // Delegate to the PolicyEvaluator class if active
+    if (this.evaluator) {
+      this.evaluator.updateConfiguredAgents(agents);
+    }
+  }
+
+  /**
+   * Replace the PolicyEvaluator atomically (for policy hot-reload).
+   * Called by PolicyWatcher.onReload when policies.yaml changes.
+   */
+  reloadEvaluator(evaluator: PolicyEvaluator): void {
+    this.evaluator = evaluator;
   }
 }

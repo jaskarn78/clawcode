@@ -44,6 +44,9 @@ import { InboxSource } from "../triggers/sources/inbox-source.js";
 import { CalendarSource } from "../triggers/sources/calendar-source.js";
 import { createWebhookHandler } from "../dashboard/webhook-handler.js";
 import { DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, DEFAULT_DEDUP_LRU_SIZE } from "../triggers/types.js";
+import { loadPolicies, PolicyValidationError } from "../triggers/policy-loader.js";
+import { PolicyEvaluator } from "../triggers/policy-evaluator.js";
+import { PolicyWatcher } from "../triggers/policy-watcher.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
@@ -394,7 +397,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; triggerEngine: TriggerEngine; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; policyWatcher: PolicyWatcher; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -654,6 +657,33 @@ export async function startDaemon(
   // the first registered source — replaces the direct TurnDispatcher path
   // that TaskScheduler previously used for prompt-based schedules.
   const configuredAgentNames = new Set(resolvedAgents.map(a => a.name));
+
+  // 6-quinquies-b-pre. Boot-time policy load (Phase 62 POL-01).
+  // Read .clawcode/policies.yaml BEFORE TriggerEngine construction.
+  // Invalid policy = daemon refuses to start. Missing file = empty rules.
+  const policyPath = join(homedir(), ".clawcode", "policies.yaml");
+  const policyAuditPath = join(MANAGER_DIR, "policy-audit.jsonl");
+  let bootEvaluator: PolicyEvaluator;
+  try {
+    const policyContent = await readFile(policyPath, "utf-8");
+    const compiledRules = loadPolicies(policyContent);
+    bootEvaluator = new PolicyEvaluator(compiledRules, configuredAgentNames);
+    log.info({ path: policyPath, ruleCount: compiledRules.length }, "policies.yaml loaded at boot");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // No policy file — start with empty rules (deny all non-default events)
+      bootEvaluator = new PolicyEvaluator([], configuredAgentNames);
+      log.info("no policies.yaml found, using default policy");
+    } else if (err instanceof PolicyValidationError) {
+      // Invalid policy — daemon must refuse to start (POL-01)
+      throw new ManagerError(
+        `FATAL: policies.yaml invalid -- daemon cannot start: ${err.message}`,
+      );
+    } else {
+      throw err;
+    }
+  }
+
   const triggerEngine = new TriggerEngine(
     {
       turnDispatcher,
@@ -666,6 +696,7 @@ export async function startDaemon(
       },
     },
     configuredAgentNames,
+    bootEvaluator,
   );
 
   // Register SchedulerSource adapter for prompt-based cron schedules.
@@ -777,6 +808,31 @@ export async function startDaemon(
     { sources: triggerEngine.registry.size },
     "TriggerEngine initialized with sources",
   );
+
+  // 6-quinquies-d. Start PolicyWatcher for hot-reload (Phase 62 POL-03).
+  // The watcher uses the same policyPath from boot. On valid reload, it
+  // swaps the TriggerEngine's evaluator atomically. Invalid reloads are
+  // logged and keep the old policy.
+  const policyWatcher = new PolicyWatcher({
+    policyPath,
+    auditPath: policyAuditPath,
+    onReload: (newEvaluator, diff) => {
+      triggerEngine.reloadEvaluator(newEvaluator);
+      log.info(
+        { added: diff.added.length, removed: diff.removed.length, modified: diff.modified.length },
+        "policy hot-reloaded — TriggerEngine evaluator swapped",
+      );
+    },
+    onError: (error) => {
+      log.warn({ error: error.message }, "policy reload failed — keeping previous policy");
+    },
+    log,
+    configuredAgents: configuredAgentNames,
+  });
+  // start() is safe here — we already validated at boot, so this will NOT
+  // throw for invalid content. It re-reads the file and starts chokidar.
+  await policyWatcher.start();
+  log.info({ policyPath, auditPath: policyAuditPath }, "policy watcher started");
 
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
@@ -1131,6 +1187,7 @@ export async function startDaemon(
       await dashboard.close();
     }
     await configWatcher.stop();
+    await policyWatcher.stop();
     server.close();
     if (discordBridge) {
       await discordBridge.stop();
@@ -1199,7 +1256,7 @@ export async function startDaemon(
 
   // TaskManager owns no external resources (inflight timers .unref()'d,
   // db handle owned by TaskStore via PayloadStore). No explicit shutdown needed.
-  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
+  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, policyWatcher, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
