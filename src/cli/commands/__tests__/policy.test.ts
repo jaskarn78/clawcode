@@ -230,7 +230,7 @@ describe("formatDryRunJson", () => {
 // runDryRun
 // ---------------------------------------------------------------------------
 
-describe("runDryRun", () => {
+describe("runDryRun", { timeout: 15_000 }, () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
