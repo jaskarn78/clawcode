@@ -174,9 +174,9 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   5. Completed / failed / cancelled / timed_out task rows older than the configured `perf.taskRetentionDays` (default 7, matching traces.db convention) are purged on the retention heartbeat; still-running rows are untouched (LIFE-03).
 
 **Plans**: 3 plans
-- [ ] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
+- [ ] 60-01-PLAN.md — TriggerSource interface + dedup pipeline + PolicyEvaluator (Wave 1)
+- [ ] 60-02-PLAN.md — TriggerEngine + SourceRegistry + TurnOrigin causationId + TaskStore DDL (Wave 2)
+- [ ] 60-03-PLAN.md — SchedulerSource adapter + task-retention heartbeat + daemon wiring (Wave 3)
 
 ### Phase 61: Additional Trigger Sources
 
@@ -192,10 +192,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   3. A peer-agent or external writer that drops a file into an agent's `collaboration/inbox/` fires that agent's turn immediately (via chokidar + `awaitWriteFinish`), strictly faster than the pre-v1.8 heartbeat-poll path (TRIG-04).
   4. A calendar event 15 minutes from its start time (or at its configured offset) fires the operator-chosen agent once — not every poll cycle — regardless of whether the source is the `google-workspace` MCP push channel, `events.list(syncToken)` incremental sweep, or an ICS URL (TRIG-05).
 
-**Plans**: 3 plans
-- [ ] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
+**Plans**: [To be planned]
 
 ### Phase 62: Policy Layer + Dry-Run
 
@@ -211,10 +208,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   3. Operator edits `policies.yaml` on a running daemon; the next trigger evaluation picks up the new rule without a daemon restart, and the diff is visible in the audit trail (POL-03).
   4. `clawcode policy dry-run --since <window>` (or equivalent) replays the last N recent trigger events against the current-on-disk policy and prints which rules would match which agents with reasons — zero actual agent turns fire (POL-04).
 
-**Plans**: 3 plans
-- [ ] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
+**Plans**: [To be planned]
 
 ### Phase 63: Observability Surfaces
 
@@ -231,10 +225,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   4. Proactive turns and delegated-task turns appear in the v1.7 trace tree with `causation_id`, `trigger_id`, and `task_id` metadata on their root spans; `clawcode trace <causation_id>` walks the entire chain (source event → trigger → turn → handoff → turn → ... → final result) across every involved agent (OBS-04).
   5. The cumulative token count for a handoff chain is visible both in the `clawcode tasks` output and in the trace metadata — answering "how much did this chain cost end-to-end?" without summing by hand (OBS-05).
 
-**Plans**: 3 plans
-- [ ] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [ ] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [ ] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
+**Plans**: [To be planned]
 **UI hint**: yes
 
 ## Progress
@@ -260,7 +251,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
 | 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
-| 60. Trigger Engine Foundation | 0/? | Not started | - |
+| 60. Trigger Engine Foundation | 0/3 | Not started | - |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
 | 62. Policy Layer + Dry-Run | 0/? | Not started | - |
 | 63. Observability Surfaces | 0/? | Not started | - |
