@@ -228,6 +228,14 @@ export class SseManager {
     } catch (err) {
       this.log.debug({ err }, "Failed to poll delivery queue");
     }
+
+    // Task graph (Phase 63 OBS-03)
+    try {
+      const taskData = await sendIpcRequest(this.socketPath, "list-tasks", {});
+      this.broadcast("task-state-change", taskData);
+    } catch (err) {
+      this.log.debug({ err }, "Failed to poll tasks");
+    }
   }
 
   /**

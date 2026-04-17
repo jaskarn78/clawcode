@@ -134,3 +134,19 @@ export type MemoryStatsData = {
     }
   >;
 };
+
+/** A single task edge for the dashboard task graph (OBS-03). */
+export type TaskGraphEdge = {
+  readonly task_id: string;
+  readonly caller_agent: string;
+  readonly target_agent: string;
+  readonly status: string;
+  readonly started_at: number;
+  readonly ended_at: number | null;
+  readonly chain_token_cost: number;
+};
+
+/** Payload for the task-state-change SSE event and /api/tasks endpoint. */
+export type TaskGraphData = {
+  readonly tasks: readonly TaskGraphEdge[];
+};

@@ -147,6 +147,11 @@ async function handleRequest(
       return;
     }
 
+    if (method === "GET" && pathname === "/tasks") {
+      await serveStatic(res, "tasks.html", MIME_TYPES[".html"]!);
+      return;
+    }
+
     // Message history: GET /api/messages/:agent?date=YYYY-MM-DD
     if (
       method === "GET" &&
@@ -327,6 +332,17 @@ async function handleRequest(
     if (method === "GET" && pathname === "/api/delivery-queue") {
       try {
         const data = await sseManager.fetchDeliveryQueue();
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
+    // One-shot task graph endpoint (Phase 63 OBS-03)
+    if (method === "GET" && pathname === "/api/tasks") {
+      try {
+        const data = await sendIpcRequest(socketPath, "list-tasks", {});
         sendJson(res, 200, data);
       } catch {
         sendJson(res, 503, { error: "Daemon not reachable" });

@@ -78,6 +78,8 @@ export const IPC_METHODS = [
   "cancel-task",
   "task-complete",
   "task-retry",
+  // Observability (Phase 63)
+  "list-tasks",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

@@ -964,7 +964,7 @@ export async function startDaemon(
 
   // 10. Create IPC handler
   const handler: IpcHandler = async (method, params) => {
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };
 
   // 11. Create IPC server
@@ -1285,6 +1285,7 @@ async function routeMethod(
   configPath: string,
   agentsBasePath: string,
   taskManager: TaskManager,
+  taskStore: TaskStore,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -2647,6 +2648,19 @@ async function routeMethod(
       const task_id = validateStringParam(params, "task_id");
       const response = await taskManager.retry(task_id);
       return response;
+    }
+
+    case "list-tasks": {
+      const now = Date.now();
+      const recentWindowMs = 30_000; // Show completed tasks for 30s
+      const rows = taskStore.rawDb.prepare(
+        `SELECT task_id, caller_agent, target_agent, status, started_at, ended_at, chain_token_cost
+         FROM tasks
+         WHERE status IN ('pending','running','awaiting_input')
+            OR (ended_at > ? AND status IN ('complete','failed','cancelled','timed_out','orphaned'))
+         ORDER BY started_at DESC`
+      ).all(now - recentWindowMs);
+      return { tasks: rows };
     }
 
     default:
