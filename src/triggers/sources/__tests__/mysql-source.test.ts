@@ -16,7 +16,7 @@ import type { TriggerEvent } from "../../types.js";
 // Mock pool + connection factory
 // ---------------------------------------------------------------------------
 
-function makeMockConnection(queryResults: Record<string, unknown[][]> = {}) {
+function makeMockConnection(queryResults: Record<string, readonly Record<string, unknown>[]> = {}) {
   const conn = {
     execute: vi.fn(async (sql: string, _params?: unknown[]) => {
       for (const [pattern, rows] of Object.entries(queryResults)) {
@@ -56,7 +56,7 @@ describe("MysqlSource", () => {
   let log: ReturnType<typeof makeLog>;
 
   beforeEach(() => {
-    ingestFn = vi.fn<(event: TriggerEvent) => Promise<void>>().mockResolvedValue(undefined);
+    ingestFn = vi.fn(async (_event: TriggerEvent): Promise<void> => {});
     log = makeLog();
     vi.useFakeTimers();
   });
@@ -84,7 +84,7 @@ describe("MysqlSource", () => {
         targetAgent: "acquisition",
         batchSize: overrides.batchSize ?? 100,
         filter: overrides.filter,
-        ingest: ingestFn,
+        ingest: ingestFn as (event: TriggerEvent) => Promise<void>,
         log,
       }),
       conn,

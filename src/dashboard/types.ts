@@ -2,6 +2,8 @@
  * Shared type definitions for the web dashboard.
  */
 
+import type { IncomingMessage, ServerResponse } from "node:http";
+
 /**
  * Configuration for the dashboard HTTP server.
  */
@@ -17,6 +19,16 @@ export type DashboardServerConfig = {
    * internet without adding authentication first.
    */
   readonly host?: string;
+  /**
+   * Phase 61 TRIG-03: Optional webhook handler injected by daemon.ts.
+   * Routes POST /webhook/<triggerId> to the WebhookSource's HTTP handler
+   * for HMAC verification and event ingestion.
+   */
+  readonly webhookHandler?: (
+    triggerId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) => Promise<void>;
 };
 
 /**

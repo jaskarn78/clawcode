@@ -87,7 +87,7 @@ export async function startDashboardServer(config: DashboardServerConfig): Promi
   });
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void handleRequest(req, res, sseManager, config.socketPath, log);
+    void handleRequest(req, res, sseManager, config.socketPath, log, config.webhookHandler);
   });
 
   sseManager.start();
@@ -120,6 +120,7 @@ async function handleRequest(
   sseManager: SseManager,
   socketPath: string,
   log: Logger,
+  webhookHandler?: DashboardServerConfig["webhookHandler"],
 ): Promise<void> {
   const method = req.method ?? "GET";
   const { pathname, segments } = parseRoute(req.url);
@@ -356,6 +357,17 @@ async function handleRequest(
         log.error({ err, agentName, action }, "Agent control failed");
         sendJson(res, 500, { error: message });
       }
+      return;
+    }
+
+    // Phase 61 TRIG-03: Webhook trigger endpoint
+    if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
+      const triggerId = decodeURIComponent(segments[1]!);
+      if (webhookHandler) {
+        await webhookHandler(triggerId, req, res);
+        return;
+      }
+      sendJson(res, 404, { error: "Webhook handler not configured" });
       return;
     }
 

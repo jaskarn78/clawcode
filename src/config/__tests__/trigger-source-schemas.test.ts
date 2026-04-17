@@ -168,12 +168,12 @@ describe("calendarTriggerSourceSchema", () => {
 
 describe("triggerSourcesConfigSchema", () => {
   it("is an optional object with mysql, webhook, inbox, calendar arrays", () => {
-    // Parse undefined (optional)
-    const empty = triggerSourcesConfigSchema!.parse({});
-    expect(empty.mysql).toEqual([]);
-    expect(empty.webhook).toEqual([]);
-    expect(empty.inbox).toEqual([]);
-    expect(empty.calendar).toEqual([]);
+    // Parse empty object -- arrays default to []
+    const empty = triggerSourcesConfigSchema!.parse({})!;
+    expect(empty!.mysql).toEqual([]);
+    expect(empty!.webhook).toEqual([]);
+    expect(empty!.inbox).toEqual([]);
+    expect(empty!.calendar).toEqual([]);
 
     // Parse with items
     const populated = triggerSourcesConfigSchema!.parse({
@@ -181,11 +181,11 @@ describe("triggerSourcesConfigSchema", () => {
       webhook: [{ triggerId: "t", secret: "s", targetAgent: "a" }],
       inbox: [{ targetAgent: "b" }],
       calendar: [{ user: "u", targetAgent: "c", mcpServer: "gw" }],
-    });
-    expect(populated.mysql).toHaveLength(1);
-    expect(populated.webhook).toHaveLength(1);
-    expect(populated.inbox).toHaveLength(1);
-    expect(populated.calendar).toHaveLength(1);
+    })!;
+    expect(populated!.mysql).toHaveLength(1);
+    expect(populated!.webhook).toHaveLength(1);
+    expect(populated!.inbox).toHaveLength(1);
+    expect(populated!.calendar).toHaveLength(1);
   });
 });
 
