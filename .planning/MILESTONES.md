@@ -1,5 +1,35 @@
 # Milestones: ClawCode
 
+## v1.8 Proactive Agents + Handoffs (Shipped: 2026-04-17)
+
+**Phases completed:** 7 phases, 21 plans, 48 tasks
+
+**Key accomplishments:**
+
+- TurnOrigin contract + TurnDispatcher chokepoint class wrapping SessionManager.sendToAgent/streamFromAgent with origin-prefixed turnIds, caller-owned Turn lifecycle, and Discord snowflake preservation helper
+- Extends the v1.7 trace store so every persisted trace row can carry a TurnOrigin JSON blob — schema migration, TurnRecord field, and Turn.recordOrigin API stitched together and proven round-trippable.
+- Every agent turn on the daemon path now flows through the TurnDispatcher chokepoint — DiscordBridge routes through `dispatchStream` (caller-owned Turn), TaskScheduler routes through `dispatch` (dispatcher-owned Turn), each trace row carries a `TurnOrigin` JSON blob, and `src/cli/commands/run.ts` compiles unchanged under TS strict via the optional-field + fallback design.
+- Locked the 8-status TaskStatus union, 15-field LIFE-02 row shape, and pure-function `assertLegalTransition` state machine — pure data foundation that Plans 58-02 (TaskStore) and 58-03 (reconciler + daemon wiring) build on with zero re-litigation.
+- Shipped the complete `TaskStore` SQLite persistence layer — idempotent schema/migration, Zod-validated 15-field insert/get, LIFE-01 state-machine-enforced `transition`, reconciler-only `markOrphaned` escape hatch, `listStaleRunning` for the reconciler scan, and `trigger_state` CRUD for Phase 60 — with zero daemon wiring and 124 passing tests across the Phase 58 suite.
+- Landed the startup-only orphan reconciler, wired TaskStore as a daemon singleton between TurnDispatcher and EscalationBudget, called reconciliation synchronously before SessionManager.startAll, and exposed `taskStore` on startDaemon's return value — closing Phase 58 with LIFE-01 + LIFE-04 proven and zero IPC / MCP / CLI surface added (Phase 59+ own all of that).
+- Typed handoff errors, deterministic SHA-256 input digest, ~100-LOC JSON-Schema→Zod v4 compiler with HAND-06 `.strict()`, YAML-fed SchemaRegistry with first-boot tolerance, and 4 pure authorization functions — all composable by Plan 59-02 TaskManager with zero daemon wiring in this plan.
+- TaskManager class implementing async-ticket delegation with 6-step authorization, AbortController deadline propagation, pinned schema hot-reload immunity, and digest-based retry idempotency
+- 4 MCP tools + 5 IPC methods + CLI tasks retry/status + AbortSignal end-to-end plumbing + PayloadStore + daemon step 6-quater TaskManager wiring -- closes Phase 59 with all 5 ROADMAP success criteria proven
+- TriggerEvent Zod schema, three-layer dedup pipeline (LRU + debounce + SQLite UNIQUE), and PolicyEvaluator pure function with 48 tests
+- TriggerEngine with 3-layer dedup -> policy -> causationId dispatch pipeline, watermark-based replay, TriggerSourceRegistry, and extended TurnOrigin/TaskStore/config schemas
+- SchedulerSource adapter routing prompt-based cron fires through TriggerEngine dedup+causation pipeline, with hourly task-retention heartbeat purging terminal rows
+- MysqlSource polling adapter with committed-read ROLLBACKed-row protection, WebhookSource with HMAC-SHA256 verification and content-addressed idempotency keys, plus Zod config schemas for all 4 trigger source types
+- InboxSource chokidar watcher for instant inbox delivery + CalendarSource MCP client poller with once-per-event dedup via fired-ID tracking in cursor_blob
+- All 4 trigger sources (MySQL, webhook, inbox, calendar) registered with TriggerEngine in daemon boot, mysql2 pool with graceful shutdown, webhook routed through WebhookSource.handleHttp, heartbeat inbox demoted to reconciler fallback
+- Zod-validated policy DSL with Handlebars template compilation, glob source matching, sliding-window throttle, rule differ, and PolicyEvaluator class replacing Phase 60's pass-through
+- PolicyWatcher with chokidar hot-reload, JSONL audit trail, TriggerEngine evaluator injection, and daemon boot-time policy validation
+- Standalone `clawcode policy dry-run --since 1h` command reads trigger_events from read-only SQLite + policies.yaml directly -- no daemon needed -- with color-coded table and JSON output
+- Read-only CLI commands for trigger fire visibility (clawcode triggers) and inter-agent task listing (clawcode tasks list) with color-coded tables, human-readable token costs, and temporal proximity task correlation
+- Real-time SVG task graph dashboard page with list-tasks IPC, SSE broadcast, and vanilla JS force-directed layout
+- Cross-agent causation chain walker with box-drawing tree output, trigger_id/task_id extraction from TurnOrigin.source, and cumulative token cost visibility
+
+---
+
 ## v1.7 Performance & Latency (Shipped: 2026-04-14)
 
 **Phases completed:** 7 phases, 24 plans, 46 tasks
