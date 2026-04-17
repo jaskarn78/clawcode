@@ -174,8 +174,8 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   5. Completed / failed / cancelled / timed_out task rows older than the configured `perf.taskRetentionDays` (default 7, matching traces.db convention) are purged on the retention heartbeat; still-running rows are untouched (LIFE-03).
 
 **Plans**: 3 plans
-- [ ] 60-01-PLAN.md — TriggerSource interface + dedup pipeline + PolicyEvaluator (Wave 1)
-- [ ] 60-02-PLAN.md — TriggerEngine + SourceRegistry + TurnOrigin causationId + TaskStore DDL (Wave 2)
+- [x] 60-01-PLAN.md — TriggerSource interface + dedup pipeline + PolicyEvaluator (Wave 1)
+- [x] 60-02-PLAN.md — TriggerEngine + SourceRegistry + TurnOrigin causationId + TaskStore DDL (Wave 2)
 - [ ] 60-03-PLAN.md — SchedulerSource adapter + task-retention heartbeat + daemon wiring (Wave 3)
 
 ### Phase 61: Additional Trigger Sources
@@ -251,7 +251,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
 | 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
-| 60. Trigger Engine Foundation | 0/3 | Not started | - |
+| 60. Trigger Engine Foundation | 2/3 | In Progress|  |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
 | 62. Policy Layer + Dry-Run | 0/? | Not started | - |
 | 63. Observability Surfaces | 0/? | Not started | - |

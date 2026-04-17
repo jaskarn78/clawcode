@@ -19,9 +19,9 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 - [ ] **TRIG-03**: Webhook triggers accept inbound HTTP POST on a dedicated endpoint, verify HMAC signature per source, dispatch to configured agent
 - [ ] **TRIG-04**: Inbox-arrival triggers fire immediately on write to the existing `collaboration/inbox` filesystem inbox (upgrade from heartbeat polling)
 - [ ] **TRIG-05**: Calendar triggers poll upcoming events via the existing `google-workspace` MCP and fire at configurable offsets (e.g., 15 min before event start)
-- [ ] **TRIG-06**: Daemon startup replays missed events since last watermark with a configurable max age (default 24h) so triggers are not lost across restarts
-- [ ] **TRIG-07**: Three-layer dedup prevents trigger storms: (a) idempotency key per event at ingress rejects duplicates, (b) per-source debouncer collapses bursts, (c) SQLite UNIQUE constraint on `(source, idempotency_key)` as safety net
-- [ ] **TRIG-08**: Every trigger fire generates a `causation_id` (nanoid) that propagates to the resulting turn's trace metadata and through any downstream handoffs — enables end-to-end tracing from source event → agent turn → delegated task → final result
+- [x] **TRIG-06**: Daemon startup replays missed events since last watermark with a configurable max age (default 24h) so triggers are not lost across restarts
+- [x] **TRIG-07**: Three-layer dedup prevents trigger storms: (a) idempotency key per event at ingress rejects duplicates, (b) per-source debouncer collapses bursts, (c) SQLite UNIQUE constraint on `(source, idempotency_key)` as safety net
+- [x] **TRIG-08**: Every trigger fire generates a `causation_id` (nanoid) that propagates to the resulting turn's trace metadata and through any downstream handoffs — enables end-to-end tracing from source event → agent turn → delegated task → final result
 
 ### Policy Layer (POL)
 
@@ -32,9 +32,9 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 
 ### Cross-Agent Handoff (HAND)
 
-- [ ] **HAND-01**: Each agent delegates a typed task to another agent via a new `delegate_task` MCP tool (async-ticket semantics — MCP call returns a `task_id` immediately; caller's turn ends; the eventual result arrives as a separate trigger firing the caller with the task result as context). Explicitly NOT sync RPC with `await` — prevents deadlock-from-sync-RPC (PITFALL-03) by design.
+- [x] **HAND-01**: Each agent delegates a typed task to another agent via a new `delegate_task` MCP tool (async-ticket semantics — MCP call returns a `task_id` immediately; caller's turn ends; the eventual result arrives as a separate trigger firing the caller with the task result as context). Explicitly NOT sync RPC with `await` — prevents deadlock-from-sync-RPC (PITFALL-03) by design.
 - [x] **HAND-02**: Task schemas are declared in a registry (`.planning/task-schemas/` YAML) with Zod validation on input and output; receiver rejects malformed inputs; payload size cap (default 64KB) enforced at validation time
-- [ ] **HAND-03**: Every handoff has a deadline propagated through the chain (not a per-hop timeout); receiver gets an AbortSignal; daemon kills tasks past the chain deadline
+- [x] **HAND-03**: Every handoff has a deadline propagated through the chain (not a per-hop timeout); receiver gets an AbortSignal; daemon kills tasks past the chain deadline
 - [x] **HAND-04**: Handoff authorization — each receiver declares which agents are allowed to delegate to it (allowlist, default deny); violations log WARN and return a typed error
 - [x] **HAND-05**: Cycle detection — every task carries a chain `depth` counter AND a `causation_id` (root trigger id); reject handoffs where depth exceeds `MAX_HANDOFF_DEPTH` (default 5) OR where the target appears in the causation chain (re-entry ban) to prevent runaway cascades
 - [x] **HAND-06**: Explicit payload — only fields listed in the task schema cross the handoff boundary; no ambient context leakage between agents
@@ -46,8 +46,8 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 - [x] **LIFE-02**: Task rows include: task_id, task_type, caller_agent, target_agent, causation_id (root trigger id), parent_task_id (nullable), depth, input_digest (hash, not raw), status, started_at, ended_at, heartbeat_at, result_digest, error, chain_token_cost
 - [ ] **LIFE-03**: Task retention defaults to 7 days matching traces.db convention; configurable via `perf.taskRetentionDays`
 - [x] **LIFE-04**: Orphaned task reconciliation — tasks with heartbeat_at older than threshold at daemon start are marked `orphaned` (not left running forever)
-- [ ] **LIFE-05**: Cost attribution — handoff token usage counts against the calling agent's budget by default; per-task override available
-- [ ] **LIFE-06**: Retry — failed tasks can be re-run idempotently with the same input against the same receiver via a CLI command and (future) auto-retry policy
+- [x] **LIFE-05**: Cost attribution — handoff token usage counts against the calling agent's budget by default; per-task override available
+- [x] **LIFE-06**: Retry — failed tasks can be re-run idempotently with the same input against the same receiver via a CLI command and (future) auto-retry policy
 
 ### Observability (OBS)
 

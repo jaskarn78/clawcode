@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to plan
-stopped_at: Completed 59-03-PLAN.md
-last_updated: "2026-04-17T13:54:23.993Z"
+status: Ready to execute
+stopped_at: Completed 60-02-PLAN.md
+last_updated: "2026-04-17T14:42:19.348Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 12
+  completed_plans: 11
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 59 — cross-agent-rpc-handoffs
+**Current focus:** Phase 60 — trigger-engine-foundation
 
 ## Current Position
 
-Phase: 60
-Plan: Not started
+Phase: 60 (trigger-engine-foundation) — EXECUTING
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -77,6 +77,12 @@ Recent decisions affecting current work:
 - [Phase 59]: PayloadStore shares tasks.db via TaskStore.rawDb getter -- single-writer invariant preserved, no lifecycle change
 - [Phase 59]: AbortSignal bridged to AbortController via addEventListener('abort') per SDK native support (Pitfall 4 resolved)
 - [Phase 59]: E2E test proves ROADMAP criteria 1-5 via TaskManager integration (not full daemon) -- acceptable scope boundary
+- [Phase 60]: LruMap hand-rolled (~40 LOC) instead of npm dep -- 10K entries trivial, no dependency warranted
+- [Phase 60]: DedupLayer owns its own trigger_events DDL rather than extending TaskStore.ensureSchema -- self-contained for in-memory DB testing
+- [Phase 60]: PolicyEvaluator is a pure function (not a class) -- TriggerEvent-in, PolicyResult-out is the stable contract Phase 62 replaces
+- [Phase 60]: causationId uses z.string().nullable().default(null) for backward-compatible TurnOrigin extension (Phase 60 TRIG-08)
+- [Phase 60]: TriggerEngine creates own DedupLayer from TaskStore.rawDb -- dedup lifecycle is engine-internal, not injected
+- [Phase 60]: trigger_events DDL in both DedupLayer (test isolation) and TaskStore.ensureSchema (daemon lifecycle) -- CREATE IF NOT EXISTS makes this safe
 
 ### Roadmap Evolution
 
@@ -105,5 +111,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 59-03-PLAN.md
+Stopped at: Completed 60-02-PLAN.md
 Resume file: None
