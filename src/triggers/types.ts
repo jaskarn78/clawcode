@@ -22,6 +22,8 @@ export const TriggerEventSchema = z.object({
   targetAgent: z.string().min(1),
   payload: z.unknown(),
   timestamp: z.number().int().min(0),
+  /** Phase 62 — optional source kind for policy DSL matching. */
+  sourceKind: z.string().optional(),
 });
 
 export type TriggerEvent = z.infer<typeof TriggerEventSchema>;

@@ -64,15 +64,16 @@ describe("TokenBucket", () => {
   it("sliding window allows refilling mid-window", () => {
     const bucket = new TokenBucket(2);
 
-    // Consume both at t=0
+    // Consume both: first at t=0, second at t=100
     expect(bucket.tryConsume()).toBe(true);
     vi.advanceTimersByTime(100);
     expect(bucket.tryConsume()).toBe(true);
     expect(bucket.tryConsume()).toBe(false);
 
-    // Advance 60s so the first timestamp expires but the second doesn't
-    vi.advanceTimersByTime(59_900);
-    // First stamp at t=0 is now >60s old (evicted). Second at t=100 still alive.
+    // Advance to t=60_001 so the first timestamp (t=0) expires
+    // windowStart = 60001 - 60000 = 1, so 0 < 1 is true (evicted)
+    // Second stamp at t=100 is still within window (100 >= 1)
+    vi.advanceTimersByTime(59_901);
     expect(bucket.tryConsume()).toBe(true); // one slot freed
     expect(bucket.tryConsume()).toBe(false); // still one from t=100
   });

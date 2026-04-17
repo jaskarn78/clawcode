@@ -147,14 +147,16 @@ describe("compileRule", () => {
     expect(compiled.source.id).toBe("pipeline_*");
   });
 
-  it("throws on Handlebars syntax error in payload at compile time", () => {
-    const brokenRule: PolicyRule = {
-      id: "broken",
+  it("Handlebars renders missing variables as empty string (graceful)", () => {
+    const rule: PolicyRule = {
+      id: "missing-var",
       enabled: true,
       priority: 0,
       target: "test",
-      payload: "{{#if}}unclosed",
+      payload: "Hello {{event.nonexistent}}!",
     };
-    expect(() => compileRule(brokenRule)).toThrow();
+    const compiled = compileRule(rule);
+    const result = compiled.template({ event: { sourceId: "x" } });
+    expect(result).toBe("Hello !");
   });
 });
