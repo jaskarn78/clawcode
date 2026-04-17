@@ -262,5 +262,5 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
 | 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
 | 61. Additional Trigger Sources | 2/3 | Complete    | 2026-04-17 |
-| 62. Policy Layer + Dry-Run | 3/3 | Complete   | 2026-04-17 |
+| 62. Policy Layer + Dry-Run | 3/3 | Complete    | 2026-04-17 |
 | 63. Observability Surfaces | 0/? | Not started | - |
