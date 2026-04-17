@@ -101,20 +101,26 @@ export class DedupLayer {
     this.defaultDebounceMs = options.defaultDebounceMs;
     this.lru = new LruMap(options.lruSize);
 
-    // Create trigger_events table idempotently.
+    // Create trigger_events table idempotently (Phase 62: added source_kind + payload).
     options.db.exec(`
       CREATE TABLE IF NOT EXISTS trigger_events (
         source_id        TEXT NOT NULL,
         idempotency_key  TEXT NOT NULL,
         created_at       INTEGER NOT NULL,
+        source_kind      TEXT,
+        payload          TEXT,
         UNIQUE(source_id, idempotency_key)
       );
       CREATE INDEX IF NOT EXISTS idx_trigger_events_created_at
         ON trigger_events(created_at);
     `);
 
+    // Phase 62: idempotent ALTER TABLE for existing DBs missing new columns.
+    try { options.db.exec("ALTER TABLE trigger_events ADD COLUMN source_kind TEXT"); } catch { /* column exists */ }
+    try { options.db.exec("ALTER TABLE trigger_events ADD COLUMN payload TEXT"); } catch { /* column exists */ }
+
     this.insertStmt = options.db.prepare(
-      "INSERT OR IGNORE INTO trigger_events (source_id, idempotency_key, created_at) VALUES (?, ?, ?)",
+      "INSERT OR IGNORE INTO trigger_events (source_id, idempotency_key, created_at, source_kind, payload) VALUES (?, ?, ?, ?, ?)",
     );
     this.purgeStmt = options.db.prepare(
       "DELETE FROM trigger_events WHERE created_at < ?",
@@ -192,9 +198,22 @@ export class DedupLayer {
    * Attempt to insert a trigger event into SQLite. Returns true if the row
    * was inserted (not a duplicate), false if the UNIQUE constraint rejected
    * it (INSERT OR IGNORE).
+   *
+   * Phase 62: Extended with optional sourceKind and payload for dry-run replay.
    */
-  insertTriggerEvent(sourceId: string, idempotencyKey: string): boolean {
-    const result = this.insertStmt.run(sourceId, idempotencyKey, Date.now());
+  insertTriggerEvent(
+    sourceId: string,
+    idempotencyKey: string,
+    sourceKind?: string,
+    payload?: string,
+  ): boolean {
+    const result = this.insertStmt.run(
+      sourceId,
+      idempotencyKey,
+      Date.now(),
+      sourceKind ?? null,
+      payload ?? null,
+    );
     return result.changes > 0;
   }
 

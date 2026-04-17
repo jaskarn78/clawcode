@@ -179,6 +179,12 @@ export class TaskStore {
       COMMIT;
     `;
     this.db.exec(ddl);
+
+    // Phase 62: idempotent ALTER TABLE for trigger_events extension.
+    // Adds source_kind + payload columns for dry-run replay. Existing DBs
+    // have the 3-column schema; new DBs get the full schema via DedupLayer.
+    try { this.db.exec("ALTER TABLE trigger_events ADD COLUMN source_kind TEXT"); } catch { /* column exists */ }
+    try { this.db.exec("ALTER TABLE trigger_events ADD COLUMN payload TEXT"); } catch { /* column exists */ }
   }
 
   /**
