@@ -16,18 +16,22 @@ const mockConnect = vi.fn().mockResolvedValue(undefined);
 const mockCallTool = vi.fn();
 const mockTransportClose = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn().mockImplementation(() => ({
-    connect: mockConnect,
-    callTool: mockCallTool,
-  })),
-}));
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => {
+  return {
+    Client: class MockClient {
+      connect = mockConnect;
+      callTool = mockCallTool;
+    },
+  };
+});
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
-  StdioClientTransport: vi.fn().mockImplementation(() => ({
-    close: mockTransportClose,
-  })),
-}));
+vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => {
+  return {
+    StdioClientTransport: class MockTransport {
+      close = mockTransportClose;
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Import after mocks
@@ -54,8 +58,9 @@ function makeMockTaskStore(cursorBlob: string | null = null) {
 type MockTaskStore = ReturnType<typeof makeMockTaskStore>;
 
 /** Build default CalendarSourceOptions. */
-function makeOptions(overrides: Partial<CalendarSourceOptions> & { taskStore?: MockTaskStore } = {}): CalendarSourceOptions {
-  const taskStore = overrides.taskStore ?? makeMockTaskStore();
+function makeOptions(overrides: Partial<Omit<CalendarSourceOptions, "taskStore">> & { taskStore?: MockTaskStore } = {}): CalendarSourceOptions {
+  const { taskStore: tsOverride, ...rest } = overrides;
+  const taskStore = tsOverride ?? makeMockTaskStore();
   return {
     user: "jas",
     targetAgent: "clawdy",
@@ -76,8 +81,7 @@ function makeOptions(overrides: Partial<CalendarSourceOptions> & { taskStore?: M
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as CalendarSourceOptions["log"],
-    ...overrides,
-    // Ensure taskStore from overrides is used
+    ...rest,
   };
 }
 
@@ -128,6 +132,7 @@ describe("CalendarSource", () => {
       mockCallTool.mockResolvedValueOnce(makeCalendarResponse([]));
 
       const source = new CalendarSource(makeOptions());
+      await source._startMcpClientForTest();
       await source._pollOnceForTest();
 
       expect(mockCallTool).toHaveBeenCalledWith({
@@ -147,6 +152,7 @@ describe("CalendarSource", () => {
     it("ingests events not in the fired set", async () => {
       const ingest = vi.fn().mockResolvedValue(undefined);
       const source = new CalendarSource(makeOptions({ ingest }));
+      await source._startMcpClientForTest();
 
       mockCallTool.mockResolvedValueOnce(
         makeCalendarResponse([
@@ -173,6 +179,7 @@ describe("CalendarSource", () => {
       const taskStore = makeMockTaskStore(existingBlob);
       const ingest = vi.fn().mockResolvedValue(undefined);
       const source = new CalendarSource(makeOptions({ taskStore, ingest }));
+      await source._startMcpClientForTest();
 
       mockCallTool.mockResolvedValueOnce(
         makeCalendarResponse([
@@ -195,6 +202,7 @@ describe("CalendarSource", () => {
     it("calls upsertTriggerState with Map entries as tuple array", async () => {
       const taskStore = makeMockTaskStore();
       const source = new CalendarSource(makeOptions({ taskStore }));
+      await source._startMcpClientForTest();
 
       mockCallTool.mockResolvedValueOnce(
         makeCalendarResponse([
@@ -226,6 +234,7 @@ describe("CalendarSource", () => {
       const taskStore = makeMockTaskStore(existingBlob);
       const ingest = vi.fn().mockResolvedValue(undefined);
       const source = new CalendarSource(makeOptions({ taskStore, ingest }));
+      await source._startMcpClientForTest();
 
       // Return the same existing event from MCP
       mockCallTool.mockResolvedValueOnce(
@@ -252,6 +261,7 @@ describe("CalendarSource", () => {
       ]);
       const taskStore = makeMockTaskStore(existingBlob);
       const source = new CalendarSource(makeOptions({ taskStore }));
+      await source._startMcpClientForTest();
 
       mockCallTool.mockResolvedValueOnce(makeCalendarResponse([]));
 
@@ -313,6 +323,7 @@ describe("CalendarSource", () => {
       } as unknown as CalendarSourceOptions["log"];
       const ingest = vi.fn();
       const source = new CalendarSource(makeOptions({ log, ingest }));
+      await source._startMcpClientForTest();
 
       mockCallTool.mockRejectedValueOnce(new Error("MCP connection failed"));
 
