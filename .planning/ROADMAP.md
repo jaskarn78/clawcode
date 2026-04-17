@@ -233,7 +233,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [ ] 63-01-PLAN.md — Triggers CLI + tasks list CLI with read-only SQLite (Wave 1)
-- [ ] 63-02-PLAN.md — Dashboard task graph page with SSE + IPC (Wave 1)
+- [x] 63-02-PLAN.md — Dashboard task graph page with SSE + IPC (Wave 1)
 - [ ] 63-03-PLAN.md — Cross-agent trace chain walker CLI (Wave 2)
 **UI hint**: yes
 
@@ -263,4 +263,4 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
 | 61. Additional Trigger Sources | 2/3 | Complete    | 2026-04-17 |
 | 62. Policy Layer + Dry-Run | 3/3 | Complete    | 2026-04-17 |
-| 63. Observability Surfaces | 0/3 | Not started | - |
+| 63. Observability Surfaces | 1/3 | In Progress|  |
