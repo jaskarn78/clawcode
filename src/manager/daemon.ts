@@ -38,6 +38,11 @@ import type { ContextZone, ZoneTransition } from "../heartbeat/context-zones.js"
 import { TaskScheduler } from "../scheduler/scheduler.js";
 import { TriggerEngine } from "../triggers/engine.js";
 import { SchedulerSource } from "../triggers/scheduler-source.js";
+import { MysqlSource } from "../triggers/sources/mysql-source.js";
+import { WebhookSource } from "../triggers/sources/webhook-source.js";
+import { InboxSource } from "../triggers/sources/inbox-source.js";
+import { CalendarSource } from "../triggers/sources/calendar-source.js";
+import { createWebhookHandler } from "../dashboard/webhook-handler.js";
 import { DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, DEFAULT_DEDUP_LRU_SIZE } from "../triggers/types.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 import { linkAgentSkills } from "../skills/linker.js";
@@ -98,6 +103,7 @@ import type { TraceStore } from "../performance/trace-store.js";
 import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-summary-cron.js";
 import { isDiscordRateLimitError } from "../discord/streaming.js";
 import { nanoid } from "nanoid";
+import { createPool, type Pool } from "mysql2/promise";
 
 /**
  * Augment a LatencyReport's segments with `slo_status`, `slo_threshold_ms`,
@@ -615,6 +621,33 @@ export async function startDaemon(
   }
   log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0 || a.memory?.consolidation?.enabled !== false).length }, "task scheduler initialized (handler-based schedules)");
 
+  // 6-quinquies-a2. Create mysql2 pool for MysqlSource (Phase 61 TRIG-02).
+  // Pool is daemon-level — shared across all MysqlSource instances.
+  // Created only if mysql trigger sources are configured. Pool size 2 per CONTEXT.md.
+  let mysqlPool: Pool | null = null;
+  const mysqlConfigs = config.triggers?.sources?.mysql ?? [];
+  if (mysqlConfigs.length > 0) {
+    const mysqlHost = process.env.MYSQL_HOST;
+    const mysqlUser = process.env.MYSQL_USER;
+    const mysqlPassword = process.env.MYSQL_PASSWORD;
+    const mysqlDatabase = process.env.MYSQL_DATABASE;
+
+    if (mysqlHost && mysqlUser && mysqlDatabase) {
+      mysqlPool = createPool({
+        host: mysqlHost,
+        user: mysqlUser,
+        password: mysqlPassword,
+        database: mysqlDatabase,
+        connectionLimit: 2,
+        waitForConnections: true,
+        enableKeepAlive: true,
+      });
+      log.info({ host: mysqlHost, database: mysqlDatabase }, "mysql2 pool created for trigger sources");
+    } else {
+      log.warn("MySQL trigger sources configured but MYSQL_HOST/MYSQL_USER/MYSQL_DATABASE env vars missing — skipping");
+    }
+  }
+
   // 6-quinquies-b. Create TriggerEngine singleton (Phase 60).
   // Depends on: turnDispatcher (6-bis), taskStore (6-ter), taskScheduler (6-quinquies-a).
   // The engine owns all non-Discord turn initiation. SchedulerSource is
@@ -644,6 +677,86 @@ export async function startDaemon(
     log,
   });
   triggerEngine.registerSource(schedulerSource);
+
+  // --- Phase 61: Register additional trigger sources (6-quinquies-c) ---
+
+  // TRIG-02: MySQL DB-change sources
+  if (mysqlPool) {
+    for (const cfg of mysqlConfigs) {
+      const mysqlSource = new MysqlSource({
+        pool: mysqlPool,
+        table: cfg.table,
+        idColumn: cfg.idColumn,
+        pollIntervalMs: cfg.pollIntervalMs,
+        targetAgent: cfg.targetAgent,
+        batchSize: cfg.batchSize,
+        filter: cfg.filter,
+        ingest: (event) => triggerEngine.ingest(event),
+        log,
+      });
+      triggerEngine.registerSource(mysqlSource);
+    }
+  }
+
+  // TRIG-03: Webhook source (single source, multiple trigger configs)
+  const webhookConfigs = config.triggers?.sources?.webhook ?? [];
+  let webhookSource: WebhookSource | null = null;
+  if (webhookConfigs.length > 0) {
+    webhookSource = new WebhookSource({
+      configs: webhookConfigs,
+      ingest: (event) => triggerEngine.ingest(event),
+      log,
+    });
+    triggerEngine.registerSource(webhookSource);
+  }
+
+  // TRIG-04: Inbox sources (one per agent with inbox trigger config)
+  const inboxConfigs = config.triggers?.sources?.inbox ?? [];
+  for (const cfg of inboxConfigs) {
+    const agentConfig = resolvedAgents.find(a => a.name === cfg.targetAgent);
+    if (!agentConfig) {
+      log.warn({ targetAgent: cfg.targetAgent }, "inbox trigger configured for unknown agent — skipping");
+      continue;
+    }
+    const inboxDir = join(agentConfig.workspace, "inbox");
+    const inboxSource = new InboxSource({
+      agentName: cfg.targetAgent,
+      inboxDir,
+      stabilityThresholdMs: cfg.stabilityThresholdMs,
+      targetAgent: cfg.targetAgent,
+      ingest: (event) => triggerEngine.ingest(event),
+      log,
+    });
+    triggerEngine.registerSource(inboxSource);
+  }
+
+  // TRIG-05: Calendar sources
+  const calendarConfigs = config.triggers?.sources?.calendar ?? [];
+  for (const cfg of calendarConfigs) {
+    const mcpServerConfig = config.mcpServers?.[cfg.mcpServer];
+    if (!mcpServerConfig) {
+      log.warn({ mcpServer: cfg.mcpServer }, "calendar trigger references unknown MCP server — skipping");
+      continue;
+    }
+    const calendarSource = new CalendarSource({
+      user: cfg.user,
+      targetAgent: cfg.targetAgent,
+      calendarId: cfg.calendarId,
+      pollIntervalMs: cfg.pollIntervalMs,
+      offsetMs: cfg.offsetMs,
+      maxResults: cfg.maxResults,
+      eventRetentionDays: cfg.eventRetentionDays,
+      mcpServer: {
+        command: mcpServerConfig.command,
+        args: mcpServerConfig.args,
+        env: mcpServerConfig.env as Record<string, string> | undefined,
+      },
+      taskStore,
+      ingest: (event) => triggerEngine.ingest(event),
+      log,
+    });
+    triggerEngine.registerSource(calendarSource);
+  }
 
   // Replay missed events from last watermarks (TRIG-06).
   // Runs SYNCHRONOUSLY before agent startAll so missed triggers
@@ -975,7 +1088,17 @@ export async function startDaemon(
   const dashboardHost = process.env.CLAWCODE_DASHBOARD_HOST ?? "127.0.0.1";
   let dashboard: Awaited<ReturnType<typeof startDashboardServer>> | null = null;
   try {
-    dashboard = await startDashboardServer({ port: dashboardPort, host: dashboardHost, socketPath: SOCKET_PATH });
+    // Phase 61 TRIG-03: Inject webhook handler routed through WebhookSource.handleHttp.
+    // WebhookSource.handleHttp owns TriggerEvent construction + stable idempotency keys.
+    const webhookHandler = webhookSource
+      ? createWebhookHandler(
+          webhookSource.configMap,
+          (triggerId, payload, rawBodyBytes) =>
+            webhookSource!.handleHttp(triggerId, payload, rawBodyBytes),
+          log,
+        )
+      : undefined;
+    dashboard = await startDashboardServer({ port: dashboardPort, host: dashboardHost, socketPath: SOCKET_PATH, webhookHandler });
     log.info({ port: dashboardPort, host: dashboardHost }, "dashboard server started");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1033,6 +1156,15 @@ export async function startDaemon(
       taskStore.close();
     } catch (err) {
       log.warn({ err: (err as Error).message }, "taskStore close failed");
+    }
+    // Phase 61: Clean up mysql2 pool (sources already stopped by triggerEngine.stopAll)
+    if (mysqlPool) {
+      try {
+        await mysqlPool.end();
+        log.info("mysql2 pool closed");
+      } catch (err) {
+        log.error({ error: (err as Error).message }, "mysql2 pool close failed");
+      }
     }
     await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
     await unlink(PID_PATH).catch((err) => { log.debug({ path: PID_PATH, error: (err as Error).message }, "pid file cleanup failed (may not exist)"); });
