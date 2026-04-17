@@ -92,7 +92,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 - [x] **Phase 57: TurnDispatcher Foundation** - Unify all agent-turn entry points (Discord, scheduler, future triggers, future tasks) behind a single `TurnDispatcher` chokepoint so the v1.8 proactive + handoff subsystems plug into one contract instead of re-inventing trace/lifecycle plumbing (completed 2026-04-15)
 - [x] **Phase 58: Task Store + State Machine** - Ship daemon-level `tasks.db`, Zod task schema registry, canonical task state machine (pending | running | awaiting_input | complete | failed | cancelled | timed_out), and chain metadata (causation_id, parent_task_id, depth) for every inter-agent task row (completed 2026-04-15)
-- [ ] **Phase 59: Cross-Agent RPC (Handoffs)** - Expose `delegate_task` / `task_status` / `cancel_task` / `task_complete` via MCP + IPC with async-ticket semantics, receiver allowlists, cycle detection, self-handoff block, schema-validated payloads, 64 KB cap, deadline propagation, chain-token cost attribution, and manual retry
+- [x] **Phase 59: Cross-Agent RPC (Handoffs)** - Expose `delegate_task` / `task_status` / `cancel_task` / `task_complete` via MCP + IPC with async-ticket semantics, receiver allowlists, cycle detection, self-handoff block, schema-validated payloads, 64 KB cap, deadline propagation, chain-token cost attribution, and manual retry (completed 2026-04-17)
 - [ ] **Phase 60: Trigger Engine Foundation** - Stand up the TriggerEngine + source registry + policy evaluator + loop detector + causation_id propagation + 3-layer dedup, migrate the v1.6 scheduler into the first registered source, and land task retention config
 - [ ] **Phase 61: Additional Trigger Sources** - Register four more sources against the Phase 60 engine: webhook HTTP receiver (HMAC-verified), MySQL DB-change poller with `last_seen_id` watermark, inbox-arrival event (upgrade from heartbeat), and Google/ICS calendar poller with configurable offsets
 - [ ] **Phase 62: Policy Layer + Dry-Run** - Declarative YAML policy DSL (Zod-validated at daemon start, atomic-reject on error) covering source/agent/template/throttle/priority, hot-reload on file edit, and dry-run replay so operators can test policy changes without firing agents
@@ -155,8 +155,8 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [x] 59-01-PLAN.md — Task schema registry + JSON-Schema→Zod compiler + typed errors + authorize.ts (Wave 1)
-- [ ] 59-02-PLAN.md — TaskManager class (delegate/cancel/completeTask/retry + deadline + cost attribution + digest) (Wave 2)
-- [ ] 59-03-PLAN.md — MCP tools + IPC + CLI tasks retry/status + daemon wiring + acceptsTasks config + AbortSignal threading (Wave 3)
+- [x] 59-02-PLAN.md — TaskManager class (delegate/cancel/completeTask/retry + deadline + cost attribution + digest) (Wave 2)
+- [x] 59-03-PLAN.md — MCP tools + IPC + CLI tasks retry/status + daemon wiring + acceptsTasks config + AbortSignal threading (Wave 3)
 
 ### Phase 60: Trigger Engine Foundation
 
@@ -259,7 +259,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 |-------|----------------|--------|-----------|
 | 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
 | 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
-| 59. Cross-Agent RPC (Handoffs) | 1/3 | In Progress|  |
+| 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete   | 2026-04-17 |
 | 60. Trigger Engine Foundation | 0/? | Not started | - |
 | 61. Additional Trigger Sources | 0/? | Not started | - |
 | 62. Policy Layer + Dry-Run | 0/? | Not started | - |
