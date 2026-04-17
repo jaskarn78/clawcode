@@ -111,6 +111,8 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 v1.0-v1.7 delivered 56 phases across 8 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, and end-to-end performance + latency optimizations.
 
+**v1.8 progress:** Phase 59 Cross-Agent RPC (Handoffs) complete — agents can delegate typed tasks to each other via MCP tools with schema validation, authorization, cycle detection, deadline propagation, cost attribution, and manual retry.
+
 ## Context
 
 ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities directly within Claude Code. Shipped v1.0-v1.7 with 56 phases across 8 milestones, covering 180+ TypeScript files.
@@ -163,4 +165,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-15 — Phase 58 Task Store + State Machine complete*
+*Last updated: 2026-04-17 — Phase 59 Cross-Agent RPC (Handoffs) complete*
