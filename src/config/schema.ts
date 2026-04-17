@@ -414,16 +414,89 @@ export const defaultsSchema = z.object({
     .optional(),
 });
 
+// ---------------------------------------------------------------------------
+// Phase 61 — Per-source trigger config schemas
+// ---------------------------------------------------------------------------
+
+/**
+ * MySQL DB-change polling trigger config (TRIG-02).
+ * Polls `SELECT ... WHERE id > ?` on a configurable table with committed-read
+ * confirmation to avoid phantom triggers from ROLLBACKed inserts.
+ */
+export const mysqlTriggerSourceSchema = z.object({
+  table: z.string().min(1),
+  idColumn: z.string().min(1).default("id"),
+  pollIntervalMs: z.number().int().positive().default(30_000),
+  targetAgent: z.string().min(1),
+  batchSize: z.number().int().positive().default(100),
+  filter: z.string().optional(),
+});
+export type MysqlTriggerSourceConfig = z.infer<typeof mysqlTriggerSourceSchema>;
+
+/**
+ * Webhook HTTP trigger config (TRIG-03).
+ * Accepts POST to `/webhook/<triggerId>` with HMAC-SHA256 signature verification.
+ */
+export const webhookTriggerSourceSchema = z.object({
+  triggerId: z.string().min(1),
+  secret: z.string().min(1),
+  targetAgent: z.string().min(1),
+  maxBodyBytes: z.number().int().positive().default(65_536),
+});
+export type WebhookTriggerSourceConfig = z.infer<typeof webhookTriggerSourceSchema>;
+
+/**
+ * Inbox filesystem trigger config (TRIG-04).
+ * Watches collaboration inbox directory via chokidar with awaitWriteFinish.
+ */
+export const inboxTriggerSourceSchema = z.object({
+  targetAgent: z.string().min(1),
+  stabilityThresholdMs: z.number().int().min(0).default(500),
+});
+export type InboxTriggerSourceConfig = z.infer<typeof inboxTriggerSourceSchema>;
+
+/**
+ * Google Calendar polling trigger config (TRIG-05).
+ * Polls upcoming events via MCP server and fires at configurable offsets.
+ */
+export const calendarTriggerSourceSchema = z.object({
+  user: z.string().min(1),
+  targetAgent: z.string().min(1),
+  calendarId: z.string().min(1).default("primary"),
+  pollIntervalMs: z.number().int().positive().default(300_000),
+  offsetMs: z.number().int().min(0).default(900_000),
+  maxResults: z.number().int().min(1).max(100).default(50),
+  mcpServer: z.string().min(1),
+  eventRetentionDays: z.number().int().positive().default(7),
+});
+export type CalendarTriggerSourceConfig = z.infer<typeof calendarTriggerSourceSchema>;
+
+/**
+ * Aggregate trigger sources config — optional object with arrays for each
+ * source type. Each array defaults to empty (source type disabled).
+ */
+export const triggerSourcesConfigSchema = z.object({
+  mysql: z.array(mysqlTriggerSourceSchema).default([]),
+  webhook: z.array(webhookTriggerSourceSchema).default([]),
+  inbox: z.array(inboxTriggerSourceSchema).default([]),
+  calendar: z.array(calendarTriggerSourceSchema).default([]),
+}).optional();
+export type TriggerSourcesConfig = z.infer<typeof triggerSourcesConfigSchema>;
+
 /**
  * Phase 60 — trigger engine configuration section.
  *
  * Lives at root level in clawcode.yaml under `triggers`. Optional — when
  * omitted, TriggerEngine uses the defaults from types.ts
  * (DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS).
+ *
+ * Phase 61 extends this with an optional `sources` sub-object containing
+ * per-source-type config arrays.
  */
 export const triggersConfigSchema = z.object({
   replayMaxAgeMs: z.number().int().positive().default(86400000),
   defaultDebounceMs: z.number().int().min(0).default(5000),
+  sources: triggerSourcesConfigSchema,
 }).optional();
 
 /** Inferred triggers config type. */
