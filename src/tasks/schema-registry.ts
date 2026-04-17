@@ -112,4 +112,15 @@ export class SchemaRegistry {
   names(): readonly string[] {
     return Object.freeze([...this.cache.keys()]);
   }
+
+  /**
+   * Test-only factory — builds a SchemaRegistry from pre-compiled entries
+   * without touching the filesystem. Plan 59-02 tests use this to avoid
+   * mkdtemp + YAML round-trips for every test case.
+   */
+  static fromEntries(entries: readonly CompiledSchema[]): SchemaRegistry {
+    const cache = new Map<string, CompiledSchema>();
+    for (const e of entries) cache.set(e.name, e);
+    return new SchemaRegistry(cache);
+  }
 }
