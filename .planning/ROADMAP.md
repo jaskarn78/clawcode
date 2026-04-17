@@ -192,7 +192,10 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   3. A peer-agent or external writer that drops a file into an agent's `collaboration/inbox/` fires that agent's turn immediately (via chokidar + `awaitWriteFinish`), strictly faster than the pre-v1.8 heartbeat-poll path (TRIG-04).
   4. A calendar event 15 minutes from its start time (or at its configured offset) fires the operator-chosen agent once — not every poll cycle — regardless of whether the source is the `google-workspace` MCP push channel, `events.list(syncToken)` incremental sweep, or an ICS URL (TRIG-05).
 
-**Plans**: [To be planned]
+**Plans**: 3 plans
+- [ ] 61-01-PLAN.md — Config schemas + MysqlSource + WebhookSource (Wave 1)
+- [ ] 61-02-PLAN.md — InboxSource + CalendarSource (Wave 2)
+- [ ] 61-03-PLAN.md — Daemon wiring + heartbeat inbox reconciler (Wave 3)
 
 ### Phase 62: Policy Layer + Dry-Run
 
@@ -252,6 +255,6 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
 | 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
-| 61. Additional Trigger Sources | 0/? | Not started | - |
+| 61. Additional Trigger Sources | 0/3 | Not started | - |
 | 62. Policy Layer + Dry-Run | 0/? | Not started | - |
 | 63. Observability Surfaces | 0/? | Not started | - |
