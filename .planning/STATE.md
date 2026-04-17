@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
 status: Ready to execute
-stopped_at: Completed 63-01-PLAN.md
-last_updated: "2026-04-17T19:34:00.000Z"
+stopped_at: Completed 63-03-PLAN.md
+last_updated: "2026-04-17T19:45:38.846Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
-  completed_phases: 2
-  total_plans: 9
-  completed_plans: 7
+  completed_phases: 7
+  total_plans: 21
+  completed_plans: 21
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 59 (cross-agent-rpc-handoffs) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -75,6 +75,8 @@ Recent decisions affecting current work:
 - [Phase 59-cross-agent-rpc-handoffs]: [Plan 59-01]: Handoff foundation landed — 6 typed errors + computeInputDigest (sha256 over canonicalStringify) + compileJsonSchema (hand-rolled ~100 LOC with HAND-06 .strict()) + SchemaRegistry (YAML loader, first-boot tolerant) + 4 pure authorize functions + MAX_PAYLOAD_BYTES=65536. 191 tests green (150 Phase 58 + 41 new). Zero new deps. src/tasks/ type-clean. Plans 59-02 + 59-03 unblocked.
 - [Phase 63]: Temporal proximity LEFT JOIN for trigger-to-task correlation (trigger_events lacks causation_id); formatTokenCount/formatDuration exported from triggers.ts for cross-CLI reuse
 - [Phase 63-observability-surfaces]: [Plan 63-01]: CLI commands landed — `clawcode triggers` (temporal proximity JOIN, color-coded table, --source/--agent/--json) + `clawcode tasks list` (read-only SQLite, --agent/--state/--json, chain_token_cost as human-readable). 38 tests passing. OBS-01 + OBS-02 + OBS-05 complete.
+- [Phase 63]: Cross-DB chain stitching: tasks.db for task rows + per-agent traces.db for turn rows, linked via causation_id LIKE query and parent_task_id/parentTurnId references
+- [Phase 63]: OBS-04 extraction: TurnOrigin.source.kind=trigger yields triggerId from source.id, kind=task yields taskId -- no new write-side columns needed
 
 ### Roadmap Evolution
 
@@ -103,5 +105,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 63-01-PLAN.md
+Stopped at: Completed 63-03-PLAN.md
 Resume file: None
