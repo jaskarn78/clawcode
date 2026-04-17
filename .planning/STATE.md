@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
 status: Ready to execute
-stopped_at: Completed 59-01-PLAN.md
-last_updated: "2026-04-15T23:18:34.606Z"
-last_activity: 2026-04-15
+stopped_at: Completed 63-01-PLAN.md
+last_updated: "2026-04-17T19:34:00.000Z"
+last_activity: 2026-04-17
 progress:
   total_phases: 7
   completed_phases: 2
@@ -73,6 +73,8 @@ Recent decisions affecting current work:
 - [Phase 58]: [Plan 58-02]: TaskStore SQLite persistence layer landed — 15 LIFE-02 fields + CHECK(depth>=0) + CHECK(status IN 8-value set), 4 covering indexes, idempotent CREATE-IF-NOT-EXISTS DDL, ORPHAN_THRESHOLD_MS_DEFAULT=5min. transition() asserts legality BEFORE UPDATE (LIFE-01 illegal-transition preserves row); markOrphaned() bypasses assertLegalTransition as reconciler escape hatch. 124 tests pass across src/tasks/__tests__/ (93 from 58-01 + 31 from 58-02). Plan 58-03 unblocked.
 - [Phase 58-task-store-state-machine]: [Plan 58-03]: Orphan reconciler + daemon TaskStore wiring landed — runStartupReconciliation pure function (95 lines, 9 tests), ORPHAN_THRESHOLD_MS=5min justified (5 missed 60s heartbeats), daemon.ts 4 surgical edits wiring taskStore as step 6-ter after TurnDispatcher and before EscalationBudget, reconciliation runs SYNCHRONOUSLY before SessionManager.startAll (LIFE-04 race guard), taskStore.close() in shutdown try/catch-wrapped AFTER manager.stopAll BEFORE socket unlink, taskStore: TaskStore exposed on startDaemon return — Phase 59 TaskManager can import without daemon.ts edits. 150 tests pass across Phase 58 suite. LIFE-01 + LIFE-04 proven. Phase 58 closed.
 - [Phase 59-cross-agent-rpc-handoffs]: [Plan 59-01]: Handoff foundation landed — 6 typed errors + computeInputDigest (sha256 over canonicalStringify) + compileJsonSchema (hand-rolled ~100 LOC with HAND-06 .strict()) + SchemaRegistry (YAML loader, first-boot tolerant) + 4 pure authorize functions + MAX_PAYLOAD_BYTES=65536. 191 tests green (150 Phase 58 + 41 new). Zero new deps. src/tasks/ type-clean. Plans 59-02 + 59-03 unblocked.
+- [Phase 63]: Temporal proximity LEFT JOIN for trigger-to-task correlation (trigger_events lacks causation_id); formatTokenCount/formatDuration exported from triggers.ts for cross-CLI reuse
+- [Phase 63-observability-surfaces]: [Plan 63-01]: CLI commands landed — `clawcode triggers` (temporal proximity JOIN, color-coded table, --source/--agent/--json) + `clawcode tasks list` (read-only SQLite, --agent/--state/--json, chain_token_cost as human-readable). 38 tests passing. OBS-01 + OBS-02 + OBS-05 complete.
 
 ### Roadmap Evolution
 
@@ -100,6 +102,6 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 
 ## Session Continuity
 
-Last activity: 2026-04-15
-Stopped at: Completed 59-01-PLAN.md
+Last activity: 2026-04-17
+Stopped at: Completed 63-01-PLAN.md
 Resume file: None
