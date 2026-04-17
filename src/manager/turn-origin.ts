@@ -48,6 +48,7 @@ export const TurnOriginSchema = z.object({
   rootTurnId: z.string().min(1),
   parentTurnId: z.string().min(1).nullable(),
   chain: z.array(z.string().min(1)).min(1),
+  causationId: z.string().nullable().default(null), // Phase 60 TRIG-08
 });
 
 export type TurnOrigin = z.infer<typeof TurnOriginSchema>;
@@ -80,6 +81,7 @@ export function makeRootOrigin(kind: SourceKind, sourceId: string): TurnOrigin {
     rootTurnId,
     parentTurnId: null,
     chain: Object.freeze([rootTurnId]),
+    causationId: null,
   }) as TurnOrigin;
 }
 
@@ -113,5 +115,29 @@ export function makeRootOriginWithTurnId(
     rootTurnId: turnId,
     parentTurnId: null,
     chain: Object.freeze([turnId]),
+    causationId: null,
+  }) as TurnOrigin;
+}
+
+/**
+ * Phase 60 TRIG-08: build a root TurnOrigin with a causation_id.
+ *
+ * Trigger-originated turns carry a nanoid causation_id born at ingress
+ * (TriggerEngine.ingest). The id flows through TurnOrigin -> trace row ->
+ * Phase 63 causation chain walker. Non-trigger origins leave this null
+ * (via makeRootOrigin / makeRootOriginWithTurnId).
+ */
+export function makeRootOriginWithCausation(
+  kind: SourceKind,
+  sourceId: string,
+  causationId: string,
+): TurnOrigin {
+  const rootTurnId = makeTurnId(kind);
+  return Object.freeze({
+    source: Object.freeze({ kind, id: sourceId }),
+    rootTurnId,
+    parentTurnId: null,
+    chain: Object.freeze([rootTurnId]),
+    causationId,
   }) as TurnOrigin;
 }

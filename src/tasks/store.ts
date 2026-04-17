@@ -67,6 +67,8 @@ type PreparedStatements = {
   readonly listStaleRunningStmt: Statement;
   readonly upsertTriggerStateStmt: Statement;
   readonly getTriggerStateStmt: Statement;
+  readonly purgeCompletedStmt: Statement;
+  readonly purgeTriggerEventsStmt: Statement;
 };
 
 /**
@@ -160,10 +162,19 @@ export class TaskStore {
         updated_at     INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS trigger_events (
+        source_id        TEXT NOT NULL,
+        idempotency_key  TEXT NOT NULL,
+        created_at       INTEGER NOT NULL,
+        UNIQUE(source_id, idempotency_key)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tasks_status_heartbeat ON tasks(status, heartbeat_at);
       CREATE INDEX IF NOT EXISTS idx_tasks_causation_id     ON tasks(causation_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_ended_at         ON tasks(ended_at);
       CREATE INDEX IF NOT EXISTS idx_tasks_caller_target    ON tasks(caller_agent, target_agent);
+      CREATE INDEX IF NOT EXISTS idx_trigger_events_created_at
+        ON trigger_events(created_at);
 
       COMMIT;
     `;
@@ -387,6 +398,36 @@ export class TaskStore {
   }
 
   /**
+   * LIFE-03 -- purge terminal task rows older than cutoffMs (epoch).
+   * Called by the task-retention heartbeat check (Phase 60).
+   * Returns number of rows deleted.
+   */
+  purgeCompleted(cutoffMs: number): number {
+    try {
+      const result = this.stmts.purgeCompletedStmt.run(cutoffMs);
+      return result.changes;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`purgeCompleted failed: ${msg}`, this.dbPath);
+    }
+  }
+
+  /**
+   * Purge trigger_events rows older than cutoffMs (epoch).
+   * Called alongside purgeCompleted on the retention heartbeat.
+   * Returns number of rows deleted.
+   */
+  purgeTriggerEvents(cutoffMs: number): number {
+    try {
+      const result = this.stmts.purgeTriggerEventsStmt.run(cutoffMs);
+      return result.changes;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TaskStoreError(`purgeTriggerEvents failed: ${msg}`, this.dbPath);
+    }
+  }
+
+  /**
    * Phase 59 -- narrow getter for subsystems that share the tasks.db handle
    * (e.g., PayloadStore). The returned Database MUST NOT be .close()d by
    * consumers -- TaskStore owns the lifecycle via its own close() method.
@@ -441,6 +482,14 @@ export class TaskStore {
       `),
       getTriggerStateStmt: this.db.prepare(`
         SELECT * FROM trigger_state WHERE source_id = ?
+      `),
+      purgeCompletedStmt: this.db.prepare(`
+        DELETE FROM tasks
+        WHERE status IN ('complete', 'failed', 'cancelled', 'timed_out', 'orphaned')
+          AND ended_at < ?
+      `),
+      purgeTriggerEventsStmt: this.db.prepare(`
+        DELETE FROM trigger_events WHERE created_at < ?
       `),
     };
   }

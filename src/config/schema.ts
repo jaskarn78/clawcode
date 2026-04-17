@@ -361,6 +361,7 @@ export const agentSchema = z.object({
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
+      taskRetentionDays: z.number().int().positive().default(7),
       slos: z.array(sloOverrideSchema).optional(),
       memoryAssemblyBudgets: memoryAssemblyBudgetsSchema.optional(),
       lazySkills: lazySkillsSchema.optional(),
@@ -402,6 +403,7 @@ export const defaultsSchema = z.object({
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
+      taskRetentionDays: z.number().int().positive().default(7),
       slos: z.array(sloOverrideSchema).optional(),
       memoryAssemblyBudgets: memoryAssemblyBudgetsSchema.optional(),
       lazySkills: lazySkillsSchema.optional(),
@@ -411,6 +413,21 @@ export const defaultsSchema = z.object({
     })
     .optional(),
 });
+
+/**
+ * Phase 60 — trigger engine configuration section.
+ *
+ * Lives at root level in clawcode.yaml under `triggers`. Optional — when
+ * omitted, TriggerEngine uses the defaults from types.ts
+ * (DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS).
+ */
+export const triggersConfigSchema = z.object({
+  replayMaxAgeMs: z.number().int().positive().default(86400000),
+  defaultDebounceMs: z.number().int().min(0).default(5000),
+}).optional();
+
+/** Inferred triggers config type. */
+export type TriggersConfig = z.infer<typeof triggersConfigSchema>;
 
 /**
  * Schema for optional Discord configuration.
@@ -449,6 +466,7 @@ export const configSchema = z.object({
     },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
+  triggers: triggersConfigSchema,
   agents: z.array(agentSchema).min(1),
 });
 

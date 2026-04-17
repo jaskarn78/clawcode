@@ -3,6 +3,7 @@ import {
   TurnOriginSchema,
   makeRootOrigin,
   makeRootOriginWithTurnId,
+  makeRootOriginWithCausation,
   makeTurnId,
   TURN_ID_REGEX,
   DISCORD_SNOWFLAKE_PREFIX,
@@ -11,14 +12,15 @@ import {
 
 describe("TurnOriginSchema", () => {
   it("round-trips a valid origin", () => {
-    const origin: TurnOrigin = {
-      source: { kind: "discord", id: "msg_123" },
+    const origin = {
+      source: { kind: "discord" as const, id: "msg_123" },
       rootTurnId: "discord:abc123XYZ0",
       parentTurnId: null,
       chain: ["discord:abc123XYZ0"],
     };
     const parsed = TurnOriginSchema.parse(origin);
-    expect(parsed).toEqual(origin);
+    // causationId defaults to null for backward compatibility (Phase 60 TRIG-08)
+    expect(parsed).toEqual({ ...origin, causationId: null });
   });
 
   it("rejects unknown source.kind", () => {
@@ -92,6 +94,11 @@ describe("makeRootOrigin", () => {
     expect(Object.isFrozen(origin.source)).toBe(true);
     expect(Object.isFrozen(origin.chain)).toBe(true);
   });
+
+  it("includes causationId: null by default (Phase 60 backward compat)", () => {
+    const origin = makeRootOrigin("discord", "msg_123");
+    expect(origin.causationId).toBeNull();
+  });
 });
 
 describe("makeTurnId", () => {
@@ -147,6 +154,30 @@ describe("makeRootOriginWithTurnId", () => {
 
   it("returns a deeply frozen origin (same invariants as makeRootOrigin)", () => {
     const origin = makeRootOriginWithTurnId("discord", "1234567890123456789", "discord:1234567890123456789");
+    expect(Object.isFrozen(origin)).toBe(true);
+    expect(Object.isFrozen(origin.source)).toBe(true);
+    expect(Object.isFrozen(origin.chain)).toBe(true);
+  });
+});
+
+describe("makeRootOriginWithCausation", () => {
+  it("produces a trigger-kind origin with non-null causationId", () => {
+    const origin = makeRootOriginWithCausation("trigger", "cron-daily", "abc123");
+    expect(origin.source).toEqual({ kind: "trigger", id: "cron-daily" });
+    expect(origin.rootTurnId).toMatch(/^trigger:[a-zA-Z0-9_-]{10,}$/);
+    expect(origin.parentTurnId).toBeNull();
+    expect(origin.chain).toEqual([origin.rootTurnId]);
+    expect(origin.causationId).toBe("abc123");
+  });
+
+  it("passes TurnOriginSchema validation with causationId set", () => {
+    const origin = makeRootOriginWithCausation("trigger", "webhook-src", "xyz789");
+    const parsed = TurnOriginSchema.parse(origin);
+    expect(parsed.causationId).toBe("xyz789");
+  });
+
+  it("returns a deeply frozen origin", () => {
+    const origin = makeRootOriginWithCausation("trigger", "x", "cid");
     expect(Object.isFrozen(origin)).toBe(true);
     expect(Object.isFrozen(origin.source)).toBe(true);
     expect(Object.isFrozen(origin.chain)).toBe(true);
