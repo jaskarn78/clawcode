@@ -309,7 +309,9 @@ describe("TaskManager", () => {
       expect(row!.depth).toBe(0);
       expect(row!.input_digest).toBe(computeInputDigest({ topic: "AI safety", depth: 3 }));
       expect(row!.started_at).toBe(mockedNow);
-      expect(row!.heartbeat_at).toBe(mockedNow);
+      // heartbeat_at is refreshed by TaskStore.transition(pending->running) using
+      // Date.now() internally; just verify it's populated and recent.
+      expect(row!.heartbeat_at).toBeGreaterThanOrEqual(mockedNow);
       expect(row!.error).toBeNull();
       expect(row!.ended_at).toBeNull();
       expect(row!.result_digest).toBeNull();
@@ -367,17 +369,42 @@ describe("TaskManager", () => {
     });
 
     it("Test 16 (HAND-03): nested task inherits parent deadline", async () => {
+      // Use a third agent (agent-C) for the child to avoid cycle detection.
+      // Parent: A -> B. Child: B -> C. (C must not appear in parent chain.)
+      const getConfig = (name: string) => {
+        const configs: Record<string, { name: string; model: "sonnet" | "opus" | "haiku"; acceptsTasks: Record<string, string[]> }> = {
+          "agent-A": { name: "agent-A", model: "sonnet", acceptsTasks: {} },
+          "agent-B": { name: "agent-B", model: "sonnet", acceptsTasks: { "research.brief": ["agent-A"] } },
+          "agent-C": { name: "agent-C", model: "sonnet", acceptsTasks: { "research.brief": ["agent-B"] } },
+        };
+        return configs[name] ?? null;
+      };
+      const mgr = new TaskManager({
+        store,
+        turnDispatcher: dispatcher,
+        schemaRegistry: registry,
+        escalationBudget: budget,
+        getAgentConfig: getConfig,
+        getStoredPayload: (id: string) => payloadStore.get(id) ?? null,
+        getStoredResult: (id: string) => resultStore.get(id) ?? null,
+        storePayload: (id: string, p: unknown) => { payloadStore.set(id, p); },
+        storeResult: (id: string, r: unknown) => { resultStore.set(id, r); },
+        now: () => mockedNow,
+      });
+
       const parentDeadline = mockedNow + 200;
-      const parentResult = await manager.delegate(
+      const parentResult = await mgr.delegate(
         validRequest({ deadline_ms: parentDeadline }),
       );
 
-      // Nested delegate inherits parent's deadline (no explicit deadline_ms)
-      const childResult = await manager.delegate(
-        validRequest({
-          parentTaskId: parentResult.task_id,
-        }),
-      );
+      // Nested delegate: B delegates to C, inherits parent's deadline
+      const childResult = await mgr.delegate({
+        caller: "agent-B",
+        target: "agent-C",
+        schema: "research.brief",
+        payload: { topic: "nested work", depth: 2 },
+        parentTaskId: parentResult.task_id,
+      });
 
       // Advance past the inherited deadline
       vi.advanceTimersByTime(250);
