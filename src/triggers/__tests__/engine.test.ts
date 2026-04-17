@@ -252,17 +252,13 @@ describe("TriggerEngine", () => {
     const source = makeFakeSource("poll-src", { poll: true });
     engine.registerSource(source);
 
-    // Seed a watermark
-    taskStore.getTriggerState.mockReturnValueOnce({
-      source_id: "poll-src",
-      last_watermark: "999",
-      cursor_blob: null,
-      updated_at: Date.now(),
-    });
+    // Seed a watermark — must be recent enough to pass maxAge check
+    const recentWatermark = String(Date.now() - 1000); // 1 second ago
+    taskStore.upsertTriggerState("poll-src", recentWatermark, null);
 
     await engine.replayMissed();
 
-    expect(source.pollFn).toHaveBeenCalledWith("999");
+    expect(source.pollFn).toHaveBeenCalledWith(recentWatermark);
   });
 
   it("replayMissed skips sources without poll method", async () => {
