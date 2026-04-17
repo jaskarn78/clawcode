@@ -194,7 +194,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [x] 61-01-PLAN.md — Config schemas + MysqlSource + WebhookSource (Wave 1)
-- [ ] 61-02-PLAN.md — InboxSource + CalendarSource (Wave 2)
+- [x] 61-02-PLAN.md — InboxSource + CalendarSource (Wave 2)
 - [ ] 61-03-PLAN.md — Daemon wiring + heartbeat inbox reconciler (Wave 3)
 
 ### Phase 62: Policy Layer + Dry-Run
@@ -255,6 +255,6 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
 | 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
-| 61. Additional Trigger Sources | 1/3 | In Progress|  |
+| 61. Additional Trigger Sources | 2/3 | In Progress|  |
 | 62. Policy Layer + Dry-Run | 0/? | Not started | - |
 | 63. Observability Surfaces | 0/? | Not started | - |

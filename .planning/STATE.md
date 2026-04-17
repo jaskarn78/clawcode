@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
 status: Ready to execute
-stopped_at: Completed 61-01-PLAN.md
-last_updated: "2026-04-17T17:05:19.568Z"
+stopped_at: Completed 61-02-PLAN.md
+last_updated: "2026-04-17T17:17:23.747Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 61 (additional-trigger-sources) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -88,6 +88,8 @@ Recent decisions affecting current work:
 - [Phase 61-additional-trigger-sources]: MysqlSource uses committed-read confirmation to prevent phantom triggers from ROLLBACKed rows
 - [Phase 61-additional-trigger-sources]: WebhookSource idempotency keys: SHA-256 of raw body bytes for content-addressed dedup, X-Webhook-ID header when present
 - [Phase 61-additional-trigger-sources]: Webhook handler buffers raw body BEFORE HMAC verification and passes raw bytes to WebhookSource for stable hash derivation
+- [Phase 61]: CalendarSource cursor_blob uses Map entries tuple format ([eventId, endTimeMs][]) for lossless round-trip with retention pruning data
+- [Phase 61]: Push channel renewal dropped from CalendarSource -- google-workspace MCP server has no push API; time-window polling with fired-ID dedup is sole delivery mechanism
 
 ### Roadmap Evolution
 
@@ -116,5 +118,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 61-01-PLAN.md
+Stopped at: Completed 61-02-PLAN.md
 Resume file: None
