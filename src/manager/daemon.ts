@@ -36,6 +36,9 @@ import { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { CheckStatus } from "../heartbeat/types.js";
 import type { ContextZone, ZoneTransition } from "../heartbeat/context-zones.js";
 import { TaskScheduler } from "../scheduler/scheduler.js";
+import { TriggerEngine } from "../triggers/engine.js";
+import { SchedulerSource } from "../triggers/scheduler-source.js";
+import { DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, DEFAULT_DEDUP_LRU_SIZE } from "../triggers/types.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
@@ -559,6 +562,102 @@ export async function startDaemon(
   });
   log.info({ schemaCount: taskManager.schemaCount }, "TaskManager initialized");
 
+  // 6-quinquies-a. Create TaskScheduler (moved from step 8b — Phase 60).
+  // TaskScheduler only needs sessionManager + turnDispatcher + log,
+  // all available since step 6-bis. Moved earlier so SchedulerSource
+  // can wrap it before HeartbeatRunner starts.
+  // IMPORTANT: Only handler-based schedules go through TaskScheduler directly.
+  // Prompt-based schedules are routed through SchedulerSource -> TriggerEngine.
+  const taskScheduler = new TaskScheduler({
+    sessionManager: manager,
+    turnDispatcher,
+    log,
+  });
+  for (const agentConfig of resolvedAgents) {
+    const handlerSchedules: ScheduleEntry[] = [];
+
+    // Inject consolidation schedule if enabled (Phase 46) — handler-based
+    const consolidationConfig = agentConfig.memory?.consolidation ?? {
+      enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *",
+    };
+    if (consolidationConfig.enabled) {
+      const memoryStore = manager.getMemoryStore(agentConfig.name);
+      const embedder = manager.getEmbedder();
+      const memoryDir = join(agentConfig.workspace, "memory");
+
+      handlerSchedules.push({
+        name: "memory-consolidation",
+        cron: consolidationConfig.schedule ?? "0 3 * * *",
+        enabled: true,
+        handler: async () => {
+          if (!memoryStore) return;
+          const deps = {
+            memoryDir,
+            memoryStore,
+            embedder,
+            summarize: (prompt: string) => manager.sendToAgent(agentConfig.name, prompt),
+          };
+          await runConsolidation(deps, consolidationConfig);
+        },
+      });
+    }
+
+    // Only add handler-based schedules to TaskScheduler (those with a handler)
+    for (const schedule of agentConfig.schedules) {
+      if (schedule.enabled && schedule.handler) {
+        handlerSchedules.push(schedule);
+      }
+    }
+
+    if (handlerSchedules.length > 0) {
+      taskScheduler.addAgent(agentConfig.name, handlerSchedules);
+    }
+  }
+  log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0 || a.memory?.consolidation?.enabled !== false).length }, "task scheduler initialized (handler-based schedules)");
+
+  // 6-quinquies-b. Create TriggerEngine singleton (Phase 60).
+  // Depends on: turnDispatcher (6-bis), taskStore (6-ter), taskScheduler (6-quinquies-a).
+  // The engine owns all non-Discord turn initiation. SchedulerSource is
+  // the first registered source — replaces the direct TurnDispatcher path
+  // that TaskScheduler previously used for prompt-based schedules.
+  const configuredAgentNames = new Set(resolvedAgents.map(a => a.name));
+  const triggerEngine = new TriggerEngine(
+    {
+      turnDispatcher,
+      taskStore,
+      log,
+      config: {
+        replayMaxAgeMs: config.triggers?.replayMaxAgeMs ?? DEFAULT_REPLAY_MAX_AGE_MS,
+        dedupLruSize: DEFAULT_DEDUP_LRU_SIZE,
+        defaultDebounceMs: config.triggers?.defaultDebounceMs ?? DEFAULT_DEBOUNCE_MS,
+      },
+    },
+    configuredAgentNames,
+  );
+
+  // Register SchedulerSource adapter for prompt-based cron schedules.
+  const schedulerSource = new SchedulerSource({
+    resolvedAgents,
+    sessionManager: manager,
+    turnDispatcher,
+    ingest: (event) => triggerEngine.ingest(event),
+    log,
+  });
+  triggerEngine.registerSource(schedulerSource);
+
+  // Replay missed events from last watermarks (TRIG-06).
+  // Runs SYNCHRONOUSLY before agent startAll so missed triggers
+  // fire before new cron ticks begin.
+  await triggerEngine.replayMissed();
+
+  // Start all trigger sources (fires cron jobs).
+  triggerEngine.startAll();
+
+  log.info(
+    { sources: triggerEngine.registry.size },
+    "TriggerEngine initialized with sources",
+  );
+
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
 
@@ -610,46 +709,7 @@ export async function startDaemon(
   heartbeatRunner.start();
   log.info({ checks: "discovered", interval: heartbeatConfig.intervalSeconds }, "heartbeat started");
 
-  // 8b. Initialize task scheduler (per D-08, D-10)
-  const taskScheduler = new TaskScheduler({
-    sessionManager: manager,
-    turnDispatcher,
-    log,
-  });
-  for (const agentConfig of resolvedAgents) {
-    const schedules: ScheduleEntry[] = [...agentConfig.schedules];
-
-    // Inject consolidation schedule if enabled (Phase 46)
-    const consolidationConfig = agentConfig.memory?.consolidation ?? {
-      enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *",
-    };
-    if (consolidationConfig.enabled) {
-      const memoryStore = manager.getMemoryStore(agentConfig.name);
-      const embedder = manager.getEmbedder();
-      const memoryDir = join(agentConfig.workspace, "memory");
-
-      schedules.push({
-        name: "memory-consolidation",
-        cron: consolidationConfig.schedule ?? "0 3 * * *",
-        enabled: true,
-        handler: async () => {
-          if (!memoryStore) return;
-          const deps = {
-            memoryDir,
-            memoryStore,
-            embedder,
-            summarize: (prompt: string) => manager.sendToAgent(agentConfig.name, prompt),
-          };
-          await runConsolidation(deps, consolidationConfig);
-        },
-      });
-    }
-
-    if (schedules.length > 0) {
-      taskScheduler.addAgent(agentConfig.name, schedules);
-    }
-  }
-  log.info({ agents: resolvedAgents.filter(a => a.schedules.length > 0 || a.memory?.consolidation?.enabled !== false).length }, "task scheduler initialized");
+  // 8b. (Moved to step 6-quinquies-a — Phase 60)
 
   // 8c. Create ThreadManager for Discord thread session lifecycle
   const threadManager = new ThreadManager({
@@ -659,6 +719,7 @@ export async function startDaemon(
     log,
   });
   heartbeatRunner.setThreadManager(threadManager);
+  heartbeatRunner.setTaskStore(taskStore);
   log.info("thread manager initialized");
 
   // 8d. Build manual webhook identities (from config webhookUrl fields)
@@ -945,7 +1006,8 @@ export async function startDaemon(
       await discordBridge.stop();
     }
     await slashHandler.stop();
-    taskScheduler.stop();
+    triggerEngine.stopAll(); // Stop trigger sources (clears debounce timers)
+    taskScheduler.stop();    // Stop handler-based cron jobs
     heartbeatRunner.stop();
     dailySummaryCron.stop();
     // Clean up all subagent thread bindings before stopping agents
@@ -998,7 +1060,7 @@ export async function startDaemon(
 
   // TaskManager owns no external resources (inflight timers .unref()'d,
   // db handle owned by TaskStore via PayloadStore). No explicit shutdown needed.
-  return { server, manager, taskStore, taskManager, payloadStore, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
+  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
