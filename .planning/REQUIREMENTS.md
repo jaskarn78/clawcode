@@ -14,9 +14,9 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 
 ### Trigger Engine (TRIG)
 
-- [ ] **TRIG-01**: Scheduled triggers fire agent turns on cron expressions with a rich context payload (not just a prompt string) — extends v1.6 TaskScheduler
-- [ ] **TRIG-02**: DB-change triggers poll a configurable MySQL SELECT with a `last_seen_id` watermark and fire on new rows matching a filter (Finmentum `pipeline_clients` primary target)
-- [ ] **TRIG-03**: Webhook triggers accept inbound HTTP POST on a dedicated endpoint, verify HMAC signature per source, dispatch to configured agent
+- [x] **TRIG-01**: Scheduled triggers fire agent turns on cron expressions with a rich context payload (not just a prompt string) — extends v1.6 TaskScheduler
+- [x] **TRIG-02**: DB-change triggers poll a configurable MySQL SELECT with a `last_seen_id` watermark and fire on new rows matching a filter (Finmentum `pipeline_clients` primary target)
+- [x] **TRIG-03**: Webhook triggers accept inbound HTTP POST on a dedicated endpoint, verify HMAC signature per source, dispatch to configured agent
 - [ ] **TRIG-04**: Inbox-arrival triggers fire immediately on write to the existing `collaboration/inbox` filesystem inbox (upgrade from heartbeat polling)
 - [ ] **TRIG-05**: Calendar triggers poll upcoming events via the existing `google-workspace` MCP and fire at configurable offsets (e.g., 15 min before event start)
 - [x] **TRIG-06**: Daemon startup replays missed events since last watermark with a configurable max age (default 24h) so triggers are not lost across restarts
@@ -44,7 +44,7 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 
 - [x] **LIFE-01**: Daemon-level `tasks.db` SQLite store (shared, not per-agent) tracks every inter-agent task and proactive turn with states: pending | running | awaiting_input | complete | failed | cancelled | timed_out
 - [x] **LIFE-02**: Task rows include: task_id, task_type, caller_agent, target_agent, causation_id (root trigger id), parent_task_id (nullable), depth, input_digest (hash, not raw), status, started_at, ended_at, heartbeat_at, result_digest, error, chain_token_cost
-- [ ] **LIFE-03**: Task retention defaults to 7 days matching traces.db convention; configurable via `perf.taskRetentionDays`
+- [x] **LIFE-03**: Task retention defaults to 7 days matching traces.db convention; configurable via `perf.taskRetentionDays`
 - [x] **LIFE-04**: Orphaned task reconciliation — tasks with heartbeat_at older than threshold at daemon start are marked `orphaned` (not left running forever)
 - [x] **LIFE-05**: Cost attribution — handoff token usage counts against the calling agent's budget by default; per-task override available
 - [x] **LIFE-06**: Retry — failed tasks can be re-run idempotently with the same input against the same receiver via a CLI command and (future) auto-retry policy
