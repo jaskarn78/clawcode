@@ -79,7 +79,7 @@ describe("TaskScheduler", () => {
     // SessionManager's getTraceCollector returns undefined. Pre-v1.8 this
     // test asserted a 2-arg call; the 3-arg shape is equivalent behavior
     // (turn=undefined ≡ no tracing) — the assertion is rewritten to match.
-    expect(sessionManager.sendToAgent).toHaveBeenCalledWith("alice", "Generate daily report", undefined);
+    expect(sessionManager.sendToAgent).toHaveBeenCalledWith("alice", "Generate daily report", undefined, { signal: undefined });
   });
 
   it("failed sendToAgent records error status but scheduler continues", async () => {

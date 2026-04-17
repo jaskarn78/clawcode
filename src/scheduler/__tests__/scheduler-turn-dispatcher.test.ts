@@ -63,6 +63,7 @@ describe("Phase 57 Plan 03 — Scheduler turn origin persistence", () => {
         "alice",
         "Generate report",
         expect.objectContaining({ id: row.id }),
+        { signal: undefined },
       );
 
       store.close();
