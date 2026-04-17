@@ -13,7 +13,7 @@ import type { InboxMessage } from "../../../collaboration/types.js";
 // Mock chokidar
 // ---------------------------------------------------------------------------
 
-type ChokidarAddCallback = (path: string) => void;
+type ChokidarAddCallback = (path: string) => Promise<void>;
 
 const mockWatcher = {
   on: vi.fn().mockReturnThis(),
