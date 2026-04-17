@@ -5,6 +5,7 @@ import type { SessionManager } from "../manager/session-manager.js";
 import type { Registry } from "../manager/types.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
+import type { TaskStore } from "../tasks/store.js";
 import type {
   CheckModule,
   CheckContext,
@@ -70,6 +71,7 @@ export class HeartbeatRunner {
   private readonly agentConfigs: Map<string, ResolvedAgentConfig> = new Map();
   private readonly zoneTrackers: Map<string, ContextZoneTracker> = new Map();
   private threadManager: ThreadManager | undefined;
+  private taskStore: TaskStore | undefined;
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -106,6 +108,14 @@ export class HeartbeatRunner {
    */
   setThreadManager(tm: ThreadManager): void {
     this.threadManager = tm;
+  }
+
+  /**
+   * Set the TaskStore reference for task-retention check context injection.
+   * Phase 60 Plan 03 — mirrors the setThreadManager pattern.
+   */
+  setTaskStore(store: TaskStore): void {
+    this.taskStore = store;
   }
 
   /**
@@ -182,6 +192,7 @@ export class HeartbeatRunner {
           registry,
           config: this.config,
           ...(this.threadManager ? { threadManager: this.threadManager } : {}),
+          ...(this.taskStore ? { taskStore: this.taskStore } : {}),
         };
 
         const timeoutMs = (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;
