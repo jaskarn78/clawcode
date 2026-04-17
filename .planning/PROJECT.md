@@ -111,7 +111,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 v1.0-v1.7 delivered 56 phases across 8 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, and end-to-end performance + latency optimizations.
 
-**v1.8 progress:** Phase 61 Additional Trigger Sources complete — MySQL polling, webhook HMAC, chokidar inbox, calendar MCP sources all wired into TriggerEngine. Phases 57-60 also complete.
+**v1.8 progress:** Phase 62 Policy Layer + Dry-Run complete — declarative YAML policies, hot-reload, JSONL audit trail, dry-run CLI. Phases 57-61 also complete. One phase remaining (63 Observability).
 
 ## Context
 
@@ -165,4 +165,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-17 — Phase 61 Additional Trigger Sources complete*
+*Last updated: 2026-04-17 — Phase 62 Policy Layer + Dry-Run complete*
