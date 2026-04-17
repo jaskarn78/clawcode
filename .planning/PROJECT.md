@@ -111,7 +111,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 v1.0-v1.7 delivered 56 phases across 8 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, and end-to-end performance + latency optimizations.
 
-**v1.8 progress:** Phase 59 Cross-Agent RPC (Handoffs) complete — agents can delegate typed tasks to each other via MCP tools with schema validation, authorization, cycle detection, deadline propagation, cost attribution, and manual retry.
+**v1.8 progress:** Phase 60 Trigger Engine Foundation complete — TriggerEngine + 3-layer dedup + SchedulerSource adapter + causation_id propagation + task retention. Phase 59 Cross-Agent RPC (Handoffs) also complete.
 
 ## Context
 
@@ -165,4 +165,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-17 — Phase 59 Cross-Agent RPC (Handoffs) complete*
+*Last updated: 2026-04-17 — Phase 60 Trigger Engine Foundation complete*
