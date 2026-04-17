@@ -51,11 +51,11 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 
 ### Observability (OBS)
 
-- [ ] **OBS-01**: `clawcode triggers` CLI lists recent trigger fires with source, matched rule, target agent, result, duration
-- [ ] **OBS-02**: `clawcode tasks` CLI lists recent inter-agent tasks with caller, target, state, duration, depth — filterable by agent + state
+- [x] **OBS-01**: `clawcode triggers` CLI lists recent trigger fires with source, matched rule, target agent, result, duration
+- [x] **OBS-02**: `clawcode tasks` CLI lists recent inter-agent tasks with caller, target, state, duration, depth — filterable by agent + state
 - [x] **OBS-03**: Dashboard panel shows in-flight inter-agent task graph (nodes = agents, edges = tasks) with real-time updates via SSE
 - [ ] **OBS-04**: Proactive turns and delegated task turns appear in the existing v1.7 trace tree with `causation_id`, `trigger_id`, and `task_id` metadata on the root span; `clawcode trace <causation_id>` CLI walks the entire chain (source event → trigger → turn → handoff → turn → ... → final result) across all involved agents
-- [ ] **OBS-05**: Handoff chain cumulative token count is visible in the task list output and in the trace metadata
+- [x] **OBS-05**: Handoff chain cumulative token count is visible in the task list output and in the trace metadata
 
 ## Future Requirements
 
