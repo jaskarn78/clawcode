@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
 status: Ready to execute
-stopped_at: Completed 63-02-PLAN.md
-last_updated: "2026-04-17T19:31:50.148Z"
+stopped_at: Completed 63-01-PLAN.md
+last_updated: "2026-04-17T19:34:00.000Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
-  completed_phases: 6
-  total_plans: 21
-  completed_plans: 19
+  completed_phases: 2
+  total_plans: 9
+  completed_plans: 7
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 63 — observability-surfaces
+**Current focus:** Phase 59 — cross-agent-rpc-handoffs
 
 ## Current Position
 
-Phase: 63 (observability-surfaces) — EXECUTING
-Plan: 3 of 3
+Phase: 59 (cross-agent-rpc-handoffs) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -73,34 +73,8 @@ Recent decisions affecting current work:
 - [Phase 58]: [Plan 58-02]: TaskStore SQLite persistence layer landed — 15 LIFE-02 fields + CHECK(depth>=0) + CHECK(status IN 8-value set), 4 covering indexes, idempotent CREATE-IF-NOT-EXISTS DDL, ORPHAN_THRESHOLD_MS_DEFAULT=5min. transition() asserts legality BEFORE UPDATE (LIFE-01 illegal-transition preserves row); markOrphaned() bypasses assertLegalTransition as reconciler escape hatch. 124 tests pass across src/tasks/__tests__/ (93 from 58-01 + 31 from 58-02). Plan 58-03 unblocked.
 - [Phase 58-task-store-state-machine]: [Plan 58-03]: Orphan reconciler + daemon TaskStore wiring landed — runStartupReconciliation pure function (95 lines, 9 tests), ORPHAN_THRESHOLD_MS=5min justified (5 missed 60s heartbeats), daemon.ts 4 surgical edits wiring taskStore as step 6-ter after TurnDispatcher and before EscalationBudget, reconciliation runs SYNCHRONOUSLY before SessionManager.startAll (LIFE-04 race guard), taskStore.close() in shutdown try/catch-wrapped AFTER manager.stopAll BEFORE socket unlink, taskStore: TaskStore exposed on startDaemon return — Phase 59 TaskManager can import without daemon.ts edits. 150 tests pass across Phase 58 suite. LIFE-01 + LIFE-04 proven. Phase 58 closed.
 - [Phase 59-cross-agent-rpc-handoffs]: [Plan 59-01]: Handoff foundation landed — 6 typed errors + computeInputDigest (sha256 over canonicalStringify) + compileJsonSchema (hand-rolled ~100 LOC with HAND-06 .strict()) + SchemaRegistry (YAML loader, first-boot tolerant) + 4 pure authorize functions + MAX_PAYLOAD_BYTES=65536. 191 tests green (150 Phase 58 + 41 new). Zero new deps. src/tasks/ type-clean. Plans 59-02 + 59-03 unblocked.
-- [Phase 59]: TaskManager is the ONLY stateful class in Phase 59 -- all handoff correctness lives here with pure helpers in Plan 59-01. DispatchOptions.signal cast in 59-02; 59-03 extends the type properly.
-- [Phase 59]: PayloadStore shares tasks.db via TaskStore.rawDb getter -- single-writer invariant preserved, no lifecycle change
-- [Phase 59]: AbortSignal bridged to AbortController via addEventListener('abort') per SDK native support (Pitfall 4 resolved)
-- [Phase 59]: E2E test proves ROADMAP criteria 1-5 via TaskManager integration (not full daemon) -- acceptable scope boundary
-- [Phase 60]: LruMap hand-rolled (~40 LOC) instead of npm dep -- 10K entries trivial, no dependency warranted
-- [Phase 60]: DedupLayer owns its own trigger_events DDL rather than extending TaskStore.ensureSchema -- self-contained for in-memory DB testing
-- [Phase 60]: PolicyEvaluator is a pure function (not a class) -- TriggerEvent-in, PolicyResult-out is the stable contract Phase 62 replaces
-- [Phase 60]: causationId uses z.string().nullable().default(null) for backward-compatible TurnOrigin extension (Phase 60 TRIG-08)
-- [Phase 60]: TriggerEngine creates own DedupLayer from TaskStore.rawDb -- dedup lifecycle is engine-internal, not injected
-- [Phase 60]: trigger_events DDL in both DedupLayer (test isolation) and TaskStore.ensureSchema (daemon lifecycle) -- CREATE IF NOT EXISTS makes this safe
-- [Phase 60]: SchedulerSource creates own Cron jobs for prompt-based schedules instead of wrapping TaskScheduler — handler schedules stay on TaskScheduler directly
-- [Phase 60]: task-retention heartbeat runs only on first agent per cycle (tasks.db is daemon-scoped), trigger_events purge window = 2x replayMaxAgeMs (48h default)
-- [Phase 61-additional-trigger-sources]: MysqlSource uses committed-read confirmation to prevent phantom triggers from ROLLBACKed rows
-- [Phase 61-additional-trigger-sources]: WebhookSource idempotency keys: SHA-256 of raw body bytes for content-addressed dedup, X-Webhook-ID header when present
-- [Phase 61-additional-trigger-sources]: Webhook handler buffers raw body BEFORE HMAC verification and passes raw bytes to WebhookSource for stable hash derivation
-- [Phase 61]: CalendarSource cursor_blob uses Map entries tuple format ([eventId, endTimeMs][]) for lossless round-trip with retention pruning data
-- [Phase 61]: Push channel renewal dropped from CalendarSource -- google-workspace MCP server has no push API; time-window polling with fired-ID dedup is sole delivery mechanism
-- [Phase 61]: mysql2 pool guarded by env vars (MYSQL_HOST/USER/DATABASE), pool size 2, created only when mysql sources configured
-- [Phase 61]: Webhook handler routes through WebhookSource.handleHttp for stable idempotency keys (SHA-256 of raw body or X-Webhook-ID header)
-- [Phase 61]: Heartbeat inbox check uses 120s staleness threshold in reconciler mode (2x default 60s heartbeat interval)
-- [Phase 62]: PolicyEvaluator class replaces Phase 60 pure function with stateful DSL-aware evaluator (glob source matching, throttle, priority, Handlebars rendering) — backward-compatible wrapper preserved
-- [Phase 62]: trigger_events table extended with source_kind + payload columns via idempotent ALTER TABLE (both TaskStore and DedupLayer) for dry-run replay in Plan 62-03
-- [Phase 62]: Dry-run uses permissive agent set (all rule targets) so output shows what WOULD happen, not filtered by daemon config
-- [Phase 62]: Read-only SQLite + fileMustExist guards for CLI commands that bypass daemon
-- [Phase 62]: PolicyEvaluator injected as optional 3rd constructor arg to TriggerEngine — backward-compatible fallback to legacy evaluatePolicy wrapper
-- [Phase 62]: Boot-time policy load runs BEFORE TriggerEngine construction — invalid policy blocks daemon via ManagerError wrapping PolicyValidationError
-- [Phase 63]: routeMethod receives taskStore as explicit parameter for list-tasks SQL query (Phase 63 OBS-03)
-- [Phase 63]: Vanilla JS + SVG force-directed layout (no D3) for task graph -- O(n^2) acceptable for <15 agent nodes
+- [Phase 63]: Temporal proximity LEFT JOIN for trigger-to-task correlation (trigger_events lacks causation_id); formatTokenCount/formatDuration exported from triggers.ts for cross-CLI reuse
+- [Phase 63-observability-surfaces]: [Plan 63-01]: CLI commands landed — `clawcode triggers` (temporal proximity JOIN, color-coded table, --source/--agent/--json) + `clawcode tasks list` (read-only SQLite, --agent/--state/--json, chain_token_cost as human-readable). 38 tests passing. OBS-01 + OBS-02 + OBS-05 complete.
 
 ### Roadmap Evolution
 
@@ -129,5 +103,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 63-02-PLAN.md
+Stopped at: Completed 63-01-PLAN.md
 Resume file: None
