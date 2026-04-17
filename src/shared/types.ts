@@ -80,6 +80,7 @@ export type ResolvedAgentConfig = {
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;
   }[];
+  readonly acceptsTasks?: Readonly<Record<string, readonly string[]>>;  // Phase 59
   readonly escalationBudget?: {
     readonly daily?: {
       readonly sonnet?: number;

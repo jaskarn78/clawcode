@@ -386,6 +386,15 @@ export class TaskStore {
     }
   }
 
+  /**
+   * Phase 59 -- narrow getter for subsystems that share the tasks.db handle
+   * (e.g., PayloadStore). The returned Database MUST NOT be .close()d by
+   * consumers -- TaskStore owns the lifecycle via its own close() method.
+   */
+  public get rawDb(): DatabaseType {
+    return this.db;
+  }
+
   /** Release the underlying SQLite handle. Subsequent calls throw. */
   close(): void {
     this.db.close();

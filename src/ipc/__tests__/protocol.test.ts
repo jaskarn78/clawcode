@@ -75,6 +75,12 @@ describe("IPC_METHODS", () => {
       "list-documents",
       // Agent provisioning
       "agent-create",
+      // Cross-agent RPC / handoffs (Phase 59)
+      "delegate-task",
+      "task-status",
+      "cancel-task",
+      "task-complete",
+      "task-retry",
     ]);
   });
 });

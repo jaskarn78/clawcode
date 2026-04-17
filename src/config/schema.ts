@@ -344,6 +344,9 @@ export const agentSchema = z.object({
   reactions: z.boolean().default(true),
   security: securityConfigSchema.optional(),
   mcpServers: z.array(z.union([mcpServerSchema, z.string()])).default([]),
+  acceptsTasks: z                      // Phase 59 HAND-04
+    .record(z.string().min(1), z.array(z.string().min(1)))
+    .optional(),
   contextBudgets: contextBudgetsSchema.optional(),
   escalationBudget: z.object({
     daily: z.object({
