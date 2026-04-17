@@ -69,11 +69,14 @@ export type UsageCallback = (data: {
  * iteration loop. The handle NEVER calls `turn.end()` — turn lifecycle is
  * caller-owned (DiscordBridge / Scheduler, wired in 50-02b).
  */
+/** Phase 59 -- optional signal bag threaded through send variants. */
+export type SendOptions = { readonly signal?: AbortSignal };
+
 export type SessionHandle = {
   readonly sessionId: string;
-  send: (message: string, turn?: Turn) => Promise<void>;
-  sendAndCollect: (message: string, turn?: Turn) => Promise<string>;
-  sendAndStream: (message: string, onChunk: (accumulated: string) => void, turn?: Turn) => Promise<string>;
+  send: (message: string, turn?: Turn, options?: SendOptions) => Promise<void>;
+  sendAndCollect: (message: string, turn?: Turn, options?: SendOptions) => Promise<string>;
+  sendAndStream: (message: string, onChunk: (accumulated: string) => void, turn?: Turn, options?: SendOptions) => Promise<string>;
   close: () => Promise<void>;
   onError: (handler: (error: Error) => void) => void;
   onEnd: (handler: () => void) => void;
@@ -125,15 +128,25 @@ export class MockSessionHandle implements SessionHandle {
     this.sessionId = sessionId;
   }
 
-  async send(_message: string, _turn?: Turn): Promise<void> {
+  async send(_message: string, _turn?: Turn, _options?: SendOptions): Promise<void> {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
     }
+    if (_options?.signal?.aborted) {
+      const err = new Error("MockSessionHandle: signal aborted");
+      err.name = "AbortError";
+      throw err;
+    }
   }
 
-  async sendAndCollect(_message: string, _turn?: Turn): Promise<string> {
+  async sendAndCollect(_message: string, _turn?: Turn, _options?: SendOptions): Promise<string> {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
+    }
+    if (_options?.signal?.aborted) {
+      const err = new Error("MockSessionHandle: signal aborted");
+      err.name = "AbortError";
+      throw err;
     }
     return `Mock response from ${this.sessionId}`;
   }
@@ -142,9 +155,15 @@ export class MockSessionHandle implements SessionHandle {
     _message: string,
     onChunk: (accumulated: string) => void,
     _turn?: Turn,
+    _options?: SendOptions,
   ): Promise<string> {
     if (this.closed) {
       throw new Error(`Session ${this.sessionId} is closed`);
+    }
+    if (_options?.signal?.aborted) {
+      const err = new Error("MockSessionHandle: signal aborted");
+      err.name = "AbortError";
+      throw err;
     }
     const response = `Mock response from ${this.sessionId}`;
     onChunk(response);
@@ -513,12 +532,22 @@ function wrapSdkQuery(
    * Uses the current (possibly runtime-updated) effort level. Strips
    * adapter-only fields (mutableSuffix) before forwarding to sdk.query.
    */
-  function turnOptions(): SdkQueryOptions {
-    return stripHandleOnlyFields({
+  function turnOptions(signal?: AbortSignal): SdkQueryOptions {
+    const opts: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       ...baseOptions,
       effort: currentEffort,
       resume: sessionId,
-    });
+    };
+    if (signal) {
+      const abortController = new AbortController();
+      if (signal.aborted) {
+        abortController.abort();
+      } else {
+        signal.addEventListener("abort", () => abortController.abort(), { once: true });
+      }
+      return stripHandleOnlyFields({ ...opts, abortController });
+    }
+    return stripHandleOnlyFields(opts);
   }
 
   /**
@@ -877,12 +906,12 @@ function wrapSdkQuery(
       return sessionId;
     },
 
-    async send(message: string, turn?: Turn): Promise<void> {
+    async send(message: string, turn?: Turn, options?: SendOptions): Promise<void> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
         const q = sdk.query({
           prompt: promptWithMutable(message),
-          options: turnOptions(),
+          options: turnOptions(options?.signal),
         });
         await iterateWithTracing(q, turn ?? boundTurn, null);
       } catch (err) {
@@ -892,12 +921,12 @@ function wrapSdkQuery(
       }
     },
 
-    async sendAndCollect(message: string, turn?: Turn): Promise<string> {
+    async sendAndCollect(message: string, turn?: Turn, options?: SendOptions): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
         const q = sdk.query({
           prompt: promptWithMutable(message),
-          options: turnOptions(),
+          options: turnOptions(options?.signal),
         });
         return await iterateWithTracing(q, turn ?? boundTurn, null);
       } catch (err) {
@@ -911,6 +940,7 @@ function wrapSdkQuery(
       message: string,
       onChunk: (accumulated: string) => void,
       turn?: Turn,
+      options?: SendOptions,
     ): Promise<string> {
       if (closed) throw new Error(`Session ${sessionId} is closed`);
       try {
@@ -924,7 +954,7 @@ function wrapSdkQuery(
         // type (missing includePartialMessages); see deferred-items.md.
         const q = sdk.query({
           prompt: promptWithMutable(message),
-          options: { ...turnOptions(), includePartialMessages: true } as SdkQueryOptions,
+          options: { ...turnOptions(options?.signal), includePartialMessages: true } as SdkQueryOptions,
         });
         return await iterateWithTracing(q, turn ?? boundTurn, onChunk);
       } catch (err) {

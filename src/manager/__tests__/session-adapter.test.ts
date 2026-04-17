@@ -1056,3 +1056,44 @@ describe("SdkSessionAdapter skill usage capture (Phase 53)", () => {
     expect(event.mentionedSkills).not.toContain("noodle-soup");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 59 — MockSessionHandle AbortSignal tests
+// ---------------------------------------------------------------------------
+import { MockSessionHandle } from "../session-adapter.js";
+
+describe("MockSessionHandle — AbortSignal (Phase 59)", () => {
+  it("sendAndCollect rejects with AbortError when signal is pre-aborted", async () => {
+    const handle = new MockSessionHandle("s1");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      handle.sendAndCollect("hello", undefined, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("sendAndCollect succeeds when signal is not aborted", async () => {
+    const handle = new MockSessionHandle("s1");
+    const controller = new AbortController();
+    const result = await handle.sendAndCollect("hello", undefined, { signal: controller.signal });
+    expect(result).toBe("Mock response from s1");
+  });
+
+  it("sendAndStream rejects with AbortError when signal is pre-aborted", async () => {
+    const handle = new MockSessionHandle("s1");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      handle.sendAndStream("hello", () => {}, undefined, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("send rejects with AbortError when signal is pre-aborted", async () => {
+    const handle = new MockSessionHandle("s1");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      handle.send("hello", undefined, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});

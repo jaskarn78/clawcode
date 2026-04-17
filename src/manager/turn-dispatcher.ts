@@ -53,6 +53,15 @@ export type DispatchOptions = {
    * Leave undefined to get the default lifecycle (dispatcher opens + ends Turn).
    */
   readonly turn?: Turn;
+  /**
+   * Phase 59 -- optional AbortSignal. When provided, the target agent's turn
+   * is aborted when the signal fires. TaskManager passes its per-task signal
+   * here to enforce chain-wide deadlines (HAND-03) and explicit cancellations.
+   *
+   * Plumbs through to session-adapter's wrapSdkQuery which wires it onto
+   * the SDK's native Options.abortController (sdk.d.ts:957).
+   */
+  readonly signal?: AbortSignal;
 };
 
 export type TurnDispatcherOptions = {
@@ -99,7 +108,7 @@ export class TurnDispatcher {
     // calling us), attach the origin and forward — caller retains end() ownership.
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal — trace side-effect */ }
-      return this.sessionManager.sendToAgent(agentName, message, options.turn);
+      return this.sessionManager.sendToAgent(agentName, message, options.turn, { signal: options.signal });
     }
 
     const turn = this.openTurn(origin, agentName, options.channelId ?? null);
@@ -107,7 +116,7 @@ export class TurnDispatcher {
       try { turn.recordOrigin(origin); } catch { /* non-fatal */ }
     }
     try {
-      const response = await this.sessionManager.sendToAgent(agentName, message, turn);
+      const response = await this.sessionManager.sendToAgent(agentName, message, turn, { signal: options.signal });
       try { turn?.end("success"); } catch { /* non-fatal — trace write is best-effort */ }
       return response;
     } catch (err) {
@@ -134,7 +143,7 @@ export class TurnDispatcher {
     // Phase 57 Plan 03: caller-owned Turn branch (see dispatch() for rationale).
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal */ }
-      return this.sessionManager.streamFromAgent(agentName, message, onChunk, options.turn);
+      return this.sessionManager.streamFromAgent(agentName, message, onChunk, options.turn, { signal: options.signal });
     }
 
     const turn = this.openTurn(origin, agentName, options.channelId ?? null);
@@ -147,6 +156,7 @@ export class TurnDispatcher {
         message,
         onChunk,
         turn,
+        { signal: options.signal },
       );
       try { turn?.end("success"); } catch { /* non-fatal */ }
       return response;

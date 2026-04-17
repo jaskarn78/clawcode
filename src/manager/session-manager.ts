@@ -349,10 +349,15 @@ export class SessionManager {
    * `getTraceCollector(name).startTurn(...)` and owns `turn.end()`. SessionManager
    * is pure passthrough — it does NOT create or end Turn objects.
    */
-  async sendToAgent(name: string, message: string, turn?: Turn): Promise<string> {
+  async sendToAgent(
+    name: string,
+    message: string,
+    turn?: Turn,
+    options?: { readonly signal?: AbortSignal },  // Phase 59
+  ): Promise<string> {
     const handle = this.requireSession(name);
     this.log.info({ agent: name, messageLength: message.length }, "sending message to agent");
-    const response = await handle.sendAndCollect(message, turn);
+    const response = await handle.sendAndCollect(message, turn, options);
     this.log.info({ agent: name, responseLength: response.length }, "agent responded");
     return response;
     // NOTE: SessionManager does NOT call turn.end() — caller owns Turn lifecycle (50-02b).
@@ -370,10 +375,11 @@ export class SessionManager {
     message: string,
     onChunk: (accumulated: string) => void,
     turn?: Turn,
+    options?: { readonly signal?: AbortSignal },  // Phase 59
   ): Promise<string> {
     const handle = this.requireSession(name);
     this.log.info({ agent: name, messageLength: message.length }, "streaming message to agent");
-    const response = await handle.sendAndStream(message, onChunk, turn);
+    const response = await handle.sendAndStream(message, onChunk, turn, options);
     this.log.info({ agent: name, responseLength: response.length }, "agent stream complete");
     return response;
     // NOTE: SessionManager does NOT call turn.end() — caller owns Turn lifecycle (50-02b).

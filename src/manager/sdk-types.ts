@@ -70,6 +70,8 @@ export type SdkQueryOptions = {
   readonly sessionId?: string;
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Phase 59 -- native SDK abort support (sdk.d.ts:957 Options.abortController). */
+  readonly abortController?: AbortController;
 };
 
 /**

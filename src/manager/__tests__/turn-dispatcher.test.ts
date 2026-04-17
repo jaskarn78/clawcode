@@ -164,6 +164,54 @@ describe("TurnDispatcher.dispatchStream", () => {
   });
 });
 
+describe("TurnDispatcher — AbortSignal threading (Phase 59)", () => {
+  it("forwards signal to sendToAgent via dispatch", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const origin = makeRootOrigin("task", "t:1");
+    const controller = new AbortController();
+    await dispatcher.dispatch(origin, "alice", "do-task", { signal: controller.signal });
+    expect(mock.sm.sendToAgent).toHaveBeenCalledTimes(1);
+    const callArgs = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    // 4th arg is options with signal
+    expect(callArgs[3]).toEqual({ signal: controller.signal });
+  });
+
+  it("forwards pre-aborted signal", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const origin = makeRootOrigin("task", "t:2");
+    const controller = new AbortController();
+    controller.abort();
+    await dispatcher.dispatch(origin, "alice", "do-task", { signal: controller.signal });
+    const callArgs = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(callArgs[3]?.signal?.aborted).toBe(true);
+  });
+
+  it("forwards signal to streamFromAgent via dispatchStream", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const origin = makeRootOrigin("task", "t:3");
+    const controller = new AbortController();
+    await dispatcher.dispatchStream(origin, "alice", "stream-task", () => {}, { signal: controller.signal });
+    expect(mock.sm.streamFromAgent).toHaveBeenCalledTimes(1);
+    const callArgs = (mock.sm.streamFromAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    // 5th arg is options with signal
+    expect(callArgs[4]).toEqual({ signal: controller.signal });
+  });
+
+  it("dispatch without signal still works (backward compat)", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
+    const origin = makeRootOrigin("discord", "msg_bc");
+    const result = await dispatcher.dispatch(origin, "alice", "hello");
+    expect(result).toBe("mock-response");
+    const callArgs = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    // signal should be undefined when not provided
+    expect(callArgs[3]).toEqual({ signal: undefined });
+  });
+});
+
 describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
   it("recordOrigin is called once when caller passes options.turn", async () => {
     const mock = makeMockSessionManager();
@@ -230,6 +278,6 @@ describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
 
     expect(recordOrigin).toHaveBeenCalledWith(origin);
     expect(ownedTurn.end).not.toHaveBeenCalled();
-    expect(mock.sm.streamFromAgent).toHaveBeenCalledWith("alice", "hi", expect.any(Function), ownedTurn);
+    expect(mock.sm.streamFromAgent).toHaveBeenCalledWith("alice", "hi", expect.any(Function), ownedTurn, { signal: undefined });
   });
 });
