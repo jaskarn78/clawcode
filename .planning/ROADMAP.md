@@ -95,7 +95,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 - [x] **Phase 59: Cross-Agent RPC (Handoffs)** - Expose `delegate_task` / `task_status` / `cancel_task` / `task_complete` via MCP + IPC with async-ticket semantics, receiver allowlists, cycle detection, self-handoff block, schema-validated payloads, 64 KB cap, deadline propagation, chain-token cost attribution, and manual retry (completed 2026-04-17)
 - [x] **Phase 60: Trigger Engine Foundation** - Stand up the TriggerEngine + source registry + policy evaluator + loop detector + causation_id propagation + 3-layer dedup, migrate the v1.6 scheduler into the first registered source, and land task retention config (completed 2026-04-17)
 - [x] **Phase 61: Additional Trigger Sources** - Register four more sources against the Phase 60 engine: webhook HTTP receiver (HMAC-verified), MySQL DB-change poller with `last_seen_id` watermark, inbox-arrival event (upgrade from heartbeat), and Google/ICS calendar poller with configurable offsets (completed 2026-04-17)
-- [ ] **Phase 62: Policy Layer + Dry-Run** - Declarative YAML policy DSL (Zod-validated at daemon start, atomic-reject on error) covering source/agent/template/throttle/priority, hot-reload on file edit, and dry-run replay so operators can test policy changes without firing agents
+- [x] **Phase 62: Policy Layer + Dry-Run** - Declarative YAML policy DSL (Zod-validated at daemon start, atomic-reject on error) covering source/agent/template/throttle/priority, hot-reload on file edit, and dry-run replay so operators can test policy changes without firing agents (completed 2026-04-17)
 - [ ] **Phase 63: Observability Surfaces** - Ship the operator surfaces on top of the Phase 57-62 substrate: dashboard in-flight task graph with SSE, `clawcode triggers` + `clawcode tasks` CLIs, trace enrichment with causation_id/trigger_id/task_id on root spans, cross-agent `clawcode trace <causation_id>` walker, and chain-token visibility across list + trace metadata
 
 ## Phase Details
@@ -213,7 +213,7 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 
 **Plans**: 3 plans
 - [x] 62-01-PLAN.md — Policy schema + loader + evaluator + throttle + differ + trigger_events migration (Wave 1)
-- [ ] 62-02-PLAN.md — Hot-reload watcher + audit trail + TriggerEngine wiring + daemon boot (Wave 2)
+- [x] 62-02-PLAN.md — Hot-reload watcher + audit trail + TriggerEngine wiring + daemon boot (Wave 2)
 - [x] 62-03-PLAN.md — Dry-run CLI command with read-only SQLite replay (Wave 2)
 
 ### Phase 63: Observability Surfaces
@@ -232,9 +232,9 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   5. The cumulative token count for a handoff chain is visible both in the `clawcode tasks` output and in the trace metadata — answering "how much did this chain cost end-to-end?" without summing by hand (OBS-05).
 
 **Plans**: 3 plans
-- [ ] 62-01-PLAN.md — Policy schema + loader + evaluator + throttle + differ + trigger_events migration (Wave 1)
+- [x] 62-01-PLAN.md — Policy schema + loader + evaluator + throttle + differ + trigger_events migration (Wave 1)
 - [ ] 62-02-PLAN.md — Hot-reload watcher + audit trail + TriggerEngine wiring + daemon boot (Wave 2)
-- [ ] 62-03-PLAN.md — Dry-run CLI command with read-only SQLite replay (Wave 2)
+- [x] 62-03-PLAN.md — Dry-run CLI command with read-only SQLite replay (Wave 2)
 **UI hint**: yes
 
 ## Progress
@@ -262,5 +262,5 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
 | 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
 | 61. Additional Trigger Sources | 2/3 | Complete    | 2026-04-17 |
-| 62. Policy Layer + Dry-Run | 2/3 | In Progress|  |
+| 62. Policy Layer + Dry-Run | 3/3 | Complete   | 2026-04-17 |
 | 63. Observability Surfaces | 0/? | Not started | - |

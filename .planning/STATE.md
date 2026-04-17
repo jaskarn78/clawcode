@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to execute
-stopped_at: Completed 62-03-PLAN.md
-last_updated: "2026-04-17T18:40:53.598Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 62-02-PLAN.md
+last_updated: "2026-04-17T18:44:25.706Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 18
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -97,6 +97,8 @@ Recent decisions affecting current work:
 - [Phase 62]: trigger_events table extended with source_kind + payload columns via idempotent ALTER TABLE (both TaskStore and DedupLayer) for dry-run replay in Plan 62-03
 - [Phase 62]: Dry-run uses permissive agent set (all rule targets) so output shows what WOULD happen, not filtered by daemon config
 - [Phase 62]: Read-only SQLite + fileMustExist guards for CLI commands that bypass daemon
+- [Phase 62]: PolicyEvaluator injected as optional 3rd constructor arg to TriggerEngine — backward-compatible fallback to legacy evaluatePolicy wrapper
+- [Phase 62]: Boot-time policy load runs BEFORE TriggerEngine construction — invalid policy blocks daemon via ManagerError wrapping PolicyValidationError
 
 ### Roadmap Evolution
 
@@ -125,5 +127,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 62-03-PLAN.md
+Stopped at: Completed 62-02-PLAN.md
 Resume file: None
