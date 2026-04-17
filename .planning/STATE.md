@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to execute
-stopped_at: Completed 60-02-PLAN.md
-last_updated: "2026-04-17T14:42:19.348Z"
+status: Ready to plan
+stopped_at: Completed 60-03-PLAN.md
+last_updated: "2026-04-17T15:03:17.375Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 
 ## Current Position
 
-Phase: 60 (trigger-engine-foundation) — EXECUTING
-Plan: 3 of 3
+Phase: 61
+Plan: Not started
 
 ## Performance Metrics
 
@@ -83,6 +83,8 @@ Recent decisions affecting current work:
 - [Phase 60]: causationId uses z.string().nullable().default(null) for backward-compatible TurnOrigin extension (Phase 60 TRIG-08)
 - [Phase 60]: TriggerEngine creates own DedupLayer from TaskStore.rawDb -- dedup lifecycle is engine-internal, not injected
 - [Phase 60]: trigger_events DDL in both DedupLayer (test isolation) and TaskStore.ensureSchema (daemon lifecycle) -- CREATE IF NOT EXISTS makes this safe
+- [Phase 60]: SchedulerSource creates own Cron jobs for prompt-based schedules instead of wrapping TaskScheduler — handler schedules stay on TaskScheduler directly
+- [Phase 60]: task-retention heartbeat runs only on first agent per cycle (tasks.db is daemon-scoped), trigger_events purge window = 2x replayMaxAgeMs (48h default)
 
 ### Roadmap Evolution
 
@@ -111,5 +113,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 60-02-PLAN.md
+Stopped at: Completed 60-03-PLAN.md
 Resume file: None
