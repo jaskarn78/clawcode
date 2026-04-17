@@ -26,6 +26,7 @@ import type { PolicyDiff } from "../policy-differ.js";
 const silentLog = pino({ level: "silent" });
 
 const VALID_POLICY_YAML = `
+version: 1
 rules:
   - id: rule-one
     target: agent-alpha
@@ -36,6 +37,7 @@ rules:
 `;
 
 const VALID_POLICY_YAML_V2 = `
+version: 1
 rules:
   - id: rule-one
     target: agent-alpha
