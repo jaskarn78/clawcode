@@ -730,6 +730,13 @@ export async function startDaemon(
     triggerEngine.registerSource(inboxSource);
   }
 
+  // Demote heartbeat inbox check to reconciler mode when InboxSource is primary
+  if (inboxConfigs.length > 0) {
+    const { setInboxSourceActive } = await import("../heartbeat/checks/inbox.js");
+    setInboxSourceActive(true);
+    log.info("heartbeat inbox check demoted to reconciler mode (InboxSource is primary)");
+  }
+
   // TRIG-05: Calendar sources
   const calendarConfigs = config.triggers?.sources?.calendar ?? [];
   for (const cfg of calendarConfigs) {
