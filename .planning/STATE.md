@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to execute
-stopped_at: Completed 61-02-PLAN.md
-last_updated: "2026-04-17T17:17:23.747Z"
+status: Ready to plan
+stopped_at: Completed 61-03-PLAN.md
+last_updated: "2026-04-17T17:53:13.038Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 
 ## Current Position
 
-Phase: 61 (additional-trigger-sources) — EXECUTING
-Plan: 3 of 3
+Phase: 62
+Plan: Not started
 
 ## Performance Metrics
 
@@ -90,6 +90,9 @@ Recent decisions affecting current work:
 - [Phase 61-additional-trigger-sources]: Webhook handler buffers raw body BEFORE HMAC verification and passes raw bytes to WebhookSource for stable hash derivation
 - [Phase 61]: CalendarSource cursor_blob uses Map entries tuple format ([eventId, endTimeMs][]) for lossless round-trip with retention pruning data
 - [Phase 61]: Push channel renewal dropped from CalendarSource -- google-workspace MCP server has no push API; time-window polling with fired-ID dedup is sole delivery mechanism
+- [Phase 61]: mysql2 pool guarded by env vars (MYSQL_HOST/USER/DATABASE), pool size 2, created only when mysql sources configured
+- [Phase 61]: Webhook handler routes through WebhookSource.handleHttp for stable idempotency keys (SHA-256 of raw body or X-Webhook-ID header)
+- [Phase 61]: Heartbeat inbox check uses 120s staleness threshold in reconciler mode (2x default 60s heartbeat interval)
 
 ### Roadmap Evolution
 
@@ -118,5 +121,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 61-02-PLAN.md
+Stopped at: Completed 61-03-PLAN.md
 Resume file: None
