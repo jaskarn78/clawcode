@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Proactive Agents + Handoffs
-status: Ready to plan
-stopped_at: Completed 61-03-PLAN.md
-last_updated: "2026-04-17T17:53:13.038Z"
+status: Ready to execute
+stopped_at: Completed 62-03-PLAN.md
+last_updated: "2026-04-17T18:40:53.598Z"
 last_activity: 2026-04-17
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 18
+  completed_plans: 17
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 61 — additional-trigger-sources
+**Current focus:** Phase 62 — policy-layer-dry-run
 
 ## Current Position
 
-Phase: 62
-Plan: Not started
+Phase: 62 (policy-layer-dry-run) — EXECUTING
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -93,6 +93,10 @@ Recent decisions affecting current work:
 - [Phase 61]: mysql2 pool guarded by env vars (MYSQL_HOST/USER/DATABASE), pool size 2, created only when mysql sources configured
 - [Phase 61]: Webhook handler routes through WebhookSource.handleHttp for stable idempotency keys (SHA-256 of raw body or X-Webhook-ID header)
 - [Phase 61]: Heartbeat inbox check uses 120s staleness threshold in reconciler mode (2x default 60s heartbeat interval)
+- [Phase 62]: PolicyEvaluator class replaces Phase 60 pure function with stateful DSL-aware evaluator (glob source matching, throttle, priority, Handlebars rendering) — backward-compatible wrapper preserved
+- [Phase 62]: trigger_events table extended with source_kind + payload columns via idempotent ALTER TABLE (both TaskStore and DedupLayer) for dry-run replay in Plan 62-03
+- [Phase 62]: Dry-run uses permissive agent set (all rule targets) so output shows what WOULD happen, not filtered by daemon config
+- [Phase 62]: Read-only SQLite + fileMustExist guards for CLI commands that bypass daemon
 
 ### Roadmap Evolution
 
@@ -121,5 +125,5 @@ See previous STATE.md history; carried forward unchanged from v1.7 shipping stat
 ## Session Continuity
 
 Last activity: 2026-04-17
-Stopped at: Completed 61-03-PLAN.md
+Stopped at: Completed 62-03-PLAN.md
 Resume file: None

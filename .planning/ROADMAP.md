@@ -212,9 +212,9 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
   4. `clawcode policy dry-run --since <window>` (or equivalent) replays the last N recent trigger events against the current-on-disk policy and prints which rules would match which agents with reasons — zero actual agent turns fire (POL-04).
 
 **Plans**: 3 plans
-- [ ] 62-01-PLAN.md — Policy schema + loader + evaluator + throttle + differ + trigger_events migration (Wave 1)
+- [x] 62-01-PLAN.md — Policy schema + loader + evaluator + throttle + differ + trigger_events migration (Wave 1)
 - [ ] 62-02-PLAN.md — Hot-reload watcher + audit trail + TriggerEngine wiring + daemon boot (Wave 2)
-- [ ] 62-03-PLAN.md — Dry-run CLI command with read-only SQLite replay (Wave 2)
+- [x] 62-03-PLAN.md — Dry-run CLI command with read-only SQLite replay (Wave 2)
 
 ### Phase 63: Observability Surfaces
 
@@ -262,5 +262,5 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
 | 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
 | 61. Additional Trigger Sources | 2/3 | Complete    | 2026-04-17 |
-| 62. Policy Layer + Dry-Run | 0/3 | Planned | - |
+| 62. Policy Layer + Dry-Run | 2/3 | In Progress|  |
 | 63. Observability Surfaces | 0/? | Not started | - |

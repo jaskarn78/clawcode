@@ -25,10 +25,10 @@ Build on the v1.0-v1.7 substrate (SessionManager, TaskScheduler, TraceStore, war
 
 ### Policy Layer (POL)
 
-- [ ] **POL-01**: Trigger-to-agent rules live in a declarative YAML policy file, validated with Zod at daemon start, errors reject the update atomically
-- [ ] **POL-02**: Policy DSL supports: source match, agent target, payload template (Handlebars or similar), throttle/debounce config, priority, enabled flag
+- [x] **POL-01**: Trigger-to-agent rules live in a declarative YAML policy file, validated with Zod at daemon start, errors reject the update atomically
+- [x] **POL-02**: Policy DSL supports: source match, agent target, payload template (Handlebars or similar), throttle/debounce config, priority, enabled flag
 - [ ] **POL-03**: Policy hot-reload — editing the policy file takes effect on the NEXT trigger evaluation without a daemon restart
-- [ ] **POL-04**: Dry-run mode — operator can replay recent trigger events against a pending policy change and see which agents would fire without actually firing them
+- [x] **POL-04**: Dry-run mode — operator can replay recent trigger events against a pending policy change and see which agents would fire without actually firing them
 
 ### Cross-Agent Handoff (HAND)
 
