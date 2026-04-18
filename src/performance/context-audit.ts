@@ -7,7 +7,8 @@
  *
  * metadata_json shape (emitted by context-assembler in Wave 2):
  *   { section_tokens: { identity, soul, skills_header, hot_tier,
- *                       recent_history, per_turn_summary, resume_summary } }
+ *                       recent_history, per_turn_summary, resume_summary,
+ *                       conversation_context } }  // Phase 67 added last
  *
  * Percentile math uses in-JS nearest-rank, matching the pattern established
  * by `TraceStore.getCacheTelemetry` (Phase 52 Plan 01) — N-small at agent
@@ -32,6 +33,7 @@ export const SECTION_NAMES = Object.freeze([
   "recent_history",
   "per_turn_summary",
   "resume_summary",
+  "conversation_context", // Phase 67 — SESS-02 dedicated brief budget
 ] as const);
 
 /** Individual section name (inferred from SECTION_NAMES). */
@@ -156,6 +158,7 @@ export function buildContextAuditReport(
       recent_history: [],
       per_turn_summary: [],
       resume_summary: [],
+      conversation_context: [], // Phase 67 — SESS-02 dedicated brief budget
     };
     let sampled = 0;
     let overBudget = 0;

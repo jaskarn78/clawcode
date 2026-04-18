@@ -398,3 +398,12 @@ describe("ContextAuditReport frozen-ness", () => {
     }
   });
 });
+
+// ── Phase 67 — SECTION_NAMES extension for conversation_context ─────────────
+
+describe("SECTION_NAMES (Phase 67)", () => {
+  it("SECTION_NAMES includes conversation_context", () => {
+    expect(SECTION_NAMES).toContain("conversation_context");
+    expect(SECTION_NAMES.length).toBe(8);
+  });
+});

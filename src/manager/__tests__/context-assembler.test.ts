@@ -1172,3 +1172,66 @@ describe("assembleContext lazy-skill compression (Phase 53 Plan 03)", () => {
     expect(Object.isFrozen(result)).toBe(true);
   });
 });
+
+// ── Phase 67 — conversation_context section in mutable suffix ──────────────
+
+describe("assembleContext — Phase 67 conversation_context", () => {
+  it("measures conversation_context tokens", () => {
+    let capturedMetadata: Record<string, unknown> | undefined;
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({
+      end: spanEnd,
+      setMetadata: (m: Record<string, unknown>) => {
+        capturedMetadata = m;
+      },
+    }));
+    const turn = { startSpan, end: vi.fn() };
+
+    const briefText =
+      "## Recent Sessions\n\n### Session from 2026-04-18 (5 hours ago)\nUser asked about deployment.";
+    const sources = makeSources({
+      identity: "I am an agent",
+      conversationContext: briefText,
+    });
+
+    const result = (assembleContextTraced as any)(
+      sources,
+      DEFAULT_BUDGETS,
+      undefined,
+      turn,
+    ) as {
+      stablePrefix: string;
+      mutableSuffix: string;
+    };
+
+    // Brief lands in MUTABLE suffix (Pitfall 1 invariant — NOT in stable prefix)
+    expect(result.mutableSuffix).toContain("## Recent Sessions");
+    expect(result.mutableSuffix).toContain("Session from 2026-04-18");
+    expect(result.stablePrefix).not.toContain("## Recent Sessions");
+    expect(result.stablePrefix).not.toContain("Session from 2026-04-18");
+
+    // section_tokens.conversation_context is measured and non-zero
+    expect(capturedMetadata).toBeDefined();
+    const sectionTokens = (capturedMetadata as any).section_tokens;
+    expect(typeof sectionTokens.conversation_context).toBe("number");
+    expect(sectionTokens.conversation_context).toBeGreaterThan(0);
+  });
+
+  it("emits conversation_context = 0 when source is empty", () => {
+    let capturedMetadata: Record<string, unknown> | undefined;
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(() => ({
+      end: spanEnd,
+      setMetadata: (m: Record<string, unknown>) => {
+        capturedMetadata = m;
+      },
+    }));
+    const turn = { startSpan, end: vi.fn() };
+
+    const sources = makeSources({ identity: "id" });
+    (assembleContextTraced as any)(sources, DEFAULT_BUDGETS, undefined, turn);
+
+    const sectionTokens = (capturedMetadata as any).section_tokens;
+    expect(sectionTokens.conversation_context).toBe(0);
+  });
+});

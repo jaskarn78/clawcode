@@ -95,6 +95,16 @@ export type ContextSources = {
    */
   readonly recentHistory?: string;
 
+  /**
+   * Phase 67 — pre-budget-enforced conversation brief rendered by
+   * `src/memory/conversation-brief.ts::assembleConversationBrief`. Lands in
+   * the MUTABLE SUFFIX (NOT stable prefix) so it never invalidates the SDK's
+   * prompt cache turn-to-turn as session summaries accumulate. Empty string
+   * or undefined → no heading rendered, `section_tokens.conversation_context`
+   * reports 0 (SESS-02 / SESS-03 invariants).
+   */
+  readonly conversationContext?: string;
+
   // ── Phase 53 Plan 03 — lazy-skill compression sources ────────────────────
 
   /**
@@ -191,7 +201,8 @@ export type SectionName =
   | "hot_tier"
   | "recent_history"
   | "per_turn_summary"
-  | "resume_summary";
+  | "resume_summary"
+  | "conversation_context"; // Phase 67 — must match SECTION_NAMES in performance/context-audit.ts
 
 /**
  * Strategy applied to a section that exceeded its per-section budget.
@@ -222,8 +233,8 @@ export type BudgetWarningEvent = {
 /**
  * Per-section token counts emitted onto the `context_assemble` span metadata
  * under key `section_tokens`. Consumed by Plan 53-01's audit aggregator.
- * All 7 canonical sections ALWAYS populated (0 for absent inputs) so the
- * audit report has a stable row shape.
+ * All 8 canonical sections ALWAYS populated (0 for absent inputs) so the
+ * audit report has a stable row shape. (Phase 67 added `conversation_context`.)
  */
 export type SectionTokenCounts = {
   readonly identity: number;
@@ -233,6 +244,8 @@ export type SectionTokenCounts = {
   readonly recent_history: number;
   readonly per_turn_summary: number;
   readonly resume_summary: number;
+  /** Phase 67 — conversation brief rendered into the mutable suffix (SESS-02). */
+  readonly conversation_context: number;
 };
 
 /**
@@ -656,6 +669,12 @@ function assembleContextInternal(
   const perTurn = sources.perTurnSummary ?? "";
   const resumeSum = sources.resumeSummary ?? sources.contextSummary;
 
+  // 8. conversation_context — Phase 67 — pre-budget-enforced brief from
+  //    `assembleConversationBrief` (src/memory/conversation-brief.ts). Pure
+  //    passthrough here: the helper already applied the accumulate-strategy
+  //    budget BEFORE this string was built, so the assembler only measures.
+  const conversationContext = sources.conversationContext ?? "";
+
   // ── Placement ────────────────────────────────────────────────────────────
   const stableParts: string[] = [];
   const mutableParts: string[] = [];
@@ -720,6 +739,16 @@ function assembleContextInternal(
     mutableParts.push(resumeSum);
   }
 
+  // Phase 67 — conversation brief in MUTABLE SUFFIX (never stable prefix).
+  //   Placement: LAST in the mutable ordering so the most-concrete signal
+  //   (`resumeSum`, i.e. "what you were doing last turn") sits closer to
+  //   the user's message, and the "background context" brief trails it.
+  //   The stable-prefix boundary is critical for prompt-cache stability —
+  //   see Pitfall 1 in 67-RESEARCH.md and CONTEXT.md Decisions.
+  if (conversationContext) {
+    mutableParts.push(conversationContext);
+  }
+
   const sectionTokens: SectionTokenCounts = Object.freeze({
     identity: countTokens(identityOut),
     soul: countTokens(soulOut),
@@ -728,6 +757,7 @@ function assembleContextInternal(
     recent_history: countTokens(recentHistoryText),
     per_turn_summary: countTokens(perTurn),
     resume_summary: countTokens(resumeSum),
+    conversation_context: countTokens(conversationContext), // Phase 67
   });
 
   return Object.freeze({
