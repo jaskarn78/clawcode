@@ -798,3 +798,94 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
     }
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// Phase 67 Plan 03 — configDeps wiring gap-closure
+// ---------------------------------------------------------------------------
+
+// Wrap buildSessionConfig with a vi.fn that forwards to the actual impl so
+// every pre-existing test keeps its real behavior (systemPrompt, hotStableToken,
+// etc.). The new test below inspects mock.calls to prove that configDeps() now
+// threads conversationStores + memoryStores through to the build call.
+vi.mock("../session-config.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-config.js")>(
+    "../session-config.js",
+  );
+  return {
+    ...actual,
+    buildSessionConfig: vi.fn(actual.buildSessionConfig),
+  };
+});
+
+import { buildSessionConfig as _buildSessionConfigForMock } from "../session-config.js";
+const mockedBuildSessionConfig = vi.mocked(_buildSessionConfigForMock);
+
+describe("configDeps wiring — Phase 67 gap-closure", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    // Keep the forwarding impl; only clear call history so this test's
+    // assertions are isolated from prior suites' startAgent invocations.
+    mockedBuildSessionConfig.mockClear();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-p67-03-"));
+    registryPath = join(tmpDir, "registry.json");
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      await rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* non-fatal — DB handles may linger briefly */
+    }
+  });
+
+  it("configDeps passes conversationStores and memoryStores", async () => {
+    const agentName = "agent-wire-test";
+    // Per-agent workspace so AgentMemoryManager.initMemory creates a real
+    // memories.db and ConversationStore for this agent.
+    const config: ResolvedAgentConfig = {
+      ...makeConfig(agentName),
+      workspace: tmpDir,
+    };
+
+    await manager.startAgent(agentName, config);
+
+    // Exactly one buildSessionConfig call for this agent start.
+    expect(mockedBuildSessionConfig).toHaveBeenCalledTimes(1);
+    const [, deps] = mockedBuildSessionConfig.mock.calls[0]!;
+
+    // 1+2: Both Maps are present and are actual Map instances.
+    expect(deps.conversationStores).toBeInstanceOf(Map);
+    expect(deps.memoryStores).toBeInstanceOf(Map);
+
+    // 3+4: Reference-equality against the SessionManager's AgentMemoryManager
+    // — proves configDeps passes the reference, not a copy/wrap.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const memoryMgr = (manager as any).memory as {
+      conversationStores: Map<string, unknown>;
+      memoryStores: Map<string, unknown>;
+    };
+    expect(deps.conversationStores).toBe(memoryMgr.conversationStores);
+    expect(deps.memoryStores).toBe(memoryMgr.memoryStores);
+
+    // 5+6: Populated stores — startAgent initializes both for this agent.
+    expect(deps.conversationStores!.get(agentName)).toBeTruthy();
+    expect(deps.memoryStores!.get(agentName)).toBeTruthy();
+  }, 30_000);
+});
