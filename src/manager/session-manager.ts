@@ -707,6 +707,11 @@ export class SessionManager {
       // Phase 53 Plan 03 — thread the shared SkillUsageTracker so the
       // assembler can read the per-agent usage window.
       skillUsageTracker: this.skillUsageTracker,
+      // Phase 67 gap-closure — thread per-agent ConversationStore + MemoryStore
+      // Maps so buildSessionConfig can invoke assembleConversationBrief.
+      // `now` is intentionally omitted — buildSessionConfig defaults to Date.now().
+      conversationStores: this.memory.conversationStores,
+      memoryStores: this.memory.memoryStores,
     };
   }
 
