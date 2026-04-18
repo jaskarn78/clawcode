@@ -21,6 +21,15 @@ import type {
 } from "./context-assembler.js";
 import type { MemoryEntry } from "../memory/types.js";
 import type { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
+// Phase 67 — Resume Auto-Injection (SESS-02, SESS-03)
+import type { ConversationStore } from "../memory/conversation-store.js";
+import type { MemoryStore } from "../memory/store.js";
+import {
+  assembleConversationBrief,
+  DEFAULT_RESUME_SESSION_COUNT,
+  DEFAULT_RESUME_GAP_THRESHOLD_HOURS,
+  DEFAULT_CONVERSATION_CONTEXT_BUDGET,
+} from "../memory/conversation-brief.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -62,6 +71,26 @@ export type SessionConfigDeps = {
    * (turns < threshold) keeps all skills rendering full content.
    */
   readonly skillUsageTracker?: SkillUsageTracker;
+  /**
+   * Phase 67 — per-agent ConversationStore map. When set (and `memoryStores`
+   * also carries an entry for the agent), `buildSessionConfig` invokes
+   * `assembleConversationBrief` and threads the rendered brief into the
+   * `conversation_context` mutable-suffix section. Absent entries degrade
+   * gracefully — no brief renders, no error.
+   */
+  readonly conversationStores?: Map<string, ConversationStore>;
+  /**
+   * Phase 67 — per-agent MemoryStore map. Required alongside
+   * `conversationStores` for the brief-assembler path to run. Session
+   * summaries are queried via `memoryStore.findByTag("session-summary")`.
+   */
+  readonly memoryStores?: Map<string, MemoryStore>;
+  /**
+   * Phase 67 — epoch-millisecond clock override. Defaults to `Date.now()` in
+   * production. Injected so integration tests can simulate a 4-hour gap
+   * boundary without `vi.setSystemTime()` or Date monkey-patching.
+   */
+  readonly now?: number;
 };
 
 /**
@@ -287,6 +316,45 @@ export async function buildSessionConfig(
     contextSummaryStr = `## Context Summary (from previous session)\n${enforced.summary}`;
   }
 
+  // --- Phase 67 — Resume Auto-Injection (SESS-02 / SESS-03) ---
+  //
+  // When both per-agent stores are wired, render the conversation brief via
+  // the pure helper from Plan 01. The helper handles:
+  //   - SESS-03 gap check (short-circuits when last session <4h ago by default)
+  //   - SESS-02 last-N tag-scoped retrieval with accumulate-budget enforcement
+  //   - Markdown rendering under a stable "## Recent Sessions" heading
+  // Result is threaded into `ContextSources.conversationContext` and lands
+  // in the MUTABLE SUFFIX — never in the cached stable prefix (Pitfall 1).
+  // Graceful degradation: when EITHER store is absent (legacy startup path,
+  // tests that don't wire stores), skip the helper entirely — no throw.
+  let conversationContextStr = "";
+  const convStore = deps.conversationStores?.get(config.name);
+  const memStore = deps.memoryStores?.get(config.name);
+  if (convStore && memStore) {
+    const briefResult = assembleConversationBrief(
+      { agentName: config.name, now: deps.now ?? Date.now() },
+      {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        config: {
+          sessionCount:
+            config.memory.conversation?.resumeSessionCount ??
+            DEFAULT_RESUME_SESSION_COUNT,
+          gapThresholdHours:
+            config.memory.conversation?.resumeGapThresholdHours ??
+            DEFAULT_RESUME_GAP_THRESHOLD_HOURS,
+          budgetTokens:
+            config.memory.conversation?.conversationContextBudget ??
+            DEFAULT_CONVERSATION_CONTEXT_BUDGET,
+        },
+        log: deps.log,
+      },
+    );
+    if (!briefResult.skipped) {
+      conversationContextStr = briefResult.brief; // already budget-enforced
+    }
+  }
+
   // --- Assemble with budgets ---
   const budgets = config.contextBudgets ?? DEFAULT_BUDGETS;
 
@@ -338,6 +406,9 @@ export async function buildSessionConfig(
     // exercise them directly via `assembleContext` sources.
     currentUserMessage: "",
     lastAssistantMessage: "",
+    // Phase 67 — conversation brief threaded into the MUTABLE SUFFIX.
+    // Empty string when stores are not wired or gap-skip fired.
+    conversationContext: conversationContextStr,
   };
 
   // Phase 52 Plan 02 — two-block assembly for prompt caching.

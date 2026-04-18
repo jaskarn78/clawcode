@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildSessionConfig, type SessionConfigDeps } from "../session-config.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
 import type { MemoryEntry, MemoryTier } from "../../memory/types.js";
+import { MemoryStore } from "../../memory/store.js";
+import { ConversationStore } from "../../memory/conversation-store.js";
 
 // Mock filesystem reads so buildSessionConfig doesn't hit disk
 vi.mock("node:fs/promises", () => ({
@@ -643,5 +645,115 @@ describe("buildSessionConfig — lazy-skill wiring (Phase 53 Plan 03)", () => {
 
     expect(result.systemPrompt).toContain("search-first");
     expect(result.systemPrompt).toContain("Research before coding");
+  });
+});
+
+// ── Phase 67 — Resume Auto-Injection (SESS-02 / SESS-03) ───────────────────
+
+describe("buildSessionConfig — Phase 67 conversation brief", () => {
+  /** Deterministic "now" — 2026-04-18T12:00:00Z. */
+  const T = new Date("2026-04-18T12:00:00Z").getTime();
+  let memStore: MemoryStore;
+  let convStore: ConversationStore;
+
+  beforeEach(() => {
+    memStore = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    convStore = new ConversationStore(memStore.getDatabase());
+  });
+
+  afterEach(() => {
+    memStore?.close();
+  });
+
+  function seedSummary(sessionId: string, content: string, createdAt: string) {
+    const entry = memStore.insert(
+      {
+        content,
+        source: "conversation",
+        importance: 0.78,
+        tags: ["session-summary", `session:${sessionId}`],
+        skipDedup: true,
+      },
+      new Float32Array(384).fill(0.1),
+    );
+    memStore
+      .getDatabase()
+      .prepare("UPDATE memories SET created_at = ? WHERE id = ?")
+      .run(createdAt, entry.id);
+  }
+
+  function seedEndedSession(startedAt: string, endedAt: string) {
+    const session = convStore.startSession("test-agent");
+    memStore
+      .getDatabase()
+      .prepare(
+        "UPDATE conversation_sessions SET started_at = ?, ended_at = ?, status = 'ended' WHERE id = ?",
+      )
+      .run(startedAt, endedAt, session.id);
+  }
+
+  it("conversation context in mutable suffix", async () => {
+    // Gap > 4h threshold: last session ended at T-7h
+    seedSummary("A", "User asked about deployment.", "2026-04-17T08:00:00Z");
+    seedSummary("B", "Discussed Phase 67 design.", "2026-04-16T08:00:00Z");
+    seedEndedSession("2026-04-18T03:00:00Z", "2026-04-18T05:00:00Z");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      conversationStores: new Map([["test-agent", convStore]]),
+      now: T,
+    } as any);
+    const result = await buildSessionConfig(config, deps);
+
+    // Brief MUST be in mutable suffix, NOT in stable system prompt
+    // (Pitfall 1 invariant — prompt-cache stability).
+    expect(result.mutableSuffix).toBeDefined();
+    const mutable = result.mutableSuffix ?? "";
+    expect(mutable).toContain("## Recent Sessions");
+    expect(mutable).toContain("User asked about deployment");
+    expect(result.systemPrompt).not.toContain("## Recent Sessions");
+    expect(result.systemPrompt).not.toContain("User asked about deployment");
+  });
+
+  it("calls conversation brief assembler", async () => {
+    seedSummary("X", "Critical decision logged.", "2026-04-17T08:00:00Z");
+    seedEndedSession("2026-04-18T03:00:00Z", "2026-04-18T05:00:00Z");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      conversationStores: new Map([["test-agent", convStore]]),
+      now: T,
+    } as any);
+    const result = await buildSessionConfig(config, deps);
+
+    // Brief content reaches the assembled prompt via the wired helper.
+    const mutable = result.mutableSuffix ?? "";
+    expect(mutable).toContain("Critical decision logged");
+  });
+
+  it("handles missing conversationStore", async () => {
+    // Seed memory so the brief WOULD render if the helper were called —
+    // then verify it is NOT called (graceful degradation).
+    seedSummary("X", "Should not appear.", "2026-04-17T08:00:00Z");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      // conversationStores intentionally omitted — simulates legacy startup path.
+      now: T,
+    } as any);
+    const result = await buildSessionConfig(config, deps);
+
+    // No throw; no brief content in any output block.
+    const mutable = result.mutableSuffix ?? "";
+    expect(mutable).not.toContain("## Recent Sessions");
+    expect(mutable).not.toContain("Should not appear");
+    expect(result.systemPrompt).not.toContain("## Recent Sessions");
+    expect(result.systemPrompt).not.toContain("Should not appear");
   });
 });
