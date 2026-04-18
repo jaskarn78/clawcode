@@ -17,12 +17,21 @@ ClawCode turns Claude Code into a multi-agent platform. Each agent is a persiste
 - **Context audit + lazy skills** — `clawcode context-audit <agent>` reports per-section token budgets; unused skills compress to one-line catalog entries
 - **Warm-path startup gate** — READ-ONLY SQLite warmup + resident embedding singleton + ready-flag before agents go live
 - **Scheduled tasks** via cron (reminders, reports, maintenance)
+- **Durable task store + state machine** — `~/.clawcode/manager/tasks.db` with enforced transitions, startup orphan reconciliation, crash recovery (v1.8)
+- **Cross-agent RPC handoffs** — `delegate_task` MCP tool with async-ticket semantics, Zod schema validation, cycle detection (v1.8)
+- **Trigger engine** — schedulers, webhooks, MySQL/inbox/calendar sources feed a unified dispatcher with 3-layer dedup + policy evaluator + watermark replay (v1.8)
+- **Policy layer** — YAML DSL with hot-reload and audit trail; `clawcode policy dry-run` previews what a trigger will fire before you commit (v1.8)
+- **Cross-agent trace walker** — `clawcode trace <id>` walks a request across agent boundaries (v1.8)
+- **Persistent conversation memory** — every Discord exchange stored in per-agent SQLite with provenance + instruction-pattern detection; session boundaries tracked (v1.9)
+- **Session-boundary summarization** — Haiku compresses each ended/crashed session into a standard MemoryEntry that auto-participates in search, decay, tier management, and knowledge graph linking (v1.9)
+- **Resume auto-injection** — agents wake up with a structured brief of recent sessions in a dedicated `conversation_context` budget section, with gap-skip for short restarts (v1.9)
+- **Conversation search + deep retrieval** — `memory_lookup` MCP tool accepts `scope="conversations"`/`"all"` + `page`; FTS5 raw-turn search + semantic summary search with tunable time-decay weighting and paginated results (v1.9)
 - **Inter-agent messaging** through filesystem-based inboxes
 - **Model escalation** — agents on Sonnet can escalate to Opus when they need it
 - **Budget enforcement** — per-agent token limits with Discord alerts
 - **Health monitoring** — context fill tracking, automatic zone alerts to Discord
-- **Web dashboard** — real-time agent status via SSE + latency / prompt cache / tool-call / warm-path panels
-- **MCP tools auto-injected** — every agent gets `memory_lookup`, `spawn_subagent_thread`, `ask_advisor` out of the box
+- **Web dashboard** — real-time agent status via SSE + latency / prompt cache / tool-call / warm-path / task-graph panels
+- **MCP tools auto-injected** — every agent gets `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `delegate_task`, `send_message` out of the box
 - **1Password integration** — auto-injected when `OP_SERVICE_ACCOUNT_TOKEN` is set
 - **Self-updating** — `clawcode update` pulls, rebuilds, and restarts from git
 
@@ -180,7 +189,13 @@ clawcode status
 | `clawcode cache <agent>` | Prompt-cache hit rate + first-token cache effect per agent |
 | `clawcode tools <agent>` | Per-tool round-trip timing with SLO status |
 | `clawcode bench` | Run latency benchmark; `--check-regression` for CI gate; `--update-baseline` to roll the baseline |
-| `clawcode context-audit <agent>` | Per-section token budget audit (identity / soul / skills / history / summary) |
+| `clawcode context-audit <agent>` | Per-section token budget audit (identity / soul / skills / history / summary / conversation_context) |
+| `clawcode tasks list` | Show tasks in the durable task store (pending, running, completed, failed) (v1.8) |
+| `clawcode tasks status <task_id>` | Inspect a task's full state, payload, and lifecycle history (v1.8) |
+| `clawcode tasks retry <task_id>` | Retry a failed task from its last stable state (v1.8) |
+| `clawcode triggers` | List active triggers (scheduler / webhook / MySQL / inbox / calendar) (v1.8) |
+| `clawcode policy dry-run` | Preview which triggers a policy change would fire without committing (v1.8) |
+| `clawcode trace <trace_id>` | Walk a request across agent boundaries with full span timings (v1.8) |
 | `clawcode security` | Manage channel access policies |
 | `clawcode dashboard` | Launch web dashboard |
 | `clawcode mcp` | Start MCP server (for agent-to-agent tools) |
@@ -261,7 +276,7 @@ clawcode bench --check-regression     # CI gate: fails on p95 regression vs base
 
 **Warm path:** SQLite + sqlite-vec handles warmed with READ-ONLY queries at agent start. Embedding model is a singleton at daemon level with a startup probe. Agent doesn't flip to `ready` in `clawcode status` / `/clawcode-fleet` until warm-path check passes (10s timeout; errors show in fleet status).
 
-**Per-agent config** — sensible defaults, customize via `clawcode.yaml`:
+**Per-agent config** (v1.7) — sensible defaults, customize via `clawcode.yaml`:
 
 ```yaml
 agents:
@@ -284,6 +299,51 @@ agents:
       tools:
         maxConcurrent: 10
         idempotent: [memory_lookup, search_documents, memory_list, memory_graph]
+```
+
+## Proactive Agents + Handoffs (v1.8)
+
+v1.8 turns agents from reactive responders into proactive actors. Every turn — whether it comes from Discord, a cron job, a webhook, a MySQL poll, or a cross-agent delegate — flows through a single dispatcher with durable state and cross-agent observability.
+
+**TurnDispatcher** — the single chokepoint for all turn sources. Every turn carries an origin-prefixed `turnId` and `TurnOrigin` trace metadata so you can always trace a request back to what started it (Discord message, scheduler fire, webhook hit, cross-agent handoff).
+
+**Task Store + State Machine** — durable `~/.clawcode/manager/tasks.db` with 15-field task rows, enforced state transitions (`pending → running → completed/failed`), startup orphan reconciliation (tasks running when the daemon crashed get re-routed on restart), and trigger_state CRUD.
+
+**Cross-agent RPC handoffs** — the `delegate_task` MCP tool lets Agent A hand a task to Agent B and get a ticket back. Results propagate through the inbox when B completes. Zod schema validation on the handoff payload; cycle detection prevents A→B→A loops.
+
+**Trigger engine** — pluggable sources (scheduler, webhook, inbox, MySQL, calendar) feed a common dispatcher. Three-layer dedup catches duplicate fires at the source, the policy layer, and the dispatcher. Watermark replay catches missed events when the daemon was down.
+
+**Policy layer (YAML DSL + hot-reload + audit trail)** — `clawcode.yaml` policies like "every weekday at 9am, fire a morning-briefing trigger for the assistant agent" with dry-run preview (`clawcode policy dry-run`) and audit logs for every policy change.
+
+**Observability** — `clawcode tasks list` / `status` / `retry`, `clawcode triggers`, `clawcode trace <id>` for cross-agent trace chain walking, and a dashboard task-graph panel showing live task state across all agents.
+
+## Persistent Conversation Memory (v1.9)
+
+v1.9 makes agents remember prior conversations. Discord exchanges are stored, summarized, auto-injected on restart, and deeply searchable — agents never wake up to a blank slate again.
+
+**ConversationStore** — per-agent SQLite tables for `conversation_sessions` and `conversation_turns` with full provenance (`channel_id`, `discord_user_id`, `is_trusted_channel`, `discord_message_id`). Session lifecycle (start/end/crash) is tracked explicitly; turns are grouped by `session_id`. Extracted memories carry `source_turn_ids` linking them back to the specific turns they came from — full lineage queryable with a JOIN.
+
+**Capture integration** — DiscordBridge fire-and-forget captures every exchange into the ConversationStore. Instruction-pattern detection (`potentially_directive` marker) flags prompt-injection attempts before they enter the persistent record — never blocks Discord delivery.
+
+**Session-boundary summarization** — when a session ends (stop or crash), a Haiku LLM call from the daemon compresses turns into a structured summary (preferences, decisions, open threads, commitments). Stored as a standard MemoryEntry (`source="conversation"`, tagged `["session-summary", "session:{id}"]`) so it automatically participates in semantic search, relevance decay, tier management, and knowledge graph auto-linking. 10s timeout with raw-turn fallback; sessions < 3 turns skip summary entirely.
+
+**Resume auto-injection** — agents wake up with the last N session summaries (default 3, configurable) rendered into a structured `## Recent Sessions` brief, injected into a dedicated `conversation_context` budget section (2000-token default, configurable) that lives in the assembler's mutable suffix (never pollutes the cached stable prefix). Adaptive gap-skip: restarts within 4 hours (configurable) skip injection entirely so crash recovery and config reloads don't waste token budget.
+
+**Conversation search + deep retrieval** — the `memory_lookup` MCP tool now accepts `scope="memories"|"conversations"|"all"` (backward-compatible default preserves pre-v1.9 response shape) and `page` parameters. `scope="conversations"` hits semantic search over session summaries; `scope="all"` merges semantic + FTS5 full-text search over raw turns with session-summary-prefers-raw-turn dedup. Results are paginated at 10 per page, time-decay-weighted (tunable half-life via `conversation.retrievalHalfLifeDays`), and carry `origin` tags (`memory` / `conversation-turn` / `session-summary`) so the agent can reason about provenance.
+
+**Per-agent config** (v1.9) — customize via `clawcode.yaml`:
+
+```yaml
+agents:
+  - name: assistant
+    memory:
+      conversation:
+        enabled: true
+        turnRetentionDays: 90                  # default 90
+        resumeSessionCount: 3                  # recent sessions in brief (default 3)
+        resumeGapThresholdHours: 4             # skip inject if gap < threshold (default 4)
+        conversationContextBudget: 2000        # tokens for brief (default 2000)
+        retrievalHalfLifeDays: 14              # decay weighting half-life (default 14)
 ```
 
 ## Deployment (Ubuntu)
@@ -369,21 +429,24 @@ src/
   cli/          # CLI entry point and commands
   config/       # YAML config loading, validation, hot-reload
   agent/        # Workspace creation and management
-  manager/      # Session lifecycle, daemon, recovery, escalation
-  discord/      # Bridge, routing, threads, webhooks, streaming
-  memory/       # SQLite store, embeddings, tiers, consolidation
+  manager/      # Session lifecycle, daemon, recovery, escalation, TurnDispatcher (v1.8)
+  discord/      # Bridge, routing, threads, webhooks, streaming, capture (v1.9)
+  memory/       # SQLite store, embeddings, tiers, consolidation, ConversationStore + search + summarizer + brief (v1.9)
   heartbeat/    # Health checks, context zones, auto-maintenance
   scheduler/    # Cron-based task execution
   ipc/          # Unix socket JSON-RPC server/client
-  mcp/          # MCP server for agent-to-agent tools
-  security/     # Channel ACLs, allowlists, approval log
+  mcp/          # MCP server for agent-to-agent tools (memory_lookup, delegate_task, send_message, etc.)
+  security/     # Channel ACLs, allowlists, approval log, instruction-pattern detector (v1.9)
   collaboration/# Inter-agent inbox messaging
   usage/        # Token tracking, budgets, cost estimation, daily Discord summary
   skills/       # Skill discovery, linking, installation
   bootstrap/    # First-run agent initialization
-  dashboard/    # Web UI with SSE real-time updates + latency/cache/tools/warm-path panels
+  dashboard/    # Web UI with SSE real-time updates + latency/cache/tools/warm-path/task-graph panels
   performance/  # TraceStore, TraceCollector, SLOs, percentiles, token counter (v1.7)
   benchmarks/   # bench harness: runner, baseline, thresholds, keep-alive (v1.7)
+  tasks/        # Durable task store, state machine, handoff schema, payload store, reconciler (v1.8)
+  triggers/     # Trigger engine, 3-layer dedup, policy differ (v1.8)
+  documents/    # RAG document ingestion + chunking + KNN search (v1.6)
   shared/       # Logger, errors, types, canonicalStringify
 scripts/
   install.sh    # Ubuntu deployment installer
