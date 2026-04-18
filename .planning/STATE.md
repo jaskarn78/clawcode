@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
 status: Ready to execute
-stopped_at: Completed 66-01-PLAN.md
-last_updated: "2026-04-18T14:33:58.675Z"
+stopped_at: Completed 66-02-PLAN.md
+last_updated: "2026-04-18T14:41:20.699Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 7
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Phase: 66 (session-boundary-summarization) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -66,6 +66,9 @@ Recent decisions affecting current work:
 - [Phase 65]: captureDiscordExchange wraps entire body in try/catch -- never blocks Discord message delivery
 - [Phase 65]: Capture block uses nested try/catch in bridge success path so failures never block Discord delivery; ConversationStore crash runs BEFORE recovery.handleCrash to avoid restart race
 - [Phase 66]: [Phase 66-01]: CreateMemoryInput.sourceTurnIds persists atomically in insert() single transaction — no follow-up UPDATE races (empty array normalized to NULL)
+- [Phase 66]: [Phase 66-02]: SessionSummarizer pipeline NEVER throws — returns discriminated result union (success vs skipped-with-reason) so SessionManager failure mode is non-fatal; LLM failures fall back to raw-turn markdown tagged 'raw-fallback' while still marking the session summarized (idempotency over perfection)
+- [Phase 66]: [Phase 66-02]: turns.length guard uses getTurnsForSession (actual rows), NOT session.turnCount — Pitfall 2 from 66-RESEARCH: fire-and-forget recordTurn writes from Phase 65 make turn_count eventually-consistent under load
+- [Phase 66]: [Phase 66-02]: AbortController + Promise.race for LLM timeout (default 10s) — wraps injected summarize() so both cooperative-abort and hard-timeout paths work; finally-clearTimeout cleanup prevents dangling timers on fast-path success
 
 ### Roadmap Evolution
 
@@ -85,5 +88,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 66-01-PLAN.md
+Stopped at: Completed 66-02-PLAN.md
 Resume file: None
