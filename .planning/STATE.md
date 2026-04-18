@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to execute
-stopped_at: Completed 68-01-PLAN.md
-last_updated: "2026-04-18T18:27:51.991Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 68-02-PLAN.md — v1.9 Persistent Conversation Memory milestone SHIPPED
+last_updated: "2026-04-18T18:56:56.582Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -85,6 +85,10 @@ Recent decisions affecting current work:
 - [Phase 68]: [Phase 68-01]: BM25 sign inversion via 1/(1+|bm25|) in conversation-search.ts before combining with decay — keeps combinedScore positive [0,1] so memory and turn results sort consistently (Pitfall 3)
 - [Phase 68]: [Phase 68-01]: MVP memory path uses case-insensitive substring match (listRecent(200) + filter) rather than SemanticSearch KNN — keeps helper-layer unit tests deterministic without embedder warmup; 68-02 can swap to KNN at the MCP/IPC wiring layer where embedder is already in scope
 - [Phase 68]: [Phase 68-01]: scope='all' dedup prefers session-summary over raw-turn for same sessionId — distilled summary carries more signal per token than verbose turns; raw turns survive only when no matching summary exists (Pitfall 4)
+- [Phase 68]: [Phase 68-02]: Extract IPC handler body to memory-lookup-handler.ts — single source of truth shared between daemon.ts production and integration tests eliminates the duplicated-reimplementation-drift risk; learned from 67-VERIFICATION configDeps gap
+- [Phase 68]: [Phase 68-02]: Zod limit.max tightened 20→10 as a breaking schema change (MAX_RESULTS_PER_PAGE hard cap) — no in-tree caller exceeds limit=10; IPC layer still clamps as defense-in-depth for non-MCP callers
+- [Phase 68]: [Phase 68-02]: Explicit scope='memories' && page=0 routes to legacy GraphSearch branch (preserves byte-for-byte pre-v1.9 response shape including linked_from); searchByScope engages only on scope='conversations'|'all' OR page>0
+- [Phase 68]: [Phase 68-02]: Per-Turn cache key widened to {query, limit, scope, page} preventing cross-scope cache bleed — a first scope='memories' call no longer serves stale data to a later scope='all' request in the same Turn
 
 ### Roadmap Evolution
 
@@ -104,5 +108,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 68-01-PLAN.md
+Stopped at: Completed 68-02-PLAN.md — v1.9 Persistent Conversation Memory milestone SHIPPED
 Resume file: None

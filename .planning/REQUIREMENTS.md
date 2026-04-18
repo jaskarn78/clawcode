@@ -27,7 +27,7 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 ### Deep Retrieval (RETR)
 
-- [ ] **RETR-01**: Agent can search conversation history on demand via an enhanced memory_lookup MCP tool with a scope parameter (backward-compatible with existing callers)
+- [x] **RETR-01**: Agent can search conversation history on demand via an enhanced memory_lookup MCP tool with a scope parameter (backward-compatible with existing callers)
 - [x] **RETR-02**: Raw conversation turn text is searchable via FTS5 full-text search for precise keyword recall when semantic search is insufficient
 - [x] **RETR-03**: Search results are paginated (max 10 per page) and time-decay-weighted so recent conversations rank higher than old ones
 
@@ -70,9 +70,9 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 | SESS-02 | Auto-inject on resume | Phase 67 | [ ] |
 | SESS-03 | Adaptive injection threshold | Phase 67 | [ ] |
 | SESS-04 | Summaries as MemoryEntries | Phase 66 | [x] |
-| RETR-01 | Conversation search MCP tool | Phase 68 | [ ] |
-| RETR-02 | FTS5 full-text search | Phase 68 | [ ] |
-| RETR-03 | Paginated decay-weighted results | Phase 68 | [ ] |
+| RETR-01 | Conversation search MCP tool | Phase 68 | [x] |
+| RETR-02 | FTS5 full-text search | Phase 68 | [x] |
+| RETR-03 | Paginated decay-weighted results | Phase 68 | [x] |
 | SEC-01 | Provenance fields on stored turns | Phase 64 | [ ] |
 | SEC-02 | Instruction-pattern detection | Phase 65 | [ ] |
 
