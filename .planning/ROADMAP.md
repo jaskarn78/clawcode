@@ -180,7 +180,11 @@ Plans:
   2. When the session gap is shorter than the configured threshold (default 4 hours), auto-injection is skipped entirely -- a brief agent restart (crash recovery, config reload) does not inject redundant context that wastes token budget
   3. An agent with zero conversation history (first session ever, or no prior summaries) starts normally with no empty or broken context section injected -- the conversation brief gracefully produces nothing rather than an empty heading or placeholder text
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 67-01-PLAN.md — conversation-brief helper module + types + Zod schema knobs (SESS-02 + SESS-03 unit tests)
+- [ ] 67-02-PLAN.md — assembler wiring: SECTION_NAMES + ContextSources extension + buildSessionConfig integration (SESS-02 + SESS-03 integration tests)
 
 ### Phase 68: Conversation Search + Deep Retrieval
 
@@ -221,5 +225,5 @@ Plans:
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
-| 67. Resume Auto-Injection | 0/TBD | Not started | - |
+| 67. Resume Auto-Injection | 0/2 | Planned     | - |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |
