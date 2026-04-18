@@ -100,7 +100,7 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 
 **Goal:** Agents remember what happened in prior sessions -- Discord conversations are stored, summarized into retrievable facts, and automatically injected on restart so agents never wake up to a blank slate.
 
-- [ ] **Phase 64: ConversationStore + Schema Foundation** - SQLite tables, session lifecycle records, memory lineage tracking, and provenance fields in per-agent memories.db
+- [x] **Phase 64: ConversationStore + Schema Foundation** - SQLite tables, session lifecycle records, memory lineage tracking, and provenance fields in per-agent memories.db (completed 2026-04-18)
 - [ ] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage
 - [ ] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash
 - [ ] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection
@@ -122,11 +122,11 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
   3. When a memory is extracted from conversation turns, the resulting MemoryEntry carries a `source_turn_ids` field linking it back to the specific conversation turns it was derived from -- lineage is verifiable by JOINing memories to conversation_turns
   4. Every stored conversation turn includes `discord_user_id`, `channel_id`, and `is_trusted_channel` provenance fields -- a turn from an untrusted channel is distinguishable from a trusted one without any post-hoc analysis
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 64-01-PLAN.md -- Types, Zod schemas, and SQLite migration methods (conversation_sessions, conversation_turns, source_turn_ids)
-- [ ] 64-02-PLAN.md -- ConversationStore class implementation, unit tests, and AgentMemoryManager wiring
+- [x] 64-01-PLAN.md -- Types, Zod schemas, and SQLite migration methods (conversation_sessions, conversation_turns, source_turn_ids)
+- [x] 64-02-PLAN.md -- ConversationStore class implementation, unit tests, and AgentMemoryManager wiring
 
 ### Phase 65: Capture Integration
 
@@ -209,7 +209,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 64. ConversationStore + Schema Foundation | 0/2 | Planned | - |
+| 64. ConversationStore + Schema Foundation | 2/2 | Complete   | 2026-04-18 |
 | 65. Capture Integration | 0/TBD | Not started | - |
 | 66. Session-Boundary Summarization | 0/TBD | Not started | - |
 | 67. Resume Auto-Injection | 0/TBD | Not started | - |

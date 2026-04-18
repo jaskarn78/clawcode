@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to plan Phase 64
-stopped_at: Roadmap created
-last_updated: "2026-04-18T00:00:00.000Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 64-02-PLAN.md
+last_updated: "2026-04-18T03:29:20.926Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
 ---
 
 # Project State
@@ -20,16 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v1.9 Persistent Conversation Memory -- Phase 64 ready to plan
+**Current focus:** Phase 64 — conversationstore-schema-foundation
 
 ## Current Position
 
-Phase: 64 of 68 (ConversationStore + Schema Foundation)
-Plan: -- (not yet planned)
-Status: Ready to plan
-Last activity: 2026-04-18 -- v1.9 roadmap created (5 phases, 12 requirements mapped)
-
-Progress: [..........] 0%
+Phase: 64 (conversationstore-schema-foundation) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -62,6 +58,9 @@ Recent decisions affecting current work:
 - [v1.9 Roadmap]: Instruction-pattern detection runs at capture time (Phase 65) before turns enter persistent store -- flags potential injection, does not block storage
 - [v1.9 Roadmap]: Phase 65 (Capture Integration) carries SEC-02 because instruction detection is a capture-time concern, not a schema concern
 - [v1.9 Roadmap]: Zero new npm dependencies -- entire milestone builds on existing stack (better-sqlite3, sqlite-vec, @huggingface/transformers, zod, etc.)
+- [Phase 64]: sourceTurnIds propagated across all MemoryEntry consumers (7 source files + 5 test files) for type-safe conversation lineage tracking
+- [Phase 64]: ConversationStore receives DatabaseType directly (not MemoryStore) -- follows DocumentStore pattern for domain stores that don't need MemoryStore.insert()
+- [Phase 64]: Session state machine enforced via UPDATE WHERE status check + changes count validation (not read-then-write pattern)
 
 ### Roadmap Evolution
 
@@ -81,5 +80,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: v1.9 roadmap created -- ready to plan Phase 64
+Stopped at: Completed 64-02-PLAN.md
 Resume file: None
