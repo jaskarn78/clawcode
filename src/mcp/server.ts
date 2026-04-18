@@ -418,34 +418,79 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
   // the frozen cached response without a second IPC round-trip.
   server.tool(
     "memory_lookup",
-    "Search your memory for relevant context, past decisions, and knowledge",
+    "Search your memory for relevant context, past decisions, and knowledge. " +
+      "Use scope='conversations' to search older Discord conversation history " +
+      "(session summaries + raw turns via FTS5) when the auto-injected resume brief " +
+      "is insufficient. Use scope='all' to search both memories and conversations. " +
+      "Results are paginated (max 10 per page); call again with page+1 if hasMore is true. " +
+      "Note: if new conversation turns are recorded between page requests, pagination " +
+      "boundaries may shift — re-issue with page 0 if strict consistency is required.",
     {
       query: z.string().describe("What to search for in memory"),
-      limit: z.number().int().min(1).max(20).default(5).describe("Max results to return"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .default(5)
+        .describe("Max results per page (1-10, hard cap at 10)"),
       agent: z.string().describe("Your agent name (pass your own name)"),
+      scope: z
+        .enum(["memories", "conversations", "all"])
+        .default("memories")
+        .describe(
+          "What to search: 'memories' (default, matches pre-v1.9 behavior), " +
+            "'conversations' (session summaries + raw turns), or 'all' (both).",
+        ),
+      page: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe(
+          "Zero-based page index for pagination (default 0). " +
+            "Response includes hasMore + nextOffset if more results exist.",
+        ),
     },
-    async ({ query, limit, agent }) => {
+    async ({ query, limit, agent, scope, page }) => {
       return invokeWithCache(
         "memory_lookup",
         agent,
-        { query, limit },
+        // Include scope+page in the per-Turn cache key so an earlier
+        // scope='memories' call does not serve a stale response to a later
+        // scope='all' request in the same Turn.
+        { query, limit, scope, page },
         async () => {
           const result = (await sendIpcRequest(SOCKET_PATH, "memory-lookup", {
             agent,
             query,
             limit,
+            scope,
+            page,
           })) as {
-            results: readonly {
-              id: string;
-              content: string;
-              relevance_score: number;
-              tags: readonly string[];
-              created_at: string;
-            }[];
+            results: readonly Record<string, unknown>[];
+            hasMore?: boolean;
+            nextOffset?: number | null;
           };
 
+          // Legacy call path (scope='memories' && page=0) returns
+          // { results: [...] } WITHOUT hasMore/nextOffset. New call paths
+          // return the full paginated envelope. Pass through whichever
+          // shape the daemon produced — the agent reads the fields the
+          // response contains.
+          const payload =
+            result.hasMore !== undefined
+              ? {
+                  results: result.results,
+                  hasMore: result.hasMore,
+                  nextOffset: result.nextOffset ?? null,
+                }
+              : result.results;
+
           return {
-            content: [{ type: "text" as const, text: JSON.stringify(result.results, null, 2) }],
+            content: [
+              { type: "text" as const, text: JSON.stringify(payload, null, 2) },
+            ],
           };
         },
         deps,
