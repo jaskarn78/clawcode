@@ -148,6 +148,10 @@ export class MemoryStore {
         ? input.importance
         : calculateImportance(input.content);
       const tags = input.tags ?? [];
+      const sourceTurnIdsJson =
+        input.sourceTurnIds && input.sourceTurnIds.length > 0
+          ? JSON.stringify([...input.sourceTurnIds])
+          : null;
 
       this.db.transaction(() => {
         this.stmts.insertMemory.run(
@@ -159,6 +163,7 @@ export class MemoryStore {
           now,
           now,
           now,
+          sourceTurnIdsJson,
         );
         this.stmts.insertVec.run(id, embedding);
 
@@ -191,7 +196,10 @@ export class MemoryStore {
         updatedAt: now,
         accessedAt: now,
         tier: "warm" as const,
-        sourceTurnIds: null,
+        sourceTurnIds:
+          input.sourceTurnIds && input.sourceTurnIds.length > 0
+            ? Object.freeze([...input.sourceTurnIds])
+            : null,
       });
     } catch (error) {
       if (error instanceof MemoryError) throw error;
@@ -708,8 +716,8 @@ export class MemoryStore {
   private prepareStatements(): PreparedStatements {
     return {
       insertMemory: this.db.prepare(`
-        INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'warm')
+        INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier, source_turn_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'warm', ?)
       `),
       insertVec: this.db.prepare(`
         INSERT INTO vec_memories (memory_id, embedding)

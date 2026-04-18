@@ -42,6 +42,8 @@ export type CreateMemoryInput = {
   readonly importance?: number;
   readonly tags?: readonly string[];
   readonly skipDedup?: boolean;
+  /** Conversation turn IDs this memory was derived from (CONV-03 lineage). Omit for non-conversation memories. */
+  readonly sourceTurnIds?: readonly string[];
 };
 
 /** A search result extends MemoryEntry with distance score. */
