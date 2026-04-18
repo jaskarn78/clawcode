@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to execute
-stopped_at: Completed 66-02-PLAN.md
-last_updated: "2026-04-18T14:41:20.699Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 66-03-PLAN.md
+last_updated: "2026-04-18T15:33:55.418Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -69,6 +69,9 @@ Recent decisions affecting current work:
 - [Phase 66]: [Phase 66-02]: SessionSummarizer pipeline NEVER throws — returns discriminated result union (success vs skipped-with-reason) so SessionManager failure mode is non-fatal; LLM failures fall back to raw-turn markdown tagged 'raw-fallback' while still marking the session summarized (idempotency over perfection)
 - [Phase 66]: [Phase 66-02]: turns.length guard uses getTurnsForSession (actual rows), NOT session.turnCount — Pitfall 2 from 66-RESEARCH: fire-and-forget recordTurn writes from Phase 65 make turn_count eventually-consistent under load
 - [Phase 66]: [Phase 66-02]: AbortController + Promise.race for LLM timeout (default 10s) — wraps injected summarize() so both cooperative-abort and hard-timeout paths work; finally-clearTimeout cleanup prevents dangling timers on fast-path success
+- [Phase 66]: [Phase 66-03]: Lifecycle-specific summarize invocation policy — stopAgent awaits (bounded by internal 10s timeout), onError fires fire-and-forget. Same summarizeSessionIfPossible helper; caller decides policy. Prevents crash recovery delay while ensuring summaries complete on normal stops.
+- [Phase 66]: [Phase 66-03]: summarizeWithHaiku wraps sdk.query with settingSources=[] so the summarizer runs config-free (no skills/MCP servers/workspace settings inherited). Prevents Pitfall 3 from 66-RESEARCH where summarizer accidentally runs with agent tools attached.
+- [Phase 66]: [Phase 66-03]: summarizeFn is a test-only SessionManagerOptions field with production fallback to summarizeWithHaiku — keeps production coupling minimal while enabling integration tests to swap the LLM call without mocking SDK modules.
 
 ### Roadmap Evolution
 
@@ -88,5 +91,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 66-02-PLAN.md
+Stopped at: Completed 66-03-PLAN.md
 Resume file: None

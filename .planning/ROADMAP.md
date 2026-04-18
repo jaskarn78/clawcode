@@ -102,7 +102,7 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 
 - [x] **Phase 64: ConversationStore + Schema Foundation** - SQLite tables, session lifecycle records, memory lineage tracking, and provenance fields in per-agent memories.db (completed 2026-04-18)
 - [x] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage (completed 2026-04-18)
-- [ ] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash
+- [x] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash (completed 2026-04-18)
 - [ ] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection
 - [ ] **Phase 68: Conversation Search + Deep Retrieval** - On-demand semantic + full-text search over conversation history via enhanced MCP tool with pagination
 
@@ -160,12 +160,12 @@ Plans:
   2. The generated session summary is stored as a standard MemoryEntry with `source="conversation"` and tags `["session-summary", "session:{id}"]` -- it automatically appears in semantic search results, receives relevance decay scoring, flows through hot/warm/cold tier management, and gets auto-linked by the knowledge graph linker without any special-case code
   3. Sessions with fewer than 3 turns produce no summary (insufficient signal) -- a session where the agent just said hello and crashed does not generate a garbage summary that pollutes the memory store
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 66-01-PLAN.md -- Complete CONV-03 write path: extend CreateMemoryInput with sourceTurnIds, update MemoryStore.insert to persist source_turn_ids atomically, add roundtrip regression tests
 - [x] 66-02-PLAN.md -- SessionSummarizer module: pure dependency-injected pipeline with buildSessionSummarizationPrompt, buildRawTurnFallback, summarizeSession (idempotent, 10s timeout, < 3-turn skip, dual-write memoryStore.insert + markSummarized)
-- [ ] 66-03-PLAN.md -- SessionManager wiring: summarizeWithHaiku helper (sdk.query with Haiku + no settings inheritance), stopAgent awaited summarize, onError fire-and-forget, integration tests
+- [x] 66-03-PLAN.md -- SessionManager wiring: summarizeWithHaiku helper (sdk.query with Haiku + no settings inheritance), stopAgent awaited summarize, onError fire-and-forget, integration tests
 
 ### Phase 67: Resume Auto-Injection
 
@@ -220,6 +220,6 @@ Plans:
 |-------|----------------|--------|-----------|
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
-| 66. Session-Boundary Summarization | 2/3 | In Progress|  |
+| 66. Session-Boundary Summarization | 3/3 | Complete   | 2026-04-18 |
 | 67. Resume Auto-Injection | 0/TBD | Not started | - |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |
