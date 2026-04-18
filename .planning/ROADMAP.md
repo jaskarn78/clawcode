@@ -101,7 +101,7 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 **Goal:** Agents remember what happened in prior sessions -- Discord conversations are stored, summarized into retrievable facts, and automatically injected on restart so agents never wake up to a blank slate.
 
 - [x] **Phase 64: ConversationStore + Schema Foundation** - SQLite tables, session lifecycle records, memory lineage tracking, and provenance fields in per-agent memories.db (completed 2026-04-18)
-- [ ] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage
+- [x] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage (completed 2026-04-18)
 - [ ] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash
 - [ ] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection
 - [ ] **Phase 68: Conversation Search + Deep Retrieval** - On-demand semantic + full-text search over conversation history via enhanced MCP tool with pagination
@@ -141,11 +141,11 @@ Plans:
   2. A Discord message containing instruction-like patterns ("remember that you must always...", "from now on ignore...", "for future reference execute...") is flagged with a `potentially_directive` marker on the stored turn row before it enters the persistent record -- the flag is visible in the raw data and available to downstream summarization
   3. Session lifecycle events (agent start, agent stop, agent crash) are recorded as session boundary transitions in `conversation_sessions` -- the capture integration calls ConversationStore.startSession() on agent boot and endSession() on stop/crash
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 65-01-PLAN.md -- Instruction detector (SEC-02), schema extension (instruction_flags column), capture helper module with tests
-- [ ] 65-02-PLAN.md -- SessionManager lifecycle wiring (start/stop/crash sessions) and DiscordBridge capture integration
+- [x] 65-02-PLAN.md -- SessionManager lifecycle wiring (start/stop/crash sessions) and DiscordBridge capture integration
 
 ### Phase 66: Session-Boundary Summarization
 
@@ -214,7 +214,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
-| 65. Capture Integration | 1/2 | In Progress|  |
+| 65. Capture Integration | 2/2 | Complete   | 2026-04-18 |
 | 66. Session-Boundary Summarization | 0/TBD | Not started | - |
 | 67. Resume Auto-Injection | 0/TBD | Not started | - |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |

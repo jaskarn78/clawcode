@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to execute
-stopped_at: Completed 65-01-PLAN.md
-last_updated: "2026-04-18T03:52:39.589Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 65-02-PLAN.md
+last_updated: "2026-04-18T03:57:42.377Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -64,6 +64,7 @@ Recent decisions affecting current work:
 - [Phase 65]: Instruction detector is zero-import pure function -- no dependencies, testable in isolation
 - [Phase 65]: Detection result persisted as JSON string in instruction_flags TEXT column
 - [Phase 65]: captureDiscordExchange wraps entire body in try/catch -- never blocks Discord message delivery
+- [Phase 65]: Capture block uses nested try/catch in bridge success path so failures never block Discord delivery; ConversationStore crash runs BEFORE recovery.handleCrash to avoid restart race
 
 ### Roadmap Evolution
 
@@ -83,5 +84,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 65-01-PLAN.md
+Stopped at: Completed 65-02-PLAN.md
 Resume file: None
