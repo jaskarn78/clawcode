@@ -79,16 +79,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-## Current Milestone: v1.8 Proactive Agents + Handoffs
+## Current Milestone: v1.9 Persistent Conversation Memory
 
-**Goal:** Agents autonomously initiate actions on external triggers AND delegate structured tasks to other agents — unlocking multi-agent workflows.
+**Goal:** Agents remember what happened in prior sessions — Discord conversations are stored, summarized into retrievable facts, and automatically injected on restart so agents never wake up to a blank slate.
 
 **Target features:**
-- Trigger engine — DB state changes, calendar events, inbox arrivals, webhook hits, scheduled observations initiate agent turns without a human message
-- Policy layer — declarative rules for which trigger fires which agent with what context payload
-- Cross-agent RPC — typed task handoff between agents with schema, timeout, and structured return (distinct from subagent-thread which is an ephemeral child session)
-- Task lifecycle — track in-flight inter-agent tasks, retry/cancel, audit trail, surface in dashboard + CLI
-- Discord surfaces — operator visibility into triggered actions + inter-agent task graph
+- Conversation turn persistence — every Discord message exchange stored in per-agent SQLite
+- Session-boundary summarization — on session end/restart, raw turns compressed into key facts, decisions, and user preferences
+- Auto-inject on resume — agent gets a structured context brief of recent sessions injected into prompt on restart
+- On-demand deep search — agent queries older conversation history via semantic search when auto-inject isn't enough
+- Relevance decay — unlimited retention with time-weighted relevance scoring
+- Cross-session continuity — "last time we talked about X" is answerable without user repeating themselves
 
 ### Out of Scope
 
@@ -107,11 +108,9 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ## Current State
 
-**Latest shipped milestone:** v1.7 Performance & Latency (shipped 2026-04-14)
+**Latest shipped milestone:** v1.8 Proactive Agents + Handoffs (shipped 2026-04-17)
 
-v1.0-v1.7 delivered 56 phases across 8 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, and end-to-end performance + latency optimizations.
-
-**v1.8 progress:** All 7 phases complete (57-63). Milestone ready for audit and completion.
+v1.0-v1.8 delivered 63 phases across 9 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, and proactive agents with cross-agent handoffs + trigger engine + policy layer + observability.
 
 ## Context
 
@@ -165,4 +164,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-17 — Phase 63 Observability Surfaces complete, v1.8 milestone fully shipped*
+*Last updated: 2026-04-18 — v1.9 Persistent Conversation Memory milestone started*
