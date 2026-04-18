@@ -1,13 +1,13 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: v1.9 milestone complete
-stopped_at: Completed quick task 260418-sux — list_schedules field fix + registry ghost-entry reconciliation
-last_updated: "2026-04-18T21:02:59.314Z"
+milestone: v2.0
+milestone_name: Open Endpoint + Eyes & Hands
+status: Defining requirements
+stopped_at: Milestone v2.0 started — requirements + roadmap in progress
+last_updated: "2026-04-18T22:30:00.000Z"
 last_activity: 2026-04-18
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,12 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Planning next milestone (v1.10 or v2.0)
+**Current focus:** v2.0 Open Endpoint + Eyes & Hands — OpenAI-compatible endpoint + browser/search/image MCPs
 
 ## Current Position
 
-Milestone: v1.9 shipped 2026-04-18
-Next: run `/gsd:new-milestone` to scope the next version
+Milestone: v2.0 started 2026-04-18
+Phase: Not started (defining requirements)
+Status: Defining requirements
+Last activity: 2026-04-18 — Milestone v2.0 started
 
 ## Performance Metrics
 

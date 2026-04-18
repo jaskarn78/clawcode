@@ -84,17 +84,15 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-## Current Milestone: v1.9 Persistent Conversation Memory
+## Current Milestone: v2.0 Open Endpoint + Eyes & Hands
 
-**Goal:** Agents remember what happened in prior sessions — Discord conversations are stored, summarized into retrievable facts, and automatically injected on restart so agents never wake up to a blank slate.
+**Goal:** Make every ClawCode agent reachable from any OpenAI-compatible client AND give them perception + action beyond Discord (browse the web, search the live web, generate images).
 
 **Target features:**
-- Conversation turn persistence — every Discord message exchange stored in per-agent SQLite
-- Session-boundary summarization — on session end/restart, raw turns compressed into key facts, decisions, and user preferences
-- Auto-inject on resume — agent gets a structured context brief of recent sessions injected into prompt on restart
-- On-demand deep search — agent queries older conversation history via semantic search when auto-inject isn't enough
-- Relevance decay — unlimited retention with time-weighted relevance scoring
-- Cross-session continuity — "last time we talked about X" is answerable without user repeating themselves
+- OpenAI-compatible HTTP endpoint — `POST /v1/chat/completions` (SSE streaming) + `GET /v1/models` on the existing daemon; bearer-key auth with per-key session continuity; tool-use translation (OpenAI functions ↔ Claude tool-use); new `TurnOrigin="openai-api"` on the v1.8 TurnDispatcher
+- Browser automation MCP — Playwright-over-CDP server auto-injected per agent; tools: navigate, screenshot, click, fill, extract, wait_for; persistent profile dir per agent; screenshots feed Claude vision
+- Web search MCP — Brave primary (key already configured) + Exa optional; tools: web_search, web_fetch_url with Readability-style extraction; intra-turn idempotent cache
+- Image generation MCP — MiniMax, OpenAI Images, and fal.ai backends selectable by config; tools: image_generate, image_edit, image_variations; output persisted to agent workspace + Discord-renderable via send_attachment
 
 ### Out of Scope
 
@@ -113,9 +111,9 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ## Current State
 
-**Latest shipped milestone:** v1.8 Proactive Agents + Handoffs (shipped 2026-04-17)
+**Latest shipped milestone:** v1.9 Persistent Conversation Memory (shipped 2026-04-18)
 
-v1.0-v1.8 delivered 63 phases across 9 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, and proactive agents with cross-agent handoffs + trigger engine + policy layer + observability.
+v1.0-v1.9 delivered 68 phases across 10 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, proactive agents with cross-agent handoffs, and persistent conversation memory with auto-injection.
 
 ## Context
 
@@ -169,4 +167,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-18 — v1.9 Persistent Conversation Memory complete (5 phases + Phase 68.1 cross-phase gap closure)*
+*Last updated: 2026-04-18 — v2.0 Open Endpoint + Eyes & Hands started*
