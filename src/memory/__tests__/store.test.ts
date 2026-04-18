@@ -486,4 +486,85 @@ describe("MemoryStore", () => {
       }
     });
   });
+
+  describe("sourceTurnIds (CONV-03 write path)", () => {
+    it("sourceTurnIds input is returned on insert (not null)", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        {
+          content: "test content with lineage",
+          source: "conversation",
+          skipDedup: true,
+          sourceTurnIds: ["turn-a", "turn-b"],
+        },
+        randomEmbedding(),
+      );
+      expect(entry.sourceTurnIds).toEqual(["turn-a", "turn-b"]);
+      expect(Object.isFrozen(entry.sourceTurnIds)).toBe(true);
+    });
+
+    it("source_turn_ids roundtrip preserves exact array on getById", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        {
+          content: "roundtrip test content",
+          source: "conversation",
+          skipDedup: true,
+          sourceTurnIds: ["t1", "t2", "t3"],
+        },
+        randomEmbedding(),
+      );
+      const fetched = store.getById(entry.id);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.sourceTurnIds).toEqual(["t1", "t2", "t3"]);
+      expect(Object.isFrozen(fetched!.sourceTurnIds)).toBe(true);
+    });
+
+    it("omitted sourceTurnIds yields null", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        {
+          content: "no lineage here",
+          source: "manual",
+          skipDedup: true,
+        },
+        randomEmbedding(),
+      );
+      expect(entry.sourceTurnIds).toBeNull();
+      const fetched = store.getById(entry.id);
+      expect(fetched!.sourceTurnIds).toBeNull();
+    });
+
+    it("empty sourceTurnIds array yields null (treated as no lineage)", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        {
+          content: "empty lineage",
+          source: "conversation",
+          skipDedup: true,
+          sourceTurnIds: [],
+        },
+        randomEmbedding(),
+      );
+      expect(entry.sourceTurnIds).toBeNull();
+    });
+
+    it("source_turn_ids column stores JSON string in DB", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        {
+          content: "check raw column",
+          source: "conversation",
+          skipDedup: true,
+          sourceTurnIds: ["alpha", "beta"],
+        },
+        randomEmbedding(),
+      );
+      const db = store.getDatabase();
+      const row = db
+        .prepare("SELECT source_turn_ids FROM memories WHERE id = ?")
+        .get(entry.id) as { source_turn_ids: string | null };
+      expect(row.source_turn_ids).toBe('["alpha","beta"]');
+    });
+  });
 });
