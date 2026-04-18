@@ -232,3 +232,13 @@ Plans:
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
 | 67. Resume Auto-Injection | 3/3 | Complete    | 2026-04-18 |
 | 68. Conversation Search + Deep Retrieval | 3/3 | Complete    | 2026-04-18 |
+
+### Phase 68.1: Close isTrustedChannel provenance wiring gap (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 68
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 68.1 to break down)

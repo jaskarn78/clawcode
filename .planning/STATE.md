@@ -95,6 +95,7 @@ Recent decisions affecting current work:
 
 - 2026-04-18: Milestone v1.9 Persistent Conversation Memory started -- 12 requirements defined
 - 2026-04-18: v1.9 roadmap created -- 5 phases (64-68), 12 requirements mapped 1:1
+- 2026-04-18: Phase 68.1 inserted after Phase 68: Close isTrustedChannel provenance wiring gap (URGENT — surfaced by v1.9 milestone audit; blocks CONV-01/SEC-01/RETR-02 in production)
 
 ### Pending Todos
 
