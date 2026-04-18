@@ -122,7 +122,11 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
   3. When a memory is extracted from conversation turns, the resulting MemoryEntry carries a `source_turn_ids` field linking it back to the specific conversation turns it was derived from -- lineage is verifiable by JOINing memories to conversation_turns
   4. Every stored conversation turn includes `discord_user_id`, `channel_id`, and `is_trusted_channel` provenance fields -- a turn from an untrusted channel is distinguishable from a trusted one without any post-hoc analysis
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 64-01-PLAN.md -- Types, Zod schemas, and SQLite migration methods (conversation_sessions, conversation_turns, source_turn_ids)
+- [ ] 64-02-PLAN.md -- ConversationStore class implementation, unit tests, and AgentMemoryManager wiring
 
 ### Phase 65: Capture Integration
 
@@ -199,13 +203,13 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 | v1.6 | 42-49 | Complete | 2026-04-12 |
 | v1.7 | 50-56 | Complete | 2026-04-14 |
 | v1.8 | 57-63 | Complete | 2026-04-17 |
-| v1.9 | 64-68 | Active -- roadmap ready | -- |
+| v1.9 | 64-68 | Active -- planning Phase 64 | -- |
 
 ### v1.9 Phase Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 64. ConversationStore + Schema Foundation | 0/TBD | Not started | - |
+| 64. ConversationStore + Schema Foundation | 0/2 | Planned | - |
 | 65. Capture Integration | 0/TBD | Not started | - |
 | 66. Session-Boundary Summarization | 0/TBD | Not started | - |
 | 67. Resume Auto-Injection | 0/TBD | Not started | - |
