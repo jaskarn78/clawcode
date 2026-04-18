@@ -63,6 +63,7 @@ import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
 import { chunkText, chunkPdf } from "../documents/chunker.js";
 import { GraphSearch } from "../memory/graph-search.js";
+import { invokeMemoryLookup } from "./memory-lookup-handler.js";
 import { startOfWeek } from "date-fns";
 import { ConfigWatcher } from "../config/watcher.js";
 import { ConfigReloader } from "./config-reloader.js";
@@ -1653,31 +1654,38 @@ async function routeMethod(
     }
 
     case "memory-lookup": {
+      // Phase 68-02 — scope-aware conversation search with pagination.
+      // Delegates to `invokeMemoryLookup` (memory-lookup-handler.ts) so the
+      // same handler body runs in production and integration tests without
+      // duplication. Branching: scope='memories' && page=0 → legacy
+      // GraphSearch (pre-v1.9 byte-compat); otherwise → searchByScope with
+      // paginated envelope (hasMore/nextOffset/origin/session_id).
       const agentName = validateStringParam(params, "agent");
       const query = validateStringParam(params, "query");
-      const limit = typeof params.limit === "number" ? Math.min(Math.max(params.limit, 1), 20) : 5;
-
       const store = manager.getMemoryStore(agentName);
       if (!store) {
-        throw new ManagerError(`Memory store not found for agent '${agentName}' (agent may not be running)`);
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
       }
 
-      const embedder = manager.getEmbedder();
-      const queryEmbedding = await embedder.embed(query);
-      const graphSearch = new GraphSearch(store);
-      const results = graphSearch.search(queryEmbedding, limit);
+      // Coerce raw IPC params to the handler's typed shape. All the
+      // defense-in-depth clamping (limit, page) happens inside the handler.
+      const scope =
+        params.scope === "conversations" || params.scope === "all"
+          ? params.scope
+          : "memories";
+      const page = typeof params.page === "number" ? params.page : 0;
+      const limit = typeof params.limit === "number" ? params.limit : 5;
 
-      return {
-        results: results.map((r) => ({
-          id: r.id,
-          content: r.content,
-          relevance_score: r.combinedScore,
-          tags: r.tags,
-          created_at: r.createdAt,
-          source: r.source,
-          linked_from: r.linkedFrom,
-        })),
-      };
+      return invokeMemoryLookup(
+        { agent: agentName, query, limit, scope, page },
+        {
+          memoryStore: store,
+          conversationStore: manager.getConversationStore(agentName),
+          embedder: manager.getEmbedder(),
+        },
+      );
     }
 
     case "usage": {
