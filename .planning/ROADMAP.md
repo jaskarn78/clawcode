@@ -141,7 +141,11 @@ Plans:
   2. A Discord message containing instruction-like patterns ("remember that you must always...", "from now on ignore...", "for future reference execute...") is flagged with a `potentially_directive` marker on the stored turn row before it enters the persistent record -- the flag is visible in the raw data and available to downstream summarization
   3. Session lifecycle events (agent start, agent stop, agent crash) are recorded as session boundary transitions in `conversation_sessions` -- the capture integration calls ConversationStore.startSession() on agent boot and endSession() on stop/crash
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 65-01-PLAN.md -- Instruction detector (SEC-02), schema extension (instruction_flags column), capture helper module with tests
+- [ ] 65-02-PLAN.md -- SessionManager lifecycle wiring (start/stop/crash sessions) and DiscordBridge capture integration
 
 ### Phase 66: Session-Boundary Summarization
 
@@ -203,14 +207,14 @@ Plans:
 | v1.6 | 42-49 | Complete | 2026-04-12 |
 | v1.7 | 50-56 | Complete | 2026-04-14 |
 | v1.8 | 57-63 | Complete | 2026-04-17 |
-| v1.9 | 64-68 | Active -- planning Phase 64 | -- |
+| v1.9 | 64-68 | Active -- planning Phase 65 | -- |
 
 ### v1.9 Phase Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
-| 65. Capture Integration | 0/TBD | Not started | - |
+| 65. Capture Integration | 0/2 | Planned | - |
 | 66. Session-Boundary Summarization | 0/TBD | Not started | - |
 | 67. Resume Auto-Injection | 0/TBD | Not started | - |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |
