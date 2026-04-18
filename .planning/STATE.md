@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Roadmap complete — ready for Phase 69 planning
-stopped_at: v2.0 roadmap created — 4 phases (69-72), 20/20 requirements mapped
-last_updated: "2026-04-18T23:00:00.000Z"
+status: Ready to execute
+stopped_at: Completed 69-01-PLAN.md — TurnOrigin 'openai-api' kind + defaults.openai schema + ApiKeysStore landed. Ready for 69-02 (HTTP server + translator + stream).
+last_updated: "2026-04-18T23:24:52.389Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 1
 ---
 
 # Project State
@@ -20,14 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.0 Open Endpoint + Eyes & Hands — OpenAI-compatible endpoint + browser/search/image MCPs
+**Current focus:** Phase 69 — OpenAI-Compatible Endpoint
 
 ## Current Position
 
-Milestone: v2.0 started 2026-04-18
-Phase: Not started (roadmap complete, Phase 69 next)
-Status: Roadmap complete — ready for Phase 69 planning
-Last activity: 2026-04-18 — v2.0 roadmap created (Phases 69-72)
+Phase: 69 (OpenAI-Compatible Endpoint) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -61,6 +59,8 @@ Recent decisions affecting current work:
 - [v2.0 Roadmap]: Browser is a resident singleton that warms at daemon boot (following the v1.7 embedder pattern from Phase 56) — NOT lazy-per-request. Search + image backends are lazy-per-first-call to keep idle daemon-boot SLO clean.
 - [v2.0 Roadmap]: Scope locked at `/v1/chat/completions` + `/v1/models` only. Legacy `/v1/completions` and `/v1/embeddings` explicitly out of scope.
 - [v2.0 Roadmap]: Image delivery reuses the existing `send_attachment` MCP tool — zero new Discord delivery surface introduced.
+- [Phase 69]: Phase 69-01: SHA-256 (not Argon2) for bearer-key storage — high-entropy tokens don't need password KDFs
+- [Phase 69]: Phase 69-01: length-guard BEFORE timingSafeEqual in verifyKey (Pitfall 6 — prevents RangeError on mismatched-length buffers)
 
 ### Roadmap Evolution
 
@@ -85,9 +85,10 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260418-sux | Fix schedule display field mismatch and add registry ghost-entry reconciliation | 2026-04-18 | 3d4ff24 | [260418-sux-fix-schedule-display-field-mismatch-and-](./quick/260418-sux-fix-schedule-display-field-mismatch-and-/) |
+| Phase 69 P01 | 13 | 3 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: v2.0 roadmap created — 4 phases (69-72), 20/20 requirements mapped. Ready for `/gsd:plan-phase 69`.
+Stopped at: Completed 69-01-PLAN.md — TurnOrigin 'openai-api' kind + defaults.openai schema + ApiKeysStore landed. Ready for 69-02 (HTTP server + translator + stream).
 Resume file: None
