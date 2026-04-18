@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
 status: Ready to execute
-stopped_at: Completed 69-01-PLAN.md — TurnOrigin 'openai-api' kind + defaults.openai schema + ApiKeysStore landed. Ready for 69-02 (HTTP server + translator + stream).
-last_updated: "2026-04-18T23:24:52.389Z"
+stopped_at: Completed 69-02-PLAN.md — src/openai/{types,translator,stream,server}.ts + tests. 122 openai tests green. Ready for 69-03 (daemon integration + CLI + E2E smoke).
+last_updated: "2026-04-18T23:52:31.547Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Phase: 69 (OpenAI-Compatible Endpoint) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -61,6 +61,10 @@ Recent decisions affecting current work:
 - [v2.0 Roadmap]: Image delivery reuses the existing `send_attachment` MCP tool — zero new Discord delivery surface introduced.
 - [Phase 69]: Phase 69-01: SHA-256 (not Argon2) for bearer-key storage — high-entropy tokens don't need password KDFs
 - [Phase 69]: Phase 69-01: length-guard BEFORE timingSafeEqual in verifyKey (Pitfall 6 — prevents RangeError on mismatched-length buffers)
+- [Phase 69-openai-compatible-endpoint]: Phase 69-02: OpenAiSessionDriver is a DI interface on server.ts, NOT a SessionAdapter extension — Plan 03 provides the real impl while Plan 02 stays hermetic from src/manager/
+- [Phase 69-openai-compatible-endpoint]: Phase 69-02: Translator uses Map<tool_use_id, openaiIndex> primary + Map<sdkBlockIndex, openaiIndex> secondary for streamed tool-call accumulation (Pitfall 1 guard)
+- [Phase 69-openai-compatible-endpoint]: Phase 69-02: Body-too-large uses req.pause() (not req.destroy()) so the 413 response body can still be written before the socket closes
+- [Phase 69-openai-compatible-endpoint]: Phase 69-02: Both req.on('close') AND res.on('close') wired to AbortController — Node event ordering varies on SSE connections, wiring both is the robust disconnect guard
 
 ### Roadmap Evolution
 
@@ -86,9 +90,10 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260418-sux | Fix schedule display field mismatch and add registry ghost-entry reconciliation | 2026-04-18 | 3d4ff24 | [260418-sux-fix-schedule-display-field-mismatch-and-](./quick/260418-sux-fix-schedule-display-field-mismatch-and-/) |
 | Phase 69 P01 | 13 | 3 tasks | 7 files |
+| Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 69-01-PLAN.md — TurnOrigin 'openai-api' kind + defaults.openai schema + ApiKeysStore landed. Ready for 69-02 (HTTP server + translator + stream).
+Stopped at: Completed 69-02-PLAN.md — src/openai/{types,translator,stream,server}.ts + tests. 122 openai tests green. Ready for 69-03 (daemon integration + CLI + E2E smoke).
 Resume file: None
