@@ -8,6 +8,8 @@ import {
   updateEntry,
   createEntry,
   EMPTY_REGISTRY,
+  reconcileRegistry,
+  type PrunedEntry,
 } from "../registry.js";
 import type { Registry, RegistryEntry } from "../types.js";
 
@@ -167,6 +169,178 @@ describe("updateEntry", () => {
     });
     expect(updated.entries[0].warm_path_ready).toBe(true);
     expect(updated.entries[0].warm_path_readiness_ms).toBe(127);
+  });
+});
+
+describe("reconcileRegistry", () => {
+  const mkEntry = (name: string): RegistryEntry => createEntry(name);
+
+  it("returns input unchanged (reference equality) for an empty registry", () => {
+    const result = reconcileRegistry(EMPTY_REGISTRY, new Set<string>());
+    expect(result.registry).toBe(EMPTY_REGISTRY);
+    expect(result.pruned).toEqual([]);
+  });
+
+  it("returns input unchanged when all entries are configured", () => {
+    const registry: Registry = {
+      entries: [mkEntry("clawdy"), mkEntry("admin-clawdy")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy", "admin-clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.registry).toBe(registry);
+    expect(result.pruned).toEqual([]);
+  });
+
+  it("prunes an unknown entry with reason 'unknown-agent' and preserves order of kept entries", () => {
+    const registry: Registry = {
+      entries: [mkEntry("clawdy"), mkEntry("ghost-agent"), mkEntry("admin-clawdy")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy", "admin-clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+      { name: "ghost-agent", reason: "unknown-agent" },
+    ]);
+    expect(result.registry.entries.map((e) => e.name)).toEqual([
+      "clawdy",
+      "admin-clawdy",
+    ]);
+  });
+
+  it("rename scenario — 'Admin Clawdy' pruned, 'admin-clawdy' retained", () => {
+    const registry: Registry = {
+      entries: [mkEntry("Admin Clawdy"), mkEntry("admin-clawdy")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["admin-clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+      { name: "Admin Clawdy", reason: "unknown-agent" },
+    ]);
+    expect(result.registry.entries.map((e) => e.name)).toEqual(["admin-clawdy"]);
+  });
+
+  it("retains a live subagent entry when its parent is configured", () => {
+    const registry: Registry = {
+      entries: [mkEntry("atlas-sub-abc123")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["atlas"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual([]);
+    expect(result.registry).toBe(registry);
+  });
+
+  it("prunes an orphaned subagent (unknown parent)", () => {
+    const registry: Registry = {
+      entries: [mkEntry("ghost-sub-xyz")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["atlas"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+      { name: "ghost-sub-xyz", reason: "orphaned-subagent" },
+    ]);
+    expect(result.registry.entries).toEqual([]);
+  });
+
+  it("retains a live thread entry when its parent is configured", () => {
+    const registry: Registry = {
+      entries: [mkEntry("clawdy-thread-1234")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual([]);
+    expect(result.registry).toBe(registry);
+  });
+
+  it("prunes an orphaned thread (unknown parent)", () => {
+    const registry: Registry = {
+      entries: [mkEntry("ghost-thread-567")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+      { name: "ghost-thread-567", reason: "orphaned-thread" },
+    ]);
+    expect(result.registry.entries).toEqual([]);
+  });
+
+  it("mixed real-world scenario prunes in registry order and keeps live entries", () => {
+    const registry: Registry = {
+      entries: [
+        mkEntry("clawdy"),
+        mkEntry("Admin Clawdy"),
+        mkEntry("admin-clawdy"),
+        mkEntry("clawdy-sub-abc"),
+        mkEntry("ghost-sub-def"),
+        mkEntry("clawdy-thread-1"),
+        mkEntry("ghost-thread-2"),
+      ],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy", "admin-clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.registry.entries.map((e) => e.name)).toEqual([
+      "clawdy",
+      "admin-clawdy",
+      "clawdy-sub-abc",
+      "clawdy-thread-1",
+    ]);
+    expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+      { name: "Admin Clawdy", reason: "unknown-agent" },
+      { name: "ghost-sub-def", reason: "orphaned-subagent" },
+      { name: "ghost-thread-2", reason: "orphaned-thread" },
+    ]);
+  });
+
+  it("is immutable — original registry and entries array untouched when pruning occurs", () => {
+    const originalEntries: readonly RegistryEntry[] = [
+      mkEntry("clawdy"),
+      mkEntry("ghost-agent"),
+    ];
+    const registry: Registry = {
+      entries: originalEntries,
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    // Original array and registry untouched
+    expect(registry.entries).toBe(originalEntries);
+    expect(registry.entries.map((e) => e.name)).toEqual(["clawdy", "ghost-agent"]);
+    expect(registry.updatedAt).toBe(100);
+    // Returned registry is a new object
+    expect(result.registry).not.toBe(registry);
+    expect(result.registry.entries).not.toBe(registry.entries);
+  });
+
+  it("bumps updatedAt when pruning occurs", () => {
+    const before = Date.now();
+    const registry: Registry = {
+      entries: [mkEntry("ghost")],
+      updatedAt: 100,
+    };
+    const known = new Set<string>(["clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.registry.updatedAt).toBeGreaterThan(100);
+    expect(result.registry.updatedAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("treats empty-parent '-sub-foo' as orphaned-subagent (never matched against known agents)", () => {
+    const registry: Registry = {
+      entries: [mkEntry("-sub-foo")],
+      updatedAt: 100,
+    };
+    // Even if the empty string were somehow in the set, it must not be treated as a live parent.
+    const known = new Set<string>(["", "clawdy"]);
+    const result = reconcileRegistry(registry, known);
+    expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+      { name: "-sub-foo", reason: "orphaned-subagent" },
+    ]);
+    expect(result.registry.entries).toEqual([]);
   });
 });
 

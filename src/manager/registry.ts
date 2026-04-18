@@ -113,6 +113,100 @@ export function updateEntry(
 }
 
 /**
+ * A registry entry removed by {@link reconcileRegistry}, together with the
+ * reason the pruner rejected it. Emitted for ops logging so operators can
+ * trace ghost-entry removals in journalctl.
+ */
+export type PrunedEntry = {
+  readonly name: string;
+  readonly reason: "unknown-agent" | "orphaned-subagent" | "orphaned-thread";
+};
+
+/**
+ * Reconcile the registry against the currently-configured set of agents.
+ *
+ * Returns a new Registry with ghost entries removed, plus a list of pruned
+ * entries for logging. Does NOT mutate the input registry.
+ *
+ * Retention rules (an entry is KEPT iff any of these is true):
+ *   1. `entry.name` is in `knownAgentNames` (a configured agent).
+ *   2. `entry.name` matches `{parent}-sub-{id}` AND parent ∈ `knownAgentNames`.
+ *   3. `entry.name` matches `{parent}-thread-{id}` AND parent ∈ `knownAgentNames`.
+ *
+ * Any other entry is pruned with a reason:
+ *   - `"unknown-agent"` — no `-sub-` / `-thread-` suffix, and name not in
+ *     `knownAgentNames`.
+ *   - `"orphaned-subagent"` — has `-sub-` suffix but parent segment is empty
+ *     or not in `knownAgentNames`.
+ *   - `"orphaned-thread"` — has `-thread-` suffix but parent segment is empty
+ *     or not in `knownAgentNames`.
+ *
+ * Names like `-sub-foo` / `-thread-foo` (empty parent segment) are routed to
+ * `orphaned-subagent` / `orphaned-thread` respectively — structurally they
+ * look like subagent/thread sessions with a broken parent, and the empty
+ * string is never treated as a live parent even if it happens to be present
+ * in `knownAgentNames`.
+ *
+ * When no pruning occurs the original registry is returned by reference
+ * (identity-equal) so callers can skip the `writeRegistry` call entirely
+ * on clean boots. When pruning occurs, `updatedAt` bumps to `Date.now()`.
+ *
+ * @param registry         The current registry state
+ * @param knownAgentNames  The set of agent names currently configured
+ */
+export function reconcileRegistry(
+  registry: Registry,
+  knownAgentNames: ReadonlySet<string>,
+): { readonly registry: Registry; readonly pruned: readonly PrunedEntry[] } {
+  const pruned: PrunedEntry[] = [];
+  const kept: RegistryEntry[] = [];
+
+  for (const entry of registry.entries) {
+    // Rule 1: exact match to a configured agent.
+    if (knownAgentNames.has(entry.name)) {
+      kept.push(entry);
+      continue;
+    }
+
+    // Rule 2: live subagent session — name shaped like `{parent}-sub-{id}`.
+    const subIdx = entry.name.indexOf("-sub-");
+    if (subIdx !== -1) {
+      const parent = entry.name.slice(0, subIdx);
+      if (parent.length > 0 && knownAgentNames.has(parent)) {
+        kept.push(entry);
+      } else {
+        pruned.push({ name: entry.name, reason: "orphaned-subagent" });
+      }
+      continue;
+    }
+
+    // Rule 3: live thread session — name shaped like `{parent}-thread-{id}`.
+    const threadIdx = entry.name.indexOf("-thread-");
+    if (threadIdx !== -1) {
+      const parent = entry.name.slice(0, threadIdx);
+      if (parent.length > 0 && knownAgentNames.has(parent)) {
+        kept.push(entry);
+      } else {
+        pruned.push({ name: entry.name, reason: "orphaned-thread" });
+      }
+      continue;
+    }
+
+    // No structural match — plain unknown agent.
+    pruned.push({ name: entry.name, reason: "unknown-agent" });
+  }
+
+  if (pruned.length === 0) {
+    return { registry, pruned: [] };
+  }
+
+  return {
+    registry: { entries: kept, updatedAt: Date.now() },
+    pruned,
+  };
+}
+
+/**
  * Type guard for Node.js system errors with a code property.
  */
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
