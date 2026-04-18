@@ -110,6 +110,12 @@ None yet.
 - Context assembly ceiling (default 8000 tokens from Phase 52) may be too low once conversation_context section is added -- verify with clawcode context-audit after Phase 67
 - 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only) -- legacy carry-over
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260418-sux | Fix schedule display field mismatch and add registry ghost-entry reconciliation | 2026-04-18 | 3d4ff24 | [260418-sux-fix-schedule-display-field-mismatch-and-](./quick/260418-sux-fix-schedule-display-field-mismatch-and-/) |
+
 ## Session Continuity
 
 Last activity: 2026-04-18
