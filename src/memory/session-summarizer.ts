@@ -113,14 +113,205 @@ export function buildRawTurnFallback(
 
 /**
  * Summarize a completed conversation session and write the result as a
- * MemoryEntry. Implementation lands in Task 2 of this plan.
+ * MemoryEntry.
  *
- * See `session-summarizer.types.ts` for the result discriminated union.
+ * Pipeline (14 steps):
+ *  1. Load session via conversationStore.getSession
+ *  2. Idempotency: if status=summarized, short-circuit with skipped
+ *  3. State machine: if status=active, reject with session-not-terminal
+ *  4. Load turns via getTurnsForSession (Pitfall 2: use turns.length, not
+ *     session.turnCount — turn_count is eventually-consistent under
+ *     fire-and-forget recordTurn writes from Phase 65)
+ *  5. Minimum-turns guard (default 3); skip cleanly with no writes
+ *  6. Build prompt (buildSessionSummarizationPrompt)
+ *  7. Call deps.summarize with an AbortController-driven timeout
+ *  8. On success: use the LLM content verbatim
+ *  9. On timeout/error/empty-response: use buildRawTurnFallback + tag
+ *     "raw-fallback" so the session still becomes summarized (idempotent)
+ *     and operators can find these entries and re-summarize later.
+ * 10. Embed the chosen content (summary or raw fallback)
+ * 11. Build tags ["session-summary", `session:${id}`, optional "raw-fallback"]
+ * 12. memoryStore.insert with source="conversation", sourceTurnIds,
+ *     skipDedup=true (summaries are unique by definition)
+ * 13. conversationStore.markSummarized — non-fatal if it throws (state
+ *     race: session may have been re-transitioned by another caller;
+ *     the memory row still exists and is searchable)
+ * 14. Return frozen success result
+ *
+ * All paths are non-fatal: summarizeSession NEVER throws to its caller.
  */
 export async function summarizeSession(
-  _input: SummarizeSessionInput,
-  _deps: SummarizeSessionDeps,
+  input: SummarizeSessionInput,
+  deps: SummarizeSessionDeps,
 ): Promise<SummarizeSessionResult> {
-  // TASK 2 implements this pipeline. For now, a stub that throws.
-  throw new Error("summarizeSession not yet implemented (Task 2)");
+  const { agentName, sessionId } = input;
+  const timeoutMs = deps.config?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const minTurns = deps.config?.minTurns ?? DEFAULT_MIN_TURNS;
+  const importance = deps.config?.importance ?? DEFAULT_IMPORTANCE;
+
+  // Step 1 — load session
+  const session = deps.conversationStore.getSession(sessionId);
+  if (!session) {
+    deps.log.warn(
+      { agent: agentName, session: sessionId },
+      "summarize: session not found",
+    );
+    return Object.freeze({
+      skipped: true as const,
+      reason: "session-not-found" as const,
+    });
+  }
+
+  // Step 2 — idempotency: already summarized (Pitfall 5)
+  if (session.status === "summarized") {
+    return Object.freeze({
+      skipped: true as const,
+      reason: "already-summarized" as const,
+    });
+  }
+
+  // Step 3 — state machine: must be in terminal status
+  if (session.status === "active") {
+    deps.log.warn(
+      { agent: agentName, session: sessionId, status: session.status },
+      "summarize: session still active — caller must end/crash first",
+    );
+    return Object.freeze({
+      skipped: true as const,
+      reason: "session-not-terminal" as const,
+    });
+  }
+
+  // Step 4 — load turns (use .length, NOT session.turnCount — Pitfall 2)
+  const turns = deps.conversationStore.getTurnsForSession(sessionId);
+
+  // Step 5 — minimum turns guard
+  if (turns.length < minTurns) {
+    return Object.freeze({
+      skipped: true as const,
+      reason: "insufficient-turns" as const,
+      turnCount: turns.length,
+    });
+  }
+
+  // Step 6-9 — build prompt, call summarize with timeout, fallback on failure
+  const prompt = buildSessionSummarizationPrompt(turns);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let summaryContent: string;
+  let fallback = false;
+  try {
+    summaryContent = await Promise.race([
+      deps.summarize(prompt, { signal: controller.signal }),
+      new Promise<string>((_, reject) => {
+        controller.signal.addEventListener("abort", () =>
+          reject(new Error("summarize timeout after " + timeoutMs + "ms")),
+        );
+      }),
+    ]);
+    if (!summaryContent || summaryContent.trim().length === 0) {
+      // Empty LLM response is treated as failure so the session still
+      // gets a (raw-fallback) summary row and becomes idempotent.
+      throw new Error("summarize returned empty content");
+    }
+  } catch (err) {
+    deps.log.warn(
+      {
+        agent: agentName,
+        session: sessionId,
+        error: (err as Error).message,
+      },
+      "summarize failed — using raw-turn fallback",
+    );
+    summaryContent = buildRawTurnFallback(turns);
+    fallback = true;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // Step 10 — embed the chosen content
+  let embedding: Float32Array;
+  try {
+    embedding = await deps.embedder.embed(summaryContent);
+  } catch (err) {
+    deps.log.warn(
+      {
+        agent: agentName,
+        session: sessionId,
+        error: (err as Error).message,
+      },
+      "embedding failed — aborting summarization",
+    );
+    // Embedder failed — skip without writing. Session stays in ended/crashed
+    // so a later retry (or manual intervention) can try again.
+    return Object.freeze({
+      skipped: true as const,
+      reason: "session-not-terminal" as const,
+      turnCount: turns.length,
+    });
+  }
+
+  // Step 11-12 — build tags, insert MemoryEntry
+  const baseTags: string[] = ["session-summary", `session:${sessionId}`];
+  if (fallback) baseTags.push("raw-fallback");
+  const tags = Object.freeze([...baseTags]);
+  const sourceTurnIds = Object.freeze(turns.map((t) => t.id));
+
+  let memoryId: string;
+  try {
+    const entry = deps.memoryStore.insert(
+      {
+        content: summaryContent,
+        source: "conversation",
+        importance,
+        tags,
+        sourceTurnIds,
+        // summaries are unique by definition; dedup would incorrectly
+        // merge distinct sessions into one summary row.
+        skipDedup: true,
+      },
+      embedding,
+    );
+    memoryId = entry.id;
+  } catch (err) {
+    deps.log.warn(
+      {
+        agent: agentName,
+        session: sessionId,
+        error: (err as Error).message,
+      },
+      "memoryStore.insert failed — summarization aborted",
+    );
+    return Object.freeze({
+      skipped: true as const,
+      reason: "session-not-terminal" as const,
+      turnCount: turns.length,
+    });
+  }
+
+  // Step 13 — markSummarized (non-fatal if race/state mismatch)
+  try {
+    deps.conversationStore.markSummarized(sessionId, memoryId);
+  } catch (err) {
+    deps.log.warn(
+      {
+        agent: agentName,
+        session: sessionId,
+        memoryId,
+        error: (err as Error).message,
+      },
+      "markSummarized failed after insert — memory row present but session FK not set",
+    );
+    // Non-fatal: the memory exists and is searchable; the session FK
+    // just wasn't set. Operators can reconcile later.
+  }
+
+  // Step 14 — success
+  return Object.freeze({
+    success: true as const,
+    memoryId,
+    fallback,
+    turnCount: turns.length,
+  });
 }
