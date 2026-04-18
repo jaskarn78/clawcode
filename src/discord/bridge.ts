@@ -36,6 +36,7 @@ import {
   makeRootOriginWithTurnId,
   DISCORD_SNOWFLAKE_PREFIX,
 } from "../manager/turn-origin.js";
+import { captureDiscordExchange } from "./capture.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -623,6 +624,29 @@ export class DiscordBridge {
 
       // Phase 50: end Turn on success after all post-processing completes
       try { turn?.end("success"); } catch { /* non-fatal */ }
+
+      // Phase 65: fire-and-forget conversation capture (SEC-02 instruction detection runs inside)
+      try {
+        const convStore = this.sessionManager.getConversationStore(sessionName);
+        const activeSessionId = this.sessionManager.getActiveConversationSessionId(sessionName);
+        if (convStore && activeSessionId) {
+          captureDiscordExchange({
+            convStore,
+            sessionId: activeSessionId,
+            userContent: formattedMessage,
+            assistantContent: response,
+            channelId,
+            discordUserId: message.author.id,
+            discordMessageId: message.id,
+            log: this.log,
+          });
+        }
+      } catch (err) {
+        this.log.warn(
+          { agent: sessionName, error: (err as Error).message },
+          "conversation capture failed (non-fatal)",
+        );
+      }
     } catch (error) {
       if (typingInterval) clearInterval(typingInterval);
       if (editor) editor.dispose();
