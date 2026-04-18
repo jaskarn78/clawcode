@@ -576,3 +576,197 @@ describe("startAgent warm-path gate (Phase 56)", () => {
     await m.stopAll();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 66 Plan 03 — session-boundary summarization wiring
+// ---------------------------------------------------------------------------
+import type { SummarizeFn } from "../../memory/session-summarizer.types.js";
+
+describe("SessionManager session-boundary summarization (Phase 66)", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+  let mockSummarize: ReturnType<typeof vi.fn>;
+
+  // Per-test unique workspace so each agent gets a fresh memories.db and
+  // ConversationStore. Shared /tmp/test-workspace across tests would mean
+  // a previous test's sessions persist, inflating turn counts.
+  function makeIsolatedConfig(name: string): ResolvedAgentConfig {
+    return { ...makeConfig(name), workspace: tmpDir };
+  }
+
+  beforeEach(async () => {
+    // Use REAL timers for these tests. The crash-path test awaits a real
+    // promise released via releaseSummarize(), so fake timers would hang.
+    vi.useRealTimers();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-p66-"));
+    registryPath = join(tmpDir, "registry.json");
+    // Default mock returns a well-formed markdown summary synchronously.
+    mockSummarize = vi.fn().mockResolvedValue(
+      "## User Preferences\n- mock pref\n\n## Decisions\n(none)\n\n## Open Threads\n(none)\n\n## Commitments\n(none)\n",
+    );
+    // Warm-path check is mocked module-wide from earlier; default from the
+    // outer beforeEach already returns ready=true.
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+      summarizeFn: mockSummarize as unknown as SummarizeFn,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* ignore */
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("stopAgent with >=3 turns triggers summarize and inserts a session-summary memory", async () => {
+    const config = makeIsolatedConfig("stop-summarize");
+    await manager.startAgent("stop-summarize", config);
+
+    const convStore = manager.getConversationStore("stop-summarize")!;
+    const convSessionId = manager.getActiveConversationSessionId(
+      "stop-summarize",
+    )!;
+    expect(convStore).toBeDefined();
+    expect(convSessionId).toBeTruthy();
+
+    // Seed 4 turns (above the minTurns=3 threshold)
+    for (let i = 0; i < 4; i++) {
+      convStore.recordTurn({
+        sessionId: convSessionId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `turn ${i} content with enough text`,
+      });
+    }
+
+    // Spy on memoryStore.insert BEFORE stopAgent (cleanupMemory closes the store).
+    const memStore = manager.getMemoryStore("stop-summarize")!;
+    const insertSpy = vi.spyOn(memStore, "insert");
+
+    await manager.stopAgent("stop-summarize");
+
+    // summarize was invoked exactly once with the agent-facing prompt
+    expect(mockSummarize).toHaveBeenCalledTimes(1);
+    const [prompt, opts] = mockSummarize.mock.calls[0]!;
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain("## User Preferences");
+    expect(opts).toHaveProperty("signal");
+
+    // memoryStore.insert called with a session-summary entry
+    const sessionSummaryCall = insertSpy.mock.calls.find(
+      (call) =>
+        (call[0] as { tags?: readonly string[] }).tags?.includes(
+          "session-summary",
+        ) ?? false,
+    );
+    expect(sessionSummaryCall).toBeDefined();
+    const input = sessionSummaryCall![0] as {
+      source: string;
+      tags: readonly string[];
+      sourceTurnIds?: readonly string[];
+    };
+    expect(input.source).toBe("conversation");
+    expect(input.tags).toContain("session-summary");
+    expect(input.tags).toContain(`session:${convSessionId}`);
+    expect(input.sourceTurnIds).toBeDefined();
+    expect(input.sourceTurnIds!.length).toBe(4);
+  });
+
+  it("stopAgent with <3 turns skips summarize (minTurns guard)", async () => {
+    const config = makeIsolatedConfig("stop-skip");
+    await manager.startAgent("stop-skip", config);
+
+    const convStore = manager.getConversationStore("stop-skip")!;
+    const convSessionId = manager.getActiveConversationSessionId(
+      "stop-skip",
+    )!;
+
+    // Seed only 2 turns — below minTurns=3
+    convStore.recordTurn({
+      sessionId: convSessionId,
+      role: "user",
+      content: "first",
+    });
+    convStore.recordTurn({
+      sessionId: convSessionId,
+      role: "assistant",
+      content: "second",
+    });
+
+    await manager.stopAgent("stop-skip");
+
+    expect(mockSummarize).not.toHaveBeenCalled();
+  });
+
+  it("onError (crash) schedules summarize fire-and-forget: crashSession transitions state synchronously, summarize completes asynchronously", async () => {
+    const config = makeIsolatedConfig("crash-summarize");
+    await manager.startAgent("crash-summarize", config);
+
+    const convStore = manager.getConversationStore("crash-summarize")!;
+    const convSessionId = manager.getActiveConversationSessionId(
+      "crash-summarize",
+    )!;
+
+    // Seed 4 turns so summarize will actually run (>= minTurns)
+    for (let i = 0; i < 4; i++) {
+      convStore.recordTurn({
+        sessionId: convSessionId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `crash turn ${i}`,
+      });
+    }
+
+    // Make summarize HANG until we release it — lets us observe that crash
+    // handler returns synchronously while summarize is still pending.
+    let releaseSummarize: ((value: string) => void) | null = null;
+    const summarizePromise = new Promise<string>((resolve) => {
+      releaseSummarize = resolve;
+    });
+    mockSummarize.mockReturnValue(summarizePromise);
+
+    // Get the MockSessionHandle via the existing harness pattern
+    const registry = await readRegistry(registryPath);
+    const entry = registry.entries.find((e) => e.name === "crash-summarize")!;
+    const sessionId = entry.sessionId!;
+    const handle = adapter.sessions.get(sessionId) as MockSessionHandle;
+    expect(handle).toBeDefined();
+
+    // Trigger crash — this calls onError synchronously inside MockSessionHandle
+    handle.simulateCrash(new Error("simulated crash"));
+
+    // Wait for the crash handler to complete (awaits crashSession sync work
+    // + recovery.handleCrash; leaves summarize detached).
+    await manager._lastCrashPromise;
+
+    // ASSERT 1: session status transitioned to "crashed" synchronously,
+    // BEFORE we release the hung summarize promise.
+    const sessionAfterCrash = convStore.getSession(convSessionId);
+    expect(sessionAfterCrash).not.toBeNull();
+    expect(sessionAfterCrash!.status).toBe("crashed");
+
+    // ASSERT 2: summarize was SCHEDULED (called) but has not yet resolved.
+    expect(mockSummarize).toHaveBeenCalledTimes(1);
+
+    // Now release summarize so the detached promise can complete.
+    releaseSummarize!(
+      "## User Preferences\n(none)\n\n## Decisions\n(none)\n\n## Open Threads\n(none)\n\n## Commitments\n(none)\n",
+    );
+
+    // Give the detached promise a few macrotasks to resolve + run markSummarized.
+    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // ASSERT 3: summarize was called with correct prompt.
+    expect(mockSummarize).toHaveBeenCalledTimes(1);
+    const [prompt] = mockSummarize.mock.calls[0]!;
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain("## User Preferences");
+  });
+});
