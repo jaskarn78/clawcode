@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Milestone complete
+status: v1.9 milestone complete
 stopped_at: Completed 68.1-01-PLAN.md — isTrustedChannel capture-path wiring live; CONV-01/SEC-01/RETR-02 honest end-to-end
-last_updated: "2026-04-18T19:46:48.052Z"
+last_updated: "2026-04-18T19:49:26.596Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 68.1 — close-istrustedchannel-provenance-wiring-gap
+**Current focus:** Planning next milestone (v1.10 or v2.0)
 
 ## Current Position
 
-Phase: 68.1
-Plan: Not started
+Milestone: v1.9 shipped 2026-04-18
+Next: run `/gsd:new-milestone` to scope the next version
 
 ## Performance Metrics
 

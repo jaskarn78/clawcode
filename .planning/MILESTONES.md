@@ -1,5 +1,27 @@
 # Milestones: ClawCode
 
+## v1.9 Persistent Conversation Memory (Shipped: 2026-04-18)
+
+**Phases completed:** 5 phases, 13 plans, 27 tasks
+
+**Key accomplishments:**
+
+- Conversation type contracts, Zod config schema, and SQLite migrations for persistent conversation sessions/turns with SEC-01 provenance tracking
+- ConversationStore class with 8-method session lifecycle CRUD, transactional turn recording with provenance fields, and AgentMemoryManager wiring
+- Instruction-pattern detector with high/medium risk classification, conversation schema extension for instruction_flags, and fire-and-forget capture helper tying detection to turn recording
+- Wired ConversationStore lifecycle into SessionManager and fire-and-forget turn capture into DiscordBridge -- every successful Discord response now auto-persists with SEC-02 instruction detection
+- CreateMemoryInput now accepts optional sourceTurnIds; MemoryStore.insert persists source_turn_ids in a single atomic transaction and propagates the frozen array (or null) into the returned MemoryEntry — closing the CONV-03 write-path gap Phase 64 left open.
+- Pure dependency-injected session-boundary summarization pipeline — compresses a completed (ended or crashed) conversation session into a standard MemoryEntry (source="conversation", tags ["session-summary", "session:{id}"], sourceTurnIds populated) via an injected `summarize` function, with AbortController-timeout, raw-turn fallback on LLM failure, and idempotent markSummarized dual-write.
+- summarizeWithHaiku helper + SessionManager lifecycle hooks (stopAgent awaited, onError fire-and-forget) complete the session-boundary summarization pipeline end-to-end.
+- Pure `assembleConversationBrief(input, deps)` helper renders last-N session-summary MemoryEntries as markdown under a stable `## Recent Sessions` heading, with 4-hour gap-skip short-circuit and accumulate-strategy budget enforcement — all behaviour covered by 11 unit tests with deterministic `now: number` injection.
+- Wired the `assembleConversationBrief` helper from Plan 01 into `buildSessionConfig` via three new `SessionConfigDeps` fields (conversationStores/memoryStores/now), extended the assembler's canonical `SECTION_NAMES` to 8 entries with `conversation_context` landing in the mutable suffix (never the cached stable prefix), and proved end-to-end wiring with 5 tests including a mutable-suffix-only invariant assertion and a graceful-degradation path.
+- Closed the single runtime gap blocking SESS-02 and SESS-03 by threading `conversationStores` + `memoryStores` through `SessionManager.configDeps()` — a surgical two-line addition that activates the entire Phase 67 read-path at runtime.
+- FTS5 external-content virtual table + sync triggers + ConversationStore.searchTurns + pure-DI searchByScope orchestrator with BM25 sign inversion, decay weighting, session-summary dedup, and offset-based pagination.
+- Extended `memory_lookup` MCP tool with backward-compatible scope + page parameters, extracted the IPC case body to a reusable helper, and landed 10 end-to-end integration tests exercising the full MCP → IPC → searchByScope → SQL → response chain with real in-memory SQLite stores.
+- Threaded the `retrievalHalfLifeDays` config knob from `conversationConfigSchema` through `ResolvedAgentConfig` → daemon `memory-lookup` IPC case → `invokeMemoryLookup` → `searchByScope`'s `halfLifeDays` parameter, turning the inert RETR-03 tunable knob into a live runtime control proven by a TDD regression test.
+
+---
+
 ## v1.8 Proactive Agents + Handoffs (Shipped: 2026-04-17)
 
 **Phases completed:** 7 phases, 21 plans, 48 tasks
