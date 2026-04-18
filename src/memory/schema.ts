@@ -72,6 +72,11 @@ export const conversationConfigSchema = z.object({
   resumeGapThresholdHours: z.number().min(0).default(4),
   // Phase 67 — dedicated budget for conversation_context section (NOT shared with resume_summary)
   conversationContextBudget: z.number().int().min(500).default(2000),
+  // Phase 68 — RETR-03: half-life for retrieval-time decay weighting over
+  // conversation search results (memories + session-summaries + raw turns).
+  // 14 days (faster than general-memory default of 30) because conversation
+  // recency is disproportionately valuable for "what did we talk about?".
+  retrievalHalfLifeDays: z.number().int().min(1).default(14),
 });
 
 /** Schema for memory system configuration. */

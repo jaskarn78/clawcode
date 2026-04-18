@@ -77,6 +77,7 @@ export class MemoryStore {
       this.migrateConversationTables();
       this.migrateSourceTurnIds();
       this.migrateInstructionFlags();
+      this.migrateConversationTurnsFts();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -710,6 +711,69 @@ export class MemoryStore {
       this.db.exec(
         "ALTER TABLE conversation_turns ADD COLUMN instruction_flags TEXT DEFAULT NULL"
       );
+    }
+  }
+
+  /**
+   * Phase 68 — RETR-02. Create FTS5 full-text index over conversation_turns.content
+   * in external-content mode, plus AI/AD/AU triggers for automatic synchronization,
+   * plus a one-shot backfill gated on sqlite_master lookup for idempotency across
+   * daemon restarts (Pitfall 2: unconditional backfill would double-index on every
+   * startup). Tokenizer: `unicode61 remove_diacritics 2` (SQLite default — handles
+   * English safely without stemming; if agents report recall gaps during dogfooding,
+   * swap to `porter unicode61` via a follow-up migration).
+   *
+   * External-content mode (`content='conversation_turns'`) avoids duplicating the
+   * `content` text — FTS5 stores only tokens and looks up the original row by
+   * rowid. Triggers run inside SQLite's transaction boundary so zero code changes
+   * are required in `ConversationStore.recordTurn` / `DELETE` / `UPDATE` paths.
+   */
+  private migrateConversationTurnsFts(): void {
+    const existing = this.db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_turns_fts'",
+      )
+      .get();
+    const needsBackfill = !existing;
+
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS conversation_turns_fts USING fts5(
+        content,
+        content='conversation_turns',
+        content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS conversation_turns_ai
+      AFTER INSERT ON conversation_turns BEGIN
+        INSERT INTO conversation_turns_fts(rowid, content)
+          VALUES (new.rowid, new.content);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS conversation_turns_ad
+      AFTER DELETE ON conversation_turns BEGIN
+        INSERT INTO conversation_turns_fts(conversation_turns_fts, rowid, content)
+          VALUES ('delete', old.rowid, old.content);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS conversation_turns_au
+      AFTER UPDATE ON conversation_turns BEGIN
+        INSERT INTO conversation_turns_fts(conversation_turns_fts, rowid, content)
+          VALUES ('delete', old.rowid, old.content);
+        INSERT INTO conversation_turns_fts(rowid, content)
+          VALUES (new.rowid, new.content);
+      END;
+    `);
+
+    if (needsBackfill) {
+      // One-shot backfill so turns recorded BEFORE this migration ran (Phase 64/65
+      // era rows under an older schema) become searchable on the first post-upgrade
+      // daemon boot. Guarded by the sqlite_master existence check above — running
+      // this on every construction would produce O(n²) duplicates.
+      this.db.exec(`
+        INSERT INTO conversation_turns_fts(rowid, content)
+          SELECT rowid, content FROM conversation_turns;
+      `);
     }
   }
 

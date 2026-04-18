@@ -590,4 +590,21 @@ describe("conversationConfigSchema (Phase 67)", () => {
     const parsed = conversationConfigSchema.parse({ resumeGapThresholdHours: 0 });
     expect(parsed.resumeGapThresholdHours).toBe(0);
   });
+
+  // Phase 68 — RETR-03: retrievalHalfLifeDays knob
+  it("retrievalHalfLifeDays defaults to 14", () => {
+    const parsed = conversationConfigSchema.parse({});
+    expect(parsed.retrievalHalfLifeDays).toBe(14);
+  });
+
+  it("retrievalHalfLifeDays accepts custom positive integer", () => {
+    const parsed = conversationConfigSchema.parse({ retrievalHalfLifeDays: 7 });
+    expect(parsed.retrievalHalfLifeDays).toBe(7);
+  });
+
+  it("retrievalHalfLifeDays rejects 0 (min=1)", () => {
+    expect(() =>
+      conversationConfigSchema.parse({ retrievalHalfLifeDays: 0 }),
+    ).toThrow();
+  });
 });

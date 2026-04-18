@@ -68,3 +68,50 @@ export type RecordTurnInput = {
   readonly origin?: string;
   readonly instructionFlags?: string;
 };
+
+// ---------------------------------------------------------------------------
+// Phase 68 — RETR-02: full-text search over conversation turns via FTS5
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for searching conversation turns via FTS5.
+ *
+ * `limit`/`offset` are enforced by the caller (the orchestrator clamps to
+ * `MAX_RESULTS_PER_PAGE = 10`; ConversationStore itself does not clamp).
+ * `includeUntrustedChannels` defaults to `false` for SEC-01 hygiene — keeps
+ * memory-poisoning vectors from leaking into agent context via search.
+ */
+export type SearchTurnsOptions = {
+  readonly limit: number;
+  readonly offset: number;
+  readonly includeUntrustedChannels?: boolean;
+};
+
+/**
+ * A single FTS5 match against `conversation_turns.content`.
+ *
+ * `bm25Score` is the raw FTS5 BM25 output — lower values mean better matches
+ * (FTS5 multiplies BM25 by -1 internally). Downstream consumers (the scoped
+ * search orchestrator) convert to a positive relevance in [0, 1].
+ */
+export type ConversationTurnSearchResult = {
+  readonly turnId: string;
+  readonly sessionId: string;
+  readonly role: "user" | "assistant" | "system";
+  readonly content: string;
+  readonly bm25Score: number;
+  readonly createdAt: string;
+  readonly channelId: string | null;
+  readonly isTrustedChannel: boolean;
+};
+
+/**
+ * Pagination envelope returned by `ConversationStore.searchTurns`.
+ *
+ * `totalMatches` counts every match across the full FTS5 index (not just the
+ * returned page) so callers can derive `hasMore` without a second query.
+ */
+export type SearchTurnsResult = {
+  readonly results: readonly ConversationTurnSearchResult[];
+  readonly totalMatches: number;
+};

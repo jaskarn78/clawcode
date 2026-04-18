@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { MemoryStore } from "../store.js";
 import { ConversationStore } from "../conversation-store.js";
 
@@ -605,6 +608,284 @@ describe("ConversationStore", () => {
       expect(colNames).toContain("is_trusted_channel");
       expect(colNames).toContain("origin");
       expect(colNames).toContain("created_at");
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Phase 68 Plan 01 — RETR-02: FTS5 migration + sync triggers + backfill
+  // ---------------------------------------------------------------------
+
+  describe("FTS5 migration", () => {
+    it("creates conversation_turns_fts virtual table idempotently", () => {
+      setup();
+      const db = memStore.getDatabase();
+
+      const first = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_turns_fts'",
+        )
+        .all();
+      expect(first.length).toBe(1);
+
+      // Idempotency is provided by `CREATE VIRTUAL TABLE IF NOT EXISTS` +
+      // the sqlite_master-gated backfill. Re-invoking the same migration on
+      // the same connection must be a no-op. We use the existing
+      // :memory: DB and issue the migration SQL again manually — simulates
+      // what happens on daemon restart against a shared connection.
+      const migrationSql = `
+        CREATE VIRTUAL TABLE IF NOT EXISTS conversation_turns_fts USING fts5(
+          content,
+          content='conversation_turns',
+          content_rowid='rowid',
+          tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS conversation_turns_ai
+        AFTER INSERT ON conversation_turns BEGIN
+          INSERT INTO conversation_turns_fts(rowid, content)
+            VALUES (new.rowid, new.content);
+        END;
+      `;
+      expect(() => db.exec(migrationSql)).not.toThrow();
+
+      const second = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_turns_fts'",
+        )
+        .all();
+      expect(second.length).toBe(1);
+    });
+
+    it("creates all three triggers (AI/AD/AU) in sqlite_master", () => {
+      setup();
+      const db = memStore.getDatabase();
+      const rows = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'conversation_turns_a%' ORDER BY name",
+        )
+        .all() as ReadonlyArray<{ name: string }>;
+      const names = rows.map((r) => r.name).sort();
+      expect(names).toEqual([
+        "conversation_turns_ad",
+        "conversation_turns_ai",
+        "conversation_turns_au",
+      ]);
+    });
+  });
+
+  describe("backfill", () => {
+    it("indexes turns recorded before the migration ran", () => {
+      // Exercise the backfill path in-process on an in-memory DB:
+      //   1. Construct MemoryStore (creates FTS5 table + triggers)
+      //   2. Drop FTS5 + triggers, then INSERT a raw turn bypassing triggers
+      //      — simulates a pre-Phase-68 row on a schema that didn't have FTS5
+      //   3. Manually invoke the same CREATE/BACKFILL SQL the migration runs,
+      //      gated on sqlite_master absence (which is now true after drop)
+      //   4. Assert the pre-existing row is now in FTS5 and searchable
+      setup();
+      const db = memStore.getDatabase();
+      const session = convStore.startSession("agent-a");
+
+      // Drop FTS5 infra to simulate pre-migration state
+      db.exec(`
+        DROP TRIGGER IF EXISTS conversation_turns_ai;
+        DROP TRIGGER IF EXISTS conversation_turns_ad;
+        DROP TRIGGER IF EXISTS conversation_turns_au;
+        DROP TABLE IF EXISTS conversation_turns_fts;
+      `);
+
+      // Insert with triggers absent — row lands in conversation_turns only
+      db.prepare(
+        `INSERT INTO conversation_turns
+           (id, session_id, turn_index, role, content, token_count,
+            channel_id, discord_user_id, discord_message_id,
+            is_trusted_channel, origin, instruction_flags, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        "pre-phase-68-turn",
+        session.id,
+        0,
+        "user",
+        "pre-migration content about deployment",
+        null,
+        null,
+        null,
+        null,
+        0,
+        null,
+        null,
+        new Date().toISOString(),
+      );
+
+      // Confirm FTS5 absent before re-running the migration
+      const before = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_turns_fts'",
+        )
+        .all();
+      expect(before.length).toBe(0);
+
+      // Re-run the migration body (mirrors migrateConversationTurnsFts)
+      const existing = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_turns_fts'",
+        )
+        .get();
+      const needsBackfill = !existing;
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS conversation_turns_fts USING fts5(
+          content,
+          content='conversation_turns',
+          content_rowid='rowid',
+          tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS conversation_turns_ai
+        AFTER INSERT ON conversation_turns BEGIN
+          INSERT INTO conversation_turns_fts(rowid, content)
+            VALUES (new.rowid, new.content);
+        END;
+      `);
+      if (needsBackfill) {
+        db.exec(`
+          INSERT INTO conversation_turns_fts(rowid, content)
+            SELECT rowid, content FROM conversation_turns;
+        `);
+      }
+
+      const ftsCount = db
+        .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
+        .get() as { c: number };
+      const rawCount = db
+        .prepare("SELECT COUNT(*) AS c FROM conversation_turns")
+        .get() as { c: number };
+      expect(ftsCount.c).toBe(rawCount.c);
+      expect(rawCount.c).toBe(1);
+
+      const hit = db
+        .prepare(
+          "SELECT content FROM conversation_turns_fts WHERE conversation_turns_fts MATCH ?",
+        )
+        .get("deployment") as { content: string } | undefined;
+      expect(hit?.content).toContain("deployment");
+    });
+
+    it("does not re-run backfill on subsequent MemoryStore constructions", () => {
+      // Uses an on-disk tmp DB (required because :memory: DBs do not share
+      // state across connections). mkdtempSync+rmSync pattern lifted from
+      // graph-search.test.ts — proven fast with dedup disabled.
+      const tempDir = mkdtempSync(join(tmpdir(), "fts5-noredup-"));
+      const dbPath = join(tempDir, "test.db");
+      try {
+        const s1 = new MemoryStore(dbPath, {
+          enabled: false,
+          similarityThreshold: 0.85,
+        });
+        const c1 = new ConversationStore(s1.getDatabase());
+        const session = c1.startSession("agent-a");
+        c1.recordTurn({
+          sessionId: session.id,
+          role: "user",
+          content: "hello world idempotency test",
+        });
+        const countAfterFirst = s1
+          .getDatabase()
+          .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
+          .get() as { c: number };
+        expect(countAfterFirst.c).toBe(1);
+        s1.close();
+
+        // Second construction — if backfill re-ran unconditionally, count
+        // would be 2 (duplicate row). sqlite_master gate prevents that.
+        const s2 = new MemoryStore(dbPath, {
+          enabled: false,
+          similarityThreshold: 0.85,
+        });
+        const countAfterReopen = s2
+          .getDatabase()
+          .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
+          .get() as { c: number };
+        expect(countAfterReopen.c).toBe(1);
+        s2.close();
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("trigger", () => {
+    it("keeps FTS5 in sync on INSERT via recordTurn", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "hello world",
+      });
+
+      const db = memStore.getDatabase();
+      const rows = db
+        .prepare(
+          "SELECT rowid, content FROM conversation_turns_fts WHERE conversation_turns_fts MATCH ?",
+        )
+        .all("hello") as ReadonlyArray<{ rowid: number; content: string }>;
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.content).toBe("hello world");
+    });
+
+    it("removes from FTS5 on DELETE", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      const turn = convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "delete me deployment",
+      });
+
+      const db = memStore.getDatabase();
+      // Confirm present
+      const before = db
+        .prepare(
+          "SELECT COUNT(*) AS c FROM conversation_turns_fts WHERE conversation_turns_fts MATCH 'deployment'",
+        )
+        .get() as { c: number };
+      expect(before.c).toBe(1);
+
+      db.prepare("DELETE FROM conversation_turns WHERE id = ?").run(turn.id);
+
+      const after = db
+        .prepare(
+          "SELECT COUNT(*) AS c FROM conversation_turns_fts WHERE conversation_turns_fts MATCH 'deployment'",
+        )
+        .get() as { c: number };
+      expect(after.c).toBe(0);
+    });
+
+    it("replaces FTS5 entry on UPDATE", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      const turn = convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "hello team",
+      });
+
+      const db = memStore.getDatabase();
+      db.prepare("UPDATE conversation_turns SET content = ? WHERE id = ?").run(
+        "goodbye team",
+        turn.id,
+      );
+
+      const helloHits = db
+        .prepare(
+          "SELECT COUNT(*) AS c FROM conversation_turns_fts WHERE conversation_turns_fts MATCH 'hello'",
+        )
+        .get() as { c: number };
+      const goodbyeHits = db
+        .prepare(
+          "SELECT COUNT(*) AS c FROM conversation_turns_fts WHERE conversation_turns_fts MATCH 'goodbye'",
+        )
+        .get() as { c: number };
+      expect(helloHits.c).toBe(0);
+      expect(goodbyeHits.c).toBe(1);
     });
   });
 });
