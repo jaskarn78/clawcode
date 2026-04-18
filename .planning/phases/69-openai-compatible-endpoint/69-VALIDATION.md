@@ -1,9 +1,9 @@
 ---
 phase: 69
 slug: openai-compatible-endpoint
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-04-18
 ---
 
@@ -84,4 +84,6 @@ created: 2026-04-18
 - [ ] Feedback latency < 30s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-04-18
+
+**Wave 0 rationale:** Plans use per-task TDD (`tdd="true"` on every implementation task). Each task creates its test file AND implementation together in a single atomic commit. This satisfies Dimensions 8a/8b/8c (automated verify on every task, quick commands, no sampling gaps) without a separate Wave 0 stub-seeding pass. Test files listed under Wave 0 Requirements are all covered by the implementation tasks that own them.
