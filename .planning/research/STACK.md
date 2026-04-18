@@ -1,252 +1,333 @@
-# Stack Research: v1.8 Proactive Agents + Handoffs
+# Stack Research: v1.9 Persistent Conversation Memory
 
-**Domain:** External-trigger detection, declarative policy matching, cross-agent typed RPC, durable task lifecycle
-**Researched:** 2026-04-13
+**Domain:** Conversation persistence + retrieval for multi-agent orchestration
+**Researched:** 2026-04-17
 **Confidence:** HIGH
 
 ## Scope
 
-This research covers ONLY new additions required for v1.8. The existing validated stack (TypeScript 6.0, Node.js 22 LTS, @anthropic-ai/claude-agent-sdk 0.2.x, better-sqlite3 12.x, sqlite-vec 0.1.9, @huggingface/transformers 4.x, croner 10.x, execa 9.x, zod 4.x, pino 9.x, discord.js 14.x, @modelcontextprotocol/sdk, chokidar 5.x, nanoid 5.x) is NOT re-evaluated — it is reused wherever possible.
+This research covers ONLY what is needed for v1.9: conversation turn persistence, session-boundary summarization, auto-inject on resume, and relevance-decay-weighted retrieval. The existing validated stack (TypeScript 6.0, Node.js 22 LTS, better-sqlite3 12.x, sqlite-vec 0.1.9, @huggingface/transformers 4.x, @anthropic-ai/tokenizer 0.0.4, croner 10.x, zod 4.x, pino 9.x, nanoid 5.x, date-fns 4.x, commander 14.x) is NOT re-evaluated.
 
 The existing substrate already provides:
-- A Unix-socket JSON-RPC 2.0 IPC server with zod-validated request/response schemas (`src/ipc/protocol.ts`)
-- A Node-built-in `http.createServer` dashboard (`src/dashboard/server.ts`) — no framework
-- An MCP server on stdio (`src/mcp/server.ts`) used for subagent-thread spawning and agent-to-agent messaging
-- Per-agent SQLite stores following an established "per-agent `.db` under workspace" pattern
-- A `croner`-backed TaskScheduler already running scheduled consolidations and daily summary cron jobs
-- A file-inbox cross-agent messaging primitive watched via `chokidar`
-
-The answer below is deliberately minimal: almost every v1.8 capability can be built on top of this substrate with a small, focused dependency footprint.
+- Per-agent SQLite databases with WAL mode, sqlite-vec loaded, prepared statements (`src/memory/store.ts`)
+- Schema migration pattern: savepoint-test or `PRAGMA table_info` detection (`migrateSchema()`, `migrateTierColumn()`, `migrateEpisodeSource()`, `migrateGraphLinks()`)
+- MemoryEntry CRUD with embedding storage, dedup, auto-linking, importance scoring
+- SemanticSearch with 2x over-fetch, relevance-decay re-ranking, importance weighting (`src/memory/search.ts`)
+- EmbeddingService singleton with ~50ms/embed latency (`src/memory/embedder.ts`)
+- Context assembler with stable/mutable split, per-section token budgets, resumeSummary slot (`src/manager/context-assembler.ts`)
+- Resume summary budget enforcement: configurable cap (default 1500 tokens, floor 500), regeneration loop, hard-truncate fallback (`src/memory/context-summary.ts`)
+- Token counting via @anthropic-ai/tokenizer wrapped in `countTokens()` (`src/performance/token-count.ts`)
+- SessionLogger writing daily markdown logs (`src/memory/session-log.ts`)
+- Consolidation pipeline with LLM summarization callback, prompt builders, digest writing (`src/memory/consolidation.ts`)
+- EpisodeStore as a pattern for domain-specific MemoryEntry wrappers (`src/memory/episode-store.ts`)
+- TurnDispatcher as the single chokepoint for all agent turns with TurnOrigin metadata (`src/manager/turn-dispatcher.ts`)
+- Relevance decay scoring with configurable half-life (`src/memory/decay.ts`, `src/memory/relevance.ts`)
+- Hot/warm/cold tier management, knowledge graph auto-linking, memory dedup
+- `memory_lookup` MCP tool for on-demand semantic search
 
 ## Recommended Stack Additions
 
-### Core Technologies
+### New Dependencies Required
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| **(no new core)** | — | Trigger scheduler / policy engine / RPC transport / task store | All four v1.8 capabilities can be built on top of the existing substrate (croner + better-sqlite3 + the Unix-socket JSON-RPC server + zod). Adding a workflow orchestrator here would fight the Agent SDK's own process lifecycle the same way PM2 would have. See "What NOT to Add" below for the full list of rejected heavyweight options. |
-| **@vlasky/zongji** | 0.6.1 (pub 2026-02-13) | MySQL 5.7 / 8.0 binlog change-stream (CDC) | The only actively maintained Zongji fork in 2026 (nevill/, rodrigogs/, manojVivek/ forks last published 2022). `@vlasky/zongji` is the canonical community fork used by PlanetScale tooling and is the upstream for `@powersync/mysql-zongji`. Gives row-level INSERT/UPDATE/DELETE events in real time with zero load on the query layer — polling SELECTs of Finmentum tables would miss deletes, create DB load, and couple the trigger engine to every table schema. Use binlog CDC by default; fall back to polling only when binlog access is not available. |
-| **node-ical** | 0.26.0 | ICS feed parser (RFC 5545) | Only used for the ICS-fallback calendar trigger source. 3M+ weekly downloads, zero runtime deps, handles recurring events via RRULE expansion. Included as an optional trigger source for any user whose calendar is exposed as an `.ics` URL rather than Google Calendar API. |
-| **googleapis** | 171.x | Google Calendar API client (watch channels + incremental sync) | May already be a transitive need for the google-workspace MCP integration. Google Calendar's `events.watch` push channels expire every 7 days and Google's own docs state notifications are "not 100% reliable" — the robust pattern is push channel + periodic incremental sync via `syncToken`. `googleapis` is the official SDK; using it keeps the OAuth/token path consistent with the existing MCP workspace integration. Only pull in if the Google Calendar MCP does not already expose change notifications to us (verify during Phase 1 of v1.8). |
+**None.**
 
-### Supporting Libraries
+v1.9 requires zero new npm dependencies. Every capability is buildable on the existing stack.
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| **p-retry** | 8.0.0 | Exponential backoff for cross-agent task retries and webhook delivery | When an agent-to-agent RPC call times out or returns a retryable error, the caller's task record needs bounded retries with jitter. `p-retry` is the smallest well-maintained option (sindresorhus, 10M+ DL/week), ESM-native, uses `retry` under the hood. Prefer this over hand-rolling `setTimeout(exponential)` which always gets jitter wrong. |
-| **p-timeout** | 7.0.1 | Hard-deadline enforcement for cross-agent RPC | Each handoff has an agent-configurable timeout (default ~5 min). `p-timeout` wraps a Promise with `AbortController` cancellation so we can propagate cancellation into the callee agent's turn via the SDK's `AbortSignal`. |
-| **p-queue** | 9.1.2 | Bounded concurrency per callee agent | A single callee agent can only meaningfully service one handoff at a time (Claude Code sessions are single-threaded). `p-queue` with `concurrency: 1` gives us an ordered per-agent mailbox without Redis/BullMQ. Already used internally by several stack deps. |
-| **raw-body** | 3.0.2 | Safe request body buffering for webhook receiver | Node's built-in `http` leaves body handling to you. `raw-body` is the Node ecosystem standard (used by Express, Koa, Fastify internals) with a hard size limit to prevent OOM on malicious webhook payloads. Tiny (~14KB), zero transitive deps. |
+### Existing Stack -- What Each Component Does for v1.9
 
-### Schema-Only Additions (No New Dependencies)
+| Technology | Current Version | v1.9 Role | Integration Point |
+|------------|----------------|-----------|-------------------|
+| better-sqlite3 | ^12.8.0 | New `conversation_turns` + `conversation_sessions` tables in per-agent memory.db | MemoryStore schema migration pattern |
+| sqlite-vec | ^0.1.9 | Session summaries stored as MemoryEntries participate in existing vec_memories KNN search | SemanticSearch.search() -- zero changes needed |
+| @huggingface/transformers | ^4.0.1 | Embed session summaries on creation | EmbeddingService.embed() -- zero changes needed |
+| @anthropic-ai/tokenizer | ^0.0.4 | Per-turn token counting, auto-inject budget enforcement | countTokens() -- zero changes needed |
+| date-fns | ^4.1.0 | Session duration, turn timestamps, retention window calculation | differenceInMinutes(), formatISO() -- already available |
+| nanoid | ^5.1.7 | IDs for conversation turns and session records | Already used throughout MemoryStore |
+| zod | ^4.3.6 | Schema validation for conversation config | Same pattern as memoryConfigSchema |
+| pino | ^9 | Structured logging for conversation persistence | shared/logger.ts -- zero changes needed |
+| croner | ^10.0.1 | Scheduled retention cleanup of old raw turns | Already used for memory consolidation cron |
+| commander | ^14.0.3 | CLI commands for conversation history browsing | Existing CLI framework |
 
-The task lifecycle store extends the existing per-daemon SQLite pattern. New file: `~/.clawcode/state/tasks.db` (daemon-scoped, NOT per-agent — tasks cross agent boundaries by definition).
+## Architecture-Driving Decisions
+
+### 1. Same Database, New Tables (NOT a Separate Database)
+
+**Decision:** Add `conversation_turns` and `conversation_sessions` tables to the existing per-agent `memory.db` via MemoryStore migration.
+
+**Why:** MemoryStore is the single database owner per agent. It already handles WAL mode, busy_timeout, sqlite-vec extension loading, and schema migrations. Adding tables here:
+- Maintains single-writer simplicity (no cross-db WAL contention with 14+ agents)
+- Enables JOIN queries between conversation turns and memory entries (e.g., "find memories created during session X")
+- Follows the established migration pattern exactly (see `migrateGraphLinks()` as the closest prior art)
+- Keeps per-agent backup/restore atomic
+
+**NOT a separate `conversations.db`** because cross-db JOINs in SQLite require ATTACH which complicates prepared statements, and two databases per agent doubles WAL contention risk.
+
+### 2. Session Summaries as MemoryEntries (NOT a Separate Retrieval System)
+
+**Decision:** Session-boundary summaries are stored as standard `MemoryEntry` objects with `source="conversation"` and tagged `["session-summary", "session:{id}"]`.
+
+**Why:** This is the exact pattern used by:
+- `EpisodeStore`: source="episode", tagged ["episode"]
+- Consolidation pipeline: source="consolidation", tagged ["weekly-digest", weekStr]
+
+By storing session summaries as MemoryEntries, they automatically:
+- Participate in semantic search via `SemanticSearch.search()` -- zero search changes
+- Get relevance decay scoring via `calculateRelevanceScore()` -- zero decay changes
+- Get importance-based ranking via `scoreAndRank()` -- zero ranking changes
+- Flow through hot/warm/cold tier system -- zero tier changes
+- Appear in `memory_lookup` MCP tool results -- zero MCP changes
+- Get auto-linked by the knowledge graph auto-linker -- zero graph changes
+- Get dedup-checked against similar existing memories -- zero dedup changes
+
+Zero new retrieval infrastructure needed.
+
+### 3. Auto-Inject via Context Assembler's resumeSummary Slot (NOT a New Pipeline Section)
+
+**Decision:** Auto-inject on resume extends the existing `ContextSources.resumeSummary` path in `context-assembler.ts`.
+
+**Why:** The context assembler already has:
+- A `resumeSummary` field that lands in the mutable suffix (uncached, per-turn)
+- Budget enforcement via `enforceSummaryBudget()` with configurable token cap (default 1500, floor 500)
+- Per-section token counting for audit (`section_tokens.resume_summary`)
+- The stable/mutable split for prompt caching compatibility
+
+The auto-inject enhancement loads N most recent session summaries, formats them into a structured brief, and feeds the result into `resumeSummary`. Adding a new section would change `SectionTokenCounts`, `ContextSources`, `SectionName`, `MemoryAssemblyBudgets`, and `DEFAULT_PHASE53_BUDGETS` -- cascading through 20+ files. Reusing `resumeSummary` avoids this entirely.
+
+### 4. Turn Recording via TurnDispatcher Post-Dispatch Hook (NOT Discord Bridge)
+
+**Decision:** Conversation turn recording hooks into TurnDispatcher's `dispatch()`/`dispatchStream()` return path.
+
+**Why:** TurnDispatcher (v1.8) is "the single chokepoint for every agent-turn initiation." Every Discord message, scheduler invocation, and handoff flows through it. Recording turns here:
+- Captures ALL turn sources (Discord, scheduler, handoff) in one place
+- Has access to `origin.rootTurnId`, `origin` type, agent name, and channel ID via `DispatchOptions`
+- Has access to both the input message and the response string (the return value)
+- Avoids scattering persistence logic across Discord bridge, scheduler bridge, and handoff receiver
+- The `TurnOrigin` type already carries source metadata for attributing turns
+
+### 5. Raw Turns WITHOUT Per-Turn Embedding (Embed Only Session Summaries)
+
+**Decision:** Store raw conversation turns as text without computing embeddings. Only session summaries get embedded.
+
+**Why:**
+- 14 agents x ~50 turns/session x ~50ms/embed = 35 seconds of embedding compute per full session per agent -- unacceptable latency per message
+- Individual turns are low-signal for semantic search ("hi", "thanks", "yes do that")
+- Session summaries distill turns into high-signal searchable facts -- this is where embedding adds value
+- Raw turns remain queryable via SQL (WHERE content LIKE ? or exact session_id lookup) for precise recall
+- If full-text search over raw turns proves necessary: SQLite's built-in FTS5 requires zero new dependencies (compiled into better-sqlite3's bundled SQLite). Add as a v1.9.1 enhancement if SQL LIKE proves insufficient.
+
+### 6. LLM Summarization via Existing Callback Pattern
+
+**Decision:** Reuse the consolidation pipeline's `summarize: (prompt: string) => Promise<string>` callback pattern for session-boundary summarization.
+
+**Why:** The consolidation pipeline (`consolidation.ts`) already:
+- Accepts a `summarize` callback injected by the caller (pure dependency injection)
+- Uses it for weekly/monthly digest generation
+- Has prompt-building helpers (`buildWeeklySummarizationPrompt`, `buildMonthlySummarizationPrompt`)
+- Handles truncation of long inputs (`MAX_PROMPT_CHARS = 30000`)
+
+Session-end summarization follows the identical pattern: collect turns, build a summarization prompt, call the injected summarizer, store the result. The summarizer implementation (which model, how to invoke) is the caller's concern, keeping the persistence module pure.
+
+## Schema Design
+
+### conversation_sessions Table
 
 ```sql
--- Cross-agent handoff / task lifecycle
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,                -- nanoid
-  parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-  source TEXT NOT NULL,               -- 'trigger:<name>' | 'agent:<id>' | 'user:<channel>'
-  from_agent TEXT,                    -- NULL when source is trigger/user
-  to_agent TEXT NOT NULL,
-  task_type TEXT NOT NULL,            -- 'handoff' | 'triggered'
-  schema_name TEXT,                   -- named typed-RPC contract (e.g. 'research.deep-dive')
-  payload_json TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN
-    ('queued','dispatched','in_progress','completed','failed','cancelled','timeout')),
-  attempt INTEGER NOT NULL DEFAULT 0,
-  max_attempts INTEGER NOT NULL DEFAULT 3,
-  timeout_ms INTEGER NOT NULL DEFAULT 300000,
+CREATE TABLE IF NOT EXISTS conversation_sessions (
+  id TEXT PRIMARY KEY,
+  agent_name TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  summary_memory_id TEXT,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active', 'ended', 'summarized')),
+  FOREIGN KEY (summary_memory_id) REFERENCES memories(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_agent
+  ON conversation_sessions(agent_name);
+CREATE INDEX IF NOT EXISTS idx_sessions_status
+  ON conversation_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_started
+  ON conversation_sessions(started_at);
+```
+
+### conversation_turns Table
+
+```sql
+CREATE TABLE IF NOT EXISTS conversation_turns (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  turn_id TEXT,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  channel_id TEXT,
+  origin TEXT,
+  token_count INTEGER,
   created_at TEXT NOT NULL,
-  dispatched_at TEXT,
-  completed_at TEXT,
-  result_json TEXT,                   -- populated on success
-  error_json TEXT                     -- populated on failure/timeout
+  FOREIGN KEY (session_id) REFERENCES conversation_sessions(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_tasks_to_agent_status ON tasks(to_agent, status);
-CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
-
--- Durable trigger state (sync tokens, last-seen binlog position, etc.)
-CREATE TABLE IF NOT EXISTS trigger_state (
-  trigger_id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,                 -- 'mysql_binlog' | 'gcal_watch' | 'ics_poll' | 'webhook' | 'inbox_watch' | 'scheduled'
-  cursor_json TEXT NOT NULL,          -- e.g. { log_file, log_pos } or { sync_token, channel_id, expires_at }
-  last_tick_at TEXT NOT NULL,
-  last_error TEXT,
-  consecutive_failures INTEGER NOT NULL DEFAULT 0
-);
+CREATE INDEX IF NOT EXISTS idx_turns_session
+  ON conversation_turns(session_id);
+CREATE INDEX IF NOT EXISTS idx_turns_created
+  ON conversation_turns(created_at);
 ```
 
-### Development Tools
+### Config Schema Addition
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| **(existing: vitest, tsx, tsup, typescript)** | Unchanged | v1.8 adds no new dev tooling. Fake-timers in vitest already handle cron-scheduled trigger tests. |
-| **docker-compose (dev only)** | MySQL 8 + binlog enabled for CDC integration tests | Not a runtime dep — needed in `docker-compose.test.yml` to spin up a MySQL with `binlog_format=ROW` for zongji integration tests. Can alternatively use a shared dev MySQL, but containerised is reproducible. |
-
-## Installation
-
-```bash
-# Core runtime additions
-npm install @vlasky/zongji@^0.6.1 node-ical@^0.26.0
-
-# Optional — only if Google Calendar MCP does not already surface push notifications
-npm install googleapis@^171.0.0
-
-# Supporting
-npm install p-retry@^8.0.0 p-timeout@^7.0.1 p-queue@^9.1.2 raw-body@^3.0.2
+```typescript
+export const conversationConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  autoSummarize: z.boolean().default(true),
+  summaryModel: z.enum(["sonnet", "opus", "haiku"]).default("haiku"),
+  resumeSessionCount: z.number().int().min(1).max(10).default(3),
+  resumeTokenBudget: z.number().int().min(500).max(4000).default(1500),
+  turnRetentionDays: z.number().int().min(7).default(90),
+  summaryImportance: z.number().min(0.1).max(1).default(0.75),
+});
 ```
 
-No new dev dependencies.
+### New MemorySource Value
 
-## Integration Points with Existing Substrate
+The existing `memorySourceSchema` already includes `"conversation"` -- no CHECK constraint migration needed. Session summaries use `source: "conversation"` with tags to distinguish them from other conversation-sourced memories.
 
-| v1.8 Capability | Existing Code to Extend | How |
-|-----------------|------------------------|-----|
-| Trigger engine scheduling loop | `src/manager/daemon.ts` + `TaskScheduler` (croner) | Register trigger sources as long-lived services started by the daemon lifecycle. Polling-based triggers (ICS, gcal sync-token sweep, polling CDC fallback) register as `croner` jobs. Stream-based triggers (zongji binlog, webhook HTTP, chokidar inbox) register as background listeners with their own backoff/restart supervision. |
-| Policy layer | `src/config/schema.ts` (zod) + config hot-reload (v1.2) | Declare trigger→agent matching rules in `clawcode.yaml` under a `triggers:` key, validated with zod. Hot-reload already watches the config; reuse that mechanism so policy changes don't require daemon restart. |
-| Webhook receiver | `src/dashboard/server.ts` (Node built-in http) | Add `/webhook/:triggerId` routes to the same http server. It already supports routing by path segment and JSON body handling — just add `raw-body` for size-bounded parsing and HMAC verification middleware. Zero new listeners, zero new ports. |
-| Cross-agent RPC transport | `src/ipc/protocol.ts` + `src/ipc/server.ts` (Unix-socket JSON-RPC) | Add new IPC methods: `task-create`, `task-status`, `task-cancel`, `task-list`. Agents call these as **MCP tools** (exposed via `src/mcp/server.ts`) that proxy into the daemon IPC. The daemon is the single arbiter of task state — agents never talk to each other directly, avoiding the distributed-consensus problem entirely. |
-| Timeout + cancellation | Agent SDK `AbortSignal` + `p-timeout` | `p-timeout` produces an `AbortController`; wire its signal into the SDK's `query({ abortController })` for the callee's turn. On cancellation, the daemon marks the task `cancelled` and the callee's current tool call is interrupted at the next safe point. |
-| Task lifecycle store | New daemon-scoped `tasks.db` using better-sqlite3 | Same `new Database(path)` + synchronous prepared-statement pattern used by every other store. A single writer (the daemon) eliminates the concurrency concerns that would otherwise push us toward a real queue. Enable WAL mode for dashboard read concurrency. |
-| Dashboard task graph | `src/dashboard/server.ts` + SSE (v1.2) | New endpoint `/api/tasks` + SSE channel `tasks:changed`. The existing SSE manager can broadcast task-state transitions. Front-end renders the parent→child task DAG. |
-| CLI surface | `src/cli/commands/*` via commander | Add `clawcode tasks list|show|cancel` commands that call the new IPC methods. Same pattern as `clawcode status`, `clawcode schedules`, `clawcode memory search`. |
+## New Files (Following Existing Patterns)
 
-## Trigger Source Decision Matrix
-
-| Source | Detection Mechanism | Rationale |
-|--------|--------------------|-----------|
-| **MySQL DB state (Finmentum)** | `@vlasky/zongji` binlog (`binlog_format=ROW`) with ROTATE/XID event-based checkpoint persisted to `trigger_state.cursor_json` | Row-level changes with zero query-layer load, catches DELETEs (polling can't), server-side filter by schema/table. Fall back to polling SELECT only when binlog access is unavailable. |
-| **Calendar (Google)** | `events.watch` push channel (7-day TTL, auto-renew) + hourly `events.list(syncToken)` incremental sweep | Google's own docs classify push as "not 100% reliable"; pairing with a periodic sync-token poll is the canonical pattern. Channel renewal runs as a croner job. |
-| **Calendar (ICS)** | `croner`-scheduled poll of the ICS URL, `node-ical` parse, diff against last snapshot hashed on `(uid, sequence, dtstart)` | For any user whose calendar isn't Google-hosted. Every 5-15 min is fine — ICS is cache-friendly. |
-| **Inbox arrivals** | `chokidar` watch of `<agent>/inbox/` (existing primitive) | Already used for cross-agent messaging. Extends cleanly to "external inbox" semantics for email-bridge or file-drop triggers. |
-| **Webhook hits** | New `/webhook/:triggerId` route on the existing dashboard `http.Server` | Already have the listener, just add routes. HMAC-SHA256 signature verification for inbound security. |
-| **Scheduled observations** | `croner` job → synthesises a trigger event | Already available. Example: "every weekday 09:00, fire `daily-standup` trigger to admin agent." |
-
-## Cross-Agent RPC Design Rationale
-
-**Contract:** Every named handoff has a zod schema (`schema_name` in the `tasks` table) registered at daemon startup. Caller's payload is validated before dispatch; callee's result is validated before being written to `result_json`. Same mechanism as our IPC request/response validation — just extended to a typed-task catalogue.
-
-**Transport:** The daemon's existing Unix-socket JSON-RPC server is the single choke point. Callers invoke a `task-create` MCP tool. The daemon:
-1. Validates payload against `schema_name`.
-2. Inserts a `queued` row into `tasks`.
-3. Either (a) posts a `task-dispatch` notification to the callee agent's Claude Code session via the existing message-injection pathway, or (b) waits for the callee to long-poll via `task-claim` (for agents that prefer pull over push).
-4. When the callee finishes, it calls `task-complete` with a result payload.
-5. The original caller either awaited the promise or fire-and-forgot — in both cases the dashboard + CLI reflect the state transition.
-
-**Why not synchronous RPC:** PROJECT.md's "Out of Scope" list explicitly rejects "Synchronous agent-to-agent RPC — async inbox pattern is simpler and more reliable." The task store IS the durable inbox. The caller's promise-await is a thin convenience layer over an async store, not a synchronous wire protocol.
-
-**Cancellation path:** Caller issues `task-cancel(id)`. Daemon flips status to `cancelled`, fires the callee's `AbortSignal` (propagated through the SDK's `query({ abortController })`), and records the cancellation in the audit trail. If the callee is between tool calls, cancellation lands cleanly; if mid-tool, the tool completes and the next loop iteration sees the aborted state.
+| New File | Pattern From | Purpose |
+|----------|-------------|---------|
+| `src/memory/conversation-store.ts` | `episode-store.ts` | ConversationStore class: session CRUD, turn recording, session listing, turn retrieval |
+| `src/memory/conversation-summarizer.ts` | `consolidation.ts` | Prompt builder for session-end summarization, summary-to-MemoryEntry pipeline |
+| `src/memory/conversation-resume.ts` | `context-summary.ts` | Load N recent session summaries, format as structured brief, enforce token budget |
 
 ## Alternatives Considered
 
 | Recommended | Alternative | When to Use Alternative |
 |-------------|-------------|-------------------------|
-| Extend existing croner + `Unix-socket JSON-RPC` + `tasks.db` | **BullMQ** (Redis-backed job queue) | Only if ClawCode grows to multiple daemon hosts that need a shared queue. Single-host, single-daemon doesn't justify the Redis operational dependency. BullMQ also fights the Agent SDK's own process lifecycle (it wants to own worker processes). |
-| Extend existing croner + `tasks.db` | **Trigger.dev v4** (self-hosted) | If v2.0+ grows to dozens of triggers with complex multi-step workflows and we need a visual DAG editor. Adds Docker/Postgres/Redis as ops deps. At v1.8 scale this is overkill by about two orders of magnitude. |
-| Extend existing croner + `tasks.db` | **Inngest** (self-hosted) | If event-driven fan-out with step-function semantics becomes core. Requires running the Inngest dev server / dedicated infra. For in-process, single-daemon orchestration it's overkill. |
-| Extend existing croner + `tasks.db` | **Temporal.io** | If we ever need true distributed durable execution with weeks-long workflows and polyglot workers. Requires PostgreSQL/Cassandra + Elasticsearch + multiple server processes. Never appropriate for a single-host multi-agent daemon. |
-| `@vlasky/zongji` (binlog CDC) | **Polling SELECT** with `updated_at > last_tick` | Fallback when MySQL binlog access isn't available (shared hosting, managed DB without replication user). Misses DELETEs, adds query load, requires a reliable `updated_at` column — only use when forced. |
-| `@vlasky/zongji` | **`@powersync/mysql-zongji`** | Also actively maintained (last pub 2025-12). Pick this one if you already use PowerSync or need their specific MySQL 8.0 auth plugin enhancements. Functionally very close to `@vlasky/zongji`; pick one and stick with it. |
-| `@vlasky/zongji` | **Database-level TRIGGER + outbox table** polled by ClawCode | Traditional "outbox pattern." Use if binlog is unavailable AND you can modify the target schema to add triggers + an outbox table. Gives near-zero-poll semantics via short poll. More intrusive than binlog; needs schema changes in Finmentum. |
-| Extend existing dashboard `http.Server` for webhooks | Stand up a separate `fastify` or `hono` HTTP server for webhook ingest | Only if webhook volume exceeds ~100 req/s sustained and the dashboard HTTP server becomes a latency bottleneck. At that point split the listener; not before. |
-| Node built-in `http` + `raw-body` | **Fastify** / **Hono** / **Express** for the webhook receiver | These frameworks are for apps with rich routing trees. We have ~5 routes. Adding a framework trades a 14KB dep for a 200KB+ dep plus the cognitive cost of another abstraction layer atop Node's http module. Revisit when we have 30+ routes. |
-| Daemon-local `tasks.db` (SQLite WAL) | **PostgreSQL** (listen/notify for task dispatch) | If we ever need multiple daemons sharing task state. Same reasoning as BullMQ: single-daemon architecture doesn't justify it. |
-| Daemon arbitrates all cross-agent RPC via its existing socket | Direct agent-to-agent Unix sockets or named pipes | Creates an N*N connection mesh, duplicates security policy, and sidesteps the central audit trail. Centralisation through the daemon is exactly the property that enables durable task lifecycle + audit log + policy enforcement. |
-| `p-retry` + `p-timeout` + `p-queue` (in-process primitives) | Rolling your own with `setTimeout` | The three `p-*` libs are ~8KB combined, zero-dep (or single transitive), covered by sindresorhus's maintenance. Custom timers always get jitter, AbortSignal wiring, and unhandled-rejection cleanup wrong on the first three attempts. |
+| Same memory.db, new tables | Separate conversations.db per agent | Never. Cross-db JOINs need ATTACH; two dbs per agent doubles WAL contention. |
+| Raw turns without embedding | Embed every turn individually | Only if per-turn semantic search is mandatory. Adds ~50ms latency per message per agent. Unlikely to be needed -- session summaries cover this. |
+| MemoryEntry for session summaries | Separate summary table with own vector index | Never. Duplicates search, decay, tier management. The whole point of unified MemoryEntry is unified retrieval. |
+| SQL LIKE for raw turn search | FTS5 virtual table | Consider FTS5 if LIKE queries over raw turns are too slow at >100K turns per agent. FTS5 is built into SQLite, zero new deps. Add as v1.9.1 if needed. |
+| LLM summarization callback | Rule-based extractive summarization | Never for quality. LLM captures nuance, decisions, preferences. Rule-based misses context. |
+| Context assembler resumeSummary | New context pipeline section | Never. New section changes SectionTokenCounts, ContextSources, SectionName, MemoryAssemblyBudgets, DEFAULT_PHASE53_BUDGETS -- cascades through 20+ files. |
+| TurnDispatcher hook | Discord bridge hook | Never. TurnDispatcher is the single chokepoint (v1.8). Discord bridge hook would miss scheduler and handoff turns. |
+| Haiku for session summarization | Sonnet/Opus for session summarization | Use sonnet only if haiku summaries consistently miss important context. Haiku is 10x cheaper and session summarization is a structured extraction task well within haiku's capability. |
 
-## What NOT to Add
+## What NOT to Use
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| **BullMQ** / **bee-queue** / **bullmq-pro** | Redis-backed distributed job queue. Adds a new long-running service (Redis) to a system that explicitly runs on a single host with per-agent SQLite. Operational complexity you'd pay for at every deploy. | `tasks.db` + `p-queue` (per-callee concurrency=1) |
-| **Temporal.io** | Enterprise-grade durable execution engine. Requires PostgreSQL/Cassandra + Elasticsearch + multiple server processes. Designed for week-long cross-service workflows in polyglot shops. Orders of magnitude over-engineered for in-process agent handoffs. | Daemon-local `tasks.db` + zod contracts |
-| **Trigger.dev v4** (self-hosted) | A whole separate self-hostable service with its own Docker stack, Postgres, Redis, worker pool, and deploy pipeline. Worth it at 50+ workflows, not at 5-10. Also: it wants to own worker processes — would fight the Agent SDK. | croner for schedulable triggers, zongji/Google watch for event triggers |
-| **Inngest** (self-hosted) | Strong for event-driven step functions, but requires the Inngest dev-server infrastructure and encourages a specific programming model that doesn't map to persistent Claude Code sessions. | Daemon-local trigger dispatcher with zod-validated events |
-| **Agenda** / **Bree** / **node-schedule** | All overlap with what croner already gives us. Adding a second scheduler bifurcates job surface area. | croner (already in stack) |
-| **PM2** (as a workflow controller) | Still correct to reject for the same reason as v1.0: it fights the Agent SDK's process lifecycle. The trigger engine isn't a reason to reconsider. | Agent SDK + execa (already in stack) |
-| **RabbitMQ / NATS / Kafka** | Durable message brokers for cross-service eventing. We have one service (the daemon). | Daemon-local `tasks.db` |
-| **GraphQL Subscriptions / tRPC** | Fancy RPC layers that would compete with the existing JSON-RPC over Unix socket. We already have zod-validated typed RPC — that's literally what we want. | Extend `IPC_METHODS` with task-* methods |
-| **Raw `child_process` IPC between agent processes** | Creates an N*N connection mesh, sidesteps the audit trail, and duplicates cancellation/timeout logic. | Daemon-arbitrated handoffs via existing IPC socket |
-| **`@rodrigogs/mysql-events`** / **`nevill/zongji`** / **`rodrigogs/zongji`** / **`manojVivek/zongji`** / **`mysql-binlog-emitter`** | All last published in 2022 or earlier. Do not use for new production code in 2026 — no MySQL 8.0 `caching_sha2_password` support or it's bolted on with patches. | `@vlasky/zongji` (0.6.1, pub 2026-02-13) or `@powersync/mysql-zongji` (0.6.0, pub 2025-12) |
-| **Polling SELECT on `updated_at`** (as primary strategy) | Cannot detect DELETEs, creates recurring query-layer load, fragile if the target schema lacks a reliable `updated_at`, requires per-table awareness. | Binlog CDC (`@vlasky/zongji`); polling only as last-resort fallback |
-| **Only** Google Calendar push watch (no incremental sync) | Google's own docs: "notifications are not 100% reliable; a small percentage will be dropped under normal operating conditions." Channels also expire every 7 days. | Push watch **plus** periodic `events.list(syncToken)` sweep |
-| **`chokidar@3`** for new code | Still works, but v5 is current. Would backfill a dep version on new code. | `chokidar@^5` (already in package.json) |
-| **`zod@3`** schemas for new contracts | Existing code is already on zod 4. Mixing would bifurcate the validation layer. | `zod@^4.3.6` (already in package.json) |
-| **Custom AbortController propagation** into the Agent SDK | The SDK already accepts `abortController`. Re-inventing it would bypass the SDK's own cleanup. | `p-timeout` → `AbortController` → `query({ abortController })` |
-| **A second HTTP server just for webhooks** | Already running `http.createServer` for the dashboard. Adding a second listener means another port to manage, document, firewall, and test. | Extend the existing `src/dashboard/server.ts` router |
+| Redis for turn buffering | SQLite INSERT is <1ms synchronous. No need to buffer in-memory then flush. | Direct better-sqlite3 INSERT in TurnDispatcher return path |
+| LangChain memory abstractions | Massive dependency (300+ transitive deps) for what is 2 SQL tables and a summarization prompt. Fights the existing MemoryStore pattern. | Custom ConversationStore following EpisodeStore's pattern (~100 lines) |
+| Separate embedding model for conversations | One embedding model is sufficient. MiniLM-L6-v2 at 384-dim handles both general memory and session summaries. | Same EmbeddingService singleton |
+| ChromaDB / Pinecone / Weaviate | External vector DB is overkill for per-agent conversation history at this scale. | sqlite-vec (already loaded in each agent's db) |
+| OpenAI / Voyage / Cohere embeddings for summaries | Adds cost, latency, network dependency. Local embeddings at ~50ms/call are fine for 1 embed per session. | @huggingface/transformers (already loaded) |
+| Custom token counter | @anthropic-ai/tokenizer is already wrapped in countTokens(). chars/4 approximation is unreliable for budget enforcement. | Existing countTokens() from performance/token-count.ts |
+| Markdown files for conversation history | SessionLogger already writes daily markdown logs. A second markdown system creates confusion and duplicates data. SQLite is the right choice for structured, queryable conversation data. | SQLite conversation_turns table |
+| Prisma / Drizzle ORM | ORM overhead for what are simple INSERTs and SELECTs with prepared statements. | Raw better-sqlite3 prepared statements (established pattern) |
+| A new MCP tool for conversation search | Session summaries are MemoryEntries. The existing memory_lookup MCP tool already searches MemoryEntries by semantic similarity. | Existing memory_lookup MCP tool |
 
 ## Stack Patterns by Variant
 
-**If DB binlog access is unavailable (managed MySQL without replication user):**
-- Fall back to polling SELECT with `updated_at > :lastCursor` LIMIT N ORDER BY updated_at
-- Accept the DELETE-invisibility tradeoff OR add an application-side soft-delete tombstone column
-- Poll interval 30-60s; use the `trigger_state` table to persist the cursor across daemon restarts
+**If agent has high conversation volume (>100 turns/day):**
+- Enable FTS5 virtual table over conversation_turns for efficient full-text search
+- Batch turn INSERTs (accumulate in-memory buffer, flush every 10 turns or 30 seconds)
+- Run turn retention cleanup as a weekly croner job instead of daily
+- FTS5 is zero-dependency (compiled into better-sqlite3's bundled SQLite)
 
-**If trigger volume exceeds ~10 events/second sustained:**
-- Add a staging queue inside `tasks.db` (`trigger_events` table with `claimed_at` column) so the dispatcher can batch
-- Still no external dependencies — SQLite handles this comfortably up to hundreds of writes/second in WAL mode
-- Re-evaluate only past 1000 events/second
+**If agent is primarily scheduled/automated (few Discord conversations):**
+- Set `conversationConfig.autoSummarize: false`
+- Scheduler-originated turns are still recorded (for audit trail and observability)
+- Resume auto-inject pulls from existing memory system only (no conversation brief)
 
-**If a single callee agent becomes a bottleneck:**
-- Raise `p-queue` concurrency from 1 — but this only works if the callee agent uses subagent-thread spawning for parallelism (Claude Code main session is single-threaded)
-- More often the right answer is "route the trigger to a different agent" via the policy layer
+**If agent needs cross-session topic threading:**
+- Tag session summaries with extracted topic tags (reuse importance.ts entity detection)
+- Link session summary MemoryEntries via knowledge graph wikilinks (`[[session:{id}]]`)
+- Auto-linker heartbeat discovers similarity edges between session summaries automatically
 
-**If v2.0 scales to multiple daemon hosts (deliberately out-of-scope for v1.8):**
-- Promote `tasks.db` to PostgreSQL with `LISTEN/NOTIFY` for cross-daemon dispatch
-- Re-evaluate Temporal/Inngest at that point — they become appropriate when distributed durability actually matters
+**If session summaries prove too lossy (rare conversations with high-value details):**
+- Increase `summaryImportance` to 0.9 so summaries decay slower
+- Add a `preserveVerbatim` flag that stores select turns as individual MemoryEntries (with embedding)
+- Keep this as a v1.9.1 enhancement -- do not over-engineer on the first pass
 
 ## Version Compatibility
 
 | Package A | Compatible With | Notes |
 |-----------|-----------------|-------|
-| `@vlasky/zongji@0.6.1` | MySQL 5.7, MySQL 8.0, MariaDB 10.x | Requires `binlog_format=ROW`, a replication user with `REPLICATION SLAVE, REPLICATION CLIENT` privileges, and `server_id` set. Handles `caching_sha2_password` (MySQL 8.0 default). |
-| `@vlasky/zongji@0.6.1` | `mysql2@3.22.0` | zongji uses its own underlying connection handling — no direct compat requirement with `mysql2`, but if we reuse a `mysql2` pool for polling fallback, they coexist fine. |
-| `googleapis@171` | Node.js 22 LTS | Official SDK; no issues. Calendar push channels require an HTTPS receiving URL (production LB must terminate TLS). |
-| `node-ical@0.26.0` | Node.js 22 LTS | Pure JS, zero native deps. Parses RFC 5545. Note: recurring-event expansion is timezone-aware but relies on `vtimezone` blocks being present in the feed. |
-| `p-retry@8`, `p-timeout@7`, `p-queue@9` | Node.js 22 LTS | All ESM-only. Project is already `"type": "module"` — no friction. |
-| `raw-body@3` | Node.js 22 LTS | Unchanged API since v2. Used internally by Express 5 — battle-tested. |
-| `better-sqlite3@12.x` | New `tasks.db` file | Same driver as existing memory stores. Enable WAL for dashboard read concurrency (`PRAGMA journal_mode=WAL`). |
-| `@modelcontextprotocol/sdk` (existing) | New `task-*` MCP tools | MCP tool definitions are static JSON-schema — register them at server init. Already doing this for `memory_lookup`, `spawn-subagent-thread`, etc. |
-| `@anthropic-ai/claude-agent-sdk@0.2.x` (existing) | Cancellation via AbortController | SDK's `query()` already accepts an `abortController` option. Verified against 0.2.97 (current installed version). |
+| better-sqlite3@12.8.0 | FTS5 virtual tables | FTS5 is built into the SQLite amalgamation that better-sqlite3 bundles. No separate extension needed. Enabled by default. |
+| better-sqlite3@12.8.0 | New conversation_* tables alongside existing memories + vec_memories | Same db, same WAL, same busy_timeout. Validated pattern (memory_links table added in v1.5). |
+| @anthropic-ai/tokenizer@0.0.4 | Per-turn token counting | Already wrapped in countTokens(). Deterministic, same BPE tokenizer as Claude. |
+| date-fns@4.1.0 | Session duration, retention window | differenceInMinutes(), subDays(), isAfter() all available. Already used in consolidation. |
+| zod@4.3.6 | conversationConfigSchema | Same validation pattern as memoryConfigSchema, decayConfigSchema, etc. |
+| croner@10.0.1 | Turn retention cleanup cron | Same scheduler used for memory consolidation. Add another handler entry. |
 
-## Key Risks & Mitigations
+## Integration Points with Existing Memory System
 
-| Risk | Mitigation |
-|------|-----------|
-| **Binlog connection drops silently** | Supervise the zongji connection with exponential backoff reconnect; persist last-seen `log_file, log_pos` in `trigger_state.cursor_json`; emit a health metric consumed by the dashboard. |
-| **Google Calendar push channel expires (7-day TTL) without renewal** | Run a croner job every 6 days to renew active watch channels; on renewal failure, fall back to periodic incremental sync via `syncToken` until the watch is re-established. |
-| **Webhook receiver hit by unverified/spoofed requests** | Require per-trigger HMAC-SHA256 secret; reject requests without valid signature. `raw-body` must capture the exact bytes signed — do not re-serialise after parsing. |
-| **Cross-agent task cycle (A delegates to B delegates to A)** | Track `parent_task_id` chain; reject new task creation if the chain length exceeds N (configurable, default 5) OR if the same `(from_agent, to_agent, schema_name)` tuple appears twice in the ancestor chain. |
-| **Callee agent deadlocks mid-task** | `p-timeout` fires `AbortSignal`; daemon marks task `timeout`; next caller retry (within `max_attempts`) goes to the next available agent if the policy allows, else surfaces failure via dashboard + Discord. |
-| **`tasks.db` grows unbounded** | Add a retention policy: move `completed`, `failed`, `cancelled`, `timeout` rows older than 30 days to `tasks_archive.db` (same schema). Already proven pattern from memory cold-archive. |
+### Where v1.9 Plugs In
+
+| Existing File | What v1.9 Adds | How |
+|---------------|----------------|-----|
+| `src/memory/store.ts` | conversation_turns + conversation_sessions tables | New migration method `migrateConversationTables()` following `migrateGraphLinks()` pattern. Called in constructor chain. |
+| `src/memory/schema.ts` | conversationConfigSchema | New Zod schema export. Added to memoryConfigSchema as optional `conversation` field. |
+| `src/memory/types.ts` | ConversationTurn, ConversationSession, ConversationConfig types | New type exports alongside existing MemoryEntry, EpisodeInput. |
+| `src/manager/turn-dispatcher.ts` | Post-dispatch turn recording | After sendToAgent()/streamFromAgent() returns, call ConversationStore.recordTurn() with input + output. Non-fatal: catch and log errors so persistence failures never block message delivery. |
+| `src/manager/context-assembler.ts` | Enhanced resumeSummary source | No changes to assembler code. The caller (session-config) loads conversation brief via new `loadConversationBrief()` and passes it as `resumeSummary`. |
+| `src/memory/context-summary.ts` | loadConversationBrief() helper | New function alongside existing loadLatestSummary(). Loads N recent session summaries, formats as structured brief, calls enforceSummaryBudget(). |
+
+### Modules That Need Zero Changes
+
+| Module | Why No Changes |
+|--------|---------------|
+| `src/memory/search.ts` | Session summaries are MemoryEntries -- already searchable via SemanticSearch |
+| `src/memory/relevance.ts` | Decay scoring applies to session summaries via their accessed_at field |
+| `src/memory/decay.ts` | Half-life decay formula works on any MemoryEntry |
+| `src/memory/embedder.ts` | Same EmbeddingService.embed() call for session summaries |
+| `src/memory/dedup.ts` | Dedup checking runs on session summary insert automatically |
+| `src/memory/similarity.ts` | Auto-linking runs on session summary insert automatically |
+| `src/memory/graph.ts` | Wikilink extraction works on session summary content |
+| `src/memory/tiers.ts` | Tier promotion/demotion applies to session summaries |
+| `src/memory/tier-manager.ts` | Tier sweeps include session summaries |
+| `src/memory/importance.ts` | Importance scoring applies (though we override with summaryImportance config) |
+
+## What Already Exists (DO NOT Rebuild)
+
+| Capability | Existing Location | v1.9 Relationship |
+|------------|-------------------|-------------------|
+| Per-agent SQLite with WAL + sqlite-vec | memory/store.ts | Schema host |
+| Relevance decay scoring | memory/decay.ts + memory/relevance.ts | Session summaries scored identically |
+| Semantic search with re-ranking | memory/search.ts | Deep search over session summaries |
+| Hot/warm/cold tier management | memory/tiers.ts + memory/tier-manager.ts | Session summaries flow through tiers |
+| Memory deduplication | memory/dedup.ts | Prevents duplicate session summaries |
+| Knowledge graph auto-linking | memory/similarity.ts + memory/graph.ts | Links session summaries to related memories |
+| Context assembly with budget enforcement | manager/context-assembler.ts | Auto-inject lands in resumeSummary slot |
+| Resume summary budget enforcer | memory/context-summary.ts | Enforces token cap on conversation brief |
+| Token counting | performance/token-count.ts | Per-turn and per-brief measurement |
+| Consolidation pipeline | memory/consolidation.ts | Pattern for LLM summarization callback |
+| Episode store | memory/episode-store.ts | Pattern for domain-specific MemoryEntry wrappers |
+| Importance scoring | memory/importance.ts | Auto-scores session summaries on insert |
+| Memory lookup MCP tool | mcp/ | Session summaries searchable via existing tool |
+| TurnDispatcher chokepoint | manager/turn-dispatcher.ts | Hook point for recording turns |
+| SessionLogger | memory/session-log.ts | Continues writing markdown daily logs (complementary, not replaced) |
 
 ## Sources
 
-- [@vlasky/zongji on npm](https://www.npmjs.com/package/@vlasky/zongji) — 0.6.1, published 2026-02-13 — HIGH (primary maintained fork)
-- [@powersync/mysql-zongji on npm](https://www.npmjs.com/package/@powersync/mysql-zongji) — 0.6.0, published 2025-12-04 — HIGH (alternative fork)
-- [PowerSync MySQL Zongji GitHub](https://github.com/powersync-ja/powersync-mysql-zongji) — MySQL 8.0 `caching_sha2_password` support details — HIGH
-- [DataCater MySQL CDC guide](https://datacater.io/blog/2021-08-25/mysql-cdc-complete-guide.html) — binlog vs polling tradeoffs — MEDIUM
-- [Percona MySQL CDC article](https://www.percona.com/blog/2016/09/13/mysql-cdc-streaming-binary-logs-and-asynchronous-triggers/) — binlog CDC rationale — MEDIUM (older but still canonical)
-- [Google Calendar API — Push notifications docs](https://developers.google.com/workspace/calendar/api/guides/push) — "not 100% reliable; channels expire"; sync-token pattern — HIGH (official)
-- [Nango — Real-time Google Calendar integration](https://www.nango.dev/blog/how-to-build-a-real-time-google-calendar-api-integration) — production webhook + incremental sync pattern — MEDIUM
-- [Loris — Google Calendar webhook synchronization](https://lorisleiva.com/google-calendar-integration/webhook-synchronizations) — 7-day channel renewal lifecycle — MEDIUM
-- [googleapis on npm](https://www.npmjs.com/package/googleapis) — 171.4.0 — HIGH (official SDK)
-- [node-ical on npm](https://www.npmjs.com/package/node-ical) — 0.26.0 — HIGH
-- [p-retry on npm](https://www.npmjs.com/package/p-retry) — 8.0.0 — HIGH (sindresorhus)
-- [p-timeout on npm](https://www.npmjs.com/package/p-timeout) — 7.0.1 — HIGH (sindresorhus)
-- [p-queue on npm](https://www.npmjs.com/package/p-queue) — 9.1.2 — HIGH (sindresorhus)
-- [raw-body on npm](https://www.npmjs.com/package/raw-body) — 3.0.2 — HIGH (used internally by Express/Koa)
-- [Trigger.dev vs Inngest vs Temporal (2026)](https://trybuildpilot.com/610-trigger-dev-vs-inngest-vs-temporal-2026) — when each is overkill — MEDIUM
-- [Akka — Inngest vs Temporal comparison](https://akka.io/blog/inngest-vs-temporal) — infra requirements — MEDIUM
-- [Medium — The Ultimate Guide to TypeScript Orchestration](https://medium.com/@matthieumordrel/the-ultimate-guide-to-typescript-orchestration-temporal-vs-trigger-dev-vs-inngest-and-beyond-29e1147c8f2d) — framework positioning — LOW
-- [node-persistent-queue on npm](https://www.npmjs.com/package/node-persistent-queue) — SQLite-backed queue prior art — LOW (reference only; we're building a purpose-built task store)
-- npm registry version lookups — all versions verified via `npm view` on 2026-04-13
-- Existing codebase: `src/ipc/protocol.ts`, `src/dashboard/server.ts`, `src/mcp/server.ts`, `src/manager/daemon.ts`, `package.json` — HIGH (source of truth for substrate)
+- Codebase analysis: `src/memory/store.ts` -- schema, migration pattern, MemoryStore class, prepared statements (Confidence: HIGH)
+- Codebase analysis: `src/memory/episode-store.ts` -- domain-specific MemoryEntry wrapper pattern (Confidence: HIGH)
+- Codebase analysis: `src/memory/consolidation.ts` -- LLM summarization callback, prompt building, digest pipeline (Confidence: HIGH)
+- Codebase analysis: `src/manager/context-assembler.ts` -- resumeSummary slot, budget enforcement, SectionTokenCounts shape (Confidence: HIGH)
+- Codebase analysis: `src/memory/context-summary.ts` -- enforceSummaryBudget(), loadLatestSummary(), DEFAULT_RESUME_SUMMARY_BUDGET (Confidence: HIGH)
+- Codebase analysis: `src/manager/turn-dispatcher.ts` -- single chokepoint, TurnOrigin, DispatchOptions (Confidence: HIGH)
+- Codebase analysis: `src/memory/search.ts` -- SemanticSearch, relevance-decay re-ranking, importance weighting (Confidence: HIGH)
+- Codebase analysis: `src/memory/relevance.ts` -- scoreAndRank(), distanceToSimilarity() (Confidence: HIGH)
+- Codebase analysis: `src/memory/decay.ts` -- calculateRelevanceScore(), half-life exponential decay (Confidence: HIGH)
+- Codebase analysis: `src/memory/embedder.ts` -- EmbeddingService singleton, ~50ms/embed, 384-dim (Confidence: HIGH)
+- Codebase analysis: `src/memory/types.ts` -- MemoryEntry, MemorySource includes "conversation" (Confidence: HIGH)
+- Codebase analysis: `src/memory/schema.ts` -- memorySourceSchema includes "conversation", Zod patterns (Confidence: HIGH)
+- Codebase analysis: `src/memory/session-log.ts` -- SessionLogger markdown pattern (Confidence: HIGH)
+- Codebase analysis: `package.json` -- all dependency versions verified (Confidence: HIGH)
+- SQLite documentation: FTS5 compiled into amalgamation, available in better-sqlite3 by default (Confidence: HIGH)
 
 ---
-*Stack research for: v1.8 Proactive Agents + Handoffs*
-*Researched: 2026-04-13*
+*Stack research for: v1.9 Persistent Conversation Memory*
+*Researched: 2026-04-17*
