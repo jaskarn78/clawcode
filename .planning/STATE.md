@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
 status: Phase complete — ready for verification
-stopped_at: Completed 67-02-PLAN.md
-last_updated: "2026-04-18T17:01:19.555Z"
+stopped_at: Completed 67-03-PLAN.md
+last_updated: "2026-04-18T17:40:06.418Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 10
+  completed_plans: 10
 ---
 
 # Project State
@@ -78,6 +78,8 @@ Recent decisions affecting current work:
 - [Phase 67]: [Phase 67-02]: Atomic single-commit for Task 1 — extended SECTION_NAMES + SectionName + SectionTokenCounts + buckets + ContextSources + mutable-suffix push + sectionTokens construction together so tsc never goes red between intermediate steps (Pitfall 5 SECTION_NAMES blast radius).
 - [Phase 67]: [Phase 67-02]: Brief placement LAST in mutable-suffix order (after resumeSum) — background context trails concrete resume recap so the model's reasoning sees the nearest-term signal first. CONTEXT.md locked this; tests assert positional ordering survives.
 - [Phase 67]: [Phase 67-02]: Graceful-degradation via conjunction guard (convStore && memStore) — either absent → helper path skipped entirely, no throw. Tolerates legacy startup, test harnesses, and partial bootstrap. SessionManager wiring follow-up still required to actually populate conversationStores/memoryStores Maps in production.
+- [Phase 67]: [Phase 67-03]: Closed runtime gap via two-line configDeps extension (conversationStores + memoryStores threaded from AgentMemoryManager). Phase 67 read-path now LIVE end-to-end — SESS-02/SESS-03 active in production.
+- [Phase 67]: [Phase 67-03]: Forward-wrapping vi.mock pattern — vi.fn(actual.buildSessionConfig) via importOriginal keeps existing 23 session-manager tests on real impl while capturing deps for new assertion. Generalizable pattern for ESM mock-with-forwarding.
 
 ### Roadmap Evolution
 
@@ -97,5 +99,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 67-02-PLAN.md
+Stopped at: Completed 67-03-PLAN.md
 Resume file: None

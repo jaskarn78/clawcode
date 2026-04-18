@@ -103,7 +103,7 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 - [x] **Phase 64: ConversationStore + Schema Foundation** - SQLite tables, session lifecycle records, memory lineage tracking, and provenance fields in per-agent memories.db (completed 2026-04-18)
 - [x] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage (completed 2026-04-18)
 - [x] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash (completed 2026-04-18)
-- [x] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection (completed 2026-04-18)
+- [x] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection (gap closure in progress — 67-03 pending) (completed 2026-04-18)
 - [ ] **Phase 68: Conversation Search + Deep Retrieval** - On-demand semantic + full-text search over conversation history via enhanced MCP tool with pagination
 
 ## Phase Details
@@ -180,11 +180,12 @@ Plans:
   2. When the session gap is shorter than the configured threshold (default 4 hours), auto-injection is skipped entirely -- a brief agent restart (crash recovery, config reload) does not inject redundant context that wastes token budget
   3. An agent with zero conversation history (first session ever, or no prior summaries) starts normally with no empty or broken context section injected -- the conversation brief gracefully produces nothing rather than an empty heading or placeholder text
 
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 67-01-PLAN.md — conversation-brief helper module + types + Zod schema knobs (SESS-02 + SESS-03 unit tests)
 - [x] 67-02-PLAN.md — assembler wiring: SECTION_NAMES + ContextSources extension + buildSessionConfig integration (SESS-02 + SESS-03 integration tests)
+- [x] 67-03-PLAN.md — gap closure: thread conversationStores + memoryStores through SessionManager.configDeps() so buildSessionConfig receives live Maps at runtime (closes SESS-02 + SESS-03 NOT_WIRED verification gap)
 
 ### Phase 68: Conversation Search + Deep Retrieval
 
@@ -225,5 +226,5 @@ Plans:
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
-| 67. Resume Auto-Injection | 2/2 | Complete   | 2026-04-18 |
+| 67. Resume Auto-Injection | 3/3 | Complete   | 2026-04-18 |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |
