@@ -76,6 +76,7 @@ export class MemoryStore {
       this.migrateGraphLinks();
       this.migrateConversationTables();
       this.migrateSourceTurnIds();
+      this.migrateInstructionFlags();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -683,6 +684,23 @@ export class MemoryStore {
     if (!hasColumn) {
       this.db.exec(
         "ALTER TABLE memories ADD COLUMN source_turn_ids TEXT DEFAULT NULL"
+      );
+    }
+  }
+
+  /**
+   * Migrate existing databases to add instruction_flags column to conversation_turns.
+   * Uses PRAGMA table_info check pattern (same as migrateSourceTurnIds).
+   * Column is nullable TEXT (JSON string of InstructionDetectionResult) for SEC-02 flagging.
+   */
+  private migrateInstructionFlags(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(conversation_turns)")
+      .all() as ReadonlyArray<{ name: string }>;
+    const hasColumn = columns.some((c) => c.name === "instruction_flags");
+    if (!hasColumn) {
+      this.db.exec(
+        "ALTER TABLE conversation_turns ADD COLUMN instruction_flags TEXT DEFAULT NULL"
       );
     }
   }

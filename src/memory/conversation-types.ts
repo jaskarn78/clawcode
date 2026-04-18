@@ -46,6 +46,7 @@ export type ConversationTurn = {
   readonly discordMessageId: string | null;
   readonly isTrustedChannel: boolean;
   readonly origin: string | null;
+  readonly instructionFlags: string | null;
   readonly createdAt: string;
 };
 
@@ -65,4 +66,5 @@ export type RecordTurnInput = {
   readonly discordMessageId?: string;
   readonly isTrustedChannel?: boolean;
   readonly origin?: string;
+  readonly instructionFlags?: string;
 };

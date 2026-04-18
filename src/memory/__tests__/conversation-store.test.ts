@@ -496,6 +496,68 @@ describe("ConversationStore", () => {
     });
   });
 
+  describe("instructionFlags", () => {
+    it("recordTurn persists instructionFlags when provided", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      const flags = '{"detected":true,"patterns":["<\\\\s*system\\\\s*>"],"riskLevel":"high"}';
+
+      const turn = convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "<system>evil</system>",
+        instructionFlags: flags,
+      });
+
+      expect(turn.instructionFlags).toBe(flags);
+
+      // Verify via raw DB
+      const db = memStore.getDatabase();
+      const row = db
+        .prepare(
+          "SELECT instruction_flags FROM conversation_turns WHERE id = ?",
+        )
+        .get(turn.id) as { instruction_flags: string | null };
+      expect(row.instruction_flags).toBe(flags);
+    });
+
+    it("recordTurn stores null instructionFlags when omitted", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+
+      const turn = convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "Hello, normal message",
+      });
+
+      expect(turn.instructionFlags).toBeNull();
+    });
+
+    it("getTurnsForSession returns instructionFlags field", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      const flags = '{"detected":true,"patterns":[],"riskLevel":"medium"}';
+
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "Flagged message",
+        instructionFlags: flags,
+      });
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "assistant",
+        content: "Response",
+      });
+
+      const turns = convStore.getTurnsForSession(session.id);
+      expect(turns).toHaveLength(2);
+      expect(turns[0].instructionFlags).toBe(flags);
+      expect(turns[1].instructionFlags).toBeNull();
+    });
+  });
+
   describe("lineage support", () => {
     it("source_turn_ids column exists on memories table", () => {
       setup();

@@ -46,6 +46,7 @@ type TurnRow = {
   readonly discord_message_id: string | null;
   readonly is_trusted_channel: number;
   readonly origin: string | null;
+  readonly instruction_flags: string | null;
   readonly created_at: string;
 };
 
@@ -96,6 +97,7 @@ function rowToTurn(row: TurnRow): ConversationTurn {
     discordMessageId: row.discord_message_id,
     isTrustedChannel: row.is_trusted_channel === 1,
     origin: row.origin,
+    instructionFlags: row.instruction_flags,
     createdAt: row.created_at,
   });
 }
@@ -247,6 +249,7 @@ export class ConversationStore {
     const discordMessageId = input.discordMessageId ?? null;
     const isTrustedChannel = input.isTrustedChannel === true ? 1 : 0;
     const origin = input.origin ?? null;
+    const instructionFlags = input.instructionFlags ?? null;
 
     const turnIndex = this.db.transaction(() => {
       // Get current turn_count as the next turn_index
@@ -275,6 +278,7 @@ export class ConversationStore {
         discordMessageId,
         isTrustedChannel,
         origin,
+        instructionFlags,
         now,
       );
 
@@ -301,6 +305,7 @@ export class ConversationStore {
       discordMessageId,
       isTrustedChannel: isTrustedChannel === 1,
       origin,
+      instructionFlags,
       createdAt: now,
     });
   }
@@ -363,13 +368,13 @@ export class ConversationStore {
         `INSERT INTO conversation_turns
          (id, session_id, turn_index, role, content, token_count,
           channel_id, discord_user_id, discord_message_id,
-          is_trusted_channel, origin, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          is_trusted_channel, origin, instruction_flags, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
       getTurnsForSession: this.db.prepare(
         `SELECT id, session_id, turn_index, role, content, token_count,
                 channel_id, discord_user_id, discord_message_id,
-                is_trusted_channel, origin, created_at
+                is_trusted_channel, origin, instruction_flags, created_at
          FROM conversation_turns
          WHERE session_id = ?
          ORDER BY turn_index ASC`,
@@ -377,7 +382,7 @@ export class ConversationStore {
       getTurnsForSessionLimited: this.db.prepare(
         `SELECT id, session_id, turn_index, role, content, token_count,
                 channel_id, discord_user_id, discord_message_id,
-                is_trusted_channel, origin, created_at
+                is_trusted_channel, origin, instruction_flags, created_at
          FROM conversation_turns
          WHERE session_id = ?
          ORDER BY turn_index ASC
