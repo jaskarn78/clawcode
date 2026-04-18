@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Milestone complete
-stopped_at: Completed 68-03-PLAN.md — Phase 68 RETR-03 gap closure shipped (knob now live end-to-end)
-last_updated: "2026-04-18T19:23:57.013Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 68.1-01-PLAN.md — isTrustedChannel capture-path wiring live; CONV-01/SEC-01/RETR-02 honest end-to-end
+last_updated: "2026-04-18T19:45:04.076Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 68 — conversation-search-deep-retrieval
+**Current focus:** Phase 68.1 — close-istrustedchannel-provenance-wiring-gap
 
 ## Current Position
 
-Phase: 68
-Plan: Not started
+Phase: 68.1 (close-istrustedchannel-provenance-wiring-gap) — COMPLETE (awaiting verification)
+Plan: 1 of 1 (all plans complete)
 
 ## Performance Metrics
 
@@ -90,6 +90,8 @@ Recent decisions affecting current work:
 - [Phase 68]: [Phase 68-02]: Explicit scope='memories' && page=0 routes to legacy GraphSearch branch (preserves byte-for-byte pre-v1.9 response shape including linked_from); searchByScope engages only on scope='conversations'|'all' OR page>0
 - [Phase 68]: [Phase 68-02]: Per-Turn cache key widened to {query, limit, scope, page} preventing cross-scope cache bleed — a first scope='memories' call no longer serves stale data to a later scope='all' request in the same Turn
 - [Phase 68]: [Phase 68-03]: Closed RETR-03 warning gap — retrievalHalfLifeDays threaded from ResolvedAgentConfig.memory.conversation through daemon IPC case → invokeMemoryLookup → searchByScope.halfLifeDays. 4-file surgical diff, no refactor. TDD regression test pinned importance=1.0 to bypass MemoryStore.insert calculateImportance fallback (store.ts:148) and keep decay-delta math above floating-point noise.
+- [Phase 68.1]: [Phase 68.1-01]: Thread isTrustedChannel from DiscordBridge through CaptureInput into both recordTurn calls — capture call site passes isTrustedChannel: true (trusted-by-construction, ACL gate at checkChannelAccess line 441 already early-returns untrusted). CONV-01/SEC-01/RETR-02 now honest end-to-end.
+- [Phase 68.1]: [Phase 68.1-01]: Integration test uses real MemoryStore(':memory:') + ConversationStore — exercises the conversation_turns_fts virtual table AI/AD/AU triggers end-to-end (no mocking). Negative test pins SEC-01 default trust filter (untrusted excluded unless includeUntrustedChannels: true) as a regression.
 
 ### Roadmap Evolution
 
@@ -110,5 +112,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 68-03-PLAN.md — Phase 68 RETR-03 gap closure shipped (knob now live end-to-end)
+Stopped at: Completed 68.1-01-PLAN.md — isTrustedChannel capture-path wiring live; CONV-01/SEC-01/RETR-02 honest end-to-end
 Resume file: None

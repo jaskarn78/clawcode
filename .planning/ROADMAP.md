@@ -232,13 +232,14 @@ Plans:
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
 | 67. Resume Auto-Injection | 3/3 | Complete    | 2026-04-18 |
 | 68. Conversation Search + Deep Retrieval | 3/3 | Complete    | 2026-04-18 |
+| 68.1. Close isTrustedChannel provenance wiring gap | 1/1 | Complete    | 2026-04-18 |
 
 ### Phase 68.1: Close isTrustedChannel provenance wiring gap (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Thread `isTrustedChannel` from DiscordBridge through CaptureInput into both `recordTurn` calls so production-captured turns carry correct trust provenance (previously always `false`). Unblocks CONV-01 / SEC-01 / RETR-02 in production.
+**Requirements**: CONV-01, SEC-01, RETR-02 (honest end-to-end after this fix)
 **Depends on:** Phase 68
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 68.1 to break down)
+- [x] 68.1-01: Wire isTrustedChannel end-to-end — CaptureInput field + 2 recordTurn threads + bridge call-site constant + 4 tests (completed 2026-04-18, commits c7efe2e + fa80f1d)

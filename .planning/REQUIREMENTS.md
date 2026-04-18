@@ -63,7 +63,7 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 | Requirement | Description | Phase | Status |
 |-------------|-------------|-------|--------|
-| CONV-01 | Turn storage with provenance | Phase 64 | [ ] |
+| CONV-01 | Turn storage with provenance | Phase 64 + 68.1 | [x] |
 | CONV-02 | Session boundary tracking | Phase 64 | [ ] |
 | CONV-03 | Memory lineage tracking | Phase 64 | [ ] |
 | SESS-01 | Session-end summarization | Phase 66 | [x] |
@@ -73,7 +73,7 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 | RETR-01 | Conversation search MCP tool | Phase 68 | [x] |
 | RETR-02 | FTS5 full-text search | Phase 68 | [x] |
 | RETR-03 | Paginated decay-weighted results | Phase 68 | [x] |
-| SEC-01 | Provenance fields on stored turns | Phase 64 | [ ] |
+| SEC-01 | Provenance fields on stored turns | Phase 64 + 68.1 | [x] |
 | SEC-02 | Instruction-pattern detection | Phase 65 | [ ] |
 
 **Coverage:**
