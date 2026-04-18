@@ -66,10 +66,10 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 | CONV-01 | Turn storage with provenance | Phase 64 | [ ] |
 | CONV-02 | Session boundary tracking | Phase 64 | [ ] |
 | CONV-03 | Memory lineage tracking | Phase 64 | [ ] |
-| SESS-01 | Session-end summarization | Phase 66 | [ ] |
+| SESS-01 | Session-end summarization | Phase 66 | [x] |
 | SESS-02 | Auto-inject on resume | Phase 67 | [ ] |
 | SESS-03 | Adaptive injection threshold | Phase 67 | [ ] |
-| SESS-04 | Summaries as MemoryEntries | Phase 66 | [ ] |
+| SESS-04 | Summaries as MemoryEntries | Phase 66 | [x] |
 | RETR-01 | Conversation search MCP tool | Phase 68 | [ ] |
 | RETR-02 | FTS5 full-text search | Phase 68 | [ ] |
 | RETR-03 | Paginated decay-weighted results | Phase 68 | [ ] |
