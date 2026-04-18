@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.9
-milestone_name: Persistent Conversation Memory
+milestone: v1.0
+milestone_name: milestone
 status: v1.9 milestone complete
-stopped_at: Completed 68.1-01-PLAN.md — isTrustedChannel capture-path wiring live; CONV-01/SEC-01/RETR-02 honest end-to-end
-last_updated: "2026-04-18T19:49:26.596Z"
+stopped_at: Completed quick task 260418-sux — list_schedules field fix + registry ghost-entry reconciliation
+last_updated: "2026-04-18T21:02:59.314Z"
 last_activity: 2026-04-18
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 13
-  completed_plans: 13
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -92,6 +92,7 @@ Recent decisions affecting current work:
 - [Phase 68]: [Phase 68-03]: Closed RETR-03 warning gap — retrievalHalfLifeDays threaded from ResolvedAgentConfig.memory.conversation through daemon IPC case → invokeMemoryLookup → searchByScope.halfLifeDays. 4-file surgical diff, no refactor. TDD regression test pinned importance=1.0 to bypass MemoryStore.insert calculateImportance fallback (store.ts:148) and keep decay-delta math above floating-point noise.
 - [Phase 68.1]: [Phase 68.1-01]: Thread isTrustedChannel from DiscordBridge through CaptureInput into both recordTurn calls — capture call site passes isTrustedChannel: true (trusted-by-construction, ACL gate at checkChannelAccess line 441 already early-returns untrusted). CONV-01/SEC-01/RETR-02 now honest end-to-end.
 - [Phase 68.1]: [Phase 68.1-01]: Integration test uses real MemoryStore(':memory:') + ConversationStore — exercises the conversation_turns_fts virtual table AI/AD/AU triggers end-to-end (no mocking). Negative test pins SEC-01 default trust filter (untrusted excluded unless includeUntrustedChannels: true) as a regression.
+- [Phase quick/260418-sux]: reconcileRegistry routes empty-parent names (e.g. '-sub-foo') to orphaned-subagent/orphaned-thread via explicit parent.length>0 guard; returns input by reference when pruned.length===0 so clean boots skip writeRegistry entirely
 
 ### Roadmap Evolution
 
@@ -112,5 +113,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 68.1-01-PLAN.md — isTrustedChannel capture-path wiring live; CONV-01/SEC-01/RETR-02 honest end-to-end
+Stopped at: Completed quick task 260418-sux — list_schedules field fix + registry ghost-entry reconciliation
 Resume file: None
