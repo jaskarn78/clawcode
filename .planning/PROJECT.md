@@ -79,6 +79,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - ConversationStore schema foundation — per-agent SQLite tables for sessions and turns, JSON provenance fields, `source_turn_ids` lineage column, FTS5 on raw-turn text (CONV-01/02/03) — v1.9
 - Capture integration — DiscordBridge auto-persists every turn with instruction-pattern detection flagging high/medium-risk injection attempts (SEC-02) — v1.9
 - Session-boundary summarization — SessionSummarizer pipeline compresses ended/crashed sessions via Haiku with 10s timeout + deterministic fallback; writes standard MemoryEntry with `source="conversation"` and `["session-summary", "session:{id}"]` tags (SESS-01/04) — v1.9
+- Resume auto-injection — `assembleConversationBrief` helper + dedicated `conversation_context` mutable-suffix section (default 3 recent summaries, 4h gap threshold, 2000-token budget) threaded through `SessionManager.configDeps()` into `buildSessionConfig`; agents auto-receive a structured context brief of prior sessions on restart, with gap-skip short-circuit for brief restarts (SESS-02/03) — v1.9
 
 ### Active
 
@@ -167,4 +168,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-18 — v1.9 Phase 66 (Session-Boundary Summarization) complete*
+*Last updated: 2026-04-18 — v1.9 Phase 67 (Resume Auto-Injection) complete*
