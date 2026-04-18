@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -581,6 +581,17 @@ describe("startAgent warm-path gate (Phase 56)", () => {
 // Phase 66 Plan 03 — session-boundary summarization wiring
 // ---------------------------------------------------------------------------
 import type { SummarizeFn } from "../../memory/session-summarizer.types.js";
+import { EmbeddingService } from "../../memory/embedder.js";
+
+// Pre-warm the embedding model ONCE for the Phase 66 block so the first
+// test doesn't pay the ~3-5s cold-start cost inside its 5s timeout. The
+// @huggingface/transformers module caches pipelines, so subsequent
+// EmbeddingService instances constructed by AgentMemoryManager reuse the
+// already-loaded ONNX model from the module cache.
+beforeAll(async () => {
+  const warmer = new EmbeddingService();
+  await warmer.warmup();
+}, 60_000);
 
 describe("SessionManager session-boundary summarization (Phase 66)", () => {
   let adapter: MockSessionAdapter;
@@ -623,7 +634,16 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
     } catch {
       /* ignore */
     }
-    await rm(tmpDir, { recursive: true, force: true });
+    // The crash-path test leaves a detached summarize promise that writes
+    // to memories.db after the test body returns. Give it a beat to settle
+    // before rm so we don't race open SQLite handles against directory
+    // removal (ENOTEMPTY on Linux when a *.db-journal sibling lingers).
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      await rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* directory may still contain open DB handles -- non-fatal for tests */
+    }
   });
 
   it("stopAgent with >=3 turns triggers summarize and inserts a session-summary memory", async () => {
@@ -677,7 +697,7 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
     expect(input.tags).toContain(`session:${convSessionId}`);
     expect(input.sourceTurnIds).toBeDefined();
     expect(input.sourceTurnIds!.length).toBe(4);
-  });
+  }, 30_000);
 
   it("stopAgent with <3 turns skips summarize (minTurns guard)", async () => {
     const config = makeIsolatedConfig("stop-skip");
@@ -703,7 +723,7 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
     await manager.stopAgent("stop-skip");
 
     expect(mockSummarize).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
   it("onError (crash) schedules summarize fire-and-forget: crashSession transitions state synchronously, summarize completes asynchronously", async () => {
     const config = makeIsolatedConfig("crash-summarize");
@@ -768,5 +788,13 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
     const [prompt] = mockSummarize.mock.calls[0]!;
     expect(typeof prompt).toBe("string");
     expect(prompt).toContain("## User Preferences");
-  });
+
+    // Manually close the memory store — crash recovery doesn't call
+    // cleanupMemory, so without this the better-sqlite3 handle stays open
+    // and ENOTEMPTY trips during tmpDir rm in afterEach.
+    const memStore = manager.getMemoryStore("crash-summarize");
+    if (memStore) {
+      try { memStore.close(); } catch { /* already closed */ }
+    }
+  }, 30_000);
 });

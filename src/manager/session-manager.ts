@@ -19,6 +19,9 @@ import type { DocumentStore } from "../documents/store.js";
 import type { TraceStore } from "../performance/trace-store.js";
 import type { TraceCollector, Turn } from "../performance/trace-collector.js";
 import type { ConversationStore } from "../memory/conversation-store.js";
+import { summarizeSession } from "../memory/session-summarizer.js";
+import type { SummarizeFn } from "../memory/session-summarizer.types.js";
+import { summarizeWithHaiku } from "./summarize-with-haiku.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
@@ -34,6 +37,12 @@ export type SessionManagerOptions = {
   readonly registryPath: string;
   readonly backoffConfig?: BackoffConfig;
   readonly log?: Logger;
+  /**
+   * Phase 66 -- test-only override for the Haiku summarize function.
+   * Production leaves this undefined; the constructor defaults to
+   * summarizeWithHaiku so integration tests can inject a mock.
+   */
+  readonly summarizeFn?: SummarizeFn;
 };
 
 /**
@@ -91,10 +100,17 @@ export class SessionManager {
     capacity: 20,
   });
 
+  /**
+   * Phase 66 -- production SummarizeFn (summarizeWithHaiku) with a test-only
+   * injection hook. Passed into summarizeSession at session-boundary events.
+   */
+  private readonly summarizeFn: SummarizeFn;
+
   constructor(options: SessionManagerOptions) {
     this.adapter = options.adapter;
     this.registryPath = options.registryPath;
     this.log = options.log ?? logger;
+    this.summarizeFn = options.summarizeFn ?? summarizeWithHaiku;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -277,6 +293,22 @@ export class SessionManager {
       const convStoreForCrash = this.memory.conversationStores.get(name);
       if (convStoreForCrash && convSessionId) {
         try { convStoreForCrash.crashSession(convSessionId); } catch { /* best-effort */ }
+        // Phase 66 -- fire-and-forget summarization (non-fatal, non-blocking).
+        // BEFORE recovery.handleCrash so summarize starts even if recovery
+        // synchronously resets state. Detached so crash recovery is never
+        // delayed waiting on Haiku (up to 10s internal timeout).
+        void this.summarizeSessionIfPossible(name, convSessionId).catch(
+          (err) => {
+            this.log.warn(
+              {
+                agent: name,
+                session: convSessionId,
+                error: (err as Error).message,
+              },
+              "crash-path summarization failed (non-fatal)",
+            );
+          },
+        );
       }
       this.activeConversationSessionIds.delete(name);
 
@@ -454,6 +486,22 @@ export class SessionManager {
     const convStoreForStop = this.memory.conversationStores.get(name);
     if (convStoreForStop && convSessionId) {
       try { convStoreForStop.endSession(convSessionId); } catch { /* session may already be ended */ }
+      // Phase 66 -- awaited summarization (bounded by its internal 10s
+      // timeout). MUST run BEFORE cleanupMemory because cleanupMemory closes
+      // the MemoryStore + ConversationStore connections. Wrapped in try/catch
+      // so a summarization failure never blocks a stop.
+      try {
+        await this.summarizeSessionIfPossible(name, convSessionId);
+      } catch (err) {
+        this.log.warn(
+          {
+            agent: name,
+            session: convSessionId,
+            error: (err as Error).message,
+          },
+          "stop-path summarization failed (non-fatal)",
+        );
+      }
     }
     this.activeConversationSessionIds.delete(name);
 
@@ -670,6 +718,76 @@ export class SessionManager {
       await this.startAgent(name, config);
     } catch (error) {
       this.log.error({ agent: name, error: (error as Error).message }, "restart attempt failed");
+    }
+  }
+
+  /**
+   * Phase 66 -- invoke session summarization for a terminal session.
+   *
+   * Non-fatal on any failure. Returns after summarizeSession resolves (which
+   * includes its internal 10s timeout + raw-turn fallback). Callers decide
+   * whether to await this (stopAgent: awaited) or fire-and-forget it
+   * (onError crash handler: void + .catch).
+   *
+   * Pulls all deps from AgentMemoryManager + the injected summarizeFn so
+   * tests can swap the LLM call without touching the rest of the pipeline.
+   */
+  private async summarizeSessionIfPossible(
+    agentName: string,
+    sessionId: string,
+  ): Promise<void> {
+    const memoryStore = this.memory.memoryStores.get(agentName);
+    const conversationStore = this.memory.conversationStores.get(agentName);
+    if (!memoryStore || !conversationStore) {
+      this.log.warn(
+        { agent: agentName, session: sessionId },
+        "summarize: missing memoryStore or conversationStore (non-fatal)",
+      );
+      return;
+    }
+    try {
+      const result = await summarizeSession(
+        { agentName, sessionId },
+        {
+          conversationStore,
+          memoryStore,
+          embedder: this.memory.embedder,
+          summarize: this.summarizeFn,
+          log: this.log,
+        },
+      );
+      if ("success" in result && result.success) {
+        this.log.info(
+          {
+            agent: agentName,
+            session: sessionId,
+            memoryId: result.memoryId,
+            fallback: result.fallback,
+            turnCount: result.turnCount,
+          },
+          "session summarized",
+        );
+      } else {
+        this.log.info(
+          {
+            agent: agentName,
+            session: sessionId,
+            reason: (result as { reason: string }).reason,
+          },
+          "session summarization skipped",
+        );
+      }
+    } catch (err) {
+      // summarizeSession is designed to never throw, but log defensively so
+      // an unexpected exception doesn't propagate past the lifecycle hook.
+      this.log.warn(
+        {
+          agent: agentName,
+          session: sessionId,
+          error: (err as Error).message,
+        },
+        "summarization threw unexpectedly (non-fatal)",
+      );
     }
   }
 }
