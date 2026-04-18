@@ -225,6 +225,7 @@ export class TierManager {
       updatedAt: now,
       accessedAt: now,
       tier: "warm" as const,
+      sourceTurnIds: null,
     });
   }
 

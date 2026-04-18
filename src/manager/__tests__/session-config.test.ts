@@ -173,6 +173,7 @@ function makeHotMemory(content: string, importance: number): MemoryEntry {
     updatedAt: "2026-01-01T00:00:00Z",
     accessedAt: "2026-01-01T00:00:00Z",
     tier: "hot" as MemoryTier,
+    sourceTurnIds: null,
   });
 }
 

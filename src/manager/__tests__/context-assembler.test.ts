@@ -522,6 +522,7 @@ function makeMemoryEntry(
     updatedAt: overrides.updatedAt ?? "2026-04-01T00:00:00.000Z",
     accessedAt: overrides.accessedAt ?? "2026-04-01T00:00:00.000Z",
     tier: overrides.tier ?? "hot",
+    sourceTurnIds: overrides.sourceTurnIds ?? null,
   });
 }
 

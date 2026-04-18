@@ -207,6 +207,7 @@ describe("TierManager", () => {
         updatedAt: new Date().toISOString(),
         accessedAt: new Date().toISOString(),
         tier: "warm" as const,
+        sourceTurnIds: null,
       });
 
       const result = tm.archiveToCold(fakeEntry);

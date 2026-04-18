@@ -28,10 +28,16 @@ type MemoryRow = {
   readonly updated_at: string;
   readonly accessed_at: string;
   readonly tier: string;
+  readonly source_turn_ids: string | null;
 };
 
 /** Convert a raw SQLite row to an immutable MemoryEntry. */
 function rowToEntry(row: MemoryRow): MemoryEntry {
+  const rawTurnIds = row.source_turn_ids;
+  const sourceTurnIds = rawTurnIds
+    ? Object.freeze(JSON.parse(rawTurnIds) as string[])
+    : null;
+
   return Object.freeze({
     id: row.id,
     content: row.content,
@@ -44,6 +50,7 @@ function rowToEntry(row: MemoryRow): MemoryEntry {
     updatedAt: row.updated_at,
     accessedAt: row.accessed_at,
     tier: (row.tier ?? "warm") as MemoryTier,
+    sourceTurnIds,
   });
 }
 
@@ -96,7 +103,7 @@ export class EpisodeStore {
     const rows = db
       .prepare(
         `SELECT id, content, source, importance, access_count, tags,
-                created_at, updated_at, accessed_at, tier
+                created_at, updated_at, accessed_at, tier, source_turn_ids
          FROM memories WHERE source = 'episode'
          ORDER BY created_at DESC, rowid DESC LIMIT ?`,
       )

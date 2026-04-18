@@ -62,6 +62,12 @@ export const episodeConfigSchema = z.object({
   archivalAgeDays: z.number().int().min(1).default(90),
 });
 
+/** Schema for conversation persistence configuration. */
+export const conversationConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  turnRetentionDays: z.number().int().min(7).default(90),
+});
+
 /** Schema for memory system configuration. */
 export const memoryConfigSchema = z.object({
   compactionThreshold: z.number().min(0).max(1).default(0.75),
@@ -91,6 +97,7 @@ export const memoryConfigSchema = z.object({
   episodes: episodeConfigSchema.default(() => ({
     archivalAgeDays: 90,
   })),
+  conversation: conversationConfigSchema.optional(),
 });
 
 /** Inferred types from schemas. */
@@ -113,3 +120,6 @@ export type EpisodeInputValidated = z.infer<typeof episodeInputSchema>;
 
 /** Inferred episode config type. */
 export type EpisodeConfig = z.infer<typeof episodeConfigSchema>;
+
+/** Inferred conversation config type. */
+export type ConversationConfig = z.infer<typeof conversationConfigSchema>;

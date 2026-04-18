@@ -188,6 +188,7 @@ export class MemoryStore {
         updatedAt: now,
         accessedAt: now,
         tier: "warm" as const,
+        sourceTurnIds: null,
       });
     } catch (error) {
       if (error instanceof MemoryError) throw error;
@@ -385,7 +386,7 @@ export class MemoryStore {
       const rows = this.db
         .prepare(
           `SELECT id, content, source, importance, access_count, tags,
-                  created_at, updated_at, accessed_at, tier
+                  created_at, updated_at, accessed_at, tier, source_turn_ids
            FROM memories WHERE tier = ? ORDER BY accessed_at DESC LIMIT ?`,
         )
         .all(tier, limit) as MemoryRow[];
@@ -429,7 +430,8 @@ export class MemoryStore {
     try {
       const rows = this.db.prepare(`
         SELECT m.id, m.content, m.source, m.importance, m.access_count,
-               m.tags, m.created_at, m.updated_at, m.accessed_at, m.tier
+               m.tags, m.created_at, m.updated_at, m.accessed_at, m.tier,
+               m.source_turn_ids
         FROM memories m, json_each(m.tags) AS t
         WHERE t.value = ?
       `).all(tag) as MemoryRow[];
@@ -622,7 +624,7 @@ export class MemoryStore {
       `),
       getById: this.db.prepare(`
         SELECT id, content, source, importance, access_count, tags,
-               created_at, updated_at, accessed_at, tier
+               created_at, updated_at, accessed_at, tier, source_turn_ids
         FROM memories WHERE id = ?
       `),
       updateAccess: this.db.prepare(`
@@ -632,7 +634,7 @@ export class MemoryStore {
       deleteVec: this.db.prepare(`DELETE FROM vec_memories WHERE memory_id = ?`),
       listRecent: this.db.prepare(`
         SELECT id, content, source, importance, access_count, tags,
-               created_at, updated_at, accessed_at, tier
+               created_at, updated_at, accessed_at, tier, source_turn_ids
         FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?
       `),
       insertSessionLog: this.db.prepare(`
@@ -647,7 +649,8 @@ export class MemoryStore {
       ),
       getBacklinks: this.db.prepare(`
         SELECT m.id, m.content, m.source, m.importance, m.access_count, m.tags,
-               m.created_at, m.updated_at, m.accessed_at, m.tier, ml.link_text
+               m.created_at, m.updated_at, m.accessed_at, m.tier, m.source_turn_ids,
+               ml.link_text
         FROM memory_links ml
         JOIN memories m ON ml.source_id = m.id
         WHERE ml.target_id = ?
@@ -655,7 +658,8 @@ export class MemoryStore {
       `),
       getForwardLinks: this.db.prepare(`
         SELECT m.id, m.content, m.source, m.importance, m.access_count, m.tags,
-               m.created_at, m.updated_at, m.accessed_at, m.tier, ml.link_text
+               m.created_at, m.updated_at, m.accessed_at, m.tier, m.source_turn_ids,
+               ml.link_text
         FROM memory_links ml
         JOIN memories m ON ml.target_id = m.id
         WHERE ml.source_id = ?
@@ -680,10 +684,16 @@ type MemoryRow = {
   readonly updated_at: string;
   readonly accessed_at: string;
   readonly tier: string;
+  readonly source_turn_ids: string | null;
 };
 
 /** Convert a raw SQLite row to an immutable MemoryEntry. */
 function rowToEntry(row: MemoryRow): MemoryEntry {
+  const rawTurnIds = row.source_turn_ids;
+  const sourceTurnIds = rawTurnIds
+    ? Object.freeze(JSON.parse(rawTurnIds) as string[])
+    : null;
+
   return Object.freeze({
     id: row.id,
     content: row.content,
@@ -696,5 +706,6 @@ function rowToEntry(row: MemoryRow): MemoryEntry {
     updatedAt: row.updated_at,
     accessedAt: row.accessed_at,
     tier: (row.tier ?? "warm") as MemoryTier,
+    sourceTurnIds,
   });
 }

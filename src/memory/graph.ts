@@ -88,11 +88,17 @@ type BacklinkRow = {
   readonly updated_at: string;
   readonly accessed_at: string;
   readonly tier: string;
+  readonly source_turn_ids: string | null;
   readonly link_text: string;
 };
 
 /** Convert a SQL row to an immutable MemoryEntry (no embedding loaded). */
 function rowToMemoryEntry(row: BacklinkRow): MemoryEntry {
+  const rawTurnIds = row.source_turn_ids;
+  const sourceTurnIds = rawTurnIds
+    ? Object.freeze(JSON.parse(rawTurnIds) as string[])
+    : null;
+
   return Object.freeze({
     id: row.id,
     content: row.content,
@@ -105,6 +111,7 @@ function rowToMemoryEntry(row: BacklinkRow): MemoryEntry {
     updatedAt: row.updated_at,
     accessedAt: row.accessed_at,
     tier: (row.tier ?? "warm") as MemoryTier,
+    sourceTurnIds,
   });
 }
 
