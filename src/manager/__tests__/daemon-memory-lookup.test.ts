@@ -379,3 +379,150 @@ describe("daemon memory-lookup IPC integration — scope branching", () => {
     expect(result.results).toBeDefined();
   });
 });
+
+/**
+ * Phase 68-02 Task 3 — end-to-end smoke tests that chain real turn
+ * recording → real memory insertion → real FTS5 (via trigger) →
+ * invokeMemoryLookup → dedup + pagination + response envelope.
+ *
+ * These tests validate the production chain: if any link in the chain
+ * were broken (e.g., FTS5 trigger missed an insert, dedup didn't apply,
+ * session_id wasn't propagated), at least one of these assertions
+ * would fail. This mirrors the 67-VERIFICATION post-mortem pattern —
+ * prove the wiring is live, not just correct in isolation.
+ */
+describe("end-to-end — searchByScope via IPC handler", () => {
+  let memStore: MemoryStore;
+  let convStore: ConversationStore;
+
+  beforeEach(() => {
+    memStore = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    convStore = new ConversationStore(memStore.getDatabase());
+  });
+
+  afterEach(() => {
+    memStore?.close();
+  });
+
+  it("scope='all' with real turns + session-summary returns deduplicated summary-first result", async () => {
+    // 1. Record 3 raw turns containing "deployment" in a real session.
+    const session = convStore.startSession("agent-a");
+    convStore.recordTurn({
+      sessionId: session.id,
+      role: "user",
+      content: "planning deployment for v2",
+      isTrustedChannel: true,
+    });
+    convStore.recordTurn({
+      sessionId: session.id,
+      role: "assistant",
+      content: "deployment will use blue-green",
+      isTrustedChannel: true,
+    });
+    convStore.recordTurn({
+      sessionId: session.id,
+      role: "user",
+      content: "deployment timeline is tight",
+      isTrustedChannel: true,
+    });
+
+    // 2. Insert a session-summary MemoryEntry for the same session.
+    //    Tags include the session:<id> pointer so dedup can link
+    //    summary ↔ raw turns.
+    const embedding = await fakeEmbedder.embed("deployment");
+    memStore.insert(
+      {
+        content: "Session S1: discussed deployment strategy (blue-green)",
+        source: "conversation",
+        tags: ["session-summary", `session:${session.id}`],
+        skipDedup: true,
+      },
+      embedding,
+    );
+
+    // 3. Invoke with scope='all' — chains FTS5 + findByTag + listRecent.
+    const result = (await invokeMemoryLookup(
+      {
+        agent: "agent-a",
+        query: "deployment",
+        scope: "all",
+        page: 0,
+        limit: 10,
+      },
+      {
+        memoryStore: memStore,
+        conversationStore: convStore,
+        embedder: fakeEmbedder,
+      },
+    )) as unknown as {
+      results: Array<{ origin: string; session_id: string | null }>;
+      hasMore: boolean;
+      nextOffset: number | null;
+    };
+
+    // 4. For this session, dedup MUST keep only the summary. Raw turns
+    //    get dropped because dedupPreferSummary prefers distilled summaries.
+    const forThisSession = result.results.filter(
+      (r) => r.session_id === session.id,
+    );
+    expect(forThisSession.length).toBeGreaterThanOrEqual(1);
+    expect(forThisSession.every((r) => r.origin === "session-summary")).toBe(
+      true,
+    );
+    // 5. Pagination envelope present on new-path responses.
+    expect(typeof result.hasMore).toBe("boolean");
+    expect(result.hasMore).toBe(false);
+    expect(result.nextOffset).toBeNull();
+  });
+
+  it("backward-compat — pre-v1.9 call without scope returns ONLY legacy fields (no origin/session_id/hasMore)", async () => {
+    const embedding = await fakeEmbedder.embed("test");
+    memStore.insert(
+      {
+        content: "A test memory for backward-compat verification",
+        source: "manual",
+        tags: ["test"],
+        skipDedup: true,
+      },
+      embedding,
+    );
+
+    // Pre-v1.9 call signature — exactly what an agent running the older
+    // MCP tool would send.
+    const result = (await invokeMemoryLookup(
+      { agent: "agent-a", query: "test", limit: 5 },
+      {
+        memoryStore: memStore,
+        conversationStore: convStore,
+        embedder: fakeEmbedder,
+      },
+    )) as unknown as {
+      results: Array<Record<string, unknown>>;
+      hasMore?: boolean;
+      nextOffset?: number | null;
+    };
+
+    // Legacy-branch envelope — NO pagination fields.
+    expect(result.hasMore).toBeUndefined();
+    expect(result.nextOffset).toBeUndefined();
+
+    if (result.results.length > 0) {
+      const first = result.results[0]!;
+      // Legacy keys — ALL present
+      expect(first).toHaveProperty("id");
+      expect(first).toHaveProperty("content");
+      expect(first).toHaveProperty("relevance_score");
+      expect(first).toHaveProperty("tags");
+      expect(first).toHaveProperty("created_at");
+      expect(first).toHaveProperty("source");
+      // linked_from is unique to GraphSearch (legacy path).
+      expect(first).toHaveProperty("linked_from");
+      // New-path fields MUST be absent for backward-compat.
+      expect(first).not.toHaveProperty("origin");
+      expect(first).not.toHaveProperty("session_id");
+    }
+  });
+});

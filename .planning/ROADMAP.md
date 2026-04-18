@@ -11,7 +11,7 @@
 - :white_check_mark: **v1.6 Platform Operations & RAG** - Phases 42-49 (shipped 2026-04-12)
 - :white_check_mark: **v1.7 Performance & Latency** - Phases 50-56 (shipped 2026-04-14)
 - :white_check_mark: **v1.8 Proactive Agents + Handoffs** - Phases 57-63 (shipped 2026-04-17)
-- :hammer_and_wrench: **v1.9 Persistent Conversation Memory** - Phases 64-68 (active, started 2026-04-18)
+- :white_check_mark: **v1.9 Persistent Conversation Memory** - Phases 64-68 (shipped 2026-04-18)
 
 ## Phases
 
@@ -96,7 +96,7 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 
 </details>
 
-### v1.9 Persistent Conversation Memory (Phases 64-68) - ACTIVE
+### v1.9 Persistent Conversation Memory (Phases 64-68) - SHIPPED 2026-04-18
 
 **Goal:** Agents remember what happened in prior sessions -- Discord conversations are stored, summarized into retrievable facts, and automatically injected on restart so agents never wake up to a blank slate.
 
@@ -104,7 +104,7 @@ Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all tur
 - [x] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage (completed 2026-04-18)
 - [x] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash (completed 2026-04-18)
 - [x] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection (gap closure in progress — 67-03 pending) (completed 2026-04-18)
-- [ ] **Phase 68: Conversation Search + Deep Retrieval** - On-demand semantic + full-text search over conversation history via enhanced MCP tool with pagination
+- [x] **Phase 68: Conversation Search + Deep Retrieval** - On-demand semantic + full-text search over conversation history via enhanced MCP tool with pagination (completed 2026-04-18)
 
 ## Phase Details
 
@@ -200,11 +200,15 @@ Plans:
   2. Raw conversation turn text is searchable via FTS5 full-text search for precise keyword recall -- an agent searching for "the exact API endpoint we discussed" finds the specific turn containing that phrase even when semantic search surfaces tangentially related results instead
   3. Search results are paginated (max 10 per page) with time-decay weighting so recent conversations rank higher than old ones given similar semantic relevance -- an agent searching "deployment" sees last week's deployment discussion before last month's, and can request additional pages if the first page does not contain what it needs
 
-**Plans**: TBD
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 68-01-PLAN.md — FTS5 query layer: migration + triggers + searchTurns + escapeFtsQuery + searchByScope orchestrator (RETR-02 + RETR-03)
+- [x] 68-02-PLAN.md — MCP tool + daemon IPC wiring: scope + page parameters + backward-compat + end-to-end integration (RETR-01)
 
 ## Progress
 
-**Status:** v1.8 Proactive Agents + Handoffs shipped 2026-04-17. v1.9 Persistent Conversation Memory active (roadmap ready 2026-04-18).
+**Status:** v1.9 Persistent Conversation Memory shipped 2026-04-18. All 5 phases (64-68) complete with 12 plans across the milestone.
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -217,7 +221,7 @@ Plans:
 | v1.6 | 42-49 | Complete | 2026-04-12 |
 | v1.7 | 50-56 | Complete | 2026-04-14 |
 | v1.8 | 57-63 | Complete | 2026-04-17 |
-| v1.9 | 64-68 | Active -- planning Phase 66 | -- |
+| v1.9 | 64-68 | Complete | 2026-04-18 |
 
 ### v1.9 Phase Progress
 
@@ -227,4 +231,4 @@ Plans:
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
 | 67. Resume Auto-Injection | 3/3 | Complete    | 2026-04-18 |
-| 68. Conversation Search + Deep Retrieval | 1/2 | In Progress|  |
+| 68. Conversation Search + Deep Retrieval | 2/2 | Complete    | 2026-04-18 |
