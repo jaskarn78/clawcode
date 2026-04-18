@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  SOURCE_KINDS,
   TurnOriginSchema,
   makeRootOrigin,
   makeRootOriginWithTurnId,
@@ -103,7 +104,7 @@ describe("makeRootOrigin", () => {
 
 describe("makeTurnId", () => {
   it("produces turnIds matching TURN_ID_REGEX for every SourceKind", () => {
-    for (const kind of ["discord", "scheduler", "task", "trigger"] as const) {
+    for (const kind of ["discord", "scheduler", "task", "trigger", "openai-api"] as const) {
       const id = makeTurnId(kind);
       expect(id).toMatch(TURN_ID_REGEX);
       expect(id.startsWith(`${kind}:`)).toBe(true);
@@ -157,6 +158,62 @@ describe("makeRootOriginWithTurnId", () => {
     expect(Object.isFrozen(origin)).toBe(true);
     expect(Object.isFrozen(origin.source)).toBe(true);
     expect(Object.isFrozen(origin.chain)).toBe(true);
+  });
+});
+
+describe("Phase 69 — openai-api kind", () => {
+  it("SOURCE_KINDS includes 'openai-api' as 5th element", () => {
+    expect(SOURCE_KINDS).toContain("openai-api");
+    expect(SOURCE_KINDS.length).toBe(5);
+    expect(SOURCE_KINDS[4]).toBe("openai-api");
+  });
+
+  it("makeTurnId('openai-api') produces a turnId matching TURN_ID_REGEX", () => {
+    const id = makeTurnId("openai-api");
+    expect(id.startsWith("openai-api:")).toBe(true);
+    expect(TURN_ID_REGEX.test(id)).toBe(true);
+  });
+
+  it("TURN_ID_REGEX accepts openai-api: prefixed ids with 10+ char bodies", () => {
+    expect(TURN_ID_REGEX.test("openai-api:abc12def45")).toBe(true);
+    expect(TURN_ID_REGEX.test("openai-api:short")).toBe(false);
+  });
+
+  it("makeRootOrigin('openai-api', fingerprint) produces frozen origin with correct kind", () => {
+    const origin = makeRootOrigin("openai-api", "deadbeef");
+    expect(Object.isFrozen(origin)).toBe(true);
+    expect(Object.isFrozen(origin.source)).toBe(true);
+    expect(Object.isFrozen(origin.chain)).toBe(true);
+    expect(origin.source.kind).toBe("openai-api");
+    expect(origin.source.id).toBe("deadbeef");
+    expect(origin.parentTurnId).toBeNull();
+    expect(origin.rootTurnId).toMatch(TURN_ID_REGEX);
+    expect(origin.rootTurnId.startsWith("openai-api:")).toBe(true);
+  });
+
+  it("makeRootOriginWithTurnId('openai-api', ..., 'openai-api:custom-foo01') preserves the custom turnId", () => {
+    const turnId = "openai-api:custom-foo01";
+    const origin = makeRootOriginWithTurnId("openai-api", "deadbeef", turnId);
+    expect(origin.rootTurnId).toBe(turnId);
+    expect(origin.chain).toEqual([turnId]);
+    expect(origin.source.kind).toBe("openai-api");
+  });
+
+  it("makeRootOriginWithTurnId throws on non-matching turnId", () => {
+    expect(() =>
+      makeRootOriginWithTurnId("openai-api", "x", "wrong-format"),
+    ).toThrow(/TURN_ID_REGEX/);
+  });
+
+  it("TurnOriginSchema accepts source.kind = 'openai-api' without modification", () => {
+    const parsed = TurnOriginSchema.parse({
+      source: { kind: "openai-api", id: "fp_abc123" },
+      rootTurnId: "openai-api:abc123XYZ0",
+      parentTurnId: null,
+      chain: ["openai-api:abc123XYZ0"],
+    });
+    expect(parsed.source.kind).toBe("openai-api");
+    expect(parsed.causationId).toBeNull();
   });
 });
 

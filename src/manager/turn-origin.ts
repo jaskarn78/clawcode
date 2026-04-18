@@ -15,9 +15,10 @@
 import { z } from "zod/v4";
 import { nanoid } from "nanoid";
 
-/** The four locked turn-source kinds. Downstream phases extend by REGISTERING
- *  a kind, never by inventing a fifth value without a roadmap update. */
-export const SOURCE_KINDS = ["discord", "scheduler", "task", "trigger"] as const;
+/** The 5 locked turn-source kinds. v2.0 Phase 69 added 'openai-api'.
+ *  Downstream phases extend by REGISTERING a kind, never by inventing a new
+ *  value without a roadmap update. */
+export const SOURCE_KINDS = ["discord", "scheduler", "task", "trigger", "openai-api"] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 /**
@@ -54,8 +55,9 @@ export const TurnOriginSchema = z.object({
 export type TurnOrigin = z.infer<typeof TurnOriginSchema>;
 
 /** Regex for validating turnIds. Phase 58 task rows + Phase 63 trace walker
- *  rely on this format; change requires milestone-level coordination. */
-export const TURN_ID_REGEX = /^(discord|scheduler|task|trigger):[a-zA-Z0-9_-]{10,}$/;
+ *  rely on this format; change requires milestone-level coordination.
+ *  v2.0 Phase 69 extended the prefix union with `openai-api`. */
+export const TURN_ID_REGEX = /^(discord|scheduler|task|trigger|openai-api):[a-zA-Z0-9_-]{10,}$/;
 
 /** Generate a new turnId of the form `<kind>:<nanoid(10)>`. 10-char nanoid
  *  matches the pre-existing scheduler convention at `src/scheduler/scheduler.ts:98`.
