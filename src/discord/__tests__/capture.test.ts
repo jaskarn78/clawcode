@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { captureDiscordExchange, type CaptureInput } from "../capture.js";
+import { MemoryStore } from "../../memory/store.js";
+import { ConversationStore } from "../../memory/conversation-store.js";
 
 /** Minimal mock of ConversationStore.recordTurn. */
 function createMockConvStore() {
@@ -165,5 +167,119 @@ describe("captureDiscordExchange", () => {
 
     const assistantCall = mockStore.recordTurn.mock.calls[1][0];
     expect(assistantCall.instructionFlags).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 68.1 — isTrustedChannel provenance wiring
+  // -------------------------------------------------------------------------
+
+  it("threads isTrustedChannel into recordTurn (both user and assistant turns)", () => {
+    captureDiscordExchange(buildInput({ isTrustedChannel: true }));
+
+    expect(mockStore.recordTurn).toHaveBeenCalledTimes(2);
+
+    const userCall = mockStore.recordTurn.mock.calls[0][0];
+    const assistantCall = mockStore.recordTurn.mock.calls[1][0];
+
+    expect(userCall.isTrustedChannel).toBe(true);
+    expect(assistantCall.isTrustedChannel).toBe(true);
+  });
+
+  it("when isTrustedChannel is omitted, both recordTurn calls receive undefined (store coerces to false)", () => {
+    captureDiscordExchange(buildInput());
+
+    const userCall = mockStore.recordTurn.mock.calls[0][0];
+    const assistantCall = mockStore.recordTurn.mock.calls[1][0];
+
+    expect(userCall.isTrustedChannel).toBeUndefined();
+    expect(assistantCall.isTrustedChannel).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 68.1 — Integration: capture → ConversationStore → searchTurns
+// Uses a real in-memory SQLite DB (MemoryStore migrates conversation tables
+// and the conversation_turns_fts virtual table on construction) so we can
+// prove end-to-end that turns captured with isTrustedChannel: true are
+// findable via the default (trust-filtered) searchTurns path.
+// ---------------------------------------------------------------------------
+
+describe("captureDiscordExchange — integration with ConversationStore.searchTurns", () => {
+  let memStore: MemoryStore;
+  let convStore: ConversationStore;
+  let log: ReturnType<typeof createMockLog>;
+
+  beforeEach(() => {
+    memStore = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    convStore = new ConversationStore(memStore.getDatabase());
+    log = createMockLog();
+  });
+
+  afterEach(() => {
+    memStore?.close();
+  });
+
+  it("turns captured with isTrustedChannel: true are findable via searchTurns default trust filter", () => {
+    const session = convStore.startSession("agent-a");
+
+    captureDiscordExchange({
+      convStore,
+      sessionId: session.id,
+      userContent: "notes on the staging deployment runbook",
+      assistantContent: "here is the deployment summary and rollback plan",
+      channelId: "ch-trusted",
+      discordUserId: "user-1",
+      discordMessageId: "msg-1",
+      isTrustedChannel: true,
+      log: log as unknown as CaptureInput["log"],
+    });
+
+    // Default trust filter path (no includeUntrustedChannels flag)
+    const trusted = convStore.searchTurns("deployment", {
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(trusted.totalMatches).toBeGreaterThanOrEqual(1);
+    expect(trusted.results.length).toBeGreaterThanOrEqual(1);
+    for (const row of trusted.results) {
+      expect(row.isTrustedChannel).toBe(true);
+    }
+  });
+
+  it("turns captured without isTrustedChannel are EXCLUDED by default searchTurns, included when includeUntrustedChannels: true", () => {
+    const session = convStore.startSession("agent-a");
+
+    captureDiscordExchange({
+      convStore,
+      sessionId: session.id,
+      userContent: "untrusted channel chatter about deployment",
+      assistantContent: "ack",
+      channelId: "ch-untrusted",
+      discordUserId: "user-2",
+      discordMessageId: "msg-2",
+      // isTrustedChannel intentionally omitted -- store coerces to false
+      log: log as unknown as CaptureInput["log"],
+    });
+
+    const defaultSearch = convStore.searchTurns("deployment", {
+      limit: 10,
+      offset: 0,
+    });
+    expect(defaultSearch.totalMatches).toBe(0);
+    expect(defaultSearch.results.length).toBe(0);
+
+    const withUntrusted = convStore.searchTurns("deployment", {
+      limit: 10,
+      offset: 0,
+      includeUntrustedChannels: true,
+    });
+    expect(withUntrusted.totalMatches).toBeGreaterThanOrEqual(1);
+    for (const row of withUntrusted.results) {
+      expect(row.isTrustedChannel).toBe(false);
+    }
   });
 });
