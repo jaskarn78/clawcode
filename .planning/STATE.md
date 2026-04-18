@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to plan
-stopped_at: Completed 67-03-PLAN.md
-last_updated: "2026-04-18T17:43:43.247Z"
+status: Ready to execute
+stopped_at: Completed 68-01-PLAN.md
+last_updated: "2026-04-18T18:27:51.991Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 67 — resume-auto-injection
+**Current focus:** Phase 68 — conversation-search-deep-retrieval
 
 ## Current Position
 
-Phase: 68
-Plan: Not started
+Phase: 68 (conversation-search-deep-retrieval) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -80,6 +80,11 @@ Recent decisions affecting current work:
 - [Phase 67]: [Phase 67-02]: Graceful-degradation via conjunction guard (convStore && memStore) — either absent → helper path skipped entirely, no throw. Tolerates legacy startup, test harnesses, and partial bootstrap. SessionManager wiring follow-up still required to actually populate conversationStores/memoryStores Maps in production.
 - [Phase 67]: [Phase 67-03]: Closed runtime gap via two-line configDeps extension (conversationStores + memoryStores threaded from AgentMemoryManager). Phase 67 read-path now LIVE end-to-end — SESS-02/SESS-03 active in production.
 - [Phase 67]: [Phase 67-03]: Forward-wrapping vi.mock pattern — vi.fn(actual.buildSessionConfig) via importOriginal keeps existing 23 session-manager tests on real impl while capturing deps for new assertion. Generalizable pattern for ESM mock-with-forwarding.
+- [Phase 68]: [Phase 68-01]: External-content FTS5 (content='conversation_turns') + AI/AD/AU triggers + sqlite_master-gated backfill — zero writes to recordTurn path; triggers inside SQLite transaction boundary make cross-table sync bulletproof
+- [Phase 68]: [Phase 68-01]: Phrase-quote escape strategy for FTS5 — escapeFtsQuery() wraps entire trimmed input and doubles embedded quotes; empty/whitespace returns double-quote pair which matches nothing safely (Pitfall 1 mitigation)
+- [Phase 68]: [Phase 68-01]: BM25 sign inversion via 1/(1+|bm25|) in conversation-search.ts before combining with decay — keeps combinedScore positive [0,1] so memory and turn results sort consistently (Pitfall 3)
+- [Phase 68]: [Phase 68-01]: MVP memory path uses case-insensitive substring match (listRecent(200) + filter) rather than SemanticSearch KNN — keeps helper-layer unit tests deterministic without embedder warmup; 68-02 can swap to KNN at the MCP/IPC wiring layer where embedder is already in scope
+- [Phase 68]: [Phase 68-01]: scope='all' dedup prefers session-summary over raw-turn for same sessionId — distilled summary carries more signal per token than verbose turns; raw turns survive only when no matching summary exists (Pitfall 4)
 
 ### Roadmap Evolution
 
@@ -99,5 +104,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 67-03-PLAN.md
+Stopped at: Completed 68-01-PLAN.md
 Resume file: None

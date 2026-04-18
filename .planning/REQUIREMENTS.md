@@ -28,8 +28,8 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 ### Deep Retrieval (RETR)
 
 - [ ] **RETR-01**: Agent can search conversation history on demand via an enhanced memory_lookup MCP tool with a scope parameter (backward-compatible with existing callers)
-- [ ] **RETR-02**: Raw conversation turn text is searchable via FTS5 full-text search for precise keyword recall when semantic search is insufficient
-- [ ] **RETR-03**: Search results are paginated (max 10 per page) and time-decay-weighted so recent conversations rank higher than old ones
+- [x] **RETR-02**: Raw conversation turn text is searchable via FTS5 full-text search for precise keyword recall when semantic search is insufficient
+- [x] **RETR-03**: Search results are paginated (max 10 per page) and time-decay-weighted so recent conversations rank higher than old ones
 
 ### Security (SEC)
 
