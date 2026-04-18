@@ -25,7 +25,7 @@ All implementation choices are at Claude's discretion — infrastructure phase. 
 
 Key research guidance (locked in prior decisions logged in STATE.md):
 
-- FTS5 virtual table already created on raw-turn text in Phase 64 (per REQUIREMENTS.md CONV-03 traceability). Phase 68 ADDs the query surface, not the schema.
+- FTS5 virtual table was NOT actually created in Phase 64 (verified via grep — `migrateConversationTables()` at `src/memory/store.ts:633-680` creates raw tables only; only `vec_memories` and `vec_document_chunks` virtual tables exist). Phase 68 MUST include a new migration (`migrateConversationTurnsFts`) using the external-content FTS5 pattern with three sync triggers + idempotent backfill gated on `sqlite_master` lookup. (REQUIREMENTS.md CONV-03 traceability referred to the FTS5 column being reserved for Phase 68; the schema was not created.)
 - Semantic search reuses `MemoryStore` + `sqlite-vec` KNN search — session summaries are already standard MemoryEntries with `source="conversation"` tag from Phase 66 (SESS-04).
 - `memory_lookup` MCP tool already exists (src/mcp/server.ts) — extend its parameter schema with `scope` (Zod enum: `"memories" | "conversations" | "all"`, default `"memories"` for backward compatibility)
 - Pagination: max 10 results per page, cursor or offset-based (Claude's discretion; cursor is more robust if multiple writes happen between pages, but offset is simpler for agent-facing consumption)
