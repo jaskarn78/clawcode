@@ -30,6 +30,16 @@ phase and are out of scope per SCOPE BOUNDARY rule.
 - `git log -1 --stat` for the `feat(66-03)` commit (immediately before
   Phase 67 began) would show these same errors existed.
 
+## Out-of-scope vitest failures (pre-existing)
+
+| File | Failures | Scope |
+|------|----------|-------|
+| `src/memory/__tests__/graph-search.test.ts` | 5 tests fail in isolation (Hook timed out in 10000ms on beforeEach temp-dir/embedder setup) | pre-existing — last touched in Phase 38, well before Phase 67 |
+
+Confirmed isolated-run failure (vitest run on this file alone):
+`5 failed | 6 passed (11)` — reproduces without parallel pressure, so
+not a concurrency regression from Phase 67 work.
+
 ## Recommended follow-up
 
 Track in ROADMAP or open a separate "tech-debt" phase to sweep the above

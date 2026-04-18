@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to plan
-stopped_at: Completed 66-03-PLAN.md
-last_updated: "2026-04-18T15:44:11.591Z"
+status: Ready to execute
+stopped_at: Completed 67-01-PLAN.md
+last_updated: "2026-04-18T16:37:45.823Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 9
+  completed_plans: 8
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 66 — session-boundary-summarization
+**Current focus:** Phase 67 — resume-auto-injection
 
 ## Current Position
 
-Phase: 67
-Plan: Not started
+Phase: 67 (resume-auto-injection) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -72,6 +72,9 @@ Recent decisions affecting current work:
 - [Phase 66]: [Phase 66-03]: Lifecycle-specific summarize invocation policy — stopAgent awaits (bounded by internal 10s timeout), onError fires fire-and-forget. Same summarizeSessionIfPossible helper; caller decides policy. Prevents crash recovery delay while ensuring summaries complete on normal stops.
 - [Phase 66]: [Phase 66-03]: summarizeWithHaiku wraps sdk.query with settingSources=[] so the summarizer runs config-free (no skills/MCP servers/workspace settings inherited). Prevents Pitfall 3 from 66-RESEARCH where summarizer accidentally runs with agent tools attached.
 - [Phase 66]: [Phase 66-03]: summarizeFn is a test-only SessionManagerOptions field with production fallback to summarizeWithHaiku — keeps production coupling minimal while enabling integration tests to swap the LLM call without mocking SDK modules.
+- [Phase 67]: [Phase 67-01]: Config placement Option A — extended conversationConfigSchema with resumeSessionCount/resumeGapThresholdHours/conversationContextBudget rather than splitting across memoryAssemblyBudgets. Respects v1.9 locked 'dedicated budget' decision.
+- [Phase 67]: [Phase 67-01]: Accumulate budget strategy locked — helper adds whole summaries until next would overflow and drops the remainder. Never half-truncates mid-summary. Over-budget single-summary still accepted (better than silent empty-string return).
+- [Phase 67]: [Phase 67-01]: Pure DI helper with injected 'now: number' — assembleConversationBrief never reads Date.now() so gap-skip tests are deterministic without vi.setSystemTime() or Date monkey-patching. Gap short-circuit happens BEFORE any MemoryStore.findByTag call (verified by spy).
 
 ### Roadmap Evolution
 
@@ -91,5 +94,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 66-03-PLAN.md
+Stopped at: Completed 67-01-PLAN.md
 Resume file: None
