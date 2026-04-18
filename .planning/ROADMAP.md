@@ -226,5 +226,5 @@ Plans:
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
-| 67. Resume Auto-Injection | 3/3 | Complete   | 2026-04-18 |
+| 67. Resume Auto-Injection | 3/3 | Complete    | 2026-04-18 |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |
