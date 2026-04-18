@@ -771,47 +771,54 @@ describe("ConversationStore", () => {
       expect(hit?.content).toContain("deployment");
     });
 
-    it("does not re-run backfill on subsequent MemoryStore constructions", () => {
-      // Uses an on-disk tmp DB (required because :memory: DBs do not share
-      // state across connections). mkdtempSync+rmSync pattern lifted from
-      // graph-search.test.ts — proven fast with dedup disabled.
-      const tempDir = mkdtempSync(join(tmpdir(), "fts5-noredup-"));
-      const dbPath = join(tempDir, "test.db");
-      try {
-        const s1 = new MemoryStore(dbPath, {
-          enabled: false,
-          similarityThreshold: 0.85,
-        });
-        const c1 = new ConversationStore(s1.getDatabase());
-        const session = c1.startSession("agent-a");
-        c1.recordTurn({
-          sessionId: session.id,
-          role: "user",
-          content: "hello world idempotency test",
-        });
-        const countAfterFirst = s1
-          .getDatabase()
-          .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
-          .get() as { c: number };
-        expect(countAfterFirst.c).toBe(1);
-        s1.close();
+    it(
+      "does not re-run backfill on subsequent MemoryStore constructions",
+      { timeout: 30000 },
+      () => {
+        // Uses an on-disk tmp DB (required because :memory: DBs do not share
+        // state across connections). mkdtempSync+rmSync pattern lifted from
+        // graph-search.test.ts. Timeout raised to 30s because the parallel
+        // vitest pool can contend with other suites opening sqlite-vec on
+        // disk; open/close/reopen on a physical file path is slower than the
+        // :memory: path used by other tests in this suite.
+        const tempDir = mkdtempSync(join(tmpdir(), "fts5-noredup-"));
+        const dbPath = join(tempDir, "test.db");
+        try {
+          const s1 = new MemoryStore(dbPath, {
+            enabled: false,
+            similarityThreshold: 0.85,
+          });
+          const c1 = new ConversationStore(s1.getDatabase());
+          const session = c1.startSession("agent-a");
+          c1.recordTurn({
+            sessionId: session.id,
+            role: "user",
+            content: "hello world idempotency test",
+          });
+          const countAfterFirst = s1
+            .getDatabase()
+            .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
+            .get() as { c: number };
+          expect(countAfterFirst.c).toBe(1);
+          s1.close();
 
-        // Second construction — if backfill re-ran unconditionally, count
-        // would be 2 (duplicate row). sqlite_master gate prevents that.
-        const s2 = new MemoryStore(dbPath, {
-          enabled: false,
-          similarityThreshold: 0.85,
-        });
-        const countAfterReopen = s2
-          .getDatabase()
-          .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
-          .get() as { c: number };
-        expect(countAfterReopen.c).toBe(1);
-        s2.close();
-      } finally {
-        rmSync(tempDir, { recursive: true, force: true });
-      }
-    });
+          // Second construction — if backfill re-ran unconditionally, count
+          // would be 2 (duplicate row). sqlite_master gate prevents that.
+          const s2 = new MemoryStore(dbPath, {
+            enabled: false,
+            similarityThreshold: 0.85,
+          });
+          const countAfterReopen = s2
+            .getDatabase()
+            .prepare("SELECT COUNT(*) AS c FROM conversation_turns_fts")
+            .get() as { c: number };
+          expect(countAfterReopen.c).toBe(1);
+          s2.close();
+        } finally {
+          rmSync(tempDir, { recursive: true, force: true });
+        }
+      },
+    );
   });
 
   describe("trigger", () => {
