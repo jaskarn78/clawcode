@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Defining requirements
-stopped_at: null
+status: Ready to plan Phase 64
+stopped_at: Roadmap created
 last_updated: "2026-04-18T00:00:00.000Z"
 last_activity: 2026-04-18
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,24 +20,28 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v1.9 Persistent Conversation Memory — defining requirements
+**Current focus:** v1.9 Persistent Conversation Memory -- Phase 64 ready to plan
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
+Phase: 64 of 68 (ConversationStore + Schema Foundation)
+Plan: -- (not yet planned)
+Status: Ready to plan
+Last activity: 2026-04-18 -- v1.9 roadmap created (5 phases, 12 requirements mapped)
+
+Progress: [..........] 0%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 63 (v1.0: 11, v1.1: 32, v1.2: 20) + v1.3-v1.7 plans
+- Total plans completed: 63+ (v1.0-v1.8 across 9 milestones)
 - Average duration: ~3.5 min
-- Total execution time: ~3.7 hours
+- Total execution time: ~3.7+ hours
 
 **Recent Trend:**
 
-- v1.7 plans: stable ~5-30min each (depth of work in phases 52-56 lifted the average)
+- v1.8 plans: stable ~5-30min each
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -49,42 +53,20 @@ Plan: —
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [v1.8 Roadmap]: Phase 57 TurnDispatcher is a net-zero refactor that MUST ship before any trigger or handoff code — it's the load-bearing chokepoint that unifies Discord / scheduler / future trigger / future handoff entry points behind one contract
-- [v1.8 Roadmap]: Task store (Phase 58) precedes handoffs (Phase 59) and triggers (Phase 60) because both write task rows with causation_id / parent_task_id / depth — state machine must exist first
-- [v1.8 Roadmap]: Handoffs (Phase 59) ship BEFORE trigger engine (Phase 60) — handoffs are testable end-to-end via the CLI without any trigger source, and locking async-ticket semantics (no sync await) early protects the API surface from sync-RPC regressions
-- [v1.8 Roadmap]: Trigger engine foundation (Phase 60) lands the policy evaluator internally + 3-layer dedup + causation_id propagation + scheduler-as-source migration BEFORE external source types — engine contract must be stable before webhooks / MySQL / inbox / calendar plug in
-- [v1.8 Roadmap]: Additional trigger sources (Phase 61) cluster into one phase because each is a thin adapter against the Phase 60 engine — no new cross-cutting abstraction per source
-- [v1.8 Roadmap]: Policy DSL + hot-reload + dry-run (Phase 62) ships as a single phase — exposing the DSL without dry-run is a foot-gun (Pitfall 5: "policy accidentally matches everything")
-- [v1.8 Roadmap]: Observability (Phase 63) is the LAST phase because causation_id / trigger_id / task_id metadata only exists once all upstream phases have landed — walking a chain requires every link to be present
-- [v1.8 Roadmap]: 30 requirements mapped 1:1 across 7 phases with zero orphans: Phase 57=0 (foundation), 58=3, 59=9, 60=5, 61=4, 62=4, 63=5
-- [v1.7 Roadmap]: Instrumentation (Phase 50) is the foundation — all optimization phases depend on it so wins can be proven
-- [v1.7 Roadmap]: SLO/regression gate (Phase 51) locked in before optimization phases so any later regression breaks CI
-- [v1.7 Roadmap]: Optimization phases (52-56) execute in parallel-capable order but all gated on Phase 50 telemetry being live
-- [v1.5 Roadmap]: Knowledge graph uses SQLite adjacency list (no graphology), zero new dependencies
-- [v1.5 Roadmap]: Session-level model routing for escalation (SDK does not support mid-session setModel)
-- [v1.5 Roadmap]: Hybrid hot-tier + on-demand loading (pure on-demand causes confabulation)
-- [v1.5 Roadmap]: Local embeddings stay (384-dim sufficient for graph similarity)
-- [Phase 57-turndispatcher-foundation]: [Plan 57-01]: TurnDispatcher + TurnOrigin contract landed — single chokepoint wrapping SessionManager, net-zero call-site impact, deeply-frozen origin shape, Discord snowflake preservation helper in place for Plan 57-03 migration
-- [Phase 57]: [Plan 57-02]: Trace store schema + Turn lifecycle extended — turnOrigin field on TurnRecord, nullable turn_origin TEXT column with idempotent migration, Turn.recordOrigin API mirrors recordCacheUsage precedent. Plan 57-03 call-site migration now unblocked.
-- [Phase 57]: Optional BridgeConfig.turnDispatcher + fallback preserves standalone runner (Blocker #1 resolved — src/cli/commands/run.ts compiles unchanged)
-- [Phase 57]: Discord turnId format: discord:<snowflake> (prefixed) — preserves trace-id continuity via rewrite
-- [Phase 57]: Caller-owned Turn handoff pattern (DiscordBridge) vs dispatcher-owned (TaskScheduler) — both supported by DispatchOptions.turn branch
-- [Phase 58-task-store-state-machine]: [Plan 58-01]: TaskStatus union (8 statuses) + LEGAL_TRANSITIONS map + 15-field LIFE-02 TaskRowSchema + assertLegalTransition pure-function state machine landed — pure-data foundation, zero daemon wiring, 93 tests passing (64 from exhaustive (from, to) table + 29 explicit). Plans 58-02 and 58-03 unblocked.
-- [Phase 58]: [Plan 58-02]: TaskStore SQLite persistence layer landed — 15 LIFE-02 fields + CHECK(depth>=0) + CHECK(status IN 8-value set), 4 covering indexes, idempotent CREATE-IF-NOT-EXISTS DDL, ORPHAN_THRESHOLD_MS_DEFAULT=5min. transition() asserts legality BEFORE UPDATE (LIFE-01 illegal-transition preserves row); markOrphaned() bypasses assertLegalTransition as reconciler escape hatch. 124 tests pass across src/tasks/__tests__/ (93 from 58-01 + 31 from 58-02). Plan 58-03 unblocked.
-- [Phase 58-task-store-state-machine]: [Plan 58-03]: Orphan reconciler + daemon TaskStore wiring landed — runStartupReconciliation pure function (95 lines, 9 tests), ORPHAN_THRESHOLD_MS=5min justified (5 missed 60s heartbeats), daemon.ts 4 surgical edits wiring taskStore as step 6-ter after TurnDispatcher and before EscalationBudget, reconciliation runs SYNCHRONOUSLY before SessionManager.startAll (LIFE-04 race guard), taskStore.close() in shutdown try/catch-wrapped AFTER manager.stopAll BEFORE socket unlink, taskStore: TaskStore exposed on startDaemon return — Phase 59 TaskManager can import without daemon.ts edits. 150 tests pass across Phase 58 suite. LIFE-01 + LIFE-04 proven. Phase 58 closed.
-- [Phase 59-cross-agent-rpc-handoffs]: [Plan 59-01]: Handoff foundation landed — 6 typed errors + computeInputDigest (sha256 over canonicalStringify) + compileJsonSchema (hand-rolled ~100 LOC with HAND-06 .strict()) + SchemaRegistry (YAML loader, first-boot tolerant) + 4 pure authorize functions + MAX_PAYLOAD_BYTES=65536. 191 tests green (150 Phase 58 + 41 new). Zero new deps. src/tasks/ type-clean. Plans 59-02 + 59-03 unblocked.
-- [Phase 63]: Temporal proximity LEFT JOIN for trigger-to-task correlation (trigger_events lacks causation_id); formatTokenCount/formatDuration exported from triggers.ts for cross-CLI reuse
-- [Phase 63-observability-surfaces]: [Plan 63-01]: CLI commands landed — `clawcode triggers` (temporal proximity JOIN, color-coded table, --source/--agent/--json) + `clawcode tasks list` (read-only SQLite, --agent/--state/--json, chain_token_cost as human-readable). 38 tests passing. OBS-01 + OBS-02 + OBS-05 complete.
-- [Phase 63]: Cross-DB chain stitching: tasks.db for task rows + per-agent traces.db for turn rows, linked via causation_id LIKE query and parent_task_id/parentTurnId references
-- [Phase 63]: OBS-04 extraction: TurnOrigin.source.kind=trigger yields triggerId from source.id, kind=task yields taskId -- no new write-side columns needed
+- [v1.9 Roadmap]: ConversationStore schema goes in existing memories.db (same WAL connection, no cross-db JOIN pain, follows migrateGraphLinks pattern)
+- [v1.9 Roadmap]: Session summaries stored as standard MemoryEntries (source="conversation") -- zero new retrieval infrastructure, auto-participates in search/decay/tiers/graph
+- [v1.9 Roadmap]: Raw turns do NOT get per-turn embeddings -- embed session summaries only; use FTS5 for raw turn text search (Phase 68)
+- [v1.9 Roadmap]: Capture happens after Discord response posted (fire-and-forget) -- never blocks message delivery
+- [v1.9 Roadmap]: Haiku for session-boundary summarization -- structured extraction prompt matters more than model size, 10x cheaper than sonnet
+- [v1.9 Roadmap]: Auto-inject uses dedicated conversation_context budget (2000-3000 tokens) in mutable suffix -- does NOT share resume_summary budget
+- [v1.9 Roadmap]: Instruction-pattern detection runs at capture time (Phase 65) before turns enter persistent store -- flags potential injection, does not block storage
+- [v1.9 Roadmap]: Phase 65 (Capture Integration) carries SEC-02 because instruction detection is a capture-time concern, not a schema concern
+- [v1.9 Roadmap]: Zero new npm dependencies -- entire milestone builds on existing stack (better-sqlite3, sqlite-vec, @huggingface/transformers, zod, etc.)
 
 ### Roadmap Evolution
 
-- 2026-04-13: Milestone v1.7 Performance & Latency started (continues from v1.6 phase numbering)
-- 2026-04-13: v1.7 roadmap created — 7 phases (50-56), 22 requirements mapped 1:1
-- 2026-04-14: v1.7 shipped
-- 2026-04-15: Milestone v1.8 Proactive Agents + Handoffs started — 30 requirements defined
-- 2026-04-15: v1.8 roadmap created — 7 phases (57-63), 30 requirements mapped 1:1
+- 2026-04-18: Milestone v1.9 Persistent Conversation Memory started -- 12 requirements defined
+- 2026-04-18: v1.9 roadmap created -- 5 phases (64-68), 12 requirements mapped 1:1
 
 ### Pending Todos
 
@@ -92,18 +74,12 @@ None yet.
 
 ### Blockers/Concerns
 
-- Haiku empirical viability unknown for ClawCode's complex tool sequences -- compatibility audit needed before Phase 39 (legacy carry-over)
-- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)
-- v1.8: @vlasky/zongji binlog access requires MySQL replication user privileges — Finmentum environment must be validated before Phase 61 DB-change trigger work
-- v1.8: Google Calendar push channels expire every 7 days — renewal cron must be scheduled alongside the push subscription (Phase 61)
-- v1.8: tasks.db is daemon-scoped (shared) — single-writer invariant must be preserved; any tool reading it must use a separate read-only handle
-
-### Quick Tasks Completed
-
-See previous STATE.md history; carried forward unchanged from v1.7 shipping state.
+- Haiku empirical viability unknown for session-boundary summarization quality -- validate with real conversation samples in Phase 66
+- Context assembly ceiling (default 8000 tokens from Phase 52) may be too low once conversation_context section is added -- verify with clawcode context-audit after Phase 67
+- 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only) -- legacy carry-over
 
 ## Session Continuity
 
-Last activity: 2026-04-17
-Stopped at: Completed 63-03-PLAN.md
+Last activity: 2026-04-18
+Stopped at: v1.9 roadmap created -- ready to plan Phase 64
 Resume file: None

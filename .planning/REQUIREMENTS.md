@@ -1,8 +1,8 @@
-# Requirements — v1.9 Persistent Conversation Memory
+# Requirements -- v1.9 Persistent Conversation Memory
 
 **Status:** Active
 **Started:** 2026-04-18
-**Phases:** TBD — roadmap pending
+**Phases:** 64-68 (5 phases)
 
 ## Milestone Goal
 
@@ -45,9 +45,9 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 ### Advanced Features (v2+)
 
-- **ADV-01**: Conversation topic threading — group related turns across sessions by topic
-- **ADV-02**: Proactive context surfacing — agent preemptively retrieves relevant conversation history mid-turn
-- **ADV-03**: Cross-agent conversation handoff context — when Agent A delegates to Agent B, relevant conversation context transfers
+- **ADV-01**: Conversation topic threading -- group related turns across sessions by topic
+- **ADV-02**: Proactive context surfacing -- agent preemptively retrieves relevant conversation history mid-turn
+- **ADV-03**: Cross-agent conversation handoff context -- when Agent A delegates to Agent B, relevant conversation context transfers
 
 ## Out of Scope
 
@@ -63,30 +63,34 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 | Requirement | Description | Phase | Status |
 |-------------|-------------|-------|--------|
-| CONV-01 | Turn storage with provenance | TBD | [ ] |
-| CONV-02 | Session boundary tracking | TBD | [ ] |
-| CONV-03 | Memory lineage tracking | TBD | [ ] |
-| SESS-01 | Session-end summarization | TBD | [ ] |
-| SESS-02 | Auto-inject on resume | TBD | [ ] |
-| SESS-03 | Adaptive injection threshold | TBD | [ ] |
-| SESS-04 | Summaries as MemoryEntries | TBD | [ ] |
-| RETR-01 | Conversation search MCP tool | TBD | [ ] |
-| RETR-02 | FTS5 full-text search | TBD | [ ] |
-| RETR-03 | Paginated decay-weighted results | TBD | [ ] |
-| SEC-01 | Provenance fields on stored turns | TBD | [ ] |
-| SEC-02 | Instruction-pattern detection | TBD | [ ] |
+| CONV-01 | Turn storage with provenance | Phase 64 | [ ] |
+| CONV-02 | Session boundary tracking | Phase 64 | [ ] |
+| CONV-03 | Memory lineage tracking | Phase 64 | [ ] |
+| SESS-01 | Session-end summarization | Phase 66 | [ ] |
+| SESS-02 | Auto-inject on resume | Phase 67 | [ ] |
+| SESS-03 | Adaptive injection threshold | Phase 67 | [ ] |
+| SESS-04 | Summaries as MemoryEntries | Phase 66 | [ ] |
+| RETR-01 | Conversation search MCP tool | Phase 68 | [ ] |
+| RETR-02 | FTS5 full-text search | Phase 68 | [ ] |
+| RETR-03 | Paginated decay-weighted results | Phase 68 | [ ] |
+| SEC-01 | Provenance fields on stored turns | Phase 64 | [ ] |
+| SEC-02 | Instruction-pattern detection | Phase 65 | [ ] |
 
 **Coverage:**
 - v1.9 requirements: 12 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 12
+- Mapped to phases: 12
+- Unmapped: 0
 
 ### Phase Coverage
 
 | Phase | Requirements | Count |
 |-------|-------------|-------|
-| TBD | All | 12 |
+| Phase 64: ConversationStore + Schema Foundation | CONV-01, CONV-02, CONV-03, SEC-01 | 4 |
+| Phase 65: Capture Integration | SEC-02 | 1 |
+| Phase 66: Session-Boundary Summarization | SESS-01, SESS-04 | 2 |
+| Phase 67: Resume Auto-Injection | SESS-02, SESS-03 | 2 |
+| Phase 68: Conversation Search + Deep Retrieval | RETR-01, RETR-02, RETR-03 | 3 |
 
 ---
 *Requirements defined: 2026-04-18*
-*Last updated: 2026-04-18 after milestone v1.9 start*
+*Last updated: 2026-04-18 after v1.9 roadmap creation*

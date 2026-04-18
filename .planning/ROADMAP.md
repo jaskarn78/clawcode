@@ -10,7 +10,8 @@
 - :white_check_mark: **v1.5 Smart Memory & Model Tiering** - Phases 36-41 (shipped 2026-04-10)
 - :white_check_mark: **v1.6 Platform Operations & RAG** - Phases 42-49 (shipped 2026-04-12)
 - :white_check_mark: **v1.7 Performance & Latency** - Phases 50-56 (shipped 2026-04-14)
-- :hammer_and_wrench: **v1.8 Proactive Agents + Handoffs** - Phases 57-63 (active, started 2026-04-15)
+- :white_check_mark: **v1.8 Proactive Agents + Handoffs** - Phases 57-63 (shipped 2026-04-17)
+- :hammer_and_wrench: **v1.9 Persistent Conversation Memory** - Phases 64-68 (active, started 2026-04-18)
 
 ## Phases
 
@@ -82,164 +83,110 @@ Phases 42-49 delivered: auto-start agents on daemon boot, systemd production int
 
 See `.planning/milestones/v1.7-ROADMAP.md` for full details.
 
-Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CLI + dashboard), SLO targets + CI regression gate, Anthropic prompt caching (two-block context assembly + per-turn prefix hash), context/token budget tuning (audit CLI + lazy skills + 1500-token resume cap), streaming + typing indicator (first-token metric + 750ms cadence + ≤500ms typing fire), tool-call overhead (intra-turn cache + per-tool telemetry + concurrency gate foundation), warm-path optimizations (READ-ONLY SQLite warmup + resident embeddings + warm-session reuse + startup ready-gate).
+Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CLI + dashboard), SLO targets + CI regression gate, Anthropic prompt caching (two-block context assembly + per-turn prefix hash), context/token budget tuning (audit CLI + lazy skills + 1500-token resume cap), streaming + typing indicator (first-token metric + 750ms cadence + <=500ms typing fire), tool-call overhead (intra-turn cache + per-tool telemetry + concurrency gate foundation), warm-path optimizations (READ-ONLY SQLite warmup + resident embeddings + warm-session reuse + startup ready-gate).
 
 </details>
 
-### v1.8 Proactive Agents + Handoffs (Phases 57-63) - ACTIVE
+<details>
+<summary>v1.8 Proactive Agents + Handoffs (Phases 57-63) - SHIPPED 2026-04-17</summary>
 
-**Goal:** Agents autonomously initiate actions on external triggers AND delegate structured tasks to other agents — unlocking multi-agent workflows.
+See `.planning/milestones/v1.8-ROADMAP.md` for full details.
 
-- [x] **Phase 57: TurnDispatcher Foundation** - Unify all agent-turn entry points (Discord, scheduler, future triggers, future tasks) behind a single `TurnDispatcher` chokepoint so the v1.8 proactive + handoff subsystems plug into one contract instead of re-inventing trace/lifecycle plumbing (completed 2026-04-15)
-- [x] **Phase 58: Task Store + State Machine** - Ship daemon-level `tasks.db`, Zod task schema registry, canonical task state machine (pending | running | awaiting_input | complete | failed | cancelled | timed_out), and chain metadata (causation_id, parent_task_id, depth) for every inter-agent task row (completed 2026-04-15)
-- [x] **Phase 59: Cross-Agent RPC (Handoffs)** - Expose `delegate_task` / `task_status` / `cancel_task` / `task_complete` via MCP + IPC with async-ticket semantics, receiver allowlists, cycle detection, self-handoff block, schema-validated payloads, 64 KB cap, deadline propagation, chain-token cost attribution, and manual retry (completed 2026-04-17)
-- [x] **Phase 60: Trigger Engine Foundation** - Stand up the TriggerEngine + source registry + policy evaluator + loop detector + causation_id propagation + 3-layer dedup, migrate the v1.6 scheduler into the first registered source, and land task retention config (completed 2026-04-17)
-- [x] **Phase 61: Additional Trigger Sources** - Register four more sources against the Phase 60 engine: webhook HTTP receiver (HMAC-verified), MySQL DB-change poller with `last_seen_id` watermark, inbox-arrival event (upgrade from heartbeat), and Google/ICS calendar poller with configurable offsets (completed 2026-04-17)
-- [x] **Phase 62: Policy Layer + Dry-Run** - Declarative YAML policy DSL (Zod-validated at daemon start, atomic-reject on error) covering source/agent/template/throttle/priority, hot-reload on file edit, and dry-run replay so operators can test policy changes without firing agents (completed 2026-04-17)
-- [x] **Phase 63: Observability Surfaces** - Ship the operator surfaces on top of the Phase 57-62 substrate: dashboard in-flight task graph with SSE, `clawcode triggers` + `clawcode tasks` CLIs, trace enrichment with causation_id/trigger_id/task_id on root spans, cross-agent `clawcode trace <causation_id>` walker, and chain-token visibility across list + trace metadata (completed 2026-04-17)
+Phases 57-63 delivered: TurnDispatcher foundation (single chokepoint for all turn sources), task store + state machine (durable tasks.db with 15-field rows + enforced transitions), cross-agent RPC handoffs (delegate_task MCP + async-ticket semantics + schema validation + cycle detection), trigger engine (3-layer dedup + policy evaluator + watermark replay + SchedulerSource migration), additional trigger sources (MySQL/webhook/inbox/calendar), policy layer + dry-run (YAML DSL + hot-reload + audit trail), observability surfaces (CLIs + dashboard task graph + cross-agent trace chain walker).
+
+</details>
+
+### v1.9 Persistent Conversation Memory (Phases 64-68) - ACTIVE
+
+**Goal:** Agents remember what happened in prior sessions -- Discord conversations are stored, summarized into retrievable facts, and automatically injected on restart so agents never wake up to a blank slate.
+
+- [ ] **Phase 64: ConversationStore + Schema Foundation** - SQLite tables, session lifecycle records, memory lineage tracking, and provenance fields in per-agent memories.db
+- [ ] **Phase 65: Capture Integration** - Wire turn recording into the Discord path with instruction-pattern detection on storage
+- [ ] **Phase 66: Session-Boundary Summarization** - LLM-generated session summaries stored as MemoryEntry objects at session end/crash
+- [ ] **Phase 67: Resume Auto-Injection** - Structured context brief from recent session summaries injected on agent restart with adaptive gap detection
+- [ ] **Phase 68: Conversation Search + Deep Retrieval** - On-demand semantic + full-text search over conversation history via enhanced MCP tool with pagination
 
 ## Phase Details
 
-### Phase 57: TurnDispatcher Foundation
+### Phase 64: ConversationStore + Schema Foundation
 
-**Goal**: Every agent turn — Discord message, scheduler tick, future trigger, future handoff — flows through a single `TurnDispatcher` chokepoint that assigns origin-prefixed turnIds, opens caller-owned Turns, and records provenance, without changing any user-visible behavior
+**Goal**: Every Discord conversation turn has a durable, queryable home in per-agent SQLite with session grouping, provenance tracking, and lineage links from extracted memories back to their source turns
 
-**Depends on**: Nothing (first v1.8 phase — foundation the rest of the milestone stacks on)
+**Depends on**: Nothing (first v1.9 phase -- data foundation everything else builds on)
 
-**Requirements**: (none — net-zero refactor; lays groundwork for HAND-*, TRIG-08, OBS-04)
-
-**Success Criteria** (what must be TRUE):
-  1. A user sending a Discord message still receives a reply through the same agent / channel / streaming pipeline, with the identical turn behavior as v1.7 (`DiscordBridge.handleMessage` now dispatches via `TurnDispatcher` instead of calling `SessionManager.streamFromAgent` directly).
-  2. A cron-scheduled turn from `TaskScheduler` still fires at its cron expression and produces a persisted trace, but now flows through the same `TurnDispatcher` entry point with a `scheduler:<nanoid>`-prefixed turnId (no second hot path).
-  3. Every persisted trace row in `traces.db` carries a `TurnOrigin` metadata blob (`source.kind`, `rootTurnId`, `parentTurnId`, `chain[]`) that downstream phases can pattern-match on.
-  4. Developers can introduce a new turn source in a follow-on phase by calling `turnDispatcher.dispatch(...)` — no new duplicated trace-setup, Turn-lifecycle, or session-lookup code per source.
-
-**Plans**: 3 plans
-- [x] 57-01-PLAN.md — TurnOrigin schema + TurnDispatcher skeleton (Wave 1)
-- [x] 57-02-PLAN.md — Trace enrichment with TurnOrigin persistence (Wave 2)
-- [x] 57-03-PLAN.md — Migrate DiscordBridge + TaskScheduler call sites + daemon wiring (Wave 3)
-
-### Phase 58: Task Store + State Machine
-
-**Goal**: Every inter-agent task and proactive turn ClawCode will dispatch has a durable row with a state machine and chain metadata, so handoffs and triggers in the next phases have a persistent substrate instead of in-memory ephemera
-
-**Depends on**: Phase 57 (TurnOrigin shape is the source-of-truth that populates task rows' causation_id + parent_task_id + depth)
-
-**Requirements**: LIFE-01, LIFE-02, LIFE-04
+**Requirements**: CONV-01, CONV-02, CONV-03, SEC-01
 
 **Success Criteria** (what must be TRUE):
-  1. Operator can point the daemon at a fresh host and see `~/.clawcode/manager/tasks.db` created with the full schema (tasks + trigger_state indexes) on first boot (LIFE-01).
-  2. A test that inserts a task row, transitions it through pending → running → complete, and re-reads it succeeds; illegal transitions (e.g. complete → running) are rejected by the state machine with a typed error (LIFE-01).
-  3. Every task row carries task_id, task_type, caller_agent, target_agent, causation_id, parent_task_id (nullable), depth, input_digest, status, started_at, ended_at, heartbeat_at, result_digest, error, and chain_token_cost — inspectable via `sqlite3 tasks.db '.schema tasks'` and round-trippable through the Zod schema (LIFE-02).
-  4. If the daemon is killed while a task is in `running`, the next daemon start reconciles tasks with a stale `heartbeat_at` (older than the configured threshold) into a terminal `orphaned` state — never leaves them running forever (LIFE-04).
+  1. A user message + agent response exchanged in Discord produces two rows in the agent's `conversation_turns` table with timestamps, channel_id, discord_user_id, role, and content -- queryable via `sqlite3 memories.db "SELECT * FROM conversation_turns ORDER BY created_at DESC LIMIT 4"`
+  2. Every agent session (start through stop or crash) is tracked as an explicit `conversation_sessions` row with id, started_at, ended_at, turn_count, and status -- turns are grouped by session_id so "what happened last session" is a single WHERE clause
+  3. When a memory is extracted from conversation turns, the resulting MemoryEntry carries a `source_turn_ids` field linking it back to the specific conversation turns it was derived from -- lineage is verifiable by JOINing memories to conversation_turns
+  4. Every stored conversation turn includes `discord_user_id`, `channel_id`, and `is_trusted_channel` provenance fields -- a turn from an untrusted channel is distinguishable from a trusted one without any post-hoc analysis
 
-**Plans**: 3 plans
-- [x] 58-01-PLAN.md — TaskStatus + TaskRowSchema + state-machine contracts (Wave 1)
-- [x] 58-02-PLAN.md — TaskStore class with SQLite + idempotent migration + transitions (Wave 2)
-- [x] 58-03-PLAN.md — Reconciler + daemon wiring + tasks.db creation on boot (Wave 3)
+**Plans**: TBD
 
-### Phase 59: Cross-Agent RPC (Handoffs)
+### Phase 65: Capture Integration
 
-**Goal**: Agent A can delegate a typed task to agent B via a single MCP tool call, and B's structured result lands back at A as a fresh turn, with schema validation / authorization / cycle detection / deadline propagation / cost attribution / manual retry all enforced by the daemon
+**Goal**: Every Discord message exchange is automatically recorded in the ConversationStore as it happens, with instruction-pattern detection flagging potential injection attempts before they enter the persistent record
 
-**Depends on**: Phase 58 (writes task rows), Phase 57 (delegated turns use TurnOrigin `kind: "task"`)
+**Depends on**: Phase 64 (ConversationStore schema must exist to write into)
 
-**Requirements**: HAND-01, HAND-02, HAND-03, HAND-04, HAND-05, HAND-06, HAND-07, LIFE-05, LIFE-06
+**Requirements**: SEC-02
 
 **Success Criteria** (what must be TRUE):
-  1. Agent A calls `delegate_task({ target: "B", schema: "research.brief", payload: {...} })` from its Claude session; the MCP tool returns a `task_id` immediately (A's turn ends), and B's next turn fires with the validated payload as context — deadlock-by-sync-RPC is impossible by construction (HAND-01).
-  2. A payload missing a required field, carrying an unknown field, or exceeding 64 KB is rejected by the daemon before B is ever woken — caller sees a typed ValidationError and no row advances past `pending` (HAND-02, HAND-06).
-  3. Every handoff carries a chain-wide deadline (wall-clock); if the chain deadline elapses, B's turn is aborted via `AbortSignal` and the task terminates in `timed_out` with no user-visible side effects downstream (HAND-03).
-  4. A delegation attempt from an agent not in the receiver's allowlist, OR where target appears already in the causation chain, OR with `depth > MAX_HANDOFF_DEPTH (5)`, OR where target === caller, is refused at the MCP tool layer with a typed error (`UNAUTHORIZED` / `CYCLE_DETECTED` / `DEPTH_EXCEEDED` / `SELF_HANDOFF_BLOCKED`) before any task row reaches `running` (HAND-04, HAND-05, HAND-07).
-  5. Tokens consumed by delegated turns count against the calling agent's budget by default with a documented per-task override; a failed task can be re-run idempotently via `clawcode tasks retry <task_id>` and produces the same input_digest against the same receiver (LIFE-05, LIFE-06).
+  1. After an agent responds to a Discord message, both the user message and assistant response appear as rows in `conversation_turns` within the same transaction -- the capture is fire-and-forget (never blocks Discord response delivery) and a capture failure is logged but does not affect the user's experience
+  2. A Discord message containing instruction-like patterns ("remember that you must always...", "from now on ignore...", "for future reference execute...") is flagged with a `potentially_directive` marker on the stored turn row before it enters the persistent record -- the flag is visible in the raw data and available to downstream summarization
+  3. Session lifecycle events (agent start, agent stop, agent crash) are recorded as session boundary transitions in `conversation_sessions` -- the capture integration calls ConversationStore.startSession() on agent boot and endSession() on stop/crash
 
-**Plans**: 3 plans
-- [x] 59-01-PLAN.md — Task schema registry + JSON-Schema→Zod compiler + typed errors + authorize.ts (Wave 1)
-- [x] 59-02-PLAN.md — TaskManager class (delegate/cancel/completeTask/retry + deadline + cost attribution + digest) (Wave 2)
-- [x] 59-03-PLAN.md — MCP tools + IPC + CLI tasks retry/status + daemon wiring + acceptsTasks config + AbortSignal threading (Wave 3)
+**Plans**: TBD
 
-### Phase 60: Trigger Engine Foundation
+### Phase 66: Session-Boundary Summarization
 
-**Goal**: A single `TriggerEngine` + source registry + policy evaluator owns every non-Discord turn initiation, propagates causation_id end-to-end, defeats trigger storms with 3-layer dedup, and replays missed events on daemon restart — with the v1.6 scheduler migrated to be its first registered source
+**Goal**: When a session ends, raw conversation turns are compressed into a structured summary of preferences, decisions, open threads, and commitments -- stored as a standard MemoryEntry that automatically participates in search, decay, tier management, and knowledge graph linking
 
-**Depends on**: Phase 57 (TurnDispatcher is the engine's downstream), Phase 58 (trigger_state persists watermarks / cursors / replay bookmarks in tasks.db)
+**Depends on**: Phase 65 (ConversationStore must have captured turns to summarize)
 
-**Requirements**: TRIG-01, TRIG-06, TRIG-07, TRIG-08, LIFE-03
+**Requirements**: SESS-01, SESS-04
 
 **Success Criteria** (what must be TRUE):
-  1. A scheduled trigger defined in config fires a target agent's turn on its cron expression with a structured context payload (not just a prompt string) — and the v1.6 `TaskScheduler` now routes through the new engine rather than owning a parallel hot path (TRIG-01).
-  2. When the daemon restarts after being down for ≤24h (configurable via max-age), it replays scheduled / polled events missed since the last watermark instead of silently dropping them (TRIG-06).
-  3. The same upstream event delivered three times — identical idempotency key, or within the debounce window, or with its `(source, idempotency_key)` duplicate hitting the SQLite UNIQUE constraint — fires the target agent exactly once, not three times (TRIG-07).
-  4. Every triggered turn's root trace span carries a `causation_id` (nanoid) generated at trigger ingress, and any downstream handoff inherits that same `causation_id` on its root span — `sqlite3 traces.db "select distinct causation_id from spans"` stitches trigger → turn → handoff → turn as one chain (TRIG-08).
-  5. Completed / failed / cancelled / timed_out task rows older than the configured `perf.taskRetentionDays` (default 7, matching traces.db convention) are purged on the retention heartbeat; still-running rows are untouched (LIFE-03).
+  1. When an agent session ends (stop or crash), a haiku LLM call from the daemon compresses that session's conversation turns into a structured summary with explicit categories (user preferences, decisions made, open threads, commitments) -- the summary is generated within 10 seconds or falls back to raw-turn extraction
+  2. The generated session summary is stored as a standard MemoryEntry with `source="conversation"` and tags `["session-summary", "session:{id}"]` -- it automatically appears in semantic search results, receives relevance decay scoring, flows through hot/warm/cold tier management, and gets auto-linked by the knowledge graph linker without any special-case code
+  3. Sessions with fewer than 3 turns produce no summary (insufficient signal) -- a session where the agent just said hello and crashed does not generate a garbage summary that pollutes the memory store
 
-**Plans**: 3 plans
-- [x] 60-01-PLAN.md — TriggerSource interface + dedup pipeline + PolicyEvaluator (Wave 1)
-- [x] 60-02-PLAN.md — TriggerEngine + SourceRegistry + TurnOrigin causationId + TaskStore DDL (Wave 2)
-- [ ] 60-03-PLAN.md — SchedulerSource adapter + task-retention heartbeat + daemon wiring (Wave 3)
+**Plans**: TBD
 
-### Phase 61: Additional Trigger Sources
+### Phase 67: Resume Auto-Injection
 
-**Goal**: Four real-world source types register against the Phase 60 engine — webhooks, MySQL row changes, inbox arrivals, and calendar events — so the Finmentum 5-agent model (acquisition / research / tax / studio / playground) can run end-to-end on external signals
+**Goal**: An agent waking up after a gap receives a structured context brief of recent sessions so it can naturally reference prior conversations without the user repeating themselves
 
-**Depends on**: Phase 60 (all four register via the TriggerSourceRegistry + funnel through TurnDispatcher)
+**Depends on**: Phase 66 (session summaries must exist in MemoryStore to assemble the brief)
 
-**Requirements**: TRIG-02, TRIG-03, TRIG-04, TRIG-05
+**Requirements**: SESS-02, SESS-03
 
 **Success Criteria** (what must be TRUE):
-  1. A new row inserted into the configured MySQL table (Finmentum `pipeline_clients` the primary target) fires the configured agent within one polling interval, the `last_seen_id` watermark advances atomically in `trigger_state`, and a `ROLLBACK`'d insert does not cause a phantom trigger (TRIG-02).
-  2. An external system POSTing to `/webhook/<triggerId>` on the dashboard HTTP server with a valid per-source HMAC-SHA256 signature fires the mapped agent; a missing / invalid signature or oversize body is rejected with the correct HTTP status and zero agent wake (TRIG-03).
-  3. A peer-agent or external writer that drops a file into an agent's `collaboration/inbox/` fires that agent's turn immediately (via chokidar + `awaitWriteFinish`), strictly faster than the pre-v1.8 heartbeat-poll path (TRIG-04).
-  4. A calendar event 15 minutes from its start time (or at its configured offset) fires the operator-chosen agent once — not every poll cycle — regardless of whether the source is the `google-workspace` MCP push channel, `events.list(syncToken)` incremental sweep, or an ICS URL (TRIG-05).
+  1. When an agent resumes after a session gap, the last N recent session summaries (default 3, configurable via `conversation.resumeSessionCount`) are assembled into a structured context brief and injected into the agent's prompt via the context assembly pipeline -- the brief fits within a dedicated conversation_context budget (2000-3000 tokens) without starving identity, skills, or hot-tier memory sections
+  2. When the session gap is shorter than the configured threshold (default 4 hours), auto-injection is skipped entirely -- a brief agent restart (crash recovery, config reload) does not inject redundant context that wastes token budget
+  3. An agent with zero conversation history (first session ever, or no prior summaries) starts normally with no empty or broken context section injected -- the conversation brief gracefully produces nothing rather than an empty heading or placeholder text
 
-**Plans**: 3 plans
-- [x] 61-01-PLAN.md — Config schemas + MysqlSource + WebhookSource (Wave 1)
-- [x] 61-02-PLAN.md — InboxSource + CalendarSource (Wave 2)
-- [ ] 61-03-PLAN.md — Daemon wiring + heartbeat inbox reconciler (Wave 3)
+**Plans**: TBD
 
-### Phase 62: Policy Layer + Dry-Run
+### Phase 68: Conversation Search + Deep Retrieval
 
-**Goal**: Operators edit one declarative YAML file to route triggers → agents with payload templates, throttles, priorities, and enable/disable flags, hot-reload takes effect on the next evaluation, and dry-run proves a policy change does what they think BEFORE any agent is woken
+**Goal**: Agents can search older conversation history on demand when the auto-injected brief is insufficient -- via semantic search over session summaries and full-text search over raw turns, with paginated, time-decay-weighted results
 
-**Depends on**: Phase 60 (the PolicyEvaluator ships there as an internal chokepoint — this phase exposes the external DSL, hot-reload, and dry-run surface)
+**Depends on**: Phase 64 (conversation_turns table for FTS5), Phase 66 (session summaries with embeddings for semantic search)
 
-**Requirements**: POL-01, POL-02, POL-03, POL-04
+**Requirements**: RETR-01, RETR-02, RETR-03
 
 **Success Criteria** (what must be TRUE):
-  1. Editing `policies.yaml` with a syntactically invalid rule or a Zod-invalid field causes the daemon to reject the update atomically (prior policy stays live, error surfaced to operator) — boot never proceeds with a broken policy (POL-01).
-  2. A single policy rule can express source-match predicates, target agent, Handlebars-style payload template, per-rule throttle / debounce, explicit priority, and an `enabled: false` kill switch — covered by fixtures proving each field is honored by the PolicyEvaluator (POL-02).
-  3. Operator edits `policies.yaml` on a running daemon; the next trigger evaluation picks up the new rule without a daemon restart, and the diff is visible in the audit trail (POL-03).
-  4. `clawcode policy dry-run --since <window>` (or equivalent) replays the last N recent trigger events against the current-on-disk policy and prints which rules would match which agents with reasons — zero actual agent turns fire (POL-04).
+  1. An agent calling `memory_lookup` with `scope="conversations"` (or `scope="all"`) receives results from conversation session summaries alongside regular knowledge memories -- the scope parameter is backward-compatible (existing callers that omit it get the same results as before)
+  2. Raw conversation turn text is searchable via FTS5 full-text search for precise keyword recall -- an agent searching for "the exact API endpoint we discussed" finds the specific turn containing that phrase even when semantic search surfaces tangentially related results instead
+  3. Search results are paginated (max 10 per page) with time-decay weighting so recent conversations rank higher than old ones given similar semantic relevance -- an agent searching "deployment" sees last week's deployment discussion before last month's, and can request additional pages if the first page does not contain what it needs
 
-**Plans**: 3 plans
-- [x] 62-01-PLAN.md — Policy schema + loader + evaluator + throttle + differ + trigger_events migration (Wave 1)
-- [x] 62-02-PLAN.md — Hot-reload watcher + audit trail + TriggerEngine wiring + daemon boot (Wave 2)
-- [x] 62-03-PLAN.md — Dry-run CLI command with read-only SQLite replay (Wave 2)
-
-### Phase 63: Observability Surfaces
-
-**Goal**: Operators see — via CLI, dashboard, and v1.7 trace tree — why any agent woke up, what it delegated, what it cost, and where a chain is currently stuck, end-to-end across all involved agents
-
-**Depends on**: Phase 57-62 (consumes TurnOrigin, tasks.db, trace metadata, trigger_state, and policy rule matches)
-
-**Requirements**: OBS-01, OBS-02, OBS-03, OBS-04, OBS-05
-
-**Success Criteria** (what must be TRUE):
-  1. `clawcode triggers` prints a table of recent trigger fires with source, matched rule, target agent, result, and duration — filterable by source and agent (OBS-01).
-  2. `clawcode tasks` prints a table of recent inter-agent tasks with caller, target, state, duration, and depth — filterable by agent + state, with cumulative chain-token cost as a visible column (OBS-02, OBS-05).
-  3. The dashboard exposes a real-time panel showing in-flight inter-agent tasks as a graph (nodes = agents, edges = tasks) that updates live over SSE as tasks transition state (OBS-03).
-  4. Proactive turns and delegated-task turns appear in the v1.7 trace tree with `causation_id`, `trigger_id`, and `task_id` metadata on their root spans; `clawcode trace <causation_id>` walks the entire chain (source event → trigger → turn → handoff → turn → ... → final result) across every involved agent (OBS-04).
-  5. The cumulative token count for a handoff chain is visible both in the `clawcode tasks` output and in the trace metadata — answering "how much did this chain cost end-to-end?" without summing by hand (OBS-05).
-
-**Plans**: 3 plans
-- [x] 63-01-PLAN.md — Triggers CLI + tasks list CLI with read-only SQLite (Wave 1)
-- [x] 63-02-PLAN.md — Dashboard task graph page with SSE + IPC (Wave 1)
-- [x] 63-03-PLAN.md — Cross-agent trace chain walker CLI (Wave 2)
-**UI hint**: yes
+**Plans**: TBD
 
 ## Progress
 
-**Status:** v1.7 Performance & Latency shipped 2026-04-14. v1.8 Proactive Agents + Handoffs active (roadmap ready 2026-04-15).
+**Status:** v1.8 Proactive Agents + Handoffs shipped 2026-04-17. v1.9 Persistent Conversation Memory active (roadmap ready 2026-04-18).
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -251,16 +198,15 @@ Phases 50-56 delivered: latency instrumentation (per-turn traces + percentile CL
 | v1.5 | 36-41 | Complete | 2026-04-10 |
 | v1.6 | 42-49 | Complete | 2026-04-12 |
 | v1.7 | 50-56 | Complete | 2026-04-14 |
-| v1.8 | 57-63 | Active — roadmap ready | — |
+| v1.8 | 57-63 | Complete | 2026-04-17 |
+| v1.9 | 64-68 | Active -- roadmap ready | -- |
 
-### v1.8 Phase Progress
+### v1.9 Phase Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 57. TurnDispatcher Foundation | 3/3 | Complete    | 2026-04-15 |
-| 58. Task Store + State Machine | 3/3 | Complete    | 2026-04-15 |
-| 59. Cross-Agent RPC (Handoffs) | 3/3 | Complete    | 2026-04-17 |
-| 60. Trigger Engine Foundation | 2/3 | Complete    | 2026-04-17 |
-| 61. Additional Trigger Sources | 2/3 | Complete    | 2026-04-17 |
-| 62. Policy Layer + Dry-Run | 3/3 | Complete    | 2026-04-17 |
-| 63. Observability Surfaces | 3/3 | Complete    | 2026-04-17 |
+| 64. ConversationStore + Schema Foundation | 0/TBD | Not started | - |
+| 65. Capture Integration | 0/TBD | Not started | - |
+| 66. Session-Boundary Summarization | 0/TBD | Not started | - |
+| 67. Resume Auto-Injection | 0/TBD | Not started | - |
+| 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |
