@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MemoryStore } from "../store.js";
-import { ConversationStore } from "../conversation-store.js";
+import {
+  ConversationStore,
+  escapeFtsQuery as escapeFtsQueryUnderTest,
+} from "../conversation-store.js";
 
 /** Create a real memory entry and return its ID (for FK-safe summary references). */
 function createMemoryEntry(memStore: MemoryStore, label: string): string {
@@ -886,6 +889,257 @@ describe("ConversationStore", () => {
         .get() as { c: number };
       expect(helloHits.c).toBe(0);
       expect(goodbyeHits.c).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Phase 68 Plan 01 — RETR-02: searchTurns + escapeFtsQuery
+  // ---------------------------------------------------------------------
+
+  describe("searchTurns", () => {
+    it("returns BM25-ranked matches ordered best-first", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "deployment strategy discussion about CI",
+        isTrustedChannel: true,
+      });
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "assistant",
+        content: "deployment deployment deployment — high density",
+        isTrustedChannel: true,
+      });
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "lunch order today at noon",
+        isTrustedChannel: true,
+      });
+
+      const out = convStore.searchTurns("deployment", {
+        limit: 10,
+        offset: 0,
+      });
+      expect(out.results.length).toBe(2);
+      expect(out.totalMatches).toBe(2);
+      // Both results contain "deployment"
+      for (const r of out.results) {
+        expect(r.content.toLowerCase()).toContain("deployment");
+      }
+      // BM25 ascending — results[0] has the lower (more negative) bm25Score
+      expect(out.results[0]!.bm25Score).toBeLessThanOrEqual(
+        out.results[1]!.bm25Score,
+      );
+    });
+
+    it("projects sessionId, role, isTrustedChannel on each result", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "project specific keyword",
+        isTrustedChannel: true,
+      });
+
+      const out = convStore.searchTurns("keyword", { limit: 10, offset: 0 });
+      expect(out.results.length).toBe(1);
+      const r = out.results[0]!;
+      expect(r.sessionId).toBe(session.id);
+      expect(r.role).toBe("user");
+      expect(r.isTrustedChannel).toBe(true);
+      // Typecheck: boolean (not number 0/1)
+      expect(typeof r.isTrustedChannel).toBe("boolean");
+    });
+
+    it("honors limit and offset pagination parameters", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      for (let i = 0; i < 15; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: "user",
+          content: `foo instance ${i}`,
+          isTrustedChannel: true,
+        });
+      }
+
+      const page1 = convStore.searchTurns("foo", { limit: 5, offset: 0 });
+      const page2 = convStore.searchTurns("foo", { limit: 5, offset: 5 });
+      const page3 = convStore.searchTurns("foo", { limit: 5, offset: 14 });
+
+      expect(page1.results.length).toBe(5);
+      expect(page2.results.length).toBe(5);
+      expect(page3.results.length).toBe(1);
+      expect(page1.totalMatches).toBe(15);
+      expect(page2.totalMatches).toBe(15);
+      expect(page3.totalMatches).toBe(15);
+
+      // Distinct pages — no turnId overlap between page1 and page2
+      const ids1 = new Set(page1.results.map((r) => r.turnId));
+      const ids2 = new Set(page2.results.map((r) => r.turnId));
+      for (const id of ids2) {
+        expect(ids1.has(id)).toBe(false);
+      }
+    });
+
+    it("excludes untrusted-channel turns by default (SEC-01 hygiene)", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "secret plan trusted",
+        isTrustedChannel: true,
+      });
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "secret plan untrusted",
+        isTrustedChannel: false,
+      });
+
+      const out = convStore.searchTurns("secret", { limit: 10, offset: 0 });
+      expect(out.results.length).toBe(1);
+      expect(out.totalMatches).toBe(1);
+      expect(out.results[0]!.isTrustedChannel).toBe(true);
+      expect(out.results[0]!.content).toContain("trusted");
+    });
+
+    it("includes untrusted-channel turns when includeUntrustedChannels: true", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "secret plan trusted",
+        isTrustedChannel: true,
+      });
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "secret plan untrusted",
+        isTrustedChannel: false,
+      });
+
+      const out = convStore.searchTurns("secret", {
+        limit: 10,
+        offset: 0,
+        includeUntrustedChannels: true,
+      });
+      expect(out.results.length).toBe(2);
+      expect(out.totalMatches).toBe(2);
+    });
+
+    it("returns frozen results array and frozen result objects", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "immutability check",
+        isTrustedChannel: true,
+      });
+
+      const out = convStore.searchTurns("immutability", {
+        limit: 10,
+        offset: 0,
+      });
+      expect(Object.isFrozen(out)).toBe(true);
+      expect(Object.isFrozen(out.results)).toBe(true);
+      expect(Object.isFrozen(out.results[0])).toBe(true);
+    });
+  });
+
+  describe("escape", () => {
+    it("escapes special characters in queries without crashing FTS5 parser", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      // Stored content includes a colon — our query below also contains a colon.
+      // Without escapeFtsQuery, FTS5 would interpret `endpoint:` as a column
+      // filter and throw `fts5: no such column 'endpoint'`.
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "the endpoint timeout: /v1/deploy fails after 30s",
+        isTrustedChannel: true,
+      });
+
+      // Colon is FTS5-reserved (column filter syntax) — must not throw
+      expect(() =>
+        convStore.searchTurns("endpoint timeout", { limit: 10, offset: 0 }),
+      ).not.toThrow();
+      expect(() =>
+        convStore.searchTurns("endpoint: fails", { limit: 10, offset: 0 }),
+      ).not.toThrow();
+      expect(() =>
+        convStore.searchTurns("(boolean) groups", { limit: 10, offset: 0 }),
+      ).not.toThrow();
+
+      // Phrase "endpoint timeout" is adjacent in the content so the match lands
+      const out = convStore.searchTurns("endpoint timeout", {
+        limit: 10,
+        offset: 0,
+      });
+      expect(out.results.length).toBeGreaterThanOrEqual(1);
+      expect(out.results[0]!.content).toContain("endpoint");
+    });
+
+    it("handles empty and whitespace-only queries safely", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "some body text",
+        isTrustedChannel: true,
+      });
+
+      const empty = convStore.searchTurns("", { limit: 10, offset: 0 });
+      expect(empty.results.length).toBe(0);
+      expect(empty.totalMatches).toBe(0);
+
+      const whitespace = convStore.searchTurns("   ", {
+        limit: 10,
+        offset: 0,
+      });
+      expect(whitespace.results.length).toBe(0);
+      expect(whitespace.totalMatches).toBe(0);
+    });
+
+    it("escapes embedded double-quotes", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: 'She said "hello" and waved',
+        isTrustedChannel: true,
+      });
+
+      // Trailing quote — classic FTS5 parse hazard
+      expect(() =>
+        convStore.searchTurns('hello"', { limit: 10, offset: 0 }),
+      ).not.toThrow();
+
+      // Embedded quote must not crash either
+      expect(() =>
+        convStore.searchTurns('hello "world', { limit: 10, offset: 0 }),
+      ).not.toThrow();
+    });
+
+    it("escapeFtsQuery() helper returns a phrase-quoted, empty-safe string", () => {
+      // Directly exercise the exported helper — guarantees no regression in
+      // the escape strategy even if ConversationStore grows alternate paths.
+      // Note: import is at top of file (module-level).
+      expect(escapeFtsQueryUnderTest("")).toBe('""');
+      expect(escapeFtsQueryUnderTest("   ")).toBe('""');
+      expect(escapeFtsQueryUnderTest("hello")).toBe('"hello"');
+      expect(escapeFtsQueryUnderTest('say "hi"')).toBe('"say ""hi"""');
+      expect(escapeFtsQueryUnderTest("a:b(c)")).toBe('"a:b(c)"');
     });
   });
 });

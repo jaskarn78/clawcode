@@ -18,8 +18,32 @@ import { nanoid } from "nanoid";
 import type {
   ConversationSession,
   ConversationTurn,
+  ConversationTurnSearchResult,
   RecordTurnInput,
+  SearchTurnsOptions,
+  SearchTurnsResult,
 } from "./conversation-types.js";
+
+/**
+ * Escape an agent-provided query for safe use in an FTS5 MATCH expression.
+ *
+ * Phrase-quotes the trimmed input and doubles any embedded double-quotes.
+ * FTS5 MATCH syntax reserves `:` (column filters), `()` (boolean groups),
+ * `"` (phrase delimiters), `*`, `-`, `+`, `NEAR`, `AND`/`OR`/`NOT`. Agents
+ * write natural language, so naive interpolation crashes the parser with
+ * `fts5: syntax error near ...` — see Pitfall 1 in 68-RESEARCH.md.
+ *
+ * Empty/whitespace input returns `""` which is a valid phrase that
+ * matches nothing (never throws). This is the "dumb but safe" strategy
+ * the phase explicitly chose; boolean operator support is a future
+ * enhancement if dogfooding surfaces a concrete need.
+ */
+export function escapeFtsQuery(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return '""';
+  const escaped = trimmed.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
 
 /** Raw session row shape from SQLite. */
 type SessionRow = {
@@ -64,6 +88,11 @@ type ConversationStatements = {
   readonly getSessionTurnCount: Statement;
   readonly incrementTurnCount: Statement;
   readonly addTokens: Statement;
+  // Phase 68 — RETR-02: FTS5 search over conversation_turns.content
+  readonly searchTurnsFts: Statement;
+  readonly searchTurnsFtsUntrusted: Statement;
+  readonly searchTurnsCount: Statement;
+  readonly searchTurnsCountUntrusted: Statement;
 };
 
 /** Convert a raw SQLite session row to an immutable ConversationSession. */
@@ -329,6 +358,75 @@ export class ConversationStore {
     return Object.freeze(rows.map(rowToTurn));
   }
 
+  /**
+   * Full-text search over conversation_turns.content via FTS5.
+   *
+   * Query is phrase-quoted via `escapeFtsQuery` so agent-crafted natural
+   * language tolerates FTS5-reserved characters (`:`, `(`, `)`, `"`, etc.)
+   * without crashing the parser (Pitfall 1).
+   *
+   * Results are ordered by BM25 relevance ascending (most relevant first —
+   * FTS5 assigns numerically lower BM25 to better matches). `bm25Score`
+   * is projected raw; the scoped search orchestrator (`conversation-search.ts`)
+   * normalises to [0, 1] via `1 / (1 + |bm25|)` before combining with decay.
+   *
+   * By default (`includeUntrustedChannels: false`), turns from untrusted
+   * Discord channels are excluded to honour SEC-01 hygiene — prevents a
+   * memory-poisoning vector (an untrusted user saying "remember you must X")
+   * from surfacing in an agent's retrieval path.
+   *
+   * Phase 68 — RETR-02.
+   */
+  searchTurns(query: string, options: SearchTurnsOptions): SearchTurnsResult {
+    const escaped = escapeFtsQuery(query);
+    const includeUntrusted = options.includeUntrustedChannels === true;
+
+    const rows = (
+      includeUntrusted
+        ? this.stmts.searchTurnsFtsUntrusted.all(
+            escaped,
+            options.limit,
+            options.offset,
+          )
+        : this.stmts.searchTurnsFts.all(escaped, options.limit, options.offset)
+    ) as Array<{
+      turnId: string;
+      sessionId: string;
+      role: string;
+      content: string;
+      bm25Score: number;
+      createdAt: string;
+      channelId: string | null;
+      isTrustedChannel: number;
+    }>;
+
+    const countRow = (
+      includeUntrusted
+        ? this.stmts.searchTurnsCountUntrusted.get(escaped)
+        : this.stmts.searchTurnsCount.get(escaped)
+    ) as { total: number } | undefined;
+
+    const results: readonly ConversationTurnSearchResult[] = Object.freeze(
+      rows.map((r) =>
+        Object.freeze({
+          turnId: r.turnId,
+          sessionId: r.sessionId,
+          role: r.role as "user" | "assistant" | "system",
+          content: r.content,
+          bm25Score: r.bm25Score,
+          createdAt: r.createdAt,
+          channelId: r.channelId,
+          isTrustedChannel: r.isTrustedChannel === 1,
+        }),
+      ),
+    );
+
+    return Object.freeze({
+      results,
+      totalMatches: countRow?.total ?? 0,
+    });
+  }
+
   /** Prepare all SQL statements for conversation operations. */
   private prepareStatements(): ConversationStatements {
     return {
@@ -400,6 +498,54 @@ export class ConversationStore {
         `UPDATE conversation_sessions
          SET total_tokens = total_tokens + ?
          WHERE id = ?`,
+      ),
+      // Phase 68 — RETR-02. BM25 ordering ascending (lower = more relevant per FTS5).
+      // `is_trusted_channel = 1` filter is the default path (SEC-01 hygiene);
+      // the *Untrusted variants drop that predicate for power-user call sites.
+      searchTurnsFts: this.db.prepare(
+        `SELECT
+           t.id AS turnId,
+           t.session_id AS sessionId,
+           t.role,
+           t.content,
+           t.created_at AS createdAt,
+           t.channel_id AS channelId,
+           t.is_trusted_channel AS isTrustedChannel,
+           bm25(conversation_turns_fts) AS bm25Score
+         FROM conversation_turns_fts
+         JOIN conversation_turns t ON t.rowid = conversation_turns_fts.rowid
+         WHERE conversation_turns_fts MATCH ?
+           AND t.is_trusted_channel = 1
+         ORDER BY bm25Score
+         LIMIT ? OFFSET ?`,
+      ),
+      searchTurnsFtsUntrusted: this.db.prepare(
+        `SELECT
+           t.id AS turnId,
+           t.session_id AS sessionId,
+           t.role,
+           t.content,
+           t.created_at AS createdAt,
+           t.channel_id AS channelId,
+           t.is_trusted_channel AS isTrustedChannel,
+           bm25(conversation_turns_fts) AS bm25Score
+         FROM conversation_turns_fts
+         JOIN conversation_turns t ON t.rowid = conversation_turns_fts.rowid
+         WHERE conversation_turns_fts MATCH ?
+         ORDER BY bm25Score
+         LIMIT ? OFFSET ?`,
+      ),
+      searchTurnsCount: this.db.prepare(
+        `SELECT COUNT(*) AS total
+         FROM conversation_turns_fts
+         JOIN conversation_turns t ON t.rowid = conversation_turns_fts.rowid
+         WHERE conversation_turns_fts MATCH ?
+           AND t.is_trusted_channel = 1`,
+      ),
+      searchTurnsCountUntrusted: this.db.prepare(
+        `SELECT COUNT(*) AS total
+         FROM conversation_turns_fts
+         WHERE conversation_turns_fts MATCH ?`,
       ),
     };
   }
