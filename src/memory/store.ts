@@ -78,6 +78,7 @@ export class MemoryStore {
       this.migrateSourceTurnIds();
       this.migrateInstructionFlags();
       this.migrateConversationTurnsFts();
+      this.migrateApiKeySessionsTable();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -775,6 +776,32 @@ export class MemoryStore {
           SELECT rowid, content FROM conversation_turns;
       `);
     }
+  }
+
+  /**
+   * Phase 69 — OPENAI-05. Per-bearer-key → Claude-session mapping lives in
+   * each agent's memories.db so it survives daemon restarts alongside the
+   * conversation sessions themselves. Idempotent (CREATE TABLE IF NOT EXISTS
+   * + CREATE INDEX IF NOT EXISTS) — safe to run on every boot.
+   *
+   * Schema mirrors `src/openai/session-index.ts` `API_KEY_SESSIONS_MIGRATION_SQL`;
+   * the canonical SQL lives in that module so the ApiKeySessionIndex unit
+   * tests can apply the migration to a `:memory:` DB without booting MemoryStore.
+   *
+   * Consumer: src/openai/driver.ts via ApiKeySessionIndex, wired at daemon
+   * boot (src/manager/daemon.ts startOpenAi section).
+   */
+  private migrateApiKeySessionsTable(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS api_key_sessions (
+        key_hash      TEXT PRIMARY KEY,
+        agent_name    TEXT NOT NULL,
+        session_id    TEXT NOT NULL,
+        created_at    INTEGER NOT NULL,
+        last_used_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_api_key_sessions_agent ON api_key_sessions(agent_name);
+    `);
   }
 
   private prepareStatements(): PreparedStatements {
