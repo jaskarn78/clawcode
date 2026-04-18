@@ -292,7 +292,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     {},
     async () => {
       const result = (await sendIpcRequest(SOCKET_PATH, "schedules", {})) as {
-        schedules: readonly { agent: string; name: string; cron: string; enabled: boolean; nextRun: string | null }[];
+        schedules: readonly { agentName: string; name: string; cron: string; enabled: boolean; nextRun: string | null }[];
       };
 
       if (result.schedules.length === 0) {
@@ -300,7 +300,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       }
 
       const text = result.schedules
-        .map((s) => `${s.agent}/${s.name}: ${s.cron} (${s.enabled ? "enabled" : "disabled"})${s.nextRun ? ` next: ${s.nextRun}` : ""}`)
+        .map((s) => `${s.agentName}/${s.name}: ${s.cron} (${s.enabled ? "enabled" : "disabled"})${s.nextRun ? ` next: ${s.nextRun}` : ""}`)
         .join("\n");
 
       return { content: [{ type: "text" as const, text }] };
