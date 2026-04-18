@@ -16,6 +16,7 @@ import { saveSummary } from "../memory/context-summary.js";
 import { UsageTracker } from "../usage/tracker.js";
 import { EpisodeStore } from "../memory/episode-store.js";
 import { DocumentStore } from "../documents/store.js";
+import { ConversationStore } from "../memory/conversation-store.js";
 import { TraceStore } from "../performance/trace-store.js";
 import { TraceCollector } from "../performance/trace-collector.js";
 
@@ -35,6 +36,7 @@ export class AgentMemoryManager {
   readonly usageTrackers: Map<string, UsageTracker> = new Map();
   readonly episodeStores: Map<string, EpisodeStore> = new Map();
   readonly documentStores: Map<string, DocumentStore> = new Map();
+  readonly conversationStores: Map<string, ConversationStore> = new Map();
   readonly traceStores: Map<string, TraceStore> = new Map();
   readonly traceCollectors: Map<string, TraceCollector> = new Map();
   readonly embedder: EmbeddingService = new EmbeddingService();
@@ -97,6 +99,10 @@ export class AgentMemoryManager {
       const documentStore = new DocumentStore(store.getDatabase());
       this.documentStores.set(name, documentStore);
 
+      // Create ConversationStore for this agent (Phase 64 -- shares memories.db connection)
+      const conversationStore = new ConversationStore(store.getDatabase());
+      this.conversationStores.set(name, conversationStore);
+
       // Create UsageTracker for this agent
       const usageDbPath = join(memoryDir, "usage.db");
       const usageTracker = new UsageTracker(usageDbPath);
@@ -146,6 +152,8 @@ export class AgentMemoryManager {
     this.contextFillProviders.delete(name);
     this.tierManagers.delete(name);
     this.documentStores.delete(name);
+    this.conversationStores.delete(name);
+    // No close() needed -- ConversationStore uses the same DB connection that MemoryStore closes
 
     const usageTracker = this.usageTrackers.get(name);
     if (usageTracker) {
