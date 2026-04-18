@@ -160,10 +160,10 @@ Plans:
   2. The generated session summary is stored as a standard MemoryEntry with `source="conversation"` and tags `["session-summary", "session:{id}"]` -- it automatically appears in semantic search results, receives relevance decay scoring, flows through hot/warm/cold tier management, and gets auto-linked by the knowledge graph linker without any special-case code
   3. Sessions with fewer than 3 turns produce no summary (insufficient signal) -- a session where the agent just said hello and crashed does not generate a garbage summary that pollutes the memory store
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 66-01-PLAN.md -- Complete CONV-03 write path: extend CreateMemoryInput with sourceTurnIds, update MemoryStore.insert to persist source_turn_ids atomically, add roundtrip regression tests
+- [x] 66-01-PLAN.md -- Complete CONV-03 write path: extend CreateMemoryInput with sourceTurnIds, update MemoryStore.insert to persist source_turn_ids atomically, add roundtrip regression tests
 - [ ] 66-02-PLAN.md -- SessionSummarizer module: pure dependency-injected pipeline with buildSessionSummarizationPrompt, buildRawTurnFallback, summarizeSession (idempotent, 10s timeout, < 3-turn skip, dual-write memoryStore.insert + markSummarized)
 - [ ] 66-03-PLAN.md -- SessionManager wiring: summarizeWithHaiku helper (sdk.query with Haiku + no settings inheritance), stopAgent awaited summarize, onError fire-and-forget, integration tests
 
@@ -220,6 +220,6 @@ Plans:
 |-------|----------------|--------|-----------|
 | 64. ConversationStore + Schema Foundation | 2/2 | Complete    | 2026-04-18 |
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
-| 66. Session-Boundary Summarization | 0/3 | Planned | - |
+| 66. Session-Boundary Summarization | 1/3 | In Progress|  |
 | 67. Resume Auto-Injection | 0/TBD | Not started | - |
 | 68. Conversation Search + Deep Retrieval | 0/TBD | Not started | - |

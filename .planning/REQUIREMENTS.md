@@ -20,10 +20,10 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 ### Session Intelligence (SESS)
 
-- [ ] **SESS-01**: On session end or restart, raw conversation turns are compressed into a structured summary (preferences, decisions, open threads, commitments) via haiku LLM call from the daemon
+- [x] **SESS-01**: On session end or restart, raw conversation turns are compressed into a structured summary (preferences, decisions, open threads, commitments) via haiku LLM call from the daemon
 - [ ] **SESS-02**: On agent resume, a structured context brief from the last N recent session summaries is automatically injected into the agent's prompt via a dedicated conversation_context budget section (2000-3000 tokens)
 - [ ] **SESS-03**: Auto-injection is skipped when the session gap is short (< 4 hours configurable) to avoid redundant context when the agent was only briefly restarted
-- [ ] **SESS-04**: Session summaries are stored as standard MemoryEntry objects (source="conversation") so they automatically participate in semantic search, relevance decay, tier management, and knowledge graph auto-linking
+- [x] **SESS-04**: Session summaries are stored as standard MemoryEntry objects (source="conversation") so they automatically participate in semantic search, relevance decay, tier management, and knowledge graph auto-linking
 
 ### Deep Retrieval (RETR)
 

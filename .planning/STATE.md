@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to plan
-stopped_at: Completed 65-02-PLAN.md
-last_updated: "2026-04-18T04:00:25.573Z"
+status: Ready to execute
+stopped_at: Completed 66-01-PLAN.md
+last_updated: "2026-04-18T14:33:58.675Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 7
+  completed_plans: 5
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 65 — capture-integration
+**Current focus:** Phase 66 — session-boundary-summarization
 
 ## Current Position
 
-Phase: 66
-Plan: Not started
+Phase: 66 (session-boundary-summarization) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ Recent decisions affecting current work:
 - [Phase 65]: Detection result persisted as JSON string in instruction_flags TEXT column
 - [Phase 65]: captureDiscordExchange wraps entire body in try/catch -- never blocks Discord message delivery
 - [Phase 65]: Capture block uses nested try/catch in bridge success path so failures never block Discord delivery; ConversationStore crash runs BEFORE recovery.handleCrash to avoid restart race
+- [Phase 66]: [Phase 66-01]: CreateMemoryInput.sourceTurnIds persists atomically in insert() single transaction — no follow-up UPDATE races (empty array normalized to NULL)
 
 ### Roadmap Evolution
 
@@ -84,5 +85,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 65-02-PLAN.md
+Stopped at: Completed 66-01-PLAN.md
 Resume file: None
