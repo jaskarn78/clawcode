@@ -12,6 +12,7 @@
 - :white_check_mark: **v1.7 Performance & Latency** - Phases 50-56 (shipped 2026-04-14)
 - :white_check_mark: **v1.8 Proactive Agents + Handoffs** - Phases 57-63 (shipped 2026-04-17)
 - :white_check_mark: **v1.9 Persistent Conversation Memory** - Phases 64-68 + 68.1 (shipped 2026-04-18)
+- :arrow_forward: **v2.0 Open Endpoint + Eyes & Hands** - Phases 69-72 (active, started 2026-04-18)
 
 ## Phases
 
@@ -105,9 +106,69 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 
 </details>
 
+### v2.0 Open Endpoint + Eyes & Hands (Active)
+
+- [ ] **Phase 69: OpenAI-Compatible Endpoint** — `POST /v1/chat/completions` + `GET /v1/models` on the daemon with SSE streaming, bearer-key-per-session auth, OpenAI↔Claude tool-use translation, and `TurnOrigin="openai-api"` tracing.
+- [ ] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton.
+- [ ] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist.
+- [ ] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration.
+
+## Phase Details
+
+### Phase 69: OpenAI-Compatible Endpoint
+**Goal**: Every ClawCode agent is reachable from any OpenAI-compatible client (Python `openai` SDK, LangChain, curl, custom apps) with first-class streaming, tool-use, and per-key session continuity — without touching the Discord surface or the v1.8 TurnDispatcher contract.
+**Depends on**: v1.8 TurnDispatcher (Phase 57), v1.9 ConversationStore (Phase 64), v1.7 streaming + prompt-cache infrastructure (Phases 52, 54)
+**Requirements**: OPENAI-01, OPENAI-02, OPENAI-03, OPENAI-04, OPENAI-05, OPENAI-06, OPENAI-07
+**Success Criteria** (what must be TRUE):
+  1. Python `openai` SDK pointed at `http://clawdy:3100/v1` with `model="<agent-name>"` receives a streamed assistant response identical in shape to an OpenAI server response (SSE `data: {...}\n\n` chunks terminated by `data: [DONE]`).
+  2. `GET /v1/models` returns every configured ClawCode agent as an OpenAI-shape model entry (`id`, `object: "model"`, `owned_by: "clawcode"`) usable by any client that calls `list_models()` first.
+  3. Two sequential `POST /v1/chat/completions` requests sharing the same bearer key preserve conversational state (agent remembers what was said) AND two requests with different bearer keys pointed at the same agent are fully isolated (neither sees the other's history).
+  4. An OpenAI-format `tool_calls` round-trip (assistant emits `tool_calls` → client sends `role: "tool"` response → assistant continues) works against a ClawCode MCP tool with zero client-side awareness that the backend is Claude.
+  5. Every trace row originating from the endpoint carries `TurnOrigin.kind = "openai-api"` with bearer-key fingerprint and client-sent `X-Request-Id` preserved, visible in `clawcode traces` CLI and dashboard — with zero TurnDispatcher contract changes.
+  6. Missing / unknown / agent-mismatched bearer keys return `401` / `403` (never a 500 or a leaked agent name), and the v1.7 prompt-cache hit rate + first-token p95 SLO show no regression when driven through the endpoint vs. the Discord path.
+**Plans**: TBD
+
+### Phase 70: Browser Automation MCP
+**Goal**: Every agent can drive a real headless Chromium — navigate the live web, screenshot pages into Claude vision, click/fill forms, extract clean content, and wait for dynamic conditions — with a persistent per-agent profile that survives daemon restarts.
+**Depends on**: Phase 69 (testable via OpenAI endpoint without Discord round-trip), v1.7 warm-path infrastructure (Phase 56), existing MCP auto-injection pattern (`clawcode`, `1password`)
+**Requirements**: BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06
+**Success Criteria** (what must be TRUE):
+  1. Clawdy opens `amazon.com`, captures a full-page screenshot, and describes the homepage layout based on the image — end-to-end through the vision pipeline with the screenshot delivered as an inline base64 or workspace-file reference Claude vision ingests directly.
+  2. An agent can complete a multi-step interaction (navigate → fill a search input → click submit → wait for results container to render → extract the result list as clean text) using only `browser_*` MCP tools, returning structured content with no nav/ads/footers in the final text.
+  3. Each agent's browser profile dir lives at `<agent-workspace>/browser/` and survives a daemon restart — logging into a site with one agent does NOT log any other agent in, and the logged-in agent stays logged in after `systemctl restart clawcoded`.
+  4. The browser warms at daemon startup as a resident singleton (like the embedder from Phase 56), with a boot-time health probe that hard-fails daemon start if Chromium can't launch — and the browser MCP server auto-injects into every agent unless `mcpServers: []` opts out, matching the existing `clawcode`/`1password` pattern.
+  5. `browser_wait_for` failures (timeout, selector never visible, URL never matches) return structured failure results — the agent sees a clear error it can recover from, never a silent hang or a raw stack trace — and p95 first-token on non-browser turns shows zero regression vs. the v1.7 baseline when the browser is idle.
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 71: Web Search MCP
+**Goal**: Every agent can search the live web and fetch clean article text for grounding and citations, with intra-turn deduplication preventing accidental re-charging on repeat queries.
+**Depends on**: Phase 70 (Playwright risk front-loaded), v1.7 intra-turn idempotent tool-cache (Phase 55), existing MCP auto-injection pattern
+**Requirements**: SEARCH-01, SEARCH-02, SEARCH-03
+**Success Criteria** (what must be TRUE):
+  1. An agent calls `web_search("claude 4.7 release notes")` and receives a ranked list of results from Brave (title, URL, snippet, published date when available), with the same call returning Exa results instead when the agent's config selects `searchBackend: "exa"`.
+  2. An agent calls `web_fetch_url(<result-url>)` and receives clean, readable article text (headings + paragraphs, no nav/ads/footer) plus extractable metadata (title, author, publish date) — the body is usable as citation material without further post-processing.
+  3. Duplicate `web_search` calls with the same query in one turn return cached results and do NOT re-hit the Brave API (verified by a single outbound HTTP request in the trace), with the cache scoped strictly to the current Turn — a later Turn with the same query hits the API fresh.
+  4. The search MCP server auto-injects into every agent following the `clawcode`/`1password` pattern (opt-out via `mcpServers: []`), and the `web_search` + `web_fetch_url` tools appear on the v1.7 intra-turn idempotent whitelist so their cached reads emit the correct `cached: true` trace metadata.
+  5. The v1.7 prompt-cache hit rate and first-token p95 SLO show no regression when agents are idle (search never called) — the Brave client is lazily initialized, not eagerly instantiated at daemon boot.
+**Plans**: TBD
+
+### Phase 72: Image Generation MCP
+**Goal**: Every agent can generate and edit images via MiniMax, OpenAI Images, or fal.ai backends (per-agent config selectable), persist output to its workspace, deliver to Discord through the existing `send_attachment` pipeline, and surface image-generation spend in `clawcode costs` alongside token spend.
+**Depends on**: Phase 71 (agents commonly search → find reference → edit), existing `send_attachment` MCP tool, v1.5 cost-tracking infrastructure (Phase 40), existing MCP auto-injection pattern
+**Requirements**: IMAGE-01, IMAGE-02, IMAGE-03, IMAGE-04
+**Success Criteria** (what must be TRUE):
+  1. An agent calls `image_generate("a cyberpunk skyline at dusk", size="1024x1024", backend="minimax")` and receives a workspace-persisted image file path — the file exists at `<agent-workspace>/generated-images/<id>.png`, readable by the agent's next turn or by a human inspecting the workspace.
+  2. An agent calls `image_edit(<workspace-path>, "add neon reflections on the wet streets")` against a backend whose config advertises edit support and receives a new image reflecting the edits — if the agent's configured backend does NOT advertise edit support, the tool returns a clean "unsupported" error rather than silently falling back.
+  3. An agent generates an image with `image_generate` and delivers it to its Discord channel via the existing `send_attachment` MCP tool using the returned workspace path — with zero new delivery surface introduced (send_attachment unchanged).
+  4. Running `clawcode costs` shows per-agent image-generation spend as a distinct cost category alongside token spend, with per-backend rate cards driving the dollar amount — an operator can answer "how much did Clawdy spend on MiniMax this week?" without leaving the CLI.
+  5. The image MCP server auto-injects into every agent (opt-out via `mcpServers: []`) and the v1.7 prompt-cache hit rate + first-token p95 SLO show no regression when agents are idle — backend HTTP clients lazily initialize at first call, not at daemon boot.
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
-**Status:** v1.9 Persistent Conversation Memory shipped 2026-04-18. All 12 requirements fully satisfied across 6 executed phases (5 planned + 1 gap-closure decimal).
+**Status:** v2.0 Open Endpoint + Eyes & Hands started 2026-04-18. 4 phases (69-72), 20 requirements mapped 1:1.
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -121,7 +182,17 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | v1.7 | 50-56 | Complete | 2026-04-14 |
 | v1.8 | 57-63 | Complete | 2026-04-17 |
 | v1.9 | 64-68 + 68.1 | Complete | 2026-04-18 |
+| v2.0 | 69-72 | Active | — |
+
+### v2.0 Phase Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 69. OpenAI-Compatible Endpoint | 0/- | Not started | - |
+| 70. Browser Automation MCP | 0/- | Not started | - |
+| 71. Web Search MCP | 0/- | Not started | - |
+| 72. Image Generation MCP | 0/- | Not started | - |
 
 ---
 
-*Next milestone: run `/gsd:new-milestone` to start fresh.*
+*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Run `/gsd:plan-phase 69` to begin.*

@@ -81,4 +81,39 @@ These surfaced during v2.0 scoping but are intentionally out of scope here:
 
 ## Traceability
 
-(Filled by roadmapper after phase breakdown.)
+Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| OPENAI-01 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-02 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-03 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-04 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-05 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-06 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-07 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| BROWSER-01 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-02 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-03 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-04 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-05 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-06 | Phase 70 — Browser Automation MCP | Pending |
+| SEARCH-01 | Phase 71 — Web Search MCP | Pending |
+| SEARCH-02 | Phase 71 — Web Search MCP | Pending |
+| SEARCH-03 | Phase 71 — Web Search MCP | Pending |
+| IMAGE-01 | Phase 72 — Image Generation MCP | Pending |
+| IMAGE-02 | Phase 72 — Image Generation MCP | Pending |
+| IMAGE-03 | Phase 72 — Image Generation MCP | Pending |
+| IMAGE-04 | Phase 72 — Image Generation MCP | Pending |
+
+### Per-phase requirement summary
+
+| Phase | Requirements | Count |
+|-------|--------------|-------|
+| Phase 69 — OpenAI-Compatible Endpoint | OPENAI-01, OPENAI-02, OPENAI-03, OPENAI-04, OPENAI-05, OPENAI-06, OPENAI-07 | 7 |
+| Phase 70 — Browser Automation MCP | BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06 | 6 |
+| Phase 71 — Web Search MCP | SEARCH-01, SEARCH-02, SEARCH-03 | 3 |
+| Phase 72 — Image Generation MCP | IMAGE-01, IMAGE-02, IMAGE-03, IMAGE-04 | 4 |
+| **Total** | | **20** |
+
+**Coverage:** 20/20 requirements mapped to exactly one phase each. No orphans. No duplicates.
