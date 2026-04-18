@@ -200,7 +200,7 @@ Plans:
   2. Raw conversation turn text is searchable via FTS5 full-text search for precise keyword recall -- an agent searching for "the exact API endpoint we discussed" finds the specific turn containing that phrase even when semantic search surfaces tangentially related results instead
   3. Search results are paginated (max 10 per page) with time-decay weighting so recent conversations rank higher than old ones given similar semantic relevance -- an agent searching "deployment" sees last week's deployment discussion before last month's, and can request additional pages if the first page does not contain what it needs
 
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 68-01-PLAN.md — FTS5 query layer: migration + triggers + searchTurns + escapeFtsQuery + searchByScope orchestrator (RETR-02 + RETR-03)
@@ -231,4 +231,4 @@ Plans:
 | 65. Capture Integration | 2/2 | Complete    | 2026-04-18 |
 | 66. Session-Boundary Summarization | 3/3 | Complete    | 2026-04-18 |
 | 67. Resume Auto-Injection | 3/3 | Complete    | 2026-04-18 |
-| 68. Conversation Search + Deep Retrieval | 2/2 | Complete   | 2026-04-18 |
+| 68. Conversation Search + Deep Retrieval | 3/3 | Complete   | 2026-04-18 |

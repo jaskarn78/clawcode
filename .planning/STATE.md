@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
 status: Phase complete — ready for verification
-stopped_at: Completed 68-02-PLAN.md — v1.9 Persistent Conversation Memory milestone SHIPPED
-last_updated: "2026-04-18T18:56:56.582Z"
+stopped_at: Completed 68-03-PLAN.md — Phase 68 RETR-03 gap closure shipped (knob now live end-to-end)
+last_updated: "2026-04-18T19:20:14.570Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 5
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 13
+  completed_plans: 13
 ---
 
 # Project State
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 
 ## Current Position
 
-Phase: 68 (conversation-search-deep-retrieval) — EXECUTING
-Plan: 2 of 2
+Phase: 68 (conversation-search-deep-retrieval) — COMPLETE
+Plan: 3 of 3 (gap closure 68-03 landed)
 
 ## Performance Metrics
 
@@ -89,6 +89,7 @@ Recent decisions affecting current work:
 - [Phase 68]: [Phase 68-02]: Zod limit.max tightened 20→10 as a breaking schema change (MAX_RESULTS_PER_PAGE hard cap) — no in-tree caller exceeds limit=10; IPC layer still clamps as defense-in-depth for non-MCP callers
 - [Phase 68]: [Phase 68-02]: Explicit scope='memories' && page=0 routes to legacy GraphSearch branch (preserves byte-for-byte pre-v1.9 response shape including linked_from); searchByScope engages only on scope='conversations'|'all' OR page>0
 - [Phase 68]: [Phase 68-02]: Per-Turn cache key widened to {query, limit, scope, page} preventing cross-scope cache bleed — a first scope='memories' call no longer serves stale data to a later scope='all' request in the same Turn
+- [Phase 68]: [Phase 68-03]: Closed RETR-03 warning gap — retrievalHalfLifeDays threaded from ResolvedAgentConfig.memory.conversation through daemon IPC case → invokeMemoryLookup → searchByScope.halfLifeDays. 4-file surgical diff, no refactor. TDD regression test pinned importance=1.0 to bypass MemoryStore.insert calculateImportance fallback (store.ts:148) and keep decay-delta math above floating-point noise.
 
 ### Roadmap Evolution
 
@@ -108,5 +109,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 68-02-PLAN.md — v1.9 Persistent Conversation Memory milestone SHIPPED
+Stopped at: Completed 68-03-PLAN.md — Phase 68 RETR-03 gap closure shipped (knob now live end-to-end)
 Resume file: None
