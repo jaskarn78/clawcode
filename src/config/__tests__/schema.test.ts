@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, configSchema, defaultsSchema, mcpServerSchema, streamingConfigSchema } from "../schema.js";
+import { agentSchema, configSchema, defaultsSchema, mcpServerSchema, openaiEndpointSchema, streamingConfigSchema } from "../schema.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
@@ -606,5 +606,125 @@ describe("conversationConfigSchema (Phase 67)", () => {
     expect(() =>
       conversationConfigSchema.parse({ retrievalHalfLifeDays: 0 }),
     ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 69 — OpenAI-compatible endpoint schema (OPENAI-01..07)
+// ---------------------------------------------------------------------------
+
+describe("openaiEndpointSchema", () => {
+  it("applies all defaults when parsed with an empty object", () => {
+    const parsed = openaiEndpointSchema.parse({});
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.port).toBe(3101);
+    expect(parsed.host).toBe("0.0.0.0");
+    expect(parsed.maxRequestBodyBytes).toBe(1048576);
+    expect(parsed.streamKeepaliveMs).toBe(15000);
+  });
+
+  it("wraps schema with .default({}) so a partial object still populates all fields", () => {
+    // When only a subset of fields is provided, the remaining fields fall
+    // back to their inner defaults. This is the realistic YAML scenario.
+    const parsed = openaiEndpointSchema.parse({ port: 9999 });
+    expect(parsed.port).toBe(9999);
+    expect(parsed.host).toBe("0.0.0.0");
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.maxRequestBodyBytes).toBe(1048576);
+    expect(parsed.streamKeepaliveMs).toBe(15000);
+  });
+
+  it("accepts port=3101 host=127.0.0.1 and preserves values", () => {
+    const parsed = openaiEndpointSchema.parse({ port: 3101, host: "127.0.0.1" });
+    expect(parsed.port).toBe(3101);
+    expect(parsed.host).toBe("127.0.0.1");
+  });
+
+  it("rejects port=0 (below min)", () => {
+    expect(() => openaiEndpointSchema.parse({ port: 0 })).toThrow();
+  });
+
+  it("rejects port=65536 (above max)", () => {
+    expect(() => openaiEndpointSchema.parse({ port: 65536 })).toThrow();
+  });
+
+  it("rejects empty host string", () => {
+    expect(() => openaiEndpointSchema.parse({ host: "" })).toThrow();
+  });
+
+  it("rejects maxRequestBodyBytes=500 (below 1024 floor)", () => {
+    expect(() =>
+      openaiEndpointSchema.parse({ maxRequestBodyBytes: 500 }),
+    ).toThrow();
+  });
+
+  it("rejects maxRequestBodyBytes above 100 MiB ceiling", () => {
+    expect(() =>
+      openaiEndpointSchema.parse({ maxRequestBodyBytes: 104857601 }),
+    ).toThrow();
+  });
+
+  it("rejects streamKeepaliveMs=500 (below 1000 floor)", () => {
+    expect(() =>
+      openaiEndpointSchema.parse({ streamKeepaliveMs: 500 }),
+    ).toThrow();
+  });
+
+  it("rejects streamKeepaliveMs above 120000 ceiling", () => {
+    expect(() =>
+      openaiEndpointSchema.parse({ streamKeepaliveMs: 120001 }),
+    ).toThrow();
+  });
+
+  it("rejects non-integer port", () => {
+    expect(() => openaiEndpointSchema.parse({ port: 3101.5 })).toThrow();
+  });
+});
+
+describe("configSchema — defaults.openai", () => {
+  it("parses with all openai defaults when defaults.openai is omitted", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.defaults.openai.enabled).toBe(true);
+      expect(result.data.defaults.openai.port).toBe(3101);
+      expect(result.data.defaults.openai.host).toBe("0.0.0.0");
+      expect(result.data.defaults.openai.maxRequestBodyBytes).toBe(1048576);
+      expect(result.data.defaults.openai.streamKeepaliveMs).toBe(15000);
+    }
+  });
+
+  it("accepts explicit defaults.openai overrides", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      defaults: {
+        openai: {
+          enabled: false,
+          port: 4000,
+          host: "127.0.0.1",
+          maxRequestBodyBytes: 2097152,
+          streamKeepaliveMs: 30000,
+        },
+      },
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.defaults.openai.enabled).toBe(false);
+      expect(result.data.defaults.openai.port).toBe(4000);
+      expect(result.data.defaults.openai.host).toBe("127.0.0.1");
+    }
+  });
+
+  it("rejects defaults.openai with out-of-range port", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      defaults: { openai: { port: 70000 } },
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(false);
   });
 });

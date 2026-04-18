@@ -321,6 +321,47 @@ export const toolsConfigSchema = z.object({
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 
 /**
+ * Phase 69 — OpenAI-compatible endpoint config (OPENAI-01..07).
+ *
+ * Lives under `defaults.openai` in clawcode.yaml. Controls the HTTP listener
+ * that exposes `/v1/chat/completions` + `/v1/models` on the daemon process.
+ *
+ * DO NOT confuse with `mcpServers.openai` (unrelated MCP server entry). The
+ * two keys live at different nesting levels and have no interaction.
+ *
+ * Every field has a default so omitting the entire block still yields a
+ * fully-populated runtime config (enabled listener on 0.0.0.0:3101).
+ *
+ * Bounds rationale:
+ *  - `port` 1..65535 — full TCP range; 0 forbidden to avoid OS-picked port.
+ *  - `host` non-empty string; default `0.0.0.0` mirrors the dashboard.
+ *  - `maxRequestBodyBytes` 1 KiB..100 MiB — sensible OpenAI message sizing.
+ *  - `streamKeepaliveMs` 1s..2min — SSE keepalive comment cadence window.
+ */
+export const openaiEndpointSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    port: z.number().int().min(1).max(65535).default(3101),
+    host: z.string().min(1).default("0.0.0.0"),
+    maxRequestBodyBytes: z
+      .number()
+      .int()
+      .min(1024)
+      .max(104857600)
+      .default(1048576),
+    streamKeepaliveMs: z
+      .number()
+      .int()
+      .min(1000)
+      .max(120000)
+      .default(15000),
+  })
+  .default({});
+
+/** Inferred Phase 69 OpenAI-endpoint config type. */
+export type OpenAiEndpointConfig = z.infer<typeof openaiEndpointSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -412,6 +453,9 @@ export const defaultsSchema = z.object({
       tools: toolsConfigSchema.optional(),
     })
     .optional(),
+  // Phase 69: OpenAI-compatible endpoint config. DO NOT confuse with
+  // mcpServers.openai (unrelated MCP entry at a different nesting level).
+  openai: openaiEndpointSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -536,6 +580,14 @@ export const configSchema = z.object({
     threads: {
       idleTimeoutMinutes: 1440,
       maxThreadSessions: 10,
+    },
+    // Phase 69 — OpenAI-compatible endpoint defaults (OPENAI-01..07).
+    openai: {
+      enabled: true,
+      port: 3101,
+      host: "0.0.0.0",
+      maxRequestBodyBytes: 1048576,
+      streamKeepaliveMs: 15000,
     },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
