@@ -27,7 +27,7 @@ import {
   ORPHAN_THRESHOLD_MS,
 } from "../tasks/reconciler.js";
 import { loadConfig, resolveAllAgents } from "../config/loader.js";
-import { readRegistry } from "./registry.js";
+import { readRegistry, reconcileRegistry, writeRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
 import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
@@ -444,6 +444,25 @@ export async function startDaemon(
   const routingTable = buildRoutingTable(resolvedAgents);
   const rateLimiter = createRateLimiter(DEFAULT_RATE_LIMITER_CONFIG);
   log.info({ routes: routingTable.channelToAgent.size }, "routing table built");
+
+  // 5d. Reconcile registry — prune ghost entries left by renamed/removed agents.
+  // Runs BEFORE SessionManager so startAll never sees stale names.
+  const knownAgentNames = new Set(resolvedAgents.map((a) => a.name));
+  const existingRegistry = await readRegistry(REGISTRY_PATH);
+  const reconciled = reconcileRegistry(existingRegistry, knownAgentNames);
+  if (reconciled.pruned.length > 0) {
+    for (const entry of reconciled.pruned) {
+      log.info(
+        { name: entry.name, reason: entry.reason },
+        "pruned ghost registry entry",
+      );
+    }
+    await writeRegistry(REGISTRY_PATH, reconciled.registry);
+    log.info(
+      { prunedCount: reconciled.pruned.length },
+      "registry reconciliation complete",
+    );
+  }
 
   // 6. Create SessionManager
   const sessionAdapter = adapter ?? new SdkSessionAdapter();
