@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { agentSchema, configSchema, defaultsSchema, mcpServerSchema, streamingConfigSchema } from "../schema.js";
+import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
   it("validates a complete MCP server config", () => {
@@ -552,5 +553,41 @@ describe("agentSchema perf combined fields (Phase 53 regression)", () => {
       expect(result.data.perf?.lazySkills?.usageThresholdTurns).toBe(10);
       expect(result.data.perf?.resumeSummaryBudget).toBe(1500);
     }
+  });
+});
+
+describe("conversationConfigSchema (Phase 67)", () => {
+  it("resumeSessionCount floor", () => {
+    // min 1 — value of 0 must be rejected
+    expect(() => conversationConfigSchema.parse({ resumeSessionCount: 0 })).toThrow();
+    // 1 is the floor — must pass
+    expect(() => conversationConfigSchema.parse({ resumeSessionCount: 1 })).not.toThrow();
+  });
+
+  it("conversationContextBudget floor", () => {
+    // min 500 — value of 499 must be rejected
+    expect(() => conversationConfigSchema.parse({ conversationContextBudget: 499 })).toThrow();
+    // 500 is the floor — must pass
+    expect(() => conversationConfigSchema.parse({ conversationContextBudget: 500 })).not.toThrow();
+  });
+
+  it("provides defaults when input is empty", () => {
+    const parsed = conversationConfigSchema.parse({});
+    expect(parsed.resumeSessionCount).toBe(3);
+    expect(parsed.resumeGapThresholdHours).toBe(4);
+    expect(parsed.conversationContextBudget).toBe(2000);
+  });
+
+  it("resumeSessionCount ceiling (max 10)", () => {
+    // max 10 — value of 11 must be rejected
+    expect(() => conversationConfigSchema.parse({ resumeSessionCount: 11 })).toThrow();
+    // 10 must pass
+    expect(() => conversationConfigSchema.parse({ resumeSessionCount: 10 })).not.toThrow();
+  });
+
+  it("resumeGapThresholdHours accepts 0 (always inject)", () => {
+    // gap=0 means never skip — valid per min(0)
+    const parsed = conversationConfigSchema.parse({ resumeGapThresholdHours: 0 });
+    expect(parsed.resumeGapThresholdHours).toBe(0);
   });
 });

@@ -37,6 +37,22 @@ export type ResolvedAgentConfig = {
       readonly coldRelevanceThreshold: number;
       readonly hotBudget: number;
     };
+    /**
+     * Phase 67 — conversation persistence knobs. Shape mirrors the resolved
+     * `conversationConfigSchema` output from `src/memory/schema.ts`. Kept
+     * optional because the raw agent config may omit the block entirely;
+     * when present, all five fields are supplied by Zod defaults.
+     */
+    readonly conversation?: {
+      readonly enabled: boolean;
+      readonly turnRetentionDays: number;
+      /** SESS-02 — last-N session summaries rendered in the conversation brief. */
+      readonly resumeSessionCount: number;
+      /** SESS-03 — skip auto-injection when gap from last session is under this many hours. */
+      readonly resumeGapThresholdHours: number;
+      /** Dedicated token budget for the conversation_context section (NOT shared with resume_summary). */
+      readonly conversationContextBudget: number;
+    };
   };
   readonly heartbeat: {
     readonly enabled: boolean;

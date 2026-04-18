@@ -66,6 +66,12 @@ export const episodeConfigSchema = z.object({
 export const conversationConfigSchema = z.object({
   enabled: z.boolean().default(true),
   turnRetentionDays: z.number().int().min(7).default(90),
+  // Phase 67 — SESS-02: how many recent session summaries to render in the brief
+  resumeSessionCount: z.number().int().min(1).max(10).default(3),
+  // Phase 67 — SESS-03: gap-skip threshold (0 = always inject; no upper bound)
+  resumeGapThresholdHours: z.number().min(0).default(4),
+  // Phase 67 — dedicated budget for conversation_context section (NOT shared with resume_summary)
+  conversationContextBudget: z.number().int().min(500).default(2000),
 });
 
 /** Schema for memory system configuration. */
