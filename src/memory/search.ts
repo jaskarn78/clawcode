@@ -14,6 +14,7 @@ type SearchRow = {
   readonly updated_at: string;
   readonly accessed_at: string;
   readonly tier: string;
+  readonly source_turn_ids: string | null;
   readonly distance: number;
 };
 
@@ -44,7 +45,7 @@ export class SemanticSearch {
       SELECT
         m.id, m.content, m.source, m.importance, m.access_count,
         m.tags, m.created_at, m.updated_at, m.accessed_at, m.tier,
-        v.distance
+        m.source_turn_ids, v.distance
       FROM vec_memories v
       INNER JOIN memories m ON m.id = v.memory_id
       WHERE v.embedding MATCH ?
@@ -116,6 +117,11 @@ export class SemanticSearch {
 
 /** Convert a raw SQLite row to an immutable SearchResult. */
 function rowToSearchResult(row: SearchRow): SearchResult {
+  const rawTurnIds = row.source_turn_ids;
+  const sourceTurnIds = rawTurnIds
+    ? Object.freeze(JSON.parse(rawTurnIds) as string[])
+    : null;
+
   return Object.freeze({
     id: row.id,
     content: row.content,
@@ -128,6 +134,7 @@ function rowToSearchResult(row: SearchRow): SearchResult {
     updatedAt: row.updated_at,
     accessedAt: row.accessed_at,
     tier: (row.tier ?? "warm") as import("./types.js").MemoryTier,
+    sourceTurnIds,
     distance: row.distance,
   });
 }

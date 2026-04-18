@@ -31,6 +31,8 @@ export type MemoryEntry = {
   readonly updatedAt: string;
   readonly accessedAt: string;
   readonly tier: MemoryTier;
+  /** Conversation turn IDs this memory was derived from (CONV-03 lineage). Null for non-conversation memories. */
+  readonly sourceTurnIds: readonly string[] | null;
 };
 
 /** Input for creating a new memory entry. */

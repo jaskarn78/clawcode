@@ -120,7 +120,7 @@ describe("CompactionManager.compact", () => {
 
     vi.mocked(deps.memoryStore.insert).mockImplementation((_input, _embedding) => {
       callOrder.push("insert");
-      return { id: "mem-1", content: "test", source: "conversation" as const, importance: 0.5, accessCount: 0, tags: [], embedding: null, createdAt: "", updatedAt: "", accessedAt: "", tier: "warm" as const };
+      return { id: "mem-1", content: "test", source: "conversation" as const, importance: 0.5, accessCount: 0, tags: [], embedding: null, createdAt: "", updatedAt: "", accessedAt: "", tier: "warm" as const, sourceTurnIds: null };
     });
 
     const extractMemories = vi.fn().mockResolvedValue(["fact1"]);
