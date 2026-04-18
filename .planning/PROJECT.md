@@ -76,6 +76,9 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Warm-path optimizations — READ-ONLY SQLite warmup, resident embedding singleton, warm-session reuse, 10s ready-gate — v1.7
 - TurnDispatcher foundation — single chokepoint for Discord/scheduler/future-trigger/future-handoff turns with origin-prefixed turnIds and `TurnOrigin` trace metadata (net-zero refactor) — v1.8
 - Task Store + State Machine — durable `~/.clawcode/manager/tasks.db` with 15-field task rows, enforced transitions, startup orphan reconciliation, and trigger_state CRUD (LIFE-01/02/04) — v1.8
+- ConversationStore schema foundation — per-agent SQLite tables for sessions and turns, JSON provenance fields, `source_turn_ids` lineage column, FTS5 on raw-turn text (CONV-01/02/03) — v1.9
+- Capture integration — DiscordBridge auto-persists every turn with instruction-pattern detection flagging high/medium-risk injection attempts (SEC-02) — v1.9
+- Session-boundary summarization — SessionSummarizer pipeline compresses ended/crashed sessions via Haiku with 10s timeout + deterministic fallback; writes standard MemoryEntry with `source="conversation"` and `["session-summary", "session:{id}"]` tags (SESS-01/04) — v1.9
 
 ### Active
 
@@ -164,4 +167,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-18 — v1.9 Persistent Conversation Memory milestone started*
+*Last updated: 2026-04-18 — v1.9 Phase 66 (Session-Boundary Summarization) complete*
