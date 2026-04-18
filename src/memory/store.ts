@@ -74,6 +74,8 @@ export class MemoryStore {
       this.migrateTierColumn();
       this.migrateEpisodeSource();
       this.migrateGraphLinks();
+      this.migrateConversationTables();
+      this.migrateSourceTurnIds();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -610,6 +612,79 @@ export class MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_memory_links_target
         ON memory_links(target_id);
     `);
+  }
+
+  /**
+   * Migrate existing databases to add conversation_sessions and conversation_turns tables.
+   * Uses idempotent CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS.
+   *
+   * conversation_sessions tracks agent interaction lifecycles with status CHECK constraint.
+   * conversation_turns stores individual turns with provenance fields (SEC-01).
+   */
+  private migrateConversationTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_sessions (
+        id TEXT PRIMARY KEY,
+        agent_name TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        turn_count INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        summary_memory_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK(status IN ('active', 'ended', 'crashed', 'summarized')),
+        FOREIGN KEY (summary_memory_id) REFERENCES memories(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_sessions_agent
+        ON conversation_sessions(agent_name);
+      CREATE INDEX IF NOT EXISTS idx_sessions_status
+        ON conversation_sessions(status);
+      CREATE INDEX IF NOT EXISTS idx_sessions_started
+        ON conversation_sessions(started_at);
+
+      CREATE TABLE IF NOT EXISTS conversation_turns (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        turn_index INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        token_count INTEGER,
+        channel_id TEXT,
+        discord_user_id TEXT,
+        discord_message_id TEXT,
+        is_trusted_channel INTEGER NOT NULL DEFAULT 0,
+        origin TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES conversation_sessions(id)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_session_order
+        ON conversation_turns(session_id, turn_index, role);
+      CREATE INDEX IF NOT EXISTS idx_turns_session
+        ON conversation_turns(session_id, turn_index);
+      CREATE INDEX IF NOT EXISTS idx_turns_created
+        ON conversation_turns(created_at);
+      CREATE INDEX IF NOT EXISTS idx_turns_channel
+        ON conversation_turns(channel_id);
+      CREATE INDEX IF NOT EXISTS idx_turns_user
+        ON conversation_turns(discord_user_id);
+    `);
+  }
+
+  /**
+   * Migrate existing databases to add source_turn_ids column to memories table.
+   * Uses PRAGMA table_info check pattern (same as migrateTierColumn).
+   * Column is nullable TEXT (JSON array of turn IDs) for CONV-03 lineage tracking.
+   */
+  private migrateSourceTurnIds(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(memories)")
+      .all() as ReadonlyArray<{ name: string }>;
+    const hasColumn = columns.some((c) => c.name === "source_turn_ids");
+    if (!hasColumn) {
+      this.db.exec(
+        "ALTER TABLE memories ADD COLUMN source_turn_ids TEXT DEFAULT NULL"
+      );
+    }
   }
 
   private prepareStatements(): PreparedStatements {
