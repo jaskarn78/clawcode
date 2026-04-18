@@ -80,7 +80,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Capture integration — DiscordBridge auto-persists every turn with instruction-pattern detection flagging high/medium-risk injection attempts (SEC-02) — v1.9
 - Session-boundary summarization — SessionSummarizer pipeline compresses ended/crashed sessions via Haiku with 10s timeout + deterministic fallback; writes standard MemoryEntry with `source="conversation"` and `["session-summary", "session:{id}"]` tags (SESS-01/04) — v1.9
 - Resume auto-injection — `assembleConversationBrief` helper + dedicated `conversation_context` mutable-suffix section (default 3 recent summaries, 4h gap threshold, 2000-token budget) threaded through `SessionManager.configDeps()` into `buildSessionConfig`; agents auto-receive a structured context brief of prior sessions on restart, with gap-skip short-circuit for brief restarts (SESS-02/03) — v1.9
-- Conversation search + deep retrieval — FTS5 virtual table on raw turns + `ConversationStore.searchTurns` with BM25 ranking and escape-safe queries; `searchByScope` pure DI orchestrator merging semantic (session-summary MemoryEntries) + full-text (raw turn) results with decay weighting (tunable half-life), session-summary-prefers-raw-turn dedup, and offset pagination at 10/page hard cap; `memory_lookup` MCP tool extended with backward-compatible `scope` + `page` parameters (RETR-01/02/03) — v1.9
+- Conversation search + deep retrieval — FTS5 virtual table on raw turns + `ConversationStore.searchTurns` with BM25 ranking and escape-safe queries; `searchByScope` pure DI orchestrator merging semantic (session-summary MemoryEntries) + full-text (raw turn) results with decay weighting (tunable half-life), session-summary-prefers-raw-turn dedup, and offset pagination at 10/page hard cap; `memory_lookup` MCP tool extended with backward-compatible `scope` + `page` parameters; `isTrustedChannel` provenance correctly threaded from DiscordBridge → CaptureInput → ConversationStore so default FTS5 trust filter returns real results in production (CONV-01/SEC-01/RETR-01/02/03) — v1.9
 
 ### Active
 
@@ -169,4 +169,4 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
 ---
-*Last updated: 2026-04-18 — v1.9 Persistent Conversation Memory complete (all 5 phases)*
+*Last updated: 2026-04-18 — v1.9 Persistent Conversation Memory complete (5 phases + Phase 68.1 cross-phase gap closure)*
