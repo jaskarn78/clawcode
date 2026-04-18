@@ -638,6 +638,12 @@ export class DiscordBridge {
             channelId,
             discordUserId: message.author.id,
             discordMessageId: message.id,
+            // Phase 68.1 — SEC-01/CONV-01: by construction, this code path
+            // runs only after `checkChannelAccess` (line 441) allowed the
+            // message. The early-return at line 447 drops untrusted-channel
+            // messages before they ever reach routing, so every captured
+            // exchange here originates from an ACL-allowed (trusted) channel.
+            isTrustedChannel: true,
             log: this.log,
           });
         }

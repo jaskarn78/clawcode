@@ -23,6 +23,17 @@ export type CaptureInput = {
   readonly channelId: string;
   readonly discordUserId: string;
   readonly discordMessageId: string;
+  /**
+   * Trust status of the originating Discord channel (SEC-01).
+   *
+   * Threaded through from `DiscordBridge` where the ACL gate at
+   * `checkChannelAccess` has already decided whether the message may be
+   * processed at all. When `true`, captured turns land with
+   * `is_trusted_channel = 1` and are visible to the default (trust-filtered)
+   * `ConversationStore.searchTurns` path. Omitted/false turns are still
+   * recorded but excluded from that default search path (SEC-01 hygiene).
+   */
+  readonly isTrustedChannel?: boolean;
   readonly log: Logger;
 };
 
@@ -64,6 +75,7 @@ export function captureDiscordExchange(input: CaptureInput): void {
       channelId: input.channelId,
       discordUserId: input.discordUserId,
       discordMessageId: input.discordMessageId,
+      isTrustedChannel: input.isTrustedChannel,
       instructionFlags,
     });
 
@@ -73,6 +85,7 @@ export function captureDiscordExchange(input: CaptureInput): void {
       role: "assistant",
       content: input.assistantContent,
       channelId: input.channelId,
+      isTrustedChannel: input.isTrustedChannel,
     });
   } catch (err) {
     input.log.warn(
