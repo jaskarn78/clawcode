@@ -82,8 +82,11 @@ describe("summarizeWithHaiku", () => {
     mockQuery.mockImplementation(
       (args: { options: { abortController?: AbortController } }) => {
         capturedController = args.options.abortController;
-        // never resolves naturally; relies on abort
+        // never resolves naturally; relies on abort. Handle pre-aborted
+        // case because the abort may fire before the for-await loop starts
+        // consuming (listener-after-abort would hang forever).
         return (async function* () {
+          if (capturedController!.signal.aborted) return;
           await new Promise<void>((resolve) => {
             capturedController!.signal.addEventListener(
               "abort",
@@ -96,11 +99,19 @@ describe("summarizeWithHaiku", () => {
     );
 
     const outerController = new AbortController();
-    const p = summarizeWithHaiku("p", { signal: outerController.signal });
 
-    // Abort the outer signal — the internal controller must see it
+    // Abort BEFORE starting — summarizeWithHaiku must attach its listener
+    // synchronously-enough that it catches a later abort. To exercise the
+    // runtime-abort path specifically, we kick off the call, flush the
+    // loadSdk() microtask, then abort.
+    const p = summarizeWithHaiku("p", { signal: outerController.signal });
+    // Flush microtasks so the listener inside summarizeWithHaiku is attached
+    // before we abort.
+    await Promise.resolve();
+    await Promise.resolve();
+
     outerController.abort();
-    await p; // Should resolve (with empty string since no result message arrived)
+    await p;
 
     expect(capturedController).toBeDefined();
     expect(capturedController!.signal.aborted).toBe(true);
