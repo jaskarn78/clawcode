@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to execute
-stopped_at: Completed 67-01-PLAN.md
-last_updated: "2026-04-18T16:37:45.823Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 67-02-PLAN.md
+last_updated: "2026-04-18T17:01:19.555Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -75,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 67]: [Phase 67-01]: Config placement Option A — extended conversationConfigSchema with resumeSessionCount/resumeGapThresholdHours/conversationContextBudget rather than splitting across memoryAssemblyBudgets. Respects v1.9 locked 'dedicated budget' decision.
 - [Phase 67]: [Phase 67-01]: Accumulate budget strategy locked — helper adds whole summaries until next would overflow and drops the remainder. Never half-truncates mid-summary. Over-budget single-summary still accepted (better than silent empty-string return).
 - [Phase 67]: [Phase 67-01]: Pure DI helper with injected 'now: number' — assembleConversationBrief never reads Date.now() so gap-skip tests are deterministic without vi.setSystemTime() or Date monkey-patching. Gap short-circuit happens BEFORE any MemoryStore.findByTag call (verified by spy).
+- [Phase 67]: [Phase 67-02]: Atomic single-commit for Task 1 — extended SECTION_NAMES + SectionName + SectionTokenCounts + buckets + ContextSources + mutable-suffix push + sectionTokens construction together so tsc never goes red between intermediate steps (Pitfall 5 SECTION_NAMES blast radius).
+- [Phase 67]: [Phase 67-02]: Brief placement LAST in mutable-suffix order (after resumeSum) — background context trails concrete resume recap so the model's reasoning sees the nearest-term signal first. CONTEXT.md locked this; tests assert positional ordering survives.
+- [Phase 67]: [Phase 67-02]: Graceful-degradation via conjunction guard (convStore && memStore) — either absent → helper path skipped entirely, no throw. Tolerates legacy startup, test harnesses, and partial bootstrap. SessionManager wiring follow-up still required to actually populate conversationStores/memoryStores Maps in production.
 
 ### Roadmap Evolution
 
@@ -94,5 +97,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 67-01-PLAN.md
+Stopped at: Completed 67-02-PLAN.md
 Resume file: None
