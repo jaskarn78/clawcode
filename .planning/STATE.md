@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Persistent Conversation Memory
-status: Ready to plan
-stopped_at: Completed 64-02-PLAN.md
-last_updated: "2026-04-18T03:33:52.489Z"
+status: Ready to execute
+stopped_at: Completed 65-01-PLAN.md
+last_updated: "2026-04-18T03:52:39.589Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 64 — conversationstore-schema-foundation
+**Current focus:** Phase 65 — capture-integration
 
 ## Current Position
 
-Phase: 65
-Plan: Not started
+Phase: 65 (capture-integration) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -61,6 +61,9 @@ Recent decisions affecting current work:
 - [Phase 64]: sourceTurnIds propagated across all MemoryEntry consumers (7 source files + 5 test files) for type-safe conversation lineage tracking
 - [Phase 64]: ConversationStore receives DatabaseType directly (not MemoryStore) -- follows DocumentStore pattern for domain stores that don't need MemoryStore.insert()
 - [Phase 64]: Session state machine enforced via UPDATE WHERE status check + changes count validation (not read-then-write pattern)
+- [Phase 65]: Instruction detector is zero-import pure function -- no dependencies, testable in isolation
+- [Phase 65]: Detection result persisted as JSON string in instruction_flags TEXT column
+- [Phase 65]: captureDiscordExchange wraps entire body in try/catch -- never blocks Discord message delivery
 
 ### Roadmap Evolution
 
@@ -80,5 +83,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-18
-Stopped at: Completed 64-02-PLAN.md
+Stopped at: Completed 65-01-PLAN.md
 Resume file: None

@@ -14,9 +14,9 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 ### Conversation Persistence (CONV)
 
-- [ ] **CONV-01**: Every Discord message exchange (user message + agent response) is stored as a structured turn pair in per-agent SQLite with timestamps, channel_id, and discord_user_id provenance
-- [ ] **CONV-02**: Session boundaries (start, end, crash) are tracked as explicit lifecycle records with session_id grouping turns into coherent conversations
-- [ ] **CONV-03**: Extracted memories carry source_turn_ids linking them back to the conversation turns they came from (lineage tracking for dual-write integrity)
+- [x] **CONV-01**: Every Discord message exchange (user message + agent response) is stored as a structured turn pair in per-agent SQLite with timestamps, channel_id, and discord_user_id provenance
+- [x] **CONV-02**: Session boundaries (start, end, crash) are tracked as explicit lifecycle records with session_id grouping turns into coherent conversations
+- [x] **CONV-03**: Extracted memories carry source_turn_ids linking them back to the conversation turns they came from (lineage tracking for dual-write integrity)
 
 ### Session Intelligence (SESS)
 
@@ -33,8 +33,8 @@ Build on the v1.0-v1.8 substrate (MemoryStore, sqlite-vec, embeddings, consolida
 
 ### Security (SEC)
 
-- [ ] **SEC-01**: Every stored conversation turn includes provenance fields (discord_user_id, channel_id, is_trusted_channel) to prevent memory poisoning from untrusted sources
-- [ ] **SEC-02**: Instruction-pattern detection runs on turn content before storage to flag potential injection attempts in persisted conversation data
+- [x] **SEC-01**: Every stored conversation turn includes provenance fields (discord_user_id, channel_id, is_trusted_channel) to prevent memory poisoning from untrusted sources
+- [x] **SEC-02**: Instruction-pattern detection runs on turn content before storage to flag potential injection attempts in persisted conversation data
 
 ## Future Requirements
 
