@@ -18,6 +18,7 @@ import type { UsageTracker } from "../usage/tracker.js";
 import type { DocumentStore } from "../documents/store.js";
 import type { TraceStore } from "../performance/trace-store.js";
 import type { TraceCollector, Turn } from "../performance/trace-collector.js";
+import type { ConversationStore } from "../memory/conversation-store.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
@@ -48,6 +49,8 @@ export class SessionManager {
   private readonly memory: AgentMemoryManager;
   private readonly recovery: SessionRecoveryManager;
   private readonly sessionEndCallbacks: Map<string, () => Promise<void>> = new Map();
+  /** Phase 65 -- tracks the active ConversationStore session ID per agent. */
+  private readonly activeConversationSessionIds: Map<string, string> = new Map();
   private skillsCatalog: SkillsCatalog = new Map();
   private allAgentConfigs: readonly ResolvedAgentConfig[] = [];
   /**
@@ -210,6 +213,18 @@ export class SessionManager {
 
     // Initialize memory, store SOUL.md as retrievable memory, and refresh hot tier
     this.memory.initMemory(name, config);
+
+    // Phase 65: start a ConversationStore session alongside the agent session
+    const convStore = this.memory.conversationStores.get(name);
+    if (convStore) {
+      try {
+        const convSession = convStore.startSession(name);
+        this.activeConversationSessionIds.set(name, convSession.id);
+      } catch (err) {
+        this.log.warn({ agent: name, error: (err as Error).message }, "failed to start conversation session (non-fatal)");
+      }
+    }
+
     await this.memory.storeSoulMemory(name, config);
     const tierManager = this.memory.tierManagers.get(name);
     if (tierManager) tierManager.refreshHotTier();
@@ -257,6 +272,14 @@ export class SessionManager {
     this.sessions.set(name, handle);
 
     handle.onError((error: Error) => {
+      // Phase 65: crash the ConversationStore session
+      const convSessionId = this.activeConversationSessionIds.get(name);
+      const convStoreForCrash = this.memory.conversationStores.get(name);
+      if (convStoreForCrash && convSessionId) {
+        try { convStoreForCrash.crashSession(convSessionId); } catch { /* best-effort */ }
+      }
+      this.activeConversationSessionIds.delete(name);
+
       this.recovery.handleCrash(name, config, error, this.sessions);
       // Invoke session end callback on crash (e.g., subagent thread cleanup)
       const endCallback = this.sessionEndCallbacks.get(name);
@@ -425,6 +448,15 @@ export class SessionManager {
     const handle = this.requireSession(name);
     this.recovery.clearStabilityTimer(name);
     this.recovery.clearRestartTimer(name);
+
+    // Phase 65: end the ConversationStore session before memory cleanup
+    const convSessionId = this.activeConversationSessionIds.get(name);
+    const convStoreForStop = this.memory.conversationStores.get(name);
+    if (convStoreForStop && convSessionId) {
+      try { convStoreForStop.endSession(convSessionId); } catch { /* session may already be ended */ }
+    }
+    this.activeConversationSessionIds.delete(name);
+
     this.memory.cleanupMemory(name);
 
     let registry = await readRegistry(this.registryPath);
@@ -575,6 +607,16 @@ export class SessionManager {
   getTraceStore(agentName: string): TraceStore | undefined { return this.memory.traceStores.get(agentName); }
   /** Phase 50 — per-agent trace collector; callers construct Turn via `.startTurn(...)` and own lifecycle. */
   getTraceCollector(agentName: string): TraceCollector | undefined { return this.memory.traceCollectors.get(agentName); }
+
+  /** Phase 65 -- per-agent ConversationStore for turn persistence. */
+  getConversationStore(agentName: string): ConversationStore | undefined {
+    return this.memory.conversationStores.get(agentName);
+  }
+
+  /** Phase 65 -- active conversation session ID for an agent (undefined if no active session). */
+  getActiveConversationSessionId(agentName: string): string | undefined {
+    return this.activeConversationSessionIds.get(agentName);
+  }
 
   async saveContextSummary(agentName: string, summary: string): Promise<void> {
     const config = this.configs.get(agentName);
