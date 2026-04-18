@@ -378,6 +378,155 @@ describe("daemon memory-lookup IPC integration — scope branching", () => {
 
     expect(result.results).toBeDefined();
   });
+
+  /**
+   * Phase 68-03 — RETR-03 gap closure regression test.
+   *
+   * Proves the `retrievalHalfLifeDays` config knob is LIVE end-to-end at
+   * runtime, not merely defined in `conversationConfigSchema`. Prior to
+   * 68-03 the value was inert: `searchByScope` always fell back to
+   * `DEFAULT_RETRIEVAL_HALF_LIFE_DAYS=14` because nothing read the
+   * resolved agent config and forwarded it through `MemoryLookupParams`.
+   *
+   * Test design:
+   *   - Two independent `:memory:` stores (separate beforeEach instances
+   *     would cross-contaminate; we build them inline to keep the test
+   *     hermetic against the outer `beforeEach`).
+   *   - Identical aged session-summary memory (10 days old) inserted in
+   *     both. We use a direct UPDATE on `accessed_at` because
+   *     MemoryStore.insert() doesn't accept an explicit timestamp —
+   *     this is the same fixture pattern other decay tests rely on.
+   *   - One call uses the default half-life (no `retrievalHalfLifeDays`
+   *     param → `DEFAULT_RETRIEVAL_HALF_LIFE_DAYS=14`).
+   *   - The other call passes `retrievalHalfLifeDays: 3` — at 10 days
+   *     aged that decays roughly 6x faster than the default, producing
+   *     a measurably lower combinedScore.
+   *
+   * Decay math at 10 days:
+   *   importance(0.5) * 0.5^(10/14) ≈ 0.305
+   *   importance(0.5) * 0.5^(10/3)  ≈ 0.049
+   *   combinedScore = 0.7 * relevance + 0.3 * decay
+   *   delta(combined) ≈ 0.3 * (0.305 - 0.049) ≈ 0.077
+   *   We assert delta > 0.05 to stay above floating-point noise while
+   *   still rejecting the "knob is inert" failure mode (delta == 0).
+   */
+  it("retrievalHalfLifeDays config knob changes decay weighting at runtime", async () => {
+    const TEN_DAYS_AGO = new Date(
+      Date.now() - 10 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    // Independent store pair A — exercised with DEFAULT half-life (14).
+    const memStoreA = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    const convStoreA = new ConversationStore(memStoreA.getDatabase());
+    // Independent store pair B — exercised with retrievalHalfLifeDays=3.
+    const memStoreB = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    const convStoreB = new ConversationStore(memStoreB.getDatabase());
+
+    try {
+      const embedding = await fakeEmbedder.embed("deployment");
+      const content = "We discussed the deployment rollout last month";
+      const tags = ["session-summary", "session:aged"];
+
+      // Insert into both stores with skipDedup so identical content lands
+      // in both DBs without triggering the dedup short-circuit.
+      const insertedA = memStoreA.insert(
+        { content, source: "conversation", tags, skipDedup: true },
+        embedding,
+      );
+      const insertedB = memStoreB.insert(
+        { content, source: "conversation", tags, skipDedup: true },
+        embedding,
+      );
+
+      // Backdate accessed_at to 10 days ago so the decay component diverges
+      // measurably between the two half-life configurations.
+      memStoreA
+        .getDatabase()
+        .prepare("UPDATE memories SET accessed_at = ? WHERE id = ?")
+        .run(TEN_DAYS_AGO, insertedA.id);
+      memStoreB
+        .getDatabase()
+        .prepare("UPDATE memories SET accessed_at = ? WHERE id = ?")
+        .run(TEN_DAYS_AGO, insertedB.id);
+
+      // Default half-life run (no retrievalHalfLifeDays param).
+      const resultDefault = (await invokeMemoryLookup(
+        {
+          agent: "agent-a",
+          query: "deployment",
+          scope: "conversations",
+          page: 0,
+          limit: 10,
+        },
+        {
+          memoryStore: memStoreA,
+          conversationStore: convStoreA,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<{
+          session_id: string | null;
+          relevance_score: number;
+        }>;
+      };
+
+      // Aggressive half-life run (3 days).
+      const resultShort = (await invokeMemoryLookup(
+        {
+          agent: "agent-a",
+          query: "deployment",
+          scope: "conversations",
+          page: 0,
+          limit: 10,
+          retrievalHalfLifeDays: 3,
+        },
+        {
+          memoryStore: memStoreB,
+          conversationStore: convStoreB,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<{
+          session_id: string | null;
+          relevance_score: number;
+        }>;
+      };
+
+      // Both runs must surface the aged memory.
+      expect(resultDefault.results.length).toBeGreaterThan(0);
+      expect(resultShort.results.length).toBeGreaterThan(0);
+
+      const agedDefault = resultDefault.results.find(
+        (r) => r.session_id === "aged",
+      );
+      const agedShort = resultShort.results.find(
+        (r) => r.session_id === "aged",
+      );
+
+      expect(agedDefault).toBeDefined();
+      expect(agedShort).toBeDefined();
+
+      // Aggressive half-life MUST decay the aged memory more.
+      expect(agedShort!.relevance_score).toBeLessThan(
+        agedDefault!.relevance_score,
+      );
+
+      // Sanity floor — the delta should be well above floating-point noise
+      // (calculated ≈ 0.077; see test design comment).
+      expect(
+        agedDefault!.relevance_score - agedShort!.relevance_score,
+      ).toBeGreaterThan(0.05);
+    } finally {
+      memStoreA.close();
+      memStoreB.close();
+    }
+  });
 });
 
 /**
