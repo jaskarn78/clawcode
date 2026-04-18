@@ -434,13 +434,17 @@ describe("daemon memory-lookup IPC integration — scope branching", () => {
       const tags = ["session-summary", "session:aged"];
 
       // Insert into both stores with skipDedup so identical content lands
-      // in both DBs without triggering the dedup short-circuit.
+      // in both DBs without triggering the dedup short-circuit. Pin
+      // importance=1.0 explicitly so MemoryStore.insert's "fall through
+      // to calculateImportance when input is undefined or exactly 0.5"
+      // branch (store.ts:148) does NOT kick in — keeps the decay-delta
+      // math predictable and well above floating-point noise.
       const insertedA = memStoreA.insert(
-        { content, source: "conversation", tags, skipDedup: true },
+        { content, source: "conversation", tags, importance: 1, skipDedup: true },
         embedding,
       );
       const insertedB = memStoreB.insert(
-        { content, source: "conversation", tags, skipDedup: true },
+        { content, source: "conversation", tags, importance: 1, skipDedup: true },
         embedding,
       );
 

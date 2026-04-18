@@ -52,6 +52,8 @@ export type ResolvedAgentConfig = {
       readonly resumeGapThresholdHours: number;
       /** Dedicated token budget for the conversation_context section (NOT shared with resume_summary). */
       readonly conversationContextBudget: number;
+      /** Phase 68 — RETR-03: half-life (days) for retrieval-time decay weighting over conversation search results. */
+      readonly retrievalHalfLifeDays: number;
     };
   };
   readonly heartbeat: {

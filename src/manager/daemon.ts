@@ -1678,8 +1678,18 @@ async function routeMethod(
       const page = typeof params.page === "number" ? params.page : 0;
       const limit = typeof params.limit === "number" ? params.limit : 5;
 
+      // Phase 68 — RETR-03 gap closure. Resolve the per-agent
+      // retrieval half-life from the conversation config block. Zod has
+      // already enforced min(1) at config-load time, so no clamping
+      // here. Leave undefined when the conversation block is absent so
+      // the handler/searchByScope fallback to DEFAULT_RETRIEVAL_HALF_LIFE_DAYS
+      // remains the single source of truth.
+      const agentConfig = manager.getAgentConfig(agentName);
+      const retrievalHalfLifeDays =
+        agentConfig?.memory.conversation?.retrievalHalfLifeDays;
+
       return invokeMemoryLookup(
-        { agent: agentName, query, limit, scope, page },
+        { agent: agentName, query, limit, scope, page, retrievalHalfLifeDays },
         {
           memoryStore: store,
           conversationStore: manager.getConversationStore(agentName),

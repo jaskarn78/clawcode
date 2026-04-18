@@ -83,6 +83,8 @@ export type MemoryLookupParams = {
   readonly limit?: number;
   readonly scope?: "memories" | "conversations" | "all";
   readonly page?: number;
+  /** Phase 68 — RETR-03 override. Resolved per-agent from conversation config; falls through to DEFAULT_RETRIEVAL_HALF_LIFE_DAYS=14 when undefined. */
+  readonly retrievalHalfLifeDays?: number;
 };
 
 /**
@@ -160,7 +162,16 @@ export async function invokeMemoryLookup(
   const offset = page * limit;
   const scopedPage = await searchByScope(
     { memoryStore, conversationStore, embedder },
-    { scope, query: params.query, limit, offset },
+    {
+      scope,
+      query: params.query,
+      limit,
+      offset,
+      // Phase 68 — RETR-03: forward the resolved per-agent half-life. Left
+      // undefined-when-absent so searchByScope's existing fallback to
+      // DEFAULT_RETRIEVAL_HALF_LIFE_DAYS remains the single source of truth.
+      halfLifeDays: params.retrievalHalfLifeDays,
+    },
   );
 
   return {
