@@ -23,18 +23,27 @@ Satisfies: **BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER
 - **Launch mode:** `chromium.launchPersistentContext(profileDir, {...})` — NOT `chromium.launch() + context`. Persistent context gives us the cookie/session survival requirement BROWSER-06 mandates without extra state-management code.
 - **Headless:** `headless: "new"` (Playwright's recommended mode). Document override via config for debugging.
 
-### Server Architecture
+### Server Architecture (LOCKED per research)
 
-- **New MCP server module** at `src/browser/` — follows the existing auto-injected server pattern (`src/mcp/server.ts` is the reference).
-- **Auto-injected** — registered alongside `clawcode` and `1password` in `src/manager/daemon.ts` MCP server injection. Agents opt-out via `mcpServers: []`.
-- **NOT a separate process** — runs as an in-daemon MCP server via the `@modelcontextprotocol/sdk` stdio transport, same as the existing `clawcode` MCP server. The Playwright Chromium subprocess IS separate but that's managed internally by Playwright.
+- **Process model parallels existing `clawcode` MCP server:** a new `clawcode browser-mcp` CLI subcommand (Claude SDK spawns one per agent session). Each subprocess speaks stdio MCP back to the SDK and IPCs to the daemon for all actual browser work.
+- **Daemon owns the singleton `BrowserManager`** — the shared Chromium process + all per-agent `BrowserContext`s live in the daemon. MCP subprocess is a thin translator: receives tool call via stdio → IPC to daemon → returns result via stdio.
+- **Auto-injected** — add `browser` alongside `clawcode` and `1password` in `src/config/loader.ts` auto-inject block. Opt-out via `mcpServers: []`.
+- **Why not in-daemon MCP?** The existing `clawcode` MCP is ALSO a subprocess — it's a `clawcode mcp` CLI command with stdio transport that talks back to the daemon via IPC. Phase 70 follows the same model for consistency.
 
-### Singleton + Per-Agent Profiles
+### Singleton + Per-Agent Profiles (LOCKED per research)
 
-- **One Chromium process per daemon** — shared browser instance with per-agent `BrowserContext` (Playwright's isolation primitive). Profile dir per agent via `launchPersistentContext`.
+- **Architecture:** ONE shared `chromium.launch()` browser process + per-agent `browser.newContext({ storageState })` with `indexedDB: true`. This is **Option 2** from 70-RESEARCH.md — `launchPersistentContext` cannot share a browser, so using `storageState` is the only way to get cross-restart cookie + localStorage + IndexedDB survival without spawning N Chromium processes. The tradeoff is `sessionStorage` is NOT persisted (sessionStorage is ephemeral by definition per web spec — no real loss).
+- **State save cadence:** debounced 5s after any storage mutation + immediate save on daemon shutdown + immediate save on context close. State file at `${agentWorkspace}/browser/state.json` written atomically (temp-rename).
 - **Warm at daemon boot** — pattern parallels v1.7 embedder (Phase 56). `src/browser/manager.ts` exposes `warmBrowser(): Promise<void>` called during daemon startup. Agents wait on the ready signal before `status: 'running'`.
-- **Profile dir location:** `${agentWorkspace}/browser/` (e.g., `~/.clawcode/agents/clawdy/browser/`). Created on first use. Survives daemon restart.
-- **Lifecycle:** daemon boot → `warmBrowser()` launches Chromium → per-agent contexts created lazily on first tool call → daemon shutdown tears down all contexts + closes browser.
+- **Profile dir location:** `${agentWorkspace}/browser/` (e.g., `~/.clawcode/agents/clawdy/browser/`). `state.json` is written by `context.storageState({ path })` on save cadence above. Per-agent `downloads/` and `screenshots/` subdirs for ephemeral artifacts.
+- **Lifecycle:** daemon boot → `warmBrowser()` launches shared Chromium + probe → per-agent contexts created lazily on first tool call (hydrated from `state.json` if exists) → daemon shutdown saves all contexts' `storageState`, closes contexts, closes browser with graceful timeout.
+
+### Launch Options (LOCKED per research pitfalls)
+
+- `args: ["--no-sandbox", "--disable-dev-shm-usage"]` — `--no-sandbox` because the `clawcode` systemd user is low-privilege (chromium sandbox requires root or setuid, neither of which we want); `--disable-dev-shm-usage` prevents `/dev/shm` exhaustion.
+- `headless: "new"` (current Playwright flag; review if deprecated).
+- `--only-shell` chromium install (not Chrome-for-Testing) to avoid the 20GB+ RSS bug per Playwright issue #38489.
+- `executablePath`: let Playwright resolve from `~/.cache/ms-playwright/` (already installed on dev box).
 
 ### Tool Surface
 
