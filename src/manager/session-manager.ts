@@ -233,8 +233,50 @@ export class SessionManager {
     registry = updateEntry(registry, name, { status: "starting" });
     await writeRegistry(this.registryPath, registry);
 
-    // Initialize memory, store SOUL.md as retrievable memory, and refresh hot tier
-    this.memory.initMemory(name, config);
+    // Initialize memory, store SOUL.md as retrievable memory, and refresh hot tier.
+    //
+    // Quick task 260419-mvh — fail-fast on memory init failure.
+    //
+    // Two guards handle the two failure modes of AgentMemoryManager.initMemory:
+    //   1. try/catch — forward-compat: if initMemory starts propagating errors
+    //      (better error hygiene), capture the REAL cause in one place.
+    //   2. `!memoryStores.has(name)` — today's silent-swallow path. initMemory's
+    //      own try/catch (session-memory.ts:125) logs ERROR but does NOT throw,
+    //      leaving no MemoryStore behind. Before this guard the cascade continued
+    //      into warm-path which THEN threw `warmSqliteStores: no MemoryStore for
+    //      agent '${name}'` — hiding the real root cause in the prior log line.
+    //
+    // On either failure: mark the agent 'failed' with a single-line cause in
+    // lastError, skip warm-path/createSession/etc., and return cleanly so the
+    // daemon keeps serving the other agents (same contract as warm-path failure).
+    try {
+      this.memory.initMemory(name, config);
+    } catch (initErr) {
+      const errMsg = (initErr as Error).message;
+      this.log.warn(
+        { agent: name, error: errMsg },
+        "failed to initialize memory — agent marked failed, skipping warm-path",
+      );
+      registry = await readRegistry(this.registryPath);
+      registry = updateEntry(registry, name, {
+        status: "failed",
+        lastError: `initMemory: ${errMsg}`,
+      });
+      await writeRegistry(this.registryPath, registry);
+      return;
+    }
+    if (!this.memory.memoryStores.has(name)) {
+      const errMsg =
+        "MemoryStore missing after initMemory (check earlier 'failed to initialize memory' log for root cause)";
+      this.log.warn({ agent: name }, errMsg);
+      registry = await readRegistry(this.registryPath);
+      registry = updateEntry(registry, name, {
+        status: "failed",
+        lastError: `initMemory: ${errMsg}`,
+      });
+      await writeRegistry(this.registryPath, registry);
+      return;
+    }
 
     // Phase 65: start a ConversationStore session alongside the agent session
     const convStore = this.memory.conversationStores.get(name);
