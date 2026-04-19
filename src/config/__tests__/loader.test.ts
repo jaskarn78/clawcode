@@ -32,6 +32,17 @@ describe("resolveAgentConfig", () => {
       },
     },
     threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+    openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+    browser: {
+      enabled: true,
+      headless: true,
+      warmOnBoot: true,
+      navigationTimeoutMs: 30000,
+      actionTimeoutMs: 10000,
+      viewport: { width: 1280, height: 720 },
+      userAgent: null,
+      maxScreenshotInlineBytes: 524288,
+    },
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -204,6 +215,17 @@ describe("resolveAgentConfig - mcpServers", () => {
       },
     },
     threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+    openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+    browser: {
+      enabled: true,
+      headless: true,
+      warmOnBoot: true,
+      navigationTimeoutMs: 30000,
+      actionTimeoutMs: 10000,
+      viewport: { width: 1280, height: 720 },
+      userAgent: null,
+      maxScreenshotInlineBytes: 524288,
+    },
   };
 
   const sharedMcpServers = {
@@ -268,6 +290,50 @@ describe("resolveAgentConfig - mcpServers", () => {
     expect(clawcode).toBeDefined();
     expect(clawcode!.command).toBe("clawcode");
     expect(clawcode!.args).toEqual(["mcp"]);
+  });
+
+  // Phase 70 Plan 03 — auto-inject the `browser` MCP entry so every agent
+  // gets the 6 browser_* tools out of the box. Parallels the `clawcode`
+  // and `1password` auto-injects. Gated by defaults.browser.enabled.
+  it("auto-injects browser MCP entry when defaults.browser.enabled is true", () => {
+    const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+    const browser = resolved.mcpServers.find((s) => s.name === "browser");
+    expect(browser).toBeDefined();
+    expect(browser!.command).toBe("clawcode");
+    expect(browser!.args).toEqual(["browser-mcp"]);
+    expect(browser!.env).toEqual({ CLAWCODE_AGENT: "test" });
+  });
+
+  it("omits browser MCP when defaults.browser.enabled is false", () => {
+    const disabledDefaults: DefaultsConfig = {
+      ...defaults,
+      browser: { ...defaults.browser, enabled: false },
+    };
+    const resolved = resolveAgentConfig(baseAgent, disabledDefaults, sharedMcpServers);
+    expect(resolved.mcpServers.find((s) => s.name === "browser")).toBeUndefined();
+  });
+
+  it("browser injection sets CLAWCODE_AGENT env to the agent name per-agent", () => {
+    const clawdy = { ...baseAgent, name: "clawdy" };
+    const rubi = { ...baseAgent, name: "rubi" };
+    const resolvedClawdy = resolveAgentConfig(clawdy, defaults, sharedMcpServers);
+    const resolvedRubi = resolveAgentConfig(rubi, defaults, sharedMcpServers);
+    expect(resolvedClawdy.mcpServers.find((s) => s.name === "browser")!.env).toEqual({ CLAWCODE_AGENT: "clawdy" });
+    expect(resolvedRubi.mcpServers.find((s) => s.name === "browser")!.env).toEqual({ CLAWCODE_AGENT: "rubi" });
+  });
+
+  it("preserves user-specified 'browser' mcpServer entry (no overwrite)", () => {
+    const customBrowser = { name: "browser", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" } };
+    const agent = {
+      ...baseAgent,
+      mcpServers: [customBrowser] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }>,
+    };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    const browser = resolved.mcpServers.find((s) => s.name === "browser");
+    expect(browser).toBeDefined();
+    expect(browser!.command).toBe("mycustom");
+    expect(browser!.args).toEqual(["--flag"]);
+    expect(browser!.env).toEqual({ CUSTOM: "x" });
   });
 
   it("resolves multiple string references", () => {
@@ -574,8 +640,8 @@ agents:
     const plainAgent = resolved.find((a) => a.name === "plain-agent");
     expect(plainAgent).toBeDefined();
     expect(plainAgent!.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
-    // No user-defined MCP servers
-    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password")).toEqual([]);
+    // No user-defined MCP servers — only the auto-injected clawcode/1password/browser entries remain.
+    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password" && s.name !== "browser")).toEqual([]);
 
     // mcp-agent has 3 resolved servers from string references + auto-injected ones
     const mcpAgent = resolved.find((a) => a.name === "mcp-agent");
@@ -661,6 +727,17 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
       },
     },
     threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+    openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+    browser: {
+      enabled: true,
+      headless: true,
+      warmOnBoot: true,
+      navigationTimeoutMs: 30000,
+      actionTimeoutMs: 10000,
+      viewport: { width: 1280, height: 720 },
+      userAgent: null,
+      maxScreenshotInlineBytes: 524288,
+    },
   };
 
   afterEach(() => {

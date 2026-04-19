@@ -90,6 +90,23 @@ export function resolveAgentConfig(
     });
   }
 
+  // Phase 70 — auto-inject the browser MCP server so every agent gets
+  // browser_navigate, browser_screenshot, browser_click, browser_fill,
+  // browser_extract, browser_wait_for. The subprocess pattern mirrors the
+  // `clawcode` entry: the daemon owns the singleton Chromium and this
+  // subprocess is a thin IPC translator. Gated by defaults.browser.enabled
+  // (default true). CLAWCODE_AGENT env is consumed by the subprocess as
+  // the default agent identity for tool calls (src/browser/mcp-server.ts).
+  const browserEnabled = defaults.browser?.enabled !== false;
+  if (browserEnabled && !resolvedMcpMap.has("browser")) {
+    resolvedMcpMap.set("browser", {
+      name: "browser",
+      command: "clawcode",
+      args: ["browser-mcp"],
+      env: { CLAWCODE_AGENT: agent.name },
+    });
+  }
+
   const mcpServers = [...resolvedMcpMap.values()].map((s) => ({
     name: s.name,
     command: s.command,

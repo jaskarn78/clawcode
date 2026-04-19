@@ -27,6 +27,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75, zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 } },
       },
       threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+      openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+      browser: {
+        enabled: true,
+        headless: true,
+        warmOnBoot: true,
+        navigationTimeoutMs: 30000,
+        actionTimeoutMs: 10000,
+        viewport: { width: 1280, height: 720 },
+        userAgent: null,
+        maxScreenshotInlineBytes: 524288,
+      },
     },
     mcpServers: {},
     agents: [
