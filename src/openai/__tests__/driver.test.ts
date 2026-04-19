@@ -31,6 +31,22 @@ import { createOpenAiSessionDriver } from "../driver.js";
 import type { OpenAiSessionDriverDeps } from "../driver.js";
 import type { SdkStreamEvent } from "../types.js";
 
+/**
+ * Phase 73 Plan 03 — per-span recording harness.
+ *
+ * A span entry captures the startSpan() name + initial metadata plus a list
+ * of setMetadata() deltas and the count of end() calls. The TurnMock in
+ * makeMockDeps collects these into a shared `spanCalls` array so tests can
+ * assert the lifecycle of the new `openai.chat_completion` span without
+ * reaching into the Turn internals.
+ */
+type SpanEntry = {
+  readonly name: string;
+  readonly metadata: Record<string, unknown>;
+  readonly setMetadataCalls: Record<string, unknown>[];
+  endCalled: number;
+};
+
 function makeMockDeps(overrides: Partial<OpenAiSessionDriverDeps> = {}): {
   deps: OpenAiSessionDriverDeps;
   db: Database.Database;
@@ -46,6 +62,7 @@ function makeMockDeps(overrides: Partial<OpenAiSessionDriverDeps> = {}): {
     }>;
     turnStartCalls: Array<{ rootTurnId: string; agentName: string }>;
     turnEndCalls: Array<"success" | "error">;
+    spanCalls: SpanEntry[];
   };
 } {
   const db = new Database(":memory:");
@@ -63,6 +80,7 @@ function makeMockDeps(overrides: Partial<OpenAiSessionDriverDeps> = {}): {
     }>,
     turnStartCalls: [] as Array<{ rootTurnId: string; agentName: string }>,
     turnEndCalls: [] as Array<"success" | "error">,
+    spanCalls: [] as SpanEntry[],
   };
 
   // The Turn mock records its lifecycle so tests can assert.
@@ -72,6 +90,26 @@ function makeMockDeps(overrides: Partial<OpenAiSessionDriverDeps> = {}): {
     end: vi.fn((outcome: "success" | "error") => {
       events.turnEndCalls.push(outcome);
     }),
+    // Phase 73 Plan 03 — recorder for the new `openai.chat_completion` span.
+    startSpan: vi.fn(
+      (name: string, metadata: Record<string, unknown> = {}) => {
+        const entry: SpanEntry = {
+          name,
+          metadata: { ...metadata },
+          setMetadataCalls: [],
+          endCalled: 0,
+        };
+        events.spanCalls.push(entry);
+        return {
+          setMetadata: (extra: Record<string, unknown>) => {
+            entry.setMetadataCalls.push({ ...extra });
+          },
+          end: () => {
+            entry.endCalled += 1;
+          },
+        };
+      },
+    ),
   });
 
   const traceCollector = {
@@ -534,6 +572,180 @@ describe("createOpenAiSessionDriver", () => {
       }
     }
     expect(combined).toBe("Hello, world");
+  });
+
+  describe("openai.chat_completion span (LAT-03)", () => {
+    it("successful dispatch produces span with ttfb_ms + total_turn_ms", async () => {
+      const { deps, db: d, events } = makeMockDeps();
+      db = d;
+      const driver = createOpenAiSessionDriver(deps);
+      const ac = new AbortController();
+      await collect(
+        driver.dispatch({
+          agentName: "clawdy",
+          keyHash:
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+          lastUserMessage: "Hi",
+          clientSystemAppend: null,
+          tools: [
+            {
+              type: "function",
+              name: "echo",
+              description: "echo",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+          toolChoice: null,
+          toolResults: [],
+          signal: ac.signal,
+          xRequestId: "req-ttfb-ok",
+        }),
+      );
+
+      // Exactly one openai.chat_completion span was opened.
+      const chatSpans = events.spanCalls.filter(
+        (s) => s.name === "openai.chat_completion",
+      );
+      expect(chatSpans).toHaveLength(1);
+      const span = chatSpans[0]!;
+
+      // Initial metadata carries agent + keyHashPrefix + xRequestId + stream + tools.
+      expect(span.metadata.agent).toBe("clawdy");
+      expect(span.metadata.keyHashPrefix).toBe("abcdef01");
+      expect(span.metadata.xRequestId).toBe("req-ttfb-ok");
+      expect(span.metadata.stream).toBe(true);
+      expect(span.metadata.tools).toBe(1);
+
+      // Exactly one setMetadata call with ttfb_ms (number) + total_turn_ms (number).
+      expect(span.setMetadataCalls).toHaveLength(1);
+      const delta = span.setMetadataCalls[0]!;
+      expect(typeof delta.ttfb_ms).toBe("number");
+      expect(typeof delta.total_turn_ms).toBe("number");
+      expect(delta.ttfb_ms).toBeGreaterThanOrEqual(0);
+      expect(delta.total_turn_ms).toBeGreaterThanOrEqual(0);
+      expect(delta.error).toBeUndefined();
+
+      // .end() called exactly once.
+      expect(span.endCalled).toBe(1);
+    });
+
+    it("aborted dispatch produces span with error:true and finite total_turn_ms", async () => {
+      const { deps, db: d, events } = makeMockDeps();
+      db = d;
+      // Never-emit dispatchStream; the abort path drives the closure.
+      (deps.turnDispatcher as unknown as {
+        dispatchStream: ReturnType<typeof vi.fn>;
+      }).dispatchStream = vi.fn(
+        async (_o, _a, _m, _cb, options: { signal?: AbortSignal } = {}) => {
+          return new Promise<string>((_resolve, reject) => {
+            const s = options.signal;
+            if (!s) return reject(new Error("no signal"));
+            s.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            );
+          });
+        },
+      );
+      const driver = createOpenAiSessionDriver(deps);
+      const ac = new AbortController();
+      const iterable = driver.dispatch({
+        agentName: "clawdy",
+        keyHash: "a".repeat(64),
+        lastUserMessage: "Hi",
+        clientSystemAppend: null,
+        tools: null,
+        toolChoice: null,
+        toolResults: [],
+        signal: ac.signal,
+        xRequestId: "req-ttfb-abort",
+      });
+      const iter = iterable[Symbol.asyncIterator]();
+      setTimeout(() => ac.abort(), 5);
+      await expect(iter.next()).rejects.toThrow();
+
+      const chatSpans = events.spanCalls.filter(
+        (s) => s.name === "openai.chat_completion",
+      );
+      expect(chatSpans).toHaveLength(1);
+      const span = chatSpans[0]!;
+      // At least one setMetadata call carrying error:true + total_turn_ms.
+      expect(span.setMetadataCalls.length).toBeGreaterThanOrEqual(1);
+      const errorDelta = span.setMetadataCalls.find(
+        (c) => c.error === true,
+      );
+      expect(errorDelta).toBeDefined();
+      expect(typeof errorDelta!.total_turn_ms).toBe("number");
+      expect(Number.isFinite(errorDelta!.total_turn_ms)).toBe(true);
+      // .end() called exactly once (idempotent guard protects against double-close).
+      expect(span.endCalled).toBe(1);
+    });
+
+    it("dispatch-promise rejection produces span with error:true + total_turn_ms", async () => {
+      const { deps, db: d, events } = makeMockDeps();
+      db = d;
+      (deps.turnDispatcher as unknown as {
+        dispatchStream: ReturnType<typeof vi.fn>;
+      }).dispatchStream = vi.fn(async () => {
+        throw new Error("boom");
+      });
+      const driver = createOpenAiSessionDriver(deps);
+      const ac = new AbortController();
+      await expect(
+        collect(
+          driver.dispatch({
+            agentName: "clawdy",
+            keyHash: "a".repeat(64),
+            lastUserMessage: "Hi",
+            clientSystemAppend: null,
+            tools: null,
+            toolChoice: null,
+            toolResults: [],
+            signal: ac.signal,
+            xRequestId: "req-ttfb-reject",
+          }),
+        ),
+      ).rejects.toThrow("boom");
+
+      const chatSpans = events.spanCalls.filter(
+        (s) => s.name === "openai.chat_completion",
+      );
+      expect(chatSpans).toHaveLength(1);
+      const span = chatSpans[0]!;
+      expect(span.setMetadataCalls).toHaveLength(1);
+      const delta = span.setMetadataCalls[0]!;
+      expect(delta.error).toBe(true);
+      expect(typeof delta.total_turn_ms).toBe("number");
+      // On pure-reject path no delta fires → ttfb_ms is null.
+      expect(delta.ttfb_ms).toBeNull();
+      expect(span.endCalled).toBe(1);
+    });
+
+    it("no span opened when traceCollectorFor returns null", async () => {
+      const { deps, db: d, events } = makeMockDeps({
+        traceCollectorFor: () => null,
+      });
+      db = d;
+      const driver = createOpenAiSessionDriver(deps);
+      const ac = new AbortController();
+      // Request still completes (driver degrades gracefully when no collector).
+      const out = await collect(
+        driver.dispatch({
+          agentName: "clawdy",
+          keyHash: "a".repeat(64),
+          lastUserMessage: "Hi",
+          clientSystemAppend: null,
+          tools: null,
+          toolChoice: null,
+          toolResults: [],
+          signal: ac.signal,
+          xRequestId: "req-ttfb-nocol",
+        }),
+      );
+      expect(out.length).toBeGreaterThan(0);
+      // No Turn was opened → no spans recorded at all.
+      expect(events.spanCalls).toHaveLength(0);
+      expect(events.turnStartCalls).toHaveLength(0);
+    });
   });
 
   it("when SessionManager returns no session_id, driver still completes without recording", async () => {

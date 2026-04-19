@@ -52,7 +52,7 @@ import type { Logger } from "pino";
 
 import type { SessionManager } from "../manager/session-manager.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
-import type { TraceCollector, Turn } from "../performance/trace-collector.js";
+import type { TraceCollector, Span, Turn } from "../performance/trace-collector.js";
 import { makeRootOriginWithTurnId } from "../manager/turn-origin.js";
 
 import type { OpenAiSessionDriver } from "./server.js";
@@ -169,6 +169,41 @@ function runDispatch(
       );
     }
   }
+
+  // Phase 73 Plan 03 — openai.chat_completion span for TTFB + total-turn
+  // latency (LAT-03). Sibling to session-adapter's `first_token` span —
+  // divergence between the two surfaces driver-queue overhead vs raw-SDK
+  // first-token latency.
+  const dispatchStartMs = Date.now();
+  let firstDeltaMs: number | undefined = undefined;
+  let chatSpan: Span | undefined;
+  if (turn) {
+    try {
+      chatSpan = turn.startSpan("openai.chat_completion", {
+        agent: agentName,
+        keyHashPrefix: fingerprint,
+        xRequestId,
+        stream: true,
+        tools: input.tools?.length ?? 0,
+      });
+    } catch {
+      /* non-fatal — trace write is best-effort */
+    }
+  }
+  // Pitfall 8 guard (73-RESEARCH): parallel wiring from success, error, and
+  // abort paths may all call endChatSpanOnce — idempotent close preserves the
+  // metadata captured at the FIRST call.
+  let chatSpanEnded = false;
+  const endChatSpanOnce = (metadata: Record<string, unknown>): void => {
+    if (chatSpanEnded) return;
+    chatSpanEnded = true;
+    try {
+      chatSpan?.setMetadata(metadata);
+      chatSpan?.end();
+    } catch {
+      /* non-fatal */
+    }
+  };
 
   // 3. Build the outgoing user message. clientSystemAppend — when present —
   //    is APPENDED after a visible delimiter so the agent's stable system
@@ -293,6 +328,12 @@ function runDispatch(
 
   // 5. Kick off the dispatch (fire-and-forget — we own the callbacks).
   const onChunk = (accumulated: string): void => {
+    // Phase 73 Plan 03 — stamp ttfb_ms on the FIRST onChunk invocation. The
+    // guard (firstDeltaMs === undefined) protects against spurious pre-delta
+    // calls or a second call beating the dispatch-promise settle.
+    if (firstDeltaMs === undefined) {
+      firstDeltaMs = Date.now();
+    }
     if (!emittedTextBlockStart) {
       emittedTextBlockStart = true;
       pushEvent({
@@ -327,10 +368,21 @@ function runDispatch(
     })
     .then((finalText) => {
       endTurnOnce("success");
+      endChatSpanOnce({
+        ttfb_ms:
+          firstDeltaMs !== undefined ? firstDeltaMs - dispatchStartMs : null,
+        total_turn_ms: Date.now() - dispatchStartMs,
+      });
       pushEnd(finalText);
     })
     .catch((err: unknown) => {
       endTurnOnce("error");
+      endChatSpanOnce({
+        ttfb_ms:
+          firstDeltaMs !== undefined ? firstDeltaMs - dispatchStartMs : null,
+        total_turn_ms: Date.now() - dispatchStartMs,
+        error: true,
+      });
       pushError(err instanceof Error ? err : new Error(String(err)));
     });
 
@@ -347,6 +399,12 @@ function runDispatch(
     const onAbort = (): void => {
       if (done) return;
       endTurnOnce("error");
+      endChatSpanOnce({
+        ttfb_ms:
+          firstDeltaMs !== undefined ? firstDeltaMs - dispatchStartMs : null,
+        total_turn_ms: Date.now() - dispatchStartMs,
+        error: true,
+      });
       pushError(new Error("openai-driver: aborted"));
     };
     if (signal.aborted) onAbort();
