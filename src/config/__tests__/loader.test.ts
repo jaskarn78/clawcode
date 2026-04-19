@@ -354,6 +354,50 @@ describe("resolveAgentConfig - mcpServers", () => {
     expect(browser!.env).toEqual({ CUSTOM: "x" });
   });
 
+  // Phase 71 Plan 02 — auto-inject the `search` MCP entry so every agent
+  // gets web_search + web_fetch_url. Parallels the browser auto-inject;
+  // gated by defaults.search.enabled (default true).
+  it("auto-injects search MCP entry when defaults.search.enabled is true", () => {
+    const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+    const search = resolved.mcpServers.find((s) => s.name === "search");
+    expect(search).toBeDefined();
+    expect(search!.command).toBe("clawcode");
+    expect(search!.args).toEqual(["search-mcp"]);
+    expect(search!.env).toEqual({ CLAWCODE_AGENT: "test" });
+  });
+
+  it("omits search MCP when defaults.search.enabled is false", () => {
+    const disabledDefaults: DefaultsConfig = {
+      ...defaults,
+      search: { ...defaults.search, enabled: false },
+    };
+    const resolved = resolveAgentConfig(baseAgent, disabledDefaults, sharedMcpServers);
+    expect(resolved.mcpServers.find((s) => s.name === "search")).toBeUndefined();
+  });
+
+  it("search injection sets CLAWCODE_AGENT env to the agent name per-agent", () => {
+    const clawdy = { ...baseAgent, name: "clawdy" };
+    const rubi = { ...baseAgent, name: "rubi" };
+    const resolvedClawdy = resolveAgentConfig(clawdy, defaults, sharedMcpServers);
+    const resolvedRubi = resolveAgentConfig(rubi, defaults, sharedMcpServers);
+    expect(resolvedClawdy.mcpServers.find((s) => s.name === "search")!.env).toEqual({ CLAWCODE_AGENT: "clawdy" });
+    expect(resolvedRubi.mcpServers.find((s) => s.name === "search")!.env).toEqual({ CLAWCODE_AGENT: "rubi" });
+  });
+
+  it("preserves user-specified 'search' mcpServer entry (no overwrite)", () => {
+    const customSearch = { name: "search", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" } };
+    const agent = {
+      ...baseAgent,
+      mcpServers: [customSearch] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }>,
+    };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    const search = resolved.mcpServers.find((s) => s.name === "search");
+    expect(search).toBeDefined();
+    expect(search!.command).toBe("mycustom");
+    expect(search!.args).toEqual(["--flag"]);
+    expect(search!.env).toEqual({ CUSTOM: "x" });
+  });
+
   it("resolves multiple string references", () => {
     const agent = { ...baseAgent, mcpServers: ["finnhub", "google"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
@@ -658,8 +702,8 @@ agents:
     const plainAgent = resolved.find((a) => a.name === "plain-agent");
     expect(plainAgent).toBeDefined();
     expect(plainAgent!.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
-    // No user-defined MCP servers — only the auto-injected clawcode/1password/browser entries remain.
-    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password" && s.name !== "browser")).toEqual([]);
+    // No user-defined MCP servers — only the auto-injected clawcode/1password/browser/search entries remain.
+    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password" && s.name !== "browser" && s.name !== "search")).toEqual([]);
 
     // mcp-agent has 3 resolved servers from string references + auto-injected ones
     const mcpAgent = resolved.find((a) => a.name === "mcp-agent");

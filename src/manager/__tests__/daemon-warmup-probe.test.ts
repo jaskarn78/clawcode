@@ -173,6 +173,60 @@ describe("daemon.ts browser warm wiring (Phase 70 Plan 03 — source grep)", () 
   });
 });
 
+// ---------------------------------------------------------------------------
+// Phase 71 Plan 02 — search MCP daemon wiring (source grep).
+//
+// Mirrors the browser grep-contract above: assert the daemon constructs
+// the BraveClient + ExaClient, registers the search-tool-call IPC handler
+// BEFORE routeMethod, and never calls a `warm()` on the search clients
+// (HTTP clients are lazy per-CONTEXT).
+// ---------------------------------------------------------------------------
+describe("daemon.ts search wiring (Phase 71 Plan 02 — source grep)", () => {
+  const src = readFileSync(
+    new URL("../daemon.ts", import.meta.url),
+    "utf-8",
+  );
+
+  it("G1: IPC method 'search-tool-call' is registered", () => {
+    expect(src).toMatch(/["']search-tool-call["']/);
+  });
+
+  it("G2: imports handleSearchToolCall from the search module", () => {
+    expect(src).toMatch(
+      /import\s+\{[^}]*handleSearchToolCall[^}]*\}\s+from\s+["']\.\.\/search\/daemon-handler\.js["']/,
+    );
+  });
+
+  it("G3: constructs BraveClient + ExaClient at daemon boot, after browser block", () => {
+    const braveCtor = src.indexOf("createBraveClient(");
+    const exaCtor = src.indexOf("createExaClient(");
+    const browserWarm = src.indexOf("browserManager.warm()");
+    expect(braveCtor).toBeGreaterThan(-1);
+    expect(exaCtor).toBeGreaterThan(-1);
+    expect(browserWarm).toBeGreaterThan(-1);
+    // Construction lives after the browser warm block.
+    expect(braveCtor).toBeGreaterThan(browserWarm);
+    expect(exaCtor).toBeGreaterThan(browserWarm);
+  });
+
+  it("G4: dispatches search-tool-call BEFORE routeMethod", () => {
+    const searchCall = src.indexOf('"search-tool-call"');
+    const routeMethodCall = src.indexOf(
+      "return routeMethod(manager, resolvedAgents",
+    );
+    expect(searchCall).toBeGreaterThan(-1);
+    expect(routeMethodCall).toBeGreaterThan(-1);
+    expect(searchCall).toBeLessThan(routeMethodCall);
+  });
+
+  it("G5: does NOT call a warm()/isReady() method on search clients at boot", () => {
+    // HTTP clients are lazy — no warm-path probe. The only warm/isReady
+    // references in daemon.ts should be browserManager's.
+    expect(src).not.toMatch(/braveClient\.warm|exaClient\.warm/);
+    expect(src).not.toMatch(/braveClient\.isReady|exaClient\.isReady/);
+  });
+});
+
 describe("EmbeddingService singleton invariant (src-level grep)", () => {
   it("src/ has exactly one production construction of EmbeddingService", () => {
     // Resolve src/ from this test file (works regardless of cwd in vitest).
