@@ -112,6 +112,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 - [x] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton. (completed 2026-04-19)
 - [x] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist. (completed 2026-04-19)
 - [x] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration. (completed 2026-04-19)
+- [ ] **Phase 73: OpenClaw endpoint latency** — TTFB instrumentation + persistent per-agent `streamInput()` subprocess + conversation-brief cache + tuned readiness wait. Target sub-2s TTFB for synchronous OpenClaw consumption.
 
 ## Phase Details
 
@@ -196,6 +197,35 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
 | 71. Web Search MCP | 2/2 | Complete    | 2026-04-19 |
 | 72. Image Generation MCP | 2/2 | Complete    | 2026-04-19 |
+
+### Phase 73: OpenClaw endpoint latency
+
+**Directory:** `.planning/phases/73-openclaw-endpoint-latency/`
+
+**Goal:** Reduce per-turn latency on the `/v1/chat/completions` endpoint to snappy levels for synchronous OpenClaw-agent consumption. Baseline: ~7s per turn for trivial prompts on clawdy (dominated by per-turn `sdk.query()` subprocess spawn + session-resume-from-disk). Target: sub-2s TTFB on warm agents, no regression on Discord path or v1.7 prompt-cache SLO.
+
+**Scope:**
+- Research OpenClaw's consumption pattern (where its code lives, how it calls OpenAI-compatible endpoints, streaming/non-stream preference, retry/timeout/concurrency behavior, which latency metric matters most to its UX).
+- Instrument TTFB + total-turn-ms metrics on the endpoint so we can prove any improvement empirically.
+- Convert `session-adapter.ts` from per-turn `sdk.query()` pattern to a persistent per-agent `streamInput()` generator — eliminates 2-5s cold-start per request. Preserve safe multiplexing and session resumption on crash.
+- Cache the assembled `conversation_context` brief per-agent; invalidate on session end or when a new terminated session appears.
+- Tune `agentReadinessWaitMs` default down from 2000ms (warm-path is ~15ms in practice — 2s is wildly conservative).
+- Verify Anthropic API prompt-cache hit rate stays ≥ v1.7 SLO across all changes.
+
+**Out of scope:** plumbing other OpenAI params (`temperature`, `max_tokens`, `reasoning_effort`, `stop`, `response_format`) — separate follow-up phase.
+
+**Constraints:**
+- No regression on Discord bridge path (same session-adapter is shared).
+- No regression on v1.7 prompt-cache hit-rate SLO.
+- All 2900+ existing tests stay green.
+- Changes deployable via `git pull && npm ci && npm run build && systemctl restart clawcode` on clawdy.
+
+**Requirements**: TBD (set during plan-phase)
+**Depends on:** Phase 72
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run `/gsd:plan-phase 73` with research enabled)
 
 ---
 
