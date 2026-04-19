@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
 status: Milestone complete
-stopped_at: "Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work."
-last_updated: "2026-04-19T04:21:31.809Z"
+stopped_at: "Completed quick task 260419-p51 — multi-agent bearer keys + (key_hash, agent) composite-PK session index + fork-escalation regression pin + spawn-subagent-from-OpenAI-endpoint README. 8 atomic commits on master (NOT pushed). ~45 net new tests. tsc at 29 baseline; 3111 pass, 7 tolerated failures in daemon-openai.test.ts. Task 4 (deploy + smoke + rotate OpenClaw + body-capture flip) deferred to orchestrator."
+last_updated: "2026-04-19T18:30:00.000Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
@@ -127,6 +127,7 @@ None yet.
 | 260419-jtk | Harden OpenAI streaming for OpenClaw: usage trailing chunk + tool-call verify + warm-path startup race | 2026-04-19 | 18252fe | [260419-jtk-harden-openai-streaming-for-openclaw-emi](./quick/260419-jtk-harden-openai-streaming-for-openclaw-emi/) |
 | 260419-mvh | Fix initMemory→warm-path cascade + add OpenAI request/payload JSONL logging + `openai-log tail` CLI | 2026-04-19 | 34dfb83 | [260419-mvh-fix-initmemory-warm-path-cascade-add-ope](./quick/260419-mvh-fix-initmemory-warm-path-cascade-add-ope/) |
 | 260419-nic | Discord `/clawcode-interrupt` + `/clawcode-steer` slash commands — mid-turn abort + steering via Phase 73 interrupt primitive | 2026-04-19 | 8ff6780 | [260419-nic-add-discord-stop-and-steer-slash-command](./quick/260419-nic-add-discord-stop-and-steer-slash-command/) |
+| 260419-p51 | Multi-agent bearer keys (scope=all) + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs | 2026-04-19 | edecd6e | [260419-p51-multi-agent-bearer-keys-fork-escalation-](./quick/260419-p51-multi-agent-bearer-keys-fork-escalation-/) |
 | Phase 69 P01 | 13 | 3 tasks | 7 files |
 | Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
 | Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
@@ -140,6 +141,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-19 - Completed quick task 260419-nic (Discord /clawcode-interrupt + /clawcode-steer slash commands)
-Stopped at: Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work.
+Last activity: 2026-04-19 - Completed quick task 260419-p51 (multi-agent bearer keys + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs)
+Stopped at: 8 atomic commits on master (NOT pushed). Task 4 (deploy + smoke + rotate OpenClaw + body-capture flip) deferred to orchestrator.
 Resume file: None
