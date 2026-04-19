@@ -394,3 +394,56 @@ export interface ClaudeUsage {
   output_tokens?: number;
   cache_read_input_tokens?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 74 Plan 01 — Caller-identity routing for the OpenClaw-backend path.
+// ---------------------------------------------------------------------------
+
+/** Namespace prefix that distinguishes template-driver requests from native routing. */
+export const OPENCLAW_PREFIX = "openclaw:" as const;
+
+/** Tier token (second colon-segment) → concrete Claude model id. */
+export const TIER_MODEL_MAP = {
+  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-4-7",
+  haiku: "claude-haiku-4-5-20251001",
+} as const;
+export type Tier = keyof typeof TIER_MODEL_MAP;
+
+/** Output of extractCallerIdentity — discriminator between native + template. */
+export type CallerIdentity =
+  | { readonly kind: "clawcode-native"; readonly agentName: string }
+  | {
+      readonly kind: "openclaw-template";
+      readonly callerSlug: string;                      // regex-validated, safe for file paths + logs
+      readonly tier: Tier;                              // sonnet | opus | haiku (defaults to sonnet)
+      readonly soulPrompt: string;                      // may be empty string
+      readonly soulFp: string;                          // sha256(soulPrompt).slice(0,16) — 16 hex chars
+      readonly tools: ClaudeToolDef[] | null;           // Phase 69 translator output, unchanged
+      readonly toolChoice: ClaudeToolChoice | null;
+      readonly toolResults: ClaudeToolResultBlock[];    // pass-through (OpenAI tool role replies)
+    };
+
+/**
+ * Shape the template driver receives from server.ts on the openclaw-template
+ * branch. Carries BOTH the native OpenAiSessionDriver.dispatch fields
+ * (agentName, keyHash, lastUserMessage, clientSystemAppend, tools, toolChoice,
+ * toolResults, signal, xRequestId) AND the template-specific fields
+ * (callerSlug, tier, soulPrompt, soulFp) so the server can pass a single object
+ * that satisfies the driver interface at both layers.
+ */
+export interface TemplateDriverInput {
+  readonly agentName: string;                           // `openclaw:${callerSlug}` for log attribution
+  readonly keyHash: string;                             // row.key_hash (64 hex)
+  readonly callerSlug: string;
+  readonly tier: Tier;
+  readonly soulPrompt: string;
+  readonly soulFp: string;
+  readonly lastUserMessage: string;                     // from Phase 69 translateRequest
+  readonly clientSystemAppend: string | null;           // ignored by template driver; kept for OpenAiSessionDriver conformance
+  readonly tools: ClaudeToolDef[] | null;
+  readonly toolChoice: ClaudeToolChoice | null;
+  readonly toolResults: ClaudeToolResultBlock[];
+  readonly signal: AbortSignal;
+  readonly xRequestId: string;
+}
