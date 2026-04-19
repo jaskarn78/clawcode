@@ -1,7 +1,25 @@
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import {
+  readFile,
+  rename,
+  mkdir,
+  copyFile,
+  open,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Registry, RegistryEntry } from "./types.js";
 import { ManagerError } from "../shared/errors.js";
+import { logger } from "../shared/logger.js";
+
+// 260419-q2z Fix C — warn-log calls go through the base `logger` directly
+// (NOT a child logger) so `vi.spyOn(logger, "warn")` intercepts them in
+// tests. Component is attached as a field on each call instead of via
+// child bindings.
+const log = {
+  warn: (obj: Record<string, unknown>, msg: string): void => {
+    logger.warn({ component: "registry", ...obj }, msg);
+  },
+};
 
 /**
  * Empty registry constant — used as the default when no registry file exists.
@@ -11,14 +29,62 @@ export const EMPTY_REGISTRY: Registry = {
   updatedAt: 0,
 } as const;
 
+// ---------------------------------------------------------------------------
+// 260419-q2z Fix C — DI seam for fsync simulation.
+// Tests inject a fake fsync (e.g. one that rejects EINVAL) to verify the
+// best-effort fsync path. Production leaves this null.
+// ---------------------------------------------------------------------------
+let _fsyncOverride: ((fh: FileHandle) => Promise<void>) | null = null;
+
+/**
+ * Test-only hook to override the internal fsync call with a custom function.
+ * Pass `null` to restore production behavior. DO NOT USE IN PRODUCTION CODE.
+ */
+export function _setFsyncForTests(
+  fn: ((fh: FileHandle) => Promise<void>) | null,
+): void {
+  _fsyncOverride = fn;
+}
+
+/**
+ * Attempt to parse the given path as a registry JSON file. Returns the parsed
+ * registry on success, or null if the file is missing OR unparseable.
+ *
+ * 260419-q2z Fix C — used by {@link readRegistry} to try `path`, then `.bak`,
+ * then `.tmp` (pre-rename state) in sequence before giving up.
+ */
+async function tryReadCandidate(path: string): Promise<Registry | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf-8");
+  } catch (error: unknown) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return null;
+    }
+    // Any other read error (permission, IO) bubbles — the caller decides.
+    throw error;
+  }
+  try {
+    return JSON.parse(raw) as Registry;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read the registry from a JSON file on disk.
  * Returns EMPTY_REGISTRY if the file does not exist.
- * Throws ManagerError if the file contains invalid JSON.
+ *
+ * 260419-q2z Fix C — when the primary file is corrupt, attempts recovery from
+ * `${path}.bak` (the pre-write snapshot) and `${path}.tmp` (pre-rename state
+ * from a mid-write crash) in that order. Throws a {@link ManagerError} with a
+ * `clawcode registry repair` hint ONLY when all three candidates are corrupt
+ * or absent.
  *
  * @param path - Absolute path to the registry JSON file
  */
 export async function readRegistry(path: string): Promise<Registry> {
+  // Primary: read path, parse, done.
   let raw: string;
   try {
     raw = await readFile(path, "utf-8");
@@ -32,16 +98,46 @@ export async function readRegistry(path: string): Promise<Registry> {
   try {
     return JSON.parse(raw) as Registry;
   } catch {
-    const err = new ManagerError(`Corrupt registry file at ${path}: invalid JSON`);
+    // Primary is corrupt. Try recovery candidates in priority order.
+    const bakPath = `${path}.bak`;
+    const bak = await tryReadCandidate(bakPath);
+    if (bak !== null) {
+      log.warn(
+        { path, recoveredFrom: bakPath },
+        "recovered from .bak (primary registry corrupt)",
+      );
+      return bak;
+    }
+    const tmpPath = `${path}.tmp`;
+    const tmp = await tryReadCandidate(tmpPath);
+    if (tmp !== null) {
+      log.warn(
+        { path, recoveredFrom: tmpPath },
+        "recovered from .tmp (pre-rename state)",
+      );
+      return tmp;
+    }
+    const err = new ManagerError(
+      `Corrupt registry file at ${path}: invalid JSON. Run \`clawcode registry repair\` to auto-trim trailing garbage.`,
+    );
     err.name = "ManagerError";
     throw err;
   }
 }
 
 /**
- * Write the registry to disk atomically.
- * Writes to a .tmp file first, then renames (atomic on POSIX).
- * Creates parent directories if they do not exist.
+ * Write the registry to disk atomically with pre-write backup + fsync.
+ *
+ * 260419-q2z Fix C — corruption-proof pipeline:
+ *   1. Copy existing `path` → `path.bak` (skipped on first-ever write).
+ *   2. Open `path.tmp`, write the JSON, best-effort fsync, close.
+ *   3. Rename `path.tmp` → `path` (POSIX atomic inode swap).
+ *
+ * fsync errors are logged at warn and swallowed (ramdisks, tmpfs on some FUSE
+ * mounts, overlayfs, and Docker-for-Mac can reject fsync). The rename step
+ * still runs so the write completes; durability is best-effort.
+ *
+ * Signature preserved: `Promise<void>`. No caller changes required.
  *
  * @param path - Absolute path to the registry JSON file
  * @param registry - The registry state to persist
@@ -53,8 +149,40 @@ export async function writeRegistry(
   const dir = dirname(path);
   await mkdir(dir, { recursive: true });
 
+  const json = JSON.stringify(registry, null, 2);
+
+  // Step 1 — copy current path to .bak before touching anything. Ignore
+  // ENOENT (first-ever write has nothing to back up).
+  const bakPath = `${path}.bak`;
+  try {
+    await copyFile(path, bakPath);
+  } catch (error: unknown) {
+    if (!(isNodeError(error) && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+
+  // Step 2 — open tmp, write, best-effort fsync, close.
   const tmpPath = `${path}.tmp`;
-  await writeFile(tmpPath, JSON.stringify(registry, null, 2), "utf-8");
+  const fh = await open(tmpPath, "w");
+  try {
+    await fh.writeFile(json, "utf-8");
+    try {
+      const fsync = _fsyncOverride ?? ((handle) => handle.sync());
+      await fsync(fh);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn(
+        { path, err: message },
+        "fsync skipped (filesystem does not support fsync)",
+      );
+    }
+  } finally {
+    await fh.close();
+  }
+
+  // Step 3 — atomic rename. Readers see either the pre-rename inode or the
+  // post-rename inode; no torn state possible.
   await rename(tmpPath, path);
 }
 

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
-import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat, writeFile as wf } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   readRegistry,
@@ -10,9 +10,11 @@ import {
   EMPTY_REGISTRY,
   reconcileRegistry,
   STOPPED_SUBAGENT_REAP_TTL_MS,
+  _setFsyncForTests,
   type PrunedEntry,
 } from "../registry.js";
 import type { Registry, RegistryEntry } from "../types.js";
+import { logger } from "../../shared/logger.js";
 
 let testDir: string;
 
@@ -680,6 +682,162 @@ describe("reconcileRegistry", () => {
         { name: "clawdy-sub-legacy", reason: "stale-subagent" },
       ]);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 260419-q2z Fix C — atomic writeRegistry + readRegistry recovery path.
+// ---------------------------------------------------------------------------
+describe("260419-q2z — writeRegistry atomic write + .bak pre-write backup", () => {
+  it("writeRegistry copies existing path to path.bak BEFORE overwriting (second write leaves .bak of FIRST write)", async () => {
+    const path = join(testDir, "registry.json");
+    const first: Registry = { entries: [createEntry("first")], updatedAt: 1 };
+    const second: Registry = { entries: [createEntry("second")], updatedAt: 2 };
+
+    // First write — no prior file, no .bak created.
+    await writeRegistry(path, first);
+    const bakAfterFirst = `${path}.bak`;
+    await expect(stat(bakAfterFirst)).rejects.toThrow();
+
+    // Second write — existing path copied to .bak BEFORE overwrite.
+    await writeRegistry(path, second);
+    const bakRaw = await readFile(bakAfterFirst, "utf-8");
+    const bakParsed = JSON.parse(bakRaw);
+    expect(bakParsed.entries[0].name).toBe("first");
+    expect(bakParsed.updatedAt).toBe(1);
+
+    // Main path reflects the SECOND write.
+    const mainRaw = await readFile(path, "utf-8");
+    expect(JSON.parse(mainRaw).entries[0].name).toBe("second");
+  });
+
+  it("writeRegistry does not create .bak when path does not yet exist", async () => {
+    const path = join(testDir, "fresh.json");
+    await writeRegistry(path, EMPTY_REGISTRY);
+    await expect(stat(`${path}.bak`)).rejects.toThrow();
+  });
+});
+
+describe("260419-q2z — fsync best-effort", () => {
+  afterEach(() => {
+    _setFsyncForTests(null);
+  });
+
+  it("writeRegistry succeeds on a mount where fsync is rejected (EINVAL)", async () => {
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    try {
+      _setFsyncForTests(() => {
+        const err = new Error("bad fd") as NodeJS.ErrnoException;
+        err.code = "EINVAL";
+        return Promise.reject(err);
+      });
+
+      const path = join(testDir, "einval.json");
+      const data: Registry = { entries: [createEntry("einval-agent")], updatedAt: 7 };
+
+      // Must not throw even though fsync rejects.
+      await writeRegistry(path, data);
+
+      const raw = await readFile(path, "utf-8");
+      expect(JSON.parse(raw).entries[0].name).toBe("einval-agent");
+
+      // Warn logged with the exact fsync-skipped phrase.
+      const calls = warnSpy.mock.calls.map((c) => JSON.stringify(c));
+      expect(calls.some((s) => s.includes("fsync skipped"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe("260419-q2z — readRegistry recovery from .bak and .tmp", () => {
+  it("recovers from .bak when path is corrupt JSON", async () => {
+    const path = join(testDir, "registry.json");
+    const validBak: Registry = { entries: [createEntry("bak-winner")], updatedAt: 500 };
+    await wf(path, "{not valid", "utf-8");
+    await wf(`${path}.bak`, JSON.stringify(validBak, null, 2), "utf-8");
+
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    try {
+      const registry = await readRegistry(path);
+      expect(registry.entries[0].name).toBe("bak-winner");
+      expect(registry.updatedAt).toBe(500);
+      const calls = warnSpy.mock.calls.map((c) => JSON.stringify(c));
+      expect(calls.some((s) => s.includes("recovered from .bak"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("prefers path over .bak when BOTH are valid", async () => {
+    const path = join(testDir, "registry.json");
+    const valid: Registry = { entries: [createEntry("main-winner")], updatedAt: 2 };
+    const bak: Registry = { entries: [createEntry("bak-loser")], updatedAt: 1 };
+    await wf(path, JSON.stringify(valid, null, 2), "utf-8");
+    await wf(`${path}.bak`, JSON.stringify(bak, null, 2), "utf-8");
+
+    const registry = await readRegistry(path);
+    expect(registry.entries[0].name).toBe("main-winner");
+  });
+
+  it("recovers from .tmp when path is corrupt AND .bak is absent (mid-rename crash)", async () => {
+    const path = join(testDir, "registry.json");
+    const validTmp: Registry = { entries: [createEntry("tmp-winner")], updatedAt: 9 };
+    await wf(path, "garbage{{", "utf-8");
+    await wf(`${path}.tmp`, JSON.stringify(validTmp, null, 2), "utf-8");
+
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    try {
+      const registry = await readRegistry(path);
+      expect(registry.entries[0].name).toBe("tmp-winner");
+      const calls = warnSpy.mock.calls.map((c) => JSON.stringify(c));
+      expect(calls.some((s) => s.includes("recovered from .tmp"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("throws ManagerError with repair hint when path AND .bak AND .tmp are all corrupt", async () => {
+    const path = join(testDir, "registry.json");
+    await wf(path, "{garbage", "utf-8");
+    await wf(`${path}.bak`, "also broken", "utf-8");
+    await wf(`${path}.tmp`, "{still broken", "utf-8");
+
+    await expect(readRegistry(path)).rejects.toThrow(/Corrupt registry file at /);
+    await expect(readRegistry(path)).rejects.toThrow(/clawcode registry repair/);
+  });
+
+  it("regression — recovers from .bak when path was truncated mid-write (today's outage shape)", async () => {
+    const path = join(testDir, "registry.json");
+    const truncated = '{"entries":[{"name":"clawdy","status":"running"';
+    const validBak: Registry = {
+      entries: [createEntry("recovered-clawdy")],
+      updatedAt: 777,
+    };
+    await wf(path, truncated, "utf-8");
+    await wf(`${path}.bak`, JSON.stringify(validBak, null, 2), "utf-8");
+
+    const registry = await readRegistry(path);
+    expect(registry.entries[0].name).toBe("recovered-clawdy");
+    expect(registry.updatedAt).toBe(777);
+  });
+});
+
+describe("260419-q2z — writeRegistry concurrent-safety light check", () => {
+  it("completes even when tmp file already exists from a prior interrupted write", async () => {
+    const path = join(testDir, "registry.json");
+    const tmpPath = `${path}.tmp`;
+    // Pre-create stale tmp garbage.
+    await wf(tmpPath, "{{stale-garbage", "utf-8");
+
+    const data: Registry = { entries: [createEntry("survivor")], updatedAt: 42 };
+    await writeRegistry(path, data);
+
+    // No residual tmp after the write.
+    await expect(stat(tmpPath)).rejects.toThrow();
+    // Main path holds the NEW registry.
+    const raw = await readFile(path, "utf-8");
+    expect(JSON.parse(raw).entries[0].name).toBe("survivor");
   });
 });
 
