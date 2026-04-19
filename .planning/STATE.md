@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Phase complete — ready for verification
+status: Milestone complete
 stopped_at: "Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work."
-last_updated: "2026-04-19T04:16:14.891Z"
+last_updated: "2026-04-19T04:21:31.809Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 
 ## Current Position
 
-Phase: 72 (Image Generation MCP) — EXECUTING
-Plan: 2 of 2
+Phase: 72
+Plan: Not started
 
 ## Performance Metrics
 

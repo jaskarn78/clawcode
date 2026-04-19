@@ -195,7 +195,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
 | 71. Web Search MCP | 2/2 | Complete    | 2026-04-19 |
-| 72. Image Generation MCP | 2/2 | Complete   | 2026-04-19 |
+| 72. Image Generation MCP | 2/2 | Complete    | 2026-04-19 |
 
 ---
 
