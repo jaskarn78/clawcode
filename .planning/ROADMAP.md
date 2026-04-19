@@ -181,7 +181,10 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   3. The assembled `conversation_context` brief is cached per-agent and reused across turns within a session — invalidated only on session end OR when a newly terminated session summary becomes available; cache hit measurably avoids the full `assembleConversationBrief` cost on subsequent turns.
   4. `agentReadinessWaitMs` is tuned to a value reflecting observed warm-path latency (~15ms, not 2000ms) and the post-restart first-request path remains correct — 503 Retry-After still fires when genuine readiness can't be achieved, but typical requests no longer burn ~2s of idle wait.
   5. Anthropic API prompt-cache hit rate on the endpoint remains ≥ v1.7 SLO across all changes — measured via existing cache-usage telemetry; the Discord bridge path shows no latency or hit-rate regression.
-**Plans**: TBD (run `/gsd:plan-phase 73`)
+**Plans**: 3 plans
+  - [ ] 73-01-PLAN.md — PersistentSessionAdapter + serial turn queue + crash recovery (LAT-01)
+  - [ ] 73-02-PLAN.md — ConversationBriefCache + readiness-wait 2000→300ms tune (LAT-02, LAT-04)
+  - [ ] 73-03-PLAN.md — openai.chat_completion TTFB span + prompt-cache non-regression + E2E smoke (LAT-03, LAT-05)
 **UI hint**: no
 
 ## Progress
