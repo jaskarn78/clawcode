@@ -4,6 +4,7 @@ import {
   mkdir,
   copyFile,
   open,
+  unlink,
   type FileHandle,
 } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -147,44 +148,88 @@ export async function writeRegistry(
   registry: Registry,
 ): Promise<void> {
   const dir = dirname(path);
-  await mkdir(dir, { recursive: true });
 
-  const json = JSON.stringify(registry, null, 2);
-
-  // Step 1 — copy current path to .bak before touching anything. Ignore
-  // ENOENT (first-ever write has nothing to back up).
-  const bakPath = `${path}.bak`;
   try {
-    await copyFile(path, bakPath);
-  } catch (error: unknown) {
-    if (!(isNodeError(error) && error.code === "ENOENT")) {
-      throw error;
-    }
-  }
+    await mkdir(dir, { recursive: true });
 
-  // Step 2 — open tmp, write, best-effort fsync, close.
-  const tmpPath = `${path}.tmp`;
-  const fh = await open(tmpPath, "w");
-  try {
-    await fh.writeFile(json, "utf-8");
+    const json = JSON.stringify(registry, null, 2);
+
+    // Step 1 — copy current path to .bak before touching anything. Ignore
+    // ENOENT (first-ever write has nothing to back up).
+    const bakPath = `${path}.bak`;
     try {
-      const fsync = _fsyncOverride ?? ((handle) => handle.sync());
-      await fsync(fh);
+      await copyFile(path, bakPath);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.warn(
-        { path, err: message },
-        "fsync skipped (filesystem does not support fsync)",
-      );
+      if (!(isNodeError(error) && error.code === "ENOENT")) {
+        throw error;
+      }
     }
-  } finally {
-    await fh.close();
-  }
 
-  // Step 3 — atomic rename. Readers see either the pre-rename inode or the
-  // post-rename inode; no torn state possible.
-  await rename(tmpPath, path);
+    // Step 2 — open tmp, write, best-effort fsync, close.
+    //
+    // Each concurrent write uses a unique PID+counter-suffixed staging path
+    // so two writers cannot truncate each other's staging file mid-flight.
+    // The canonical `${path}.tmp` is cleaned up on the happy path so
+    // readRegistry's .tmp recovery only returns a result after a real
+    // mid-rename crash (not a test teardown race).
+    const tmpPath = `${path}.tmp`;
+    const stagingPath = `${tmpPath}.${process.pid}.${_stagingCounter++}`;
+    const fh = await open(stagingPath, "w");
+    try {
+      await fh.writeFile(json, "utf-8");
+      try {
+        const fsync = _fsyncOverride ?? ((handle) => handle.sync());
+        await fsync(fh);
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        log.warn(
+          { path, err: message },
+          "fsync skipped (filesystem does not support fsync)",
+        );
+      }
+    } finally {
+      await fh.close();
+    }
+
+    // Step 3 — atomic rename stagingPath → path. POSIX atomic inode swap:
+    // readers see either the pre-rename inode or the post-rename inode; no
+    // torn state possible.
+    await rename(stagingPath, path);
+
+    // Best-effort cleanup of any stale canonical tmp left behind by a prior
+    // interrupted write (pre-rename crash). Ignore ENOENT.
+    try {
+      await unlink(tmpPath);
+    } catch (error: unknown) {
+      if (!(isNodeError(error) && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+  } catch (error: unknown) {
+    // ENOENT at the outermost level means the target directory was
+    // unlinked during the write — either a test teardown race (rm -rf on
+    // tmpDir while a detached crash-write was still in flight) or a
+    // concurrent operator `rm` of ~/.clawcode/. Neither is a programming
+    // error in SessionManager; the registry simply no longer exists. Log
+    // at debug and swallow. Any other error propagates normally.
+    if (isNodeError(error) && error.code === "ENOENT") {
+      log.warn(
+        { path, err: error.message },
+        "writeRegistry: target path vanished mid-write (likely teardown race) — skipping",
+      );
+      return;
+    }
+    throw error;
+  }
 }
+
+/**
+ * 260419-q2z Fix C — per-process staging counter. Used to build a unique tmp
+ * path so concurrent writeRegistry calls on the same file cannot truncate
+ * each other's staging file before rename.
+ */
+let _stagingCounter = 0;
 
 /**
  * Create a new registry entry with default values.
