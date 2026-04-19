@@ -119,6 +119,13 @@ import { createBraveClient } from "../search/providers/brave.js";
 import { createExaClient } from "../search/providers/exa.js";
 import { fetchUrl } from "../search/fetcher.js";
 import type { IpcSearchToolCallParams } from "../ipc/types.js";
+// Phase 72 — image generation MCP.
+import { handleImageToolCall } from "../image/daemon-handler.js";
+import { createOpenAiImageClient } from "../image/providers/openai.js";
+import { createMiniMaxImageClient } from "../image/providers/minimax.js";
+import { createFalImageClient } from "../image/providers/fal.js";
+import type { IpcImageToolCallParams } from "../ipc/types.js";
+import type { ImageBackend, ImageProvider } from "../image/types.js";
 
 /**
  * Augment a LatencyReport's segments with `slo_status`, `slo_threshold_ms`,
@@ -1055,6 +1062,29 @@ export async function startDaemon(
     );
   }
 
+  // 9e. Phase 72 — Image generation MCP clients.
+  //
+  // Lazy API-key reads inside each provider method keep daemon boot cheap
+  // even when OPENAI_API_KEY / MINIMAX_API_KEY / FAL_API_KEY are absent.
+  // No warm-path probe needed — HTTP clients are ephemeral; missing keys
+  // surface as `invalid_input` on first tool call.
+  const imageCfg = config.defaults.image;
+  const imageProviders: Record<ImageBackend, ImageProvider> = {
+    openai: createOpenAiImageClient(imageCfg),
+    minimax: createMiniMaxImageClient(imageCfg),
+    fal: createFalImageClient(imageCfg),
+  };
+  if (imageCfg.enabled) {
+    log.info(
+      { backend: imageCfg.backend, workspaceSubdir: imageCfg.workspaceSubdir },
+      "image MCP clients ready (lazy — no boot-time network)",
+    );
+  } else {
+    log.info(
+      "image MCP disabled (defaults.image.enabled=false); skipping",
+    );
+  }
+
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
   // owned by the OpenAiEndpointHandle below (no double-open, no extra
@@ -1110,6 +1140,21 @@ export async function startDaemon(
           fetcher: fetchUrl,
         },
         params as unknown as IpcSearchToolCallParams,
+      );
+    }
+    // Phase 72 — image-tool-call is intercepted BEFORE routeMethod
+    // (same closure pattern as browser-tool-call + search-tool-call).
+    // The daemon-owned image provider clients + per-agent UsageTracker
+    // lookup are closed over here.
+    if (method === "image-tool-call") {
+      return handleImageToolCall(
+        {
+          imageConfig: imageCfg,
+          resolvedAgents,
+          providers: imageProviders,
+          usageTrackerLookup: (agent) => manager.getUsageTracker(agent),
+        },
+        params as unknown as IpcImageToolCallParams,
       );
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);

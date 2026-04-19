@@ -220,7 +220,7 @@ For Discord, set the bot token in `clawcode.yaml`:
 
 ## MCP Servers
 
-Three MCP servers are **auto-injected** for every agent — no configuration needed:
+Four MCP servers are **auto-injected** for every agent — no configuration needed:
 
 | Server | Condition | Tools Provided |
 |--------|-----------|----------------|
@@ -228,6 +228,7 @@ Three MCP servers are **auto-injected** for every agent — no configuration nee
 | `1password` | When `OP_SERVICE_ACCOUNT_TOKEN` is set | Secure credential access via 1Password |
 | `browser` | When `defaults.browser.enabled: true` (default) | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_extract`, `browser_wait_for` |
 | `search` | When `defaults.search.enabled: true` (default) | `web_search`, `web_fetch_url` |
+| `image` | When `defaults.image.enabled: true` (default) | `image_generate`, `image_edit`, `image_variations` |
 
 Add custom MCP servers in `clawcode.yaml`:
 
@@ -565,6 +566,110 @@ The smoke drives `web_search → web_fetch_url → web_search (repeat)` against 
 - No `robots.txt` enforcement — agents are expected to respect site ToS themselves. Blanket enforcement would be too aggressive for an assistant tool.
 - Image / news / video sub-APIs are deferred to v2.x (text web search only for v2.0).
 - Alternate backends (Google CSE, SerpAPI, DuckDuckGo) are deferred to v2.x.
+
+## Image Generation (Phase 72)
+
+Every agent gets text-to-image generation, image editing, and image variations via the auto-injected `image` MCP server (the `clawcode image-mcp` stdio subprocess — a thin translator to the daemon's shared OpenAI / MiniMax / fal.ai image clients). Output is written atomically to the agent workspace so the returned path can be handed directly to the existing `send_attachment` tool for Discord delivery — no new delivery surface is introduced.
+
+### Setup
+
+Set at minimum `OPENAI_API_KEY` in the environment before starting the daemon (OpenAI is the default backend). Alternate backends have their own keys:
+
+```bash
+# In clawcode.yaml or systemd EnvironmentFile:
+OPENAI_API_KEY=sk-proj-...          # default backend
+MINIMAX_API_KEY=...                  # optional — when defaults.image.backend="minimax"
+FAL_API_KEY=...                      # optional — when defaults.image.backend="fal"
+```
+
+All three keys are read lazily on the first tool call — a missing key surfaces as `invalid_input` rather than a daemon-boot crash, so the daemon stays bootable on a dev box with only one backend configured.
+
+### Tools
+
+| Tool | Args | Returns | Backends |
+|------|------|---------|----------|
+| `image_generate` | `prompt: string, size?: "256x256"\|"512x512"\|"1024x1024"\|"1024x1792"\|"1792x1024" (default "1024x1024"), style?, backend?, model?, n?: 1-4 (default 1)` | `{ images: [{ path, url?, size, backend, model, prompt, cost_cents }], total_cost_cents }` | openai, minimax, fal |
+| `image_edit` | `imagePath: string, prompt: string, backend?, maskPath?, model?, size?` | `{ images: [...], total_cost_cents }` | openai, fal — MiniMax returns `unsupported_operation` |
+| `image_variations` | `imagePath: string, n?: 1-4 (default 1), backend?, model?, size?` | `{ images: [...], total_cost_cents }` | openai — MiniMax + fal return `unsupported_operation` |
+
+Backend support matrix:
+
+| Backend | Default model | Generate | Edit | Variations |
+|---------|---------------|----------|------|------------|
+| OpenAI | `gpt-image-1` (alt: `dall-e-3`, `dall-e-2`) | yes | yes | yes |
+| MiniMax | `image-01` | yes | no | no |
+| fal.ai | `fal-ai/flux-pro` (alt: `fal-ai/flux-schnell`, `fal-ai/flux/dev/image-to-image`) | yes | yes (image-to-image) | no |
+
+Backends where an op is unsupported return a helpful `unsupported_operation` error naming the backends that DO support it — the agent can self-route without asking:
+
+```
+MiniMax does not support image_edit. Backends with edit support: openai, fal.
+```
+
+Error taxonomy (never throws — always `{ error: { type, message, backend?, status? } }`): `rate_limit`, `invalid_input`, `backend_unavailable`, `unsupported_operation`, `content_policy`, `network`, `size_limit`, `internal`.
+
+### Discord delivery
+
+Generated images are written atomically to `<agent-workspace>/generated-images/<timestamp>-<id>.png` (configurable via `defaults.image.workspaceSubdir`). Agents pass the returned `path` to the existing `send_attachment` MCP tool:
+
+```
+# Clawdy in a Discord channel:
+User> generate a cat in a tophat and post it
+# Clawdy calls image_generate → receives {path, ...}
+# Clawdy calls send_attachment(channel, path) → Discord upload
+```
+
+No new Discord delivery surface — pure composition of existing tools.
+
+### Cost tracking
+
+Every successful generate / edit / variations call records a row in the per-agent `usage_events` SQLite store with `category="image"`, composite model `${backend}:${model}`, `count`, and `cost_cents` from the rate-card table in `src/image/costs.ts`. View with `clawcode costs` — image rows are distinct from token rows via the new Category column:
+
+```
+$ clawcode costs --period today
+Agent     Category  Model                     Tokens In  Tokens Out  Cost (USD)
+--------  --------  ------------------------  ---------  ----------  ----------
+clawdy    tokens    haiku                     150,000    25,000      $0.0688
+clawdy    image     openai:gpt-image-1        0          0           $0.1200
+clawdy    image     fal:fal-ai/flux-pro       0          0           $0.0500
+                                                                     ----------
+TOTAL                                         150,000    25,000      $0.2388
+```
+
+Pricing is best-effort per published rate cards (OpenAI/MiniMax/fal docs); override sources are listed in `src/image/costs.ts`.
+
+### Intra-turn cache
+
+`image_generate`, `image_edit`, and `image_variations` are deliberately **NOT** on the v1.7 idempotent-tool whitelist. Image generation is non-deterministic — the same prompt yields different images each call — so caching would be a correctness bug. Each call hits network fresh even within a single Turn.
+
+### Opt-out
+
+Set `defaults.image.enabled: false` in `clawcode.yaml` to disable the image MCP globally — no auto-inject, agents will not see the tools. Agents can also override the auto-inject by listing their own `image` entry in `mcpServers:`.
+
+### End-to-end smoke
+
+```bash
+# daemon must be running with OPENAI_API_KEY (or MINIMAX/FAL_API_KEY) set
+node scripts/image-smoke.mjs
+# or: node scripts/image-smoke.mjs clawdy "a cat in a tophat"
+```
+
+Expected output on success:
+
+```
+Phase 72 image smoke — agent=clawdy prompt="a cat in a tophat" socket=/home/user/.clawcode/manager/clawcode.sock
+[1/1] image_generate — backend=openai, model=gpt-image-1 (8341ms)
+       path: /home/user/.clawcode/agents/clawdy/generated-images/1734...-abc.png
+SMOKE PASS — image written to <path> (284521 bytes, cost 4¢)
+```
+
+Exits 0 on success, 2 on daemon-not-running, 1 on assertion failure (missing key, network error, empty file, etc.).
+
+### Known limitations
+
+- OpenAI DALL-E 2 / 3 / gpt-image-1 are the only models covered by the built-in pricing table; custom models return `cost_cents: 0` (generation succeeds, cost row is just under-reported).
+- fal.ai returns hosted URLs with ~1h expiry — we fetch bytes immediately and persist to disk; the hosted URL on the returned metadata is for logging only.
+- Stable Diffusion, Midjourney, video generation, inpainting with precise masks — all deferred to v2.x.
 
 ## Deployment (Ubuntu)
 

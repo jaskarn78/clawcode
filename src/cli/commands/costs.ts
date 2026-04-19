@@ -8,6 +8,12 @@ import type { CostByAgentModel } from "../../usage/types.js";
 /**
  * Format cost data as an aligned table with totals.
  *
+ * Phase 72 extension — adds a "Category" column between "Agent" and
+ * "Model" so image-generation rows (category="image") are visually
+ * distinct from token rows (category="tokens" / null / undefined).
+ * Back-compat: legacy rows with `category` null or undefined display
+ * as "tokens".
+ *
  * @param rows - Array of CostByAgentModel entries
  * @returns Formatted table string
  */
@@ -16,10 +22,11 @@ export function formatCostsTable(rows: readonly CostByAgentModel[]): string {
     return "No cost data for the selected period.";
   }
 
-  const headers = ["Agent", "Model", "Tokens In", "Tokens Out", "Cost (USD)"];
+  const headers = ["Agent", "Category", "Model", "Tokens In", "Tokens Out", "Cost (USD)"];
 
   const dataRows = rows.map((r) => [
     r.agent,
+    r.category ?? "tokens",
     r.model,
     r.tokens_in.toLocaleString(),
     r.tokens_out.toLocaleString(),
@@ -29,7 +36,7 @@ export function formatCostsTable(rows: readonly CostByAgentModel[]): string {
   const totalIn = rows.reduce((sum, r) => sum + r.tokens_in, 0);
   const totalOut = rows.reduce((sum, r) => sum + r.tokens_out, 0);
   const totalCost = rows.reduce((sum, r) => sum + r.cost_usd, 0);
-  const totalRow = ["TOTAL", "", totalIn.toLocaleString(), totalOut.toLocaleString(), `$${totalCost.toFixed(4)}`];
+  const totalRow = ["TOTAL", "", "", totalIn.toLocaleString(), totalOut.toLocaleString(), `$${totalCost.toFixed(4)}`];
 
   const allRows = [headers, ...dataRows, totalRow];
 

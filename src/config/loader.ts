@@ -123,6 +123,22 @@ export function resolveAgentConfig(
     });
   }
 
+  // Phase 72 — auto-inject the image MCP server so every agent gets
+  // image_generate + image_edit + image_variations. The daemon owns the
+  // OpenAI/MiniMax/fal provider clients; this subprocess is a thin IPC
+  // translator. Gated by defaults.image.enabled (default true).
+  // CLAWCODE_AGENT env is consumed by the subprocess as the default
+  // agent identity for tool calls (src/image/mcp-server.ts).
+  const imageEnabled = defaults.image?.enabled !== false;
+  if (imageEnabled && !resolvedMcpMap.has("image")) {
+    resolvedMcpMap.set("image", {
+      name: "image",
+      command: "clawcode",
+      args: ["image-mcp"],
+      env: { CLAWCODE_AGENT: agent.name },
+    });
+  }
+
   const mcpServers = [...resolvedMcpMap.values()].map((s) => ({
     name: s.name,
     command: s.command,
