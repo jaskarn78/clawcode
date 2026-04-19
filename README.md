@@ -26,12 +26,16 @@ ClawCode turns Claude Code into a multi-agent platform. Each agent is a persiste
 - **Session-boundary summarization** — Haiku compresses each ended/crashed session into a standard MemoryEntry that auto-participates in search, decay, tier management, and knowledge graph linking (v1.9)
 - **Resume auto-injection** — agents wake up with a structured brief of recent sessions in a dedicated `conversation_context` budget section, with gap-skip for short restarts (v1.9)
 - **Conversation search + deep retrieval** — `memory_lookup` MCP tool accepts `scope="conversations"`/`"all"` + `page`; FTS5 raw-turn search + semantic summary search with tunable time-decay weighting and paginated results (v1.9)
+- **OpenAI-compatible HTTP endpoint** — `POST /v1/chat/completions` (SSE streaming) + `GET /v1/models` on the daemon; every agent reachable from any OpenAI-compatible client (Python SDK, LangChain, LibreChat, curl) with bearer-key-per-session continuity and OpenAI↔Claude tool-use translation (v2.0)
+- **Browser automation MCP** — auto-injected Playwright-powered server; every agent can `browser_navigate` / `browser_screenshot` (vision-ready) / `browser_click` / `browser_fill` / `browser_extract` (Readability) / `browser_wait_for` against a real headless Chromium with per-agent persistent profile (v2.0)
+- **Web search MCP** — auto-injected Brave (primary) / Exa (optional) backend; `web_search` + `web_fetch_url` (Readability-cleaned article text); intra-turn idempotent cache preventing double-charging on repeat queries (v2.0)
+- **Image generation MCP** — auto-injected OpenAI Images / MiniMax / fal.ai backends; `image_generate` / `image_edit` / `image_variations` persist to workspace, deliver to Discord via `send_attachment`, spend surfaces in `clawcode costs` as a new category (v2.0)
 - **Inter-agent messaging** through filesystem-based inboxes
 - **Model escalation** — agents on Sonnet can escalate to Opus when they need it
 - **Budget enforcement** — per-agent token limits with Discord alerts
 - **Health monitoring** — context fill tracking, automatic zone alerts to Discord
 - **Web dashboard** — real-time agent status via SSE + latency / prompt cache / tool-call / warm-path / task-graph panels
-- **MCP tools auto-injected** — every agent gets `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `delegate_task`, `send_message` out of the box
+- **MCP tools auto-injected** — every agent gets `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `delegate_task`, `send_message`, plus `browser_*`, `web_search` / `web_fetch_url`, and `image_generate` / `image_edit` / `image_variations` out of the box (v2.0)
 - **1Password integration** — auto-injected when `OP_SERVICE_ACCOUNT_TOKEN` is set
 - **Self-updating** — `clawcode update` pulls, rebuilds, and restarts from git
 
