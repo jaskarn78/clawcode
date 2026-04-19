@@ -6,6 +6,7 @@ import {
   type SkillUsageTracker,
   extractSkillMentions,
 } from "../usage/skill-usage-tracker.js";
+import { createPersistentSessionHandle } from "./persistent-session-handle.js";
 
 /**
  * Phase 52 Plan 02 — per-turn prefixHash provider contract.
@@ -318,9 +319,12 @@ export function buildSystemPromptOption(
  * SessionAdapter backed by the Claude Agent SDK query() API.
  * Uses dynamic imports so the file compiles even without the SDK installed.
  *
- * Each send/sendAndCollect/sendAndStream call creates a fresh query() with
- * the `resume` option for session continuity. This per-turn-query approach
- * avoids complex async coordination while preserving multi-turn context.
+ * Phase 73 Plan 01: `createSession`/`resumeSession` both route through
+ * `createPersistentSessionHandle` — one long-lived `sdk.query({ prompt:
+ * asyncIterable })` per agent lifetime (streaming input mode). Eliminates the
+ * per-turn CLI subprocess spawn that dominated TTFB on warm agents. The
+ * legacy per-turn-query shape (`wrapSdkQuery`) is retained ONLY as the backing
+ * factory for `createTracedSessionHandle` (test-only export).
  */
 export class SdkSessionAdapter implements SessionAdapter {
   async createSession(
@@ -344,17 +348,18 @@ export class SdkSessionAdapter implements SessionAdapter {
       ...(mcpServers ? { mcpServers } : {}),
     };
 
-    // Initial query to establish the session
+    // Phase 73 Plan 01 — initial drain establishes the session ID from disk,
+    // then the persistent handle owns ONE long-lived sdk.query({ prompt:
+    // asyncIterable }) for the rest of the agent's lifetime. The drain query
+    // is a throwaway — its CLI subprocess exits after emitting the `result`.
     const initialQuery = sdk.query({ prompt: "Session initialized.", options: stripHandleOnlyFields(baseOptions) });
-    const { sessionId, query } = await drainInitialQuery(initialQuery);
+    const { sessionId } = await drainInitialQuery(initialQuery);
 
-    return wrapSdkQuery(
-      query,
+    return createPersistentSessionHandle(
       sdk,
       baseOptions,
       sessionId,
       usageCallback,
-      undefined,
       prefixHashProvider,
       skillTracking,
     );
@@ -383,13 +388,12 @@ export class SdkSessionAdapter implements SessionAdapter {
       ...(mcpServers ? { mcpServers } : {}),
     };
 
-    return wrapSdkQuery(
-      undefined,
+    // Phase 73 Plan 01 — persistent handle (no per-turn sdk.query spawn).
+    return createPersistentSessionHandle(
       sdk,
       baseOptions,
       sessionId,
       usageCallback,
-      undefined,
       prefixHashProvider,
       skillTracking,
     );
@@ -503,12 +507,17 @@ function extractUsage(
 }
 
 /**
- * Wrap the SDK query() API into a SessionHandle.
+ * Wrap the SDK query() API into a SessionHandle — **legacy per-turn-query**.
+ *
+ * @deprecated Phase 73 Plan 01 — production `SdkSessionAdapter.createSession`
+ * and `resumeSession` now route through `createPersistentSessionHandle` (one
+ * long-lived `sdk.query({ prompt: asyncIterable })` per agent lifetime). This
+ * function is retained ONLY as the backing factory for `createTracedSessionHandle`,
+ * a test-only export used by existing per-turn span + cache telemetry tests.
+ * NO production code path reaches this function anymore.
  *
  * Uses a per-turn-query pattern: each send/sendAndCollect/sendAndStream creates
- * a fresh query() call with `resume: sessionId` for session continuity. This is
- * simpler than managing a persistent generator with streamInput() and avoids
- * complex async coordination.
+ * a fresh query() call with `resume: sessionId` for session continuity.
  */
 function wrapSdkQuery(
   _initialQuery: SdkQuery | undefined,
