@@ -91,6 +91,8 @@ describe("IPC_METHODS", () => {
       "browser-tool-call",
       // Web search MCP (Phase 71)
       "search-tool-call",
+      // Image generation MCP (Phase 72)
+      "image-tool-call",
     ]);
   });
 });
