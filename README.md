@@ -220,12 +220,13 @@ For Discord, set the bot token in `clawcode.yaml`:
 
 ## MCP Servers
 
-Two MCP servers are **auto-injected** for every agent — no configuration needed:
+Three MCP servers are **auto-injected** for every agent — no configuration needed:
 
 | Server | Condition | Tools Provided |
 |--------|-----------|----------------|
 | `clawcode` | Always | `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `agent_status`, `send_message` |
 | `1password` | When `OP_SERVICE_ACCOUNT_TOKEN` is set | Secure credential access via 1Password |
+| `browser` | When `defaults.browser.enabled: true` (default) | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_extract`, `browser_wait_for` |
 
 Add custom MCP servers in `clawcode.yaml`:
 
@@ -438,6 +439,79 @@ Runs OPENAI-01 (non-stream), OPENAI-02 (stream), OPENAI-03 (models list), and OP
 - No rate limiting or billing metering (v2.1 territory).
 - No `/v1/embeddings` or legacy `/v1/completions` (out of scope).
 - Admin key-management is CLI only (no admin API).
+
+## Browser Automation (Phase 70)
+
+Every agent gets a full headless Chromium browser via the auto-injected `browser` MCP server (the `clawcode browser-mcp` stdio subprocess — a thin translator to the daemon's shared Chromium singleton). Six tools cover the common web-automation surface; cookies, localStorage, and IndexedDB persist across daemon restarts via a per-agent `storageState` on disk.
+
+### First-run install
+
+```bash
+# One-time (needs network — downloads ~200MB Chromium shell):
+npx playwright install chromium --only-shell
+
+# On a fresh Ubuntu/Debian box (needs sudo, installs libnss3/libatk/etc):
+sudo npx playwright install-deps chromium
+```
+
+The daemon hard-fails at startup if the Chromium install is missing — the error message names the exact install command.
+
+### Tools
+
+| Tool | Args | Returns |
+|------|------|---------|
+| `browser_navigate` | `url: string, waitUntil?: "load"\|"domcontentloaded"\|"networkidle", timeoutMs?: number` | `{ url, title, status }` |
+| `browser_screenshot` | `fullPage?: boolean, savePath?: string` | `{ path, bytes, inlineBase64? }` (base64 only when under `maxScreenshotInlineBytes`) |
+| `browser_click` | `selector: string, timeoutMs?: number` | `{ clicked: true, selector, newUrl? }` |
+| `browser_fill` | `selector: string, value: string, timeoutMs?: number` | `{ filled: true, selector }` |
+| `browser_extract` | `mode: "selector"\|"readability", selector?: string` | `{ text, html?, metadata? }` (readability returns title, byline, publishedTime, etc.) |
+| `browser_wait_for` | `selector?: string, url?: string, timeoutMs?: number` | `{ matched: boolean, elapsedMs }` (structured timeout — never throws) |
+
+Agent steering baked into the tool descriptions:
+
+- `browser_navigate` — avoids `networkidle` as default (hangs on SPAs).
+- `browser_click / fill / wait_for` — prefer `getByRole() / getByTestId() / getByText()` selectors over raw CSS.
+- `browser_screenshot` — path-based workflow for repeats (avoid filling conversation history with base64 payloads).
+
+### Opt-out
+
+Set `defaults.browser.enabled: false` in `clawcode.yaml` to disable the browser MCP globally — no Chromium process, no auto-inject. Agents can also override the auto-inject by listing their own `browser` entry in `mcpServers:`.
+
+### End-to-end smoke
+
+```bash
+# daemon must be running
+node scripts/browser-smoke.mjs
+# or: node scripts/browser-smoke.mjs clawdy https://example.com
+```
+
+The smoke drives `browser_navigate → browser_screenshot → browser_extract(readability)` against https://example.com and asserts the extracted text contains "Example Domain". Exits 0 on success.
+
+### Example (via OpenAI SDK — Phase 69 endpoint)
+
+Because MCP servers are injected at agent-session creation, you can drive the browser through the Phase-69 OpenAI-compatible endpoint — no Discord round-trip needed:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:3101/v1", api_key="ck_clawdy_XXXX")
+response = client.chat.completions.create(
+    model="clawdy",
+    messages=[{"role": "user", "content": "Navigate to https://example.com, screenshot it, and summarize the page."}],
+)
+print(response.choices[0].message.content)
+```
+
+The agent receives the `browser_*` tools in its system prompt and will plan, navigate, screenshot, and extract — all within a single turn.
+
+### Caveat
+
+Chromium adds ~200-400MB RSS to the daemon baseline. Measure at scale with:
+
+```bash
+ps -o rss -p $(pgrep -f clawcoded)
+```
+
+v2.1 may revisit shared-Chromium vs. per-agent Chromium if the N-agent footprint becomes an issue.
 
 ## Deployment (Ubuntu)
 
