@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
 status: Ready to execute
-stopped_at: Completed 70-01-PLAN.md — deps + browserConfigSchema + BrowserManager singleton. 2629 tests green. Plan 01 complete; Plan 02 (MCP tool handlers) ready.
-last_updated: "2026-04-19T01:07:48.775Z"
+stopped_at: Completed 70-02-PLAN.md — 6 pure tool handlers + MCP stdio subprocess + CLI subcommand + IPC types. 94/94 browser tests green. Plan 03 ready.
+last_updated: "2026-04-19T01:32:07.691Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Phase: 70 (Browser Automation MCP) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -72,6 +72,11 @@ Recent decisions affecting current work:
 - [Phase 70-browser-automation-mcp]: Option 2 architecture locked: shared chromium.launch() + per-agent newContext({ storageState }) — Pitfall 1 guard via grep, Pitfall 2 (--no-sandbox) absent
 - [Phase 70-browser-automation-mcp]: Plan 70-01: BrowserManager warm/getContext/close mirrors embedder.ts warmPromise pattern; DI driver seam lets manager tests run without real Chromium
 - [Phase 70-browser-automation-mcp]: Plan 70-01: storageState persistence uses atomic .tmp → rename with indexedDB:true; zero-byte guard (Pitfall 10) returns undefined on partial-write recovery; debounced 5s saver collapses burst writes
+- [Phase 70-browser-automation-mcp]: Plan 70-02: tools.ts stays PURE — MCP content envelope shaping lives in mcp-server.ts; 35 test cases run against vi.fn() BrowserContext mock with no Chromium
+- [Phase 70-browser-automation-mcp]: Plan 70-02: action-timeout on click/fill maps to element_not_found (common root cause = selector never actionable); browser_wait_for keeps 'timeout' type for BROWSER-05 contract
+- [Phase 70-browser-automation-mcp]: Plan 70-02: agent-name resolution precedence arg > CLAWCODE_AGENT env > invalid_argument error — no IPC round-trip on the error path
+- [Phase 70-browser-automation-mcp]: Plan 70-02: __testOnly_buildHandler DI seam — MCP SDK doesn't expose clean tool introspection; returning the exact registered handler lets tests pin the forward-to-daemon contract without a real StdioServerTransport
+- [Phase 70-browser-automation-mcp]: Plan 70-02: src/ipc/types.ts created as new module — project previously kept IPC types in protocol.ts (Zod schemas); Phase 70 introduces a separate types module so Plan 02 declares the contract without touching protocol.ts's IPC_METHODS enum (Plan 03 appends)
 
 ### Roadmap Evolution
 
@@ -100,9 +105,10 @@ None yet.
 | Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
 | Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
 | Phase 70-browser-automation-mcp P01 | 15min | 3 tasks | 9 files |
+| Phase 70-browser-automation-mcp P02 | 20min | 3 tasks | 14 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 70-01-PLAN.md — deps + browserConfigSchema + BrowserManager singleton. 2629 tests green. Plan 01 complete; Plan 02 (MCP tool handlers) ready.
+Stopped at: Completed 70-02-PLAN.md — 6 pure tool handlers + MCP stdio subprocess + CLI subcommand + IPC types. 94/94 browser tests green. Plan 03 ready.
 Resume file: None

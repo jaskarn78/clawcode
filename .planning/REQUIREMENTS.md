@@ -26,11 +26,11 @@ The daemon exposes a stable, OpenAI-compatible HTTP surface so any client that s
 
 Agents can drive a real headless Chromium to read, interact with, and extract data from live web pages.
 
-- [ ] **BROWSER-01**: User (via agent) can open a URL with `browser_navigate` and receive a page-loaded signal, with the current URL/title returned.
-- [ ] **BROWSER-02**: User (via agent) can capture a full-page or viewport `browser_screenshot` saved to the agent workspace, with the path returned in a form Claude vision can ingest (inline base64 or workspace file reference).
-- [ ] **BROWSER-03**: User (via agent) can interact with a page via `browser_click` (selector) and `browser_fill` (selector + value) and observe the resulting page state.
-- [ ] **BROWSER-04**: User (via agent) can extract clean text or structured content from a rendered page with `browser_extract` (accepts selector or "main content" mode with Readability-style extraction).
-- [ ] **BROWSER-05**: User (via agent) can wait for a condition (`browser_wait_for`) — selector visible, URL match, timeout — before next action, with clear timeout/failure results.
+- [x] **BROWSER-01**: User (via agent) can open a URL with `browser_navigate` and receive a page-loaded signal, with the current URL/title returned.
+- [x] **BROWSER-02**: User (via agent) can capture a full-page or viewport `browser_screenshot` saved to the agent workspace, with the path returned in a form Claude vision can ingest (inline base64 or workspace file reference).
+- [x] **BROWSER-03**: User (via agent) can interact with a page via `browser_click` (selector) and `browser_fill` (selector + value) and observe the resulting page state.
+- [x] **BROWSER-04**: User (via agent) can extract clean text or structured content from a rendered page with `browser_extract` (accepts selector or "main content" mode with Readability-style extraction).
+- [x] **BROWSER-05**: User (via agent) can wait for a condition (`browser_wait_for`) — selector visible, URL match, timeout — before next action, with clear timeout/failure results.
 - [x] **BROWSER-06**: User (as operator) can trust that each agent's browser has a persistent profile dir under `<agent-workspace>/browser/` so cookies and sessions survive daemon restarts, and that the browser warms at daemon start (resident singleton like the embedder) with a boot-time health probe.
 
 ### Web Search (SEARCH-*)
@@ -92,11 +92,11 @@ Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
 | OPENAI-05 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | OPENAI-06 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | OPENAI-07 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| BROWSER-01 | Phase 70 — Browser Automation MCP | Pending |
-| BROWSER-02 | Phase 70 — Browser Automation MCP | Pending |
-| BROWSER-03 | Phase 70 — Browser Automation MCP | Pending |
-| BROWSER-04 | Phase 70 — Browser Automation MCP | Pending |
-| BROWSER-05 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-01 | Phase 70 — Browser Automation MCP | Complete |
+| BROWSER-02 | Phase 70 — Browser Automation MCP | Complete |
+| BROWSER-03 | Phase 70 — Browser Automation MCP | Complete |
+| BROWSER-04 | Phase 70 — Browser Automation MCP | Complete |
+| BROWSER-05 | Phase 70 — Browser Automation MCP | Complete |
 | BROWSER-06 | Phase 70 — Browser Automation MCP | Complete |
 | SEARCH-01 | Phase 71 — Web Search MCP | Pending |
 | SEARCH-02 | Phase 71 — Web Search MCP | Pending |
