@@ -409,9 +409,73 @@ curl http://127.0.0.1:3101/v1/chat/completions \
 
 ### Integration cookbook
 
-- **OpenClaw** — set the `openai:default` provider `baseUrl` to `http://clawdy:3101/v1` and drop the ClawCode bearer key into `apiKey`. Agent names become model ids.
+- **OpenClaw** — set the `openai:default` provider `baseUrl` to `http://clawdy:3101/v1` and drop the ClawCode bearer key into `apiKey`. Agent names become model ids. For caller-provided agent configs (OpenClaw agents with their own SOULs / models / memory), see [OpenClaw Backend (Phase 74)](#openclaw-backend-phase-74) below.
 - **LibreChat** — same pattern: add an OpenAI-compatible endpoint with `baseUrl: http://clawdy:3101/v1` and the bearer key. Each agent appears as a selectable model in the UI.
 - **LangChain / LlamaIndex** — any `OpenAI(base_url=..., api_key=...)` constructor works unchanged.
+
+### OpenClaw Backend (Phase 74)
+
+Point OpenClaw at a ClawCode daemon and let OpenClaw's workspace-scoped agents ride the Phase 73 sub-2s persistent-session path WITHOUT registering each agent in `clawcode.yaml`. OpenClaw owns SOUL / memory / workspace / model preference. ClawCode provides only the warm prompt-cache and the SDK subprocess.
+
+The bridge is a **namespace-prefixed model id**: `openclaw:<slug>:<tier>` where `<slug>` is OpenClaw's own agent identifier (free-form, alphanumeric + hyphen; regex `/^[a-z0-9][a-z0-9_-]{0,63}$/i`) and `<tier>` is one of `sonnet` / `opus` / `haiku`. Tier is optional — `openclaw:researcher` ≡ `openclaw:researcher:sonnet`.
+
+Each transient session is keyed on `(bearer_key_hash, caller_slug, sha256(SOUL), tier)`. Any change to any of the four respawns. TTL 30 min idle (tunable via `CLAWCODE_OPENCLAW_TEMPLATE_TTL_MS`); LRU cap defaults to 32 handles (`CLAWCODE_OPENCLAW_TEMPLATE_CACHE_SIZE`). Cost rows land in `usage_events` with `agent="openclaw:<slug>"` — visible in `clawcode costs` with zero CLI change, one row per caller regardless of tier.
+
+**OpenClaw provider config** (`~/.openclaw/openclaw.json` → `models.providers.clawcode`):
+
+```json
+{
+  "baseUrl": "http://100.98.211.108:3101/v1",
+  "api": "openai-completions",
+  "apiKey": "ck_all_...",
+  "models": [
+    { "id": "openclaw:finmentum-researcher:sonnet", "name": "Finmentum Researcher (Sonnet via ClawCode)", "contextWindow": 200000, "maxTokens": 8192 },
+    { "id": "openclaw:finmentum-researcher:opus",   "name": "Finmentum Researcher (Opus via ClawCode)",   "contextWindow": 200000, "maxTokens": 8192 },
+    { "id": "openclaw:generic-coder:sonnet",        "name": "Generic Coder (Sonnet)",                     "contextWindow": 200000, "maxTokens": 8192 }
+  ]
+}
+```
+
+Any `openclaw:<slug>:<tier>` id works — OpenClaw only needs model ids for its selector catalog. ClawCode accepts any `openclaw:*` shape at runtime. OpenClaw sends the agent's SOUL as `messages[0].content` with `role: "system"`; any subsequent `system` messages are ignored (SDK `systemPrompt` is immutable per persistent query — SOUL change ⇒ new cache key ⇒ new handle).
+
+**What's shared between OpenClaw and ClawCode:**
+
+- Claude SDK subprocess + warm prompt cache (the whole point of this integration).
+- Tools flow through as OpenAI `tool_calls` round-trips via `messages[]` — OpenClaw-side agents keep their own tool surface and handle tool execution themselves.
+
+**What is NOT shared:**
+
+- **No workspace** — transient sessions run in a fixed `~/.clawcode/manager/transient` directory, NEVER a caller-supplied cwd. OpenClaw's filesystem context stays OpenClaw-side.
+- **No memory** — transient sessions have no ConversationStore, no MemoryStore, no RAG. Long-term memory belongs to OpenClaw.
+- **No ClawCode MCP surface** — `mcpServers: {}` + `settingSources: []`. Caller-declared tools in the request `tools[]` array travel via OpenAI tool_calls, not as ClawCode MCP mounts.
+
+**Key management** — OpenClaw authenticates with a **scope='all' bearer key** (required for the `openclaw:*` prefix). Create one via:
+
+```bash
+clawcode api-keys create --all --label openclaw-fleet
+# alias: clawcode openai-key create --all --label openclaw-fleet
+```
+
+**Security — locking down admin-grade ClawCode agents:**
+
+A scope='all' bearer key (by design) accepts any agent as `body.model`. If you operate admin-grade ClawCode agents (e.g. `admin-clawdy`) alongside an OpenClaw provider config, set `security.denyScopeAll: true` on those agents in `clawcode.yaml` so a compromised OpenClaw-side key cannot impersonate them:
+
+```yaml
+agents:
+  - name: admin-clawdy
+    admin: true
+    security:
+      denyScopeAll: true   # scope='all' keys get 403 agent_forbids_multi_agent_key
+```
+
+The `openclaw:<slug>` namespace is NEVER subject to this flag — the template branch is a different code path entirely (caller-controlled slug, no admin surface, no workspace access).
+
+**Smoke test:** `scripts/smoke-openclaw-backend.mjs` posts two sequential `openclaw:*` requests and validates SSE streaming + cache-hit TTFB signal.
+
+```bash
+CLAWCODE_OPENAI_SMOKE_KEY=ck_all_xxxxxxxx node scripts/smoke-openclaw-backend.mjs
+# Exit 0 = ok; exit 2 = daemon unreachable / missing key; exit 1 = assertion failed.
+```
 
 ### Key management
 

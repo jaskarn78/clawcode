@@ -1441,6 +1441,12 @@ export async function startDaemon(
     // owns the IPC socket for CLI fallback queries) shuts down. The
     // endpoint-bootstrap helper encapsulates the Pitfall 10 ordering
     // (activeStreams → server.close → store.close).
+    //
+    // Phase 74 Plan 02 invariant: the ordering is manager.drain() (above)
+    // → openAiEndpoint.close() (which internally drains the OpenClaw
+    // TransientSessionCache before server.close()) → browserManager.close()
+    // → server.close(). In-flight openclaw-template transient turns either
+    // finish cleanly or abort with AbortError — no leaked SDK subprocesses.
     await openAiEndpoint.close();
     if (dashboard) {
       await dashboard.close();

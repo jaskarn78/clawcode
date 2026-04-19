@@ -90,6 +90,12 @@ export interface OpenAiEndpointHandle {
    * without re-opening the SQLite file.
    */
   readonly apiKeysStore?: ApiKeysStore;
+  /**
+   * Phase 74 Plan 02 — exposed for admin / observability. Daemon shutdown
+   * relies on `close()` draining this internally; external callers only
+   * need it for size probes / metrics.
+   */
+  readonly transientCache?: TransientSessionCache;
   close(): Promise<void>;
 }
 
@@ -397,26 +403,45 @@ export async function startOpenAiEndpoint(
     port: handle.address.port,
     host: handle.address.host,
     apiKeysStore,
+    transientCache,
     close: async () => {
-      // Pitfall 10 order: activeStreams first, then server, then transient
-      // cache (closes per-caller SDK subprocesses), then store, then logger.
+      // Phase 74 Plan 02 shutdown order (extends Phase 69 Pitfall 10):
+      //   1. Drain transient cache  — in-flight openclaw-template turns
+      //                                finish cleanly OR abort with
+      //                                AbortError; SDK subprocesses are
+      //                                terminated before the server yanks
+      //                                sockets out from under them. Matches
+      //                                the quick task 260419-q2z graceful
+      //                                shutdown contract for persistent
+      //                                sessions (the daemon calls
+      //                                SessionManager.drain before us).
+      //   2. activeStreams + server  — Phase 69 Pitfall 10: all active SSE
+      //                                handles close cleanly, then
+      //                                server.close() completes.
+      //   3. apiKeysStore           — SQLite handle released after clients
+      //                                stop issuing requests.
+      //   4. requestLogger          — JSONL file handle flushed last.
+      try {
+        const size = transientCache.size();
+        if (size > 0) {
+          log.info(
+            { cacheSize: size },
+            "draining OpenClaw transient session cache",
+          );
+        }
+        await transientCache.closeAll();
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          "OpenAI endpoint transient-session-cache close failed (non-fatal)",
+        );
+      }
       try {
         await handle.close();
       } catch (err) {
         log.warn(
           { err: (err as Error).message },
           "OpenAI endpoint server close failed (non-fatal)",
-        );
-      }
-      // Phase 74 Plan 01 — drain transient cache BEFORE closing the store so
-      // any per-caller handle.close() calls that want to record final usage
-      // still have a live DB to write to.
-      try {
-        await transientCache.closeAll();
-      } catch (err) {
-        log.warn(
-          { err: (err as Error).message },
-          "OpenAI endpoint transient-session-cache close failed (non-fatal)",
         );
       }
       try {
