@@ -171,6 +171,19 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   - [x] 72-02-PLAN.md — MCP subprocess + CLI + auto-inject + costs CLI category extension + smoke + README (stdio server, daemon wiring, loader auto-inject, formatCostsTable category column, smoke script)
 **UI hint**: yes
 
+### Phase 73: OpenClaw Endpoint Latency
+**Goal**: Reduce per-turn latency on the `/v1/chat/completions` endpoint to sub-2s TTFB on warm agents for synchronous OpenClaw-agent consumption, with no regression on the Discord path or the v1.7 prompt-cache SLO. Baseline: ~7s per turn for trivial prompts on clawdy, dominated by per-turn `sdk.query()` subprocess spawn + session-resume-from-disk (see `src/manager/session-adapter.ts:508-511`).
+**Depends on**: Phase 69 (endpoint surface), Phase 72 (v2.0 complete), v1.7 prompt-cache infrastructure, v1.8 TurnDispatcher, v1.9 ConversationStore
+**Requirements**: LAT-01, LAT-02, LAT-03, LAT-04, LAT-05
+**Success Criteria** (what must be TRUE):
+  1. An OpenClaw agent issues `POST /v1/chat/completions` against a warm admin-clawdy session and receives first-token within p95 ≤ 2000ms on a single-turn conversation — measured and recorded in trace metadata on every request (TTFB + total-turn-ms fields present on the `openai.chat_completion` span).
+  2. A persistent per-agent `streamInput()` generator handles N consecutive turns from the same agent without spawning a fresh `sdk.query()` subprocess per turn — verified by process-count trace showing a single Claude Code child process survives across turns, with safe multiplexing and session resumption on crash.
+  3. The assembled `conversation_context` brief is cached per-agent and reused across turns within a session — invalidated only on session end OR when a newly terminated session summary becomes available; cache hit measurably avoids the full `assembleConversationBrief` cost on subsequent turns.
+  4. `agentReadinessWaitMs` is tuned to a value reflecting observed warm-path latency (~15ms, not 2000ms) and the post-restart first-request path remains correct — 503 Retry-After still fires when genuine readiness can't be achieved, but typical requests no longer burn ~2s of idle wait.
+  5. Anthropic API prompt-cache hit rate on the endpoint remains ≥ v1.7 SLO across all changes — measured via existing cache-usage telemetry; the Discord bridge path shows no latency or hit-rate regression.
+**Plans**: TBD (run `/gsd:plan-phase 73`)
+**UI hint**: no
+
 ## Progress
 
 **Status:** v2.0 Open Endpoint + Eyes & Hands started 2026-04-18. 4 phases (69-72), 20 requirements mapped 1:1.
@@ -198,35 +211,6 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | 71. Web Search MCP | 2/2 | Complete    | 2026-04-19 |
 | 72. Image Generation MCP | 2/2 | Complete    | 2026-04-19 |
 
-### Phase 73: OpenClaw endpoint latency
-
-**Directory:** `.planning/phases/73-openclaw-endpoint-latency/`
-
-**Goal:** Reduce per-turn latency on the `/v1/chat/completions` endpoint to snappy levels for synchronous OpenClaw-agent consumption. Baseline: ~7s per turn for trivial prompts on clawdy (dominated by per-turn `sdk.query()` subprocess spawn + session-resume-from-disk). Target: sub-2s TTFB on warm agents, no regression on Discord path or v1.7 prompt-cache SLO.
-
-**Scope:**
-- Research OpenClaw's consumption pattern (where its code lives, how it calls OpenAI-compatible endpoints, streaming/non-stream preference, retry/timeout/concurrency behavior, which latency metric matters most to its UX).
-- Instrument TTFB + total-turn-ms metrics on the endpoint so we can prove any improvement empirically.
-- Convert `session-adapter.ts` from per-turn `sdk.query()` pattern to a persistent per-agent `streamInput()` generator — eliminates 2-5s cold-start per request. Preserve safe multiplexing and session resumption on crash.
-- Cache the assembled `conversation_context` brief per-agent; invalidate on session end or when a new terminated session appears.
-- Tune `agentReadinessWaitMs` default down from 2000ms (warm-path is ~15ms in practice — 2s is wildly conservative).
-- Verify Anthropic API prompt-cache hit rate stays ≥ v1.7 SLO across all changes.
-
-**Out of scope:** plumbing other OpenAI params (`temperature`, `max_tokens`, `reasoning_effort`, `stop`, `response_format`) — separate follow-up phase.
-
-**Constraints:**
-- No regression on Discord bridge path (same session-adapter is shared).
-- No regression on v1.7 prompt-cache hit-rate SLO.
-- All 2900+ existing tests stay green.
-- Changes deployable via `git pull && npm ci && npm run build && systemctl restart clawcode` on clawdy.
-
-**Requirements**: TBD (set during plan-phase)
-**Depends on:** Phase 72
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run `/gsd:plan-phase 73` with research enabled)
-
 ---
 
-*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Run `/gsd:plan-phase 69` to begin.*
+*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Phase 73 in progress.*
