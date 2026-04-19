@@ -983,8 +983,36 @@ export async function startDaemon(
     );
   }
 
-  // 10. Create IPC handler
+  // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
+  // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
+  // owned by the OpenAiEndpointHandle below (no double-open, no extra
+  // positional arg on routeMethod). openAiEndpointRef is a closure over the
+  // `let` declared later in this function so the CLI can reach the store
+  // immediately after startOpenAiEndpoint returns.
+  let openAiEndpointRef: OpenAiEndpointHandle | null = null;
   const handler: IpcHandler = async (method, params) => {
+    if (
+      method === "openai-key-create" ||
+      method === "openai-key-list" ||
+      method === "openai-key-revoke"
+    ) {
+      const ep = openAiEndpointRef;
+      if (!ep || !ep.enabled || !ep.apiKeysStore) {
+        throw new ManagerError(
+          "OpenAI endpoint is not active — start the daemon with config.defaults.openai.enabled=true or set CLAWCODE_OPENAI_PORT to a free port",
+        );
+      }
+      const { routeOpenAiKeyIpc } = await import("../openai/ipc-handlers.js");
+      return routeOpenAiKeyIpc(
+        {
+          apiKeysStore: ep.apiKeysStore,
+          sessionManager: manager,
+          agentNames: () => resolvedAgents.filter((a) => !a.name.includes("-sub-") && !a.name.includes("-thread-")).map((a) => a.name),
+        },
+        method,
+        params,
+      );
+    }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };
 
@@ -1213,6 +1241,7 @@ export async function startDaemon(
     },
     config.defaults.openai,
   );
+  openAiEndpointRef = openAiEndpoint;
 
   // 11e. Phase 52 Plan 03 (CACHE-03): daily cost + cache hit-rate summary
   // cron. Fires at 09:00 UTC and posts one Discord embed per running agent

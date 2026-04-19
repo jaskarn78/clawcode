@@ -81,6 +81,12 @@ describe("IPC_METHODS", () => {
       "cancel-task",
       "task-complete",
       "task-retry",
+      // Observability (Phase 63)
+      "list-tasks",
+      // OpenAI-compatible endpoint key management (Phase 69)
+      "openai-key-create",
+      "openai-key-list",
+      "openai-key-revoke",
     ]);
   });
 });

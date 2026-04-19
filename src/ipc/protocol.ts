@@ -80,6 +80,10 @@ export const IPC_METHODS = [
   "task-retry",
   // Observability (Phase 63)
   "list-tasks",
+  // OpenAI-compatible endpoint key management (Phase 69)
+  "openai-key-create",
+  "openai-key-list",
+  "openai-key-revoke",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
