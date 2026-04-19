@@ -47,6 +47,16 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         timeoutMs: 10000,
         fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
       },
+      image: {
+        enabled: true,
+        backend: "openai" as const,
+        openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+        minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+        fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+        maxImageBytes: 10485760,
+        timeoutMs: 60000,
+        workspaceSubdir: "generated-images",
+      },
     },
     mcpServers: {},
     agents: [

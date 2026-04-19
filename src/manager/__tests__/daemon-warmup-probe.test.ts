@@ -227,6 +227,62 @@ describe("daemon.ts search wiring (Phase 71 Plan 02 — source grep)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Phase 72 Plan 02 — image MCP daemon wiring (source grep).
+//
+// Mirrors the browser + search grep-contracts above: assert the daemon
+// constructs all three image provider clients at boot, registers the
+// image-tool-call IPC handler BEFORE routeMethod, and never warms the
+// providers at boot (HTTP clients are lazy — missing API keys surface as
+// invalid_input on first tool call, not as daemon-boot crashes).
+// ---------------------------------------------------------------------------
+describe("daemon.ts image wiring (Phase 72 Plan 02 — source grep)", () => {
+  const src = readFileSync(
+    new URL("../daemon.ts", import.meta.url),
+    "utf-8",
+  );
+
+  it("G1: IPC method 'image-tool-call' is registered", () => {
+    expect(src).toMatch(/["']image-tool-call["']/);
+  });
+
+  it("G2: imports handleImageToolCall from the image module", () => {
+    expect(src).toMatch(
+      /import\s+\{[^}]*handleImageToolCall[^}]*\}\s+from\s+["']\.\.\/image\/daemon-handler\.js["']/,
+    );
+  });
+
+  it("G3: constructs all 3 image provider clients at daemon boot", () => {
+    expect(src).toMatch(/createOpenAiImageClient\(/);
+    expect(src).toMatch(/createMiniMaxImageClient\(/);
+    expect(src).toMatch(/createFalImageClient\(/);
+  });
+
+  it("G4: dispatches image-tool-call BEFORE routeMethod", () => {
+    const imageCall = src.indexOf('"image-tool-call"');
+    const routeMethodCall = src.indexOf(
+      "return routeMethod(manager, resolvedAgents",
+    );
+    expect(imageCall).toBeGreaterThan(-1);
+    expect(routeMethodCall).toBeGreaterThan(-1);
+    expect(imageCall).toBeLessThan(routeMethodCall);
+  });
+
+  it("G5: does NOT call generate/edit/variations on image providers at boot (lazy — no boot-time network)", () => {
+    // The only `.generate(` / `.edit(` / `.variations(` call sites in
+    // daemon.ts should live inside the IPC handler closure (which only
+    // runs when an agent calls the tool) — not at module top-level or
+    // inside the startDaemon bootstrap.
+    //
+    // Grep for the provider client names followed by a method call.
+    // There must be no direct `.generate(` / `.edit(` / `.variations(`
+    // on the image-provider client identifiers; the handler reaches
+    // them via `providers[backend].generate(...)` through the pure
+    // tool handler, not via the bare client identifier.
+    expect(src).not.toMatch(/\bimageProviders\.\w+\.(generate|edit|variations)\(/);
+  });
+});
+
 describe("EmbeddingService singleton invariant (src-level grep)", () => {
   it("src/ has exactly one production construction of EmbeddingService", () => {
     // Resolve src/ from this test file (works regardless of cwd in vitest).

@@ -52,6 +52,16 @@ describe("resolveAgentConfig", () => {
       timeoutMs: 10000,
       fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
     },
+    image: {
+      enabled: true,
+      backend: "openai" as const,
+      openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+      minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+      fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+      maxImageBytes: 10485760,
+      timeoutMs: 60000,
+      workspaceSubdir: "generated-images",
+    },
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -244,6 +254,16 @@ describe("resolveAgentConfig - mcpServers", () => {
       timeoutMs: 10000,
       fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
     },
+    image: {
+      enabled: true,
+      backend: "openai" as const,
+      openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+      minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+      fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+      maxImageBytes: 10485760,
+      timeoutMs: 60000,
+      workspaceSubdir: "generated-images",
+    },
   };
 
   const sharedMcpServers = {
@@ -404,6 +424,51 @@ describe("resolveAgentConfig - mcpServers", () => {
     expect(resolved.mcpServers.find(s => s.name === "finnhub")).toBeDefined();
     expect(resolved.mcpServers.find(s => s.name === "google")).toBeDefined();
     expect(resolved.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
+  });
+
+  // Phase 72 Plan 02 — auto-inject the `image` MCP entry so every agent
+  // gets image_generate + image_edit + image_variations. Parallels the
+  // browser + search auto-injects; gated by defaults.image.enabled
+  // (default true).
+  it("L1: auto-injects image MCP entry when defaults.image.enabled is true", () => {
+    const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+    const image = resolved.mcpServers.find((s) => s.name === "image");
+    expect(image).toBeDefined();
+    expect(image!.command).toBe("clawcode");
+    expect(image!.args).toEqual(["image-mcp"]);
+    expect(image!.env).toEqual({ CLAWCODE_AGENT: "test" });
+  });
+
+  it("L2: omits image MCP when defaults.image.enabled is false", () => {
+    const disabledDefaults: DefaultsConfig = {
+      ...defaults,
+      image: { ...defaults.image, enabled: false },
+    };
+    const resolved = resolveAgentConfig(baseAgent, disabledDefaults, sharedMcpServers);
+    expect(resolved.mcpServers.find((s) => s.name === "image")).toBeUndefined();
+  });
+
+  it("L3: image injection sets CLAWCODE_AGENT env to the agent name per-agent", () => {
+    const clawdy = { ...baseAgent, name: "clawdy" };
+    const rubi = { ...baseAgent, name: "rubi" };
+    const resolvedClawdy = resolveAgentConfig(clawdy, defaults, sharedMcpServers);
+    const resolvedRubi = resolveAgentConfig(rubi, defaults, sharedMcpServers);
+    expect(resolvedClawdy.mcpServers.find((s) => s.name === "image")!.env).toEqual({ CLAWCODE_AGENT: "clawdy" });
+    expect(resolvedRubi.mcpServers.find((s) => s.name === "image")!.env).toEqual({ CLAWCODE_AGENT: "rubi" });
+  });
+
+  it("L4: preserves user-specified 'image' mcpServer entry (no overwrite)", () => {
+    const customImage = { name: "image", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" } };
+    const agent = {
+      ...baseAgent,
+      mcpServers: [customImage] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }>,
+    };
+    const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+    const image = resolved.mcpServers.find((s) => s.name === "image");
+    expect(image).toBeDefined();
+    expect(image!.command).toBe("mycustom");
+    expect(image!.args).toEqual(["--flag"]);
+    expect(image!.env).toEqual({ CUSTOM: "x" });
   });
 });
 
@@ -702,8 +767,8 @@ agents:
     const plainAgent = resolved.find((a) => a.name === "plain-agent");
     expect(plainAgent).toBeDefined();
     expect(plainAgent!.mcpServers.find(s => s.name === "clawcode")).toBeDefined();
-    // No user-defined MCP servers — only the auto-injected clawcode/1password/browser/search entries remain.
-    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password" && s.name !== "browser" && s.name !== "search")).toEqual([]);
+    // No user-defined MCP servers — only the auto-injected clawcode/1password/browser/search/image entries remain.
+    expect(plainAgent!.mcpServers.filter(s => s.name !== "clawcode" && s.name !== "1password" && s.name !== "browser" && s.name !== "search" && s.name !== "image")).toEqual([]);
 
     // mcp-agent has 3 resolved servers from string references + auto-injected ones
     const mcpAgent = resolved.find((a) => a.name === "mcp-agent");
@@ -808,6 +873,16 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
       maxResults: 20,
       timeoutMs: 10000,
       fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
+    },
+    image: {
+      enabled: true,
+      backend: "openai" as const,
+      openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+      minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+      fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+      maxImageBytes: 10485760,
+      timeoutMs: 60000,
+      workspaceSubdir: "generated-images",
     },
   };
 
