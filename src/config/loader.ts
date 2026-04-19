@@ -107,6 +107,22 @@ export function resolveAgentConfig(
     });
   }
 
+  // Phase 71 — auto-inject the search MCP server so every agent gets
+  // web_search + web_fetch_url. The daemon owns the BraveClient/ExaClient
+  // singletons; this subprocess is a thin IPC translator. Gated by
+  // defaults.search.enabled (default true). CLAWCODE_AGENT env is consumed
+  // by the subprocess as the default agent identity for tool calls
+  // (src/search/mcp-server.ts).
+  const searchEnabled = defaults.search?.enabled !== false;
+  if (searchEnabled && !resolvedMcpMap.has("search")) {
+    resolvedMcpMap.set("search", {
+      name: "search",
+      command: "clawcode",
+      args: ["search-mcp"],
+      env: { CLAWCODE_AGENT: agent.name },
+    });
+  }
+
   const mcpServers = [...resolvedMcpMap.values()].map((s) => ({
     name: s.name,
     command: s.command,

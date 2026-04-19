@@ -227,6 +227,7 @@ Three MCP servers are **auto-injected** for every agent — no configuration nee
 | `clawcode` | Always | `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `agent_status`, `send_message` |
 | `1password` | When `OP_SERVICE_ACCOUNT_TOKEN` is set | Secure credential access via 1Password |
 | `browser` | When `defaults.browser.enabled: true` (default) | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_extract`, `browser_wait_for` |
+| `search` | When `defaults.search.enabled: true` (default) | `web_search`, `web_fetch_url` |
 
 Add custom MCP servers in `clawcode.yaml`:
 
@@ -512,6 +513,58 @@ ps -o rss -p $(pgrep -f clawcoded)
 ```
 
 v2.1 may revisit shared-Chromium vs. per-agent Chromium if the N-agent footprint becomes an issue.
+
+## Web Search (Phase 71)
+
+Every agent gets live web search + clean article fetching via the auto-injected `search` MCP server (the `clawcode search-mcp` stdio subprocess — a thin translator to the daemon's shared Brave + Exa clients). Two tools cover the common research surface; duplicate calls within a single Turn short-circuit through the v1.7 intra-turn idempotent tool-cache.
+
+### Setup
+
+Set `BRAVE_API_KEY` in the environment before starting the daemon:
+
+```bash
+# In clawcode.yaml or systemd EnvironmentFile:
+BRAVE_API_KEY=your-brave-subscription-token
+```
+
+Switch to Exa with `defaults.search.backend: "exa"` and set `EXA_API_KEY` instead. Keys are read lazily on the first search call — a missing key surfaces as `invalid_argument` rather than a daemon-boot crash.
+
+### Tools
+
+| Tool | Args | Returns |
+|------|------|---------|
+| `web_search` | `query: string, numResults?: number (default 20, max 20)` | `{ results: [{ title, url, snippet, publishedDate? }], total, provider, query }` |
+| `web_fetch_url` | `url: string, mode?: "readability" \| "raw" (default "readability"), maxBytes?: number (default 1 MiB)` | `{ url, title, byline, publishedDate, text, html?, wordCount, mode }` |
+
+- `web_search` — ranked result list; clamps `numResults` to `config.maxResults` (default 20). Backend switch via `defaults.search.backend: "brave" \| "exa"`.
+- `web_fetch_url` — Mozilla Readability extraction by default (clean article text + metadata); `mode: "raw"` returns stripped HTML text for non-article pages. Hard 1 MiB size cap, 30s timeout.
+
+Error taxonomy (never throws — always `{ error: { type, message, ... } }`): `network`, `rate_limit` (with `retryAfter`), `invalid_url`, `size_limit`, `extraction_failed`, `invalid_argument`, `internal`.
+
+### Intra-Turn Cache
+
+Both tools are on the v1.7 idempotent-tool whitelist (alongside `memory_lookup`, `search_documents`, etc.). Duplicate calls with identical args within a single Turn return the prior result with `cached: true` in the trace. Cross-turn calls always hit the network fresh.
+
+### Opt-out
+
+Set `defaults.search.enabled: false` in `clawcode.yaml` to disable the search MCP globally — no auto-inject, agents will not see the tools. Agents can also override the auto-inject by listing their own `search` entry in `mcpServers:`.
+
+### End-to-end smoke
+
+```bash
+# daemon must be running with BRAVE_API_KEY set
+node scripts/search-smoke.mjs
+# or: node scripts/search-smoke.mjs clawdy "anthropic claude api"
+```
+
+The smoke drives `web_search → web_fetch_url → web_search (repeat)` against a live daemon. Exits 0 on success, 2 on daemon-not-running, 1 on assertion failure.
+
+### Known limitations
+
+- Brave API rate limits vary by subscription tier; 429 surfaces as a structured `rate_limit` error with `retryAfter` seconds extracted from the `retry-after` header.
+- No `robots.txt` enforcement — agents are expected to respect site ToS themselves. Blanket enforcement would be too aggressive for an assistant tool.
+- Image / news / video sub-APIs are deferred to v2.x (text web search only for v2.0).
+- Alternate backends (Google CSE, SerpAPI, DuckDuckGo) are deferred to v2.x.
 
 ## Deployment (Ubuntu)
 

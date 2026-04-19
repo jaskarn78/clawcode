@@ -113,6 +113,12 @@ import { createPool, type Pool } from "mysql2/promise";
 import { BrowserManager } from "../browser/manager.js";
 import { handleBrowserToolCall } from "../browser/daemon-handler.js";
 import type { IpcBrowserToolCallParams } from "../ipc/types.js";
+// Phase 71 — web search MCP.
+import { handleSearchToolCall } from "../search/daemon-handler.js";
+import { createBraveClient } from "../search/providers/brave.js";
+import { createExaClient } from "../search/providers/exa.js";
+import { fetchUrl } from "../search/fetcher.js";
+import type { IpcSearchToolCallParams } from "../ipc/types.js";
 
 /**
  * Augment a LatencyReport's segments with `slo_status`, `slo_threshold_ms`,
@@ -1029,6 +1035,26 @@ export async function startDaemon(
     );
   }
 
+  // 9d. Phase 71 — Web search MCP clients.
+  //
+  // Lazy API-key reads inside `.search()` keep daemon boot cheap even when
+  // BRAVE_API_KEY / EXA_API_KEY are absent. No warm-path probe needed —
+  // HTTP clients are ephemeral; missing keys surface as `invalid_argument`
+  // on first tool call, not as daemon-boot crashes.
+  const searchCfg = config.defaults.search;
+  const braveClient = createBraveClient(searchCfg);
+  const exaClient = createExaClient(searchCfg);
+  if (searchCfg.enabled) {
+    log.info(
+      { backend: searchCfg.backend, maxResults: searchCfg.maxResults },
+      "search MCP clients ready (lazy — no boot-time network)",
+    );
+  } else {
+    log.info(
+      "search MCP disabled (defaults.search.enabled=false); skipping",
+    );
+  }
+
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
   // owned by the OpenAiEndpointHandle below (no double-open, no extra
@@ -1068,6 +1094,22 @@ export async function startDaemon(
       return handleBrowserToolCall(
         { browserManager, resolvedAgents, browserConfig: browserCfg },
         params as unknown as IpcBrowserToolCallParams,
+      );
+    }
+    // Phase 71 — search-tool-call is intercepted BEFORE routeMethod
+    // for the same reason as browser-tool-call: the existing 24-arg
+    // routeMethod signature stays stable. The daemon-owned BraveClient
+    // + ExaClient + fetcher are closed over here.
+    if (method === "search-tool-call") {
+      return handleSearchToolCall(
+        {
+          searchConfig: searchCfg,
+          resolvedAgents,
+          braveClient,
+          exaClient,
+          fetcher: fetchUrl,
+        },
+        params as unknown as IpcSearchToolCallParams,
       );
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
