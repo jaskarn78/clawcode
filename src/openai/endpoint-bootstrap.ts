@@ -33,8 +33,11 @@ import { ApiKeysStore } from "./keys.js";
 import { createOpenAiSessionDriver } from "./driver.js";
 import { ApiKeySessionIndex } from "./session-index.js";
 import { createRequestLogger, type RequestLogger } from "./request-logger.js";
+import { TransientSessionCache } from "./transient-session-cache.js";
+import { createOpenClawTemplateDriver } from "./template-driver.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
+import type { SdkModule } from "../manager/sdk-types.js";
 
 /** Config block consumed by the helper — mirrors `openaiEndpointSchema`. */
 export interface OpenAiEndpointConfig {
@@ -66,6 +69,14 @@ export interface OpenAiEndpointDeps {
    * and honoring CLAWCODE_OPENAI_LOG_DIR / CLAWCODE_OPENAI_LOG_BODIES.
    */
   readonly requestLogger?: RequestLogger;
+  /**
+   * Phase 74 Plan 01 — SdkModule handle the OpenClawTemplateDriver uses for
+   * spawning transient persistent SDK sessions. Optional for backwards-
+   * compatibility with existing callers (daemon.ts wiring is additive): when
+   * absent, the template driver is NOT wired and `openclaw:`-prefixed
+   * requests receive 501 template_driver_disabled.
+   */
+  readonly sdk?: SdkModule;
 }
 
 /** Returned handle — `enabled:false` means startup was skipped or failed. */
@@ -190,6 +201,50 @@ export async function startOpenAiEndpoint(
     log,
   });
 
+  // Phase 74 Plan 01 — build the OpenClaw template driver + its transient
+  // session cache. If `deps.sdk` is absent (daemon.ts not yet threading the
+  // SDK through), dynamically import it here — mirrors the loadSdk() pattern
+  // in session-adapter.ts so the template driver always has a live SDK
+  // handle in production. Tests inject deps.sdk explicitly. Operator can
+  // tune the LRU cap and idle TTL via env vars (defaults: 32 handles,
+  // 30 minutes). Auth-gated downstream — only scope='all' bearer + openclaw:
+  // prefix reach the template driver (extractCallerIdentity enforces both).
+  const templateCacheSize =
+    Number.parseInt(
+      process.env.CLAWCODE_OPENCLAW_TEMPLATE_CACHE_SIZE ?? "32",
+      10,
+    ) || 32;
+  const templateTtlMs =
+    Number.parseInt(
+      process.env.CLAWCODE_OPENCLAW_TEMPLATE_TTL_MS ??
+        String(30 * 60 * 1000),
+      10,
+    ) || 30 * 60 * 1000;
+  const transientCache = new TransientSessionCache({
+    maxSize: templateCacheSize,
+    ttlMs: templateTtlMs,
+    log,
+  });
+  let templateSdk: SdkModule | undefined = deps.sdk;
+  if (!templateSdk) {
+    try {
+      const imported = (await import("@anthropic-ai/claude-agent-sdk")) as unknown as SdkModule;
+      templateSdk = imported;
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "openclaw template driver disabled — @anthropic-ai/claude-agent-sdk not available",
+      );
+    }
+  }
+  const templateDriver = templateSdk
+    ? createOpenClawTemplateDriver({
+        sdk: templateSdk,
+        cache: transientCache,
+        log,
+      })
+    : undefined;
+
   const startServer = deps.startServer ?? (await import("./server.js")).startOpenAiServer;
 
   // Phase 73 Plan 02 — env override (undefined → server uses its 300ms default).
@@ -229,6 +284,8 @@ export async function startOpenAiEndpoint(
         : {}),
       // Quick task 260419-mvh — JSONL request feed for diagnostics.
       requestLogger,
+      // Phase 74 Plan 01 — template driver for openclaw: prefixed requests.
+      ...(templateDriver ? { templateDriver } : {}),
     });
   } catch (err) {
     if (isAddrInUse(err)) {
@@ -257,6 +314,14 @@ export async function startOpenAiEndpoint(
     } catch {
       /* non-fatal */
     }
+    // Phase 74 Plan 01 — drain the transient cache even on start failure so
+    // no SDK subprocesses leak (they won't exist yet on a listen() failure
+    // but belt-and-suspenders; closeAll() is idempotent + safe on empty).
+    try {
+      await transientCache.closeAll();
+    } catch {
+      /* non-fatal */
+    }
     return NOOP_HANDLE;
   }
 
@@ -268,13 +333,25 @@ export async function startOpenAiEndpoint(
     host: handle.address.host,
     apiKeysStore,
     close: async () => {
-      // Pitfall 10 order: activeStreams first, then server, then store, then logger.
+      // Pitfall 10 order: activeStreams first, then server, then transient
+      // cache (closes per-caller SDK subprocesses), then store, then logger.
       try {
         await handle.close();
       } catch (err) {
         log.warn(
           { err: (err as Error).message },
           "OpenAI endpoint server close failed (non-fatal)",
+        );
+      }
+      // Phase 74 Plan 01 — drain transient cache BEFORE closing the store so
+      // any per-caller handle.close() calls that want to record final usage
+      // still have a live DB to write to.
+      try {
+        await transientCache.closeAll();
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          "OpenAI endpoint transient-session-cache close failed (non-fatal)",
         );
       }
       try {

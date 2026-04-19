@@ -51,6 +51,7 @@ import {
   type ModelsListResponse,
   type OpenAiError,
   type SdkStreamEvent,
+  type TemplateDriverInput,
 } from "./types.js";
 import {
   NoUserMessageError,
@@ -65,6 +66,7 @@ import type {
   RequestLogger,
   RequestLogRecord,
 } from "./request-logger.js";
+import { extractCallerIdentity } from "./caller-identity.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -131,6 +133,13 @@ export interface OpenAiServerConfig {
    * Absent by default so Plan 02 hermetic tests stay hermetic.
    */
   requestLogger?: RequestLogger;
+  /**
+   * Phase 74 Plan 01 — OpenClaw template driver. Wired when body.model
+   * starts with `openclaw:`. When absent, any `openclaw:`-prefixed request
+   * returns 501 not_implemented (feature flag). Production wires this
+   * unconditionally in endpoint-bootstrap.ts alongside the native driver.
+   */
+  templateDriver?: OpenAiSessionDriver;
 }
 
 /** Handle returned by `startOpenAiServer`. */
@@ -537,18 +546,57 @@ async function handleChatCompletions(
     return { role: m.role, content: text };
   });
 
-  // 4. Scope-aware authorization (quick task 260419-p51 — P51-SERVER-SCOPE).
-  //    row.scope is one of:
-  //      - "all"            — multi-agent key; allowed on any configured agent.
-  //                           body.model MUST still be a real agent (else 404).
-  //      - "agent:<name>"   — legacy pinned key; allowed only on the bound agent.
-  //                           Mismatch → 403 (with no agent-name leak).
-  const expectedAgentScope = `agent:${body.model}`;
-  if (row.scope === "all") {
-    // Multi-agent key — the requested model MUST be a configured top-level agent.
-    // agentNames() is the truth source; if the model isn't listed, 404.
-    const knownModels = topLevelAgents(config.agentNames());
-    if (!knownModels.includes(body.model)) {
+  // 4. Translate OpenAI request → Claude inputs (moved up from post-scope-check
+  //    for Phase 74 — caller-identity extraction needs tools/toolChoice/
+  //    toolResults for the template-driver branch).
+  let translated;
+  try {
+    translated = translateRequest(body);
+  } catch (err) {
+    if (err instanceof NoUserMessageError) {
+      partial.error_type = "invalid_request_error";
+      partial.error_code = "no_user_message";
+      sendError(
+        res,
+        400,
+        "invalid_request_error",
+        "messages[] must contain at least one role:'user' entry",
+        "no_user_message",
+        xRequestId,
+      );
+      return;
+    }
+    partial.error_type = "invalid_request_error";
+    partial.error_code = "translate_error";
+    sendError(
+      res,
+      400,
+      "invalid_request_error",
+      "Failed to translate request",
+      "translate_error",
+      xRequestId,
+    );
+    return;
+  }
+
+  // 5. Phase 74 Plan 01 — caller-identity routing. Runs BEFORE scope-aware
+  //    authz so that `openclaw:<slug>[:<tier>]` model ids can reach the
+  //    template driver (they are NOT in the knownAgents list, so the
+  //    Phase 69 scope-aware check would 404 them). extractCallerIdentity
+  //    itself enforces scope='all' for the openclaw-template path —
+  //    defense-in-depth against pinned-key impersonation.
+  const knownAgents = topLevelAgents(config.agentNames());
+  const callerIdentity = extractCallerIdentity(
+    body,
+    row,
+    knownAgents,
+    translated.tools,
+    translated.toolChoice,
+    translated.toolResults,
+  );
+
+  if ("error" in callerIdentity) {
+    if (callerIdentity.error === "unknown_model") {
       partial.error_type = "invalid_request_error";
       partial.error_code = "unknown_model";
       sendError(
@@ -561,6 +609,117 @@ async function handleChatCompletions(
       );
       return;
     }
+    // malformed_caller — bad openclaw: syntax OR pinned key trying the
+    // template route.
+    partial.error_type = "invalid_request_error";
+    partial.error_code = "malformed_caller";
+    sendError(
+      res,
+      400,
+      "invalid_request_error",
+      "Invalid caller identity: model must be 'openclaw:<slug>[:<tier>]' with tier in {sonnet, opus, haiku} and slug matching /^[a-z0-9][a-z0-9_-]{0,63}$/i",
+      "malformed_caller",
+      xRequestId,
+    );
+    return;
+  }
+
+  // 5a. Phase 74 template path — skip scope-aware authz (extractCallerIdentity
+  //     already checked scope='all'), skip warm-path wait (transient handles
+  //     don't live in SessionManager), dispatch to the template driver.
+  if (callerIdentity.kind === "openclaw-template") {
+    partial.agent = `openclaw:${callerIdentity.callerSlug}`;
+
+    if (!config.templateDriver) {
+      partial.error_type = "server_error";
+      partial.error_code = "template_driver_disabled";
+      sendError(
+        res,
+        501,
+        "server_error",
+        "OpenClaw template driver not configured on this daemon",
+        "template_driver_disabled",
+        xRequestId,
+      );
+      return;
+    }
+
+    // Fire-and-forget last-used stamp.
+    try {
+      config.apiKeysStore.touchLastUsed(row.key_hash);
+    } catch (err) {
+      log.debug({ err }, "touchLastUsed failed (non-fatal)");
+    }
+
+    const ac = new AbortController();
+    const onClientClose = (): void => {
+      ac.abort();
+    };
+    req.on("close", onClientClose);
+    res.on("close", onClientClose);
+
+    const turnId = newChatCompletionId();
+    const templateInput: TemplateDriverInput = {
+      agentName: `openclaw:${callerIdentity.callerSlug}`,
+      keyHash: row.key_hash,
+      callerSlug: callerIdentity.callerSlug,
+      tier: callerIdentity.tier,
+      soulPrompt: callerIdentity.soulPrompt,
+      soulFp: callerIdentity.soulFp,
+      lastUserMessage: translated.lastUserMessage,
+      clientSystemAppend: null,
+      tools: translated.tools,
+      toolChoice: translated.toolChoice,
+      toolResults: translated.toolResults,
+      signal: ac.signal,
+      xRequestId,
+    };
+
+    // The template driver reads the TemplateDriverInput shape; the cast
+    // below satisfies the OpenAiSessionDriver.dispatch parameter type.
+    const driverInput = templateInput as unknown as Parameters<
+      OpenAiSessionDriver["dispatch"]
+    >[0];
+    const templateConfig = { ...config, driver: config.templateDriver };
+
+    if (body.stream) {
+      const streamIncludeUsage = body.stream_options?.include_usage === true;
+      await runStreaming(
+        res,
+        templateConfig,
+        activeStreams,
+        body.model,
+        turnId,
+        driverInput,
+        streamIncludeUsage,
+        xRequestId,
+        log,
+        partial,
+      );
+      return;
+    }
+    await runNonStreaming(
+      res,
+      body.model,
+      turnId,
+      driverInput,
+      templateConfig,
+      xRequestId,
+      log,
+      partial,
+    );
+    return;
+  }
+
+  // 5b. Native path — enforce scope-aware authz exactly as Phase 69 + quick
+  //     task 260419-p51 did. body.model is known to be a valid top-level
+  //     agent at this point (caller-identity's fast path confirmed).
+  //    row.scope is one of:
+  //      - "all"            — multi-agent key; allowed on any configured agent.
+  //      - "agent:<name>"   — legacy pinned key; allowed only on the bound agent.
+  //                           Mismatch → 403 (with no agent-name leak).
+  const expectedAgentScope = `agent:${body.model}`;
+  if (row.scope === "all") {
     // Stamp the TARGETED agent into the log record — scope="all" means the
     // key has no "owner" agent; the request determines which agent the turn
     // routes to. Overrides the earlier partial.agent = row.agent_name (="*").
@@ -581,14 +740,10 @@ async function handleChatCompletions(
     return;
   }
 
-  // 4b. Post-v2.0 hardening — warm-path startup race gate.
+  // 5c. Post-v2.0 hardening — warm-path startup race gate.
   // When `agentIsRunning` is provided (production path), bound the wait on
   // the agent becoming ready before dispatching. Plan 02 tests omit the
   // config field and skip the wait entirely — hermetic path preserved.
-  //
-  // Quick task 260419-p51: routing target is body.model (= the requested
-  // agent). For legacy pinned keys this equals row.agent_name; for
-  // scope='all' keys this is the user's choice.
   const targetAgentName = body.model;
   if (config.agentIsRunning) {
     const ready = await waitForAgentReady(
@@ -610,33 +765,6 @@ async function handleChatCompletions(
     config.apiKeysStore.touchLastUsed(row.key_hash);
   } catch (err) {
     log.debug({ err }, "touchLastUsed failed (non-fatal)");
-  }
-
-  // 5. Translate OpenAI request → Claude inputs.
-  let translated;
-  try {
-    translated = translateRequest(body);
-  } catch (err) {
-    if (err instanceof NoUserMessageError) {
-      sendError(
-        res,
-        400,
-        "invalid_request_error",
-        "messages[] must contain at least one role:'user' entry",
-        "no_user_message",
-        xRequestId,
-      );
-      return;
-    }
-    sendError(
-      res,
-      400,
-      "invalid_request_error",
-      "Failed to translate request",
-      "translate_error",
-      xRequestId,
-    );
-    return;
   }
 
   // 6. Open AbortController for client-disconnect + shutdown.
