@@ -1,0 +1,412 @@
+/**
+ * Phase 74 Plan 01 — OpenClawTemplateDriver unit tests.
+ *
+ * All SDK + handle interactions are mocked. Pins the invariants that keep
+ * the template path safe + isolated:
+ *   - systemPrompt passed as STRING (Pitfall 2)
+ *   - cwd === CLAWCODE_TRANSIENT_CWD (Pitfall 4)
+ *   - mcpServers:{}, settingSources:[] — caller cannot mount ClawCode MCPs
+ *   - handle reuse on identical (bearer, slug, soulFp, tier)
+ *   - handle re-creation on ANY of the four-component key change
+ *   - AbortSignal flows through to handle.sendAndStream unchanged
+ *   - createHandle throwing → iterator rejects on first next()
+ *   - driver shape satisfies OpenAiSessionDriver at compile-time
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import pino from "pino";
+
+import {
+  createOpenClawTemplateDriver,
+  CLAWCODE_TRANSIENT_CWD,
+} from "../template-driver.js";
+import type { OpenAiSessionDriver } from "../server.js";
+import { TransientSessionCache } from "../transient-session-cache.js";
+import type { TemplateDriverInput } from "../types.js";
+import type { SessionHandle, UsageCallback } from "../../manager/session-adapter.js";
+import type { SdkModule, SdkQueryOptions } from "../../manager/sdk-types.js";
+import type { createPersistentSessionHandle as CreatePersistentFn } from "../../manager/persistent-session-handle.js";
+
+// ---------------------------------------------------------------------------
+// Mock builders
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal SDK module stub. The template driver doesn't call sdk.query
+ * directly — that's inside createPersistentSessionHandle, which we mock via
+ * the createHandle seam. We still need to pass SOMETHING for the driver's
+ * deps.sdk field.
+ */
+function fakeSdk(): SdkModule {
+  return {
+    query: vi.fn() as unknown as SdkModule["query"],
+  };
+}
+
+/**
+ * Mock SessionHandle whose sendAndStream emits one text delta + resolves.
+ * The delta is pushed synchronously via the onChunk callback so event
+ * ordering is deterministic.
+ */
+function makeMockHandle(opts?: {
+  sessionId?: string;
+  streamText?: string;
+  rejectWith?: Error;
+  perChunkAbortCheck?: boolean;
+}): SessionHandle & { readonly sendAndStreamMock: ReturnType<typeof vi.fn> } {
+  const sessionId = opts?.sessionId ?? "sess-" + Math.random().toString(36).slice(2);
+  const streamText = opts?.streamText ?? "hello world";
+
+  const sendAndStreamMock = vi.fn(async (_message: string, onChunk: (acc: string) => void, _turn?: unknown, options?: { signal?: AbortSignal }) => {
+    if (opts?.rejectWith) throw opts.rejectWith;
+    // Emit the text in a single callback for simplicity. Tests that care
+    // about per-chunk streaming can override sendAndStream.
+    if (options?.signal?.aborted) {
+      const e = new Error("aborted");
+      e.name = "AbortError";
+      throw e;
+    }
+    onChunk(streamText);
+    return streamText;
+  });
+
+  const h: SessionHandle & { sendAndStreamMock: ReturnType<typeof vi.fn> } = {
+    sessionId,
+    send: vi.fn().mockResolvedValue(undefined),
+    sendAndCollect: vi.fn().mockResolvedValue(""),
+    sendAndStream: sendAndStreamMock as unknown as SessionHandle["sendAndStream"],
+    close: vi.fn().mockResolvedValue(undefined) as unknown as SessionHandle["close"],
+    onError: vi.fn(),
+    onEnd: vi.fn(),
+    setEffort: vi.fn(),
+    getEffort: vi.fn().mockReturnValue("low") as unknown as SessionHandle["getEffort"],
+    interrupt: vi.fn(),
+    hasActiveTurn: vi.fn().mockReturnValue(false) as unknown as SessionHandle["hasActiveTurn"],
+    sendAndStreamMock,
+  };
+  return h;
+}
+
+function baseInput(overrides?: Partial<TemplateDriverInput>): TemplateDriverInput {
+  return {
+    agentName: "openclaw:fin-test",
+    keyHash: "K1".padEnd(64, "0"),
+    callerSlug: "fin-test",
+    tier: "sonnet",
+    soulPrompt: "SOUL",
+    soulFp: "abc",
+    lastUserMessage: "hi",
+    clientSystemAppend: null,
+    tools: null,
+    toolChoice: null,
+    toolResults: [],
+    signal: new AbortController().signal,
+    xRequestId: "x",
+    ...overrides,
+  };
+}
+
+async function consume<T>(iter: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const v of iter) out.push(v);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("OpenClawTemplateDriver", () => {
+  let cache: TransientSessionCache;
+  const log = pino({ level: "silent" });
+
+  beforeEach(() => {
+    cache = new TransientSessionCache({ maxSize: 8, ttlMs: 60_000 });
+  });
+
+  it("Test 10: driver shape satisfies OpenAiSessionDriver at compile + runtime", () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    const _assert: OpenAiSessionDriver = driver; // compile-time check
+    void _assert;
+    expect(typeof driver.dispatch).toBe("function");
+  });
+
+  it("Test 1: first dispatch creates a persistent handle with STRING systemPrompt + fixed cwd + sonnet model", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+
+    await consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+
+    expect(createHandle).toHaveBeenCalledTimes(1);
+    const createArgs = (createHandle as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown as [SdkModule, SdkQueryOptions, string, UsageCallback | undefined];
+    const baseOptions = createArgs[1];
+    expect(typeof baseOptions.systemPrompt).toBe("string");
+    expect(baseOptions.systemPrompt).toBe("SOUL");
+    expect(baseOptions.cwd).toBe(CLAWCODE_TRANSIENT_CWD);
+    expect(baseOptions.model).toBe("claude-sonnet-4-6");
+    expect(baseOptions.permissionMode).toBe("bypassPermissions");
+    expect(baseOptions.mcpServers).toEqual({});
+    expect(baseOptions.settingSources).toEqual([]);
+  });
+
+  it("Test 2: second dispatch with same cache key reuses the handle (createHandle called once)", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    await consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(createHandle).toHaveBeenCalledTimes(1);
+    expect(handle.sendAndStreamMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("Test 3: different soulFp triggers a NEW persistent handle", async () => {
+    const h1 = makeMockHandle({ sessionId: "s1" });
+    const h2 = makeMockHandle({ sessionId: "s2" });
+    const createHandle = vi
+      .fn()
+      .mockImplementationOnce(() => h1)
+      .mockImplementationOnce(() => h2) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ soulFp: "abc" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    await consume(driver.dispatch(baseInput({ soulFp: "xyz" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(createHandle).toHaveBeenCalledTimes(2);
+  });
+
+  it("Test 4: different tier triggers new handle and maps to the correct model", async () => {
+    const h1 = makeMockHandle();
+    const h2 = makeMockHandle();
+    const createHandle = vi
+      .fn()
+      .mockImplementationOnce(() => h1)
+      .mockImplementationOnce(() => h2) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ tier: "sonnet" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    await consume(driver.dispatch(baseInput({ tier: "opus" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(createHandle).toHaveBeenCalledTimes(2);
+    const firstOpts = ((createHandle as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown as [SdkModule, SdkQueryOptions])[1];
+    const secondOpts = ((createHandle as unknown as ReturnType<typeof vi.fn>).mock.calls[1] as unknown as [SdkModule, SdkQueryOptions])[1];
+    expect(firstOpts.model).toBe("claude-sonnet-4-6");
+    expect(secondOpts.model).toBe("claude-opus-4-7");
+  });
+
+  it("different bearer key hash triggers new handle (isolation across tenants)", async () => {
+    const h1 = makeMockHandle();
+    const h2 = makeMockHandle();
+    const createHandle = vi
+      .fn()
+      .mockImplementationOnce(() => h1)
+      .mockImplementationOnce(() => h2) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ keyHash: "A".padEnd(64, "0") }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    await consume(driver.dispatch(baseInput({ keyHash: "B".padEnd(64, "0") }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(createHandle).toHaveBeenCalledTimes(2);
+  });
+
+  it("different callerSlug triggers new handle", async () => {
+    const h1 = makeMockHandle();
+    const h2 = makeMockHandle();
+    const createHandle = vi
+      .fn()
+      .mockImplementationOnce(() => h1)
+      .mockImplementationOnce(() => h2) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ callerSlug: "fin-test" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    await consume(driver.dispatch(baseInput({ callerSlug: "other" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(createHandle).toHaveBeenCalledTimes(2);
+  });
+
+  it("Test 5: dispatch yields a content_block_delta followed by a result event", async () => {
+    const handle = makeMockHandle({ streamText: "hello", sessionId: "s-1" });
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    const events = await consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    // Expect: content_block_start, content_block_delta(text="hello"), result
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    const last = events[events.length - 1]!;
+    expect(last.type).toBe("result");
+    if (last.type === "result") {
+      expect(last.session_id).toBe("s-1");
+    }
+    const hasDelta = events.some((e) => {
+      return (
+        e.type === "stream_event" &&
+        e.event.type === "content_block_delta" &&
+        e.event.delta.type === "text_delta" &&
+        e.event.delta.text === "hello"
+      );
+    });
+    expect(hasDelta).toBe(true);
+  });
+
+  it("Test 6: AbortSignal is passed through to handle.sendAndStream unchanged", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    const ac = new AbortController();
+    await consume(driver.dispatch(baseInput({ signal: ac.signal }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(handle.sendAndStreamMock).toHaveBeenCalledTimes(1);
+    const callArgs = handle.sendAndStreamMock.mock.calls[0] as unknown as [string, unknown, unknown, { signal?: AbortSignal }];
+    expect(callArgs[0]).toBe("hi"); // lastUserMessage
+    const opts = callArgs[3];
+    expect(opts?.signal).toBe(ac.signal);
+  });
+
+  it("Test 7: aborting before dispatch propagates an AbortError through the iterator", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      consume(driver.dispatch(baseInput({ signal: ac.signal }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0])),
+    ).rejects.toThrow(/abort/i);
+  });
+
+  it("Test 8: handle.sendAndStream rejecting with a non-abort error propagates via iterator error channel", async () => {
+    const handle = makeMockHandle({ rejectWith: new Error("boom") });
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await expect(
+      consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0])),
+    ).rejects.toThrow("boom");
+  });
+
+  it("Test 9: createHandle throwing synchronously propagates on first next()", async () => {
+    const createHandle = vi.fn().mockImplementation(() => {
+      throw new Error("sdk-init-failed");
+    }) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await expect(
+      consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0])),
+    ).rejects.toThrow("sdk-init-failed");
+    // Cache must NOT retain a failed entry.
+    expect(cache.size()).toBe(0);
+  });
+
+  it("haiku tier maps to claude-haiku-4-5-20251001", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ tier: "haiku" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    const opts = ((createHandle as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown as [SdkModule, SdkQueryOptions])[1];
+    expect(opts.model).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("ensureCwd is called with CLAWCODE_TRANSIENT_CWD on first handle materialization, not on reuse", async () => {
+    const ensureCwd = vi.fn();
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+      ensureCwd,
+    });
+    await consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    await consume(driver.dispatch(baseInput() as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    expect(ensureCwd).toHaveBeenCalledTimes(1);
+    expect(ensureCwd).toHaveBeenCalledWith(CLAWCODE_TRANSIENT_CWD);
+  });
+
+  it("baseOptions.systemPrompt is NEVER wrapped as a preset object form", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ soulPrompt: "CALLER SOUL PROMPT" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    const opts = ((createHandle as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown as [SdkModule, SdkQueryOptions])[1];
+    // Pitfall 2 guard — must be a plain string, NOT an object.
+    expect(typeof opts.systemPrompt).toBe("string");
+    expect(opts.systemPrompt).toBe("CALLER SOUL PROMPT");
+    // Belt-and-suspenders: the preset object form would have `type` + `preset` keys.
+    expect((opts.systemPrompt as unknown as { type?: unknown }).type).toBeUndefined();
+    expect((opts.systemPrompt as unknown as { preset?: unknown }).preset).toBeUndefined();
+  });
+
+  it("empty SOUL prompt is still passed through (empty string, not object)", async () => {
+    const handle = makeMockHandle();
+    const createHandle = vi.fn().mockReturnValue(handle) as unknown as typeof CreatePersistentFn;
+    const driver = createOpenClawTemplateDriver({
+      sdk: fakeSdk(),
+      cache,
+      log,
+      createHandle,
+    });
+    await consume(driver.dispatch(baseInput({ soulPrompt: "" }) as unknown as Parameters<OpenAiSessionDriver["dispatch"]>[0]));
+    const opts = ((createHandle as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown as [SdkModule, SdkQueryOptions])[1];
+    expect(opts.systemPrompt).toBe("");
+  });
+});
