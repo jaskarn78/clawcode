@@ -15,13 +15,18 @@ import type { SearchToolOutcome } from "../types.js";
  * (Phase 70) where the same pattern is established.
  */
 
+/** Convenience: loosens the mock type for call-arg inspection in tests. */
+type IpcMock = ReturnType<typeof vi.fn> & {
+  mock: { calls: Array<[string, string, Record<string, unknown>]> };
+};
+
 describe("search mcp-server handler (Phase 71 Plan 02)", () => {
   it("M1: forwards web_search call via sendIpc with {agent, toolName, args}", async () => {
     const sendIpc = vi.fn(async () =>
       ({ ok: true as const, data: { results: [], total: 0, provider: "brave", query: "x" } }) satisfies SearchToolOutcome,
-    );
+    ) as unknown as IpcMock;
     const handler = __testOnly_buildHandler("web_search", {
-      sendIpc,
+      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1] extends { sendIpc?: infer S } ? S : never,
       env: { CLAWCODE_AGENT: "clawdy" },
     });
     await handler({ query: "x" });
@@ -39,9 +44,9 @@ describe("search mcp-server handler (Phase 71 Plan 02)", () => {
   it("M2: args.agent overrides env.CLAWCODE_AGENT", async () => {
     const sendIpc = vi.fn(async () =>
       ({ ok: true as const, data: {} }) satisfies SearchToolOutcome,
-    );
+    ) as unknown as IpcMock;
     const handler = __testOnly_buildHandler("web_search", {
-      sendIpc,
+      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1] extends { sendIpc?: infer S } ? S : never,
       env: { CLAWCODE_AGENT: "from-env" },
     });
     await handler({ agent: "from-arg", query: "q" });
@@ -53,9 +58,9 @@ describe("search mcp-server handler (Phase 71 Plan 02)", () => {
   });
 
   it("M3: neither arg nor env → invalid_argument with isError=true", async () => {
-    const sendIpc = vi.fn();
+    const sendIpc = vi.fn() as unknown as IpcMock;
     const handler = __testOnly_buildHandler("web_search", {
-      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1]["sendIpc"],
+      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1] extends { sendIpc?: infer S } ? S : never,
       env: {},
     });
     const res = await handler({ query: "q" });
@@ -70,9 +75,9 @@ describe("search mcp-server handler (Phase 71 Plan 02)", () => {
   it("M4: sendIpc throws → isError=true with {error:{type:'internal', message}}", async () => {
     const sendIpc = vi.fn(async () => {
       throw new Error("socket blew up");
-    });
+    }) as unknown as IpcMock;
     const handler = __testOnly_buildHandler("web_search", {
-      sendIpc,
+      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1] extends { sendIpc?: infer S } ? S : never,
       env: { CLAWCODE_AGENT: "clawdy" },
     });
     const res = await handler({ query: "q" });
@@ -86,9 +91,9 @@ describe("search mcp-server handler (Phase 71 Plan 02)", () => {
     const data = { results: [{ title: "T", url: "u", snippet: "s" }], total: 1, provider: "brave", query: "q" };
     const sendIpc = vi.fn(async () =>
       ({ ok: true as const, data }) satisfies SearchToolOutcome,
-    );
+    ) as unknown as IpcMock;
     const handler = __testOnly_buildHandler("web_search", {
-      sendIpc,
+      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1] extends { sendIpc?: infer S } ? S : never,
       env: { CLAWCODE_AGENT: "clawdy" },
     });
     const res = await handler({ query: "q" });
@@ -105,9 +110,9 @@ describe("search mcp-server handler (Phase 71 Plan 02)", () => {
         ok: false as const,
         error: { type: "rate_limit", message: "429", retryAfter: 30 },
       }) satisfies SearchToolOutcome,
-    );
+    ) as unknown as IpcMock;
     const handler = __testOnly_buildHandler("web_search", {
-      sendIpc,
+      sendIpc: sendIpc as unknown as Parameters<typeof __testOnly_buildHandler>[1] extends { sendIpc?: infer S } ? S : never,
       env: { CLAWCODE_AGENT: "clawdy" },
     });
     const res = await handler({ query: "q" });

@@ -44,3 +44,42 @@ export interface IpcBrowserToolCallParams {
  * (text, or text + image for screenshots with inlineBase64).
  */
 export type IpcBrowserToolCallResult = BrowserToolOutcome;
+
+/* ------------------------------------------------------------------ */
+/*  Phase 71 — Web Search MCP IPC contract                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Parameters for the `search-tool-call` IPC method.
+ *
+ * Flow (mirrors Phase 70's browser-tool-call):
+ *   Claude SDK spawns `clawcode search-mcp` per agent session →
+ *   `src/search/mcp-server.ts` receives a tool call over stdio →
+ *   packs `{ agent, toolName, args }` into this shape →
+ *   `sendIpcRequest(SOCKET_PATH, "search-tool-call", ...)` →
+ *   daemon dispatches to `handleSearchToolCall` in
+ *   `src/search/daemon-handler.ts`, which calls `webSearch` or
+ *   `webFetchUrl` against the daemon-owned BraveClient/ExaClient/fetcher.
+ */
+export interface IpcSearchToolCallParams {
+  readonly agent: string;
+  readonly toolName: "web_search" | "web_fetch_url";
+  readonly args: Record<string, unknown>;
+}
+
+/**
+ * Result type for `search-tool-call`. Widened to `unknown` on the success
+ * branch to keep the IPC layer shallowly-typed — concrete shapes
+ * (`SearchResponse`, `FetchUrlResult`) live in the search module and are
+ * re-narrowed by the MCP subprocess when shaping the content envelope.
+ */
+export type IpcSearchToolCallResult =
+  | { readonly ok: true; readonly data: unknown }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly type: string;
+        readonly message: string;
+        readonly [k: string]: unknown;
+      };
+    };

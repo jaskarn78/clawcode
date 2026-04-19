@@ -88,6 +88,11 @@ export const IPC_METHODS = [
   // the out-of-process `clawcode browser-mcp` subprocess to the daemon's
   // shared BrowserManager + the pure handlers in src/browser/tools.ts.
   "browser-tool-call",
+  // Web search MCP (Phase 71) — routes per-agent tool calls from the
+  // out-of-process `clawcode search-mcp` subprocess to the daemon's
+  // shared BraveClient/ExaClient + URL fetcher + the pure handlers in
+  // src/search/tools.ts.
+  "search-tool-call",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
