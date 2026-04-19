@@ -537,8 +537,37 @@ async function handleChatCompletions(
     return { role: m.role, content: text };
   });
 
-  // 4. Model-to-key pinning. CONTEXT.md: "never leak agent name".
-  if (row.agent_name !== body.model) {
+  // 4. Scope-aware authorization (quick task 260419-p51 — P51-SERVER-SCOPE).
+  //    row.scope is one of:
+  //      - "all"            — multi-agent key; allowed on any configured agent.
+  //                           body.model MUST still be a real agent (else 404).
+  //      - "agent:<name>"   — legacy pinned key; allowed only on the bound agent.
+  //                           Mismatch → 403 (with no agent-name leak).
+  const expectedAgentScope = `agent:${body.model}`;
+  if (row.scope === "all") {
+    // Multi-agent key — the requested model MUST be a configured top-level agent.
+    // agentNames() is the truth source; if the model isn't listed, 404.
+    const knownModels = topLevelAgents(config.agentNames());
+    if (!knownModels.includes(body.model)) {
+      partial.error_type = "invalid_request_error";
+      partial.error_code = "unknown_model";
+      sendError(
+        res,
+        404,
+        "invalid_request_error",
+        `Unknown model: '${body.model}'`,
+        "unknown_model",
+        xRequestId,
+      );
+      return;
+    }
+    // Stamp the TARGETED agent into the log record — scope="all" means the
+    // key has no "owner" agent; the request determines which agent the turn
+    // routes to. Overrides the earlier partial.agent = row.agent_name (="*").
+    partial.agent = body.model;
+  } else if (row.scope === expectedAgentScope) {
+    // Legacy pinned key on its bound agent — partial.agent already set above.
+  } else {
     partial.error_type = "permission_error";
     partial.error_code = "agent_mismatch";
     sendError(
@@ -556,9 +585,14 @@ async function handleChatCompletions(
   // When `agentIsRunning` is provided (production path), bound the wait on
   // the agent becoming ready before dispatching. Plan 02 tests omit the
   // config field and skip the wait entirely — hermetic path preserved.
+  //
+  // Quick task 260419-p51: routing target is body.model (= the requested
+  // agent). For legacy pinned keys this equals row.agent_name; for
+  // scope='all' keys this is the user's choice.
+  const targetAgentName = body.model;
   if (config.agentIsRunning) {
     const ready = await waitForAgentReady(
-      row.agent_name,
+      targetAgentName,
       config.agentIsRunning,
       config.agentReadinessWaitMs ?? 300,
       config.agentReadinessPollIntervalMs ?? 50,
@@ -620,9 +654,11 @@ async function handleChatCompletions(
   res.on("close", onClientClose);
 
   // 7. Dispatch + branch on stream vs non-stream.
+  // Quick task 260419-p51: agentName is always body.model (= targetAgentName)
+  // so scope='all' keys route to the requested agent, not to "*".
   const turnId = newChatCompletionId();
   const driverInput = {
-    agentName: row.agent_name,
+    agentName: targetAgentName,
     keyHash: row.key_hash,
     lastUserMessage: translated.lastUserMessage,
     clientSystemAppend: translated.clientSystemAppend,
