@@ -126,7 +126,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   4. An OpenAI-format `tool_calls` round-trip (assistant emits `tool_calls` → client sends `role: "tool"` response → assistant continues) works against a ClawCode MCP tool with zero client-side awareness that the backend is Claude.
   5. Every trace row originating from the endpoint carries `TurnOrigin.kind = "openai-api"` with bearer-key fingerprint and client-sent `X-Request-Id` preserved, visible in `clawcode traces` CLI and dashboard — with zero TurnDispatcher contract changes.
   6. Missing / unknown / agent-mismatched bearer keys return `401` / `403` (never a 500 or a leaked agent name), and the v1.7 prompt-cache hit rate + first-token p95 SLO show no regression when driven through the endpoint vs. the Discord path.
-**Plans**: TBD
+**Plans**: 3 plans (see `.planning/phases/69-openai-compatible-endpoint/`)
 
 ### Phase 70: Browser Automation MCP
 **Goal**: Every agent can drive a real headless Chromium — navigate the live web, screenshot pages into Claude vision, click/fill forms, extract clean content, and wait for dynamic conditions — with a persistent per-agent profile that survives daemon restarts.
@@ -138,7 +138,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   3. Each agent's browser profile dir lives at `<agent-workspace>/browser/` and survives a daemon restart — logging into a site with one agent does NOT log any other agent in, and the logged-in agent stays logged in after `systemctl restart clawcoded`.
   4. The browser warms at daemon startup as a resident singleton (like the embedder from Phase 56), with a boot-time health probe that hard-fails daemon start if Chromium can't launch — and the browser MCP server auto-injects into every agent unless `mcpServers: []` opts out, matching the existing `clawcode`/`1password` pattern.
   5. `browser_wait_for` failures (timeout, selector never visible, URL never matches) return structured failure results — the agent sees a clear error it can recover from, never a silent hang or a raw stack trace — and p95 first-token on non-browser turns shows zero regression vs. the v1.7 baseline when the browser is idle.
-**Plans**: TBD
+**Plans**: 3 plans (see `.planning/phases/70-browser-automation-mcp/`)
 **UI hint**: yes
 
 ### Phase 71: Web Search MCP
@@ -151,7 +151,9 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   3. Duplicate `web_search` calls with the same query in one turn return cached results and do NOT re-hit the Brave API (verified by a single outbound HTTP request in the trace), with the cache scoped strictly to the current Turn — a later Turn with the same query hits the API fresh.
   4. The search MCP server auto-injects into every agent following the `clawcode`/`1password` pattern (opt-out via `mcpServers: []`), and the `web_search` + `web_fetch_url` tools appear on the v1.7 intra-turn idempotent whitelist so their cached reads emit the correct `cached: true` trace metadata.
   5. The v1.7 prompt-cache hit rate and first-token p95 SLO show no regression when agents are idle (search never called) — the Brave client is lazily initialized, not eagerly instantiated at daemon boot.
-**Plans**: TBD
+**Plans**: 2 plans
+  - [ ] 71-01-PLAN.md — Providers + tools + config (Brave/Exa clients, URL fetcher, pure tool handlers, schema + idempotent whitelist)
+  - [ ] 71-02-PLAN.md — MCP subprocess + CLI + auto-inject + smoke (stdio server, daemon wiring, loader auto-inject, smoke script, README)
 
 ### Phase 72: Image Generation MCP
 **Goal**: Every agent can generate and edit images via MiniMax, OpenAI Images, or fal.ai backends (per-agent config selectable), persist output to its workspace, deliver to Discord through the existing `send_attachment` pipeline, and surface image-generation spend in `clawcode costs` alongside token spend.
@@ -190,7 +192,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 |-------|----------------|--------|-----------|
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
-| 71. Web Search MCP | 0/- | Not started | - |
+| 71. Web Search MCP | 0/2 | Planned | - |
 | 72. Image Generation MCP | 0/- | Not started | - |
 
 ---
