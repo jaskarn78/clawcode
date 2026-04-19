@@ -200,6 +200,112 @@ describe("clawcode openai-key create", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Quick task 260419-p51 — --all flag coverage (P51-MULTI-AGENT-KEY)
+// ---------------------------------------------------------------------------
+
+describe("clawcode openai-key create --all", () => {
+  it("invokes runCreate with {all:true} when --all is set (no positional agent)", async () => {
+    const { deps, logs } = makeMockDeps({
+      runCreate: vi.fn(async () => ({
+        key: `ck_all_${"x".repeat(32)}`,
+        keyHash: "b".repeat(64),
+        agent: "*",
+        label: "openclaw-all",
+        expiresAt: null,
+        createdAt: 1_700_000_000_000,
+      })),
+    });
+    const program = makeProgram(deps);
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "openai-key",
+      "create",
+      "--all",
+      "--label",
+      "openclaw-all",
+    ]);
+    expect(deps.runCreate).toHaveBeenCalledOnce();
+    const call = (deps.runCreate as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(call.all).toBe(true);
+    expect(call.agent).toBeUndefined();
+    expect(call.label).toBe("openclaw-all");
+    // Output renders the "(all)" sentinel, never the raw "*".
+    const joined = logs.join("\n");
+    expect(joined).toContain("ck_all_");
+    expect(joined).toContain("(all)");
+    expect(joined).not.toMatch(/^Agent:\s*\*/m);
+  });
+
+  it("rejects {agent, --all} together — mutual exclusion, exits 1", async () => {
+    const { deps, errors, exitCodes } = makeMockDeps();
+    const program = makeProgram(deps);
+    await program.parseAsync([
+      "node",
+      "clawcode",
+      "openai-key",
+      "create",
+      "clawdy",
+      "--all",
+    ]);
+    expect(deps.runCreate).not.toHaveBeenCalled();
+    expect(exitCodes).toContain(1);
+    expect(errors.join("\n")).toMatch(/--all|agent/i);
+  });
+
+  it("rejects neither agent nor --all — exits 1 with helpful error", async () => {
+    const { deps, errors, exitCodes } = makeMockDeps();
+    const program = makeProgram(deps);
+    await program.parseAsync(["node", "clawcode", "openai-key", "create"]);
+    expect(deps.runCreate).not.toHaveBeenCalled();
+    expect(exitCodes).toContain(1);
+    expect(errors.join("\n")).toMatch(/agent|--all/i);
+  });
+});
+
+describe("clawcode openai-key list — Scope column", () => {
+  it("renders a Scope column with values like 'agent:clawdy' and 'all'", async () => {
+    const now = Date.now();
+    const { deps, logs } = makeMockDeps({
+      runList: vi.fn(async () => ({
+        rows: [
+          {
+            key_hash: "1234567890abcdef".repeat(4),
+            agent_name: "clawdy",
+            scope: "agent:clawdy",
+            label: "pinned",
+            created_at: now - 3600_000,
+            last_used_at: null,
+            expires_at: null,
+            disabled_at: null,
+          },
+          {
+            key_hash: "abcdef1234567890".repeat(4),
+            agent_name: "*",
+            scope: "all",
+            label: "fleet",
+            created_at: now - 7200_000,
+            last_used_at: null,
+            expires_at: null,
+            disabled_at: null,
+          },
+        ],
+      })),
+    });
+    const program = makeProgram(deps);
+    await program.parseAsync(["node", "clawcode", "openai-key", "list"]);
+    const out = logs.join("\n");
+    expect(out).toContain("Scope");
+    expect(out).toContain("agent:clawdy");
+    expect(out).toContain("all");
+    // Sanity: the Scope column sits between Agent and Hash in the header row.
+    const header = out.split("\n")[0] ?? "";
+    expect(header.indexOf("Agent")).toBeLessThan(header.indexOf("Scope"));
+    expect(header.indexOf("Scope")).toBeLessThan(header.indexOf("Hash"));
+  });
+});
+
 describe("clawcode openai-key list", () => {
   it("prints 'no keys yet' when list is empty", async () => {
     const { deps, logs } = makeMockDeps();
@@ -217,6 +323,7 @@ describe("clawcode openai-key list", () => {
             {
               key_hash: "1234567890abcdef".repeat(4),
               agent_name: "clawdy",
+              scope: "agent:clawdy",
               label: "label-active",
               created_at: now - 3600_000,
               last_used_at: now - 100_000,
@@ -226,6 +333,7 @@ describe("clawcode openai-key list", () => {
             {
               key_hash: "abcdef1234567890".repeat(4),
               agent_name: "clawdy",
+              scope: "agent:clawdy",
               label: "label-revoked",
               created_at: now - 7200_000,
               last_used_at: null,
@@ -235,6 +343,7 @@ describe("clawcode openai-key list", () => {
             {
               key_hash: "fedcba0987654321".repeat(4),
               agent_name: "clawdy",
+              scope: "agent:clawdy",
               label: "label-expired",
               created_at: now - 7200_000,
               last_used_at: null,
@@ -264,6 +373,7 @@ describe("clawcode openai-key list", () => {
             {
               key_hash: "a".repeat(64),
               agent_name: "clawdy",
+              scope: "agent:clawdy",
               label: "t",
               created_at: Date.now(),
               last_used_at: null,

@@ -27,11 +27,36 @@ import { ApiKeySessionIndex } from "./session-index.js";
 // Zod schemas (validated by daemon routeMethod before calling a handler)
 // ---------------------------------------------------------------------------
 
-export const openAiKeyCreateRequestSchema = z.object({
-  agent: z.string().min(1),
-  label: z.string().min(1).optional(),
-  expiresAt: z.number().int().positive().optional(),
-});
+/**
+ * Create-key request schema. Discriminated union on `{agent}` vs `{all:true}`:
+ *   - `{agent: "name"}` — legacy pinned key (back-compat).
+ *   - `{all: true}`     — multi-agent key (P51-MULTI-AGENT-KEY).
+ *
+ * The two shapes are mutually exclusive — Zod rejects both fields in the
+ * same payload. `label` + `expiresAt` are optional on either shape.
+ */
+const openAiKeyCreateRequestSingleSchema = z
+  .object({
+    agent: z.string().min(1),
+    all: z.undefined().optional(),
+    label: z.string().min(1).optional(),
+    expiresAt: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const openAiKeyCreateRequestAllSchema = z
+  .object({
+    agent: z.undefined().optional(),
+    all: z.literal(true),
+    label: z.string().min(1).optional(),
+    expiresAt: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const openAiKeyCreateRequestSchema = z.union([
+  openAiKeyCreateRequestSingleSchema,
+  openAiKeyCreateRequestAllSchema,
+]);
 export type OpenAiKeyCreateRequest = z.infer<typeof openAiKeyCreateRequestSchema>;
 
 export const openAiKeyCreateResponseSchema = z.object({
@@ -52,6 +77,8 @@ export const openAiKeyRowSchema = z.object({
   last_used_at: z.number().nullable(),
   expires_at: z.number().nullable(),
   disabled_at: z.number().nullable(),
+  // Quick task 260419-p51 — scope row, never null post-migration.
+  scope: z.string(),
 });
 export type OpenAiKeyRow = z.infer<typeof openAiKeyRowSchema>;
 
@@ -88,11 +115,36 @@ export interface OpenAiKeyIpcDeps {
   readonly agentNames: () => ReadonlyArray<string>;
 }
 
-/** `openai-key-create` handler — returns the plaintext key exactly once. */
+/**
+ * `openai-key-create` handler — returns the plaintext key exactly once.
+ *
+ * Branches on the discriminated union:
+ *   - `{all: true}`       → createAllKey (scope='all', agent_name='*')
+ *   - `{agent: "name"}`   → createKey (scope='agent:<name>', validated against
+ *                             the configured agent fleet)
+ */
 export function handleOpenAiKeyCreate(
   deps: OpenAiKeyIpcDeps,
   request: OpenAiKeyCreateRequest,
 ): OpenAiKeyCreateResponse {
+  if (request.all === true) {
+    // --all key — no single-agent validation (bearer accepted on any configured
+    // agent at request time; server.ts does the scope check).
+    const { key, row } = deps.apiKeysStore.createAllKey({
+      label: request.label,
+      expiresAt: request.expiresAt,
+    });
+    return {
+      key,
+      keyHash: row.key_hash,
+      agent: row.agent_name,
+      label: row.label,
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+    };
+  }
+
+  // Legacy pinned-key path — validate the agent name against the configured fleet.
   const agents = deps.agentNames();
   if (!agents.includes(request.agent)) {
     throw new Error(

@@ -113,11 +113,21 @@ function computeStatus(row: { disabled_at: number | null; expires_at: number | n
   return "active";
 }
 
+/**
+ * Render agent_name for the CLI — the `"*"` sentinel used by scope='all' keys
+ * is rendered as "(all)" everywhere end-users see it.
+ */
+function displayAgent(agentName: string): string {
+  return agentName === "*" ? "(all)" : agentName;
+}
+
 function renderListTable(rows: ReadonlyArray<OpenAiKeyRow | ApiKeyRow>): string {
-  const header = ["Label", "Agent", "Hash", "Created", "Last Used", "Expires", "Status"];
+  // Quick task 260419-p51 — new "Scope" column between Agent and Hash.
+  const header = ["Label", "Agent", "Scope", "Hash", "Created", "Last Used", "Expires", "Status"];
   const data = rows.map((r) => [
     r.label ?? "",
-    r.agent_name,
+    displayAgent(r.agent_name),
+    r.scope,
     r.key_hash.slice(0, 8),
     formatIso(r.created_at),
     formatIso(r.last_used_at),
@@ -140,28 +150,33 @@ function renderListTable(rows: ReadonlyArray<OpenAiKeyRow | ApiKeyRow>): string 
 // Subcommand handlers
 // ---------------------------------------------------------------------------
 
-/** `create` subcommand — IPC path. */
+/** `create` subcommand — IPC path. Forwards the discriminated-union payload verbatim. */
 async function runCreateIpc(
   req: OpenAiKeyCreateRequest,
 ): Promise<OpenAiKeyCreateResponse> {
-  const result = await sendIpcRequest(SOCKET_PATH, "openai-key-create", {
-    agent: req.agent,
+  // Pass the union through verbatim — IPC server re-validates with the Zod schema.
+  const payload: Record<string, unknown> = {
     label: req.label,
     expiresAt: req.expiresAt,
-  });
+  };
+  if (req.all === true) {
+    payload["all"] = true;
+  } else {
+    payload["agent"] = req.agent;
+  }
+  const result = await sendIpcRequest(SOCKET_PATH, "openai-key-create", payload);
   return result as OpenAiKeyCreateResponse;
 }
 
-/** `create` subcommand — direct DB fallback. */
+/** `create` subcommand — direct DB fallback. Handles both single-agent and --all. */
 function runCreateDirect(
   req: OpenAiKeyCreateRequest,
 ): OpenAiKeyCreateResponse {
   const store = new ApiKeysStore(API_KEYS_DB_PATH);
   try {
-    const { key, row } = store.createKey(req.agent, {
-      label: req.label,
-      expiresAt: req.expiresAt,
-    });
+    const { key, row } = req.all === true
+      ? store.createAllKey({ label: req.label, expiresAt: req.expiresAt })
+      : store.createKey(req.agent, { label: req.label, expiresAt: req.expiresAt });
     return {
       key,
       keyHash: row.key_hash,
@@ -266,39 +281,67 @@ export function registerOpenAiKeyCommand(
     .description("Manage bearer keys for the OpenAI-compatible endpoint");
 
   root
-    .command("create <agent>")
-    .description("Create a new bearer key for an agent (prints the key ONCE)")
+    .command("create [agent]")
+    .description(
+      "Create a new bearer key. Provide an agent name for a pinned key, or --all for a multi-agent key (prints the key ONCE).",
+    )
+    .option("--all", "Scope the key to ALL configured agents (P51-MULTI-AGENT-KEY)")
     .option("--label <name>", "Human-readable label (optional)")
     .option("--expires <duration>", "Expiry duration like 30d, 6h, or 'never'", "never")
-    .action(async (agent: string, opts: { label?: string; expires: string }) => {
-      try {
-        let expiresAt: number | undefined;
-        const ms = parseDuration(opts.expires);
-        if (ms !== null) {
-          expiresAt = Date.now() + ms;
+    .action(
+      async (
+        agent: string | undefined,
+        opts: { all?: boolean; label?: string; expires: string },
+      ) => {
+        try {
+          // Quick task 260419-p51 — mutual exclusion on agent vs --all.
+          if (agent && opts.all) {
+            deps.error(
+              "Error: specify one of <agent> or --all, not both.",
+            );
+            deps.exit(1);
+            return;
+          }
+          if (!agent && !opts.all) {
+            deps.error(
+              "Error: specify an <agent> name or pass --all for a multi-agent key.",
+            );
+            deps.exit(1);
+            return;
+          }
+
+          let expiresAt: number | undefined;
+          const ms = parseDuration(opts.expires);
+          if (ms !== null) {
+            expiresAt = Date.now() + ms;
+          }
+
+          const req: OpenAiKeyCreateRequest = opts.all
+            ? { all: true, label: opts.label, expiresAt }
+            : { agent: agent as string, label: opts.label, expiresAt };
+
+          const response = await deps.runCreate(req);
+          const lines: string[] = [];
+          lines.push(`Key:     ${response.key}`);
+          // Render the "*" sentinel as "(all)" for end-users.
+          lines.push(
+            `Agent:   ${response.agent === "*" ? "(all)" : response.agent}`,
+          );
+          lines.push(`Label:   ${response.label ?? "(none)"}`);
+          lines.push(
+            `Expires: ${response.expiresAt === null ? "never" : new Date(response.expiresAt).toISOString()}`,
+          );
+          lines.push(`Hash:    ${response.keyHash.slice(0, 8)}...`);
+          lines.push("");
+          lines.push("Store this key securely — it will not be shown again.");
+          deps.log(lines.join("\n"));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          deps.error(`Error: ${msg}`);
+          deps.exit(1);
         }
-        const response = await deps.runCreate({
-          agent,
-          label: opts.label,
-          expiresAt,
-        });
-        const lines: string[] = [];
-        lines.push(`Key:     ${response.key}`);
-        lines.push(`Agent:   ${response.agent}`);
-        lines.push(`Label:   ${response.label ?? "(none)"}`);
-        lines.push(
-          `Expires: ${response.expiresAt === null ? "never" : new Date(response.expiresAt).toISOString()}`,
-        );
-        lines.push(`Hash:    ${response.keyHash.slice(0, 8)}...`);
-        lines.push("");
-        lines.push("Store this key securely — it will not be shown again.");
-        deps.log(lines.join("\n"));
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        deps.error(`Error: ${msg}`);
-        deps.exit(1);
-      }
-    });
+      },
+    );
 
   root
     .command("list")
