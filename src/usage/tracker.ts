@@ -2,7 +2,12 @@ import Database from "better-sqlite3";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { nanoid } from "nanoid";
 import { addDays } from "date-fns";
-import type { UsageEvent, UsageAggregate, CostByAgentModel } from "./types.js";
+import type {
+  UsageEvent,
+  UsageAggregate,
+  CostByAgentModel,
+  CostByCategory,
+} from "./types.js";
 
 /**
  * Zero-value aggregate returned when no events match a query.
@@ -25,6 +30,7 @@ type PreparedStatements = {
   readonly totalUsage: Statement;
   readonly totalUsageByAgent: Statement;
   readonly costsByAgentModel: Statement;
+  readonly costsByCategory: Statement;
 };
 
 /**
@@ -61,6 +67,10 @@ export class UsageTracker {
 
   /**
    * Record a usage event.
+   *
+   * Phase 72: optional `category`, `backend`, `count` fields are
+   * appended for image-generation rows. Existing token call sites
+   * leave them undefined → stored as NULL → exposed as null on read.
    */
   record(event: Omit<UsageEvent, "id">): void {
     const id = nanoid();
@@ -75,6 +85,9 @@ export class UsageTracker {
       event.model,
       event.duration_ms,
       event.session_id,
+      event.category ?? null,
+      event.backend ?? null,
+      event.count ?? null,
     );
   }
 
@@ -132,6 +145,20 @@ export class UsageTracker {
   }
 
   /**
+   * Phase 72 — get cost totals grouped by category (tokens vs image)
+   * for a time range. Pre-Phase-72 NULL rows are coalesced into the
+   * "tokens" bucket so the historical token spend rolls up correctly.
+   *
+   * @param startTime - ISO timestamp (inclusive)
+   * @param endTime - ISO timestamp (exclusive)
+   * @returns Frozen array of `{ category, cost_usd }` rows.
+   */
+  getCostsByCategory(startTime: string, endTime: string): readonly CostByCategory[] {
+    const rows = this.stmts.costsByCategory.all(startTime, endTime) as CostByCategory[];
+    return Object.freeze(rows.map((row) => Object.freeze({ ...row })));
+  }
+
+  /**
    * Close the database connection.
    */
   close(): void {
@@ -157,6 +184,29 @@ export class UsageTracker {
       CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_events(timestamp);
       CREATE INDEX IF NOT EXISTS idx_usage_agent ON usage_events(agent);
     `);
+
+    // Phase 72 — idempotent column migrations. SQLite throws "duplicate
+    // column name" on a re-add; we swallow only that specific error and
+    // re-throw anything else (DB locked, schema mismatch, etc).
+    this.addColumnIfMissing("category", "TEXT");
+    this.addColumnIfMissing("backend", "TEXT");
+    this.addColumnIfMissing("count", "INTEGER");
+  }
+
+  /**
+   * Add a nullable column to `usage_events` if it doesn't already exist.
+   * Idempotent: safe to call on every constructor invocation. Surfaces
+   * any non-"duplicate column" error verbatim.
+   */
+  private addColumnIfMissing(column: string, type: string): void {
+    try {
+      this.db.exec(`ALTER TABLE usage_events ADD COLUMN ${column} ${type}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/duplicate column/i.test(msg)) {
+        throw err;
+      }
+    }
   }
 
   private prepareStatements(): PreparedStatements {
@@ -171,8 +221,8 @@ export class UsageTracker {
 
     return {
       insert: this.db.prepare(`
-        INSERT INTO usage_events (id, agent, timestamp, tokens_in, tokens_out, cost_usd, turns, model, duration_ms, session_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO usage_events (id, agent, timestamp, tokens_in, tokens_out, cost_usd, turns, model, duration_ms, session_id, category, backend, count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       sessionUsage: this.db.prepare(`
         SELECT ${aggregateSql} FROM usage_events WHERE session_id = ?
@@ -190,13 +240,21 @@ export class UsageTracker {
         SELECT ${aggregateSql} FROM usage_events WHERE agent = ?
       `),
       costsByAgentModel: this.db.prepare(`
-        SELECT agent, model,
+        SELECT agent, model, category,
           COALESCE(SUM(tokens_in), 0) AS tokens_in,
           COALESCE(SUM(tokens_out), 0) AS tokens_out,
           COALESCE(SUM(cost_usd), 0) AS cost_usd
         FROM usage_events
         WHERE timestamp >= ? AND timestamp < ?
-        GROUP BY agent, model
+        GROUP BY agent, model, category
+        ORDER BY cost_usd DESC
+      `),
+      costsByCategory: this.db.prepare(`
+        SELECT COALESCE(category, 'tokens') AS category,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM usage_events
+        WHERE timestamp >= ? AND timestamp < ?
+        GROUP BY COALESCE(category, 'tokens')
         ORDER BY cost_usd DESC
       `),
     };

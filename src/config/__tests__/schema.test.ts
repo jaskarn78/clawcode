@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, streamingConfigSchema } from "../schema.js";
+import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, streamingConfigSchema } from "../schema.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
@@ -976,5 +976,82 @@ describe("searchConfigSchema (Phase 71)", () => {
     expect(() => {
       (IDEMPOTENT_TOOL_DEFAULTS as string[]).push("nope");
     }).toThrow();
+  });
+
+  // --------------------------------------------------------------------------
+  // Phase 72 — image generation MCP config schema
+  // --------------------------------------------------------------------------
+
+  it("S1: imageConfigSchema parses empty input and returns documented defaults", () => {
+    const parsed = imageConfigSchema.parse({});
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.backend).toBe("openai");
+    expect(parsed.openai.apiKeyEnv).toBe("OPENAI_API_KEY");
+    expect(parsed.openai.model).toBe("gpt-image-1");
+    expect(parsed.minimax.apiKeyEnv).toBe("MINIMAX_API_KEY");
+    expect(parsed.minimax.model).toBe("image-01");
+    expect(parsed.fal.apiKeyEnv).toBe("FAL_API_KEY");
+    expect(parsed.fal.model).toBe("fal-ai/flux-pro");
+    expect(parsed.maxImageBytes).toBe(10485760);
+    expect(parsed.timeoutMs).toBe(60000);
+    expect(parsed.workspaceSubdir).toBe("generated-images");
+  });
+
+  it("S2: imageConfigSchema rejects unknown backend (z.enum strict)", () => {
+    const result = imageConfigSchema.safeParse({ backend: "stable-diffusion" });
+    expect(result.success).toBe(false);
+  });
+
+  it("S3: defaultsSchema parses minimal config and image block is populated", () => {
+    const parsed = defaultsSchema.parse({});
+    expect(parsed.image).toBeDefined();
+    expect(parsed.image.backend).toBe("openai");
+    expect(parsed.image.openai.model).toBe("gpt-image-1");
+  });
+
+  it("S4: configSchema with only version+agents produces a populated defaults.image block equal to imageConfigSchema().parse({})", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const expected = imageConfigSchema.parse({});
+    expect(result.data.defaults.image).toEqual(expected);
+  });
+
+  it("S5: imageConfigSchema rejects maxImageBytes one byte over 10MB", () => {
+    const result = imageConfigSchema.safeParse({ maxImageBytes: 10485761 });
+    expect(result.success).toBe(false);
+  });
+
+  it("imageConfigSchema rejects timeoutMs over 5 minutes", () => {
+    expect(imageConfigSchema.safeParse({ timeoutMs: 300001 }).success).toBe(false);
+    expect(imageConfigSchema.safeParse({ timeoutMs: 300000 }).success).toBe(true);
+    expect(imageConfigSchema.safeParse({ timeoutMs: 999 }).success).toBe(false);
+  });
+
+  it("imageConfigSchema rejects empty workspaceSubdir", () => {
+    expect(imageConfigSchema.safeParse({ workspaceSubdir: "" }).success).toBe(false);
+  });
+
+  it("imageConfigSchema rejects empty apiKeyEnv on any backend", () => {
+    expect(
+      imageConfigSchema.safeParse({ openai: { apiKeyEnv: "", model: "x" } }).success,
+    ).toBe(false);
+    expect(
+      imageConfigSchema.safeParse({ minimax: { apiKeyEnv: "", model: "x" } }).success,
+    ).toBe(false);
+    expect(
+      imageConfigSchema.safeParse({ fal: { apiKeyEnv: "", model: "x" } }).success,
+    ).toBe(false);
+  });
+
+  it("IDEMPOTENT_TOOL_DEFAULTS does NOT contain image_generate / image_edit / image_variations", () => {
+    // Image tools are non-deterministic — same prompt yields different images.
+    // Caching them would be a correctness bug.
+    expect(IDEMPOTENT_TOOL_DEFAULTS).not.toContain("image_generate");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).not.toContain("image_edit");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).not.toContain("image_variations");
   });
 });

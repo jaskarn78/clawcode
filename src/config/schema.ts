@@ -534,6 +534,82 @@ export const searchConfigSchema = z
 export type SearchConfig = z.infer<typeof searchConfigSchema>;
 
 /**
+ * Phase 72 — image generation MCP config (IMAGE-01..04).
+ *
+ * Lives under `defaults.image` in clawcode.yaml. Governs the auto-injected
+ * image-generation MCP subprocess (Plan 02 wires the subprocess + CLI +
+ * daemon auto-inject); this schema shapes the three pure tool handlers
+ * (`image_generate`, `image_edit`, `image_variations`) built in Plan 01.
+ *
+ * Architecture: backend union locked at `["openai", "minimax", "fal"]`
+ * per 72-CONTEXT D-01 (no Stable Diffusion / Midjourney / video stubs).
+ * Provider API keys are read LAZILY at client call time — missing keys at
+ * daemon boot do NOT crash, they surface as structured `invalid_input`
+ * errors on the first call instead.
+ *
+ * Zero new npm deps: providers use native `fetch` + native `FormData`
+ * (Node 22 has both built-in).
+ *
+ * Bounds rationale:
+ *  - `maxImageBytes` 1..10 MiB — 10 MiB ceiling matches the Discord
+ *    attachment limit (Nitro-free guilds get 10 MiB) so generated
+ *    artifacts can always be delivered via send_attachment.
+ *  - `timeoutMs` 1s..5min — image generation has more variance than text
+ *    (DALL-E HD can take 30-60s; flux-pro 10-20s); 5 min ceiling is the
+ *    backend's own published max-runtime budget.
+ *  - `workspaceSubdir` non-empty — defaults to `"generated-images"`;
+ *    written to `<agent-workspace>/<workspaceSubdir>/<timestamp>-<id>.png`.
+ */
+export const imageConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    backend: z.enum(["openai", "minimax", "fal"]).default("openai"),
+    openai: z
+      .object({
+        apiKeyEnv: z.string().min(1).default("OPENAI_API_KEY"),
+        model: z.string().min(1).default("gpt-image-1"),
+      })
+      .default(() => ({
+        apiKeyEnv: "OPENAI_API_KEY",
+        model: "gpt-image-1",
+      })),
+    minimax: z
+      .object({
+        apiKeyEnv: z.string().min(1).default("MINIMAX_API_KEY"),
+        model: z.string().min(1).default("image-01"),
+      })
+      .default(() => ({
+        apiKeyEnv: "MINIMAX_API_KEY",
+        model: "image-01",
+      })),
+    fal: z
+      .object({
+        apiKeyEnv: z.string().min(1).default("FAL_API_KEY"),
+        model: z.string().min(1).default("fal-ai/flux-pro"),
+      })
+      .default(() => ({
+        apiKeyEnv: "FAL_API_KEY",
+        model: "fal-ai/flux-pro",
+      })),
+    maxImageBytes: z.number().int().min(1).max(10485760).default(10485760),
+    timeoutMs: z.number().int().min(1000).max(300000).default(60000),
+    workspaceSubdir: z.string().min(1).default("generated-images"),
+  })
+  .default(() => ({
+    enabled: true,
+    backend: "openai" as const,
+    openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+    minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+    fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+    maxImageBytes: 10485760,
+    timeoutMs: 60000,
+    workspaceSubdir: "generated-images",
+  }));
+
+/** Inferred Phase 72 image config type. */
+export type ImageConfig = z.infer<typeof imageConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -635,6 +711,13 @@ export const defaultsSchema = z.object({
   // Exa provider clients + URL fetcher + Readability adapter. Backend
   // union locked at brave|exa; API keys read lazily at client call time.
   search: searchConfigSchema,
+  // Phase 72: image generation MCP config (IMAGE-01..04). Governs the
+  // OpenAI / MiniMax / fal.ai provider clients + workspace writer + cost
+  // recorder. Backend union locked at openai|minimax|fal; API keys read
+  // lazily at client call time. image_generate / edit / variations are
+  // NOT idempotent (different images for same prompt) — explicitly
+  // excluded from IDEMPOTENT_TOOL_DEFAULTS.
+  image: imageConfigSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -799,6 +882,17 @@ export const configSchema = z.object({
         maxBytes: 1048576,
         userAgentSuffix: null,
       },
+    },
+    // Phase 72 — image generation MCP defaults (IMAGE-01..04).
+    image: {
+      enabled: true,
+      backend: "openai" as const,
+      openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+      minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+      fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+      maxImageBytes: 10485760,
+      timeoutMs: 60000,
+      workspaceSubdir: "generated-images",
     },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
