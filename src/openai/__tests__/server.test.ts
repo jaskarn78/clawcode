@@ -339,6 +339,139 @@ describe("POST /v1/chat/completions — auth (OPENAI-04)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Quick task 260419-p51 — scope-aware auth (P51-SERVER-SCOPE)
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/chat/completions — scope-aware auth (P51-SERVER-SCOPE)", () => {
+  it("legacy pinned key on its own agent → 200 (no regression)", async () => {
+    const h = await bootHarness({ events: textStream });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("legacy pinned key on OTHER agent → 403 code:agent_mismatch (no regression)", async () => {
+    const h = await bootHarness({ events: textStream });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "assistant",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error.code).toBe("agent_mismatch");
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("scope='all' key on any configured agent → 200", async () => {
+    const h = await bootHarness({ events: textStream });
+    try {
+      // Mint an --all key directly on the store.
+      const { key: allKey } = h.keysStore.createAllKey({ label: "fleet" });
+      // First hit: clawdy
+      const r1 = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${allKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(r1.status).toBe(200);
+      // Second hit: assistant (a different agent with the same key).
+      const r2 = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${allKey}`,
+        },
+        body: JSON.stringify({
+          model: "assistant",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(r2.status).toBe(200);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("scope='all' key on unknown model → 404 code:unknown_model", async () => {
+    const h = await bootHarness({ events: textStream });
+    try {
+      const { key: allKey } = h.keysStore.createAllKey({ label: "fleet" });
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${allKey}`,
+        },
+        body: JSON.stringify({
+          model: "does-not-exist",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.error.code).toBe("unknown_model");
+      expect(body.error.type).toBe("invalid_request_error");
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("scope='all' key stamps driverInput.agentName = body.model (not the key's owner)", async () => {
+    const h = await bootHarness({ events: textStream });
+    try {
+      const { key: allKey } = h.keysStore.createAllKey({ label: "fleet" });
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${allKey}`,
+        },
+        body: JSON.stringify({
+          model: "assistant",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      // The mock driver captured the dispatch input — agentName should be
+      // "assistant" (the requested model), NOT "*" (the --all key's owner).
+      const call = h.driver.calls.at(-1);
+      expect(call?.agentName).toBe("assistant");
+    } finally {
+      await teardown(h);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: OPENAI-01 non-streaming
 // ---------------------------------------------------------------------------
 

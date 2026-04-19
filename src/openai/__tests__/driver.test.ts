@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   API_KEY_SESSIONS_MIGRATION_SQL,
+  API_KEY_SESSIONS_MIGRATION_V2_SQL,
   ApiKeySessionIndex,
 } from "../session-index.js";
 import { createOpenAiSessionDriver } from "../driver.js";
@@ -67,6 +68,7 @@ function makeMockDeps(overrides: Partial<OpenAiSessionDriverDeps> = {}): {
 } {
   const db = new Database(":memory:");
   db.exec(API_KEY_SESSIONS_MIGRATION_SQL);
+  db.exec(API_KEY_SESSIONS_MIGRATION_V2_SQL);
 
   const events = {
     dispatchStreamCalls: [] as Array<{
@@ -243,7 +245,7 @@ describe("createOpenAiSessionDriver", () => {
       }),
     );
     const sessionIndex = deps.sessionIndexFor("clawdy");
-    const found = sessionIndex.lookup(keyHash);
+    const found = sessionIndex.lookup(keyHash, "clawdy");
     expect(found?.session_id).toBe("sess-generated-by-sdk");
     expect(found?.agent_name).toBe("clawdy");
   });
@@ -259,12 +261,12 @@ describe("createOpenAiSessionDriver", () => {
     // touch() strictly bumps it forward.
     const sessionIndex = deps.sessionIndexFor("clawdy");
     sessionIndex.record(keyHash, "clawdy", "sess-previous");
-    d.prepare("UPDATE api_key_sessions SET last_used_at = ? WHERE key_hash = ?").run(
+    d.prepare("UPDATE api_key_sessions_v2 SET last_used_at = ? WHERE key_hash = ?").run(
       1000,
       keyHash,
     );
     const before = d
-      .prepare("SELECT last_used_at FROM api_key_sessions WHERE key_hash = ?")
+      .prepare("SELECT last_used_at FROM api_key_sessions_v2 WHERE key_hash = ?")
       .get(keyHash) as { last_used_at: number };
 
     await collect(
@@ -283,7 +285,7 @@ describe("createOpenAiSessionDriver", () => {
 
     const after = d
       .prepare(
-        "SELECT last_used_at, session_id FROM api_key_sessions WHERE key_hash = ?",
+        "SELECT last_used_at, session_id FROM api_key_sessions_v2 WHERE key_hash = ?",
       )
       .get(keyHash) as { last_used_at: number; session_id: string };
     expect(after.last_used_at).toBeGreaterThan(before.last_used_at);
@@ -338,8 +340,62 @@ describe("createOpenAiSessionDriver", () => {
     );
 
     const idx = deps.sessionIndexFor("clawdy");
-    expect(idx.lookup(key1)?.session_id).toBe("sess-key1");
-    expect(idx.lookup(key2)?.session_id).toBe("sess-key2");
+    expect(idx.lookup(key1, "clawdy")?.session_id).toBe("sess-key1");
+    expect(idx.lookup(key2, "clawdy")?.session_id).toBe("sess-key2");
+  });
+
+  // Quick task 260419-p51 — same bearer key + different agents → independent sessions.
+  it("same key_hash on different agents records independent (key_hash, agent) sessions", async () => {
+    const { deps, db: d } = makeMockDeps();
+    db = d;
+    const driver = createOpenAiSessionDriver(deps);
+    const keyHash = "9".repeat(64);
+
+    // Driver mock must return a DIFFERENT session_id per agent so we can
+    // confirm the per-(key, agent) mapping survives independently.
+    const sm = deps.sessionManager as unknown as {
+      getActiveConversationSessionId: ReturnType<typeof vi.fn>;
+    };
+    sm.getActiveConversationSessionId
+      .mockReturnValueOnce("sess-clawdy-A")
+      .mockReturnValueOnce("sess-assistant-B");
+
+    const ac = new AbortController();
+    await collect(
+      driver.dispatch({
+        agentName: "clawdy",
+        keyHash,
+        lastUserMessage: "Hi from clawdy",
+        clientSystemAppend: null,
+        tools: null,
+        toolChoice: null,
+        toolResults: [],
+        signal: ac.signal,
+        xRequestId: "req-clawdy",
+      }),
+    );
+    await collect(
+      driver.dispatch({
+        agentName: "assistant",
+        keyHash,
+        lastUserMessage: "Hi from assistant",
+        clientSystemAppend: null,
+        tools: null,
+        toolChoice: null,
+        toolResults: [],
+        signal: ac.signal,
+        xRequestId: "req-assistant",
+      }),
+    );
+
+    const idx = deps.sessionIndexFor("ignored");
+    expect(idx.lookup(keyHash, "clawdy")?.session_id).toBe("sess-clawdy-A");
+    expect(idx.lookup(keyHash, "assistant")?.session_id).toBe("sess-assistant-B");
+    // Both rows coexist under the composite PK.
+    const rowCount = d
+      .prepare("SELECT COUNT(*) AS n FROM api_key_sessions_v2 WHERE key_hash = ?")
+      .get(keyHash) as { n: number };
+    expect(rowCount.n).toBe(2);
   });
 
   it("caller-owned Turn is started with origin.source.kind === 'openai-api' and source.id === first-8-hex(keyHash)", async () => {
