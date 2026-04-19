@@ -678,6 +678,123 @@ describe("createStreamingTranslator — parallel tool calls preserve order", () 
 });
 
 // ---------------------------------------------------------------------------
+// createStreamingTranslator — usage trailer (stream_options.include_usage)
+// ---------------------------------------------------------------------------
+
+describe("createStreamingTranslator — usage trailer (stream_options.include_usage)", () => {
+  // U1: legacy no-arg form — one terminal chunk, derived finish_reason.
+  it("finalize() with no arg returns 1 chunk with delta:{} (regression guard)", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-1", model: "clawdy" });
+    for (const e of textStreamFixture) t.onEvent(e);
+    const out = t.finalize();
+    expect(out).toHaveLength(1);
+    expect(out[0]!.choices[0]!.delta).toEqual({});
+    expect(out[0]!.choices[0]!.finish_reason).toBe("stop");
+    expect(out[0]!.usage).toBeUndefined();
+  });
+
+  // U2: legacy positional string form — backward compat.
+  it("finalize('stop') positional arg still works (backward compat with Plan 02 tests)", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-2", model: "clawdy" });
+    for (const e of textStreamFixture) t.onEvent(e);
+    const out = t.finalize("stop");
+    expect(out).toHaveLength(1);
+    expect(out[0]!.choices[0]!.finish_reason).toBe("stop");
+    expect(out[0]!.usage).toBeUndefined();
+  });
+
+  // U3: object form with includeUsage:false — identical to no-flag.
+  it("finalize({ includeUsage: false }) returns 1 chunk, no usage trailer", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-3", model: "clawdy" });
+    for (const e of textStreamFixture) t.onEvent(e);
+    const out = t.finalize({ includeUsage: false });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.choices[0]!.delta).toEqual({});
+    expect(out[0]!.choices[0]!.finish_reason).toBe("stop");
+    expect(out[0]!.usage).toBeUndefined();
+  });
+
+  // U4: tool-use fixture with includeUsage:true → terminal + usage chunk.
+  it("finalize({ includeUsage: true }) on tool-use stream emits terminal + usage chunk", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-4", model: "clawdy" });
+    for (const e of toolUseStreamFixture) t.onEvent(e);
+    const out = t.finalize({ includeUsage: true });
+    expect(out).toHaveLength(2);
+    // Terminal chunk: unchanged
+    expect(out[0]!.choices[0]!.delta).toEqual({});
+    expect(out[0]!.choices[0]!.finish_reason).toBe("tool_calls");
+    expect(out[0]!.usage).toBeUndefined();
+    // Usage chunk: choices:[] (NOT choices[0]), has usage object.
+    expect(out[1]!.choices).toEqual([]);
+    expect(out[1]!.usage).toBeDefined();
+    // tool-use fixture: input_tokens:20, output_tokens:10, cache_read:0
+    expect(out[1]!.usage!.prompt_tokens).toBe(20);
+    expect(out[1]!.usage!.completion_tokens).toBe(10);
+    expect(out[1]!.usage!.total_tokens).toBe(30);
+  });
+
+  // U5: text fixture with includeUsage:true → terminal + usage with text fixture numbers.
+  it("finalize({ includeUsage: true }) on text stream emits terminal + usage chunk with text numbers", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-5", model: "clawdy" });
+    for (const e of textStreamFixture) t.onEvent(e);
+    const out = t.finalize({ includeUsage: true });
+    expect(out).toHaveLength(2);
+    expect(out[0]!.choices[0]!.finish_reason).toBe("stop");
+    // text fixture: input_tokens:12, output_tokens:3, cache_read:0
+    expect(out[1]!.choices).toEqual([]);
+    expect(out[1]!.usage!.prompt_tokens).toBe(12);
+    expect(out[1]!.usage!.completion_tokens).toBe(3);
+    expect(out[1]!.usage!.total_tokens).toBe(15);
+  });
+
+  // U6: no result event → terminal only, NO usage chunk even when flag true.
+  it("finalize({ includeUsage: true }) with no result event emits terminal ONLY (no usage chunk)", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-6", model: "clawdy" });
+    // Synthesize: content_block_start(text) + text_delta + content_block_stop.
+    // No `result` event — so usage stays undefined.
+    const noResult: SdkStreamEvent[] = [
+      { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text" } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hi" } } },
+      { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+    ];
+    for (const e of noResult) t.onEvent(e);
+    expect(t.usage).toBeUndefined();
+    const out = t.finalize({ includeUsage: true });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.choices[0]!.delta).toEqual({});
+    expect(out[0]!.choices[0]!.finish_reason).toBe("stop");
+  });
+
+  // U7: both params — finishReason override + includeUsage.
+  it("finalize({ finishReason: 'length', includeUsage: true }) honors both args", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-7", model: "clawdy" });
+    for (const e of textStreamFixture) t.onEvent(e);
+    const out = t.finalize({ finishReason: "length", includeUsage: true });
+    expect(out).toHaveLength(2);
+    expect(out[0]!.choices[0]!.finish_reason).toBe("length");
+    expect(out[1]!.choices).toEqual([]);
+    expect(out[1]!.usage).toBeDefined();
+  });
+
+  // U8: load-bearing same-id/object/model invariant across terminal + usage chunks.
+  it("terminal chunk and usage chunk share id, object, model (OpenAI clients group by id)", () => {
+    const t = createStreamingTranslator({ id: "chatcmpl-usage-8", model: "clawdy" });
+    for (const e of textStreamFixture) t.onEvent(e);
+    const out = t.finalize({ includeUsage: true });
+    expect(out).toHaveLength(2);
+    expect(out[0]!.id).toBe("chatcmpl-usage-8");
+    expect(out[1]!.id).toBe("chatcmpl-usage-8");
+    expect(out[0]!.object).toBe("chat.completion.chunk");
+    expect(out[1]!.object).toBe("chat.completion.chunk");
+    expect(out[0]!.model).toBe("clawdy");
+    expect(out[1]!.model).toBe("clawdy");
+    // `created` is epoch seconds on both (Pitfall 2 — same-turn timing).
+    expect(typeof out[0]!.created).toBe("number");
+    expect(typeof out[1]!.created).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // makeChunk (primitive)
 // ---------------------------------------------------------------------------
 

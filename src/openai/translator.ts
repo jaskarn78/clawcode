@@ -48,6 +48,7 @@ import type {
   ChatCompletionResponse,
   ChatCompletionToolCall,
   ChatCompletionToolCallDelta,
+  ChatCompletionUsage,
   ClaudeToolChoice,
   ClaudeToolDef,
   ClaudeToolResultBlock,
@@ -326,6 +327,36 @@ export function makeNonStreamResponse(params: {
 }
 
 /**
+ * Build the OpenAI `stream_options.include_usage` trailing chunk:
+ *
+ *   { id, object:"chat.completion.chunk", created, model,
+ *     choices: [],
+ *     usage: { prompt_tokens, completion_tokens, total_tokens } }
+ *
+ * Spec: https://platform.openai.com/docs/api-reference/chat/streaming
+ * `choices` is intentionally the empty array on this final usage chunk —
+ * clients that opted into `stream_options.include_usage` expect exactly this
+ * shape after the terminal finish_reason chunk, before the [DONE] sentinel.
+ *
+ * Module-private — one-call primitive owned by `createStreamingTranslator`.
+ */
+function makeUsageChunk(params: {
+  id: string;
+  model: string;
+  usage: ChatCompletionUsage;
+  created?: number;
+}): ChatCompletionChunk {
+  return {
+    id: params.id,
+    object: "chat.completion.chunk",
+    created: params.created ?? epochSeconds(),
+    model: params.model,
+    choices: [],
+    usage: params.usage,
+  };
+}
+
+/**
  * Build a streaming chunk with the given delta and finish_reason. Pure
  * record builder — no state. `role` is a property of the caller-provided
  * delta; the streaming translator controls when to set it (Pitfall 3).
@@ -373,10 +404,44 @@ export function makeChunk(params: {
  * read-only snapshots — useful for callers that also want to produce a
  * non-streaming response in the same flow.
  */
+/**
+ * Options for `StreamingTranslator.finalize()`.
+ *
+ * `includeUsage` controls whether the OpenAI `stream_options.include_usage`
+ * trailing chunk is emitted AFTER the terminal `delta:{}` chunk.
+ *
+ * Contract:
+ *   - `includeUsage === true` AND we captured a `result` event → return
+ *     `[terminalChunk, usageChunk]`. The usage chunk has `choices:[]` and
+ *     the same id/object/model/created as the terminal chunk.
+ *   - `includeUsage === true` BUT no `result` event was observed (usage is
+ *     undefined) → return `[terminalChunk]` only. We deliberately OMIT the
+ *     usage chunk rather than emit `{0,0,0}` — OpenAI spec allows absence
+ *     and emitting zeros misleads clients building token-cost reports.
+ *   - `includeUsage !== true` (default) → behaviour is identical to today:
+ *     exactly one terminal chunk, no usage trailer.
+ */
+export interface FinalizeOptions {
+  finishReason?: "stop" | "tool_calls" | "length";
+  includeUsage?: boolean;
+}
+
 export interface StreamingTranslator {
   onEvent(event: SdkStreamEvent): ChatCompletionChunk[];
+  /**
+   * Emit terminal + optional usage-trailer chunks.
+   *
+   * Two call shapes supported:
+   *   - Object form (preferred): `finalize({ finishReason, includeUsage })`.
+   *   - Legacy positional string form: `finalize("stop" | "tool_calls" | "length")`
+   *     — kept for backward compatibility with Plan 02 tests and callers.
+   *     New code SHOULD use the object form.
+   *
+   * See `FinalizeOptions` for the full `includeUsage` contract, including
+   * the "omit usage chunk when usage was never captured" rule.
+   */
   finalize(
-    finishReason?: "stop" | "tool_calls" | "length",
+    options?: "stop" | "tool_calls" | "length" | FinalizeOptions,
   ): ChatCompletionChunk[];
   readonly hadToolUse: boolean;
   readonly collectedText: string;
@@ -550,17 +615,32 @@ export function createStreamingTranslator(params: {
       return [];
     },
 
-    finalize(finishReasonOverride): ChatCompletionChunk[] {
+    finalize(options): ChatCompletionChunk[] {
+      // Normalize legacy positional string form into the object shape. Both
+      // call styles remain supported — see `FinalizeOptions` JSDoc.
+      const normalized: FinalizeOptions =
+        typeof options === "string"
+          ? { finishReason: options }
+          : options ?? {};
       const finishReason =
-        finishReasonOverride ?? (hadToolUse ? "tool_calls" : "stop");
-      return [
-        makeChunk({
-          id,
-          model,
-          delta: {},
-          finishReason,
-        }),
-      ];
+        normalized.finishReason ?? (hadToolUse ? "tool_calls" : "stop");
+      const terminal = makeChunk({
+        id,
+        model,
+        delta: {},
+        finishReason,
+      });
+      if (!normalized.includeUsage) return [terminal];
+      // Post-v2.0 hardening: emit OpenAI `stream_options.include_usage`
+      // trailing chunk. If we never saw a `result` event, omit rather than
+      // emit `{0,0,0}` (spec allows absence; zeros mislead token-cost UI).
+      if (usage === undefined) return [terminal];
+      const usageChunk = makeUsageChunk({
+        id,
+        model,
+        usage: deriveUsage(usage),
+      });
+      return [terminal, usageChunk];
     },
 
     get hadToolUse(): boolean {

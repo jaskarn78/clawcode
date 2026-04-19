@@ -465,7 +465,19 @@ async function handleChatCompletions(
   };
 
   if (body.stream) {
-    await runStreaming(res, config, activeStreams, body.model, turnId, driverInput, xRequestId, log);
+    // Post-v2.0 hardening — honor stream_options.include_usage when present.
+    const streamIncludeUsage = body.stream_options?.include_usage === true;
+    await runStreaming(
+      res,
+      config,
+      activeStreams,
+      body.model,
+      turnId,
+      driverInput,
+      streamIncludeUsage,
+      xRequestId,
+      log,
+    );
     return;
   }
 
@@ -529,6 +541,7 @@ async function runStreaming(
   model: string,
   turnId: string,
   driverInput: Parameters<OpenAiSessionDriver["dispatch"]>[0],
+  streamIncludeUsage: boolean,
   xRequestId: string,
   log: Logger,
 ): Promise<void> {
@@ -559,7 +572,7 @@ async function runStreaming(
         }
       }
     }
-    const finals = translator.finalize();
+    const finals = translator.finalize({ includeUsage: streamIncludeUsage });
     for (const c of finals) {
       await handle.emit(c);
     }
