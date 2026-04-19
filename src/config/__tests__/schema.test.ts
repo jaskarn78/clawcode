@@ -883,6 +883,57 @@ describe("configSchema — defaults.openai", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // Regression for the "clawdy v2 stability" bug (2026-04-19).
+  // When `defaults:` is PRESENT with other fields but `openai` is absent,
+  // Zod must still cascade inner field defaults so `enabled` resolves to true.
+  // The previous `.default({})` form silently yielded `{}` here — the endpoint
+  // saw `enabled: undefined`, hit the disabled branch, and never bound port 3101.
+  it("cascades openai defaults when defaults block is present but openai is absent (real clawdy config shape)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      defaults: {
+        model: "sonnet",
+        basePath: "~/.clawcode/agents",
+        memory: { compactionThreshold: 0.75, searchTopK: 10 },
+        heartbeat: {
+          enabled: true,
+          intervalSeconds: 60,
+          timeoutSeconds: 10,
+          contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+        },
+      },
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.defaults.openai.enabled).toBe(true);
+      expect(result.data.defaults.openai.port).toBe(3101);
+      expect(result.data.defaults.openai.host).toBe("0.0.0.0");
+      expect(result.data.defaults.openai.maxRequestBodyBytes).toBe(1048576);
+      expect(result.data.defaults.openai.streamKeepaliveMs).toBe(15000);
+    }
+  });
+
+  it("defaultsSchema.parse with partial input populates openai fully (cascade check)", () => {
+    // Direct defaultsSchema parse — what the inner loader path sees.
+    const parsed = defaultsSchema.parse({
+      model: "sonnet",
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        timeoutSeconds: 10,
+        contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+      },
+    });
+    expect(parsed.openai).toEqual({
+      enabled: true,
+      port: 3101,
+      host: "0.0.0.0",
+      maxRequestBodyBytes: 1048576,
+      streamKeepaliveMs: 15000,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -364,7 +364,22 @@ export const openaiEndpointSchema = z
       .max(120000)
       .default(15000),
   })
-  .default({});
+  // IMPORTANT: Must use factory-form default returning a fully-populated
+  // literal (matching browserConfigSchema / searchConfigSchema / imageConfigSchema
+  // pattern). A bare `.default({})` is a TRAP in Zod — when this schema appears
+  // as a field in a parent z.object and the parent input omits the field, Zod
+  // injects the literal default VALUE without re-running inner `.default()`
+  // validators. Result: `{}` with no `enabled` key → `!config.enabled` trips
+  // the disabled branch and the endpoint never binds. See
+  // .planning/debug/resolved/clawdy-v2-stability.md (2026-04-19) for the full
+  // forensic trail and the empirical reproduction.
+  .default(() => ({
+    enabled: true,
+    port: 3101,
+    host: "0.0.0.0",
+    maxRequestBodyBytes: 1048576,
+    streamKeepaliveMs: 15000,
+  }));
 
 /** Inferred Phase 69 OpenAI-endpoint config type. */
 export type OpenAiEndpointConfig = z.infer<typeof openaiEndpointSchema>;

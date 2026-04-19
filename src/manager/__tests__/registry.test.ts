@@ -9,6 +9,7 @@ import {
   createEntry,
   EMPTY_REGISTRY,
   reconcileRegistry,
+  STOPPED_SUBAGENT_REAP_TTL_MS,
   type PrunedEntry,
 } from "../registry.js";
 import type { Registry, RegistryEntry } from "../types.js";
@@ -47,6 +48,12 @@ describe("createEntry", () => {
     const entry = createEntry("warm-defaults");
     expect(entry.warm_path_ready).toBe(false);
     expect(entry.warm_path_readiness_ms).toBeNull();
+  });
+
+  // clawdy-v2-stability (2026-04-19)
+  it("defaults stoppedAt to null (field populated by stopAgent on transition)", () => {
+    const entry = createEntry("sub-entry");
+    expect(entry.stoppedAt).toBeNull();
   });
 });
 
@@ -174,6 +181,17 @@ describe("updateEntry", () => {
 
 describe("reconcileRegistry", () => {
   const mkEntry = (name: string): RegistryEntry => createEntry(name);
+  /**
+   * Sub/thread entries need status="running" to survive the TTL reap path
+   * (added 2026-04-19 for clawdy-v2-stability). Pre-TTL tests that called
+   * `mkEntry` for sub/thread rows effectively created stopped-with-null-stoppedAt
+   * entries, which the new reap logic (correctly) prunes as legacy zombies.
+   * Use this helper when the test intends to represent a live subagent/thread.
+   */
+  const mkLiveSubEntry = (name: string): RegistryEntry => ({
+    ...createEntry(name),
+    status: "running",
+  });
 
   it("returns input unchanged (reference equality) for an empty registry", () => {
     const result = reconcileRegistry(EMPTY_REGISTRY, new Set<string>());
@@ -223,7 +241,7 @@ describe("reconcileRegistry", () => {
 
   it("retains a live subagent entry when its parent is configured", () => {
     const registry: Registry = {
-      entries: [mkEntry("atlas-sub-abc123")],
+      entries: [mkLiveSubEntry("atlas-sub-abc123")],
       updatedAt: 100,
     };
     const known = new Set<string>(["atlas"]);
@@ -247,7 +265,7 @@ describe("reconcileRegistry", () => {
 
   it("retains a live thread entry when its parent is configured", () => {
     const registry: Registry = {
-      entries: [mkEntry("clawdy-thread-1234")],
+      entries: [mkLiveSubEntry("clawdy-thread-1234")],
       updatedAt: 100,
     };
     const known = new Set<string>(["clawdy"]);
@@ -275,10 +293,10 @@ describe("reconcileRegistry", () => {
         mkEntry("clawdy"),
         mkEntry("Admin Clawdy"),
         mkEntry("admin-clawdy"),
-        mkEntry("clawdy-sub-abc"),
-        mkEntry("ghost-sub-def"),
-        mkEntry("clawdy-thread-1"),
-        mkEntry("ghost-thread-2"),
+        mkLiveSubEntry("clawdy-sub-abc"),
+        mkLiveSubEntry("ghost-sub-def"),
+        mkLiveSubEntry("clawdy-thread-1"),
+        mkLiveSubEntry("ghost-thread-2"),
       ],
       updatedAt: 100,
     };
@@ -341,6 +359,175 @@ describe("reconcileRegistry", () => {
       { name: "-sub-foo", reason: "orphaned-subagent" },
     ]);
     expect(result.registry.entries).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // clawdy-v2-stability (2026-04-19) — TTL-based reap for stopped sub/thread
+  // entries. Before this fix, stopAgent left permanent "gravestones" in the
+  // registry that the dashboard SSE loop hit every memory poll, generating
+  // "Memory store not found" log spam at level 50.
+  // -------------------------------------------------------------------------
+  describe("stopped sub/thread TTL reap", () => {
+    const NOW = 2_000_000_000_000; // deterministic epoch
+    const TTL = STOPPED_SUBAGENT_REAP_TTL_MS;
+
+    /** Helper: sub/thread entry with status+stoppedAt injected. */
+    const stoppedSub = (name: string, stoppedAt: number | null | undefined): RegistryEntry => ({
+      ...createEntry(name),
+      status: "stopped",
+      stoppedAt,
+    });
+
+    it("prunes a stopped subagent whose stoppedAt is older than the TTL", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-sub-abc", NOW - TTL - 1)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-abc", reason: "stale-subagent" },
+      ]);
+      expect(result.registry.entries).toEqual([]);
+    });
+
+    it("retains a stopped subagent whose stoppedAt is within the TTL (recently stopped)", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-sub-recent", NOW - 1000)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual([]);
+      expect(result.registry).toBe(registry); // reference-equal on clean pass
+    });
+
+    it("prunes a stopped subagent with stoppedAt exactly at the TTL boundary", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-sub-boundary", NOW - TTL)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-boundary", reason: "stale-subagent" },
+      ]);
+    });
+
+    it("prunes a legacy stopped subagent with missing stoppedAt (treat as long-stopped)", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-sub-legacy", undefined)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-legacy", reason: "stale-subagent" },
+      ]);
+      expect(result.registry.entries).toEqual([]);
+    });
+
+    it("prunes a legacy stopped subagent with null stoppedAt (same as missing)", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-sub-null", null)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-null", reason: "stale-subagent" },
+      ]);
+    });
+
+    it("retains a running subagent regardless of stoppedAt", () => {
+      const runningSub: RegistryEntry = {
+        ...createEntry("clawdy-sub-running"),
+        status: "running",
+        // Even if stoppedAt is ancient (from a prior stop → restart cycle),
+        // the current status is "running" so the entry must be kept.
+        stoppedAt: NOW - TTL - 10_000_000,
+      };
+      const registry: Registry = { entries: [runningSub], updatedAt: 100 };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual([]);
+      expect(result.registry).toBe(registry);
+    });
+
+    it("prunes a stale thread entry with the 'stale-thread' reason", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-thread-xyz", NOW - TTL - 1)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-thread-xyz", reason: "stale-thread" },
+      ]);
+    });
+
+    it("does NOT TTL-reap the parent agent even when it is stopped for ages", () => {
+      // Parent agents represent configured agents and the operator expects
+      // them to persist across daemon boots regardless of stopped-age.
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy", NOW - TTL - 999_999)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual([]);
+      expect(result.registry).toBe(registry);
+    });
+
+    it("orphaned-subagent takes precedence over stale-subagent (unknown parent reason wins)", () => {
+      // If the parent is gone AND the entry is stopped beyond TTL, the
+      // orphan reason is more informative — record that, not the stale TTL.
+      const registry: Registry = {
+        entries: [stoppedSub("gone-sub-xyz", NOW - TTL - 1)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]); // "gone" is not here
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "gone-sub-xyz", reason: "orphaned-subagent" },
+      ]);
+    });
+
+    it("mixed scenario: one stale-sub, one stale-thread, one fresh-sub, parent kept", () => {
+      const registry: Registry = {
+        entries: [
+          mkEntry("clawdy"),
+          stoppedSub("clawdy-sub-stale", NOW - TTL - 1),
+          stoppedSub("clawdy-thread-stale", NOW - TTL - 1),
+          stoppedSub("clawdy-sub-fresh", NOW - 1000),
+        ],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.registry.entries.map((e) => e.name)).toEqual([
+        "clawdy",
+        "clawdy-sub-fresh",
+      ]);
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-stale", reason: "stale-subagent" },
+        { name: "clawdy-thread-stale", reason: "stale-thread" },
+      ]);
+      expect(result.registry.updatedAt).toBe(NOW);
+    });
+
+    it("custom reapTtlMs overrides the default (shorter TTL for aggressive reap)", () => {
+      const registry: Registry = {
+        entries: [stoppedSub("clawdy-sub-a", NOW - 5000)],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      // Default TTL would keep this (stoppedAt is only 5s old). Custom 1s TTL reaps.
+      const result = reconcileRegistry(registry, known, { now: NOW, reapTtlMs: 1000 });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-a", reason: "stale-subagent" },
+      ]);
+    });
   });
 });
 

@@ -523,7 +523,14 @@ export class SessionManager {
     this.skillUsageTracker.resetAgent(name);
 
     registry = await readRegistry(this.registryPath);
-    registry = updateEntry(registry, name, { status: "stopped", sessionId: null });
+    // clawdy-v2-stability (2026-04-19): record stoppedAt so reconcileRegistry's
+    // TTL-prune pass can reap stale subagent/thread gravestones. Parent agents
+    // also get the timestamp but are never TTL-reaped — only sub/thread entries.
+    registry = updateEntry(registry, name, {
+      status: "stopped",
+      sessionId: null,
+      stoppedAt: Date.now(),
+    });
     await writeRegistry(this.registryPath, registry);
 
     // Invoke session end callback (e.g., subagent thread cleanup)

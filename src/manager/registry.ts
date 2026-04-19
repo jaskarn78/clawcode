@@ -77,6 +77,10 @@ export function createEntry(name: string): RegistryEntry {
     // Phase 56 Plan 01 — warm-path fields default to pre-check state.
     warm_path_ready: false,
     warm_path_readiness_ms: null,
+    // clawdy-v2-stability (2026-04-19) — stoppedAt is populated only when
+    // stopAgent transitions the entry to status="stopped". A newly-created
+    // entry is never "already stopped" in the reap sense, so null here.
+    stoppedAt: null,
   };
 }
 
@@ -119,8 +123,24 @@ export function updateEntry(
  */
 export type PrunedEntry = {
   readonly name: string;
-  readonly reason: "unknown-agent" | "orphaned-subagent" | "orphaned-thread";
+  readonly reason:
+    | "unknown-agent"
+    | "orphaned-subagent"
+    | "orphaned-thread"
+    | "stale-subagent"
+    | "stale-thread";
 };
+
+/**
+ * Default TTL for reaping stopped subagent / thread-session entries. Any
+ * sub/thread entry with `status:"stopped"` and a `stoppedAt` older than this
+ * TTL (or missing `stoppedAt` — legacy pre-fix data) is considered abandoned
+ * and pruned by {@link reconcileRegistry}. 1 hour balances "keep recently-stopped
+ * entries visible in dashboards for debug" against "don't let gravestones
+ * accumulate for days". Parent agents are NEVER reaped by this TTL — only
+ * `*-sub-*` and `*-thread-*` entries.
+ */
+export const STOPPED_SUBAGENT_REAP_TTL_MS = 60 * 60 * 1000;
 
 /**
  * Reconcile the registry against the currently-configured set of agents.
@@ -129,9 +149,13 @@ export type PrunedEntry = {
  * entries for logging. Does NOT mutate the input registry.
  *
  * Retention rules (an entry is KEPT iff any of these is true):
- *   1. `entry.name` is in `knownAgentNames` (a configured agent).
- *   2. `entry.name` matches `{parent}-sub-{id}` AND parent ∈ `knownAgentNames`.
- *   3. `entry.name` matches `{parent}-thread-{id}` AND parent ∈ `knownAgentNames`.
+ *   1. `entry.name` is in `knownAgentNames` (a configured agent). Parent
+ *      agents are NEVER TTL-reaped — even when stopped they represent
+ *      actual configured agents and the operator expects persistent state.
+ *   2. `entry.name` matches `{parent}-sub-{id}` AND parent ∈ `knownAgentNames`
+ *      AND the entry is either not stopped, or stopped within the reap TTL.
+ *   3. `entry.name` matches `{parent}-thread-{id}` AND parent ∈ `knownAgentNames`
+ *      AND the entry is either not stopped, or stopped within the reap TTL.
  *
  * Any other entry is pruned with a reason:
  *   - `"unknown-agent"` — no `-sub-` / `-thread-` suffix, and name not in
@@ -140,6 +164,11 @@ export type PrunedEntry = {
  *     or not in `knownAgentNames`.
  *   - `"orphaned-thread"` — has `-thread-` suffix but parent segment is empty
  *     or not in `knownAgentNames`.
+ *   - `"stale-subagent"` — subagent whose parent IS configured but the entry
+ *     has been `status:"stopped"` longer than {@link STOPPED_SUBAGENT_REAP_TTL_MS}
+ *     (or the entry predates the `stoppedAt` field, meaning it's legacy zombie
+ *     data and should be cleaned up on first boot with the new reap path).
+ *   - `"stale-thread"` — same rule for thread-session entries.
  *
  * Names like `-sub-foo` / `-thread-foo` (empty parent segment) are routed to
  * `orphaned-subagent` / `orphaned-thread` respectively — structurally they
@@ -149,20 +178,43 @@ export type PrunedEntry = {
  *
  * When no pruning occurs the original registry is returned by reference
  * (identity-equal) so callers can skip the `writeRegistry` call entirely
- * on clean boots. When pruning occurs, `updatedAt` bumps to `Date.now()`.
+ * on clean boots. When pruning occurs, `updatedAt` bumps to `now`.
  *
  * @param registry         The current registry state
  * @param knownAgentNames  The set of agent names currently configured
+ * @param options          Optional overrides for reap behavior — `now` is
+ *                         injected for tests; `reapTtlMs` defaults to
+ *                         {@link STOPPED_SUBAGENT_REAP_TTL_MS}.
  */
 export function reconcileRegistry(
   registry: Registry,
   knownAgentNames: ReadonlySet<string>,
+  options: { readonly now?: number; readonly reapTtlMs?: number } = {},
 ): { readonly registry: Registry; readonly pruned: readonly PrunedEntry[] } {
+  const now = options.now ?? Date.now();
+  const reapTtlMs = options.reapTtlMs ?? STOPPED_SUBAGENT_REAP_TTL_MS;
+
   const pruned: PrunedEntry[] = [];
   const kept: RegistryEntry[] = [];
 
+  /**
+   * True when the sub/thread entry should be TTL-reaped — i.e. it is fully
+   * stopped and either (a) stoppedAt is older than the TTL or (b) stoppedAt
+   * is missing (legacy pre-fix data — treat as stopped long ago).
+   *
+   * Non-stopped statuses (starting / running / stopping / crashed / restarting /
+   * failed) are always retained regardless of stoppedAt so we never reap an
+   * entry mid-lifecycle. `failed` in particular is kept so operators can see
+   * the terminal failure in the dashboard.
+   */
+  const isStaleStopped = (entry: RegistryEntry): boolean => {
+    if (entry.status !== "stopped") return false;
+    if (entry.stoppedAt == null) return true; // legacy entry — reap immediately
+    return now - entry.stoppedAt >= reapTtlMs;
+  };
+
   for (const entry of registry.entries) {
-    // Rule 1: exact match to a configured agent.
+    // Rule 1: exact match to a configured agent — never TTL-reaped.
     if (knownAgentNames.has(entry.name)) {
       kept.push(entry);
       continue;
@@ -172,10 +224,12 @@ export function reconcileRegistry(
     const subIdx = entry.name.indexOf("-sub-");
     if (subIdx !== -1) {
       const parent = entry.name.slice(0, subIdx);
-      if (parent.length > 0 && knownAgentNames.has(parent)) {
-        kept.push(entry);
-      } else {
+      if (parent.length === 0 || !knownAgentNames.has(parent)) {
         pruned.push({ name: entry.name, reason: "orphaned-subagent" });
+      } else if (isStaleStopped(entry)) {
+        pruned.push({ name: entry.name, reason: "stale-subagent" });
+      } else {
+        kept.push(entry);
       }
       continue;
     }
@@ -184,10 +238,12 @@ export function reconcileRegistry(
     const threadIdx = entry.name.indexOf("-thread-");
     if (threadIdx !== -1) {
       const parent = entry.name.slice(0, threadIdx);
-      if (parent.length > 0 && knownAgentNames.has(parent)) {
-        kept.push(entry);
-      } else {
+      if (parent.length === 0 || !knownAgentNames.has(parent)) {
         pruned.push({ name: entry.name, reason: "orphaned-thread" });
+      } else if (isStaleStopped(entry)) {
+        pruned.push({ name: entry.name, reason: "stale-thread" });
+      } else {
+        kept.push(entry);
       }
       continue;
     }
@@ -201,7 +257,7 @@ export function reconcileRegistry(
   }
 
   return {
-    registry: { entries: kept, updatedAt: Date.now() },
+    registry: { entries: kept, updatedAt: now },
     pruned,
   };
 }

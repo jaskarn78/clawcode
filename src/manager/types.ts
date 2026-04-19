@@ -41,6 +41,18 @@ export type RegistryEntry = {
    * pending; a number after success. `undefined` on pre-Phase-56 entries.
    */
   readonly warm_path_readiness_ms?: number | null;
+  /**
+   * Timestamp (ms since epoch) when the entry most recently transitioned to
+   * status="stopped" via stopAgent. Consumed by `reconcileRegistry` to TTL-prune
+   * subagent / thread-session "gravestones" so the registry does not grow
+   * unboundedly.
+   *
+   * OPTIONAL for backward compatibility: entries persisted before the
+   * clawdy-v2-stability fix (2026-04-19) lack this field. The reap path treats
+   * `undefined` as "stopped long ago" → eligible for immediate prune on first
+   * boot (one-time cleanup of legacy zombies).
+   */
+  readonly stoppedAt?: number | null;
 };
 
 /**

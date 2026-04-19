@@ -35,8 +35,18 @@ export class SseManager {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private memoryIntervalId: ReturnType<typeof setInterval> | null = null;
 
-  /** Cached agent names from the last status poll (used for memory queries). */
+  /**
+   * Cached agent names from the last status poll (used for memory queries).
+   *
+   * clawdy-v2-stability (2026-04-19): we now track running-status alongside
+   * the name so `pollMemoryStats` can skip non-running entries. Polling a
+   * stopped subagent triggered `Memory store not found` errors at level 50
+   * on every 15s memory tick — spam that masked real problems in journalctl.
+   * Only entries whose daemon-reported status is "running" own an open
+   * MemoryStore; querying anything else is guaranteed to fail.
+   */
   private lastAgentNames: readonly string[] = [];
+  private lastRunningAgentNames: readonly string[] = [];
 
   constructor(config: SseManagerConfig) {
     this.socketPath = config.socketPath;
@@ -159,8 +169,14 @@ export class SseManager {
       };
     });
 
-    // Cache agent names for memory poll
+    // Cache agent names for memory poll. Memory/episode IPC is only valid
+    // against "running" agents — SessionManager opens the MemoryStore on
+    // startAgent and closes it on stopAgent. Keep the full name list for
+    // other consumers but filter for the memory poll.
     this.lastAgentNames = agents.map((a) => a.name);
+    this.lastRunningAgentNames = agents
+      .filter((a) => a.status === "running")
+      .map((a) => a.name);
 
     return {
       agents,
@@ -240,9 +256,19 @@ export class SseManager {
 
   /**
    * Poll per-agent memory stats (slower interval).
+   *
+   * Only queries agents whose last-observed status is "running". A stopped /
+   * crashed / failed agent has no open MemoryStore — asking the daemon for
+   * `memory-list` against it guarantees a "Memory store not found" throw,
+   * which ipc-server logs at level 50. Before the clawdy-v2-stability fix
+   * (2026-04-19) this caused 26×/tick log spam on clawdy because stopped
+   * subagent gravestones were still in the registry. The reap path in
+   * reconcileRegistry prunes gravestones eventually, but this filter is
+   * the primary defense — it prevents the spam even for a new subagent
+   * that just transitioned to stopped seconds ago.
    */
   private async pollMemoryStats(): Promise<void> {
-    const agentNames = [...this.lastAgentNames];
+    const agentNames = [...this.lastRunningAgentNames];
     if (agentNames.length === 0) return;
 
     const agents: Record<
