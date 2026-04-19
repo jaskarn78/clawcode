@@ -166,7 +166,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   4. Running `clawcode costs` shows per-agent image-generation spend as a distinct cost category alongside token spend, with per-backend rate cards driving the dollar amount — an operator can answer "how much did Clawdy spend on MiniMax this week?" without leaving the CLI.
   5. The image MCP server auto-injects into every agent (opt-out via `mcpServers: []`) and the v1.7 prompt-cache hit rate + first-token p95 SLO show no regression when agents are idle — backend HTTP clients lazily initialize at first call, not at daemon boot.
 **Plans**: 2 plans
-  - [ ] 72-01-PLAN.md — Providers + tools + cost integration (OpenAI/MiniMax/fal clients, workspace writer, costs.ts + UsageTracker schema migration, pure tool handlers, schema extension)
+  - [x] 72-01-PLAN.md — Providers + tools + cost integration (OpenAI/MiniMax/fal clients, workspace writer, costs.ts + UsageTracker schema migration, pure tool handlers, schema extension)
   - [ ] 72-02-PLAN.md — MCP subprocess + CLI + auto-inject + costs CLI category extension + smoke + README (stdio server, daemon wiring, loader auto-inject, formatCostsTable category column, smoke script)
 **UI hint**: yes
 
@@ -195,7 +195,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
 | 71. Web Search MCP | 2/2 | Complete    | 2026-04-19 |
-| 72. Image Generation MCP | 0/2 | Not started | - |
+| 72. Image Generation MCP | 1/2 | In Progress|  |
 
 ---
 

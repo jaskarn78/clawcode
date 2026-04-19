@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to plan
-stopped_at: "Completed 71-02-PLAN.md — auto-inject + daemon wiring + smoke script + README section. Phase 71 end-to-end: all 3 SEARCH-* requirements closed. 2795 tests green."
-last_updated: "2026-04-19T03:06:07.497Z"
+status: Ready to execute
+stopped_at: Completed 72-01-PLAN.md — provider clients (OpenAI/MiniMax/fal) + workspace writer + cost integration + UsageTracker schema migration + 3 pure tool handlers. 99 net new tests. 2894 green. Zero new npm deps.
+last_updated: "2026-04-19T03:44:53.519Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 10
+  completed_plans: 9
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 71 — Web Search MCP
+**Current focus:** Phase 72 — Image Generation MCP
 
 ## Current Position
 
-Phase: 72
-Plan: Not started
+Phase: 72 (Image Generation MCP) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -90,6 +90,11 @@ Recent decisions affecting current work:
 - [Phase 71-web-search-mcp]: Plan 71-02: Daemon-owned BraveClient + ExaClient singletons constructed unconditionally at boot — lazy API-key reads inside .search() keep daemon bootable without keys present
 - [Phase 71-web-search-mcp]: Plan 71-02: No warm-path probe for search — HTTP clients hold no state, Phase 70's warm-path probe pattern does not apply. Keeps daemon boot + v1.7 SLO ceiling intact with zero new measurement surface
 - [Phase 71-web-search-mcp]: Plan 71-02: SEARCH-03 intra-turn cache is end-to-end operational with zero net-new code in src/mcp/ or src/performance/ — Plan 01's IDEMPOTENT_TOOL_DEFAULTS extension + existing v1.7 invokeWithCache machinery covers both tools automatically
+- [Phase 72-image-generation-mcp]: Plan 72-01: Zero new npm deps — native fetch + native FormData + native Blob (Node 22) replaced node-fetch / form-data / axios / got
+- [Phase 72-image-generation-mcp]: Plan 72-01: image_generate / image_edit / image_variations explicitly NOT in IDEMPOTENT_TOOL_DEFAULTS — same prompt yields different images (caching = correctness bug)
+- [Phase 72-image-generation-mcp]: Plan 72-01: UsageTracker schema migration is idempotent ALTER TABLE × 3 with try/catch swallowing only 'duplicate column' — pre-Phase-72 DBs auto-migrate on construction; second construction does not throw
+- [Phase 72-image-generation-mcp]: Plan 72-01: recordCost failure is non-fatal (try/catch + console.warn) — generation already cost real money, can't fail the tool just because the local cost-DB locked
+- [Phase 72-image-generation-mcp]: Plan 72-01: composite model column model='${backend}:${model}' for image rows — keeps existing CostByAgentModel grouping splitting image rows from token rows for the same agent without schema break
 
 ### Roadmap Evolution
 
@@ -122,9 +127,10 @@ None yet.
 | Phase 70-browser-automation-mcp P03 | 27min | 3 tasks | 12 files |
 | Phase 71 P01 | 21 min | 3 tasks | 16 files |
 | Phase 71-web-search-mcp P02 | 10 min | 2 tasks | 10 files |
+| Phase 72-image-generation-mcp P01 | 32min | 3 tasks | 20 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 71-02-PLAN.md — auto-inject + daemon wiring + smoke script + README section. Phase 71 end-to-end: all 3 SEARCH-* requirements closed. 2795 tests green.
+Stopped at: Completed 72-01-PLAN.md — provider clients (OpenAI/MiniMax/fal) + workspace writer + cost integration + UsageTracker schema migration + 3 pure tool handlers. 99 net new tests. 2894 green. Zero new npm deps.
 Resume file: None
