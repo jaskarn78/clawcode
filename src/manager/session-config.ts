@@ -30,6 +30,11 @@ import {
   DEFAULT_RESUME_GAP_THRESHOLD_HOURS,
   DEFAULT_CONVERSATION_CONTEXT_BUDGET,
 } from "../memory/conversation-brief.js";
+// Phase 73 Plan 02 — per-agent conversation-brief cache (LAT-02).
+import {
+  ConversationBriefCache,
+  computeBriefFingerprint,
+} from "./conversation-brief-cache.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -91,6 +96,15 @@ export type SessionConfigDeps = {
    * boundary without `vi.setSystemTime()` or Date monkey-patching.
    */
   readonly now?: number;
+  /**
+   * Phase 73 Plan 02 — per-agent conversation-brief cache (LAT-02).
+   *
+   * When supplied, `buildSessionConfig` short-circuits `assembleConversationBrief`
+   * when the current terminated-session-id fingerprint matches the cached
+   * entry's fingerprint. Absent → legacy behavior (brief re-assembled every
+   * call). Owned by SessionManager; invalidated on stopAgent + crash.
+   */
+  readonly briefCache?: ConversationBriefCache;
 };
 
 /**
@@ -331,27 +345,49 @@ export async function buildSessionConfig(
   const convStore = deps.conversationStores?.get(config.name);
   const memStore = deps.memoryStores?.get(config.name);
   if (convStore && memStore) {
-    const briefResult = assembleConversationBrief(
-      { agentName: config.name, now: deps.now ?? Date.now() },
-      {
-        conversationStore: convStore,
-        memoryStore: memStore,
-        config: {
-          sessionCount:
-            config.memory.conversation?.resumeSessionCount ??
-            DEFAULT_RESUME_SESSION_COUNT,
-          gapThresholdHours:
-            config.memory.conversation?.resumeGapThresholdHours ??
-            DEFAULT_RESUME_GAP_THRESHOLD_HOURS,
-          budgetTokens:
-            config.memory.conversation?.conversationContextBudget ??
-            DEFAULT_CONVERSATION_CONTEXT_BUDGET,
+    const sessionCount =
+      config.memory.conversation?.resumeSessionCount ??
+      DEFAULT_RESUME_SESSION_COUNT;
+    // Phase 73 Plan 02 — compute fingerprint over the actual brief inputs
+    // (terminated-session IDs) so invalidation is driven by content-change,
+    // not by a coarse agent-name key (73-RESEARCH Pitfall 7).
+    const terminatedIds = convStore
+      .listRecentTerminatedSessions(config.name, sessionCount)
+      .map((s) => s.id);
+    const fingerprint = computeBriefFingerprint(terminatedIds);
+    const cached = deps.briefCache?.get(config.name);
+    if (cached && cached.fingerprint === fingerprint) {
+      // Cache HIT — skip assembleConversationBrief entirely, inline the
+      // cached rendered block.
+      conversationContextStr = cached.briefBlock;
+    } else {
+      // Cache MISS (or no cache wired) — compute the brief and, if a cache
+      // is present and the result is non-skipped, write it back keyed by
+      // the fresh fingerprint.
+      const briefResult = assembleConversationBrief(
+        { agentName: config.name, now: deps.now ?? Date.now() },
+        {
+          conversationStore: convStore,
+          memoryStore: memStore,
+          config: {
+            sessionCount,
+            gapThresholdHours:
+              config.memory.conversation?.resumeGapThresholdHours ??
+              DEFAULT_RESUME_GAP_THRESHOLD_HOURS,
+            budgetTokens:
+              config.memory.conversation?.conversationContextBudget ??
+              DEFAULT_CONVERSATION_CONTEXT_BUDGET,
+          },
+          log: deps.log,
         },
-        log: deps.log,
-      },
-    );
-    if (!briefResult.skipped) {
-      conversationContextStr = briefResult.brief; // already budget-enforced
+      );
+      if (!briefResult.skipped) {
+        conversationContextStr = briefResult.brief; // already budget-enforced
+        deps.briefCache?.set(config.name, {
+          fingerprint,
+          briefBlock: briefResult.brief,
+        });
+      }
     }
   }
 

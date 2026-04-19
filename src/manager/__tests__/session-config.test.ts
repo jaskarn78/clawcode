@@ -4,6 +4,11 @@ import type { ResolvedAgentConfig } from "../../shared/types.js";
 import type { MemoryEntry, MemoryTier } from "../../memory/types.js";
 import { MemoryStore } from "../../memory/store.js";
 import { ConversationStore } from "../../memory/conversation-store.js";
+import {
+  ConversationBriefCache,
+  computeBriefFingerprint,
+} from "../conversation-brief-cache.js";
+import * as briefModule from "../../memory/conversation-brief.js";
 
 // Mock filesystem reads so buildSessionConfig doesn't hit disk
 vi.mock("node:fs/promises", () => ({
@@ -755,5 +760,180 @@ describe("buildSessionConfig — Phase 67 conversation brief", () => {
     expect(mutable).not.toContain("Should not appear");
     expect(result.systemPrompt).not.toContain("## Recent Sessions");
     expect(result.systemPrompt).not.toContain("Should not appear");
+  });
+});
+
+// ── Phase 73 Plan 02 — conversation-brief cache wiring (LAT-02) ─────────────
+
+describe("buildSessionConfig — Phase 73 brief cache wiring", () => {
+  /** Deterministic "now" — 2026-04-18T12:00:00Z. */
+  const T = new Date("2026-04-18T12:00:00Z").getTime();
+  let memStore: MemoryStore;
+  let convStore: ConversationStore;
+  let spy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    memStore = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    convStore = new ConversationStore(memStore.getDatabase());
+  });
+
+  afterEach(() => {
+    spy?.mockRestore();
+    spy = undefined;
+    memStore?.close();
+  });
+
+  function seedSummary(
+    sessionId: string,
+    content: string,
+    createdAt: string,
+  ) {
+    const entry = memStore.insert(
+      {
+        content,
+        source: "conversation",
+        importance: 0.78,
+        tags: ["session-summary", `session:${sessionId}`],
+        skipDedup: true,
+      },
+      new Float32Array(384).fill(0.1),
+    );
+    memStore
+      .getDatabase()
+      .prepare("UPDATE memories SET created_at = ? WHERE id = ?")
+      .run(createdAt, entry.id);
+  }
+
+  function seedEndedSession(
+    id: string,
+    startedAt: string,
+    endedAt: string,
+  ) {
+    const session = convStore.startSession("test-agent");
+    memStore
+      .getDatabase()
+      .prepare(
+        "UPDATE conversation_sessions SET id = ?, started_at = ?, ended_at = ?, status = 'ended' WHERE id = ?",
+      )
+      .run(id, startedAt, endedAt, session.id);
+  }
+
+  it("cache MISS → calls assembleConversationBrief and populates the cache", async () => {
+    seedSummary("A", "User asked about deployment.", "2026-04-17T08:00:00Z");
+    seedEndedSession("sess-A", "2026-04-18T03:00:00Z", "2026-04-18T05:00:00Z");
+
+    const cache = new ConversationBriefCache();
+    spy = vi.spyOn(briefModule, "assembleConversationBrief");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      conversationStores: new Map([["test-agent", convStore]]),
+      briefCache: cache,
+      now: T,
+    } as any);
+
+    const result = await buildSessionConfig(config, deps);
+
+    // Brief was assembled exactly once (miss path took the real assembler).
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Cache populated.
+    const entry = cache.get("test-agent");
+    expect(entry).toBeDefined();
+    expect(entry!.briefBlock).toContain("## Recent Sessions");
+    // Rendered block flows into the mutable suffix as today.
+    expect(result.mutableSuffix ?? "").toContain("User asked about deployment");
+  });
+
+  it("cache HIT (matching fingerprint) → skips assembleConversationBrief, uses cached block", async () => {
+    // Seed a terminated session; cache stores a fabricated brief keyed by
+    // the fingerprint computed over that session's ID. buildSessionConfig
+    // MUST return the cached brief without invoking the assembler.
+    seedEndedSession("sess-A", "2026-04-18T03:00:00Z", "2026-04-18T05:00:00Z");
+    const fingerprint = computeBriefFingerprint(["sess-A"]);
+    const cachedBlock =
+      "## Recent Sessions\n### Session from cache\nCached brief body.\n";
+
+    const cache = new ConversationBriefCache();
+    cache.set("test-agent", { fingerprint, briefBlock: cachedBlock });
+
+    spy = vi.spyOn(briefModule, "assembleConversationBrief");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      conversationStores: new Map([["test-agent", convStore]]),
+      briefCache: cache,
+      now: T,
+    } as any);
+
+    const result = await buildSessionConfig(config, deps);
+
+    // Assembler was NOT called — hit path short-circuited.
+    expect(spy).toHaveBeenCalledTimes(0);
+    // Cached body lands in the mutable suffix verbatim.
+    expect(result.mutableSuffix ?? "").toContain("Cached brief body.");
+  });
+
+  it("cache entry with stale fingerprint → cache miss, assembler called, new entry written", async () => {
+    seedSummary("A", "First session summary.", "2026-04-17T08:00:00Z");
+    seedEndedSession("sess-A", "2026-04-18T03:00:00Z", "2026-04-18T05:00:00Z");
+
+    // Populate cache with a fingerprint that does NOT match current
+    // terminated-session set (simulates a second terminated session having
+    // appeared after the cache was last written).
+    const staleFingerprint = computeBriefFingerprint(["sess-OLD"]);
+    const cache = new ConversationBriefCache();
+    cache.set("test-agent", {
+      fingerprint: staleFingerprint,
+      briefBlock: "## Stale brief",
+    });
+
+    spy = vi.spyOn(briefModule, "assembleConversationBrief");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      conversationStores: new Map([["test-agent", convStore]]),
+      briefCache: cache,
+      now: T,
+    } as any);
+
+    const result = await buildSessionConfig(config, deps);
+
+    // Stale entry did NOT match the fresh fingerprint → assembler ran.
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Stale body does NOT leak into the output.
+    expect(result.mutableSuffix ?? "").not.toContain("Stale brief");
+    // Fresh body DOES appear (from the assembler).
+    expect(result.mutableSuffix ?? "").toContain("First session summary");
+    // Cache was overwritten with the new fingerprint.
+    const freshFingerprint = computeBriefFingerprint(["sess-A"]);
+    expect(cache.get("test-agent")!.fingerprint).toBe(freshFingerprint);
+  });
+
+  it("no briefCache dep → byte-identical legacy behavior (assembler called each time)", async () => {
+    seedSummary("A", "Legacy brief body.", "2026-04-17T08:00:00Z");
+    seedEndedSession("sess-A", "2026-04-18T03:00:00Z", "2026-04-18T05:00:00Z");
+
+    spy = vi.spyOn(briefModule, "assembleConversationBrief");
+
+    const config = makeConfig({ name: "test-agent", channels: ["general"] });
+    const deps = makeDeps({
+      memoryStores: new Map([["test-agent", memStore]]),
+      conversationStores: new Map([["test-agent", convStore]]),
+      // briefCache intentionally omitted — legacy path.
+      now: T,
+    } as any);
+
+    await buildSessionConfig(config, deps);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Second call also hits the assembler (no cache in play).
+    await buildSessionConfig(config, deps);
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });
