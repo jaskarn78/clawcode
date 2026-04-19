@@ -110,7 +110,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 
 - [x] **Phase 69: OpenAI-Compatible Endpoint** — `POST /v1/chat/completions` + `GET /v1/models` on the daemon with SSE streaming, bearer-key-per-session auth, OpenAI↔Claude tool-use translation, and `TurnOrigin="openai-api"` tracing. (completed 2026-04-19)
 - [x] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton. (completed 2026-04-19)
-- [ ] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist.
+- [x] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist. (completed 2026-04-19)
 - [ ] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration.
 
 ## Phase Details
@@ -153,7 +153,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   5. The v1.7 prompt-cache hit rate and first-token p95 SLO show no regression when agents are idle (search never called) — the Brave client is lazily initialized, not eagerly instantiated at daemon boot.
 **Plans**: 2 plans
   - [x] 71-01-PLAN.md — Providers + tools + config (Brave/Exa clients, URL fetcher, pure tool handlers, schema + idempotent whitelist)
-  - [ ] 71-02-PLAN.md — MCP subprocess + CLI + auto-inject + smoke (stdio server, daemon wiring, loader auto-inject, smoke script, README)
+  - [x] 71-02-PLAN.md — MCP subprocess + CLI + auto-inject + smoke (stdio server, daemon wiring, loader auto-inject, smoke script, README)
 
 ### Phase 72: Image Generation MCP
 **Goal**: Every agent can generate and edit images via MiniMax, OpenAI Images, or fal.ai backends (per-agent config selectable), persist output to its workspace, deliver to Discord through the existing `send_attachment` pipeline, and surface image-generation spend in `clawcode costs` alongside token spend.
@@ -192,7 +192,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 |-------|----------------|--------|-----------|
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
-| 71. Web Search MCP | 1/2 | In Progress|  |
+| 71. Web Search MCP | 2/2 | Complete   | 2026-04-19 |
 | 72. Image Generation MCP | 0/- | Not started | - |
 
 ---

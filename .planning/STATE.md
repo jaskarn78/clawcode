@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to execute
-stopped_at: Completed 71-01-PLAN.md — searchConfigSchema + Brave/Exa clients + URL fetcher + Readability adapter + pure tool handlers + IDEMPOTENT_TOOL_DEFAULTS extension. Zero new npm deps. 130 Plan-01 tests green.
-last_updated: "2026-04-19T02:45:40.974Z"
+status: Phase complete — ready for verification
+stopped_at: "Completed 71-02-PLAN.md — auto-inject + daemon wiring + smoke script + README section. Phase 71 end-to-end: all 3 SEARCH-* requirements closed. 2795 tests green."
+last_updated: "2026-04-19T03:01:22.951Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -86,6 +86,10 @@ Recent decisions affecting current work:
 - [Phase 71]: Plan 71-01: Lazy API-key reads at client search() call time — missing key surfaces as invalid_argument on first call, not daemon-boot crash
 - [Phase 71]: Plan 71-01: Native fetch over provider wrapper packages (no @brave/search-client, no exa-js) — zero npm deps, error mapping under our control
 - [Phase 71]: Plan 71-01: vi.spyOn(globalThis,'fetch') for all test mocking — mirrors attachments.test.ts, zero new test deps; error taxonomy locked at 7 discriminants (CONTEXT D-02)
+- [Phase 71-web-search-mcp]: Plan 71-02: IPC handler intercepted BEFORE routeMethod (same closure pattern as Phase 70 browser-tool-call + Phase 69 openai-key-*) — keeps 24-arg routeMethod signature stable
+- [Phase 71-web-search-mcp]: Plan 71-02: Daemon-owned BraveClient + ExaClient singletons constructed unconditionally at boot — lazy API-key reads inside .search() keep daemon bootable without keys present
+- [Phase 71-web-search-mcp]: Plan 71-02: No warm-path probe for search — HTTP clients hold no state, Phase 70's warm-path probe pattern does not apply. Keeps daemon boot + v1.7 SLO ceiling intact with zero new measurement surface
+- [Phase 71-web-search-mcp]: Plan 71-02: SEARCH-03 intra-turn cache is end-to-end operational with zero net-new code in src/mcp/ or src/performance/ — Plan 01's IDEMPOTENT_TOOL_DEFAULTS extension + existing v1.7 invokeWithCache machinery covers both tools automatically
 
 ### Roadmap Evolution
 
@@ -117,9 +121,10 @@ None yet.
 | Phase 70-browser-automation-mcp P02 | 20min | 3 tasks | 14 files |
 | Phase 70-browser-automation-mcp P03 | 27min | 3 tasks | 12 files |
 | Phase 71 P01 | 21 min | 3 tasks | 16 files |
+| Phase 71-web-search-mcp P02 | 10 min | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 71-01-PLAN.md — searchConfigSchema + Brave/Exa clients + URL fetcher + Readability adapter + pure tool handlers + IDEMPOTENT_TOOL_DEFAULTS extension. Zero new npm deps. 130 Plan-01 tests green.
+Stopped at: Completed 71-02-PLAN.md — auto-inject + daemon wiring + smoke script + README section. Phase 71 end-to-end: all 3 SEARCH-* requirements closed. 2795 tests green.
 Resume file: None
