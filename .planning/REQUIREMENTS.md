@@ -31,7 +31,7 @@ Agents can drive a real headless Chromium to read, interact with, and extract da
 - [ ] **BROWSER-03**: User (via agent) can interact with a page via `browser_click` (selector) and `browser_fill` (selector + value) and observe the resulting page state.
 - [ ] **BROWSER-04**: User (via agent) can extract clean text or structured content from a rendered page with `browser_extract` (accepts selector or "main content" mode with Readability-style extraction).
 - [ ] **BROWSER-05**: User (via agent) can wait for a condition (`browser_wait_for`) — selector visible, URL match, timeout — before next action, with clear timeout/failure results.
-- [ ] **BROWSER-06**: User (as operator) can trust that each agent's browser has a persistent profile dir under `<agent-workspace>/browser/` so cookies and sessions survive daemon restarts, and that the browser warms at daemon start (resident singleton like the embedder) with a boot-time health probe.
+- [x] **BROWSER-06**: User (as operator) can trust that each agent's browser has a persistent profile dir under `<agent-workspace>/browser/` so cookies and sessions survive daemon restarts, and that the browser warms at daemon start (resident singleton like the embedder) with a boot-time health probe.
 
 ### Web Search (SEARCH-*)
 
@@ -97,7 +97,7 @@ Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
 | BROWSER-03 | Phase 70 — Browser Automation MCP | Pending |
 | BROWSER-04 | Phase 70 — Browser Automation MCP | Pending |
 | BROWSER-05 | Phase 70 — Browser Automation MCP | Pending |
-| BROWSER-06 | Phase 70 — Browser Automation MCP | Pending |
+| BROWSER-06 | Phase 70 — Browser Automation MCP | Complete |
 | SEARCH-01 | Phase 71 — Web Search MCP | Pending |
 | SEARCH-02 | Phase 71 — Web Search MCP | Pending |
 | SEARCH-03 | Phase 71 — Web Search MCP | Pending |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to plan
-stopped_at: "Completed 69-03-PLAN.md — daemon integration + CLI + Python smoke. 1237 tests green. Plan 03 complete; phase ready for /gsd:verify-work."
-last_updated: "2026-04-19T00:22:33.240Z"
+status: Ready to execute
+stopped_at: Completed 70-01-PLAN.md — deps + browserConfigSchema + BrowserManager singleton. 2629 tests green. Plan 01 complete; Plan 02 (MCP tool handlers) ready.
+last_updated: "2026-04-19T01:07:48.775Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 6
+  completed_plans: 4
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 69 — OpenAI-Compatible Endpoint
+**Current focus:** Phase 70 — Browser Automation MCP
 
 ## Current Position
 
-Phase: 70
-Plan: Not started
+Phase: 70 (Browser Automation MCP) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -69,6 +69,9 @@ Recent decisions affecting current work:
 - [Phase 69-openai-compatible-endpoint]: Phase 69-03: SdkStreamEvent synthesis in driver.ts — bridges TurnDispatcher's (accumulated:string) callback into async-iterable of content_block_delta+result events via bounded queue + pending-resolver
 - [Phase 69-openai-compatible-endpoint]: Phase 69-03: Handler-arrow-fn intercepts openai-key-* IPC methods BEFORE routeMethod — avoids growing 23-arg signature; new handlers reach daemon state via closures over pre-declared let openAiEndpointRef
 - [Phase 69-openai-compatible-endpoint]: Phase 69-03: Factored startOpenAiEndpoint into src/openai/endpoint-bootstrap.ts specifically so 10 integration tests drive boot + env + EADDRINUSE + shutdown ordering without booting full daemon
+- [Phase 70-browser-automation-mcp]: Option 2 architecture locked: shared chromium.launch() + per-agent newContext({ storageState }) — Pitfall 1 guard via grep, Pitfall 2 (--no-sandbox) absent
+- [Phase 70-browser-automation-mcp]: Plan 70-01: BrowserManager warm/getContext/close mirrors embedder.ts warmPromise pattern; DI driver seam lets manager tests run without real Chromium
+- [Phase 70-browser-automation-mcp]: Plan 70-01: storageState persistence uses atomic .tmp → rename with indexedDB:true; zero-byte guard (Pitfall 10) returns undefined on partial-write recovery; debounced 5s saver collapses burst writes
 
 ### Roadmap Evolution
 
@@ -96,9 +99,10 @@ None yet.
 | Phase 69 P01 | 13 | 3 tasks | 7 files |
 | Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
 | Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
+| Phase 70-browser-automation-mcp P01 | 15min | 3 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 69-03-PLAN.md — daemon integration + CLI + Python smoke. 1237 tests green. Plan 03 complete; phase ready for /gsd:verify-work.
+Stopped at: Completed 70-01-PLAN.md — deps + browserConfigSchema + BrowserManager singleton. 2629 tests green. Plan 01 complete; Plan 02 (MCP tool handlers) ready.
 Resume file: None
