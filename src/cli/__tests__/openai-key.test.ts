@@ -52,14 +52,17 @@ function makeMockDeps(
   const errors: string[] = [];
   const exitCodes: number[] = [];
   const deps: OpenAiKeyCommandDeps = {
-    runCreate: vi.fn(async (req: OpenAiKeyCreateRequest) => ({
-      key: `ck_clawdy_${"x".repeat(32)}`,
-      keyHash: "a".repeat(64),
-      agent: req.agent,
-      label: req.label ?? null,
-      expiresAt: req.expiresAt ?? null,
-      createdAt: 1_700_000_000_000,
-    })),
+    runCreate: vi.fn(async (req: OpenAiKeyCreateRequest) => {
+      const agent = req.all === true ? "*" : req.agent;
+      return {
+        key: `ck_clawdy_${"x".repeat(32)}`,
+        keyHash: "a".repeat(64),
+        agent,
+        label: req.label ?? null,
+        expiresAt: req.expiresAt ?? null,
+        createdAt: 1_700_000_000_000,
+      };
+    }),
     runList: vi.fn(async () => ({ rows: [] })),
     runRevoke: vi.fn(async () => ({ revoked: true })),
     log: (m: string) => logs.push(m),
@@ -464,10 +467,12 @@ describe("direct-DB fallback integration (daemon down)", () => {
       runCreate: async (req) => {
         const store = new ApiKeysStore(dbPath);
         try {
-          const { key, row } = store.createKey(req.agent, {
-            label: req.label,
-            expiresAt: req.expiresAt,
-          });
+          const { key, row } = req.all === true
+            ? store.createAllKey({ label: req.label, expiresAt: req.expiresAt })
+            : store.createKey(req.agent, {
+                label: req.label,
+                expiresAt: req.expiresAt,
+              });
           return {
             key,
             keyHash: row.key_hash,
