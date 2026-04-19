@@ -43,6 +43,15 @@ describe("resolveAgentConfig", () => {
       userAgent: null,
       maxScreenshotInlineBytes: 524288,
     },
+    search: {
+      enabled: true,
+      backend: "brave" as const,
+      brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+      exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+      maxResults: 20,
+      timeoutMs: 10000,
+      fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
+    },
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -225,6 +234,15 @@ describe("resolveAgentConfig - mcpServers", () => {
       viewport: { width: 1280, height: 720 },
       userAgent: null,
       maxScreenshotInlineBytes: 524288,
+    },
+    search: {
+      enabled: true,
+      backend: "brave" as const,
+      brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+      exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+      maxResults: 20,
+      timeoutMs: 10000,
+      fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
     },
   };
 
@@ -737,6 +755,15 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
       viewport: { width: 1280, height: 720 },
       userAgent: null,
       maxScreenshotInlineBytes: 524288,
+    },
+    search: {
+      enabled: true,
+      backend: "brave" as const,
+      brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+      exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+      maxResults: 20,
+      timeoutMs: 10000,
+      fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
     },
   };
 

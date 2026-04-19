@@ -272,6 +272,14 @@ export const IDEMPOTENT_TOOL_DEFAULTS: readonly string[] = Object.freeze([
   "search_documents",
   "memory_list",
   "memory_graph",
+  // Phase 71 (SEARCH-03) — web search MCP tools. Both are read-only from the
+  // agent's perspective: `web_search` issues a GET to Brave/Exa and returns
+  // a ranked list, `web_fetch_url` issues a GET for a URL and returns
+  // extracted article text. Duplicate calls with identical args within a
+  // single Turn are safe to serve from the intra-turn cache (no side
+  // effects, deterministic response within the ~second-scale Turn window).
+  "web_search",
+  "web_fetch_url",
 ]);
 
 /**
@@ -435,6 +443,97 @@ export const browserConfigSchema = z
 export type BrowserConfig = z.infer<typeof browserConfigSchema>;
 
 /**
+ * Phase 71 — web search MCP config (SEARCH-01..03).
+ *
+ * Lives under `defaults.search` in clawcode.yaml. Governs the auto-injected
+ * web-search MCP subprocess (Plan 02 wires the subprocess + CLI + daemon
+ * auto-inject); this schema shapes the two pure tool handlers (`web_search`,
+ * `web_fetch_url`) built in Plan 01.
+ *
+ * Architecture: backend union locked at `["brave", "exa"]` per 71-CONTEXT
+ * D-01 (no Google CSE / DuckDuckGo / SerpAPI stubs). Provider API keys are
+ * read LAZILY at client `search()` call time — missing keys at daemon boot
+ * do NOT crash, they surface as structured `invalid_argument` errors on the
+ * first call instead.
+ *
+ * Zero new npm deps: providers use native `fetch`, Readability extraction
+ * reuses Phase 70's `@mozilla/readability` + `jsdom` import via
+ * `src/search/readability.ts` (thin wrapper — no hoist).
+ *
+ * Bounds rationale:
+ *  - `maxResults` 1..20 — hard cap 20 matches CONTEXT "maxResults: 20"
+ *    (agents don't need more; providers charge per result).
+ *  - `timeoutMs` 1s..60s — provider request budget; <1s is unreliable,
+ *    >60s defeats intra-turn latency budgets.
+ *  - `fetch.timeoutMs` 1s..2min — URL fetch has more variance than search
+ *    (slow/redirecting sites); 2 min ceiling prevents runaway fetches.
+ *  - `fetch.maxBytes` 1..10 MiB — 1 MiB default per CONTEXT, 10 MiB hard
+ *    ceiling to keep agents from fetching absurd resource bundles.
+ *  - `country` exactly 2 chars — ISO 3166 alpha-2 code validation.
+ */
+export const searchConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    backend: z.enum(["brave", "exa"]).default("brave"),
+    brave: z
+      .object({
+        apiKeyEnv: z.string().min(1).default("BRAVE_API_KEY"),
+        safeSearch: z.enum(["off", "moderate", "strict"]).default("moderate"),
+        country: z.string().length(2).default("us"),
+      })
+      .default(() => ({
+        apiKeyEnv: "BRAVE_API_KEY",
+        safeSearch: "moderate" as const,
+        country: "us",
+      })),
+    exa: z
+      .object({
+        apiKeyEnv: z.string().min(1).default("EXA_API_KEY"),
+        useAutoprompt: z.boolean().default(false),
+      })
+      .default(() => ({
+        apiKeyEnv: "EXA_API_KEY",
+        useAutoprompt: false,
+      })),
+    maxResults: z.number().int().min(1).max(20).default(20),
+    timeoutMs: z.number().int().min(1000).max(60000).default(10000),
+    fetch: z
+      .object({
+        timeoutMs: z.number().int().min(1000).max(120000).default(30000),
+        maxBytes: z.number().int().min(1).max(10485760).default(1048576),
+        userAgentSuffix: z.string().nullable().default(null),
+      })
+      .default(() => ({
+        timeoutMs: 30000,
+        maxBytes: 1048576,
+        userAgentSuffix: null,
+      })),
+  })
+  .default(() => ({
+    enabled: true,
+    backend: "brave" as const,
+    brave: {
+      apiKeyEnv: "BRAVE_API_KEY",
+      safeSearch: "moderate" as const,
+      country: "us",
+    },
+    exa: {
+      apiKeyEnv: "EXA_API_KEY",
+      useAutoprompt: false,
+    },
+    maxResults: 20,
+    timeoutMs: 10000,
+    fetch: {
+      timeoutMs: 30000,
+      maxBytes: 1048576,
+      userAgentSuffix: null,
+    },
+  }));
+
+/** Inferred Phase 71 search config type. */
+export type SearchConfig = z.infer<typeof searchConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -532,6 +631,10 @@ export const defaultsSchema = z.object({
   // Phase 70: browser automation config (BROWSER-01..06). Governs the
   // resident Chromium singleton + per-agent BrowserContext persistence.
   browser: browserConfigSchema,
+  // Phase 71: web search MCP config (SEARCH-01..03). Governs the Brave /
+  // Exa provider clients + URL fetcher + Readability adapter. Backend
+  // union locked at brave|exa; API keys read lazily at client call time.
+  search: searchConfigSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -675,6 +778,27 @@ export const configSchema = z.object({
       viewport: { width: 1280, height: 720 },
       userAgent: null,
       maxScreenshotInlineBytes: 524288,
+    },
+    // Phase 71 — web search MCP defaults (SEARCH-01..03).
+    search: {
+      enabled: true,
+      backend: "brave" as const,
+      brave: {
+        apiKeyEnv: "BRAVE_API_KEY",
+        safeSearch: "moderate" as const,
+        country: "us",
+      },
+      exa: {
+        apiKeyEnv: "EXA_API_KEY",
+        useAutoprompt: false,
+      },
+      maxResults: 20,
+      timeoutMs: 10000,
+      fetch: {
+        timeoutMs: 30000,
+        maxBytes: 1048576,
+        userAgentSuffix: null,
+      },
     },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
