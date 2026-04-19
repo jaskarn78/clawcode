@@ -23,14 +23,11 @@
  * `redirect: "manual"` + a loop here.
  */
 
-import { createRequire } from "node:module";
+import { CLAWCODE_VERSION } from "../shared/version.js";
 import { makeError, toSearchToolError } from "./errors.js";
 import type { SearchError } from "./types.js";
 
-const require = createRequire(import.meta.url);
-const pkg = require("../../package.json") as { version: string };
-const PKG_VERSION = pkg.version ?? "0.0.0";
-const BASE_UA = `ClawCode/${PKG_VERSION} (+https://github.com/jaskarn78/clawcode)`;
+const BASE_UA = `ClawCode/${CLAWCODE_VERSION} (+https://github.com/jaskarn78/clawcode)`;
 
 /** Options required by every `fetchUrl` call. */
 export interface FetchUrlOpts {

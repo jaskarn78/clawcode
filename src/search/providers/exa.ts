@@ -10,7 +10,7 @@
  * either provider via a single typed interface.
  */
 
-import { createRequire } from "node:module";
+import { CLAWCODE_VERSION } from "../../shared/version.js";
 import type {
   SearchResponse,
   SearchResultItem,
@@ -19,9 +19,7 @@ import type {
 import type { SearchConfig } from "../../config/schema.js";
 import { makeError, toSearchToolError } from "../errors.js";
 
-const require = createRequire(import.meta.url);
-const pkg = require("../../../package.json") as { version: string };
-const USER_AGENT = `ClawCode/${pkg.version ?? "0.0.0"} (+https://github.com/jaskarn78/clawcode)`;
+const USER_AGENT = `ClawCode/${CLAWCODE_VERSION} (+https://github.com/jaskarn78/clawcode)`;
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
