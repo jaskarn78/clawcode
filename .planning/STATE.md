@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
 status: Milestone complete
-stopped_at: "Completed quick task 260419-p51 — multi-agent bearer keys + (key_hash, agent) composite-PK session index + fork-escalation regression pin + spawn-subagent-from-OpenAI-endpoint README. 8 atomic commits on master (NOT pushed). ~45 net new tests. tsc at 29 baseline; 3111 pass, 7 tolerated failures in daemon-openai.test.ts. Task 4 (deploy + smoke + rotate OpenClaw + body-capture flip) deferred to orchestrator."
-last_updated: "2026-04-19T18:30:00.000Z"
+stopped_at: "Completed quick task 260419-q2z — registry atomic write (fsync + .bak + unique-staging + recovery) + clawcode registry repair CLI + short-session summarizer branch (1-2 turn sessions produce MemoryEntry) + SessionManager.drain(timeoutMs) graceful shutdown + daemon shutdown awaits drain BEFORE openAiEndpoint.close(). 5 atomic commits on master (NOT pushed). ~30 net new tests. tsc at 29 baseline; 3149 pass, 7 tolerated daemon-openai failures. Deploy + smoke + body-capture flip deferred to orchestrator."
+last_updated: "2026-04-19T19:35:00.000Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
@@ -128,6 +128,7 @@ None yet.
 | 260419-mvh | Fix initMemory→warm-path cascade + add OpenAI request/payload JSONL logging + `openai-log tail` CLI | 2026-04-19 | 34dfb83 | [260419-mvh-fix-initmemory-warm-path-cascade-add-ope](./quick/260419-mvh-fix-initmemory-warm-path-cascade-add-ope/) |
 | 260419-nic | Discord `/clawcode-interrupt` + `/clawcode-steer` slash commands — mid-turn abort + steering via Phase 73 interrupt primitive | 2026-04-19 | 8ff6780 | [260419-nic-add-discord-stop-and-steer-slash-command](./quick/260419-nic-add-discord-stop-and-steer-slash-command/) |
 | 260419-p51 | Multi-agent bearer keys (scope=all) + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs | 2026-04-19 | edecd6e | [260419-p51-multi-agent-bearer-keys-fork-escalation-](./quick/260419-p51-multi-agent-bearer-keys-fork-escalation-/) |
+| 260419-q2z | Registry atomic write + recovery + `clawcode registry repair` CLI + always-summarize short sessions + graceful shutdown drain (FIX A+B+C) | 2026-04-19 | fa34ef3 | [260419-q2z-registry-atomic-write-graceful-shutdown-](./quick/260419-q2z-registry-atomic-write-graceful-shutdown-/) |
 | Phase 69 P01 | 13 | 3 tasks | 7 files |
 | Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
 | Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
@@ -141,6 +142,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-19 - Completed quick task 260419-p51 (multi-agent bearer keys + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs)
-Stopped at: 8 atomic commits on master (NOT pushed). Task 4 (deploy + smoke + rotate OpenClaw + body-capture flip) deferred to orchestrator.
+Last activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
+Stopped at: 5 atomic commits on master (NOT pushed). Deploy + smoke + body-capture flip deferred to orchestrator.
 Resume file: None
