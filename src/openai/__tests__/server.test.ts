@@ -41,6 +41,14 @@ const textStream: SdkStreamEvent[] = JSON.parse(
 const toolUseStream: SdkStreamEvent[] = JSON.parse(
   readFileSync(join(FIXTURES_DIR, "sdk-stream-tool-use.json"), "utf8"),
 );
+/**
+ * Post-v2.0 hardening fixture — a single-tool-call stream that terminates
+ * via finish_reason:"tool_calls". Used by Task 2 of 260419-jtk to pin the
+ * server-level tool-call contract + stream_options.include_usage interop.
+ */
+const toolUseTerminalStream: SdkStreamEvent[] = JSON.parse(
+  readFileSync(join(FIXTURES_DIR, "sdk-stream-tool-use-terminal.json"), "utf8"),
+);
 
 // ---------------------------------------------------------------------------
 // Mock session driver — replays recorded events with optional delay + abort.
@@ -614,6 +622,204 @@ describe("POST /v1/chat/completions — tool-use streaming (OPENAI-06)", () => {
         choices: Array<{ finish_reason: string | null; delta: object }>;
       };
       expect(last.choices[0]!.finish_reason).toBe("tool_calls");
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  // Post-v2.0 hardening — Task 2 of 260419-jtk.
+  // Pins the terminal tool-call contract at the SERVER seam + usage-trailer interop.
+
+  it("T1 — realistic tool_use sequence terminates with finish_reason:'tool_calls' and correct delta shapes", async () => {
+    const h = await bootHarness({ events: toolUseTerminalStream });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "go to example.com" }],
+          stream: true,
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      const parsed = parseSseBody(body);
+      expect(parsed.seenDone).toBe(true);
+
+      // First tool-call start chunk — must carry { index, id, type, function:{name} }.
+      const startChunks = parsed.chunks.filter((c) => {
+        const delta = (c as { choices: Array<{ delta: { tool_calls?: Array<{ id?: string }> } }> })
+          .choices[0]!.delta;
+        return delta.tool_calls?.[0]?.id !== undefined;
+      });
+      expect(startChunks).toHaveLength(1);
+      const startTc = (startChunks[0] as {
+        choices: Array<{ delta: { tool_calls: Array<{ index: number; id: string; type: string; function: { name: string } }> } }>;
+      }).choices[0]!.delta.tool_calls[0]!;
+      expect(startTc).toMatchObject({
+        index: 0,
+        id: "tu_bn1",
+        type: "function",
+        function: { name: "browser_navigate" },
+      });
+
+      // Argument-delta chunks — carry ONLY { index, function:{arguments} } (no id, no type).
+      const argChunks = parsed.chunks.filter((c) => {
+        const tc = (c as { choices: Array<{ delta: { tool_calls?: Array<{ id?: string; function?: { arguments?: string } }> } }> })
+          .choices[0]!.delta.tool_calls?.[0];
+        return tc !== undefined && tc.id === undefined && tc.function?.arguments !== undefined;
+      });
+      expect(argChunks.length).toBeGreaterThan(0);
+      for (const c of argChunks) {
+        const tc = (c as { choices: Array<{ delta: { tool_calls: Array<{ index: number; id?: string; type?: string; function: { arguments: string } }> } }> })
+          .choices[0]!.delta.tool_calls[0]!;
+        expect(tc.id).toBeUndefined();
+        expect(tc.type).toBeUndefined();
+        expect(typeof tc.index).toBe("number");
+        expect(typeof tc.function.arguments).toBe("string");
+      }
+
+      // Concatenated arguments across index:0 chunks must parse as valid JSON.
+      let concatenated = "";
+      for (const c of parsed.chunks) {
+        const tc = (c as { choices: Array<{ delta: { tool_calls?: Array<{ index: number; function?: { arguments?: string } }> } }> })
+          .choices[0]!.delta.tool_calls?.[0];
+        if (tc && tc.index === 0 && tc.function?.arguments) {
+          concatenated += tc.function.arguments;
+        }
+      }
+      expect(concatenated).toBe('{"url":"https://example.com"}');
+      expect(() => JSON.parse(concatenated)).not.toThrow();
+
+      // Last chunk before [DONE]: delta:{} + finish_reason:"tool_calls".
+      const last = parsed.chunks[parsed.chunks.length - 1] as {
+        choices: Array<{ finish_reason: string | null; delta: object }>;
+      };
+      expect(last.choices[0]!.delta).toEqual({});
+      expect(last.choices[0]!.finish_reason).toBe("tool_calls");
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("T2 — trailing usage chunk fires when stream_options.include_usage:true on a tool-call stream", async () => {
+    const h = await bootHarness({ events: toolUseTerminalStream });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "go to example.com" }],
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      const parsed = parseSseBody(body);
+      expect(parsed.seenDone).toBe(true);
+      // Need AT LEAST two final chunks: terminal + usage trailer.
+      expect(parsed.chunks.length).toBeGreaterThanOrEqual(2);
+
+      const terminalChunk = parsed.chunks[parsed.chunks.length - 2] as {
+        id: string;
+        choices: Array<{ finish_reason: string | null; delta: object }>;
+        usage?: unknown;
+      };
+      const usageChunk = parsed.chunks[parsed.chunks.length - 1] as {
+        id: string;
+        choices: unknown[];
+        usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+      };
+
+      // Terminal chunk: tool_calls finish, delta empty, no usage.
+      expect(terminalChunk.choices[0]!.delta).toEqual({});
+      expect(terminalChunk.choices[0]!.finish_reason).toBe("tool_calls");
+      expect(terminalChunk.usage).toBeUndefined();
+
+      // Usage chunk: choices:[] and fixture-derived token numbers.
+      expect(usageChunk.choices).toEqual([]);
+      expect(usageChunk.usage.prompt_tokens).toBe(15);
+      expect(usageChunk.usage.completion_tokens).toBe(5);
+      expect(usageChunk.usage.total_tokens).toBe(20);
+
+      // Same id across terminal + usage chunk — OpenAI clients group by id.
+      expect(usageChunk.id).toBe(terminalChunk.id);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("T3 — no trailing usage chunk when stream_options is absent", async () => {
+    const h = await bootHarness({ events: toolUseTerminalStream });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "go to example.com" }],
+          stream: true,
+        }),
+      });
+      const body = await res.text();
+      const parsed = parseSseBody(body);
+      // Last chunk is the terminal — finish_reason:tool_calls, no usage.
+      const last = parsed.chunks[parsed.chunks.length - 1] as {
+        choices: Array<{ finish_reason: string | null }>;
+        usage?: unknown;
+      };
+      expect(last.choices[0]!.finish_reason).toBe("tool_calls");
+      expect(last.usage).toBeUndefined();
+      // No chunk in the stream should have choices:[] (the usage-trailer shape).
+      for (const c of parsed.chunks) {
+        const choices = (c as { choices: unknown[] }).choices;
+        expect(choices.length).toBeGreaterThan(0);
+      }
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("T4 — no trailing usage chunk when stream_options.include_usage:false explicitly", async () => {
+    const h = await bootHarness({ events: toolUseTerminalStream });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "go to example.com" }],
+          stream: true,
+          stream_options: { include_usage: false },
+        }),
+      });
+      const body = await res.text();
+      const parsed = parseSseBody(body);
+      const last = parsed.chunks[parsed.chunks.length - 1] as {
+        choices: Array<{ finish_reason: string | null }>;
+        usage?: unknown;
+      };
+      expect(last.choices[0]!.finish_reason).toBe("tool_calls");
+      expect(last.usage).toBeUndefined();
+      for (const c of parsed.chunks) {
+        const choices = (c as { choices: unknown[] }).choices;
+        expect(choices.length).toBeGreaterThan(0);
+      }
     } finally {
       await teardown(h);
     }
