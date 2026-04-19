@@ -1306,12 +1306,15 @@ export async function startDaemon(
   }
 
   // 11c. Initialize slash command handler (requires Discord bridge client — no fallback)
+  // Quick task 260419-nic — pass turnDispatcher so /clawcode-steer can
+  // dispatch [USER STEER] follow-up turns after interrupting in-flight ones.
   const slashHandler = new SlashCommandHandler({
     routingTable,
     sessionManager: manager,
     resolvedAgents,
     botToken,
     client: discordBridge?.discordClient,
+    turnDispatcher,
     log,
   });
   if (botToken) {

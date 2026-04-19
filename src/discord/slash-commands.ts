@@ -24,6 +24,9 @@ import { getAgentForChannel } from "./router.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import type { Logger } from "pino";
 import { logger } from "../shared/logger.js";
+import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
+import type { TurnOrigin } from "../manager/turn-origin.js";
+import { makeRootOrigin } from "../manager/turn-origin.js";
 
 /**
  * Maximum Discord message length (API limit).
@@ -40,6 +43,14 @@ export type SlashCommandHandlerConfig = {
   readonly botToken: string;
   readonly client?: Client;
   readonly log?: Logger;
+  /**
+   * Quick task 260419-nic — optional TurnDispatcher reference used by the
+   * /clawcode-steer slash command to dispatch a follow-up [USER STEER] turn
+   * after interrupting the in-flight one. Optional so existing callers
+   * (tests, legacy wiring) don't break; when absent, /clawcode-steer
+   * replies with a clear "steer unavailable" message.
+   */
+  readonly turnDispatcher?: TurnDispatcher;
 };
 
 /**
@@ -56,6 +67,7 @@ export class SlashCommandHandler {
   private readonly resolvedAgents: readonly ResolvedAgentConfig[];
   private readonly botToken: string;
   private readonly log: Logger;
+  private readonly turnDispatcher: TurnDispatcher | null;
   private client: Client | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
 
@@ -66,6 +78,7 @@ export class SlashCommandHandler {
     this.botToken = config.botToken;
     this.client = config.client ?? null;
     this.log = config.log ?? logger;
+    this.turnDispatcher = config.turnDispatcher ?? null;
   }
 
   /**
@@ -367,6 +380,57 @@ export class SlashCommandHandler {
         };
         const embed = buildFleetEmbed(result.entries, this.resolvedAgents);
         await interaction.editReply({ embeds: [embed] });
+      } else if (ipcMethod === "interrupt-agent") {
+        // Quick task 260419-nic — daemon-direct mid-turn abort. Bypasses IPC
+        // (we already hold a SessionManager reference) so there's no extra
+        // hop on the time-sensitive path.
+        const resolvedName =
+          agentName ?? getAgentForChannel(this.routingTable, interaction.channelId);
+        if (!resolvedName) {
+          await interaction.editReply(
+            "No agent to interrupt — specify `agent:` or run in an agent-bound channel.",
+          );
+          return;
+        }
+        const reply = await handleInterruptSlash({
+          agentName: resolvedName,
+          interruptAgent: (n) => this.sessionManager.interruptAgent(n),
+          log: this.log,
+        });
+        await interaction.editReply(reply);
+      } else if (ipcMethod === "steer-agent") {
+        // Quick task 260419-nic — interrupt + dispatch [USER STEER] follow-up.
+        const resolvedName =
+          agentName ?? getAgentForChannel(this.routingTable, interaction.channelId);
+        const guidance = interaction.options.getString("guidance");
+        if (!resolvedName) {
+          await interaction.editReply(
+            "No agent to steer — specify `agent:` or run in an agent-bound channel.",
+          );
+          return;
+        }
+        if (!guidance) {
+          await interaction.editReply("Guidance is required.");
+          return;
+        }
+        if (!this.turnDispatcher) {
+          await interaction.editReply(
+            "Steer unavailable: turn dispatcher not wired.",
+          );
+          return;
+        }
+        const dispatcher = this.turnDispatcher;
+        const reply = await handleSteerSlash({
+          agentName: resolvedName,
+          guidance,
+          channelId: interaction.channelId,
+          interactionId: interaction.id,
+          interruptAgent: (n) => this.sessionManager.interruptAgent(n),
+          hasActiveTurn: (n) => this.sessionManager.hasActiveTurn(n),
+          dispatch: (origin, n, msg) => dispatcher.dispatch(origin, n, msg),
+          log: this.log,
+        });
+        await interaction.editReply(reply);
       } else if (ipcMethod === "agent-create") {
         const name = interaction.options.getString("name");
         const soul = interaction.options.getString("soul");
@@ -411,6 +475,134 @@ export class SlashCommandHandler {
         /* expired */
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quick task 260419-nic — pure handlers for /clawcode-interrupt + /clawcode-steer.
+//
+// Exported so tests can drive the command logic without spinning up a real
+// Discord interaction pipeline. `handleControlCommand` wires them in-process
+// against SessionManager + TurnDispatcher.
+// ---------------------------------------------------------------------------
+
+const STEER_CLEAR_POLL_MS = 50;
+const STEER_CLEAR_MAX_WAIT_MS = 2000;
+const STEER_PREFIX = "[USER STEER] ";
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Render the ephemeral reply for `/clawcode-interrupt`.
+ *
+ * Returns:
+ *   - "🛑 Stopped {agent} mid-turn."           — interruptAgent reported interrupted:true
+ *   - "No active turn for {agent}."            — interruptAgent reported {false,false}
+ *   - "Error: could not interrupt {agent}: …"  — interruptAgent threw
+ *
+ * Never throws — errors map to a user-visible message.
+ */
+export async function handleInterruptSlash(deps: {
+  readonly agentName: string;
+  readonly interruptAgent: (
+    name: string,
+  ) => Promise<{ readonly interrupted: boolean; readonly hadActiveTurn: boolean }>;
+  readonly log: Logger;
+}): Promise<string> {
+  const { agentName, interruptAgent, log } = deps;
+  try {
+    const result = await interruptAgent(agentName);
+    if (result.interrupted) {
+      log.info(
+        { agent: agentName, event: "slash_interrupt_ok" },
+        "slash /interrupt succeeded",
+      );
+      return `🛑 Stopped ${agentName} mid-turn.`;
+    }
+    return `No active turn for ${agentName}.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(
+      { agent: agentName, error: msg },
+      "slash /interrupt failed",
+    );
+    return `Error: could not interrupt ${agentName}: ${msg}`;
+  }
+}
+
+/**
+ * Render the ephemeral reply for `/clawcode-steer`.
+ *
+ * Flow:
+ *   1. interruptAgent(agent) — fires q.interrupt() on any in-flight turn.
+ *   2. Poll hasActiveTurn() every 50ms for up to 2000ms until the turn clears.
+ *      If the deadline expires, log.warn and proceed anyway (SerialTurnQueue
+ *      will queue the new turn behind the stuck one — caller still gets a
+ *      response once the stuck turn resolves or aborts).
+ *   3. dispatch(origin=discord, agent, "[USER STEER] {guidance}") — the
+ *      TurnDispatcher owns Turn lifecycle + opens the streaming reply in
+ *      the channel via the normal DiscordBridge path.
+ *
+ * Returns:
+ *   - "↩ Steered {agent}. New response coming in this channel." — happy path
+ *   - "Error: could not steer {agent}: …"                        — dispatch threw
+ */
+export async function handleSteerSlash(deps: {
+  readonly agentName: string;
+  readonly guidance: string;
+  readonly channelId: string;
+  readonly interactionId: string;
+  readonly interruptAgent: (
+    name: string,
+  ) => Promise<{ readonly interrupted: boolean; readonly hadActiveTurn: boolean }>;
+  readonly hasActiveTurn: (name: string) => boolean;
+  readonly dispatch: (
+    origin: TurnOrigin,
+    agentName: string,
+    message: string,
+  ) => Promise<unknown>;
+  readonly log: Logger;
+  readonly sleep?: (ms: number) => Promise<void>;
+}): Promise<string> {
+  const {
+    agentName,
+    guidance,
+    channelId,
+    interruptAgent,
+    hasActiveTurn,
+    dispatch,
+    log,
+  } = deps;
+  const sleep = deps.sleep ?? defaultSleep;
+  try {
+    // 1. Interrupt any in-flight turn (safe no-op if idle).
+    await interruptAgent(agentName);
+
+    // 2. Poll for the turn to clear, up to STEER_CLEAR_MAX_WAIT_MS.
+    const deadline = Date.now() + STEER_CLEAR_MAX_WAIT_MS;
+    while (hasActiveTurn(agentName) && Date.now() < deadline) {
+      await sleep(STEER_CLEAR_POLL_MS);
+    }
+    if (hasActiveTurn(agentName)) {
+      log.warn(
+        { agent: agentName, waitMs: STEER_CLEAR_MAX_WAIT_MS },
+        "steer: turn did not clear within deadline — dispatching anyway (will queue)",
+      );
+    }
+
+    // 3. Dispatch the new turn via the discord origin kind.
+    const origin = makeRootOrigin("discord", channelId);
+    await dispatch(origin, agentName, `${STEER_PREFIX}${guidance}`);
+    log.info(
+      { agent: agentName, channelId, event: "slash_steer_ok" },
+      "slash /steer dispatched",
+    );
+    return `↩ Steered ${agentName}. New response coming in this channel.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn({ agent: agentName, error: msg }, "slash /steer failed");
+    return `Error: could not steer ${agentName}: ${msg}`;
   }
 }
 

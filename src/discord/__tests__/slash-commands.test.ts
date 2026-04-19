@@ -1,14 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   formatCommandMessage,
   resolveAgentCommands,
   buildFleetEmbed,
   formatUptime,
+  handleInterruptSlash,
+  handleSteerSlash,
 } from "../slash-commands.js";
-import { DEFAULT_SLASH_COMMANDS } from "../slash-types.js";
+import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "../slash-types.js";
 import type { SlashCommandDef } from "../slash-types.js";
 import type { RegistryEntry } from "../../manager/types.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
+import type { Logger } from "pino";
+import { makeRootOrigin } from "../../manager/turn-origin.js";
 
 describe("formatCommandMessage", () => {
   it("returns claudeCommand as-is when no options are provided", () => {
@@ -242,5 +246,236 @@ describe("buildFleetEmbed", () => {
     expect(result.fields[0].value).not.toContain("\u00B7 warm ");
     expect(result.fields[0].value).not.toContain("\u00B7 warming");
     expect(result.fields[0].value).not.toContain("warm-path error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quick task 260419-nic — /clawcode-interrupt + /clawcode-steer handlers
+// ---------------------------------------------------------------------------
+
+/** Minimal Logger stub — pino has a rich interface we don't need for pure handlers. */
+function makeStubLogger(): {
+  info: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+  debug: ReturnType<typeof vi.fn>;
+  child: ReturnType<typeof vi.fn>;
+} {
+  const stub = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(),
+  };
+  stub.child.mockReturnValue(stub);
+  return stub;
+}
+
+describe("slash /clawcode-interrupt + /clawcode-steer", () => {
+  // -------------------------------------------------------------------------
+  // T1-T3 — handleInterruptSlash
+  // -------------------------------------------------------------------------
+
+  it("T1: handleInterruptSlash hadActiveTurn=true, interrupted=true → '🛑 Stopped {agent} mid-turn.'", async () => {
+    const interruptAgent = vi
+      .fn()
+      .mockResolvedValue({ interrupted: true, hadActiveTurn: true });
+    const log = makeStubLogger();
+
+    const reply = await handleInterruptSlash({
+      agentName: "clawdy",
+      interruptAgent,
+      log: log as unknown as Logger,
+    });
+    expect(reply).toBe("🛑 Stopped clawdy mid-turn.");
+    expect(interruptAgent).toHaveBeenCalledWith("clawdy");
+    expect(interruptAgent).toHaveBeenCalledTimes(1);
+    // Info log fires on success path.
+    const infoCall = log.info.mock.calls.find(
+      (c) => (c[0] as { event?: string }).event === "slash_interrupt_ok",
+    );
+    expect(infoCall).toBeDefined();
+  });
+
+  it("T2: handleInterruptSlash hadActiveTurn=false → 'No active turn for {agent}.'", async () => {
+    const interruptAgent = vi
+      .fn()
+      .mockResolvedValue({ interrupted: false, hadActiveTurn: false });
+    const log = makeStubLogger();
+
+    const reply = await handleInterruptSlash({
+      agentName: "idle-bot",
+      interruptAgent,
+      log: log as unknown as Logger,
+    });
+    expect(reply).toBe("No active turn for idle-bot.");
+  });
+
+  it("T3: handleInterruptSlash interruptAgent throws → returns 'Error: could not interrupt {agent}: {message}'", async () => {
+    const interruptAgent = vi
+      .fn()
+      .mockRejectedValue(new Error("kaboom"));
+    const log = makeStubLogger();
+
+    const reply = await handleInterruptSlash({
+      agentName: "broken-bot",
+      interruptAgent,
+      log: log as unknown as Logger,
+    });
+    expect(reply).toBe("Error: could not interrupt broken-bot: kaboom");
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // T4-T6 — handleSteerSlash
+  // -------------------------------------------------------------------------
+
+  it("T4: handleSteerSlash happy path — interrupts, waits for clear, dispatches [USER STEER] {guidance}", async () => {
+    const interruptAgent = vi
+      .fn()
+      .mockResolvedValue({ interrupted: true, hadActiveTurn: true });
+    // hasActiveTurn flips from true → false after the first poll.
+    let pollCount = 0;
+    const hasActiveTurn = vi.fn(() => {
+      pollCount += 1;
+      return pollCount <= 1;
+    });
+    const dispatch = vi.fn().mockResolvedValue("ok");
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const log = makeStubLogger();
+
+    const reply = await handleSteerSlash({
+      agentName: "clawdy",
+      guidance: "actually just say hi",
+      channelId: "chan-42",
+      interactionId: "int-1",
+      interruptAgent,
+      hasActiveTurn,
+      dispatch,
+      log: log as unknown as Logger,
+      sleep,
+    });
+
+    expect(interruptAgent).toHaveBeenCalledWith("clawdy");
+    expect(interruptAgent).toHaveBeenCalledTimes(1);
+    // Dispatch must fire with a discord-origin + [USER STEER] prefix.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    const [origin, name, msg] = dispatch.mock.calls[0]!;
+    expect((origin as { source: { kind: string } }).source.kind).toBe("discord");
+    expect(name).toBe("clawdy");
+    expect(msg).toMatch(/^\[USER STEER\] /);
+    expect(msg).toContain("actually just say hi");
+
+    expect(reply).toBe("↩ Steered clawdy. New response coming in this channel.");
+  });
+
+  it("T5: handleSteerSlash — hasActiveTurn still true after 2000ms → log.warn, still dispatches", async () => {
+    const interruptAgent = vi
+      .fn()
+      .mockResolvedValue({ interrupted: true, hadActiveTurn: true });
+    const hasActiveTurn = vi.fn(() => true); // never flips
+    const dispatch = vi.fn().mockResolvedValue("ok");
+    // Fake sleep advances Date.now so the poll loop terminates at the deadline.
+    const startAt = Date.now();
+    let virtualNow = startAt;
+    const sleep = vi.fn(async (ms: number) => {
+      virtualNow += ms;
+    });
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => virtualNow);
+    const log = makeStubLogger();
+
+    try {
+      const reply = await handleSteerSlash({
+        agentName: "stuck-bot",
+        guidance: "unstick yourself",
+        channelId: "chan-stuck",
+        interactionId: "int-stuck",
+        interruptAgent,
+        hasActiveTurn,
+        dispatch,
+        log: log as unknown as Logger,
+        sleep,
+      });
+
+      // Still dispatched (proceed-anyway).
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      // Warn log captured.
+      const warnCall = log.warn.mock.calls.find((c) =>
+        String(c[1] ?? "").includes("did not clear"),
+      );
+      expect(warnCall).toBeDefined();
+      expect(reply).toBe(
+        "↩ Steered stuck-bot. New response coming in this channel.",
+      );
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("T6: handleSteerSlash — dispatch throws → 'Error: could not steer {agent}: {message}'", async () => {
+    const interruptAgent = vi
+      .fn()
+      .mockResolvedValue({ interrupted: false, hadActiveTurn: false });
+    const hasActiveTurn = vi.fn(() => false);
+    const dispatch = vi.fn().mockRejectedValue(new Error("dispatch-fail"));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const log = makeStubLogger();
+
+    const reply = await handleSteerSlash({
+      agentName: "clawdy",
+      guidance: "go left",
+      channelId: "chan-err",
+      interactionId: "int-err",
+      interruptAgent,
+      hasActiveTurn,
+      dispatch,
+      log: log as unknown as Logger,
+      sleep,
+    });
+
+    expect(reply).toBe("Error: could not steer clawdy: dispatch-fail");
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // T7 — CONTROL_COMMANDS shape + count invariants
+  // -------------------------------------------------------------------------
+
+  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 15", () => {
+    const interrupt = CONTROL_COMMANDS.find((c) => c.name === "clawcode-interrupt");
+    const steer = CONTROL_COMMANDS.find((c) => c.name === "clawcode-steer");
+    expect(interrupt).toBeDefined();
+    expect(steer).toBeDefined();
+
+    // Descriptions must be < 100 chars (Discord limit).
+    for (const cmd of CONTROL_COMMANDS) {
+      expect(cmd.description.length).toBeLessThan(100);
+    }
+
+    // clawcode-interrupt: optional agent only.
+    expect(interrupt!.ipcMethod).toBe("interrupt-agent");
+    expect(interrupt!.control).toBe(true);
+    expect(interrupt!.options).toHaveLength(1);
+    expect(interrupt!.options[0]!.name).toBe("agent");
+    expect(interrupt!.options[0]!.required).toBe(false);
+
+    // clawcode-steer: required guidance + optional agent.
+    expect(steer!.ipcMethod).toBe("steer-agent");
+    expect(steer!.control).toBe(true);
+    expect(steer!.options).toHaveLength(2);
+    const guidanceOpt = steer!.options.find((o) => o.name === "guidance");
+    expect(guidanceOpt).toBeDefined();
+    expect(guidanceOpt!.required).toBe(true);
+    const agentOpt = steer!.options.find((o) => o.name === "agent");
+    expect(agentOpt).toBeDefined();
+    expect(agentOpt!.required).toBe(false);
+
+    // Combined count = 15 (8 default + 7 control).
+    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(15);
+
+    // Sanity — makeRootOrigin still accepts 'discord' (used by handleSteerSlash).
+    const origin = makeRootOrigin("discord", "chan-xyz");
+    expect(origin.source.kind).toBe("discord");
   });
 });

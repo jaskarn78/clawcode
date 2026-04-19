@@ -77,12 +77,23 @@ describe("slash-types", () => {
   });
 
   describe("CONTROL_COMMANDS", () => {
-    it("contains exactly 5 control commands", () => {
-      expect(CONTROL_COMMANDS).toHaveLength(5);
+    it("contains exactly 7 control commands", () => {
+      // Quick task 260419-nic — grew from 5 to 7 with clawcode-interrupt +
+      // clawcode-steer. Combined default (8) + control (7) = 15 slash commands.
+      expect(CONTROL_COMMANDS).toHaveLength(7);
     });
 
     it("all control commands have control: true and a valid ipcMethod", () => {
-      const validMethods = ["start", "stop", "restart", "status", "agent-create"];
+      const validMethods = [
+        "start",
+        "stop",
+        "restart",
+        "status",
+        "agent-create",
+        // Quick task 260419-nic — mid-turn abort + redirect.
+        "interrupt-agent",
+        "steer-agent",
+      ];
       for (const cmd of CONTROL_COMMANDS) {
         expect(cmd.control).toBe(true);
         expect(validMethods).toContain(cmd.ipcMethod);

@@ -182,4 +182,31 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       { name: "model", type: 3, description: "Model: sonnet (default), opus, or haiku", required: false },
     ],
   },
+  // Quick task 260419-nic — live control over an agent's in-flight SDK turn.
+  // /clawcode-interrupt aborts the current turn (drops the queue slot).
+  // /clawcode-steer aborts + dispatches a [USER STEER] follow-up so the
+  // agent course-corrects without waiting for the current turn to finish.
+  // Names deliberately avoid collision with the existing clawcode-stop
+  // (which stops a whole agent, not a turn).
+  {
+    name: "clawcode-interrupt",
+    description: "Abort the agent's in-flight turn (no effect if idle)",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "interrupt-agent",
+    options: [
+      { name: "agent", type: 3, description: "Agent name (default: channel's agent)", required: false },
+    ],
+  },
+  {
+    name: "clawcode-steer",
+    description: "Abort current turn and redirect the agent with new guidance",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "steer-agent",
+    options: [
+      { name: "guidance", type: 3, description: "What the agent should do instead", required: true },
+      { name: "agent", type: 3, description: "Agent name (default: channel's agent)", required: false },
+    ],
+  },
 ] as const;
