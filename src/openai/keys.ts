@@ -111,9 +111,22 @@ export interface ApiKeyRow {
   last_used_at: number | null;
   expires_at: number | null;
   disabled_at: number | null;
+  /**
+   * Quick task 260419-p51 — scope row (P51-MULTI-AGENT-KEY). One of:
+   *   - `"agent:<name>"` — legacy pinned key; allowed only on the bound agent.
+   *   - `"all"`          — multi-agent key; allowed on any configured agent.
+   *
+   * NEVER null on post-migration reads. On pre-v2 DBs this row may transiently
+   * be NULL between the column-add step and the backfill step of a single
+   * migration transaction; the store never surfaces NULL to callers.
+   *
+   * Legacy-DB backfill runs exactly once — guarded by `api_keys_schema_version`
+   * row (v1 → v2 triggers the one-time `UPDATE api_keys SET scope = 'agent:'||agent_name`).
+   */
+  scope: string;
 }
 
-/** Options for `ApiKeysStore.createKey`. */
+/** Options for `ApiKeysStore.createKey` / `createAllKey`. */
 export interface CreateKeyOptions {
   label?: string;
   expiresAt?: number;
@@ -128,14 +141,27 @@ interface ApiKeyRawRow {
   readonly last_used_at: number | null;
   readonly expires_at: number | null;
   readonly disabled_at: number | null;
+  readonly scope: string | null;
 }
 
 /**
  * Current schema version tracked in `api_keys_schema_version`. Bumped whenever
  * the `api_keys` DDL changes — matches the migration-idempotency pattern used
  * in `src/tasks/store.ts` (Phase 58).
+ *
+ * v1: initial schema.
+ * v2 (quick task 260419-p51): added `scope TEXT` column + one-shot backfill
+ *     for legacy rows (`scope = "agent:" || agent_name`).
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+
+/**
+ * Sentinel `agent_name` value for scope='all' rows. Users never see the raw
+ * character — the CLI print path renders it as "(all)". We pick "*" because
+ * it satisfies the NOT NULL constraint on agent_name without introducing a
+ * separate CHECK.
+ */
+const ALL_AGENT_SENTINEL = "*";
 
 /**
  * Minimum plausible bearer-key length. Guards `lookupByIncomingKey` against
@@ -176,6 +202,9 @@ export class ApiKeysStore {
 
   /** Idempotent schema setup — safe to call on every open. */
   private migrate(): void {
+    // Step 1 — Base schema + greenfield scope column (CREATE IF NOT EXISTS
+    // is a no-op on existing DBs, so the inline `scope TEXT` only lands on
+    // brand-new files; legacy DBs pick it up via the ALTER below).
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS api_keys_schema_version (
         version INTEGER PRIMARY KEY
@@ -187,25 +216,61 @@ export class ApiKeysStore {
         created_at    INTEGER NOT NULL,
         last_used_at  INTEGER,
         expires_at    INTEGER,
-        disabled_at   INTEGER
+        disabled_at   INTEGER,
+        scope         TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_api_keys_agent ON api_keys(agent_name);
       CREATE INDEX IF NOT EXISTS idx_api_keys_label ON api_keys(label);
     `);
-    const row = this.db
+
+    // Step 2 — Idempotent ALTER to add `scope` to pre-v2 DBs. Mirrors the
+    // Plan 72-01 UsageTracker pattern: try the ALTER, swallow `duplicate
+    // column` errors, re-throw anything unexpected.
+    try {
+      this.db.exec("ALTER TABLE api_keys ADD COLUMN scope TEXT");
+    } catch (err) {
+      const msg = String(err);
+      if (!msg.includes("duplicate column")) throw err;
+    }
+
+    // Step 3 — Version-gated one-time backfill. Legacy rows (pre-v2) have
+    // NULL scope; we set `scope = "agent:" || agent_name`. Guarded by the
+    // `api_keys_schema_version` row — runs EXACTLY once per DB file.
+    const versionRow = this.db
       .prepare("SELECT version FROM api_keys_schema_version")
       .get() as { version: number } | undefined;
-    if (!row) {
-      this.db
-        .prepare("INSERT INTO api_keys_schema_version (version) VALUES (?)")
-        .run(SCHEMA_VERSION);
+    const currentVersion = versionRow?.version ?? 0;
+
+    if (currentVersion < SCHEMA_VERSION) {
+      if (currentVersion === 1) {
+        // Upgrade path: v1 → v2. Backfill legacy rows.
+        this.db
+          .prepare(
+            "UPDATE api_keys SET scope = 'agent:' || agent_name WHERE scope IS NULL",
+          )
+          .run();
+      }
+      if (!versionRow) {
+        // Greenfield (no version row yet) — stamp current version.
+        this.db
+          .prepare("INSERT INTO api_keys_schema_version (version) VALUES (?)")
+          .run(SCHEMA_VERSION);
+      } else {
+        // Upgrade — replace the stored version.
+        this.db
+          .prepare("DELETE FROM api_keys_schema_version")
+          .run();
+        this.db
+          .prepare("INSERT INTO api_keys_schema_version (version) VALUES (?)")
+          .run(SCHEMA_VERSION);
+      }
     }
   }
 
   /**
-   * Insert a fresh key for `agentName`. Returns the plaintext key (show once)
-   * and the persisted row. `opts.expiresAt` is an absolute epoch-ms timestamp;
-   * `opts.label` is an operator-visible tag for revocation by label.
+   * Insert a fresh pinned key for `agentName` (scope = "agent:<name>").
+   * Returns the plaintext key (show once) and the persisted row. Legacy
+   * back-compat path — CLI callers without `--all` still land here.
    */
   createKey(
     agentName: string,
@@ -220,10 +285,41 @@ export class ApiKeysStore {
       last_used_at: null,
       expires_at: opts.expiresAt ?? null,
       disabled_at: null,
+      scope: `agent:${agentName}`,
     };
+    this.insertRow(row);
+    return { key, row };
+  }
+
+  /**
+   * Quick task 260419-p51 — insert a multi-agent (`scope = "all"`) key.
+   * `agent_name` is stamped as the sentinel `"*"` (rendered as "(all)" in
+   * the CLI). The bearer accepted on ANY configured agent at auth time
+   * (server.ts does the scope-aware check).
+   */
+  createAllKey(opts: CreateKeyOptions = {}): { key: string; row: ApiKeyRow } {
+    // Slug becomes "all" because generateApiKey strips non-alphanumerics;
+    // users see `ck_all_...` so the key is self-documenting.
+    const { key, hashHex } = generateApiKey("all");
+    const row: ApiKeyRow = {
+      key_hash: hashHex,
+      agent_name: ALL_AGENT_SENTINEL,
+      label: opts.label ?? null,
+      created_at: Date.now(),
+      last_used_at: null,
+      expires_at: opts.expiresAt ?? null,
+      disabled_at: null,
+      scope: "all",
+    };
+    this.insertRow(row);
+    return { key, row };
+  }
+
+  /** Shared INSERT path — single source of truth for both create paths. */
+  private insertRow(row: ApiKeyRow): void {
     this.db
       .prepare(
-        "INSERT INTO api_keys (key_hash, agent_name, label, created_at, last_used_at, expires_at, disabled_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO api_keys (key_hash, agent_name, label, created_at, last_used_at, expires_at, disabled_at, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         row.key_hash,
@@ -233,8 +329,8 @@ export class ApiKeysStore {
         row.last_used_at,
         row.expires_at,
         row.disabled_at,
+        row.scope,
       );
-    return { key, row };
   }
 
   /** Return every row, most-recent first. Hashes only — plaintext never present. */
@@ -242,15 +338,7 @@ export class ApiKeysStore {
     const rows = this.db
       .prepare("SELECT * FROM api_keys ORDER BY created_at DESC")
       .all() as ApiKeyRawRow[];
-    return rows.map((r) => ({
-      key_hash: r.key_hash,
-      agent_name: r.agent_name,
-      label: r.label,
-      created_at: r.created_at,
-      last_used_at: r.last_used_at,
-      expires_at: r.expires_at,
-      disabled_at: r.disabled_at,
-    }));
+    return rows.map((r) => rawToRow(r));
   }
 
   /**
@@ -312,15 +400,7 @@ export class ApiKeysStore {
     if (!row) return null;
     if (row.disabled_at !== null) return null;
     if (row.expires_at !== null && row.expires_at <= Date.now()) return null;
-    return {
-      key_hash: row.key_hash,
-      agent_name: row.agent_name,
-      label: row.label,
-      created_at: row.created_at,
-      last_used_at: row.last_used_at,
-      expires_at: row.expires_at,
-      disabled_at: row.disabled_at,
-    };
+    return rawToRow(row);
   }
 
   /**
@@ -338,6 +418,25 @@ export class ApiKeysStore {
   close(): void {
     this.db.close();
   }
+}
+
+/**
+ * Normalize a raw SQLite row into the public `ApiKeyRow` shape. Defends
+ * against the transient null-scope window between the ALTER and the backfill
+ * on a mid-migration read: if `scope` is NULL we synthesize `agent:<name>`
+ * on the fly — matches the backfill rule so subsequent reads converge.
+ */
+function rawToRow(r: ApiKeyRawRow): ApiKeyRow {
+  return {
+    key_hash: r.key_hash,
+    agent_name: r.agent_name,
+    label: r.label,
+    created_at: r.created_at,
+    last_used_at: r.last_used_at,
+    expires_at: r.expires_at,
+    disabled_at: r.disabled_at,
+    scope: r.scope ?? `agent:${r.agent_name}`,
+  };
 }
 
 /** Re-export the hash-prefix floor for Plan 03's CLI parser. */
