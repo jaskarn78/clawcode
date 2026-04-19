@@ -95,6 +95,13 @@ export function createPersistentSessionHandle(
   let generatorDead = false;
   let generatorError: Error | null = null;
 
+  // Quick task 260419-nic — public interrupt primitive slot.
+  // iterateUntilResult installs its fireInterruptOnce on entry and clears on
+  // exit. handle.interrupt() reads and invokes if set. Never holds a stale
+  // reference across turns — guarded by `closed` + explicit clears in the
+  // try/finally + catch path of iterateUntilResult.
+  let currentInterruptFn: (() => void) | null = null;
+
   function notifyError(err: Error): void {
     generatorDead = true;
     generatorError = err;
@@ -192,6 +199,15 @@ export function createPersistentSessionHandle(
       endToEnd?.end();
     };
 
+    // Per-iteration deadline arm hook. Set at the top of each loop iteration
+    // when the deadline hasn't yet been armed. Consumed by fireInterruptOnce
+    // so that an external handle.interrupt() call (quick-task 260419-nic) can
+    // arm the deadline on the currently-pending driverIter.next() race —
+    // otherwise the iteration would hang indefinitely waiting for a `result`
+    // message that never arrives. Cleared once the arm fires or iteration
+    // proceeds past the current step.
+    let armDeadlineForCurrentIteration: (() => void) | null = null;
+
     const fireInterruptOnce = (): void => {
       if (interruptCalled) return;
       interruptCalled = true;
@@ -201,7 +217,22 @@ export function createPersistentSessionHandle(
       } catch {
         // ignore — interrupt failure is not fatal
       }
+      // Quick task 260419-nic — arm the deadline for the currently-pending
+      // driverIter.next() race so the turn rejects with AbortError within
+      // INTERRUPT_DEADLINE_MS instead of hanging forever.
+      if (armDeadlineForCurrentIteration) {
+        try {
+          armDeadlineForCurrentIteration();
+        } catch {
+          // ignore — never fatal
+        }
+      }
     };
+
+    // Quick task 260419-nic — install handle-level interrupt slot for the
+    // duration of this turn. Cleared in every exit path (success finally,
+    // catch, and step.done throw) below.
+    currentInterruptFn = fireInterruptOnce;
 
     // If already aborted on entry, fire interrupt immediately and race deadline.
     if (signal?.aborted) {
@@ -238,25 +269,36 @@ export function createPersistentSessionHandle(
             }
           });
 
-          // If signal fires between now and the next message, arm the deadline.
-          const lateAbortHandler = (): void => {
-            fireInterruptOnce();
-            if (!deadlineTimer && deadlineReject) {
-              deadlineTimer = setTimeout(() => {
-                const err = new Error("Aborted: interrupt deadline exceeded");
-                err.name = "AbortError";
-                deadlineReject!(err);
-              }, INTERRUPT_DEADLINE_MS);
-            }
-          };
-          if (signal && !signal.aborted) {
-            signal.addEventListener("abort", lateAbortHandler, { once: true });
-          } else if (signal?.aborted && !deadlineTimer) {
+          // Shared deadline-arm closure used by (a) the signal abort handler,
+          // (b) the already-aborted branch below, and (c) quick-task 260419-nic's
+          // handle.interrupt() path via fireInterruptOnce → armDeadlineForCurrentIteration.
+          const armDeadline = (): void => {
+            if (deadlineTimer || !deadlineReject) return;
             deadlineTimer = setTimeout(() => {
               const err = new Error("Aborted: interrupt deadline exceeded");
               err.name = "AbortError";
-              if (deadlineReject) deadlineReject(err);
+              deadlineReject!(err);
             }, INTERRUPT_DEADLINE_MS);
+          };
+          // Expose to fireInterruptOnce for this iteration.
+          armDeadlineForCurrentIteration = armDeadline;
+          // If interrupt() was already called BEFORE this iteration started
+          // (previous iteration consumed a message, then handle.interrupt()
+          // fired), arm the deadline immediately so this iteration's
+          // driverIter.next() doesn't hang.
+          if (interruptCalled) {
+            armDeadline();
+          }
+
+          // If signal fires between now and the next message, arm the deadline.
+          const lateAbortHandler = (): void => {
+            fireInterruptOnce();
+            armDeadline();
+          };
+          if (signal && !signal.aborted) {
+            signal.addEventListener("abort", lateAbortHandler, { once: true });
+          } else if (signal?.aborted) {
+            armDeadline();
           }
 
           let step: IteratorResult<SdkStreamMessage>;
@@ -265,10 +307,14 @@ export function createPersistentSessionHandle(
           } finally {
             if (deadlineTimer) clearTimeout(deadlineTimer);
             if (signal) signal.removeEventListener("abort", lateAbortHandler);
+            // Clear per-iteration arm hook so a stale closure doesn't fire
+            // after the iteration proceeds.
+            armDeadlineForCurrentIteration = null;
           }
 
           if (step.done) {
             // Stream ended without a result — treat as generator-dead.
+            currentInterruptFn = null;
             throw new Error("generator-dead");
           }
           const msg = step.value;
@@ -453,9 +499,15 @@ export function createPersistentSessionHandle(
         }
       } finally {
         if (signal) signal.removeEventListener("abort", abortHandler);
+        // Quick task 260419-nic — clear handle-level interrupt slot on every
+        // exit path (success and error). Post-turn handle.interrupt() is a no-op.
+        currentInterruptFn = null;
       }
     } catch (err) {
       closeAllSpans();
+      // Quick task 260419-nic — also clear on error path (defense in depth;
+      // the try/finally above already clears, but pair this with closeAllSpans).
+      currentInterruptFn = null;
       // If abort path caused the error, propagate as AbortError; otherwise
       // this is a generator-dead scenario — notify error handlers.
       if (
@@ -518,6 +570,9 @@ export function createPersistentSessionHandle(
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
+      // Quick task 260419-nic — clear handle-level interrupt slot so any
+      // post-close handle.interrupt() call is a hard no-op.
+      currentInterruptFn = null;
       inputQueue.end();
       try {
         q.close();
@@ -548,6 +603,39 @@ export function createPersistentSessionHandle(
 
     getEffort(): "low" | "medium" | "high" | "max" {
       return currentEffort;
+    },
+
+    /**
+     * Quick task 260419-nic — public mid-turn interrupt primitive.
+     *
+     * When a turn is in-flight (currentInterruptFn installed by
+     * iterateUntilResult), fires the SDK q.interrupt() via the captured
+     * closure. The in-flight send/sendAndCollect/sendAndStream rejects with
+     * AbortError within the INTERRUPT_DEADLINE_MS (2s) window via the
+     * existing abort-deadline race inside iterateUntilResult.
+     *
+     * No-op when:
+     *   - handle is closed (currentInterruptFn cleared in close())
+     *   - no turn is in-flight (slot is null between turns)
+     *   - q.interrupt() was already called this turn (fireInterruptOnce guard)
+     *
+     * Synchronous by design — q.interrupt() is fire-and-forget.
+     */
+    interrupt(): void {
+      if (closed) return;
+      const fn = currentInterruptFn;
+      if (fn) fn();
+    },
+
+    /**
+     * Quick task 260419-nic — in-flight turn probe.
+     *
+     * Returns true only when a turn is actively iterating driverIter.
+     * False on freshly-created handle, between turns, and after close().
+     * Backed by SerialTurnQueue.hasInFlight() — single source of truth.
+     */
+    hasActiveTurn(): boolean {
+      return !closed && turnQueue.hasInFlight();
     },
   };
 

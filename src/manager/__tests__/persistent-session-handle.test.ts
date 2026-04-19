@@ -221,7 +221,7 @@ describe("createPersistentSessionHandle", () => {
     await handle.close();
   });
 
-  it("SessionHandle surface is byte-identical to the v2.0 contract", async () => {
+  it("SessionHandle surface is byte-identical to the v2.0 contract (+ quick-task 260419-nic extensions)", async () => {
     const { sdkMock } = buildHarness();
     const handle = createPersistentSessionHandle(
       sdkMock as unknown as SdkModule,
@@ -237,6 +237,9 @@ describe("createPersistentSessionHandle", () => {
     expect(typeof handle.onEnd).toBe("function");
     expect(typeof handle.setEffort).toBe("function");
     expect(typeof handle.getEffort).toBe("function");
+    // quick-task 260419-nic — mid-turn interrupt primitives.
+    expect(typeof handle.interrupt).toBe("function");
+    expect(typeof handle.hasActiveTurn).toBe("function");
     // setEffort / getEffort round-trip
     handle.setEffort("high");
     expect(handle.getEffort()).toBe("high");
@@ -392,5 +395,129 @@ describe("createPersistentSessionHandle", () => {
     await expect(
       handle.sendAndStream("after-close", () => undefined),
     ).rejects.toThrow(/closed/i);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Quick task 260419-nic — public interrupt() + hasActiveTurn() primitives.
+  // ---------------------------------------------------------------------------
+
+  describe("interrupt() + hasActiveTurn() primitives", () => {
+    it("A: handle exposes interrupt() and hasActiveTurn() on public surface", () => {
+      const { sdkMock } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-surface-abc",
+      );
+      expect(typeof handle.interrupt).toBe("function");
+      expect(typeof handle.hasActiveTurn).toBe("function");
+    });
+
+    it("B: hasActiveTurn() returns false on a fresh handle (no send yet)", () => {
+      const { sdkMock } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-fresh",
+      );
+      expect(handle.hasActiveTurn()).toBe(false);
+    });
+
+    it("C: hasActiveTurn() returns true while sendAndStream awaits SDK, false after resolution", async () => {
+      const { sdkMock, getController } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-active",
+      );
+
+      const p = handle.sendAndStream("msg-C", () => undefined);
+      // Two microticks for: (1) turnQueue.run slot install, (2) inputQueue.push +
+      // iterateUntilResult entry awaiting driverIter.next().
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(handle.hasActiveTurn()).toBe(true);
+
+      emitStockTurn(getController(), { text: "r-C", sessionId: "sess-active" });
+      await p;
+      expect(handle.hasActiveTurn()).toBe(false);
+
+      await handle.close();
+    });
+
+    it("D: interrupt() with active turn fires q.interrupt() once; in-flight sendAndStream rejects with AbortError within 2500ms", async () => {
+      const { sdkMock, getController } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-interrupt-active",
+      );
+
+      const p = handle.sendAndStream("slow-msg", () => undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const t0 = Date.now();
+      handle.interrupt();
+
+      await expect(p).rejects.toMatchObject({ name: "AbortError" });
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeLessThan(2500);
+
+      expect(getController().interrupt).toHaveBeenCalledTimes(1);
+      await handle.close();
+    });
+
+    it("E: interrupt() with no active turn is a no-op (does not call q.interrupt())", () => {
+      const { sdkMock, getController } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-interrupt-idle",
+      );
+      // No send() issued → no active turn.
+      expect(handle.hasActiveTurn()).toBe(false);
+      // Must not throw, must not call q.interrupt().
+      expect(() => handle.interrupt()).not.toThrow();
+      // Controller exists because sdk.query is called inside the handle
+      // factory (drives the long-lived generator).
+      expect(getController().interrupt).not.toHaveBeenCalled();
+    });
+
+    it("F: interrupt() is idempotent — two calls during the same turn fire q.interrupt() only once", async () => {
+      const { sdkMock, getController } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-interrupt-idempotent",
+      );
+
+      const p = handle.sendAndStream("slow-msg", () => undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      handle.interrupt();
+      handle.interrupt();
+      handle.interrupt();
+
+      await expect(p).rejects.toMatchObject({ name: "AbortError" });
+      expect(getController().interrupt).toHaveBeenCalledTimes(1);
+
+      await handle.close();
+    });
+
+    it("G: close() makes subsequent interrupt() a hard no-op", async () => {
+      const { sdkMock, getController } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-interrupt-after-close",
+      );
+      await handle.close();
+      const countBefore = getController().interrupt.mock.calls.length;
+      expect(() => handle.interrupt()).not.toThrow();
+      expect(handle.hasActiveTurn()).toBe(false);
+      expect(getController().interrupt.mock.calls.length).toBe(countBefore);
+    });
   });
 });

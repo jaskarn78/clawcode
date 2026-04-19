@@ -83,6 +83,25 @@ export type SessionHandle = {
   onEnd: (handler: () => void) => void;
   setEffort: (level: "low" | "medium" | "high" | "max") => void;
   getEffort: () => "low" | "medium" | "high" | "max";
+  /**
+   * Phase 73 extension (quick task 260419-nic) — mid-turn abort primitive.
+   *
+   * When a turn is in-flight, fires the SDK Query.interrupt() and the
+   * awaiting send/sendAndCollect/sendAndStream rejects with AbortError
+   * within the 2s interrupt-deadline window. When no turn is in-flight,
+   * returns without side effects (idempotent no-op).
+   *
+   * Never throws — interrupt failure is swallowed (matches fireInterruptOnce).
+   */
+  interrupt: () => void;
+  /**
+   * Phase 73 extension (quick task 260419-nic) — in-flight turn probe.
+   *
+   * Returns true when there is an active iterateUntilResult() consuming
+   * driverIter, false otherwise (handle freshly created OR last turn resolved
+   * OR handle closed). Backed by the depth-1 SerialTurnQueue.inFlight slot.
+   */
+  hasActiveTurn: () => boolean;
 };
 
 /**
@@ -124,6 +143,15 @@ export class MockSessionHandle implements SessionHandle {
   private endHandler: (() => void) | null = null;
   private closed = false;
   private effort: "low" | "medium" | "high" | "max" = "low";
+  /**
+   * Quick task 260419-nic — track whether a send is "in-flight".
+   *
+   * The mock's send variants are effectively synchronous, so this flag
+   * flips true → false within a single send(). Tests that exercise the
+   * SessionManager.interruptAgent positive path flip this directly via
+   * __testSetActiveTurn(true) to simulate a hanging SDK turn.
+   */
+  private activeTurn: boolean = false;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -138,6 +166,12 @@ export class MockSessionHandle implements SessionHandle {
       err.name = "AbortError";
       throw err;
     }
+    this.activeTurn = true;
+    try {
+      // Mock has no SDK work to do — resolve immediately.
+    } finally {
+      this.activeTurn = false;
+    }
   }
 
   async sendAndCollect(_message: string, _turn?: Turn, _options?: SendOptions): Promise<string> {
@@ -149,7 +183,12 @@ export class MockSessionHandle implements SessionHandle {
       err.name = "AbortError";
       throw err;
     }
-    return `Mock response from ${this.sessionId}`;
+    this.activeTurn = true;
+    try {
+      return `Mock response from ${this.sessionId}`;
+    } finally {
+      this.activeTurn = false;
+    }
   }
 
   async sendAndStream(
@@ -166,9 +205,14 @@ export class MockSessionHandle implements SessionHandle {
       err.name = "AbortError";
       throw err;
     }
-    const response = `Mock response from ${this.sessionId}`;
-    onChunk(response);
-    return response;
+    this.activeTurn = true;
+    try {
+      const response = `Mock response from ${this.sessionId}`;
+      onChunk(response);
+      return response;
+    } finally {
+      this.activeTurn = false;
+    }
   }
 
   async close(): Promise<void> {
@@ -190,6 +234,33 @@ export class MockSessionHandle implements SessionHandle {
 
   getEffort(): "low" | "medium" | "high" | "max" {
     return this.effort;
+  }
+
+  /**
+   * Quick task 260419-nic — mock interrupt is a no-op.
+   *
+   * Tests that care about real abort mechanics drive the real handle
+   * (createPersistentSessionHandle). SessionManager.interruptAgent tests
+   * use this mock to verify the dispatch + logging path.
+   */
+  interrupt(): void {
+    /* no-op — mock has no SDK query to interrupt */
+  }
+
+  /**
+   * Quick task 260419-nic — expose the activeTurn flag.
+   */
+  hasActiveTurn(): boolean {
+    return this.activeTurn;
+  }
+
+  /**
+   * Test-only hook — flip activeTurn to drive interruptAgent tests.
+   * Never called from production. Prefixed __test to match existing
+   * test-only conventions (see browser-mcp __testOnly_*).
+   */
+  __testSetActiveTurn(v: boolean): void {
+    this.activeTurn = v;
   }
 
   /**
@@ -998,6 +1069,22 @@ function wrapSdkQuery(
 
     getEffort(): "low" | "medium" | "high" | "max" {
       return currentEffort;
+    },
+
+    /**
+     * Quick task 260419-nic — legacy wrapSdkQuery predates the mid-turn
+     * interrupt primitive. The per-turn-query shape has no persistent Query
+     * reference to interrupt() cleanly across all send variants. This legacy
+     * factory is test-only (createTracedSessionHandle) — production routes
+     * through createPersistentSessionHandle. Treat as a no-op here; callers
+     * that need the real primitive must use the persistent handle.
+     */
+    interrupt(): void {
+      /* no-op — legacy per-turn-query handle lacks mid-turn interrupt */
+    },
+
+    hasActiveTurn(): boolean {
+      return false;
     },
   };
 }

@@ -88,6 +88,18 @@ export class SerialTurnQueue {
   private inFlight: Promise<unknown> | null = null;
   private queued: Promise<unknown> | null = null;
 
+  /**
+   * Quick task 260419-nic — pure accessor for the in-flight slot.
+   *
+   * Used by createPersistentSessionHandle's public hasActiveTurn() to expose
+   * whether a turn is currently being iterated (true between `run(fn)`
+   * invocation and its `.finally` clear). Matches the existing no-setter-
+   * leakage pattern — reading the slot NEVER mutates queue state.
+   */
+  hasInFlight(): boolean {
+    return this.inFlight !== null;
+  }
+
   async run<T>(fn: () => Promise<T>): Promise<T> {
     if (this.inFlight && this.queued) {
       throw new Error(QUEUE_FULL_ERROR_MESSAGE);
