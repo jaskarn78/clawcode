@@ -109,6 +109,21 @@ export class SessionManager {
    */
   private readonly summarizeFn: SummarizeFn;
 
+  /**
+   * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
+   * at daemon shutdown. Each call to `summarizeSessionIfPossible` is wrapped
+   * in {@link trackSummary} so SIGTERM never truncates an unfinished summary.
+   */
+  private readonly pendingSummaries: Set<Promise<void>> = new Set();
+
+  /**
+   * 260419-q2z Fix B — set to `true` by {@link drain}; causes
+   * `streamFromAgent` / `sendToAgent` to reject new work with
+   * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
+   * continue to function so the daemon can still clean up cleanly.
+   */
+  private draining: boolean = false;
+
   constructor(options: SessionManagerOptions) {
     this.adapter = options.adapter;
     this.registryPath = options.registryPath;
@@ -345,18 +360,20 @@ export class SessionManager {
         // BEFORE recovery.handleCrash so summarize starts even if recovery
         // synchronously resets state. Detached so crash recovery is never
         // delayed waiting on Haiku (up to 10s internal timeout).
-        void this.summarizeSessionIfPossible(name, convSessionId).catch(
-          (err) => {
-            this.log.warn(
-              {
-                agent: name,
-                session: convSessionId,
-                error: (err as Error).message,
-              },
-              "crash-path summarization failed (non-fatal)",
-            );
-          },
-        );
+        // 260419-q2z Fix B — track the crash-path summary so shutdown drain
+        // waits for it even though we're fire-and-forget at this callsite.
+        void this.trackSummary(
+          this.summarizeSessionIfPossible(name, convSessionId),
+        ).catch((err) => {
+          this.log.warn(
+            {
+              agent: name,
+              session: convSessionId,
+              error: (err as Error).message,
+            },
+            "crash-path summarization failed (non-fatal)",
+          );
+        });
       }
       this.activeConversationSessionIds.delete(name);
       this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
@@ -459,6 +476,13 @@ export class SessionManager {
     turn?: Turn,
     options?: { readonly signal?: AbortSignal },  // Phase 59
   ): Promise<string> {
+    // 260419-q2z Fix B — reject new turns once drain() has been called.
+    if (this.draining) {
+      throw new SessionError(
+        `shutting down, agent '${name}' is no longer accepting turns`,
+        name,
+      );
+    }
     const handle = this.requireSession(name);
     this.log.info({ agent: name, messageLength: message.length }, "sending message to agent");
     const response = await handle.sendAndCollect(message, turn, options);
@@ -481,6 +505,13 @@ export class SessionManager {
     turn?: Turn,
     options?: { readonly signal?: AbortSignal },  // Phase 59
   ): Promise<string> {
+    // 260419-q2z Fix B — reject new turns once drain() has been called.
+    if (this.draining) {
+      throw new SessionError(
+        `shutting down, agent '${name}' is no longer accepting turns`,
+        name,
+      );
+    }
     const handle = this.requireSession(name);
     this.log.info({ agent: name, messageLength: message.length }, "streaming message to agent");
     const response = await handle.sendAndStream(message, onChunk, turn, options);
@@ -541,7 +572,10 @@ export class SessionManager {
       // the MemoryStore + ConversationStore connections. Wrapped in try/catch
       // so a summarization failure never blocks a stop.
       try {
-        await this.summarizeSessionIfPossible(name, convSessionId);
+        // 260419-q2z Fix B — track stop-path summary so drain() waits for it.
+        await this.trackSummary(
+          this.summarizeSessionIfPossible(name, convSessionId),
+        );
       } catch (err) {
         this.log.warn(
           {
@@ -875,6 +909,86 @@ export class SessionManager {
    * Pulls all deps from AgentMemoryManager + the injected summarizeFn so
    * tests can swap the LLM call without touching the rest of the pipeline.
    */
+  /**
+   * 260419-q2z Fix B — register an in-flight summarization promise with the
+   * shutdown drain. Adds to {@link pendingSummaries} and removes on settle.
+   *
+   * Returns the original promise so callers can await / catch exactly as
+   * before — the tracker is invisible to happy-path code.
+   */
+  private trackSummary(p: Promise<void>): Promise<void> {
+    this.pendingSummaries.add(p);
+    const settle = (): void => {
+      this.pendingSummaries.delete(p);
+    };
+    p.then(settle, settle);
+    return p;
+  }
+
+  /**
+   * 260419-q2z Fix B — test-only hook that feeds a promise into the same
+   * pendingSummaries set used by production crash/stop paths.
+   * Production code MUST NOT call this; it exists so the shutdown drain tests
+   * can exercise drain() without standing up full agent+memory infrastructure.
+   */
+  __testTrackSummary(p: Promise<void>): Promise<void> {
+    return this.trackSummary(p);
+  }
+
+  /**
+   * 260419-q2z Fix B — test-only inspector for the draining flag.
+   */
+  __testIsDraining(): boolean {
+    return this.draining;
+  }
+
+  /**
+   * 260419-q2z Fix B — drain in-flight summarization promises before daemon
+   * shutdown so SIGTERM does not truncate a registry update or memory insert
+   * mid-flight.
+   *
+   * After calling drain(), new turn dispatches (streamFromAgent /
+   * sendToAgent) reject with `SessionError('shutting down, agent X is no
+   * longer accepting turns')`. This is the ONE surface that blocks new work;
+   * stopAgent / reconcileRegistry continue to function so the daemon can
+   * still clean up.
+   *
+   * @param timeoutMs - Hard ceiling on how long to wait for pending
+   *                    summaries. On timeout, the promises are NOT cancelled
+   *                    — drain just stops waiting. The summaries continue in
+   *                    the background; any SIGKILL that follows will kill
+   *                    them.
+   * @returns Counts of settled vs. timed-out summaries. `settled + timedOut`
+   *          equals the number of summaries that were in flight when drain
+   *          was called.
+   */
+  async drain(
+    timeoutMs: number,
+  ): Promise<{ readonly settled: number; readonly timedOut: number }> {
+    this.draining = true;
+    const count = this.pendingSummaries.size;
+    if (count === 0) {
+      return { settled: 0, timedOut: 0 };
+    }
+    const snapshot = [...this.pendingSummaries];
+    const allSettled = Promise.allSettled(snapshot).then(() => "done" as const);
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+      // Don't keep the event loop alive just for this timer.
+      timeoutHandle.unref?.();
+    });
+    try {
+      const winner = await Promise.race([allSettled, timeout]);
+      if (winner === "done") {
+        return { settled: count, timedOut: 0 };
+      }
+      return { settled: 0, timedOut: this.pendingSummaries.size };
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
+  }
+
   private async summarizeSessionIfPossible(
     agentName: string,
     sessionId: string,

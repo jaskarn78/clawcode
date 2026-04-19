@@ -1416,6 +1416,26 @@ export async function startDaemon(
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
+    // 260419-q2z Fix B — drain in-flight session summaries BEFORE closing any
+    // downstream resource. The 15s ceiling matches summarizeSession's internal
+    // 10s timeout + 5s slack for embed + insert + markSummarized. After drain
+    // returns, new turn dispatches via streamFromAgent/sendToAgent reject
+    // with SessionError('shutting down ...'), so stopAll() below is safe from
+    // races with an in-progress turn.
+    try {
+      const drainResult = await manager.drain(15_000);
+      log.info(
+        { settled: drainResult.settled, timedOut: drainResult.timedOut },
+        "session manager drain complete",
+      );
+    } catch (err) {
+      // drain() is designed not to throw, but log defensively so an
+      // unexpected exception doesn't block the rest of shutdown.
+      log.warn(
+        { err: (err as Error).message },
+        "session manager drain threw unexpectedly (non-fatal)",
+      );
+    }
     // Phase 69 — close OpenAI endpoint FIRST: activeStreams drained + server
     // closed + apiKeysStore handle released, before the dashboard (which
     // owns the IPC socket for CLI fallback queries) shuts down. The
