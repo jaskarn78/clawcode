@@ -465,9 +465,20 @@ export async function startDaemon(
 
   // 5d. Reconcile registry — prune ghost entries left by renamed/removed agents.
   // Runs BEFORE SessionManager so startAll never sees stale names.
+  //
+  // clawdy-v2-stability follow-up (2026-04-19): `pruneNonStoppedSubagents: true`
+  // reaps sub/thread entries whose `status !== "stopped"` but whose child
+  // process cannot be alive — by definition, no subagent process survives a
+  // daemon restart, so any entry marked running/starting/etc. at boot time is
+  // a phantom left over from an uncleanly-exited prior daemon. Without this,
+  // those entries survive the TTL reap (targets stopped) AND the
+  // pollMemoryStats filter (allows running), triggering
+  // "Memory store not found" log spam every SSE tick.
   const knownAgentNames = new Set(resolvedAgents.map((a) => a.name));
   const existingRegistry = await readRegistry(REGISTRY_PATH);
-  const reconciled = reconcileRegistry(existingRegistry, knownAgentNames);
+  const reconciled = reconcileRegistry(existingRegistry, knownAgentNames, {
+    pruneNonStoppedSubagents: true,
+  });
   if (reconciled.pruned.length > 0) {
     for (const entry of reconciled.pruned) {
       log.info(

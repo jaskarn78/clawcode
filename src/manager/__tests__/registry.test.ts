@@ -529,6 +529,158 @@ describe("reconcileRegistry", () => {
       ]);
     });
   });
+
+  // clawdy-v2-stability follow-up (2026-04-19) — phantom reaping at daemon boot.
+  // A subagent process cannot survive a daemon restart, so any sub/thread entry
+  // that was still marked non-stopped when the prior daemon exited is a phantom
+  // the moment the new daemon starts. The `pruneNonStoppedSubagents` flag enables
+  // the boot-time sweep; without the flag, behavior is unchanged (back-compat).
+  describe("pruneNonStoppedSubagents (boot-time phantom reap)", () => {
+    const NOW = 1_000_000_000;
+    const runningSub = (name: string): RegistryEntry => ({
+      ...createEntry(name),
+      status: "running",
+      startedAt: NOW - 10_000,
+    });
+    const startingSub = (name: string): RegistryEntry => ({
+      ...createEntry(name),
+      status: "starting",
+      startedAt: NOW - 10_000,
+    });
+
+    it("flag=false (default): non-stopped subagent with known parent is retained", () => {
+      const registry: Registry = {
+        entries: [runningSub("clawdy-sub-abc")],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, { now: NOW });
+      expect(result.pruned).toEqual([]);
+      expect(result.registry).toBe(registry);
+    });
+
+    it("flag=true: running subagent with known parent pruned as phantom-subagent", () => {
+      const registry: Registry = {
+        entries: [runningSub("clawdy-sub-abc")],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-abc", reason: "phantom-subagent" },
+      ]);
+      expect(result.registry.entries).toEqual([]);
+    });
+
+    it("flag=true: starting subagent also classified as phantom", () => {
+      const registry: Registry = {
+        entries: [startingSub("clawdy-sub-xyz")],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-xyz", reason: "phantom-subagent" },
+      ]);
+    });
+
+    it("flag=true: running thread with known parent pruned as phantom-thread", () => {
+      const registry: Registry = {
+        entries: [
+          { ...createEntry("clawdy-thread-1"), status: "running" },
+        ],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-thread-1", reason: "phantom-thread" },
+      ]);
+    });
+
+    it("flag=true: orphaned non-stopped subagent still pruned as orphaned-subagent (orphan precedence preserved)", () => {
+      // Parent missing wins over phantom status — the operator wants the more
+      // informative reason.
+      const registry: Registry = {
+        entries: [runningSub("gone-sub-xyz")],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]); // "gone" is not configured
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "gone-sub-xyz", reason: "orphaned-subagent" },
+      ]);
+    });
+
+    it("flag=true: stopped-within-TTL subagent still retained (phantom check only applies to non-stopped)", () => {
+      const registry: Registry = {
+        entries: [
+          {
+            ...createEntry("clawdy-sub-fresh"),
+            status: "stopped",
+            stoppedAt: NOW - 1000,
+          },
+        ],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.pruned).toEqual([]);
+      expect(result.registry).toBe(registry);
+    });
+
+    it("flag=true: parent agent marked running is NEVER phantom-pruned (rule 1 exempts parents)", () => {
+      const registry: Registry = {
+        entries: [{ ...createEntry("clawdy"), status: "running" }],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.pruned).toEqual([]);
+      expect(result.registry).toBe(registry);
+    });
+
+    it("flag=true: mixed boot state — 2 phantoms + 1 legacy zombie + 1 configured parent", () => {
+      const registry: Registry = {
+        entries: [
+          { ...createEntry("clawdy"), status: "running" }, // parent — kept
+          runningSub("clawdy-sub-phantom-a"),              // phantom-subagent
+          { ...createEntry("clawdy-thread-phantom-b"), status: "starting" }, // phantom-thread
+          createEntry("clawdy-sub-legacy"),                // legacy null-stoppedAt zombie → stale
+        ],
+        updatedAt: 100,
+      };
+      const known = new Set<string>(["clawdy"]);
+      const result = reconcileRegistry(registry, known, {
+        now: NOW,
+        pruneNonStoppedSubagents: true,
+      });
+      expect(result.registry.entries.map((e) => e.name)).toEqual(["clawdy"]);
+      expect(result.pruned).toEqual<readonly PrunedEntry[]>([
+        { name: "clawdy-sub-phantom-a", reason: "phantom-subagent" },
+        { name: "clawdy-thread-phantom-b", reason: "phantom-thread" },
+        { name: "clawdy-sub-legacy", reason: "stale-subagent" },
+      ]);
+    });
+  });
 });
 
 describe("Phase 56 — backward compatibility for pre-warm-path registries", () => {

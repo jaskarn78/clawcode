@@ -128,7 +128,9 @@ export type PrunedEntry = {
     | "orphaned-subagent"
     | "orphaned-thread"
     | "stale-subagent"
-    | "stale-thread";
+    | "stale-thread"
+    | "phantom-subagent"
+    | "phantom-thread";
 };
 
 /**
@@ -169,6 +171,14 @@ export const STOPPED_SUBAGENT_REAP_TTL_MS = 60 * 60 * 1000;
  *     (or the entry predates the `stoppedAt` field, meaning it's legacy zombie
  *     data and should be cleaned up on first boot with the new reap path).
  *   - `"stale-thread"` — same rule for thread-session entries.
+ *   - `"phantom-subagent"` — subagent whose parent IS configured, `status` is
+ *     NOT `"stopped"` (e.g. `"running"` / `"starting"`), AND the caller passed
+ *     `pruneNonStoppedSubagents: true`. Used on daemon boot to reap entries
+ *     whose child process crashed in a prior daemon instance before
+ *     `stopAgent` could transition them to `"stopped"` — no child process is
+ *     alive across a daemon restart, so any non-stopped sub/thread entry at
+ *     boot is by definition a phantom.
+ *   - `"phantom-thread"` — same rule for thread-session entries.
  *
  * Names like `-sub-foo` / `-thread-foo` (empty parent segment) are routed to
  * `orphaned-subagent` / `orphaned-thread` respectively — structurally they
@@ -184,15 +194,22 @@ export const STOPPED_SUBAGENT_REAP_TTL_MS = 60 * 60 * 1000;
  * @param knownAgentNames  The set of agent names currently configured
  * @param options          Optional overrides for reap behavior — `now` is
  *                         injected for tests; `reapTtlMs` defaults to
- *                         {@link STOPPED_SUBAGENT_REAP_TTL_MS}.
+ *                         {@link STOPPED_SUBAGENT_REAP_TTL_MS};
+ *                         `pruneNonStoppedSubagents` enables phantom reaping
+ *                         (daemon passes `true` at boot — see JSDoc above).
  */
 export function reconcileRegistry(
   registry: Registry,
   knownAgentNames: ReadonlySet<string>,
-  options: { readonly now?: number; readonly reapTtlMs?: number } = {},
+  options: {
+    readonly now?: number;
+    readonly reapTtlMs?: number;
+    readonly pruneNonStoppedSubagents?: boolean;
+  } = {},
 ): { readonly registry: Registry; readonly pruned: readonly PrunedEntry[] } {
   const now = options.now ?? Date.now();
   const reapTtlMs = options.reapTtlMs ?? STOPPED_SUBAGENT_REAP_TTL_MS;
+  const pruneNonStopped = options.pruneNonStoppedSubagents ?? false;
 
   const pruned: PrunedEntry[] = [];
   const kept: RegistryEntry[] = [];
@@ -228,6 +245,8 @@ export function reconcileRegistry(
         pruned.push({ name: entry.name, reason: "orphaned-subagent" });
       } else if (isStaleStopped(entry)) {
         pruned.push({ name: entry.name, reason: "stale-subagent" });
+      } else if (pruneNonStopped && entry.status !== "stopped") {
+        pruned.push({ name: entry.name, reason: "phantom-subagent" });
       } else {
         kept.push(entry);
       }
@@ -242,6 +261,8 @@ export function reconcileRegistry(
         pruned.push({ name: entry.name, reason: "orphaned-thread" });
       } else if (isStaleStopped(entry)) {
         pruned.push({ name: entry.name, reason: "stale-thread" });
+      } else if (pruneNonStopped && entry.status !== "stopped") {
+        pruned.push({ name: entry.name, reason: "phantom-thread" });
       } else {
         kept.push(entry);
       }
