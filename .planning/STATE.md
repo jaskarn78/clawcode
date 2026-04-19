@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to execute
-stopped_at: Completed 72-01-PLAN.md — provider clients (OpenAI/MiniMax/fal) + workspace writer + cost integration + UsageTracker schema migration + 3 pure tool handlers. 99 net new tests. 2894 green. Zero new npm deps.
-last_updated: "2026-04-19T03:44:53.519Z"
+status: Phase complete — ready for verification
+stopped_at: "Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work."
+last_updated: "2026-04-19T04:16:14.891Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -95,6 +95,10 @@ Recent decisions affecting current work:
 - [Phase 72-image-generation-mcp]: Plan 72-01: UsageTracker schema migration is idempotent ALTER TABLE × 3 with try/catch swallowing only 'duplicate column' — pre-Phase-72 DBs auto-migrate on construction; second construction does not throw
 - [Phase 72-image-generation-mcp]: Plan 72-01: recordCost failure is non-fatal (try/catch + console.warn) — generation already cost real money, can't fail the tool just because the local cost-DB locked
 - [Phase 72-image-generation-mcp]: Plan 72-01: composite model column model='${backend}:${model}' for image rows — keeps existing CostByAgentModel grouping splitting image rows from token rows for the same agent without schema break
+- [Phase 72-image-generation-mcp]: Plan 72-02: IPC handler intercepted BEFORE routeMethod (same closure pattern as browser-tool-call + search-tool-call + openai-key-*) — keeps 24-arg routeMethod signature from growing
+- [Phase 72-image-generation-mcp]: Plan 72-02: usageTrackerLookup as callback (not bound tracker) — keeps handler agent-agnostic AND lets call succeed when agent's tracker DB isn't open yet (recordCost no-op rather than crash)
+- [Phase 72-image-generation-mcp]: Plan 72-02: Daemon-owned image clients constructed unconditionally at boot but lazy API-key reads keep daemon bootable without any keys present — missing keys surface as invalid_input on first tool call
+- [Phase 72-image-generation-mcp]: Plan 72-02: Costs CLI Category column between Agent and Model — legacy null/undefined category displays as 'tokens' for back-compat; image rows distinct at a glance (closes IMAGE-04 end-to-end)
 
 ### Roadmap Evolution
 
@@ -128,9 +132,10 @@ None yet.
 | Phase 71 P01 | 21 min | 3 tasks | 16 files |
 | Phase 71-web-search-mcp P02 | 10 min | 2 tasks | 10 files |
 | Phase 72-image-generation-mcp P01 | 32min | 3 tasks | 20 files |
+| Phase 72-image-generation-mcp P02 | 24 min | 2 tasks | 16 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 72-01-PLAN.md — provider clients (OpenAI/MiniMax/fal) + workspace writer + cost integration + UsageTracker schema migration + 3 pure tool handlers. 99 net new tests. 2894 green. Zero new npm deps.
+Stopped at: Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work.
 Resume file: None

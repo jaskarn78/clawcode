@@ -111,7 +111,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 - [x] **Phase 69: OpenAI-Compatible Endpoint** — `POST /v1/chat/completions` + `GET /v1/models` on the daemon with SSE streaming, bearer-key-per-session auth, OpenAI↔Claude tool-use translation, and `TurnOrigin="openai-api"` tracing. (completed 2026-04-19)
 - [x] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton. (completed 2026-04-19)
 - [x] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist. (completed 2026-04-19)
-- [ ] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration.
+- [x] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration. (completed 2026-04-19)
 
 ## Phase Details
 
@@ -167,7 +167,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   5. The image MCP server auto-injects into every agent (opt-out via `mcpServers: []`) and the v1.7 prompt-cache hit rate + first-token p95 SLO show no regression when agents are idle — backend HTTP clients lazily initialize at first call, not at daemon boot.
 **Plans**: 2 plans
   - [x] 72-01-PLAN.md — Providers + tools + cost integration (OpenAI/MiniMax/fal clients, workspace writer, costs.ts + UsageTracker schema migration, pure tool handlers, schema extension)
-  - [ ] 72-02-PLAN.md — MCP subprocess + CLI + auto-inject + costs CLI category extension + smoke + README (stdio server, daemon wiring, loader auto-inject, formatCostsTable category column, smoke script)
+  - [x] 72-02-PLAN.md — MCP subprocess + CLI + auto-inject + costs CLI category extension + smoke + README (stdio server, daemon wiring, loader auto-inject, formatCostsTable category column, smoke script)
 **UI hint**: yes
 
 ## Progress
@@ -195,7 +195,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
 | 71. Web Search MCP | 2/2 | Complete    | 2026-04-19 |
-| 72. Image Generation MCP | 1/2 | In Progress|  |
+| 72. Image Generation MCP | 2/2 | Complete   | 2026-04-19 |
 
 ---
 

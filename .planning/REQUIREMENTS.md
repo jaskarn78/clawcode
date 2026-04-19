@@ -47,7 +47,7 @@ Agents can produce visual output and deliver it to Discord (or any consumer) via
 
 - [x] **IMAGE-01**: User (via agent) can call `image_generate` with a prompt plus optional size/style/model parameters and select a backend (MiniMax, OpenAI Images, or fal.ai) chosen by per-agent config, receiving a workspace-persisted image file path as the result.
 - [x] **IMAGE-02**: User (via agent) can call `image_edit` with an input image path + edit prompt and receive a new image reflecting the edits from whichever backend supports it (config-gated — only backends advertising edit support are available).
-- [ ] **IMAGE-03**: User (via agent) can deliver a generated image to a Discord channel by calling the existing `send_attachment` MCP tool with the workspace path returned from `image_generate` — no new delivery surface.
+- [x] **IMAGE-03**: User (via agent) can deliver a generated image to a Discord channel by calling the existing `send_attachment` MCP tool with the workspace path returned from `image_generate` — no new delivery surface.
 - [x] **IMAGE-04**: User (as operator) can budget and observe per-agent image-generation spend in the existing `clawcode costs` CLI with image calls recorded as a new cost category alongside tokens.
 
 ---
@@ -103,7 +103,7 @@ Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
 | SEARCH-03 | Phase 71 — Web Search MCP | Complete |
 | IMAGE-01 | Phase 72 — Image Generation MCP | Complete |
 | IMAGE-02 | Phase 72 — Image Generation MCP | Complete |
-| IMAGE-03 | Phase 72 — Image Generation MCP | Pending |
+| IMAGE-03 | Phase 72 — Image Generation MCP | Complete |
 | IMAGE-04 | Phase 72 — Image Generation MCP | Complete |
 
 ### Per-phase requirement summary
