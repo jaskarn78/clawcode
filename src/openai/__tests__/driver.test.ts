@@ -589,10 +589,9 @@ describe("createOpenAiSessionDriver", () => {
           clientSystemAppend: null,
           tools: [
             {
-              type: "function",
               name: "echo",
               description: "echo",
-              parameters: { type: "object", properties: {} },
+              input_schema: { type: "object", properties: {} },
             },
           ],
           toolChoice: null,
