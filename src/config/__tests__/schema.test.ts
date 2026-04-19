@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, mcpServerSchema, openaiEndpointSchema, streamingConfigSchema } from "../schema.js";
+import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, streamingConfigSchema } from "../schema.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
@@ -882,5 +882,99 @@ describe("configSchema — defaults.openai", () => {
       agents: [{ name: "test" }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 71 — web search MCP config schema
+// ---------------------------------------------------------------------------
+
+describe("searchConfigSchema (Phase 71)", () => {
+  it("returns full default when parsing empty object", () => {
+    const result = searchConfigSchema.parse({});
+    expect(result).toEqual({
+      enabled: true,
+      backend: "brave",
+      brave: {
+        apiKeyEnv: "BRAVE_API_KEY",
+        safeSearch: "moderate",
+        country: "us",
+      },
+      exa: {
+        apiKeyEnv: "EXA_API_KEY",
+        useAutoprompt: false,
+      },
+      maxResults: 20,
+      timeoutMs: 10000,
+      fetch: {
+        timeoutMs: 30000,
+        maxBytes: 1048576,
+        userAgentSuffix: null,
+      },
+    });
+  });
+
+  it("keeps defaults for unspecified nested fields on partial override", () => {
+    const result = searchConfigSchema.parse({ backend: "exa", maxResults: 5 });
+    expect(result.backend).toBe("exa");
+    expect(result.maxResults).toBe(5);
+    // Nested defaults still populated
+    expect(result.brave).toEqual({
+      apiKeyEnv: "BRAVE_API_KEY",
+      safeSearch: "moderate",
+      country: "us",
+    });
+    expect(result.exa).toEqual({
+      apiKeyEnv: "EXA_API_KEY",
+      useAutoprompt: false,
+    });
+    expect(result.fetch).toEqual({
+      timeoutMs: 30000,
+      maxBytes: 1048576,
+      userAgentSuffix: null,
+    });
+  });
+
+  it("rejects backend='google' (only brave|exa allowed)", () => {
+    expect(() => searchConfigSchema.parse({ backend: "google" })).toThrow();
+  });
+
+  it("rejects maxResults=0 (must be >= 1)", () => {
+    expect(() => searchConfigSchema.parse({ maxResults: 0 })).toThrow();
+  });
+
+  it("rejects maxResults=21 (hard cap 20)", () => {
+    expect(() => searchConfigSchema.parse({ maxResults: 21 })).toThrow();
+  });
+
+  it("rejects fetch.maxBytes=0 (must be >= 1)", () => {
+    expect(() => searchConfigSchema.parse({ fetch: { maxBytes: 0 } })).toThrow();
+  });
+
+  it("defaultsSchema.parse({}).search returns a fully-populated default", () => {
+    const parsed = defaultsSchema.parse({});
+    expect(parsed.search).toBeDefined();
+    expect(parsed.search.enabled).toBe(true);
+    expect(parsed.search.backend).toBe("brave");
+    expect(parsed.search.maxResults).toBe(20);
+    expect(parsed.search.timeoutMs).toBe(10000);
+    expect(parsed.search.brave.apiKeyEnv).toBe("BRAVE_API_KEY");
+    expect(parsed.search.exa.apiKeyEnv).toBe("EXA_API_KEY");
+    expect(parsed.search.fetch.maxBytes).toBe(1048576);
+  });
+
+  it("IDEMPOTENT_TOOL_DEFAULTS contains web_search and web_fetch_url (frozen)", () => {
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toContain("web_search");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toContain("web_fetch_url");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toContain("memory_lookup");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toContain("search_documents");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toContain("memory_list");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toContain("memory_graph");
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toHaveLength(6);
+    expect(Object.isFrozen(IDEMPOTENT_TOOL_DEFAULTS)).toBe(true);
+    // Frozen array — push should throw in strict mode.
+    expect(() => {
+      (IDEMPOTENT_TOOL_DEFAULTS as string[]).push("nope");
+    }).toThrow();
   });
 });

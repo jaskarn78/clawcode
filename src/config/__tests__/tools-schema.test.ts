@@ -73,16 +73,20 @@ describe("toolsConfigSchema (Phase 55)", () => {
     expect(withTools.perf?.tools?.maxConcurrent).toBe(10);
   });
 
-  it("IDEMPOTENT_TOOL_DEFAULTS contains EXACTLY the 4 CONTEXT D-02 entries — no more, no less", () => {
+  it("IDEMPOTENT_TOOL_DEFAULTS contains EXACTLY the 4 CONTEXT D-02 entries + Phase 71 web-search tools", () => {
     // Correctness-critical: if a non-idempotent tool sneaks into this list, the
     // intra-turn cache (Plan 55-02) would serve stale results for side-effectful
-    // tools. Lock the list at 4 and verify names match verbatim.
-    expect(IDEMPOTENT_TOOL_DEFAULTS).toHaveLength(4);
+    // tools. Phase 71 (SEARCH-03) extends the list with `web_search` +
+    // `web_fetch_url` — both are read-only from the agent's perspective, so
+    // duplicate intra-turn calls can safely return cached results.
+    expect(IDEMPOTENT_TOOL_DEFAULTS).toHaveLength(6);
     expect([...IDEMPOTENT_TOOL_DEFAULTS]).toEqual([
       "memory_lookup",
       "search_documents",
       "memory_list",
       "memory_graph",
+      "web_search",
+      "web_fetch_url",
     ]);
     // Non-idempotent tools MUST NOT appear.
     const forbidden = [
