@@ -47,6 +47,7 @@ import { registerPolicyCommand } from "./commands/policy.js";
 import { registerTriggersCommand } from "./commands/triggers.js";
 import { registerTraceCommand } from "./commands/trace.js";
 import { registerOpenAiKeyCommand } from "./commands/openai-key.js";
+import { registerOpenAiLogCommand } from "./commands/openai-log.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -174,6 +175,7 @@ registerPolicyCommand(program);
 registerTriggersCommand(program);
 registerTraceCommand(program);
 registerOpenAiKeyCommand(program);
+registerOpenAiLogCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,

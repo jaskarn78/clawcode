@@ -30,6 +30,7 @@ import { startOpenAiServer, type OpenAiServerHandle, type OpenAiSessionDriver } 
 import { ApiKeysStore } from "../keys.js";
 import type { SdkStreamEvent } from "../types.js";
 import { SessionError } from "../../shared/errors.js";
+import type { RequestLogger, RequestLogRecord } from "../request-logger.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -172,6 +173,8 @@ async function bootHarness(opts: {
   agentReadinessWaitMs?: number;
   /** Post-v2.0 hardening — poll cadence during readiness wait. */
   agentReadinessPollIntervalMs?: number;
+  /** Quick task 260419-mvh — optional request logger for SI-* tests. */
+  requestLogger?: RequestLogger;
 }): Promise<TestHarness> {
   const agentNames = opts.agentNames ?? [
     "clawdy",
@@ -200,6 +203,7 @@ async function bootHarness(opts: {
     agentIsRunning: opts.agentIsRunning,
     agentReadinessWaitMs: opts.agentReadinessWaitMs,
     agentReadinessPollIntervalMs: opts.agentReadinessPollIntervalMs,
+    requestLogger: opts.requestLogger,
   });
   const baseUrl = `http://127.0.0.1:${handle.address.port}`;
   return {
@@ -1345,6 +1349,251 @@ describe("POST /v1/chat/completions — Phase 73 readiness-wait default", () => 
       // 500ms is a generous CI-friendly bound (spec says < 50ms on clawdy).
       expect(elapsed).toBeLessThan(500);
       expect(h.driver.calls.length).toBe(1);
+    } finally {
+      await teardown(h);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quick task 260419-mvh Task 2 — JSONL request logger integration
+// ---------------------------------------------------------------------------
+
+function makeRecordingLogger(): { logger: RequestLogger; records: RequestLogRecord[] } {
+  const records: RequestLogRecord[] = [];
+  const logger: RequestLogger = {
+    log: (r) => {
+      records.push(r);
+    },
+    close: async () => {},
+  };
+  return { logger, records };
+}
+
+/**
+ * Wait for the recording logger to have accumulated at least `n` records or
+ * until the 1s deadline passes. The logger fires inside res.on('close'),
+ * which Node schedules microtask-late — a short poll keeps tests deterministic
+ * without timing hacks.
+ */
+async function awaitRecords(
+  records: RequestLogRecord[],
+  n: number,
+  timeoutMs = 1000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (records.length < n && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+describe("POST /v1/chat/completions — request logging (quick task 260419-mvh)", () => {
+  it("SI-1 — non-stream 200 writes exactly one record with full field shape", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({ events: textStream, requestLogger: logger });
+    try {
+      const started = Date.now();
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+          stream: false,
+        }),
+      });
+      expect(res.status).toBe(200);
+      await awaitRecords(records, 1);
+      expect(records).toHaveLength(1);
+      const r = records[0]!;
+      expect(r.status_code).toBe(200);
+      expect(r.stream).toBe(false);
+      expect(r.finish_reason).toBe("stop");
+      expect(r.total_ms).toBeGreaterThanOrEqual(0);
+      expect(r.total_ms).toBeLessThan(Date.now() - started + 500);
+      expect(r.response_bytes).toBeGreaterThan(0);
+      expect(r.agent).toBe("clawdy");
+      expect(r.model).toBe("clawdy");
+      expect(r.messages_count).toBe(1);
+      expect(r.bearer_key_prefix).toBe(h.pinnedKey.slice(0, 12));
+      expect(r.bearer_key_prefix!.length).toBe(12);
+      expect(r.error_type).toBeNull();
+      expect(r.error_code).toBeNull();
+      expect(r.method).toBe("POST");
+      expect(r.path).toBe("/v1/chat/completions");
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("SI-2 — stream 200 writes record with ttfb_ms > 0 and finish_reason:'stop'", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({
+      events: textStream,
+      perEventDelayMs: 5,
+      requestLogger: logger,
+    });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        }),
+      });
+      await res.text();
+      await awaitRecords(records, 1);
+      expect(records).toHaveLength(1);
+      const r = records[0]!;
+      expect(r.stream).toBe(true);
+      expect(r.status_code).toBe(200);
+      expect(r.finish_reason).toBe("stop");
+      expect(r.ttfb_ms).not.toBeNull();
+      expect(r.ttfb_ms!).toBeGreaterThanOrEqual(0);
+      expect(r.total_ms).toBeGreaterThanOrEqual(r.ttfb_ms!);
+      expect(r.response_bytes).toBeGreaterThan(0);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("SI-3 — 401 missing bearer writes record with error_code:'missing_key'", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({ events: textStream, requestLogger: logger });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(401);
+      await awaitRecords(records, 1);
+      expect(records).toHaveLength(1);
+      const r = records[0]!;
+      expect(r.status_code).toBe(401);
+      expect(r.error_type).toBe("authentication_error");
+      expect(r.error_code).toBe("missing_key");
+      expect(r.bearer_key_prefix).toBeNull();
+      expect(r.agent).toBeNull();
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("SI-4 — 503 agent warming writes record with error_code:'agent_warming'", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({
+      events: textStream,
+      requestLogger: logger,
+      agentIsRunning: () => false,
+      agentReadinessWaitMs: 100,
+      agentReadinessPollIntervalMs: 25,
+    });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(503);
+      await awaitRecords(records, 1);
+      expect(records).toHaveLength(1);
+      const r = records[0]!;
+      expect(r.status_code).toBe(503);
+      expect(r.error_code).toBe("agent_warming");
+      expect(r.agent).toBe("clawdy"); // key resolved before warm-gate tripped
+      expect(r.bearer_key_prefix).toBe(h.pinnedKey.slice(0, 12));
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("SI-5 — GET /v1/models writes record with method:'GET', agent/messages_count null, bearer null", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({ events: textStream, requestLogger: logger });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/models`);
+      expect(res.status).toBe(200);
+      await awaitRecords(records, 1);
+      expect(records).toHaveLength(1);
+      const r = records[0]!;
+      expect(r.method).toBe("GET");
+      expect(r.path).toBe("/v1/models");
+      expect(r.agent).toBeNull();
+      expect(r.messages_count).toBeNull();
+      expect(r.bearer_key_prefix).toBeNull();
+      expect(r.status_code).toBe(200);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("SI-6 — exactly one logger.log() call per request (no duplicates across close events)", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({ events: textStream, requestLogger: logger });
+    try {
+      for (let i = 0; i < 3; i++) {
+        const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${h.pinnedKey}`,
+          },
+          body: JSON.stringify({
+            model: "clawdy",
+            messages: [{ role: "user", content: `hi ${i}` }],
+          }),
+        });
+        expect(res.status).toBe(200);
+      }
+      await awaitRecords(records, 3);
+      expect(records).toHaveLength(3);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("SI-7 — 403 agent-mismatch still records (bearer prefix + agent set from key, error_code:'agent_mismatch')", async () => {
+    const { logger, records } = makeRecordingLogger();
+    const h = await bootHarness({ events: textStream, requestLogger: logger });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "assistant", // key is pinned to clawdy → 403
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(403);
+      await awaitRecords(records, 1);
+      const r = records[0]!;
+      expect(r.status_code).toBe(403);
+      expect(r.error_type).toBe("permission_error");
+      expect(r.error_code).toBe("agent_mismatch");
+      expect(r.bearer_key_prefix).toBe(h.pinnedKey.slice(0, 12));
+      expect(r.agent).toBe("clawdy"); // resolved before mismatch check
+      expect(r.model).toBe("assistant");
     } finally {
       await teardown(h);
     }

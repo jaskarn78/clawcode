@@ -32,6 +32,7 @@ import type { Logger } from "pino";
 import { ApiKeysStore } from "./keys.js";
 import { createOpenAiSessionDriver } from "./driver.js";
 import { ApiKeySessionIndex } from "./session-index.js";
+import { createRequestLogger, type RequestLogger } from "./request-logger.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 
@@ -59,6 +60,12 @@ export interface OpenAiEndpointDeps {
   readonly startServer?: typeof import("./server.js").startOpenAiServer;
   /** Injected factory for ApiKeysStore — tests pass a `:memory:` path stub. */
   readonly apiKeysStoreFactory?: (dbPath: string) => ApiKeysStore;
+  /**
+   * Quick task 260419-mvh — injected request logger for tests. Absent in
+   * production: the helper builds a default logger pointing at managerDir
+   * and honoring CLAWCODE_OPENAI_LOG_DIR / CLAWCODE_OPENAI_LOG_BODIES.
+   */
+  readonly requestLogger?: RequestLogger;
 }
 
 /** Returned handle — `enabled:false` means startup was skipped or failed. */
@@ -191,6 +198,17 @@ export async function startOpenAiEndpoint(
     log,
   );
 
+  // Quick task 260419-mvh — build the default request logger when tests don't
+  // inject one. Honors CLAWCODE_OPENAI_LOG_DIR (defaults to managerDir) and
+  // CLAWCODE_OPENAI_LOG_BODIES (opt-in PII capture; default false).
+  const requestLogger =
+    deps.requestLogger ??
+    createRequestLogger({
+      dir: process.env.CLAWCODE_OPENAI_LOG_DIR ?? deps.managerDir,
+      includeBodies: process.env.CLAWCODE_OPENAI_LOG_BODIES === "true",
+      log,
+    });
+
   let handle: Awaited<ReturnType<typeof startServer>>;
   try {
     handle = await startServer({
@@ -209,6 +227,8 @@ export async function startOpenAiEndpoint(
       ...(readinessWaitMs !== undefined
         ? { agentReadinessWaitMs: readinessWaitMs }
         : {}),
+      // Quick task 260419-mvh — JSONL request feed for diagnostics.
+      requestLogger,
     });
   } catch (err) {
     if (isAddrInUse(err)) {
@@ -230,6 +250,13 @@ export async function startOpenAiEndpoint(
     } catch {
       /* non-fatal */
     }
+    // Quick task 260419-mvh — close the logger so future-async writes don't
+    // keep a stale handle behind us. Current impl is a no-op but good hygiene.
+    try {
+      await requestLogger.close();
+    } catch {
+      /* non-fatal */
+    }
     return NOOP_HANDLE;
   }
 
@@ -241,7 +268,7 @@ export async function startOpenAiEndpoint(
     host: handle.address.host,
     apiKeysStore,
     close: async () => {
-      // Pitfall 10 order: activeStreams first, then server, then store.
+      // Pitfall 10 order: activeStreams first, then server, then store, then logger.
       try {
         await handle.close();
       } catch (err) {
@@ -256,6 +283,14 @@ export async function startOpenAiEndpoint(
         log.warn(
           { err: (err as Error).message },
           "OpenAI endpoint api-keys-store close failed (non-fatal)",
+        );
+      }
+      try {
+        await requestLogger.close();
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          "OpenAI endpoint request-logger close failed (non-fatal)",
         );
       }
     },

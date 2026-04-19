@@ -61,6 +61,10 @@ import {
   translateRequest,
 } from "./translator.js";
 import { startOpenAiSse, type OpenAiSseHandle } from "./stream.js";
+import type {
+  RequestLogger,
+  RequestLogRecord,
+} from "./request-logger.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -121,6 +125,12 @@ export interface OpenAiServerConfig {
    * Default 50ms.
    */
   agentReadinessPollIntervalMs?: number;
+  /**
+   * Quick task 260419-mvh — JSONL request logger. When set, every request
+   * (chat-completion + /v1/models) emits exactly one record on res.on('close').
+   * Absent by default so Plan 02 hermetic tests stay hermetic.
+   */
+  requestLogger?: RequestLogger;
 }
 
 /** Handle returned by `startOpenAiServer`. */
@@ -371,9 +381,12 @@ async function handleChatCompletions(
   activeStreams: Set<OpenAiSseHandle>,
   xRequestId: string,
   log: Logger,
+  partial: MutableLogRecord,
 ): Promise<void> {
   // 1. Content-Type (Pitfall 9).
   if (!isJsonContentType(req)) {
+    partial.error_type = "invalid_request_error";
+    partial.error_code = "invalid_content_type";
     sendError(
       res,
       400,
@@ -388,6 +401,8 @@ async function handleChatCompletions(
   // 2. Auth — bearer key required.
   const bearer = extractBearer(req);
   if (bearer === null) {
+    partial.error_type = "authentication_error";
+    partial.error_code = "missing_key";
     sendError(
       res,
       401,
@@ -398,8 +413,14 @@ async function handleChatCompletions(
     );
     return;
   }
+  // Quick task 260419-mvh — capture the first 12 chars of the RAW bearer
+  // for observability BEFORE the store lookup. Never more, never less.
+  partial.bearer_key_prefix = bearer.slice(0, 12);
+
   const row = config.apiKeysStore.lookupByIncomingKey(bearer);
   if (row === null) {
+    partial.error_type = "authentication_error";
+    partial.error_code = "invalid_key";
     sendError(
       res,
       401,
@@ -410,6 +431,7 @@ async function handleChatCompletions(
     );
     return;
   }
+  partial.agent = row.agent_name;
 
   // 3. Body read + parse.
   let raw: Buffer;
@@ -417,6 +439,8 @@ async function handleChatCompletions(
     raw = await readBody(req, config.maxRequestBodyBytes);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
+      partial.error_type = "invalid_request_error";
+      partial.error_code = "body_too_large";
       sendError(
         res,
         413,
@@ -427,6 +451,8 @@ async function handleChatCompletions(
       );
       return;
     }
+    partial.error_type = "invalid_request_error";
+    partial.error_code = "body_read_error";
     sendError(
       res,
       400,
@@ -442,6 +468,8 @@ async function handleChatCompletions(
   try {
     bodyJson = JSON.parse(raw.toString("utf8"));
   } catch {
+    partial.error_type = "invalid_request_error";
+    partial.error_code = "body_parse_error";
     sendError(
       res,
       400,
@@ -455,6 +483,8 @@ async function handleChatCompletions(
 
   const parseResult = chatCompletionRequestSchema.safeParse(bodyJson);
   if (!parseResult.success) {
+    partial.error_type = "invalid_request_error";
+    partial.error_code = "body_validation_error";
     sendError(
       res,
       400,
@@ -466,9 +496,14 @@ async function handleChatCompletions(
     return;
   }
   const body = parseResult.data as ChatCompletionRequest;
+  partial.model = body.model;
+  partial.stream = body.stream === true;
+  partial.messages_count = body.messages.length;
 
   // 4. Model-to-key pinning. CONTEXT.md: "never leak agent name".
   if (row.agent_name !== body.model) {
+    partial.error_type = "permission_error";
+    partial.error_code = "agent_mismatch";
     sendError(
       res,
       403,
@@ -492,6 +527,8 @@ async function handleChatCompletions(
       config.agentReadinessPollIntervalMs ?? 50,
     );
     if (!ready) {
+      partial.error_type = "server_error";
+      partial.error_code = "agent_warming";
       sendAgentWarming(res, xRequestId);
       return;
     }
@@ -572,11 +609,12 @@ async function handleChatCompletions(
       streamIncludeUsage,
       xRequestId,
       log,
+      partial,
     );
     return;
   }
 
-  await runNonStreaming(res, body.model, turnId, driverInput, config, xRequestId, log);
+  await runNonStreaming(res, body.model, turnId, driverInput, config, xRequestId, log, partial);
 }
 
 /**
@@ -593,6 +631,7 @@ async function runNonStreaming(
   config: OpenAiServerConfig,
   xRequestId: string,
   log: Logger,
+  partial: MutableLogRecord,
 ): Promise<void> {
   const translator = createStreamingTranslator({ id: turnId, model });
   try {
@@ -606,9 +645,13 @@ async function runNonStreaming(
     // than the generic 500 driver_error. OpenAI clients can't distinguish
     // a transient warm-path miss from a permanent failure otherwise.
     if (isSessionNotRunningError(err)) {
+      partial.error_type = "server_error";
+      partial.error_code = "agent_warming";
       sendAgentWarming(res, xRequestId);
       return;
     }
+    partial.error_type = "server_error";
+    partial.error_code = "driver_error";
     log.warn({ err }, "driver failed on non-stream path");
     sendError(
       res,
@@ -629,6 +672,11 @@ async function runNonStreaming(
     toolCalls,
     usage: translator.usage,
   });
+  // Quick task 260419-mvh — finish_reason mirrors makeNonStreamResponse logic
+  // (tool_calls when toolCalls non-empty; stop otherwise). No additional
+  // translator state required.
+  partial.finish_reason = toolCalls.length > 0 ? "tool_calls" : "stop";
+  partial.response_bytes = Buffer.byteLength(JSON.stringify(response));
   sendJson(res, 200, response, xRequestId);
 }
 
@@ -656,7 +704,11 @@ async function runStreaming(
   streamIncludeUsage: boolean,
   xRequestId: string,
   log: Logger,
+  partial: MutableLogRecord,
 ): Promise<void> {
+  const streamStart = Date.now();
+  let sentFirstChunk = false;
+  let emittedBytes = 0;
   // SSE headers need x-request-id too; startOpenAiSse writes its own
   // writeHead call, but we inject the x-request-id here by setting it on the
   // response before write occurs. node:http allows setHeader prior to
@@ -677,18 +729,33 @@ async function runStreaming(
     for await (const event of config.driver.dispatch(driverInput)) {
       const chunks = translator.onEvent(event);
       for (const c of chunks) {
+        if (!sentFirstChunk) {
+          sentFirstChunk = true;
+          partial.ttfb_ms = Date.now() - streamStart;
+        }
+        emittedBytes += Buffer.byteLength(JSON.stringify(c));
         const ok = await handle.emit(c);
         if (!ok) {
           // Client disconnected — abort driver iteration.
+          partial.response_bytes = emittedBytes;
           return;
         }
       }
     }
     const finals = translator.finalize({ includeUsage: streamIncludeUsage });
+    // Record the terminal chunk's finish_reason for observability.
+    const terminal = finals[0] as
+      | { choices: Array<{ finish_reason: string | null }> }
+      | undefined;
+    if (terminal?.choices?.[0]?.finish_reason) {
+      partial.finish_reason = terminal.choices[0].finish_reason;
+    }
     for (const c of finals) {
+      emittedBytes += Buffer.byteLength(JSON.stringify(c));
       await handle.emit(c);
     }
     handle.emitDone();
+    partial.response_bytes = emittedBytes;
   } catch (err) {
     // Post-v2.0 hardening — if the driver slipped past the pre-dispatch
     // gate and threw SessionError("not running"), surface the warm-path
@@ -697,6 +764,8 @@ async function runStreaming(
     // can't write a 503 cleanly — but the `agent_warming` code in the
     // OpenAI error envelope still tells the client this is retryable.
     if (isSessionNotRunningError(err)) {
+      partial.error_type = "server_error";
+      partial.error_code = "agent_warming";
       log.warn({ err }, "driver SessionError not-running mid-stream (post-gate race)");
       handle.emitError({
         error: {
@@ -706,6 +775,8 @@ async function runStreaming(
         },
       });
     } else {
+      partial.error_type = "server_error";
+      partial.error_code = "driver_error";
       log.warn({ err }, "driver failed mid-stream");
       handle.emitError({
         error: {
@@ -715,6 +786,7 @@ async function runStreaming(
         },
       });
     }
+    partial.response_bytes = emittedBytes;
   } finally {
     activeStreams.delete(handle);
   }
@@ -778,6 +850,31 @@ export async function startOpenAiServer(
 }
 
 /**
+ * Quick task 260419-mvh — mutable per-request log record. Fields are filled
+ * by the route handlers as they make progress (auth, body parse, translate,
+ * dispatch). `res.on('close')` emits exactly one record via the injected
+ * logger, guarded by a `logged` boolean so we never double-emit.
+ */
+interface MutableLogRecord {
+  request_id: string;
+  timestamp_iso: string;
+  method: string;
+  path: string;
+  agent: string | null;
+  model: string | null;
+  stream: boolean | null;
+  bearer_key_prefix: string | null;
+  messages_count: number | null;
+  status_code: number;
+  ttfb_ms: number | null;
+  total_ms: number;
+  response_bytes: number;
+  error_type: string | null;
+  error_code: string | null;
+  finish_reason: string | null;
+}
+
+/**
  * Top-level request router. Exported as `route` at module scope so the
  * handler functions stay small and composable.
  */
@@ -790,10 +887,52 @@ async function route(
   bootEpochSeconds: number,
   log: Logger,
 ): Promise<void> {
-  try {
-    const method = req.method ?? "GET";
-    const url = (req.url ?? "/").split("?")[0] ?? "/";
+  const method = req.method ?? "GET";
+  const url = (req.url ?? "/").split("?")[0] ?? "/";
+  const startMs = Date.now();
 
+  // Build the mutable record up front — handlers mutate only what they know.
+  const partial: MutableLogRecord = {
+    request_id: xRequestId,
+    timestamp_iso: new Date(startMs).toISOString(),
+    method,
+    path: url,
+    agent: null,
+    model: null,
+    stream: null,
+    bearer_key_prefix: null,
+    messages_count: null,
+    status_code: 0,
+    ttfb_ms: null,
+    total_ms: 0,
+    response_bytes: 0,
+    error_type: null,
+    error_code: null,
+    finish_reason: null,
+  };
+
+  if (config.requestLogger) {
+    let logged = false;
+    res.on("close", () => {
+      if (logged) return;
+      logged = true;
+      partial.total_ms = Date.now() - startMs;
+      partial.status_code = res.statusCode;
+      if (partial.response_bytes === 0) {
+        // Best-effort fallback when handlers didn't stamp it.
+        const cl = res.getHeader("content-length");
+        const n = typeof cl === "string" ? Number.parseInt(cl, 10) : typeof cl === "number" ? cl : 0;
+        if (Number.isFinite(n) && n >= 0) partial.response_bytes = n;
+      }
+      try {
+        config.requestLogger!.log(partial as RequestLogRecord);
+      } catch {
+        // createRequestLogger swallows fs errors internally — belt-and-suspenders.
+      }
+    });
+  }
+
+  try {
     if (method === "OPTIONS") {
       handleOptions(res, xRequestId);
       return;
@@ -805,7 +944,15 @@ async function route(
     }
 
     if (method === "POST" && url === "/v1/chat/completions") {
-      await handleChatCompletions(req, res, config, activeStreams, xRequestId, log);
+      await handleChatCompletions(
+        req,
+        res,
+        config,
+        activeStreams,
+        xRequestId,
+        log,
+        partial,
+      );
       return;
     }
 

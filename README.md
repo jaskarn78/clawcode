@@ -426,9 +426,28 @@ clawcode openai-key revoke ab12cd34               # by 8+ hex prefix of the hash
 
 - `CLAWCODE_OPENAI_HOST` — override listener bind (default `0.0.0.0`).
 - `CLAWCODE_OPENAI_PORT` — override listener port (default `3101`).
+- `CLAWCODE_OPENAI_LOG_DIR` — override request-log directory (default `~/.clawcode/manager/`).
+- `CLAWCODE_OPENAI_LOG_BODIES` — set to `true` to capture full message bodies in the request log. **Default off** — prompts may contain PII. Leave off unless you're debugging a specific request.
 - Disable entirely via `defaults.openai.enabled: false` in `clawcode.yaml`.
 
 Port conflicts are non-fatal: the daemon logs a warning and continues without the endpoint.
+
+### Request logging
+
+Every request to `/v1/chat/completions` and `/v1/models` is appended as one JSON line to `~/.clawcode/manager/openai-requests-YYYY-MM-DD.jsonl` (UTC date — single rollover boundary across operator timezones).
+
+```bash
+clawcode openai-log tail --agent clawdy --since 1h        # padded-column table
+clawcode openai-log tail --since 24h --json               # raw JSONL for jq
+clawcode openai-log tail --since 48h                      # reads today + yesterday's files
+```
+
+Redaction rules baked in:
+
+- `bearer_key_prefix` is only the **first 12 chars** of the incoming bearer — never more. The full key never lands in the log.
+- `messages[]` is **stripped by default**. Set `CLAWCODE_OPENAI_LOG_BODIES=true` to capture bodies verbatim. **Warning:** prompts often contain PII / tool-result text / secrets in tool args. Treat a logs directory with `CLAWCODE_OPENAI_LOG_BODIES=true` as a secrets directory — lock down perms and rotate aggressively.
+
+Fields captured per record: `request_id`, `timestamp_iso`, `method`, `path`, `agent`, `model`, `stream`, `status_code`, `ttfb_ms` (stream only), `total_ms`, `bearer_key_prefix`, `messages_count`, `response_bytes`, `error_type`, `error_code`, `finish_reason`. Writes are synchronous + fail-silent (fs errors rate-limited to 1 warn/min so `/v1/chat/completions` is never blocked by an observability feed).
 
 ### End-to-end smoke
 
