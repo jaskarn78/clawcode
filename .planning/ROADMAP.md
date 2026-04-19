@@ -189,7 +189,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 **UI hint**: no
 
 ### Phase 74: Seamless OpenClaw Backend
-**Goal**: OpenClaw can add ClawCode as a generic LLM provider in `openclaw.json` and its workspace-scoped agents (each with their own SOUL, tools, model preferences, memory, workspace dir) reach ClawCode via `/v1/chat/completions` without requiring per-OpenClaw-agent pre-registration on ClawCode. The caller's agent config — SOUL-as-system-prompt, tool list, model, memory hints — flows IN the request; ClawCode materializes a session that respects it while preserving isolation, cost attribution, and the v1.7 prompt-cache SLO.
+**Goal**: OpenClaw can add ClawCode as a generic LLM provider in `openclaw.json` and its workspace-scoped agents (each with their own SOUL, tools, model preferences, memory, workspace dir) reach ClawCode via `/v1/chat/completions` without requiring per-OpenClaw-agent pre-registration on ClawCode. The caller's agent config — SOUL-as-system-prompt, tool list, model, memory hints — flows IN the request via the namespaced `openclaw:<slug>:<tier>` model id convention; ClawCode materializes a transient persistent-session keyed on (bearer, callerSlug, sha256(SOUL), tier) that respects it while preserving isolation, cost attribution, and the v1.7 prompt-cache SLO.
 **Depends on**: Phase 69 (endpoint surface), Phase 73 (persistent-subprocess + brief cache), v1.5 cost-tracking, v1.9 ConversationStore
 **Requirements**: BACKEND-01, BACKEND-02, BACKEND-03, BACKEND-04, BACKEND-05
 **Success Criteria** (what must be TRUE):
@@ -198,7 +198,9 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   3. Cost tracking attributes spend to the CALLER-provided identity (so OpenClaw's per-workspace cost dashboards stay accurate), NOT to a single catchall "openai-endpoint" bucket.
   4. Isolation: caller-provided configs cannot escape into ClawCode's own agents' workspaces, memory stores, or MCP tool surface. Security audit passes — no path traversal via workspace, no SOUL-as-instruction-injection into the ClawCode kernel.
   5. OpenClaw side needs ONE provider entry with ONE bearer key (multi-agent key from Phase 73) — all OpenClaw-side agents route through it; the `model:` field carries the identifier OpenClaw expects back.
-**Plans**: TBD (run `/gsd:research-phase 74` first, then `/gsd:plan-phase 74`)
+**Plans**: 2 plans
+  - [ ] 74-01-PLAN.md — Caller-identity routing + transient-session cache + OpenClawTemplateDriver + server.ts routing branch (BACKEND-01, BACKEND-02 infrastructure, BACKEND-05)
+  - [ ] 74-02-PLAN.md — `security.denyScopeAll` gate + UsageTracker caller-attributed cost rows + shutdown drain + smoke + README (BACKEND-02 E2E, BACKEND-03, BACKEND-04)
 **UI hint**: no
 
 ## Progress
@@ -230,4 +232,4 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 
 ---
 
-*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Phase 74 in research.*
+*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Phase 74 planned (2 plans).*
