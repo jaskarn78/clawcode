@@ -126,6 +126,7 @@ None yet.
 | 260418-sux | Fix schedule display field mismatch and add registry ghost-entry reconciliation | 2026-04-18 | 3d4ff24 | [260418-sux-fix-schedule-display-field-mismatch-and-](./quick/260418-sux-fix-schedule-display-field-mismatch-and-/) |
 | 260419-jtk | Harden OpenAI streaming for OpenClaw: usage trailing chunk + tool-call verify + warm-path startup race | 2026-04-19 | 18252fe | [260419-jtk-harden-openai-streaming-for-openclaw-emi](./quick/260419-jtk-harden-openai-streaming-for-openclaw-emi/) |
 | 260419-mvh | Fix initMemory→warm-path cascade + add OpenAI request/payload JSONL logging + `openai-log tail` CLI | 2026-04-19 | 34dfb83 | [260419-mvh-fix-initmemory-warm-path-cascade-add-ope](./quick/260419-mvh-fix-initmemory-warm-path-cascade-add-ope/) |
+| 260419-nic | Discord `/clawcode-interrupt` + `/clawcode-steer` slash commands — mid-turn abort + steering via Phase 73 interrupt primitive | 2026-04-19 | 8ff6780 | [260419-nic-add-discord-stop-and-steer-slash-command](./quick/260419-nic-add-discord-stop-and-steer-slash-command/) |
 | Phase 69 P01 | 13 | 3 tasks | 7 files |
 | Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
 | Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
@@ -139,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-19 - Completed quick task 260419-mvh (warm-path cascade fix + request JSONL logging)
+Last activity: 2026-04-19 - Completed quick task 260419-nic (Discord /clawcode-interrupt + /clawcode-steer slash commands)
 Stopped at: Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work.
 Resume file: None
