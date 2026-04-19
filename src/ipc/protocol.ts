@@ -93,6 +93,11 @@ export const IPC_METHODS = [
   // shared BraveClient/ExaClient + URL fetcher + the pure handlers in
   // src/search/tools.ts.
   "search-tool-call",
+  // Image generation MCP (Phase 72) — routes per-agent tool calls from
+  // the out-of-process `clawcode image-mcp` subprocess to the daemon's
+  // shared image provider clients + the pure handlers in
+  // src/image/tools.ts.
+  "image-tool-call",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

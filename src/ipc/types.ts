@@ -83,3 +83,44 @@ export type IpcSearchToolCallResult =
         readonly [k: string]: unknown;
       };
     };
+
+/* ------------------------------------------------------------------ */
+/*  Phase 72 — Image Generation MCP IPC contract                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Parameters for the `image-tool-call` IPC method.
+ *
+ * Flow (mirrors Phase 70/71):
+ *   Claude SDK spawns `clawcode image-mcp` per agent session →
+ *   `src/image/mcp-server.ts` receives a tool call over stdio →
+ *   packs `{ agent, toolName, args }` into this shape →
+ *   `sendIpcRequest(SOCKET_PATH, "image-tool-call", ...)` →
+ *   daemon dispatches to `handleImageToolCall` in
+ *   `src/image/daemon-handler.ts`, which calls `imageGenerate`,
+ *   `imageEdit`, or `imageVariations` against the daemon-owned
+ *   OpenAI/MiniMax/fal image provider clients.
+ */
+export interface IpcImageToolCallParams {
+  readonly agent: string;
+  readonly toolName: "image_generate" | "image_edit" | "image_variations";
+  readonly args: Record<string, unknown>;
+}
+
+/**
+ * Result type for `image-tool-call`. Widened to `unknown` on the success
+ * branch to keep the IPC layer shallowly-typed — concrete shapes
+ * (`ImageGenerateResult`, `ImageEditResult`, `ImageVariationsResult`)
+ * live in the image module and are re-narrowed by the MCP subprocess
+ * when shaping the content envelope.
+ */
+export type IpcImageToolCallResult =
+  | { readonly ok: true; readonly data: unknown }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly type: string;
+        readonly message: string;
+        readonly [k: string]: unknown;
+      };
+    };
