@@ -279,6 +279,23 @@ export async function startOpenAiEndpoint(
       // up to agentReadinessWaitMs (default 300ms post persistent-subprocess)
       // before responding 503 Retry-After rather than 500 driver_error.
       agentIsRunning: deps.sessionManager.isRunning.bind(deps.sessionManager),
+      // Phase 74 Plan 02 — per-agent config lookup for the denyScopeAll
+      // gate. scope='all' bearer keys targeting an agent with
+      // `security.denyScopeAll: true` receive 403
+      // agent_forbids_multi_agent_key. Returns null when the agent is not
+      // registered on this daemon (falls through to the Phase 69
+      // agent_mismatch path, not the denyScopeAll 403). Narrows
+      // ResolvedAgentConfig down to the minimum shape the server reads —
+      // keeps server.ts hermetic from the config module.
+      getAgentConfig: (name: string) => {
+        const cfg = deps.sessionManager.getAgentConfig(name);
+        if (!cfg) return null;
+        return {
+          security: cfg.security
+            ? { denyScopeAll: cfg.security.denyScopeAll }
+            : undefined,
+        };
+      },
       ...(readinessWaitMs !== undefined
         ? { agentReadinessWaitMs: readinessWaitMs }
         : {}),

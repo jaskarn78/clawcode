@@ -147,9 +147,18 @@ export const allowlistEntrySchema = z.object({
 
 /**
  * Security configuration schema for per-agent execution approval.
+ *
+ * Phase 74 Plan 02 — `denyScopeAll` gates access to this agent from
+ * scope='all' (multi-agent) bearer keys. Default `false` preserves
+ * back-compat (any scope='all' key can target any configured agent).
+ * Set `true` on admin-grade agents (e.g. admin-clawdy) so a compromised
+ * OpenClaw-side scope='all' key cannot impersonate them via body.model.
+ * The `openclaw:<slug>` template path is ALWAYS exempt from this flag —
+ * that branch is a different code path entirely (no admin surface).
  */
 export const securityConfigSchema = z.object({
   allowlist: z.array(allowlistEntrySchema).default([]),
+  denyScopeAll: z.boolean().default(false),
 });
 
 /** Inferred security config type. */

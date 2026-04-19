@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, streamingConfigSchema } from "../schema.js";
+import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, securityConfigSchema, streamingConfigSchema } from "../schema.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
@@ -1104,5 +1104,52 @@ describe("searchConfigSchema (Phase 71)", () => {
     expect(IDEMPOTENT_TOOL_DEFAULTS).not.toContain("image_generate");
     expect(IDEMPOTENT_TOOL_DEFAULTS).not.toContain("image_edit");
     expect(IDEMPOTENT_TOOL_DEFAULTS).not.toContain("image_variations");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 74 Plan 02 — security.denyScopeAll per-agent flag
+// ---------------------------------------------------------------------------
+
+describe("Phase 74 Plan 02 — securityConfigSchema.denyScopeAll", () => {
+  it("parses { allowlist: [], denyScopeAll: true } successfully with denyScopeAll=true", () => {
+    const result = securityConfigSchema.safeParse({
+      allowlist: [],
+      denyScopeAll: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.denyScopeAll).toBe(true);
+      expect(result.data.allowlist).toEqual([]);
+    }
+  });
+
+  it("parses { allowlist: [] } (no denyScopeAll) successfully with denyScopeAll defaulting to false", () => {
+    const result = securityConfigSchema.safeParse({ allowlist: [] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.denyScopeAll).toBe(false);
+    }
+  });
+
+  it("rejects denyScopeAll as non-boolean (must be boolean type)", () => {
+    const result = securityConfigSchema.safeParse({
+      allowlist: [],
+      denyScopeAll: "yes",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("full agent config with admin=true + security.denyScopeAll=true parses and exposes the flag", () => {
+    const result = agentSchema.safeParse({
+      name: "admin-clawdy",
+      admin: true,
+      security: { denyScopeAll: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.admin).toBe(true);
+      expect(result.data.security?.denyScopeAll).toBe(true);
+    }
   });
 });

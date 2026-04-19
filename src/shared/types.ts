@@ -91,6 +91,13 @@ export type ResolvedAgentConfig = {
   readonly reactions: boolean;
   readonly security?: {
     readonly allowlist: readonly { readonly pattern: string }[];
+    /**
+     * Phase 74 Plan 02 — per-agent gate against scope='all' bearer keys.
+     * When `true`, the OpenAI endpoint returns 403 agent_forbids_multi_agent_key
+     * for any scope='all' bearer targeting this agent. Default `false`.
+     * Does NOT affect the `openclaw:<slug>` template-driver path.
+     */
+    readonly denyScopeAll: boolean;
   };
   readonly mcpServers: readonly {
     readonly name: string;

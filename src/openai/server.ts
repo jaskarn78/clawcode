@@ -140,6 +140,23 @@ export interface OpenAiServerConfig {
    * unconditionally in endpoint-bootstrap.ts alongside the native driver.
    */
   templateDriver?: OpenAiSessionDriver;
+  /**
+   * Phase 74 Plan 02 — per-agent config lookup for the denyScopeAll gate.
+   * Production wires this to `(name) => sessionManager.getAgentConfig(name) ?? null`.
+   * When absent, the gate defaults to permissive (scope='all' reaches any
+   * native agent — Phase 69 backwards-compatible behaviour). Only consulted
+   * on the clawcode-native branch; the openclaw: template branch bypasses
+   * this check entirely (slug is caller-controlled, not a native target).
+   *
+   * Return shape is a structural subset of ResolvedAgentConfig — only the
+   * `security.denyScopeAll` field is read. Anything else on the returned
+   * object is ignored by the gate (keeps the server hermetic from
+   * src/config/schema.ts).
+   */
+  getAgentConfig?: (name: string) =>
+    | { security?: { denyScopeAll?: boolean } | undefined }
+    | null
+    | undefined;
 }
 
 /** Handle returned by `startOpenAiServer`. */
@@ -724,6 +741,28 @@ async function handleChatCompletions(
     // key has no "owner" agent; the request determines which agent the turn
     // routes to. Overrides the earlier partial.agent = row.agent_name (="*").
     partial.agent = body.model;
+
+    // Phase 74 Plan 02 — denyScopeAll gate. Scope='all' keys cannot target
+    // native agents that have opted out via `security.denyScopeAll: true`.
+    // The template-driver path (openclaw: prefix) is NOT subject to this
+    // check — it was already handled above in branch 5a via
+    // extractCallerIdentity() and never reaches this native branch.
+    // Defaults to permissive when `getAgentConfig` is absent or returns
+    // null/undefined — preserves Phase 69 backwards-compatibility.
+    const targetCfg = config.getAgentConfig?.(body.model) ?? null;
+    if (targetCfg && targetCfg.security?.denyScopeAll === true) {
+      partial.error_type = "permission_error";
+      partial.error_code = "agent_forbids_multi_agent_key";
+      sendError(
+        res,
+        403,
+        "permission_error",
+        "The requested agent does not accept multi-agent bearer keys",
+        "agent_forbids_multi_agent_key",
+        xRequestId,
+      );
+      return;
+    }
   } else if (row.scope === expectedAgentScope) {
     // Legacy pinned key on its bound agent — partial.agent already set above.
   } else {
