@@ -109,7 +109,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 ### v2.0 Open Endpoint + Eyes & Hands (Active)
 
 - [x] **Phase 69: OpenAI-Compatible Endpoint** — `POST /v1/chat/completions` + `GET /v1/models` on the daemon with SSE streaming, bearer-key-per-session auth, OpenAI↔Claude tool-use translation, and `TurnOrigin="openai-api"` tracing. (completed 2026-04-19)
-- [ ] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton.
+- [x] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton. (completed 2026-04-19)
 - [ ] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist.
 - [ ] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration.
 
@@ -189,7 +189,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
-| 70. Browser Automation MCP | 2/3 | In Progress|  |
+| 70. Browser Automation MCP | 3/3 | Complete   | 2026-04-19 |
 | 71. Web Search MCP | 0/- | Not started | - |
 | 72. Image Generation MCP | 0/- | Not started | - |
 

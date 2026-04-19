@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to execute
-stopped_at: Completed 70-02-PLAN.md — 6 pure tool handlers + MCP stdio subprocess + CLI subcommand + IPC types. 94/94 browser tests green. Plan 03 ready.
-last_updated: "2026-04-19T01:32:07.691Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 70-03-PLAN.md — auto-inject browser MCP, warm-path + daemon-handler + browser-tool-call IPC, browser-smoke.mjs + README section. Phase 70 complete end-to-end. 2720 tests green.
+last_updated: "2026-04-19T02:05:58.569Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -77,6 +77,11 @@ Recent decisions affecting current work:
 - [Phase 70-browser-automation-mcp]: Plan 70-02: agent-name resolution precedence arg > CLAWCODE_AGENT env > invalid_argument error — no IPC round-trip on the error path
 - [Phase 70-browser-automation-mcp]: Plan 70-02: __testOnly_buildHandler DI seam — MCP SDK doesn't expose clean tool introspection; returning the exact registered handler lets tests pin the forward-to-daemon contract without a real StdioServerTransport
 - [Phase 70-browser-automation-mcp]: Plan 70-02: src/ipc/types.ts created as new module — project previously kept IPC types in protocol.ts (Zod schemas); Phase 70 introduces a separate types module so Plan 02 declares the contract without touching protocol.ts's IPC_METHODS enum (Plan 03 appends)
+- [Phase 70-browser-automation-mcp]: Plan 70-03: Extracted handleBrowserToolCall into src/browser/daemon-handler.ts — pure deps-based dispatcher gives tests a clean seam against real BrowserManager + mock driver without IPC transport or real Chromium
+- [Phase 70-browser-automation-mcp]: Plan 70-03: Browser IPC handler intercepted BEFORE routeMethod (mirrors Phase 69 openai-key-* pattern) — keeps 24-arg routeMethod signature from growing
+- [Phase 70-browser-automation-mcp]: Plan 70-03: WRITE_PRODUCING_TOOLS set (navigate/click/fill) gates saveAgentState — read-only tools (screenshot/extract/wait_for) skip the flush, preventing write amplification
+- [Phase 70-browser-automation-mcp]: Plan 70-03: daemon shutdown orders browserManager.close() BEFORE server.close() — in-flight browser-tool-call requests fail cleanly rather than hang (Pitfall 5 end-to-end)
+- [Phase 70-browser-automation-mcp]: Plan 70-03: Smoke script is zero-dependency Node ESM — inlines a minimal JSON-RPC-over-Unix-socket client so it works on a fresh clone with no build step; exit 2 on daemon-not-running distinguishes infra-skip from assertion-fail
 
 ### Roadmap Evolution
 
@@ -106,9 +111,10 @@ None yet.
 | Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
 | Phase 70-browser-automation-mcp P01 | 15min | 3 tasks | 9 files |
 | Phase 70-browser-automation-mcp P02 | 20min | 3 tasks | 14 files |
+| Phase 70-browser-automation-mcp P03 | 27min | 3 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 70-02-PLAN.md — 6 pure tool handlers + MCP stdio subprocess + CLI subcommand + IPC types. 94/94 browser tests green. Plan 03 ready.
+Stopped at: Completed 70-03-PLAN.md — auto-inject browser MCP, warm-path + daemon-handler + browser-tool-call IPC, browser-smoke.mjs + README section. Phase 70 complete end-to-end. 2720 tests green.
 Resume file: None
