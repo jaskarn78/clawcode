@@ -499,6 +499,10 @@ async function handleChatCompletions(
   partial.model = body.model;
   partial.stream = body.stream === true;
   partial.messages_count = body.messages.length;
+  partial.messages = body.messages.map((m) => ({
+    role: m.role,
+    content: typeof m.content === "string" ? m.content : "",
+  }));
 
   // 4. Model-to-key pinning. CONTEXT.md: "never leak agent name".
   if (row.agent_name !== body.model) {
@@ -872,6 +876,12 @@ interface MutableLogRecord {
   error_type: string | null;
   error_code: string | null;
   finish_reason: string | null;
+  // Quick task 260419-mvh follow-up — populated at validation time with the
+  // incoming `messages` array. The request-logger's `redact()` drops this
+  // field entirely unless `includeBodies=true` (CLAWCODE_OPENAI_LOG_BODIES).
+  // Stamped here so opt-in body capture actually has data to pass through;
+  // without this, the env var was a no-op.
+  messages?: ReadonlyArray<{ readonly role: string; readonly content: string }>;
 }
 
 /**
