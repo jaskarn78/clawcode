@@ -76,6 +76,7 @@ import { ApprovalLog } from "../security/approval-log.js";
 import { parseSecurityMd } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
 import { startDashboardServer } from "../dashboard/server.js";
+import { startOpenAiEndpoint, type OpenAiEndpointHandle } from "../openai/endpoint-bootstrap.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
@@ -1188,6 +1189,31 @@ export async function startDaemon(
     log.warn({ port: dashboardPort, host: dashboardHost, error: msg }, "dashboard server failed to start — continuing without dashboard");
   }
 
+  // 11d-bis. Phase 69 — OpenAI-compatible endpoint. Starts AFTER dashboard
+  // (so dashboard port conflicts surface first) and AFTER SessionManager +
+  // ConversationStore are fully initialized (which happens above inside the
+  // SessionManager constructor path). Non-fatal: an EADDRINUSE on the openai
+  // port is logged at warn and the daemon continues without the endpoint.
+  //
+  // Env overrides: CLAWCODE_OPENAI_PORT, CLAWCODE_OPENAI_HOST (mirrors
+  // CLAWCODE_DASHBOARD_PORT / _HOST). Disabled entirely via
+  // config.defaults.openai.enabled = false.
+  //
+  // Under the hood, startOpenAiEndpoint calls startOpenAiServer from
+  // src/openai/server.ts with a production OpenAiSessionDriver built via
+  // createOpenAiSessionDriver (src/openai/driver.ts). Shutdown honors
+  // Pitfall 10: drain activeStreams → server.close() → apiKeysStore.close().
+  const openAiEndpoint: OpenAiEndpointHandle = await startOpenAiEndpoint(
+    {
+      managerDir: MANAGER_DIR,
+      sessionManager: manager,
+      turnDispatcher,
+      agentNames: () => resolvedAgents.filter((a) => !a.name.includes("-sub-") && !a.name.includes("-thread-")).map((a) => a.name),
+      log,
+    },
+    config.defaults.openai,
+  );
+
   // 11e. Phase 52 Plan 03 (CACHE-03): daily cost + cache hit-rate summary
   // cron. Fires at 09:00 UTC and posts one Discord embed per running agent
   // carrying the previous 24h cost totals AND `💾 Cache: {hitRate}% over
@@ -1203,6 +1229,12 @@ export async function startDaemon(
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
+    // Phase 69 — close OpenAI endpoint FIRST: activeStreams drained + server
+    // closed + apiKeysStore handle released, before the dashboard (which
+    // owns the IPC socket for CLI fallback queries) shuts down. The
+    // endpoint-bootstrap helper encapsulates the Pitfall 10 ordering
+    // (activeStreams → server.close → store.close).
+    await openAiEndpoint.close();
     if (dashboard) {
       await dashboard.close();
     }
