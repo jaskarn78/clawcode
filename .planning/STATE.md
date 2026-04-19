@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to plan
-stopped_at: Completed 70-03-PLAN.md — auto-inject browser MCP, warm-path + daemon-handler + browser-tool-call IPC, browser-smoke.mjs + README section. Phase 70 complete end-to-end. 2720 tests green.
-last_updated: "2026-04-19T02:10:17.626Z"
+status: Ready to execute
+stopped_at: Completed 71-01-PLAN.md — searchConfigSchema + Brave/Exa clients + URL fetcher + Readability adapter + pure tool handlers + IDEMPOTENT_TOOL_DEFAULTS extension. Zero new npm deps. 130 Plan-01 tests green.
+last_updated: "2026-04-19T02:45:40.974Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 70 — Browser Automation MCP
+**Current focus:** Phase 71 — Web Search MCP
 
 ## Current Position
 
-Phase: 71
-Plan: Not started
+Phase: 71 (Web Search MCP) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -82,6 +82,10 @@ Recent decisions affecting current work:
 - [Phase 70-browser-automation-mcp]: Plan 70-03: WRITE_PRODUCING_TOOLS set (navigate/click/fill) gates saveAgentState — read-only tools (screenshot/extract/wait_for) skip the flush, preventing write amplification
 - [Phase 70-browser-automation-mcp]: Plan 70-03: daemon shutdown orders browserManager.close() BEFORE server.close() — in-flight browser-tool-call requests fail cleanly rather than hang (Pitfall 5 end-to-end)
 - [Phase 70-browser-automation-mcp]: Plan 70-03: Smoke script is zero-dependency Node ESM — inlines a minimal JSON-RPC-over-Unix-socket client so it works on a fresh clone with no build step; exit 2 on daemon-not-running distinguishes infra-skip from assertion-fail
+- [Phase 71]: Plan 71-01: Reuse Phase 70 parseArticle via direct import from src/browser/readability.js — no hoist to src/shared/
+- [Phase 71]: Plan 71-01: Lazy API-key reads at client search() call time — missing key surfaces as invalid_argument on first call, not daemon-boot crash
+- [Phase 71]: Plan 71-01: Native fetch over provider wrapper packages (no @brave/search-client, no exa-js) — zero npm deps, error mapping under our control
+- [Phase 71]: Plan 71-01: vi.spyOn(globalThis,'fetch') for all test mocking — mirrors attachments.test.ts, zero new test deps; error taxonomy locked at 7 discriminants (CONTEXT D-02)
 
 ### Roadmap Evolution
 
@@ -112,9 +116,10 @@ None yet.
 | Phase 70-browser-automation-mcp P01 | 15min | 3 tasks | 9 files |
 | Phase 70-browser-automation-mcp P02 | 20min | 3 tasks | 14 files |
 | Phase 70-browser-automation-mcp P03 | 27min | 3 tasks | 12 files |
+| Phase 71 P01 | 21 min | 3 tasks | 16 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19
-Stopped at: Completed 70-03-PLAN.md — auto-inject browser MCP, warm-path + daemon-handler + browser-tool-call IPC, browser-smoke.mjs + README section. Phase 70 complete end-to-end. 2720 tests green.
+Stopped at: Completed 71-01-PLAN.md — searchConfigSchema + Brave/Exa clients + URL fetcher + Readability adapter + pure tool handlers + IDEMPOTENT_TOOL_DEFAULTS extension. Zero new npm deps. 130 Plan-01 tests green.
 Resume file: None

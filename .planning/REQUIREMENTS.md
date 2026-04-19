@@ -37,9 +37,9 @@ Agents can drive a real headless Chromium to read, interact with, and extract da
 
 Agents can search the live web and fetch clean article content for grounding and citations.
 
-- [ ] **SEARCH-01**: User (via agent) can call `web_search` with a query and receive a ranked list of results (title, URL, snippet, published date when available) from Brave Search, with an optional Exa backend selectable per-agent config.
-- [ ] **SEARCH-02**: User (via agent) can call `web_fetch_url` on a result URL and receive clean, readable page text (headers + paragraphs, no nav/ads) along with metadata (title, author, publish date when extractable).
-- [ ] **SEARCH-03**: User (as operator) can trust that duplicate `web_search` / `web_fetch_url` calls within a single turn return cached results (no double-charging), joining the v1.7 idempotent tool-cache whitelist, with the cache scoped to a single Turn (zero cross-turn leak).
+- [x] **SEARCH-01**: User (via agent) can call `web_search` with a query and receive a ranked list of results (title, URL, snippet, published date when available) from Brave Search, with an optional Exa backend selectable per-agent config.
+- [x] **SEARCH-02**: User (via agent) can call `web_fetch_url` on a result URL and receive clean, readable page text (headers + paragraphs, no nav/ads) along with metadata (title, author, publish date when extractable).
+- [x] **SEARCH-03**: User (as operator) can trust that duplicate `web_search` / `web_fetch_url` calls within a single turn return cached results (no double-charging), joining the v1.7 idempotent tool-cache whitelist, with the cache scoped to a single Turn (zero cross-turn leak).
 
 ### Image Generation (IMAGE-*)
 
@@ -98,9 +98,9 @@ Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
 | BROWSER-04 | Phase 70 — Browser Automation MCP | Complete |
 | BROWSER-05 | Phase 70 — Browser Automation MCP | Complete |
 | BROWSER-06 | Phase 70 — Browser Automation MCP | Complete |
-| SEARCH-01 | Phase 71 — Web Search MCP | Pending |
-| SEARCH-02 | Phase 71 — Web Search MCP | Pending |
-| SEARCH-03 | Phase 71 — Web Search MCP | Pending |
+| SEARCH-01 | Phase 71 — Web Search MCP | Complete |
+| SEARCH-02 | Phase 71 — Web Search MCP | Complete |
+| SEARCH-03 | Phase 71 — Web Search MCP | Complete |
 | IMAGE-01 | Phase 72 — Image Generation MCP | Pending |
 | IMAGE-02 | Phase 72 — Image Generation MCP | Pending |
 | IMAGE-03 | Phase 72 — Image Generation MCP | Pending |

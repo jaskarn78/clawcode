@@ -152,7 +152,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   4. The search MCP server auto-injects into every agent following the `clawcode`/`1password` pattern (opt-out via `mcpServers: []`), and the `web_search` + `web_fetch_url` tools appear on the v1.7 intra-turn idempotent whitelist so their cached reads emit the correct `cached: true` trace metadata.
   5. The v1.7 prompt-cache hit rate and first-token p95 SLO show no regression when agents are idle (search never called) — the Brave client is lazily initialized, not eagerly instantiated at daemon boot.
 **Plans**: 2 plans
-  - [ ] 71-01-PLAN.md — Providers + tools + config (Brave/Exa clients, URL fetcher, pure tool handlers, schema + idempotent whitelist)
+  - [x] 71-01-PLAN.md — Providers + tools + config (Brave/Exa clients, URL fetcher, pure tool handlers, schema + idempotent whitelist)
   - [ ] 71-02-PLAN.md — MCP subprocess + CLI + auto-inject + smoke (stdio server, daemon wiring, loader auto-inject, smoke script, README)
 
 ### Phase 72: Image Generation MCP
@@ -192,7 +192,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 |-------|----------------|--------|-----------|
 | 69. OpenAI-Compatible Endpoint | 3/3 | Complete    | 2026-04-19 |
 | 70. Browser Automation MCP | 3/3 | Complete    | 2026-04-19 |
-| 71. Web Search MCP | 0/2 | Planned | - |
+| 71. Web Search MCP | 1/2 | In Progress|  |
 | 72. Image Generation MCP | 0/- | Not started | - |
 
 ---
