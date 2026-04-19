@@ -362,6 +362,79 @@ export const openaiEndpointSchema = z
 export type OpenAiEndpointConfig = z.infer<typeof openaiEndpointSchema>;
 
 /**
+ * Phase 70 — browser automation config (BROWSER-01..06).
+ *
+ * Governs the resident Chromium singleton warmed at daemon boot and the
+ * per-agent BrowserContext persistence behavior. The auto-injected browser
+ * MCP subprocess (clawcode browser-mcp — wired in Plan 02) delegates to the
+ * daemon's BrowserManager; this schema shapes the manager's behavior, not
+ * the subprocess transport.
+ *
+ * Architecture: `chromium.launch()` + per-agent
+ * `browser.newContext({ storageState })` (70-RESEARCH.md Option 2 — Pitfall 1
+ * forbids `launchPersistentContext` because it cannot share a Browser).
+ *
+ * DO NOT change `headless` to a string — Playwright 1.59 accepts the boolean
+ * form and maps `true` to the new-headless mode. The `"new"` string the
+ * CONTEXT.md draft mentioned is NOT a valid Playwright 1.59 launch option.
+ *
+ * Bounds rationale:
+ *  - `navigationTimeoutMs` 1s..10min — 10 min hard ceiling prevents runaway
+ *    agent behavior pinning a navigation forever.
+ *  - `actionTimeoutMs` 100ms..5min — same ceiling philosophy at the
+ *    action granularity (click/fill/wait_for).
+ *  - `viewport` 320x240..7680x4320 — floor covers low-end phone emulation,
+ *    ceiling matches 8K rendering (well above any realistic agent need).
+ *  - `maxScreenshotInlineBytes` 0..5 MiB — 0 means "never inline" (always
+ *    return path only); 5 MiB is Claude's per-image vision cap
+ *    (70-RESEARCH.md Pitfall 7).
+ */
+export const browserConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    headless: z.boolean().default(true),
+    warmOnBoot: z.boolean().default(true),
+    navigationTimeoutMs: z
+      .number()
+      .int()
+      .min(1000)
+      .max(600000)
+      .default(30000),
+    actionTimeoutMs: z
+      .number()
+      .int()
+      .min(100)
+      .max(300000)
+      .default(10000),
+    viewport: z
+      .object({
+        width: z.number().int().min(320).max(7680).default(1280),
+        height: z.number().int().min(240).max(4320).default(720),
+      })
+      .default(() => ({ width: 1280, height: 720 })),
+    userAgent: z.string().nullable().default(null),
+    maxScreenshotInlineBytes: z
+      .number()
+      .int()
+      .min(0)
+      .max(5242880)
+      .default(524288),
+  })
+  .default(() => ({
+    enabled: true,
+    headless: true,
+    warmOnBoot: true,
+    navigationTimeoutMs: 30000,
+    actionTimeoutMs: 10000,
+    viewport: { width: 1280, height: 720 },
+    userAgent: null,
+    maxScreenshotInlineBytes: 524288,
+  }));
+
+/** Inferred Phase 70 browser config type. */
+export type BrowserConfig = z.infer<typeof browserConfigSchema>;
+
+/**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
  */
@@ -456,6 +529,9 @@ export const defaultsSchema = z.object({
   // Phase 69: OpenAI-compatible endpoint config. DO NOT confuse with
   // mcpServers.openai (unrelated MCP entry at a different nesting level).
   openai: openaiEndpointSchema,
+  // Phase 70: browser automation config (BROWSER-01..06). Governs the
+  // resident Chromium singleton + per-agent BrowserContext persistence.
+  browser: browserConfigSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -588,6 +664,17 @@ export const configSchema = z.object({
       host: "0.0.0.0",
       maxRequestBodyBytes: 1048576,
       streamKeepaliveMs: 15000,
+    },
+    // Phase 70 — browser automation defaults (BROWSER-01..06).
+    browser: {
+      enabled: true,
+      headless: true,
+      warmOnBoot: true,
+      navigationTimeoutMs: 30000,
+      actionTimeoutMs: 10000,
+      viewport: { width: 1280, height: 720 },
+      userAgent: null,
+      maxScreenshotInlineBytes: 524288,
     },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),

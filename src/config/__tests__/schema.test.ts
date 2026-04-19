@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, configSchema, defaultsSchema, mcpServerSchema, openaiEndpointSchema, streamingConfigSchema } from "../schema.js";
+import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, mcpServerSchema, openaiEndpointSchema, streamingConfigSchema } from "../schema.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
@@ -144,6 +144,162 @@ describe("configSchema - mcpServers", () => {
     if (result.success) {
       expect(result.data.agents[0].mcpServers).toEqual([]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 70 — browser automation config schema
+// ---------------------------------------------------------------------------
+
+describe("browserConfigSchema", () => {
+  it("parses with all defaults when block omitted (undefined input)", () => {
+    const result = browserConfigSchema.safeParse(undefined);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.enabled).toBe(true);
+      expect(result.data.headless).toBe(true);
+      expect(result.data.warmOnBoot).toBe(true);
+      expect(result.data.navigationTimeoutMs).toBe(30000);
+      expect(result.data.actionTimeoutMs).toBe(10000);
+      expect(result.data.viewport).toEqual({ width: 1280, height: 720 });
+      expect(result.data.userAgent).toBeNull();
+      expect(result.data.maxScreenshotInlineBytes).toBe(524288);
+    }
+  });
+
+  it("parses an empty object as all defaults", () => {
+    const result = browserConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.enabled).toBe(true);
+      expect(result.data.headless).toBe(true);
+      expect(result.data.maxScreenshotInlineBytes).toBe(524288);
+    }
+  });
+
+  it("parses with partial overrides (headless=false preserved, others default)", () => {
+    const result = browserConfigSchema.safeParse({ headless: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.headless).toBe(false);
+      expect(result.data.enabled).toBe(true);
+      expect(result.data.navigationTimeoutMs).toBe(30000);
+      expect(result.data.viewport).toEqual({ width: 1280, height: 720 });
+    }
+  });
+
+  it("rejects navigationTimeoutMs=0", () => {
+    const result = browserConfigSchema.safeParse({ navigationTimeoutMs: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects negative actionTimeoutMs", () => {
+    const result = browserConfigSchema.safeParse({ actionTimeoutMs: -1 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects navigationTimeoutMs over 10-minute ceiling", () => {
+    const result = browserConfigSchema.safeParse({ navigationTimeoutMs: 600001 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects viewport width=0", () => {
+    const result = browserConfigSchema.safeParse({ viewport: { width: 0, height: 720 } });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects viewport height under 240", () => {
+    const result = browserConfigSchema.safeParse({ viewport: { width: 1280, height: 239 } });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects maxScreenshotInlineBytes > 5 MiB", () => {
+    const result = browserConfigSchema.safeParse({ maxScreenshotInlineBytes: 6291456 });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts maxScreenshotInlineBytes = 0 (never inline)", () => {
+    const result = browserConfigSchema.safeParse({ maxScreenshotInlineBytes: 0 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.maxScreenshotInlineBytes).toBe(0);
+    }
+  });
+
+  it("accepts userAgent null", () => {
+    const result = browserConfigSchema.safeParse({ userAgent: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.userAgent).toBeNull();
+    }
+  });
+
+  it("accepts userAgent custom string", () => {
+    const result = browserConfigSchema.safeParse({ userAgent: "ClawcodeBot/1.0" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.userAgent).toBe("ClawcodeBot/1.0");
+    }
+  });
+
+  it("accepts custom viewport within bounds", () => {
+    const result = browserConfigSchema.safeParse({ viewport: { width: 1920, height: 1080 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.viewport).toEqual({ width: 1920, height: 1080 });
+    }
+  });
+});
+
+describe("configSchema - defaults.browser wiring", () => {
+  it("parses config without defaults.browser and applies browser defaults", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.defaults.browser).toBeDefined();
+      expect(result.data.defaults.browser.enabled).toBe(true);
+      expect(result.data.defaults.browser.headless).toBe(true);
+      expect(result.data.defaults.browser.navigationTimeoutMs).toBe(30000);
+    }
+  });
+
+  it("parses config with explicit defaults.browser block", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      defaults: {
+        browser: {
+          enabled: false,
+          headless: false,
+          navigationTimeoutMs: 45000,
+          viewport: { width: 1920, height: 1080 },
+        },
+      },
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.defaults.browser.enabled).toBe(false);
+      expect(result.data.defaults.browser.headless).toBe(false);
+      expect(result.data.defaults.browser.navigationTimeoutMs).toBe(45000);
+      expect(result.data.defaults.browser.viewport).toEqual({ width: 1920, height: 1080 });
+      // Unspecified fields should fall back to defaults.
+      expect(result.data.defaults.browser.warmOnBoot).toBe(true);
+      expect(result.data.defaults.browser.actionTimeoutMs).toBe(10000);
+    }
+  });
+
+  it("rejects defaults.browser with invalid viewport", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      defaults: {
+        browser: { viewport: { width: 10, height: 720 } },
+      },
+      agents: [{ name: "test" }],
+    });
+    expect(result.success).toBe(false);
   });
 });
 

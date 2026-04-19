@@ -77,6 +77,14 @@ npm install
 npm run build
 ```
 
+Phase 70 (browser automation MCP) requires the Chromium browser binary. Run this once after the first `npm install`:
+
+```bash
+npx playwright install chromium --only-shell
+# On a fresh Ubuntu/Debian box, also install system libs (one-time, needs sudo):
+sudo npx playwright install-deps chromium
+```
+
 ### Create an Agent
 
 The interactive wizard walks through everything:
