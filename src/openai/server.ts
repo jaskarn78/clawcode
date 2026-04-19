@@ -110,8 +110,10 @@ export interface OpenAiServerConfig {
    */
   agentIsRunning?: (agentName: string) => boolean;
   /**
-   * Post-v2.0 hardening — max wait before 503 Retry-After on warm-path race.
-   * Default 2000ms. Tests override to 50–200ms for speed.
+   * Phase 73 Plan 02 — max wait before 503 Retry-After on warm-path race.
+   * Default 300ms (tuned down from 2000ms post-persistent-subprocess).
+   * Tests override to 50–200ms for speed. Override at runtime via
+   * CLAWCODE_OPENAI_READINESS_WAIT_MS env var (see endpoint-bootstrap.ts).
    */
   agentReadinessWaitMs?: number;
   /**
@@ -486,7 +488,7 @@ async function handleChatCompletions(
     const ready = await waitForAgentReady(
       row.agent_name,
       config.agentIsRunning,
-      config.agentReadinessWaitMs ?? 2000,
+      config.agentReadinessWaitMs ?? 300,
       config.agentReadinessPollIntervalMs ?? 50,
     );
     if (!ready) {

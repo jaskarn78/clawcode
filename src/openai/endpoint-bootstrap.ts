@@ -102,6 +102,30 @@ function resolveEnvOverrides(config: OpenAiEndpointConfig): {
   return { port, host };
 }
 
+/**
+ * Phase 73 Plan 02 — parse CLAWCODE_OPENAI_READINESS_WAIT_MS env override.
+ *
+ * Returns undefined (server uses its 300ms default) when absent or invalid.
+ * Returns a bounded integer in [0, 60_000] when valid. Logs a warn on
+ * invalid values so operators see why their override was ignored. Exported
+ * for unit tests to pin the parse contract without booting an endpoint.
+ */
+export function parseReadinessWaitMs(
+  raw: string | undefined,
+  log?: { warn: (obj: Record<string, unknown>, msg?: string) => void },
+): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0 || n > 60_000) {
+    log?.warn(
+      { raw, default: 300 },
+      "CLAWCODE_OPENAI_READINESS_WAIT_MS invalid — using default 300ms",
+    );
+    return undefined;
+  }
+  return n;
+}
+
 /** Detect EADDRINUSE across Node error surface shapes. */
 function isAddrInUse(err: unknown): boolean {
   if (err && typeof err === "object") {
@@ -161,6 +185,12 @@ export async function startOpenAiEndpoint(
 
   const startServer = deps.startServer ?? (await import("./server.js")).startOpenAiServer;
 
+  // Phase 73 Plan 02 — env override (undefined → server uses its 300ms default).
+  const readinessWaitMs = parseReadinessWaitMs(
+    process.env.CLAWCODE_OPENAI_READINESS_WAIT_MS,
+    log,
+  );
+
   let handle: Awaited<ReturnType<typeof startServer>>;
   try {
     handle = await startServer({
@@ -172,11 +202,13 @@ export async function startOpenAiEndpoint(
       driver,
       agentNames: deps.agentNames,
       log,
-      // Post-v2.0 hardening — bound the warm-path startup race: during the
-      // ~5s window between daemon start and an agent's warm path completing,
-      // the handler polls this up to 2000ms before responding 503 Retry-After
-      // (rather than surfacing SessionError as 500 driver_error).
+      // Phase 73 Plan 02 — warm-path startup race: handler polls isRunning
+      // up to agentReadinessWaitMs (default 300ms post persistent-subprocess)
+      // before responding 503 Retry-After rather than 500 driver_error.
       agentIsRunning: deps.sessionManager.isRunning.bind(deps.sessionManager),
+      ...(readinessWaitMs !== undefined
+        ? { agentReadinessWaitMs: readinessWaitMs }
+        : {}),
     });
   } catch (err) {
     if (isAddrInUse(err)) {

@@ -1274,3 +1274,79 @@ describe("POST /v1/chat/completions — warm-path startup race", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 73 Plan 02 — readiness-wait default tuned 2000 → 300ms (LAT-04)
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/chat/completions — Phase 73 readiness-wait default", () => {
+  it("uses 300ms default when no override provided (agent never warms → 503 within budget)", async () => {
+    // No agentReadinessWaitMs passed → server falls back to its new 300ms default.
+    // With agentIsRunning always false, the 503 arrives after ~300ms (the default).
+    const h = await bootHarness({
+      events: textStream,
+      agentIsRunning: () => false,
+      // agentReadinessWaitMs intentionally omitted — exercises the 300ms default.
+      agentReadinessPollIntervalMs: 25,
+    });
+    try {
+      const started = Date.now();
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      const elapsed = Date.now() - started;
+      expect(res.status).toBe(503);
+      // 300ms budget + some scheduler slack — previous 2000ms default would
+      // let elapsed reach ~2s, so this upper bound is the regression guard.
+      expect(elapsed).toBeLessThan(700);
+      // And it DID wait — not an immediate 503 (would be < 50ms).
+      expect(elapsed).toBeGreaterThanOrEqual(250);
+      expect(h.driver.calls.length).toBe(0);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("warm path (isRunning===true) skips wait — dispatches in under 50ms", async () => {
+    // Warm agent: the single isRunning() call at the top of waitForAgentReady
+    // returns true → handler skips the wait loop entirely. Total latency is
+    // the HTTP round-trip + driver dispatch (a fixture replay here).
+    const h = await bootHarness({
+      events: textStream,
+      agentIsRunning: () => true,
+      // Large wait budget to prove the skip is what's fast — not the budget.
+      agentReadinessWaitMs: 5000,
+      agentReadinessPollIntervalMs: 25,
+    });
+    try {
+      const started = Date.now();
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      const elapsed = Date.now() - started;
+      expect(res.status).toBe(200);
+      // Warm-path should dispatch fast; the wait loop is skipped entirely.
+      // 500ms is a generous CI-friendly bound (spec says < 50ms on clawdy).
+      expect(elapsed).toBeLessThan(500);
+      expect(h.driver.calls.length).toBe(1);
+    } finally {
+      await teardown(h);
+    }
+  });
+});
