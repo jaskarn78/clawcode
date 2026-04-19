@@ -112,7 +112,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 - [x] **Phase 70: Browser Automation MCP** — Playwright-over-CDP auto-injected MCP server with 6 tools (navigate/screenshot/click/fill/extract/wait_for), per-agent persistent profile dir, and warm-start singleton. (completed 2026-04-19)
 - [x] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist. (completed 2026-04-19)
 - [x] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration. (completed 2026-04-19)
-- [ ] **Phase 73: OpenClaw endpoint latency** — TTFB instrumentation + persistent per-agent `streamInput()` subprocess + conversation-brief cache + tuned readiness wait. Target sub-2s TTFB for synchronous OpenClaw consumption.
+- [x] **Phase 73: OpenClaw endpoint latency** — TTFB instrumentation + persistent per-agent `streamInput()` subprocess + conversation-brief cache + tuned readiness wait. Achieved sub-2s TTFB (1.67-1.87s measured, 3.7-4.2× speedup vs ~7s baseline). (completed 2026-04-19)
 
 ## Phase Details
 

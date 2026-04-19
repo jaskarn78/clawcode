@@ -138,6 +138,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-19 - Completed quick task 260419-jtk: Harden OpenAI streaming for OpenClaw
+Last activity: 2026-04-19 - Completed Phase 73: OpenClaw endpoint latency (sub-2s TTFB achieved, 3.7-4.2× speedup)
 Stopped at: Completed 72-02-PLAN.md — IPC contract + daemon-handler + MCP subprocess + CLI subcommand + auto-inject + daemon wiring + costs CLI Category + smoke + README. 37 net new tests (Plan 02 delta). 2846 green (8 pre-existing flaky timeouts unrelated). v2.0 milestone (Open Endpoint + Eyes & Hands) complete end-to-end: 20/20 requirements across Phases 69/70/71/72 closed. Ready for /gsd:verify-work.
 Resume file: None
