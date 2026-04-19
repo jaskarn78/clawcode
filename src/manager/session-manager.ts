@@ -30,6 +30,7 @@ import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 import type { SkillTrackingConfig } from "./session-adapter.js";
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "./warm-path-check.js";
+import { ConversationBriefCache } from "./conversation-brief-cache.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -100,6 +101,8 @@ export class SessionManager {
     capacity: 20,
   });
 
+  /** Phase 73 Plan 02 — per-agent conversation-brief cache (LAT-02). */
+  private readonly briefCache = new ConversationBriefCache();
   /**
    * Phase 66 -- production SummarizeFn (summarizeWithHaiku) with a test-only
    * injection hook. Passed into summarizeSession at session-boundary events.
@@ -212,6 +215,9 @@ export class SessionManager {
     this.sessionEndCallbacks.set(sessionName, callback);
   }
 
+  /** Phase 73 Plan 02 — escape hatch (stop/crash auto-invalidate). */
+  invalidateBriefCache(n: string): void { this.briefCache.invalidate(n); }
+
   /** @throws SessionError if the agent is already running */
   async startAgent(name: string, config: ResolvedAgentConfig): Promise<void> {
     if (this.sessions.has(name)) {
@@ -311,6 +317,7 @@ export class SessionManager {
         );
       }
       this.activeConversationSessionIds.delete(name);
+      this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
 
       this.recovery.handleCrash(name, config, error, this.sessions);
       // Invoke session end callback on crash (e.g., subagent thread cleanup)
@@ -478,6 +485,7 @@ export class SessionManager {
   /** @throws SessionError if the agent is not running */
   async stopAgent(name: string): Promise<void> {
     const handle = this.requireSession(name);
+    this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
     this.recovery.clearStabilityTimer(name);
     this.recovery.clearRestartTimer(name);
 
@@ -736,6 +744,7 @@ export class SessionManager {
       // `now` is intentionally omitted — buildSessionConfig defaults to Date.now().
       conversationStores: this.memory.conversationStores,
       memoryStores: this.memory.memoryStores,
+      briefCache: this.briefCache, // Phase 73 Plan 02 — LAT-02
     };
   }
 

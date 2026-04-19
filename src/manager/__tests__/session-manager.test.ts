@@ -890,3 +890,107 @@ describe("configDeps wiring — Phase 67 gap-closure", () => {
     expect(deps.memoryStores!.get(agentName)).toBeTruthy();
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// Phase 73 Plan 02 — brief cache invalidation on stop + crash (LAT-02)
+// ---------------------------------------------------------------------------
+
+import { ConversationBriefCache } from "../conversation-brief-cache.js";
+
+describe("brief cache invalidation", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+  let invalidateSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    mockedBuildSessionConfig.mockClear();
+    // Spy on the prototype so every ConversationBriefCache instance (including
+    // the one SessionManager owns privately) reports calls through this mock.
+    invalidateSpy = vi.spyOn(ConversationBriefCache.prototype, "invalidate");
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-p73-brief-"));
+    registryPath = join(tmpDir, "registry.json");
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+    });
+  });
+
+  afterEach(async () => {
+    invalidateSpy.mockRestore();
+    try {
+      await manager.stopAll();
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      await rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* non-fatal */
+    }
+  });
+
+  it("stopAgent invalidates brief cache entry", async () => {
+    const agentName = "agent-cache-stop";
+    const config: ResolvedAgentConfig = {
+      ...makeConfig(agentName),
+      workspace: tmpDir,
+    };
+
+    await manager.startAgent(agentName, config);
+    invalidateSpy.mockClear(); // ignore any warm-path invalidations
+
+    await manager.stopAgent(agentName);
+
+    // stopAgent MUST have invalidated the cache for this agent name.
+    const calls = invalidateSpy.mock.calls as Array<[string]>;
+    expect(calls.some((c) => c[0] === agentName)).toBe(true);
+  }, 30_000);
+
+  it("crash invalidates brief cache entry", async () => {
+    const agentName = "agent-cache-crash";
+    const config: ResolvedAgentConfig = {
+      ...makeConfig(agentName),
+      workspace: tmpDir,
+    };
+
+    await manager.startAgent(agentName, config);
+    // MockSessionAdapter.sessions is keyed by sessionId (mock-<agent>-<n>),
+    // not by agent name. Grab the handle whichever mock ID it was given.
+    const handle = [...adapter.sessions.values()].find(
+      (h) => h !== undefined,
+    );
+    expect(handle).toBeDefined();
+
+    invalidateSpy.mockClear();
+
+    handle!.simulateCrash(new Error("boom"));
+    // simulateCrash fires the onError handler synchronously; recovery
+    // scheduling is async but the invalidate fires BEFORE handleCrash.
+
+    const calls = invalidateSpy.mock.calls as Array<[string]>;
+    expect(calls.some((c) => c[0] === agentName)).toBe(true);
+  }, 30_000);
+
+  it("invalidateBriefCache(agent) is the public API and fires invalidate", async () => {
+    const agentName = "agent-cache-public";
+    const config: ResolvedAgentConfig = {
+      ...makeConfig(agentName),
+      workspace: tmpDir,
+    };
+
+    await manager.startAgent(agentName, config);
+    invalidateSpy.mockClear();
+
+    // Smoke: public method exists and delegates to the private cache.
+    expect(() => manager.invalidateBriefCache(agentName)).not.toThrow();
+
+    const calls = invalidateSpy.mock.calls as Array<[string]>;
+    expect(calls.some((c) => c[0] === agentName)).toBe(true);
+  }, 30_000);
+});
