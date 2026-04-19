@@ -84,6 +84,10 @@ export const IPC_METHODS = [
   "openai-key-create",
   "openai-key-list",
   "openai-key-revoke",
+  // Browser automation MCP (Phase 70) — routes per-agent tool calls from
+  // the out-of-process `clawcode browser-mcp` subprocess to the daemon's
+  // shared BrowserManager + the pure handlers in src/browser/tools.ts.
+  "browser-tool-call",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

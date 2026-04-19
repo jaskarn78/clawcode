@@ -109,6 +109,10 @@ import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-s
 import { isDiscordRateLimitError } from "../discord/streaming.js";
 import { nanoid } from "nanoid";
 import { createPool, type Pool } from "mysql2/promise";
+// Phase 70 — browser automation MCP.
+import { BrowserManager } from "../browser/manager.js";
+import { handleBrowserToolCall } from "../browser/daemon-handler.js";
+import type { IpcBrowserToolCallParams } from "../ipc/types.js";
 
 /**
  * Augment a LatencyReport's segments with `slo_status`, `slo_threshold_ms`,
@@ -983,12 +987,59 @@ export async function startDaemon(
     );
   }
 
+  // 9c. Phase 70 — browser automation MCP.
+  //
+  // Instantiate the shared BrowserManager singleton and (when warmOnBoot
+  // is true) launch the resident Chromium process + run its built-in
+  // health probe. HARD FAIL on probe failure, mirroring the embedder
+  // probe above — a broken browser pipeline surfaces immediately rather
+  // than degrading the first tool call on a running agent. The install
+  // hint is carried through from BrowserManager.warm() so the operator
+  // sees the exact npx command to run.
+  const browserCfg = config.defaults.browser;
+  const browserManager = new BrowserManager({
+    headless: browserCfg.headless,
+    viewport: browserCfg.viewport,
+    userAgent: browserCfg.userAgent,
+    log: log.child({ component: "browser" }),
+  });
+  if (browserCfg.enabled && browserCfg.warmOnBoot) {
+    const browserT0 = Date.now();
+    try {
+      await browserManager.warm();
+      log.info(
+        { durationMs: Date.now() - browserT0 },
+        "browser warm+probe succeeded",
+      );
+    } catch (err) {
+      const browserMsg = (err as Error).message;
+      log.error(
+        { error: browserMsg },
+        "browser warm probe failed — daemon startup HARD FAIL",
+      );
+      throw new ManagerError(`browser warm probe failed: ${browserMsg}`);
+    }
+  } else if (!browserCfg.enabled) {
+    log.info(
+      "browser MCP disabled (defaults.browser.enabled=false); skipping warm",
+    );
+  } else {
+    log.info(
+      "browser warmOnBoot=false; Chromium will launch lazily on first tool call",
+    );
+  }
+
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
   // owned by the OpenAiEndpointHandle below (no double-open, no extra
   // positional arg on routeMethod). openAiEndpointRef is a closure over the
   // `let` declared later in this function so the CLI can reach the store
   // immediately after startOpenAiEndpoint returns.
+  //
+  // Phase 70 piggybacks on the same closure pattern: `browser-tool-call`
+  // is handled BEFORE routeMethod so the new path stays off the existing
+  // 24-arg routeMethod signature. handleBrowserToolCall is a pure-ish
+  // dispatcher extracted to src/browser/daemon-handler.ts for testability.
   let openAiEndpointRef: OpenAiEndpointHandle | null = null;
   const handler: IpcHandler = async (method, params) => {
     if (
@@ -1011,6 +1062,12 @@ export async function startDaemon(
         },
         method,
         params,
+      );
+    }
+    if (method === "browser-tool-call") {
+      return handleBrowserToolCall(
+        { browserManager, resolvedAgents, browserConfig: browserCfg },
+        params as unknown as IpcBrowserToolCallParams,
       );
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
@@ -1269,6 +1326,18 @@ export async function startDaemon(
     }
     await configWatcher.stop();
     await policyWatcher.stop();
+    // Phase 70 — close the browser BEFORE the IPC server so any in-flight
+    // browser-tool-call requests fail cleanly. BrowserManager.close() runs
+    // Pitfall-10 ordered save-state → ctx.close → browser.close per agent,
+    // so cookies / localStorage / IndexedDB are flushed to disk here.
+    try {
+      await browserManager.close();
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "browser manager close failed on shutdown",
+      );
+    }
     server.close();
     if (discordBridge) {
       await discordBridge.stop();

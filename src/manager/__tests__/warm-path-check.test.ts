@@ -122,6 +122,48 @@ describe("runWarmPathCheck", () => {
     expect(result.durations_ms.session).toBeGreaterThanOrEqual(0);
   });
 
+  // Phase 70 Plan 03 — browser probe integration.
+  it("browserProbe success → durations_ms.browser populated, no error", async () => {
+    const browserProbe = vi.fn(async () => {
+      // Tiny delay so measured duration is > 0ms.
+      await new Promise((r) => setTimeout(r, 1));
+    });
+    const result = await runWarmPathCheck({
+      agent: "alice",
+      sqliteWarm: makeSqliteWarmOk(),
+      embedder: makeEmbedderOk(),
+      browserProbe,
+    });
+    expect(browserProbe).toHaveBeenCalledTimes(1);
+    expect(result.ready).toBe(true);
+    expect(result.durations_ms.browser).toBeGreaterThan(0);
+    expect(result.errors.filter((e) => e.startsWith("browser:"))).toHaveLength(0);
+  });
+
+  it("no browserProbe → durations_ms.browser === 0 and no error", async () => {
+    const result = await runWarmPathCheck({
+      agent: "alice",
+      sqliteWarm: makeSqliteWarmOk(),
+      embedder: makeEmbedderOk(),
+    });
+    expect(result.durations_ms.browser).toBe(0);
+    expect(result.errors.filter((e) => e.startsWith("browser:"))).toHaveLength(0);
+  });
+
+  it("browserProbe failure → ready:false with 'browser: <msg>' error", async () => {
+    const result = await runWarmPathCheck({
+      agent: "alice",
+      sqliteWarm: makeSqliteWarmOk(),
+      embedder: makeEmbedderOk(),
+      browserProbe: async () => {
+        throw new Error("chromium not warmed");
+      },
+    });
+    expect(result.ready).toBe(false);
+    expect(result.errors.some((e) => e.startsWith("browser:"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("chromium not warmed"))).toBe(true);
+  });
+
   describe("timeout", () => {
     beforeEach(() => {
       vi.useFakeTimers();

@@ -386,7 +386,7 @@ beforeEach(() => {
   mockedRunWarmPathCheck.mockResolvedValue(
     Object.freeze({
       ready: true,
-      durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1 }),
+      durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1, browser: 0 }),
       total_ms: 131,
       errors: Object.freeze([]) as readonly string[],
     }),
@@ -396,7 +396,7 @@ beforeEach(() => {
 function makeReadyResult(totalMs = 131) {
   return Object.freeze({
     ready: true,
-    durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1 }),
+    durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1, browser: 0 }),
     total_ms: totalMs,
     errors: Object.freeze([]) as readonly string[],
   });
@@ -405,7 +405,7 @@ function makeReadyResult(totalMs = 131) {
 function makeFailureResult(errors: readonly string[], totalMs = 85) {
   return Object.freeze({
     ready: false,
-    durations_ms: Object.freeze({ sqlite: 20, embedder: 65, session: 0 }),
+    durations_ms: Object.freeze({ sqlite: 20, embedder: 65, session: 0, browser: 0 }),
     total_ms: totalMs,
     errors: Object.freeze([...errors]) as readonly string[],
   });
@@ -563,7 +563,7 @@ describe("startAgent warm-path gate (Phase 56)", () => {
     const payload = readyLog!.obj as {
       agent: string;
       total_ms: number;
-      durations_ms: { sqlite: number; embedder: number; session: number };
+      durations_ms: { sqlite: number; embedder: number; session: number; browser: number };
     };
     expect(payload.agent).toBe("warm-log");
     expect(payload.total_ms).toBe(142);
@@ -571,6 +571,7 @@ describe("startAgent warm-path gate (Phase 56)", () => {
       sqlite: 50,
       embedder: 80,
       session: 1,
+      browser: 0,
     });
 
     await m.stopAll();

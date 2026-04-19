@@ -87,6 +87,8 @@ describe("IPC_METHODS", () => {
       "openai-key-create",
       "openai-key-list",
       "openai-key-revoke",
+      // Browser automation MCP (Phase 70)
+      "browser-tool-call",
     ]);
   });
 });

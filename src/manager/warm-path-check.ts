@@ -25,6 +25,11 @@ export type WarmPathDurations = {
   readonly sqlite: number;
   readonly embedder: number;
   readonly session: number;
+  /**
+   * Phase 70 Plan 03 — duration of the optional browser readiness probe.
+   * Records 0 when no `browserProbe` dep is supplied.
+   */
+  readonly browser: number;
 };
 
 export type WarmPathResult = {
@@ -45,6 +50,14 @@ export type WarmPathDeps = {
    * session step is a no-op and records 0ms.
    */
   readonly sessionProbe?: () => Promise<void>;
+  /**
+   * Phase 70 Plan 03 — optional browser readiness probe. When provided,
+   * the warm-path runs it after the session probe; a failure contributes
+   * to the `errors` array and sets `ready:false`, matching the existing
+   * sqlite/embedder/session probe pattern. Absent probe means no-op +
+   * `durations_ms.browser === 0`.
+   */
+  readonly browserProbe?: () => Promise<void>;
   /** Override timeout for tests. Defaults to `WARM_PATH_TIMEOUT_MS`. */
   readonly timeoutMs?: number;
 };
@@ -66,6 +79,7 @@ export async function runWarmPathCheck(
   let sqliteMs = 0;
   let embedderMs = 0;
   let sessionMs = 0;
+  let browserMs = 0;
 
   const work = (async () => {
     // Step 1 — SQLite + sqlite-vec warmup.
@@ -97,6 +111,17 @@ export async function runWarmPathCheck(
       errors.push(`session: ${(e as Error).message}`);
     }
     sessionMs = performance.now() - sessStart;
+
+    // Step 4 — Phase 70 browser probe. Optional: when defaults.browser
+    // .warmOnBoot=true the daemon passes an isReady() check; otherwise
+    // absent and browserMs stays 0.
+    const browserStart = performance.now();
+    try {
+      if (deps.browserProbe) await deps.browserProbe();
+    } catch (e) {
+      errors.push(`browser: ${(e as Error).message}`);
+    }
+    browserMs = deps.browserProbe ? performance.now() - browserStart : 0;
   })();
 
   let timedOut = false;
@@ -123,6 +148,7 @@ export async function runWarmPathCheck(
       sqlite: sqliteMs,
       embedder: embedderMs,
       session: sessionMs,
+      browser: browserMs,
     }),
     total_ms,
     errors: Object.freeze([...errors]) as readonly string[],

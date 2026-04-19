@@ -106,6 +106,73 @@ describe("daemon.ts probe wiring (source-level grep)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Phase 70 Plan 03 — browser warm probe wiring.
+//
+// Mirrors the embedder probe grep-contract above: we grep the daemon.ts
+// source to assert the browser warm call, hard-fail path, and shutdown
+// close ordering are wired correctly. Keeps tests hermetic — no real
+// Chromium boot during unit test runs.
+// ---------------------------------------------------------------------------
+describe("daemon.ts browser warm wiring (Phase 70 Plan 03 — source grep)", () => {
+  const src = readFileSync(
+    new URL("../daemon.ts", import.meta.url),
+    "utf-8",
+  );
+
+  it("instantiates the BrowserManager singleton exactly once", () => {
+    const matches = src.match(/new BrowserManager\(/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it("calls browserManager.warm() under a warmOnBoot guard", () => {
+    expect(src).toMatch(/browserManager\.warm\(\)/);
+    // The warm call should be gated by both enabled and warmOnBoot.
+    expect(src).toMatch(/browserCfg\.enabled && browserCfg\.warmOnBoot/);
+  });
+
+  it("wraps the browser warm call in a ManagerError hard-fail path", () => {
+    expect(src).toMatch(/browser warm probe failed/);
+    // The same ManagerError import is used as the embedder probe.
+    const matches = src.match(/new ManagerError\(/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2); // embedder + browser
+  });
+
+  it("logs a skip message when defaults.browser.enabled is false", () => {
+    expect(src).toMatch(/browser MCP disabled/);
+  });
+
+  it("logs a lazy-warm message when warmOnBoot is false", () => {
+    expect(src).toMatch(/Chromium will launch lazily/);
+  });
+
+  it("dispatches browser-tool-call BEFORE routeMethod", () => {
+    const browserCall = src.indexOf('"browser-tool-call"');
+    const routeMethodCall = src.indexOf(
+      "return routeMethod(manager, resolvedAgents",
+    );
+    expect(browserCall).toBeGreaterThan(-1);
+    expect(routeMethodCall).toBeGreaterThan(-1);
+    expect(browserCall).toBeLessThan(routeMethodCall);
+  });
+
+  it("calls browserManager.close() BEFORE server.close() on shutdown", () => {
+    const closeCall = src.indexOf("browserManager.close()");
+    const serverClose = src.indexOf("server.close();");
+    expect(closeCall).toBeGreaterThan(-1);
+    expect(serverClose).toBeGreaterThan(-1);
+    expect(closeCall).toBeLessThan(serverClose);
+  });
+
+  it("places the browser warm AFTER the embedder probe", () => {
+    const embedderProbe = src.indexOf('embed("warmup probe")');
+    const browserWarm = src.indexOf("browserManager.warm()");
+    expect(embedderProbe).toBeGreaterThan(-1);
+    expect(browserWarm).toBeGreaterThan(-1);
+    expect(browserWarm).toBeGreaterThan(embedderProbe);
+  });
+});
+
 describe("EmbeddingService singleton invariant (src-level grep)", () => {
   it("src/ has exactly one production construction of EmbeddingService", () => {
     // Resolve src/ from this test file (works regardless of cwd in vitest).
