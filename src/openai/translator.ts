@@ -125,11 +125,44 @@ export function translateRequest(body: ChatCompletionRequest): TranslatedRequest
   };
 }
 
+/**
+ * Normalize OpenAI message content (string | array<ContentPart> | null) to a
+ * single string. OpenClaw and most modern clients send multi-part arrays —
+ * we concatenate `text` parts with "\n\n" and render `image_url` as a
+ * markdown-style link so the textual model still receives context. Future
+ * work: proper vision wiring for image parts via Claude's native image block.
+ */
+function contentToString(
+  content:
+    | string
+    | null
+    | ReadonlyArray<{ type: string } & Record<string, unknown>>,
+): string {
+  if (content === null || content === undefined) return "";
+  if (typeof content === "string") return content;
+  const parts: string[] = [];
+  for (const p of content) {
+    if (p.type === "text" && typeof p.text === "string") {
+      parts.push(p.text);
+    } else if (p.type === "image_url") {
+      const iu = p.image_url as unknown;
+      const url = typeof iu === "string" ? iu : (iu as { url?: string })?.url;
+      if (typeof url === "string" && url.length > 0) {
+        parts.push(`![image](${url})`);
+      }
+    }
+    // Other part types silently skipped — tolerate future OpenAI additions.
+  }
+  return parts.join("\n\n");
+}
+
 /** Walk `messages` from the tail and return the most recent user content, or null. */
 function findLastUserMessage(messages: ReadonlyArray<ChatMessage>): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m && m.role === "user") return m.content;
+    if (m && m.role === "user") {
+      return contentToString(m.content as Parameters<typeof contentToString>[0]);
+    }
   }
   return null;
 }
@@ -138,7 +171,9 @@ function findLastUserMessage(messages: ReadonlyArray<ChatMessage>): string | nul
 function collectSystemAppend(messages: ReadonlyArray<ChatMessage>): string | null {
   const parts: string[] = [];
   for (const m of messages) {
-    if (m.role === "system") parts.push(m.content);
+    if (m.role === "system") {
+      parts.push(contentToString(m.content as Parameters<typeof contentToString>[0]));
+    }
   }
   if (parts.length === 0) return null;
   return parts.join("\n\n");
@@ -168,7 +203,7 @@ function collectTrailingToolResults(
       results.push({
         type: "tool_result",
         tool_use_id: m.tool_call_id,
-        content: m.content,
+        content: contentToString(m.content as Parameters<typeof contentToString>[0]),
       });
     }
   }
@@ -202,12 +237,14 @@ function translateToolChoice(choice: ToolChoice): ClaudeToolChoice {
  */
 export function translateToolResult(msg: {
   tool_call_id: string;
-  content: string;
+  content:
+    | string
+    | ReadonlyArray<{ type: string } & Record<string, unknown>>;
 }): ClaudeToolResultBlock {
   return {
     type: "tool_result",
     tool_use_id: msg.tool_call_id,
-    content: msg.content,
+    content: contentToString(msg.content),
   };
 }
 

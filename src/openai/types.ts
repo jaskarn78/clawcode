@@ -61,24 +61,52 @@ const assistantToolCallSchema = z.object({
  * `role` field is a literal. `.passthrough()` is intentionally NOT set on the
  * branches — the outer request schema passes through, per Pitfall 2.
  */
+/**
+ * OpenAI content-parts — the multi-modal shape where `content` is an array of
+ * typed parts rather than a single string. OpenClaw and most modern OpenAI-
+ * compatible clients (LangChain, Vercel AI SDK) emit this form. Supported
+ * part types: `text` (always), `image_url` (accepted — translator concats
+ * the url as markdown-style for now; full vision wiring is follow-up work).
+ * Unknown part types are accepted via passthrough and ignored downstream.
+ */
+const textContentPartSchema = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+});
+const imageUrlContentPartSchema = z.object({
+  type: z.literal("image_url"),
+  image_url: z.union([
+    z.string(),
+    z.object({ url: z.string(), detail: z.string().optional() }).passthrough(),
+  ]),
+});
+const contentPartSchema = z.union([
+  textContentPartSchema,
+  imageUrlContentPartSchema,
+  z.object({ type: z.string() }).passthrough(), // tolerate future part kinds
+]);
+
+/** Accepts legacy `string` OR OpenAI multi-modal `array<ContentPart>` shape. */
+const stringOrPartsSchema = z.union([z.string(), z.array(contentPartSchema)]);
+
 export const chatMessageSchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("system"),
-    content: z.string(),
+    content: stringOrPartsSchema,
   }),
   z.object({
     role: z.literal("user"),
-    content: z.string(),
+    content: stringOrPartsSchema,
   }),
   z.object({
     role: z.literal("assistant"),
-    content: z.string().nullable(),
+    content: stringOrPartsSchema.nullable(),
     tool_calls: z.array(assistantToolCallSchema).optional(),
   }),
   z.object({
     role: z.literal("tool"),
     tool_call_id: z.string(),
-    content: z.string(),
+    content: stringOrPartsSchema,
   }),
 ]);
 

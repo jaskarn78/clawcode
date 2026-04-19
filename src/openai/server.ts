@@ -514,10 +514,28 @@ async function handleChatCompletions(
   partial.model = body.model;
   partial.stream = body.stream === true;
   partial.messages_count = body.messages.length;
-  partial.messages = body.messages.map((m) => ({
-    role: m.role,
-    content: typeof m.content === "string" ? m.content : "",
-  }));
+  partial.messages = body.messages.map((m) => {
+    const c = m.content as unknown;
+    let text = "";
+    if (typeof c === "string") {
+      text = c;
+    } else if (Array.isArray(c)) {
+      // Flatten text-parts for the log record; image_url rendered as markdown.
+      const parts: string[] = [];
+      for (const p of c) {
+        const part = p as { type?: string; text?: unknown; image_url?: unknown };
+        if (part && part.type === "text" && typeof part.text === "string") {
+          parts.push(part.text);
+        } else if (part && part.type === "image_url") {
+          const iu = part.image_url;
+          const url = typeof iu === "string" ? iu : (iu as { url?: string })?.url;
+          if (typeof url === "string") parts.push(`![image](${url})`);
+        }
+      }
+      text = parts.join("\n\n");
+    }
+    return { role: m.role, content: text };
+  });
 
   // 4. Model-to-key pinning. CONTEXT.md: "never leak agent name".
   if (row.agent_name !== body.model) {
