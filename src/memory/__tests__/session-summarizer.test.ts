@@ -116,7 +116,7 @@ describe("SessionSummarizer", () => {
 
       expect(result).toMatchObject({
         success: true,
-        fallback: false,
+        fallback: "llm",
         turnCount: 5,
       });
       if ("success" in result && result.success) {
@@ -198,7 +198,11 @@ describe("SessionSummarizer", () => {
   });
 
   describe("skip conditions", () => {
-    it("skips sessions with fewer than 3 turns (default minTurns)", async () => {
+    // 260419-q2z Fix A — sessions below minTurns now produce a deterministic
+    // short-summary instead of being silently skipped. The Haiku call is
+    // still bypassed (zero LLM spend for 1-2 turn sessions), but a
+    // MemoryEntry IS written so no conversation is lost.
+    it("short-session path: <minTurns sessions produce a short-summary MemoryEntry (no Haiku call)", async () => {
       const { sessionId } = seedEndedSession(2);
       const mockSummarize: SummarizeFn = vi.fn();
       const deps: SummarizeSessionDeps = {
@@ -215,18 +219,18 @@ describe("SessionSummarizer", () => {
       );
 
       expect(result).toMatchObject({
-        skipped: true,
-        reason: "insufficient-turns",
+        success: true,
+        fallback: "short-session",
         turnCount: 2,
       });
       expect(mockSummarize).not.toHaveBeenCalled();
 
-      // Session NOT transitioned to summarized — still ended
+      // Session transitions to summarized via short-session path.
       const session = convStore.getSession(sessionId);
-      expect(session!.status).toBe("ended");
+      expect(session!.status).toBe("summarized");
     });
 
-    it("respects custom minTurns via config", async () => {
+    it("respects custom minTurns via config (still short-session when below cutoff)", async () => {
       const { sessionId } = seedEndedSession(5);
       const mockSummarize: SummarizeFn = vi.fn();
       const deps: SummarizeSessionDeps = {
@@ -243,8 +247,8 @@ describe("SessionSummarizer", () => {
         deps,
       );
       expect(result).toMatchObject({
-        skipped: true,
-        reason: "insufficient-turns",
+        success: true,
+        fallback: "short-session",
         turnCount: 5,
       });
       expect(mockSummarize).not.toHaveBeenCalled();
@@ -381,7 +385,7 @@ describe("SessionSummarizer", () => {
 
       expect(result).toMatchObject({
         success: true,
-        fallback: true,
+        fallback: "raw-turn",
         turnCount: 3,
       });
       if ("success" in result && result.success) {
@@ -410,7 +414,7 @@ describe("SessionSummarizer", () => {
         { agentName: "agent-a", sessionId },
         deps,
       );
-      expect(result).toMatchObject({ success: true, fallback: true });
+      expect(result).toMatchObject({ success: true, fallback: "raw-turn" });
       if ("success" in result && result.success) {
         const entry = memStore.getById(result.memoryId);
         expect(entry!.tags).toContain("raw-fallback");
@@ -434,7 +438,7 @@ describe("SessionSummarizer", () => {
         { agentName: "agent-a", sessionId },
         deps,
       );
-      expect(result).toMatchObject({ success: true, fallback: true });
+      expect(result).toMatchObject({ success: true, fallback: "raw-turn" });
     });
 
     it("session still transitions to summarized even on fallback path", async () => {
@@ -509,6 +513,261 @@ describe("SessionSummarizer", () => {
       expect(result).toContain("alpha");
       expect(result).toContain("### assistant (turn 1)");
       expect(result).toContain("beta");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 260419-q2z Fix A — always-summarize short sessions. Zero-turn sessions are
+  // now a distinct skip reason; 1-2 turn sessions produce a deterministic
+  // short-summary MemoryEntry instead of being silently skipped.
+  // -------------------------------------------------------------------------
+  describe("260419-q2z — short-session branch", () => {
+    /** Seed an ENDED session containing exactly `n` turns with explicit roles. */
+    function seedWithRoles(
+      roles: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
+    ): { sessionId: string; turnIds: string[] } {
+      const session = convStore.startSession("agent-a");
+      const turnIds: string[] = [];
+      for (const { role, content } of roles) {
+        const turn = convStore.recordTurn({
+          sessionId: session.id,
+          role,
+          content,
+        });
+        turnIds.push(turn.id);
+      }
+      convStore.endSession(session.id);
+      return { sessionId: session.id, turnIds };
+    }
+
+    it("zero-turn session skips with reason 'zero-turns' and NO MemoryEntry inserted", async () => {
+      const session = convStore.startSession("agent-a");
+      convStore.endSession(session.id);
+
+      const mockSummarize: SummarizeFn = vi.fn();
+      const mockEmbedder = createMockEmbedder();
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: mockEmbedder,
+        summarize: mockSummarize,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId: session.id },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        skipped: true,
+        reason: "zero-turns",
+      });
+      expect(mockSummarize).not.toHaveBeenCalled();
+      expect(mockEmbedder.embed).not.toHaveBeenCalled();
+    });
+
+    it("1-turn session builds a short-session summary with sourceTurnIds=[t1], short tag, fallback='short-session'", async () => {
+      const { sessionId, turnIds } = seedWithRoles([
+        { role: "user", content: "Hey clawdy can you remind me to buy eggs tomorrow?" },
+      ]);
+
+      const mockSummarize: SummarizeFn = vi.fn();
+      const mockEmbedder = createMockEmbedder();
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: mockEmbedder,
+        summarize: mockSummarize,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        fallback: "short-session",
+        turnCount: 1,
+      });
+      expect(mockSummarize).not.toHaveBeenCalled(); // no Haiku spend
+      expect(mockEmbedder.embed).toHaveBeenCalledTimes(1);
+
+      if ("success" in result && result.success) {
+        const entry = memStore.getById(result.memoryId);
+        expect(entry).not.toBeNull();
+        expect(entry!.source).toBe("conversation");
+        expect(entry!.tags).toContain("session-summary");
+        expect(entry!.tags).toContain("short");
+        expect(entry!.tags).toContain(`session:${sessionId}`);
+        expect(entry!.sourceTurnIds).toEqual(turnIds);
+        expect(entry!.content).toContain("1 turn(s)");
+        expect(entry!.content).toContain("Last user:");
+        expect(entry!.content).toContain("Last agent:");
+        expect(entry!.content).toContain("Tags: [session-summary, short].");
+      }
+    });
+
+    it("2-turn session: both turn IDs in sourceTurnIds; user+agent content referenced", async () => {
+      const { sessionId, turnIds } = seedWithRoles([
+        { role: "user", content: "What's the status of the registry fix?" },
+        { role: "assistant", content: "Task 1 committed — atomic write live." },
+      ]);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn() as unknown as SummarizeFn,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        fallback: "short-session",
+        turnCount: 2,
+      });
+      if ("success" in result && result.success) {
+        const entry = memStore.getById(result.memoryId);
+        expect(entry!.sourceTurnIds).toEqual(turnIds);
+        expect(entry!.content).toContain("2 turn(s).");
+        expect(entry!.content).toContain('"What\'s the status of the registry fix?"');
+        expect(entry!.content).toContain('"Task 1 committed — atomic write live."');
+        expect(entry!.content).toContain("Tags: [session-summary, short].");
+      }
+    });
+
+    it("minTurns regression: >=minTurns still calls Haiku (fallback='llm')", async () => {
+      const { sessionId } = seedEndedSession(3);
+      const mockSummarize: SummarizeFn = vi
+        .fn()
+        .mockResolvedValue("## User Preferences\n(none)\n");
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: mockSummarize,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        fallback: "llm",
+        turnCount: 3,
+      });
+      expect(mockSummarize).toHaveBeenCalledTimes(1);
+    });
+
+    it("truncates user/agent content to 80 chars with '...' suffix when too long", async () => {
+      const longUser = "x".repeat(500);
+      const { sessionId } = seedWithRoles([{ role: "user", content: longUser }]);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn() as unknown as SummarizeFn,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+
+      expect("success" in result && result.success).toBe(true);
+      if ("success" in result && result.success) {
+        const entry = memStore.getById(result.memoryId);
+        // Truncated to 80 chars + "..." inside the quotes — NOT the full 500.
+        expect(entry!.content).toContain('"' + "x".repeat(80) + '..."');
+        expect(entry!.content).not.toContain("x".repeat(200));
+      }
+    });
+
+    it("short-session tolerates markSummarized failure (still returns success)", async () => {
+      const { sessionId } = seedWithRoles([
+        { role: "user", content: "hi" },
+      ]);
+
+      // Wrap convStore to throw on markSummarized, but delegate everything else.
+      const delegating = new Proxy(convStore, {
+        get(target, prop) {
+          if (prop === "markSummarized") {
+            return () => {
+              throw new Error("race: session already summarized");
+            };
+          }
+          return (target as unknown as Record<string | symbol, unknown>)[prop];
+        },
+      });
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: delegating as typeof convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn() as unknown as SummarizeFn,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+
+      // Row was inserted; markSummarized race is swallowed.
+      expect(result).toMatchObject({
+        success: true,
+        fallback: "short-session",
+      });
+    });
+
+    it("logs info with event 'short-session summary built' and the fallback+turnCount payload", async () => {
+      const { sessionId } = seedWithRoles([{ role: "user", content: "hello" }]);
+
+      const infoSpy = vi.fn();
+      const warnSpy = vi.fn();
+      const log = {
+        info: infoSpy,
+        warn: warnSpy,
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: () => log,
+      } as unknown as import("pino").Logger;
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn() as unknown as SummarizeFn,
+        log,
+      };
+
+      await summarizeSession({ agentName: "agent-a", sessionId }, deps);
+
+      // At least one info call with the expected shape + message.
+      const infoCalls = infoSpy.mock.calls as Array<[Record<string, unknown>, string]>;
+      const match = infoCalls.find(
+        (c) =>
+          typeof c[1] === "string" &&
+          c[1].includes("short-session summary built") &&
+          c[0]["fallback"] === "short-session" &&
+          c[0]["turnCount"] === 1,
+      );
+      expect(match).toBeDefined();
     });
   });
 });

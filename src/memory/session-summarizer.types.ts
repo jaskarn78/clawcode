@@ -52,6 +52,17 @@ export type SummarizeSessionInput = {
 };
 
 /**
+ * Fallback discriminator for a successful summarization.
+ *
+ * - "llm"           — Haiku summarized the turns (happy path).
+ * - "raw-turn"      — LLM timed out or errored; raw-turn dump was used instead.
+ * - "short-session" — session had fewer than minTurns turns (1 or 2); a
+ *                     deterministic short-summary was built without calling
+ *                     the LLM. Quick task 260419-q2z Fix A.
+ */
+export type SummarizeSuccessFallback = "llm" | "raw-turn" | "short-session";
+
+/**
  * Discriminated union of possible outcomes.
  *
  * `success: true` — a MemoryEntry was written and the session was transitioned
@@ -64,16 +75,23 @@ export type SummarizeSessionResult =
   | {
       readonly success: true;
       readonly memoryId: string;
-      /** True when the LLM call timed out or errored and raw-turn fallback was used. */
-      readonly fallback: boolean;
+      /**
+       * Which content-generation path produced this summary.
+       *
+       * Quick task 260419-q2z Fix A — promoted from boolean to discriminated
+       * string so short-session summaries are distinguishable from raw-turn
+       * fallbacks downstream (dashboards, log filters).
+       */
+      readonly fallback: SummarizeSuccessFallback;
       readonly turnCount: number;
     }
   | {
       readonly skipped: true;
       readonly reason:
         | "already-summarized"
-        | "insufficient-turns"
+        | "insufficient-turns" // retained for back-compat; post-260419-q2z, short-session fallback supplants this
         | "session-not-found"
-        | "session-not-terminal";
+        | "session-not-terminal"
+        | "zero-turns"; // 260419-q2z Fix A — distinct from insufficient-turns
       readonly turnCount?: number;
     };

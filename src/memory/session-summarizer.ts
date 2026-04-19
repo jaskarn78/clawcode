@@ -17,6 +17,7 @@ import type {
   SummarizeSessionDeps,
   SummarizeSessionInput,
   SummarizeSessionResult,
+  SummarizeSuccessFallback,
 } from "./session-summarizer.types.js";
 
 /** Maximum combined character length before proportional truncation. */
@@ -112,6 +113,30 @@ export function buildRawTurnFallback(
 }
 
 /**
+ * 260419-q2z Fix A — deterministic one-line summary for sessions too short
+ * to warrant a Haiku call. Guarantees every conversation leaves a
+ * MemoryEntry behind (zero-turn sessions are skipped separately).
+ *
+ * Template:
+ *   `{N} turn(s). Last user: "<first 80 chars>". Last agent: "<first 80 chars>".
+ *    Tags: [session-summary, short].`
+ *
+ * Content exceeding 80 chars is truncated with a `...` suffix inside the
+ * quotes. Messages ≤ 80 chars render verbatim (no ellipsis).
+ */
+export function buildShortSessionSummary(
+  turns: readonly ConversationTurn[],
+): string {
+  const truncate = (s: string): string =>
+    s.length > 80 ? `${s.slice(0, 80)}...` : s;
+  const lastUser = [...turns].reverse().find((t) => t.role === "user");
+  const lastAgent = [...turns].reverse().find((t) => t.role === "assistant");
+  const userPart = lastUser ? `"${truncate(lastUser.content)}"` : `(none)`;
+  const agentPart = lastAgent ? `"${truncate(lastAgent.content)}"` : `(none)`;
+  return `${turns.length} turn(s). Last user: ${userPart}. Last agent: ${agentPart}. Tags: [session-summary, short].`;
+}
+
+/**
  * Summarize a completed conversation session and write the result as a
  * MemoryEntry.
  *
@@ -185,49 +210,63 @@ export async function summarizeSession(
   // Step 4 — load turns (use .length, NOT session.turnCount — Pitfall 2)
   const turns = deps.conversationStore.getTurnsForSession(sessionId);
 
-  // Step 5 — minimum turns guard
-  if (turns.length < minTurns) {
+  // Step 5 — turn-count decision tree (260419-q2z Fix A)
+  // Zero-turn sessions are genuinely nothing to summarize — skip with a
+  // distinct reason so operators can disambiguate empty vs. short.
+  if (turns.length === 0) {
     return Object.freeze({
       skipped: true as const,
-      reason: "insufficient-turns" as const,
-      turnCount: turns.length,
+      reason: "zero-turns" as const,
     });
   }
 
-  // Step 6-9 — build prompt, call summarize with timeout, fallback on failure
-  const prompt = buildSessionSummarizationPrompt(turns);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Short-session branch: 1 or 2 turns. Bypass Haiku (cost + latency) and
+  // produce a deterministic summary so the conversation leaves a memory
+  // trail regardless of length.
+  const shortSession = turns.length < minTurns;
 
+  // Step 6-9 — content source: short-session deterministic OR Haiku-with-fallback
   let summaryContent: string;
-  let fallback = false;
-  try {
-    summaryContent = await Promise.race([
-      deps.summarize(prompt, { signal: controller.signal }),
-      new Promise<string>((_, reject) => {
-        controller.signal.addEventListener("abort", () =>
-          reject(new Error("summarize timeout after " + timeoutMs + "ms")),
-        );
-      }),
-    ]);
-    if (!summaryContent || summaryContent.trim().length === 0) {
-      // Empty LLM response is treated as failure so the session still
-      // gets a (raw-fallback) summary row and becomes idempotent.
-      throw new Error("summarize returned empty content");
+  let fallback: SummarizeSuccessFallback;
+
+  if (shortSession) {
+    summaryContent = buildShortSessionSummary(turns);
+    fallback = "short-session";
+  } else {
+    const prompt = buildSessionSummarizationPrompt(turns);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const llmContent = await Promise.race([
+        deps.summarize(prompt, { signal: controller.signal }),
+        new Promise<string>((_, reject) => {
+          controller.signal.addEventListener("abort", () =>
+            reject(new Error("summarize timeout after " + timeoutMs + "ms")),
+          );
+        }),
+      ]);
+      if (!llmContent || llmContent.trim().length === 0) {
+        // Empty LLM response is treated as failure so the session still
+        // gets a (raw-fallback) summary row and becomes idempotent.
+        throw new Error("summarize returned empty content");
+      }
+      summaryContent = llmContent;
+      fallback = "llm";
+    } catch (err) {
+      deps.log.warn(
+        {
+          agent: agentName,
+          session: sessionId,
+          error: (err as Error).message,
+        },
+        "summarize failed — using raw-turn fallback",
+      );
+      summaryContent = buildRawTurnFallback(turns);
+      fallback = "raw-turn";
+    } finally {
+      clearTimeout(timer);
     }
-  } catch (err) {
-    deps.log.warn(
-      {
-        agent: agentName,
-        session: sessionId,
-        error: (err as Error).message,
-      },
-      "summarize failed — using raw-turn fallback",
-    );
-    summaryContent = buildRawTurnFallback(turns);
-    fallback = true;
-  } finally {
-    clearTimeout(timer);
   }
 
   // Step 10 — embed the chosen content
@@ -254,7 +293,8 @@ export async function summarizeSession(
 
   // Step 11-12 — build tags, insert MemoryEntry
   const baseTags: string[] = ["session-summary", `session:${sessionId}`];
-  if (fallback) baseTags.push("raw-fallback");
+  if (fallback === "raw-turn") baseTags.push("raw-fallback");
+  if (fallback === "short-session") baseTags.push("short");
   const tags = Object.freeze([...baseTags]);
   const sourceTurnIds = Object.freeze(turns.map((t) => t.id));
 
@@ -305,6 +345,22 @@ export async function summarizeSession(
     );
     // Non-fatal: the memory exists and is searchable; the session FK
     // just wasn't set. Operators can reconcile later.
+  }
+
+  // 260419-q2z Fix A — emit a distinct info log for short-session summaries
+  // so dashboards and log-filters can surface them separately from the
+  // "session summarized" line fired by session-manager.ts on the Haiku path.
+  if (fallback === "short-session") {
+    deps.log.info(
+      {
+        agent: agentName,
+        session: sessionId,
+        fallback,
+        turnCount: turns.length,
+        memoryId,
+      },
+      "short-session summary built",
+    );
   }
 
   // Step 14 — success
