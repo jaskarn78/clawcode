@@ -994,3 +994,112 @@ describe("brief cache invalidation", () => {
     expect(calls.some((c) => c[0] === agentName)).toBe(true);
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// Quick task 260419-nic — SessionManager.interruptAgent primitive
+// ---------------------------------------------------------------------------
+
+describe("interruptAgent", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+  let infoLogs: Array<{ obj: unknown; msg: string }>;
+  let warnLogs: Array<{ obj: unknown; msg: string }>;
+  let testLogger: {
+    info: (obj: unknown, msg?: string) => void;
+    warn: (obj: unknown, msg?: string) => void;
+    error: () => void;
+    debug: () => void;
+    child: () => unknown;
+  };
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-interrupt-"));
+    registryPath = join(tmpDir, "registry.json");
+    infoLogs = [];
+    warnLogs = [];
+    testLogger = {
+      info: (obj, msg) => infoLogs.push({ obj, msg: msg ?? "" }),
+      warn: (obj, msg) => warnLogs.push({ obj, msg: msg ?? "" }),
+      error: () => undefined,
+      debug: () => undefined,
+      child: () => testLogger,
+    };
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      log: testLogger as any,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* ignore */
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("Test 1: unknown agent → returns {interrupted:false, hadActiveTurn:false}, no throw", async () => {
+    const sessionsBefore = adapter.sessions.size;
+    const result = await manager.interruptAgent("nonexistent-agent");
+    expect(result).toEqual({ interrupted: false, hadActiveTurn: false });
+    expect(adapter.sessions.size).toBe(sessionsBefore);
+  });
+
+  it("Test 2: agent running but no active turn → {interrupted:false, hadActiveTurn:false}", async () => {
+    const config = makeConfig("idle-agent");
+    await manager.startAgent("idle-agent", config);
+    const handle = [...adapter.sessions.values()][0] as MockSessionHandle;
+    expect(handle.hasActiveTurn()).toBe(false);
+
+    const result = await manager.interruptAgent("idle-agent");
+    expect(result).toEqual({ interrupted: false, hadActiveTurn: false });
+  });
+
+  it("Test 3: agent with active turn → calls handle.interrupt(), returns {interrupted:true, hadActiveTurn:true}, logs info event:'agent_interrupted'", async () => {
+    const config = makeConfig("active-agent");
+    await manager.startAgent("active-agent", config);
+    const handle = [...adapter.sessions.values()][0] as MockSessionHandle;
+
+    // Flip activeTurn flag so interruptAgent takes the positive path.
+    handle.__testSetActiveTurn(true);
+    const interruptSpy = vi.spyOn(handle, "interrupt");
+
+    const result = await manager.interruptAgent("active-agent");
+    expect(result).toEqual({ interrupted: true, hadActiveTurn: true });
+    expect(interruptSpy).toHaveBeenCalledTimes(1);
+
+    const infoMsg = infoLogs.find(
+      (l) => (l.obj as { event?: string }).event === "agent_interrupted",
+    );
+    expect(infoMsg).toBeDefined();
+    expect((infoMsg!.obj as { agent: string }).agent).toBe("active-agent");
+  });
+
+  it("Test 4: handle.interrupt() throws → re-throws and log.warn captures the failure", async () => {
+    const config = makeConfig("boom-agent");
+    await manager.startAgent("boom-agent", config);
+    const handle = [...adapter.sessions.values()][0] as MockSessionHandle;
+    handle.__testSetActiveTurn(true);
+    handle.interrupt = () => {
+      throw new Error("interrupt boom");
+    };
+
+    await expect(manager.interruptAgent("boom-agent")).rejects.toThrow(
+      /interrupt boom/,
+    );
+
+    const warnMsg = warnLogs.find(
+      (l) => (l.obj as { error?: string }).error === "interrupt boom",
+    );
+    expect(warnMsg).toBeDefined();
+    expect((warnMsg!.obj as { agent: string }).agent).toBe("boom-agent");
+  });
+});

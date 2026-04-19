@@ -597,6 +597,69 @@ export class SessionManager {
     this.log.info({ agent: name }, "agent stopped");
   }
 
+  /**
+   * Quick task 260419-nic — interrupt the agent's in-flight SDK turn.
+   *
+   * Returns a 2-flag result so callers (e.g., Discord `/clawcode-interrupt`
+   * slash handler) can render the right ephemeral message:
+   *   - hadActiveTurn=false, interrupted=false → "No active turn for X"
+   *   - hadActiveTurn=true,  interrupted=true  → "Stopped X mid-turn"
+   *
+   * No-op (returns {false,false}) when:
+   *   - the agent is not in this.sessions (never started / already stopped)
+   *   - the handle does not expose interrupt/hasActiveTurn (legacy handles)
+   *   - hasActiveTurn() returns false
+   *
+   * Throws if handle.interrupt() itself throws — caller (slash-command layer)
+   * surfaces the error ephemerally.
+   */
+  async interruptAgent(
+    name: string,
+  ): Promise<{ readonly interrupted: boolean; readonly hadActiveTurn: boolean }> {
+    const handle = this.sessions.get(name);
+    if (!handle) {
+      return { interrupted: false, hadActiveTurn: false };
+    }
+    // Duck-type guard — legacy wrapSdkQuery handles (used by the test-only
+    // createTracedSessionHandle) do expose stubs for these, but newer MCP
+    // adapters or custom handles may not. Belt-and-suspenders.
+    if (
+      typeof handle.interrupt !== "function" ||
+      typeof handle.hasActiveTurn !== "function"
+    ) {
+      return { interrupted: false, hadActiveTurn: false };
+    }
+    if (!handle.hasActiveTurn()) {
+      return { interrupted: false, hadActiveTurn: false };
+    }
+    try {
+      handle.interrupt();
+    } catch (err) {
+      this.log.warn(
+        { agent: name, error: (err as Error).message },
+        "interrupt failed",
+      );
+      throw err;
+    }
+    this.log.info(
+      { agent: name, event: "agent_interrupted" },
+      "agent turn interrupted",
+    );
+    return { interrupted: true, hadActiveTurn: true };
+  }
+
+  /**
+   * Quick task 260419-nic — expose the handle's hasActiveTurn() for the
+   * `/clawcode-steer` slash-command's poll loop. Returns false when the
+   * agent is not running OR the handle predates the Task 1 primitive.
+   */
+  hasActiveTurn(name: string): boolean {
+    const handle = this.sessions.get(name);
+    if (!handle) return false;
+    if (typeof handle.hasActiveTurn !== "function") return false;
+    return handle.hasActiveTurn();
+  }
+
   async restartAgent(name: string, config: ResolvedAgentConfig): Promise<void> {
     await this.stopAgent(name);
     let registry = await readRegistry(this.registryPath);
