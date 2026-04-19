@@ -106,6 +106,7 @@ Recent decisions affecting current work:
 - 2026-04-18: Milestone v2.0 Open Endpoint + Eyes & Hands started — 20 requirements defined across 4 categories
 - 2026-04-18: v2.0 roadmap created — 4 phases (69-72), 20/20 requirements mapped 1:1, zero orphans
 - 2026-04-19: Phase 73 added — OpenClaw endpoint latency (research integration, TTFB instrumentation, persistent subprocess via streamInput, brief cache, readiness-wait tune). Dir: `.planning/phases/73-openclaw-endpoint-latency/`
+- 2026-04-19: Phase 74 added — Seamless OpenClaw backend (caller-provided agent config on /v1/chat/completions). Research-first before planning. Dir: `.planning/phases/74-seamless-openclaw-backend-caller-provided-agent-config/`
 
 ### Pending Todos
 

@@ -113,6 +113,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 - [x] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist. (completed 2026-04-19)
 - [x] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration. (completed 2026-04-19)
 - [x] **Phase 73: OpenClaw endpoint latency** — TTFB instrumentation + persistent per-agent `streamInput()` subprocess + conversation-brief cache + tuned readiness wait. Achieved sub-2s TTFB (1.67-1.87s measured, 3.7-4.2× speedup vs ~7s baseline). (completed 2026-04-19)
+- [ ] **Phase 74: Seamless OpenClaw backend** — caller-provided agent config on `/v1/chat/completions`. OpenClaw-side agents (their own SOUL/tools/model/memory/workspace) use ClawCode as a rendering backend without pre-registration on ClawCode. Research first.
 
 ## Phase Details
 
@@ -187,6 +188,19 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   - [ ] 73-03-PLAN.md — openai.chat_completion TTFB span + prompt-cache non-regression + E2E smoke (LAT-03, LAT-05)
 **UI hint**: no
 
+### Phase 74: Seamless OpenClaw Backend
+**Goal**: OpenClaw can add ClawCode as a generic LLM provider in `openclaw.json` and its workspace-scoped agents (each with their own SOUL, tools, model preferences, memory, workspace dir) reach ClawCode via `/v1/chat/completions` without requiring per-OpenClaw-agent pre-registration on ClawCode. The caller's agent config — SOUL-as-system-prompt, tool list, model, memory hints — flows IN the request; ClawCode materializes a session that respects it while preserving isolation, cost attribution, and the v1.7 prompt-cache SLO.
+**Depends on**: Phase 69 (endpoint surface), Phase 73 (persistent-subprocess + brief cache), v1.5 cost-tracking, v1.9 ConversationStore
+**Requirements**: BACKEND-01, BACKEND-02, BACKEND-03, BACKEND-04, BACKEND-05
+**Success Criteria** (what must be TRUE):
+  1. An OpenClaw client issues `POST /v1/chat/completions` carrying its own agent identity (SOUL prompt via `messages[0].role="system"` OR dedicated extension field), its model preference, its tool definitions — and ClawCode honors all three without requiring that agent to be pre-registered in `clawcode.yaml`.
+  2. Independent sessions per (bearer-key, caller-provided-agent-identity) with prompt-cache hits on turn 2+ — v1.7 SLO preserved across caller-provided configs.
+  3. Cost tracking attributes spend to the CALLER-provided identity (so OpenClaw's per-workspace cost dashboards stay accurate), NOT to a single catchall "openai-endpoint" bucket.
+  4. Isolation: caller-provided configs cannot escape into ClawCode's own agents' workspaces, memory stores, or MCP tool surface. Security audit passes — no path traversal via workspace, no SOUL-as-instruction-injection into the ClawCode kernel.
+  5. OpenClaw side needs ONE provider entry with ONE bearer key (multi-agent key from Phase 73) — all OpenClaw-side agents route through it; the `model:` field carries the identifier OpenClaw expects back.
+**Plans**: TBD (run `/gsd:research-phase 74` first, then `/gsd:plan-phase 74`)
+**UI hint**: no
+
 ## Progress
 
 **Status:** v2.0 Open Endpoint + Eyes & Hands started 2026-04-18. 4 phases (69-72), 20 requirements mapped 1:1.
@@ -216,4 +230,4 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 
 ---
 
-*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Phase 73 in progress.*
+*Active milestone: v2.0 Open Endpoint + Eyes & Hands. Phase 74 in research.*
