@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
 status: Milestone complete
-stopped_at: "Completed quick task 260419-q2z — registry atomic write (fsync + .bak + unique-staging + recovery) + clawcode registry repair CLI + short-session summarizer branch (1-2 turn sessions produce MemoryEntry) + SessionManager.drain(timeoutMs) graceful shutdown + daemon shutdown awaits drain BEFORE openAiEndpoint.close(). 5 atomic commits on master (NOT pushed). ~30 net new tests. tsc at 29 baseline; 3149 pass, 7 tolerated daemon-openai failures. Deploy + smoke + body-capture flip deferred to orchestrator."
-last_updated: "2026-04-19T19:35:00.000Z"
-last_activity: 2026-04-19
+stopped_at: Completed 74-01-PLAN.md — transient session cache + OpenClawTemplateDriver + caller-identity routing. 3 atomic commits on master (NOT pushed). 66 new tests + 228 Phase 69 regressions all green; tsc at 29 baseline; 3214 pass / 8 tolerable baseline failures.
+last_updated: "2026-04-19T23:39:04.344Z"
+last_activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_phases: 6
+  completed_phases: 5
+  total_plans: 15
+  completed_plans: 14
 ---
 
 # Project State
@@ -99,6 +99,11 @@ Recent decisions affecting current work:
 - [Phase 72-image-generation-mcp]: Plan 72-02: usageTrackerLookup as callback (not bound tracker) — keeps handler agent-agnostic AND lets call succeed when agent's tracker DB isn't open yet (recordCost no-op rather than crash)
 - [Phase 72-image-generation-mcp]: Plan 72-02: Daemon-owned image clients constructed unconditionally at boot but lazy API-key reads keep daemon bootable without any keys present — missing keys surface as invalid_input on first tool call
 - [Phase 72-image-generation-mcp]: Plan 72-02: Costs CLI Category column between Agent and Model — legacy null/undefined category displays as 'tokens' for back-compat; image rows distinct at a glance (closes IMAGE-04 end-to-end)
+- [Phase 74]: Phase 74-01: caller-identity routing runs BEFORE scope-aware authz — enables malformed openclaw: syntax on pinned key to surface as 400 malformed_caller; zero Phase 69 regression
+- [Phase 74]: Phase 74-01: systemPrompt passed as STRING (Pitfall 2) to createPersistentSessionHandle — REPLACES SDK kernel prompt for transient sessions; preset+append NOT used
+- [Phase 74]: Phase 74-01: CLAWCODE_TRANSIENT_CWD fixed at module scope (~/.clawcode/manager/transient); driver never reads caller workspace/cwd/metadata (Pitfall 4 guard, grep-enforced)
+- [Phase 74]: Phase 74-01: TransientSessionCache LRU+TTL with close-on-evict — handle.close() errors caught + logged; cache invariants hold under SDK subprocess crash
+- [Phase 74]: Phase 74-01: dynamic SDK import fallback in endpoint-bootstrap keeps daemon.ts zero-touch for Plan 01; deps.sdk stays optional; missing SDK → 501 template_driver_disabled
 
 ### Roadmap Evolution
 
@@ -140,9 +145,10 @@ None yet.
 | Phase 71-web-search-mcp P02 | 10 min | 2 tasks | 10 files |
 | Phase 72-image-generation-mcp P01 | 32min | 3 tasks | 20 files |
 | Phase 72-image-generation-mcp P02 | 24 min | 2 tasks | 16 files |
+| Phase 74 P01 | 22min | 3 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
-Stopped at: 5 atomic commits on master (NOT pushed). Deploy + smoke + body-capture flip deferred to orchestrator.
+Stopped at: Completed 74-01-PLAN.md — transient session cache + OpenClawTemplateDriver + caller-identity routing. 3 atomic commits on master (NOT pushed). 66 new tests + 228 Phase 69 regressions all green; tsc at 29 baseline; 3214 pass / 8 tolerable baseline failures.
 Resume file: None
