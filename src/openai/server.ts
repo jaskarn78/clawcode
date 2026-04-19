@@ -102,6 +102,23 @@ export interface OpenAiServerConfig {
   agentNames: () => ReadonlyArray<string>;
   /** Optional logger — defaults to a pino child when absent. */
   log?: Logger;
+  /**
+   * Post-v2.0 hardening — boolean readiness probe for warm-path startup race.
+   * Production wires this to `SessionManager.isRunning.bind(sessionManager)`.
+   * When absent (test harness path), the wait gate is disabled and the handler
+   * dispatches immediately (preserves Plan 02 hermetic tests).
+   */
+  agentIsRunning?: (agentName: string) => boolean;
+  /**
+   * Post-v2.0 hardening — max wait before 503 Retry-After on warm-path race.
+   * Default 2000ms. Tests override to 50–200ms for speed.
+   */
+  agentReadinessWaitMs?: number;
+  /**
+   * Post-v2.0 hardening — poll cadence during the readiness wait window.
+   * Default 50ms.
+   */
+  agentReadinessPollIntervalMs?: number;
 }
 
 /** Handle returned by `startOpenAiServer`. */
@@ -151,6 +168,7 @@ function sendJson(
   status: number,
   body: unknown,
   xRequestId?: string,
+  extraHeaders?: Record<string, string>,
 ): void {
   if (res.writableEnded) return;
   const payload = JSON.stringify(body);
@@ -159,6 +177,7 @@ function sendJson(
     {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(payload).toString(),
+      ...(extraHeaders ?? {}),
     },
     xRequestId,
   );
@@ -173,9 +192,66 @@ function sendError(
   message: string,
   code: string | null = null,
   xRequestId?: string,
+  extraHeaders?: Record<string, string>,
 ): void {
   const { body } = buildOpenAiError(status, type, message, code);
-  sendJson(res, status, body, xRequestId);
+  sendJson(res, status, body, xRequestId, extraHeaders);
+}
+
+/**
+ * Post-v2.0 hardening — bounded poll on `isRunning(agentName)` for the
+ * warm-path startup race. Resolves `true` as soon as the probe flips, or
+ * `false` when `waitMs` elapses.
+ *
+ * Pure — takes `isRunning` as a fn param so tests can drive the gate without
+ * booting a real SessionManager.
+ */
+async function waitForAgentReady(
+  agentName: string,
+  isRunning: (name: string) => boolean,
+  waitMs: number,
+  pollMs: number,
+): Promise<boolean> {
+  if (isRunning(agentName)) return true;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    if (isRunning(agentName)) return true;
+  }
+  return false;
+}
+
+/**
+ * Post-v2.0 hardening — shared 503 emitter used by the pre-dispatch gate AND
+ * the defensive `SessionError not-running` catch in `runNonStreaming`.
+ * Keeps the error envelope and Retry-After header consistent in one place.
+ */
+function sendAgentWarming(
+  res: ServerResponse,
+  xRequestId?: string,
+): void {
+  sendError(
+    res,
+    503,
+    "server_error",
+    "Agent warming up, retry shortly",
+    "agent_warming",
+    xRequestId,
+    { "Retry-After": "2" },
+  );
+}
+
+/**
+ * Post-v2.0 hardening — classifier for the warm-path defensive catch.
+ * Uses `.name === "SessionError"` (not `instanceof`) so session-manager module
+ * duplication across build boundaries does not defeat the check.
+ */
+function isSessionNotRunningError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === "SessionError" &&
+    err.message.includes(" is not running")
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +478,23 @@ async function handleChatCompletions(
     return;
   }
 
+  // 4b. Post-v2.0 hardening — warm-path startup race gate.
+  // When `agentIsRunning` is provided (production path), bound the wait on
+  // the agent becoming ready before dispatching. Plan 02 tests omit the
+  // config field and skip the wait entirely — hermetic path preserved.
+  if (config.agentIsRunning) {
+    const ready = await waitForAgentReady(
+      row.agent_name,
+      config.agentIsRunning,
+      config.agentReadinessWaitMs ?? 2000,
+      config.agentReadinessPollIntervalMs ?? 50,
+    );
+    if (!ready) {
+      sendAgentWarming(res, xRequestId);
+      return;
+    }
+  }
+
   // Fire-and-forget last-used stamp.
   try {
     config.apiKeysStore.touchLastUsed(row.key_hash);
@@ -505,6 +598,15 @@ async function runNonStreaming(
       translator.onEvent(event);
     }
   } catch (err) {
+    // Post-v2.0 hardening — defensive belt-and-suspenders: if the driver
+    // somehow throws SessionError("not running") after the pre-dispatch
+    // gate (race, no gate configured, etc.), surface a clean 503 rather
+    // than the generic 500 driver_error. OpenAI clients can't distinguish
+    // a transient warm-path miss from a permanent failure otherwise.
+    if (isSessionNotRunningError(err)) {
+      sendAgentWarming(res, xRequestId);
+      return;
+    }
     log.warn({ err }, "driver failed on non-stream path");
     sendError(
       res,
@@ -533,6 +635,14 @@ async function runNonStreaming(
  * by event, emit each chunk. On driver error mid-stream, call `emitError` so
  * the client sees a clean termination. Register/deregister on the
  * activeStreams set so the shutdown hook can close in-flight connections.
+ *
+ * Post-v2.0 hardening note — the primary warm-path guard is the
+ * `waitForAgentReady` gate in `handleChatCompletions` (pre-dispatch, before
+ * SSE headers are committed). By the time we're in `runStreaming`, SSE is
+ * open and any `SessionError not-running` surfaces through the in-stream
+ * `emitError` envelope with `agent_warming` code rather than a clean 503.
+ * Keeping SSE headers committed immediately is required so keepalive pings
+ * can start before the first driver event (see the keepalive test).
  */
 async function runStreaming(
   res: ServerResponse,
@@ -578,14 +688,31 @@ async function runStreaming(
     }
     handle.emitDone();
   } catch (err) {
-    log.warn({ err }, "driver failed mid-stream");
-    handle.emitError({
-      error: {
-        message: "Driver failed mid-stream",
-        type: "server_error",
-        code: "driver_error",
-      },
-    });
+    // Post-v2.0 hardening — if the driver slipped past the pre-dispatch
+    // gate and threw SessionError("not running"), surface the warm-path
+    // signal through the in-stream error envelope rather than generic
+    // driver_error. Headers are already committed at this point, so we
+    // can't write a 503 cleanly — but the `agent_warming` code in the
+    // OpenAI error envelope still tells the client this is retryable.
+    if (isSessionNotRunningError(err)) {
+      log.warn({ err }, "driver SessionError not-running mid-stream (post-gate race)");
+      handle.emitError({
+        error: {
+          message: "Agent warming up, retry shortly",
+          type: "server_error",
+          code: "agent_warming",
+        },
+      });
+    } else {
+      log.warn({ err }, "driver failed mid-stream");
+      handle.emitError({
+        error: {
+          message: "Driver failed mid-stream",
+          type: "server_error",
+          code: "driver_error",
+        },
+      });
+    }
   } finally {
     activeStreams.delete(handle);
   }

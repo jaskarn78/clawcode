@@ -172,6 +172,11 @@ export async function startOpenAiEndpoint(
       driver,
       agentNames: deps.agentNames,
       log,
+      // Post-v2.0 hardening — bound the warm-path startup race: during the
+      // ~5s window between daemon start and an agent's warm path completing,
+      // the handler polls this up to 2000ms before responding 503 Retry-After
+      // (rather than surfacing SessionError as 500 driver_error).
+      agentIsRunning: deps.sessionManager.isRunning.bind(deps.sessionManager),
     });
   } catch (err) {
     if (isAddrInUse(err)) {

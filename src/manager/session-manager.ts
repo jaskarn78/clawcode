@@ -647,6 +647,23 @@ export class SessionManager {
 
   getRunningAgents(): readonly string[] { return [...this.sessions.keys()]; }
 
+  /**
+   * Post-v2.0 hardening — single-name boolean readiness probe.
+   *
+   * Used by the OpenAI endpoint (src/openai/server.ts) to bound the warm-path
+   * startup race. During the ~5s window between daemon start and the agent's
+   * warm path completing, `streamFromAgent` / `nonStreamFromAgent` throw
+   * `SessionError('not running')`. The endpoint polls this helper to decide
+   * between wait-then-dispatch and a 503 Retry-After response.
+   *
+   * Deliberately does NOT differentiate "starting" vs "fully warm" —
+   * `this.sessions.has(name)` flips to true AFTER warmupAgent returns, which
+   * is exactly the gate the endpoint needs.
+   */
+  isRunning(name: string): boolean {
+    return this.sessions.has(name);
+  }
+
   // Memory accessors (delegate to AgentMemoryManager)
   getMemoryStore(agentName: string): MemoryStore | undefined { return this.memory.memoryStores.get(agentName); }
   getCompactionManager(agentName: string): CompactionManager | undefined { return this.memory.compactionManagers.get(agentName); }

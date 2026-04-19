@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { startOpenAiServer, type OpenAiServerHandle, type OpenAiSessionDriver } from "../server.js";
 import { ApiKeysStore } from "../keys.js";
 import type { SdkStreamEvent } from "../types.js";
+import { SessionError } from "../../shared/errors.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -163,6 +164,14 @@ async function bootHarness(opts: {
   pinAgent?: string;
   keepaliveMs?: number;
   maxBody?: number;
+  /** Post-v2.0 hardening — optional custom driver (overrides events-based mock). */
+  driverOverride?: OpenAiSessionDriver;
+  /** Post-v2.0 hardening — warm-path readiness probe. When omitted, wait gate is disabled. */
+  agentIsRunning?: (agentName: string) => boolean;
+  /** Post-v2.0 hardening — max wait before 503 Retry-After. */
+  agentReadinessWaitMs?: number;
+  /** Post-v2.0 hardening — poll cadence during readiness wait. */
+  agentReadinessPollIntervalMs?: number;
 }): Promise<TestHarness> {
   const agentNames = opts.agentNames ?? [
     "clawdy",
@@ -173,12 +182,13 @@ async function bootHarness(opts: {
   const pinAgent = opts.pinAgent ?? "clawdy";
   const keysStore = new ApiKeysStore(":memory:");
   const { key, row } = keysStore.createKey(pinAgent, { label: "test-key" });
-  const driver = makeMockDriver({
+  const mockDriver = makeMockDriver({
     events: opts.events,
     preFirstEventDelayMs: opts.preFirstEventDelayMs,
     perEventDelayMs: opts.perEventDelayMs,
     throwAtIndex: opts.throwAtIndex,
   });
+  const driver: OpenAiSessionDriver = opts.driverOverride ?? mockDriver;
   const handle = await startOpenAiServer({
     port: 0,
     host: "127.0.0.1",
@@ -187,13 +197,16 @@ async function bootHarness(opts: {
     apiKeysStore: keysStore,
     driver,
     agentNames: () => agentNames,
+    agentIsRunning: opts.agentIsRunning,
+    agentReadinessWaitMs: opts.agentReadinessWaitMs,
+    agentReadinessPollIntervalMs: opts.agentReadinessPollIntervalMs,
   });
   const baseUrl = `http://127.0.0.1:${handle.address.port}`;
   return {
     handle,
     baseUrl,
     keysStore,
-    driver,
+    driver: mockDriver,
     pinnedKey: key,
     pinnedHashHex: row.key_hash,
     agentNames,
@@ -1096,5 +1109,168 @@ describe("server — OPTIONS + 404 + graceful close", () => {
     await closePromise;
     expect(h.handle.activeStreams.size).toBe(0);
     h.keysStore.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Post-v2.0 hardening — warm-path startup race (quick task 260419-jtk Task 3)
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/chat/completions — warm-path startup race", () => {
+  it("W1 — agent already running → immediate dispatch (no wait)", async () => {
+    const h = await bootHarness({
+      events: textStream,
+      agentIsRunning: () => true,
+      agentReadinessWaitMs: 1000,
+      agentReadinessPollIntervalMs: 50,
+    });
+    try {
+      const started = Date.now();
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      const elapsed = Date.now() - started;
+      expect(res.status).toBe(200);
+      // No poll cycles — should complete well under the 1000ms budget.
+      expect(elapsed).toBeLessThan(500);
+      expect(h.driver.calls.length).toBe(1);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("W2 — agent never warms within budget → 503 Retry-After:2 + agent_warming code", async () => {
+    const h = await bootHarness({
+      events: textStream,
+      agentIsRunning: () => false,
+      agentReadinessWaitMs: 150,
+      agentReadinessPollIntervalMs: 25,
+    });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("2");
+      const body = await res.json();
+      expect(body.error.type).toBe("server_error");
+      expect(body.error.code).toBe("agent_warming");
+      expect(body.error.message).toMatch(/warming/i);
+      // Pre-dispatch gate held — driver never invoked.
+      expect(h.driver.calls.length).toBe(0);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("W3 — agent warms partway through the poll window → dispatch succeeds", async () => {
+    let callCount = 0;
+    const isRunning = (_name: string): boolean => {
+      callCount++;
+      // Not running for the first 3 observations, then ready.
+      return callCount > 3;
+    };
+    const h = await bootHarness({
+      events: textStream,
+      agentIsRunning: isRunning,
+      agentReadinessWaitMs: 500,
+      agentReadinessPollIntervalMs: 25,
+    });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      // Polled at least 3 times to flip to true, capped by budget/pollInterval.
+      expect(callCount).toBeGreaterThanOrEqual(3);
+      expect(callCount).toBeLessThanOrEqual(500 / 25 + 4);
+      expect(h.driver.calls.length).toBe(1);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("W4 — no agentIsRunning config → wait gate disabled (Plan 02 hermetic harness preserved)", async () => {
+    // Pre-Task-3 behaviour: NO agentIsRunning field passed. Existing Plan 02
+    // tests rely on this hermetic path — regression guard.
+    const h = await bootHarness({ events: textStream });
+    try {
+      const started = Date.now();
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(h.driver.calls.length).toBe(1);
+    } finally {
+      await teardown(h);
+    }
+  });
+
+  it("W5 — SessionError 'not running' from driver on non-stream path surfaces as 503 agent_warming", async () => {
+    // No agentIsRunning config — disable pre-dispatch gate so we exercise the
+    // defensive catch path inside runNonStreaming.
+    const throwingDriver: OpenAiSessionDriver = {
+      // eslint-disable-next-line require-yield
+      async *dispatch(_input) {
+        throw new SessionError("Agent 'clawdy' is not running", "clawdy");
+      },
+    };
+    const h = await bootHarness({
+      events: textStream,
+      driverOverride: throwingDriver,
+    });
+    try {
+      const res = await fetch(`${h.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${h.pinnedKey}`,
+        },
+        body: JSON.stringify({
+          model: "clawdy",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("2");
+      const body = await res.json();
+      expect(body.error.type).toBe("server_error");
+      expect(body.error.code).toBe("agent_warming");
+    } finally {
+      await teardown(h);
+    }
   });
 });
