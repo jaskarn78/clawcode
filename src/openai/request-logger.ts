@@ -60,6 +60,8 @@ export interface RequestLogRecord {
   readonly finish_reason: string | null;   // from translator.finalize() (stream/non-stream)
   /** Present iff includeBodies=true — stripped by default (PII / prompt content). */
   readonly messages?: ReadonlyArray<{ readonly role: string; readonly content: string }>;
+  /** Raw pre-validation request body (stamped on 400 body_validation_error for diagnostics). Same PII gate as `messages`. */
+  readonly raw_body?: Readonly<Record<string, unknown>>;
 }
 
 export interface RequestLogger {
@@ -107,17 +109,20 @@ export function createRequestLogger(opts: CreateRequestLoggerOpts): RequestLogge
   }
 
   /**
-   * Returns a NEW record with `messages` stripped when includeBodies=false.
-   * Immutable by contract — never mutates the caller's record (coding-style.md).
+   * Returns a NEW record with `messages` and `raw_body` stripped when
+   * includeBodies=false. Immutable by contract — never mutates the caller's
+   * record (coding-style.md).
    */
   function redact(record: RequestLogRecord): RequestLogRecord {
     if (includeBodies) return record;
-    if (record.messages === undefined) return record;
-    // Omit the `messages` field entirely — `messages_count` survives in the
-    // spread. No mutation of the input object.
-    const { messages: _omit, ...rest } = record as RequestLogRecord & {
+    const anyRec = record as RequestLogRecord & {
       messages?: unknown;
+      raw_body?: unknown;
     };
+    if (anyRec.messages === undefined && anyRec.raw_body === undefined) {
+      return record;
+    }
+    const { messages: _om1, raw_body: _om2, ...rest } = anyRec;
     return rest as RequestLogRecord;
   }
 

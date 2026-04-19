@@ -485,6 +485,21 @@ async function handleChatCompletions(
   if (!parseResult.success) {
     partial.error_type = "invalid_request_error";
     partial.error_code = "body_validation_error";
+    // Diagnostic: surface the specific Zod failures in the journal so operators
+    // can see WHICH field was wrong without needing body capture. Also attach
+    // the raw (pre-Zod) body to the JSONL record — the request-logger's
+    // redact() drops this field unless includeBodies=true, so PII is still
+    // gated by CLAWCODE_OPENAI_LOG_BODIES.
+    const issueSummary = parseResult.error.issues.map((i) => ({
+      path: Array.isArray(i.path) ? i.path.join(".") : String(i.path ?? ""),
+      code: i.code,
+      message: i.message,
+    }));
+    log.info(
+      { request_id: xRequestId, issues: issueSummary },
+      "openai /v1/chat/completions body validation failed",
+    );
+    partial.raw_body = bodyJson as Record<string, unknown>;
     sendError(
       res,
       400,
@@ -882,6 +897,10 @@ interface MutableLogRecord {
   // Stamped here so opt-in body capture actually has data to pass through;
   // without this, the env var was a no-op.
   messages?: ReadonlyArray<{ readonly role: string; readonly content: string }>;
+  // Raw pre-Zod body attached only on 400 body_validation_error so operators
+  // can see the exact payload shape the client sent. Also PII-gated through
+  // the same `includeBodies` redaction.
+  raw_body?: Record<string, unknown>;
 }
 
 /**
