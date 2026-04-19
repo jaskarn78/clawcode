@@ -1,19 +1,17 @@
 ---
-status: verifying
+status: resolved
 trigger: "clawdy v2.0 stability: OpenAI endpoint not bound on 3101, fin-test restartCount=14, 26 stale sub-/thread- agent entries causing memory store lookup noise"
 created: 2026-04-19T13:00:00Z
-updated: 2026-04-19T14:30:00Z
+updated: 2026-04-19T13:35:00Z
+resolved: 2026-04-19T13:35:00Z
 ---
 
 ## Current Focus
 
-hypothesis: Root causes now confirmed for all three issues. Implementing fixes.
-  - #1 (OpenAI endpoint) ROOT CAUSE: Zod .default({}) vs .default(() => ({...full...})) asymmetry. When YAML provides a partial `defaults:` block (with any field, even unrelated), Zod fills the missing `openai` field by applying the literal default value without re-validating — so inner field defaults DO NOT cascade. openaiEndpointSchema uses `.default({})` (line 367) → yields `{}` → enabled is undefined → `!config.enabled` branch taken → NOOP_HANDLE → port 3101 never bound. browser/search/image schemas use `.default(() => ({ ...full object... }))` — those populate correctly. Test reproduction inline below.
-  - #2 (fin-test restartCount) ROOT CAUSE: NOT a live crash loop. restartCount is a persisted counter in registry.json, lifetime-accumulating. Only `SessionManager.restartAgent()` increments it (explicit CLI/IPC restart), NOT crash recovery. AgentRunner.restartCount is separate in-memory per-boot. Journal confirms no restarts for fin-test in the 12:42:30–12:45:00 window. 14 reflects historical explicit restarts. Fix direction: zero out restartCount on daemon boot for agents that are starting fresh (clean slate), OR leave as-is (informational only). Pragmatic: leave it alone — not a bug.
-  - #3 (subagent reap) ROOT CAUSE: stopAgent marks status="stopped" but never removes entry. reconcileRegistry only prunes orphans (unknown parent). No TTL-based reap. Dashboard pollMemoryStats iterates ALL agent names including "stopped" ones → 26×/tick "Memory store not found" log.error spam.
-test: Fix implementation: (A) change openaiEndpointSchema's outer default to factory returning full object; (B) add stoppedAt field + TTL-based reap to reconcileRegistry; (C) filter pollMemoryStats by status="running".
-expecting: Build + test pass, then human-verify on clawdy.
-next_action: Implement code fixes, run typecheck + test, commit, emit human-verify checkpoint.
+hypothesis: All three root causes confirmed and fixed in commit 8d90c42. Deployed to clawdy 2026-04-19T13:28Z. End-to-end human verification passed for #1 (port bound, models endpoint, chat completion), #3 (agent count 29 → 8, 21 pruned entries, log spam drop). #2 confirmed non-bug. One small follow-up identified: phantom-running registry entries whose processes crashed uncleanly before status transitioned — these survive both the reap (targets status:"stopped") and the SSE filter (allows status:"running"). Recommendation recorded in Follow-Up section below. Session resolved.
+test: Deploy 8d90c42 (pushed + daemon restarted at 13:28 UTC) and run smoke.
+expecting: Port 3101 LISTEN, OpenAI /v1/models returns 3 parents, /v1/chat/completions returns ChatCompletion, agent count drops ~29→8, log spam drops ~26/tick → ~20/6min.
+next_action: Session resolved. Follow-up task tracked separately.
 
 ## Investigation Plan
 
@@ -165,8 +163,16 @@ verification:
   - npx vitest run (scoped to config/manager/dashboard/openai): 43 files / 791 tests passed
   - Full test suite: 2942/2943 passed (the 1 failure is src/documents/__tests__/chunker.test.ts PDF-chunker timeout — untouched by this fix, pre-existing flake)
   - npm run build: ESM dist/cli/index.js 974.98 KB, build success in 178ms
-  - End-to-end schema check against exact clawdy YAML shape: defaults.openai.enabled=true, port=3101, host=0.0.0.0 — PASS (endpoint will bind on deploy)
-  - PENDING: commit + clawdy deploy smoke (human-verify checkpoint next)
+  - End-to-end schema check against exact clawdy YAML shape: defaults.openai.enabled=true, port=3101, host=0.0.0.0 — PASS
+  - COMMIT 8d90c42 pushed to master, deployed to clawdy 2026-04-19T13:28Z.
+  - Live smoke on clawdy post-deploy (all PASS):
+      1. Issue #1 RESOLVED — `ss -ltn` shows `0.0.0.0:3101` LISTEN.
+      2. Issue #1 RESOLVED — `GET /v1/models` returns OpenAI JSON `{"object":"list","data":[{"id":"fin-test"...},{"id":"test-agent"...},{"id":"admin-clawdy"...}]}`.
+      3. Issue #1 RESOLVED — key issuance via IPC: `clawcode openai-key create admin-clawdy --label smoke-test-20260419` printed `ck_adminc_...` + hash.
+      4. Issue #1 RESOLVED — end-to-end `POST /v1/chat/completions` from 100.98.211.108:3101 with bearer key returned `{"id":"chatcmpl-FeEkgrqV8wrQaphq","object":"chat.completion","model":"admin-clawdy","choices":[{"message":{"role":"assistant","content":"PONG"},"finish_reason":"stop"}]}`. Endpoint fully usable.
+      5. Issue #3 RESOLVED — agent count dropped 29 → 8. Boot log shows ~21 `pruned ghost registry entry` lines with `reason: stale-subagent` / `stale-thread`. Legacy zombie sweep worked on first reconcile pass.
+      6. Issue #3 RESOLVED — log spam dropped from ~26/tick to ~20 total over 6 min (residual from 5 phantom-running entries — see Follow-Up).
+      7. Issue #2 CONFIRMED non-bug — fin-test running cleanly, no crash loop. restartCount=14 reflects historical explicit CLI restarts.
 files_changed:
   - src/config/schema.ts (openaiEndpointSchema: .default({}) → .default(() => ({...full...})))
   - src/config/__tests__/schema.test.ts (2 regression tests for partial-defaults cascading)
@@ -174,4 +180,29 @@ files_changed:
   - src/manager/registry.ts (createEntry inits stoppedAt=null; reconcileRegistry adds TTL reap with PrunedEntry reasons stale-subagent/stale-thread; STOPPED_SUBAGENT_REAP_TTL_MS constant = 1h)
   - src/manager/session-manager.ts (stopAgent sets stoppedAt: Date.now() when transitioning to status="stopped")
   - src/manager/__tests__/registry.test.ts (11 TTL-reap tests; mkLiveSubEntry helper for backward compat of pre-fix tests that intended sub/thread entries be "live")
-  - src/dashboard/sse.ts (lastRunningAgentNames field populated in fetchCurrentState; pollMemoryStats filters by status="running" — eliminates "Memory store not found" level-50 log spam)
+  - src/dashboard/sse.ts (lastRunningAgentNames field populated in fetchCurrentState; pollMemoryStats filters by status="running")
+commit: 8d90c42 (master, pushed + deployed 2026-04-19T13:28Z)
+
+## Follow-Up (NOT-YET-IMPLEMENTED)
+
+Tracked as polish, not blocking. Recorded here so it isn't lost.
+
+**Symptom:** Residual log spam on clawdy post-fix (~20 lines / 6 min, down from 26/tick). Five registry entries remain marked `status:"running"` despite having no live MemoryStore in SessionManager:
+  - `admin-clawdy-sub-CbXCb3` (startedAt 2026-04-16T19:15)
+  - `admin-clawdy-sub-UeYsBk` (2026-04-16T19:17)
+  - `admin-clawdy-sub-jo5Q8s` (2026-04-16T19:23)
+  - `fin-test-sub-YVas9N` (2026-04-17T13:31)
+  - `admin-clawdy-sub-YB3HFj` (2026-04-17T17:05)
+
+**Why they survive both layers:**
+  - The TTL reap in `reconcileRegistry` only targets `status:"stopped"` entries. These are `status:"running"` — never transitioned because the process crashed uncleanly before `stopAgent` ran.
+  - The `pollMemoryStats` SSE filter only skips non-running agents. These pass the filter, then fail the `memory-list` IPC lookup → `ipc-server` level-50 `Memory store not found` on each tick.
+
+**Root cause class:** Unclean process termination + no boot-time reconciliation of "registry says running, but no live store" phantoms.
+
+**Recommended fix (separate future session):**
+  At daemon boot, add a new phase to `reconcileRegistry()` in `src/manager/registry.ts`: iterate all entries with `status:"running"`, and for each one where `sessionManager.getMemoryStore(name)` returns `undefined`, transition the entry to `status:"stopped"` with `stoppedAt: Date.now() - reapTtlMs - 1` so it reaps immediately on the same boot cycle. This requires passing a MemoryStore-existence callback (or the SessionManager's store map) into `reconcileRegistry`. Add 2-3 tests covering phantom-running sub/thread entries.
+
+**Files (when implemented):** `src/manager/registry.ts`, `src/manager/__tests__/registry.test.ts`, likely a small wiring change where `reconcileRegistry` is invoked.
+
+**Priority:** Low. Current residual log rate (~3.3/min) is acceptable; these phantoms will clear on any future clean `stopAgent` of those agents or on server rebuild. Implement when convenient.
