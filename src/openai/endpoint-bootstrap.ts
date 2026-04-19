@@ -35,6 +35,7 @@ import { ApiKeySessionIndex } from "./session-index.js";
 import { createRequestLogger, type RequestLogger } from "./request-logger.js";
 import { TransientSessionCache } from "./transient-session-cache.js";
 import { createOpenClawTemplateDriver } from "./template-driver.js";
+import { TIER_MODEL_MAP } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import type { SdkModule } from "../manager/sdk-types.js";
@@ -242,6 +243,53 @@ export async function startOpenAiEndpoint(
         sdk: templateSdk,
         cache: transientCache,
         log,
+        // Phase 74 Plan 02 — caller-attributed cost rows. Every completed
+        // transient turn fires this callback; we route UsageTracker.record
+        // with agent='openclaw:<slug>' (tier encoded in the model field,
+        // not the agent field — matches CONTEXT D-04: one cost row per
+        // caller, not per (caller, tier)).
+        //
+        // NOTE: UsageTracker instances are PER-AGENT. Transient sessions
+        // have no native agent, so we route to the first top-level agent's
+        // tracker DB. The `agent` column keeps openclaw rows distinguishable
+        // from native rows at query time — getCostsByAgentModel groups by
+        // (agent, model), so each caller slug forms its own row regardless
+        // of which DB file holds the row. When no top-level agent exists
+        // yet (e.g. daemon boot race), tracker.record is skipped — cost
+        // accounting is non-critical (Pitfall 8).
+        onUsage: (input, usage, sessionId, elapsedMs) => {
+          try {
+            const names = deps.agentNames();
+            const fleetAnchor = names.find(
+              (n) => !n.includes("-sub-") && !n.includes("-thread-"),
+            );
+            const tracker = fleetAnchor
+              ? deps.sessionManager.getUsageTracker(fleetAnchor)
+              : undefined;
+            if (!tracker) return; // No tracker — non-fatal skip.
+            const u = (usage ?? {}) as {
+              tokens_in?: number;
+              tokens_out?: number;
+              cost_usd?: number;
+            };
+            tracker.record({
+              agent: `openclaw:${input.callerSlug}`,
+              timestamp: new Date().toISOString(),
+              tokens_in: u.tokens_in ?? 0,
+              tokens_out: u.tokens_out ?? 0,
+              cost_usd: u.cost_usd ?? 0,
+              turns: 1,
+              model: TIER_MODEL_MAP[input.tier],
+              duration_ms: elapsedMs,
+              session_id: sessionId,
+            });
+          } catch (err) {
+            log.warn(
+              { err, callerSlug: input.callerSlug },
+              "tracker.record failed (non-fatal)",
+            );
+          }
+        },
       })
     : undefined;
 
