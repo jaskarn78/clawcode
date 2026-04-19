@@ -26,7 +26,7 @@ ClawCode turns Claude Code into a multi-agent platform. Each agent is a persiste
 - **Session-boundary summarization** — Haiku compresses each ended/crashed session into a standard MemoryEntry that auto-participates in search, decay, tier management, and knowledge graph linking (v1.9)
 - **Resume auto-injection** — agents wake up with a structured brief of recent sessions in a dedicated `conversation_context` budget section, with gap-skip for short restarts (v1.9)
 - **Conversation search + deep retrieval** — `memory_lookup` MCP tool accepts `scope="conversations"`/`"all"` + `page`; FTS5 raw-turn search + semantic summary search with tunable time-decay weighting and paginated results (v1.9)
-- **OpenAI-compatible HTTP endpoint** — `POST /v1/chat/completions` (SSE streaming) + `GET /v1/models` on the daemon; every agent reachable from any OpenAI-compatible client (Python SDK, LangChain, LibreChat, curl) with bearer-key-per-session continuity and OpenAI↔Claude tool-use translation (v2.0)
+- **OpenAI-compatible HTTP endpoint** — `POST /v1/chat/completions` (SSE streaming) + `GET /v1/models` on the daemon; every agent reachable from any OpenAI-compatible client (Python SDK, LangChain, LibreChat, curl) with bearer-key-per-session continuity and OpenAI↔Claude tool-use translation, with fork-based escalation and subagent-thread delegation available mid-turn (v2.0)
 - **Browser automation MCP** — auto-injected Playwright-powered server; every agent can `browser_navigate` / `browser_screenshot` (vision-ready) / `browser_click` / `browser_fill` / `browser_extract` (Readability) / `browser_wait_for` against a real headless Chromium with per-agent persistent profile (v2.0)
 - **Web search MCP** — auto-injected Brave (primary) / Exa (optional) backend; `web_search` + `web_fetch_url` (Readability-cleaned article text); intra-turn idempotent cache preventing double-charging on repeat queries (v2.0)
 - **Image generation MCP** — auto-injected OpenAI Images / MiniMax / fal.ai backends; `image_generate` / `image_edit` / `image_variations` persist to workspace, deliver to Discord via `send_attachment`, spend surfaces in `clawcode costs` as a new category (v2.0)
@@ -417,10 +417,46 @@ curl http://127.0.0.1:3101/v1/chat/completions \
 
 ```bash
 clawcode openai-key create clawdy --label ci-bot --expires 365d
-clawcode openai-key list                          # table view, never shows plaintext
-clawcode openai-key revoke ci-bot                 # by label
-clawcode openai-key revoke ab12cd34               # by 8+ hex prefix of the hash
+clawcode openai-key create --all --label openclaw-all   # multi-agent key (P51-MULTI-AGENT-KEY)
+clawcode openai-key list                                # table view, never shows plaintext
+clawcode openai-key revoke ci-bot                       # by label
+clawcode openai-key revoke ab12cd34                     # by 8+ hex prefix of the hash
 ```
+
+Two key shapes are supported:
+
+- **Pinned** (`create <agent>`) — scope is `agent:<name>`; accepted only on that single agent. Legacy, back-compat.
+- **Multi-agent** (`create --all`) — scope is `all`; accepted on ANY configured agent as the `model` field of the request. One bearer, whole fleet. Each `(key_hash, agent_name)` pair carries its own persistent conversation (`api_key_sessions_v2` composite-PK), so the same `--all` key chatting with `clawdy` and `fin-test` maintains two independent session histories.
+
+### Spawning subagents from OpenAI-endpoint turns
+
+Every ClawCode agent that has the `subagent-thread` skill loaded exposes the `spawn_subagent_thread` MCP tool to itself. When a caller asks the agent (via the OpenAI endpoint) to delegate work — especially with a model upgrade like "spawn an opus agent" — the agent can call the tool from within the turn, wait for the subagent's response, and summarize back to the OpenAI client.
+
+Example:
+
+```bash
+curl http://clawdy:3101/v1/chat/completions \
+  -H "Authorization: Bearer ck_fin-te_XXXXXXXXXXXXXXXXXXXXXXXXXXXX" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fin-test",
+    "messages": [{
+      "role": "user",
+      "content": "Spawn an opus subagent to deeply research the S&P 500 sector rotation since Jan 2026 and summarize in 3 bullets."
+    }]
+  }'
+```
+
+The agent:
+
+1. Recognizes the delegation intent.
+2. Calls `spawn_subagent_thread` with `model: "opus"` and the research prompt.
+3. Waits for the subagent's completion (streamed through the daemon's trace collector — turn lifecycle is recorded under the OpenAI-API turn origin).
+4. Summarizes the subagent's output back to the OpenAI client in the final response.
+
+Fork-based escalation (`"this needs opus"` keyword trigger + error-threshold auto-escalation) also works unchanged across OpenAI-endpoint turns — the parent's persistent SDK query survives the fork spawn (Phase 73 invariant; pinned by `escalation.test.ts`).
+
+For the Discord-initiated version of this flow, see the `subagent-thread` skill docs — identical tool, same underlying session, different caller path.
 
 ### Environment
 
