@@ -18,7 +18,7 @@ The daemon exposes a stable, OpenAI-compatible HTTP surface so any client that s
 - [x] **OPENAI-02**: User (as API client) can request `stream: true` and receive `text/event-stream` chunks in OpenAI SSE format (`data: {...}\n\n`, final `data: [DONE]`) with assistant deltas as the agent generates.
 - [x] **OPENAI-03**: User (as API client) can call `GET /v1/models` and see every configured ClawCode agent listed as a model (`id: "<agent-name>"`, `object: "model"`, `owned_by: "clawcode"`).
 - [x] **OPENAI-04**: User (as operator) can generate per-client bearer API keys, pin each key to a specific agent, and have the daemon reject requests with missing, unknown, or agent-mismatched keys with `401` / `403`.
-- [ ] **OPENAI-05**: User (as API client) can make a sequence of `POST /v1/chat/completions` requests with the same bearer key and have the agent retain conversational memory across requests (per-bearer-key session — one isolated session per API key, persisted via ConversationStore).
+- [x] **OPENAI-05**: User (as API client) can make a sequence of `POST /v1/chat/completions` requests with the same bearer key and have the agent retain conversational memory across requests (per-bearer-key session — one isolated session per API key, persisted via ConversationStore).
 - [x] **OPENAI-06**: User (as API client) can receive OpenAI-format `tool_calls` in responses when the agent chooses a tool, and can reply with `role: "tool"` messages that the daemon translates bidirectionally to Claude tool-use blocks.
 - [x] **OPENAI-07**: User (as operator) can observe `TurnOrigin = "openai-api"` on every trace row originating from the endpoint, with the bearer key fingerprint and client-sent `X-Request-Id` preserved — no TurnDispatcher refactor, just a new origin kind.
 
@@ -89,7 +89,7 @@ Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
 | OPENAI-02 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | OPENAI-03 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | OPENAI-04 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-05 | Phase 69 — OpenAI-Compatible Endpoint | Pending |
+| OPENAI-05 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | OPENAI-06 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | OPENAI-07 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
 | BROWSER-01 | Phase 70 — Browser Automation MCP | Pending |

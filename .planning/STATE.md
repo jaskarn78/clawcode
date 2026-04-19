@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
-status: Ready to execute
-stopped_at: Completed 69-02-PLAN.md — src/openai/{types,translator,stream,server}.ts + tests. 122 openai tests green. Ready for 69-03 (daemon integration + CLI + E2E smoke).
-last_updated: "2026-04-18T23:52:31.547Z"
-last_activity: 2026-04-18
+status: Phase complete — ready for verification
+stopped_at: "Completed 69-03-PLAN.md — daemon integration + CLI + Python smoke. 1237 tests green. Plan 03 complete; phase ready for /gsd:verify-work."
+last_updated: "2026-04-19T00:17:31.858Z"
+last_activity: 2026-04-19
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -65,6 +65,10 @@ Recent decisions affecting current work:
 - [Phase 69-openai-compatible-endpoint]: Phase 69-02: Translator uses Map<tool_use_id, openaiIndex> primary + Map<sdkBlockIndex, openaiIndex> secondary for streamed tool-call accumulation (Pitfall 1 guard)
 - [Phase 69-openai-compatible-endpoint]: Phase 69-02: Body-too-large uses req.pause() (not req.destroy()) so the 413 response body can still be written before the socket closes
 - [Phase 69-openai-compatible-endpoint]: Phase 69-02: Both req.on('close') AND res.on('close') wired to AbortController — Node event ordering varies on SSE connections, wiring both is the robust disconnect guard
+- [Phase 69-openai-compatible-endpoint]: Phase 69-03: NO additive fields on TurnDispatcher — clientSystemAppend routed via user-message body with delimiter (Pitfall 8 preserved, Discord path byte-for-byte unchanged)
+- [Phase 69-openai-compatible-endpoint]: Phase 69-03: SdkStreamEvent synthesis in driver.ts — bridges TurnDispatcher's (accumulated:string) callback into async-iterable of content_block_delta+result events via bounded queue + pending-resolver
+- [Phase 69-openai-compatible-endpoint]: Phase 69-03: Handler-arrow-fn intercepts openai-key-* IPC methods BEFORE routeMethod — avoids growing 23-arg signature; new handlers reach daemon state via closures over pre-declared let openAiEndpointRef
+- [Phase 69-openai-compatible-endpoint]: Phase 69-03: Factored startOpenAiEndpoint into src/openai/endpoint-bootstrap.ts specifically so 10 integration tests drive boot + env + EADDRINUSE + shutdown ordering without booting full daemon
 
 ### Roadmap Evolution
 
@@ -91,9 +95,10 @@ None yet.
 | 260418-sux | Fix schedule display field mismatch and add registry ghost-entry reconciliation | 2026-04-18 | 3d4ff24 | [260418-sux-fix-schedule-display-field-mismatch-and-](./quick/260418-sux-fix-schedule-display-field-mismatch-and-/) |
 | Phase 69 P01 | 13 | 3 tasks | 7 files |
 | Phase 69-openai-compatible-endpoint P02 | 24 | 4 tasks | 9 files |
+| Phase 69-openai-compatible-endpoint P03 | 18 | 5 tasks | 16 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-18
-Stopped at: Completed 69-02-PLAN.md — src/openai/{types,translator,stream,server}.ts + tests. 122 openai tests green. Ready for 69-03 (daemon integration + CLI + E2E smoke).
+Last activity: 2026-04-19
+Stopped at: Completed 69-03-PLAN.md — daemon integration + CLI + Python smoke. 1237 tests green. Plan 03 complete; phase ready for /gsd:verify-work.
 Resume file: None
