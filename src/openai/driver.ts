@@ -288,12 +288,14 @@ function runDispatch(
     } catch {
       sessionId = undefined;
     }
-    // Record / touch the bearer-key → session mapping.
+    // Record / touch the bearer-key → session mapping. Quick task 260419-p51:
+    // touch() is now (keyHash, agentName) — composite-PK means we only
+    // refresh this agent's last_used_at.
     if (sessionId) {
       try {
         const idx = deps.sessionIndexFor(agentName);
         idx.record(keyHash, agentName, sessionId);
-        idx.touch(keyHash);
+        idx.touch(keyHash, agentName);
       } catch (err) {
         deps.log?.warn(
           { agent: agentName, err: (err as Error).message },

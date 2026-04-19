@@ -36,11 +36,10 @@
 import type { Database } from "better-sqlite3";
 
 /**
- * The canonical migration SQL. Idempotent (CREATE TABLE IF NOT EXISTS +
+ * The canonical v1 migration SQL. Idempotent (CREATE TABLE IF NOT EXISTS +
  * CREATE INDEX IF NOT EXISTS) so it can run on every `MemoryStore` init
- * without conditional guards. Exported for use by both `src/memory/store.ts`
- * (production path) and `src/openai/__tests__/session-continuity.test.ts`
- * (unit tests apply the SQL directly to a `:memory:` DB).
+ * without conditional guards. Kept as a tombstone — production code reads
+ * from v2; v1 table lives on for one release cycle as a safety net.
  */
 export const API_KEY_SESSIONS_MIGRATION_SQL = `
   CREATE TABLE IF NOT EXISTS api_key_sessions (
@@ -51,6 +50,29 @@ export const API_KEY_SESSIONS_MIGRATION_SQL = `
     last_used_at  INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_api_key_sessions_agent ON api_key_sessions(agent_name);
+`;
+
+/**
+ * Quick task 260419-p51 — v2 migration (P51-SESSION-ISOLATION).
+ *
+ * Composite PK `(key_hash, agent_name)` — lets one bearer key hold DISTINCT
+ * sessions per agent. SQLite doesn't support changing a PK in place, so we
+ * created a new table rather than altering v1. `src/memory/store.ts` runs
+ * this alongside the v1 create and copies rows over exactly once (guarded
+ * by an "is v2 empty?" check).
+ *
+ * Idempotent: `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`.
+ */
+export const API_KEY_SESSIONS_MIGRATION_V2_SQL = `
+  CREATE TABLE IF NOT EXISTS api_key_sessions_v2 (
+    key_hash      TEXT NOT NULL,
+    agent_name    TEXT NOT NULL,
+    session_id    TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    last_used_at  INTEGER NOT NULL,
+    PRIMARY KEY(key_hash, agent_name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_key_sessions_v2_agent ON api_key_sessions_v2(agent_name);
 `;
 
 /**
@@ -75,37 +97,39 @@ export class ApiKeySessionIndex {
   constructor(private readonly db: Database) {}
 
   /**
-   * HOT PATH — called on every OpenAI-endpoint request. Returns `null` when
-   * the key has no existing session (first-ever request) OR when the row
-   * was deleted (post-revoke). Caller interprets `null` as "start a fresh
-   * session, then `record` the returned session_id here".
+   * HOT PATH — called on every OpenAI-endpoint request. Looks up the
+   * `(key_hash, agent_name)` pair in the v2 table. Returns `null` when
+   * this bearer has never talked to THIS agent before (multi-agent keys
+   * carry independent sessions per agent per P51-SESSION-ISOLATION).
    */
-  lookup(keyHash: string): { session_id: string; agent_name: string } | null {
+  lookup(
+    keyHash: string,
+    agentName: string,
+  ): { session_id: string; agent_name: string } | null {
     const row = this.db
       .prepare(
-        "SELECT session_id, agent_name FROM api_key_sessions WHERE key_hash = ?",
+        "SELECT session_id, agent_name FROM api_key_sessions_v2 WHERE key_hash = ? AND agent_name = ?",
       )
-      .get(keyHash) as
+      .get(keyHash, agentName) as
       | { session_id: string; agent_name: string }
       | undefined;
     return row ?? null;
   }
 
   /**
-   * Insert-or-update the mapping. Uses `ON CONFLICT(key_hash) DO UPDATE` so
-   * legitimate session rotation (e.g., the Claude SDK returns a different
-   * `session_id` after a fork/compact operation) quietly overwrites the
-   * stored value. `created_at` is preserved on conflict — only `session_id`
-   * and `last_used_at` move.
+   * Insert-or-update the mapping. Uses `ON CONFLICT(key_hash, agent_name)
+   * DO UPDATE` so session rotation (SDK returns a new session_id post-fork /
+   * post-compact) quietly overwrites the stored value for THIS agent only —
+   * other agents' sessions for the same key remain untouched.
    */
   record(keyHash: string, agentName: string, sessionId: string): void {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO api_key_sessions
+        `INSERT INTO api_key_sessions_v2
            (key_hash, agent_name, session_id, created_at, last_used_at)
          VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(key_hash) DO UPDATE SET
+         ON CONFLICT(key_hash, agent_name) DO UPDATE SET
            session_id = excluded.session_id,
            last_used_at = excluded.last_used_at`,
       )
@@ -114,23 +138,26 @@ export class ApiKeySessionIndex {
 
   /**
    * Stamp `last_used_at = Date.now()` for observability. Silent no-op if
-   * the row doesn't exist (UPDATE affects 0 rows). Called on every reuse
-   * of an existing mapping so `listForAgent` ORDER BY is meaningful.
+   * the row doesn't exist. Scope: the single `(keyHash, agentName)` pair —
+   * other agents' rows for the same key are not affected.
    */
-  touch(keyHash: string): void {
+  touch(keyHash: string, agentName: string): void {
     this.db
-      .prepare("UPDATE api_key_sessions SET last_used_at = ? WHERE key_hash = ?")
-      .run(Date.now(), keyHash);
+      .prepare(
+        "UPDATE api_key_sessions_v2 SET last_used_at = ? WHERE key_hash = ? AND agent_name = ?",
+      )
+      .run(Date.now(), keyHash, agentName);
   }
 
   /**
-   * Remove the mapping. Called by the CLI revoke path so a future
-   * reactivation (or key reuse with a new label) starts fresh. Returns
-   * `true` if a row was deleted, `false` if there was nothing to remove.
+   * Revoke path — removes ALL mappings for `keyHash` across every agent.
+   * Called by the CLI revoke flow when a key is disabled: we don't want
+   * session residue sticking around on ANY agent after the bearer dies.
+   * Returns `true` if one or more rows were deleted.
    */
   delete(keyHash: string): boolean {
     const result = this.db
-      .prepare("DELETE FROM api_key_sessions WHERE key_hash = ?")
+      .prepare("DELETE FROM api_key_sessions_v2 WHERE key_hash = ?")
       .run(keyHash);
     return result.changes > 0;
   }
@@ -144,7 +171,7 @@ export class ApiKeySessionIndex {
     const rows = this.db
       .prepare(
         `SELECT key_hash, agent_name, session_id, last_used_at
-         FROM api_key_sessions
+         FROM api_key_sessions_v2
          WHERE agent_name = ?
          ORDER BY last_used_at DESC`,
       )
@@ -155,15 +182,14 @@ export class ApiKeySessionIndex {
 
 /**
  * Convenience wrapper — one-shot lookup without constructing an index
- * instance. Equivalent to `new ApiKeySessionIndex(db).lookup(keyHash)`.
- * The driver uses this inside the hot-path iterator so the per-dispatch
- * code stays one line.
+ * instance. Equivalent to `new ApiKeySessionIndex(db).lookup(keyHash, agentName)`.
  */
 export function lookupSessionForKey(
   db: Database,
   keyHash: string,
+  agentName: string,
 ): { session_id: string; agent_name: string } | null {
-  return new ApiKeySessionIndex(db).lookup(keyHash);
+  return new ApiKeySessionIndex(db).lookup(keyHash, agentName);
 }
 
 /**

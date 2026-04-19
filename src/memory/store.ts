@@ -781,27 +781,62 @@ export class MemoryStore {
   /**
    * Phase 69 — OPENAI-05. Per-bearer-key → Claude-session mapping lives in
    * each agent's memories.db so it survives daemon restarts alongside the
-   * conversation sessions themselves. Idempotent (CREATE TABLE IF NOT EXISTS
-   * + CREATE INDEX IF NOT EXISTS) — safe to run on every boot.
+   * conversation sessions themselves.
    *
-   * Schema mirrors `src/openai/session-index.ts` `API_KEY_SESSIONS_MIGRATION_SQL`;
-   * the canonical SQL lives in that module so the ApiKeySessionIndex unit
-   * tests can apply the migration to a `:memory:` DB without booting MemoryStore.
+   * Quick task 260419-p51 (P51-SESSION-ISOLATION) — bumps the schema to v2
+   * with composite PK `(key_hash, agent_name)`. Multi-agent bearer keys
+   * carry independent session rows per agent; legacy pinned keys preserve
+   * their single-agent mapping.
    *
-   * Consumer: src/openai/driver.ts via ApiKeySessionIndex, wired at daemon
-   * boot (src/manager/daemon.ts startOpenAi section).
+   * Migration flow (wrapped in a transaction for atomicity):
+   *   1. Create v1 table (idempotent) — kept as a tombstone for one release
+   *      cycle so a downgrade doesn't lose data.
+   *   2. Create v2 table (idempotent).
+   *   3. If v2 is empty AND v1 has rows, copy v1 → v2 exactly once (the
+   *      "v2 empty?" check is the idempotency guard — on the second boot
+   *      v2 already has rows and the copy is skipped).
    */
   private migrateApiKeySessionsTable(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS api_key_sessions (
-        key_hash      TEXT PRIMARY KEY,
-        agent_name    TEXT NOT NULL,
-        session_id    TEXT NOT NULL,
-        created_at    INTEGER NOT NULL,
-        last_used_at  INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_api_key_sessions_agent ON api_key_sessions(agent_name);
-    `);
+    this.db.transaction(() => {
+      // v1 — legacy tombstone (still created so the `INSERT...SELECT` below
+      // always has a source table even on greenfield DBs).
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS api_key_sessions (
+          key_hash      TEXT PRIMARY KEY,
+          agent_name    TEXT NOT NULL,
+          session_id    TEXT NOT NULL,
+          created_at    INTEGER NOT NULL,
+          last_used_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_key_sessions_agent ON api_key_sessions(agent_name);
+      `);
+      // v2 — composite PK (key_hash, agent_name).
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS api_key_sessions_v2 (
+          key_hash      TEXT NOT NULL,
+          agent_name    TEXT NOT NULL,
+          session_id    TEXT NOT NULL,
+          created_at    INTEGER NOT NULL,
+          last_used_at  INTEGER NOT NULL,
+          PRIMARY KEY(key_hash, agent_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_key_sessions_v2_agent ON api_key_sessions_v2(agent_name);
+      `);
+      // One-shot copy from v1 → v2, guarded by "v2 empty?". Once a v2 row
+      // lands (either from this copy or from a fresh driver write), this
+      // branch never re-runs on subsequent boots.
+      const alreadyMigrated = this.db
+        .prepare("SELECT 1 FROM api_key_sessions_v2 LIMIT 1")
+        .get();
+      if (!alreadyMigrated) {
+        this.db.exec(`
+          INSERT OR IGNORE INTO api_key_sessions_v2
+            (key_hash, agent_name, session_id, created_at, last_used_at)
+          SELECT key_hash, agent_name, session_id, created_at, last_used_at
+          FROM api_key_sessions
+        `);
+      }
+    })();
   }
 
   private prepareStatements(): PreparedStatements {
