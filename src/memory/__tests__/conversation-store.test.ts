@@ -151,6 +151,70 @@ describe("ConversationStore", () => {
       expect(aRecent[0].agentName).toBe("agent-a");
       expect(bRecent[0].agentName).toBe("agent-b");
     });
+
+    // ── agents-forget-across-sessions debug (2026-04-19) ─────────────────
+    it("listRecentTerminatedSessions excludes active sessions", () => {
+      setup();
+      const s1 = convStore.startSession("agent-a");
+      convStore.endSession(s1.id);
+      const s2 = convStore.startSession("agent-a");
+      convStore.crashSession(s2.id);
+      const s3 = convStore.startSession("agent-a"); // left active
+
+      const terminated = convStore.listRecentTerminatedSessions("agent-a", 10);
+
+      expect(terminated).toHaveLength(2);
+      expect(terminated.map((s) => s.id)).not.toContain(s3.id);
+      expect(terminated.map((s) => s.id)).toContain(s1.id);
+      expect(terminated.map((s) => s.id)).toContain(s2.id);
+    });
+
+    it("listRecentTerminatedSessions includes summarized sessions", () => {
+      setup();
+      const memId = createMemoryEntry(memStore, "summarized-check");
+      const session = convStore.startSession("agent-a");
+      convStore.endSession(session.id);
+      convStore.markSummarized(session.id, memId);
+
+      const terminated = convStore.listRecentTerminatedSessions("agent-a", 10);
+
+      expect(terminated).toHaveLength(1);
+      expect(terminated[0].status).toBe("summarized");
+    });
+
+    it("listRecentTerminatedSessions orders by started_at DESC", () => {
+      setup();
+      const s1 = convStore.startSession("agent-a");
+      convStore.endSession(s1.id);
+      const s2 = convStore.startSession("agent-a");
+      convStore.endSession(s2.id);
+      const s3 = convStore.startSession("agent-a");
+      convStore.endSession(s3.id);
+
+      const terminated = convStore.listRecentTerminatedSessions("agent-a", 10);
+
+      expect(terminated).toHaveLength(3);
+      expect(terminated[0].id).toBe(s3.id);
+      expect(terminated[2].id).toBe(s1.id);
+    });
+
+    it("listRecentTerminatedSessions respects limit and agent filter", () => {
+      setup();
+      const s1 = convStore.startSession("agent-a");
+      convStore.endSession(s1.id);
+      const s2 = convStore.startSession("agent-a");
+      convStore.endSession(s2.id);
+      const s3 = convStore.startSession("agent-b");
+      convStore.endSession(s3.id);
+
+      const aLimited = convStore.listRecentTerminatedSessions("agent-a", 1);
+      expect(aLimited).toHaveLength(1);
+      expect(aLimited[0].agentName).toBe("agent-a");
+
+      const bAll = convStore.listRecentTerminatedSessions("agent-b", 10);
+      expect(bAll).toHaveLength(1);
+      expect(bAll[0].id).toBe(s3.id);
+    });
   });
 
   describe("state machine transitions", () => {
@@ -192,6 +256,31 @@ describe("ConversationStore", () => {
       setup();
       const memId = createMemoryEntry(memStore, "nonexistent-test");
       expect(() => convStore.markSummarized("does-not-exist", memId)).toThrow();
+    });
+
+    // ── agents-forget-across-sessions debug (2026-04-19) ─────────────────
+    // Race-condition idempotency: crash-path fire-and-forget and stop-path
+    // awaited summarize can both reach markSummarized. The loser USED to
+    // throw "not found or not in 'ended'/'crashed' status" which emitted a
+    // misleading warn log. Now the loser returns the current (already-
+    // summarized) row without error.
+    it("markSummarized is idempotent when called twice on the same session", () => {
+      setup();
+      const memId1 = createMemoryEntry(memStore, "race-winner");
+      const memId2 = createMemoryEntry(memStore, "race-loser");
+      const session = convStore.startSession("agent-a");
+      convStore.endSession(session.id);
+
+      const first = convStore.markSummarized(session.id, memId1);
+      expect(first.status).toBe("summarized");
+      expect(first.summaryMemoryId).toBe(memId1);
+
+      // Second call — session is already summarized. Should NOT throw, and
+      // should return the existing row (the second memId does NOT overwrite
+      // the first).
+      const second = convStore.markSummarized(session.id, memId2);
+      expect(second.status).toBe("summarized");
+      expect(second.summaryMemoryId).toBe(memId1);
     });
   });
 

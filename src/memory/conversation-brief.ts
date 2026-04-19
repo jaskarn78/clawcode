@@ -12,11 +12,18 @@
  *   `config.sessionCount`, and renders each as a `### Session from …`
  *   markdown block under a stable `## Recent Sessions` heading.
  *
- * SESS-03 — 4-hour gap skip: reads the most recent session via
- *   `listRecentSessions(agent, 1)`. If the gap between `now` and
- *   `endedAt ?? startedAt` is below `gapThresholdHours`, returns
- *   `{ skipped: true, reason: "gap" }` WITHOUT touching MemoryStore
- *   (verified by spy in the paired test suite).
+ * SESS-03 — 4-hour gap skip: reads the most recent TERMINATED session via
+ *   `listRecentTerminatedSessions(agent, 1)` (excludes status='active').
+ *   If the gap between `now` and `endedAt ?? startedAt` is below
+ *   `gapThresholdHours`, returns `{ skipped: true, reason: "gap" }` WITHOUT
+ *   touching MemoryStore (verified by spy in the paired test suite).
+ *
+ * agents-forget-across-sessions (2026-04-19): originally called
+ *   `listRecentSessions` which included the just-created active session
+ *   created by `SessionManager.startAgent` BEFORE buildSessionConfig runs.
+ *   That made every startup evaluate gap~=0 and always gap-skip. Switched
+ *   to the terminated-only variant so the gap is measured against the
+ *   previous terminated session as the design intended.
  *
  * Accumulate budget strategy (CONTEXT.md §Specifics #4):
  *   Build the brief by iteratively adding summaries while total tokens
@@ -81,12 +88,21 @@ export function assembleConversationBrief(
   // --- SESS-03 gap check (BEFORE any MemoryStore read) --------------------
   // Short-circuiting here preserves the test-asserted contract: if the
   // daemon was only briefly restarted, we don't even look for summaries.
-  const recent = conversationStore.listRecentSessions(agentName, 1);
+  //
+  // agents-forget-across-sessions (2026-04-19): use the terminated-only
+  // variant — SessionManager.startAgent creates a fresh active session
+  // BEFORE buildSessionConfig runs, so listRecentSessions would always
+  // return that just-started row, collapse the gap to ~0ms, and gap-skip
+  // the brief on every daemon boot. Terminated-only is the correct source
+  // for "when did the previous session actually end?"
+  const recent = conversationStore.listRecentTerminatedSessions(agentName, 1);
   if (recent.length > 0) {
     const last = recent[0]!;
-    // Active sessions carry `endedAt: null` — fall back to `startedAt` so
-    // crash-recovery paths still produce a sensible gap. Pitfall 2 in
-    // 67-RESEARCH documents this precisely.
+    // For terminated sessions, endedAt is always populated (ended/crashed
+    // transitions set it; summarized preserves the prior endedAt). The
+    // `?? startedAt` fallback is defensive — a row with status in
+    // (ended,crashed,summarized) but endedAt=null would be a schema
+    // invariant violation upstream.
     const lastTsIso = last.endedAt ?? last.startedAt;
     // Clock-skew clamp: `Math.max(0, …)` keeps the gap non-negative even
     // when an NTP correction moves the system clock backward between

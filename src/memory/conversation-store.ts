@@ -82,6 +82,13 @@ type ConversationStatements = {
   readonly updateSessionSummarized: Statement;
   readonly getSession: Statement;
   readonly listSessions: Statement;
+  /**
+   * agents-forget-across-sessions debug (2026-04-19): terminated-only listing
+   * used by the resume-brief gap check. Excludes status='active' so a
+   * just-started session doesn't collapse the gap to zero on every daemon
+   * boot (Phase 67 SESS-03 production bug).
+   */
+  readonly listRecentTerminatedSessions: Statement;
   readonly insertTurn: Statement;
   readonly getTurnsForSession: Statement;
   readonly getTurnsForSessionLimited: Statement;
@@ -214,7 +221,17 @@ export class ConversationStore {
 
   /**
    * Mark an ended or crashed session as summarized with a link to the summary memory.
-   * Throws if the session is not in "ended" or "crashed" status.
+   *
+   * Idempotent: if the session is already in status 'summarized', returns the
+   * existing row without error — this handles the benign race where the
+   * crash-path fire-and-forget summarizer and the stop-path awaited
+   * summarizer both run to completion (each observes status=ended/crashed
+   * in its own snapshot, then the winner flips it to summarized; the loser
+   * USED to emit a misleading warn). Memory row is still present; the
+   * winning caller already persisted the FK.
+   *
+   * Throws only when the session row does not exist or is still in 'active'
+   * status (caller must have forgotten to end/crash it first).
    */
   markSummarized(
     sessionId: string,
@@ -226,8 +243,19 @@ export class ConversationStore {
     );
 
     if (result.changes === 0) {
+      // Distinguish "already summarized" (idempotent no-op) from
+      // "not found" / "still active" (real error).
+      const row = this.stmts.getSession.get(sessionId) as SessionRow | undefined;
+      if (!row) {
+        throw new Error(
+          `Cannot mark session '${sessionId}' as summarized: session not found`,
+        );
+      }
+      if (row.status === "summarized") {
+        return rowToSession(row);
+      }
       throw new Error(
-        `Cannot mark session '${sessionId}' as summarized: not found or not in 'ended'/'crashed' status`,
+        `Cannot mark session '${sessionId}' as summarized: session is in status '${row.status}' (expected 'ended' or 'crashed')`,
       );
     }
 
@@ -254,6 +282,34 @@ export class ConversationStore {
     limit: number,
   ): readonly ConversationSession[] {
     const rows = this.stmts.listSessions.all(agentName, limit) as SessionRow[];
+    return Object.freeze(rows.map(rowToSession));
+  }
+
+  /**
+   * List recent TERMINATED sessions (status IN 'ended' | 'crashed' |
+   * 'summarized'), ordered by started_at DESC. Excludes status='active'.
+   *
+   * agents-forget-across-sessions debug (2026-04-19): Phase 67 SESS-03's gap
+   * check MUST measure gap against the most-recent previously-terminated
+   * session. In production, SessionManager.startAgent creates a fresh
+   * active session BEFORE buildSessionConfig runs; listRecentSessions(1)
+   * would return that just-created row, collapse the gap to ~0ms, and
+   * gap-skip the brief on every daemon boot. This variant filters it out.
+   *
+   * An 'active' row from a prior hard crash (no graceful shutdown, no
+   * crash-handler fired) is also excluded — the brief simply falls through
+   * to "no prior terminated session" and renders anyway, which is the
+   * correct behaviour (we don't know when that orphan truly ended, so we
+   * should not silently suppress recall).
+   */
+  listRecentTerminatedSessions(
+    agentName: string,
+    limit: number,
+  ): readonly ConversationSession[] {
+    const rows = this.stmts.listRecentTerminatedSessions.all(
+      agentName,
+      limit,
+    ) as SessionRow[];
     return Object.freeze(rows.map(rowToSession));
   }
 
@@ -459,6 +515,18 @@ export class ConversationStore {
                 total_tokens, summary_memory_id, status
          FROM conversation_sessions
          WHERE agent_name = ?
+         ORDER BY started_at DESC, rowid DESC
+         LIMIT ?`,
+      ),
+      // agents-forget-across-sessions debug (2026-04-19): exclude 'active'
+      // so the brief gap-check doesn't collapse to zero against the
+      // just-created current session.
+      listRecentTerminatedSessions: this.db.prepare(
+        `SELECT id, agent_name, started_at, ended_at, turn_count,
+                total_tokens, summary_memory_id, status
+         FROM conversation_sessions
+         WHERE agent_name = ?
+           AND status IN ('ended', 'crashed', 'summarized')
          ORDER BY started_at DESC, rowid DESC
          LIMIT ?`,
       ),

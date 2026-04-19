@@ -435,4 +435,93 @@ describe("assembleConversationBrief", () => {
     expect(result.brief).not.toContain("DECISION-BODY");
     expect(result.brief).toContain("SESSION-SUMMARY-BODY-0");
   });
+
+  // ── Regression: agents-forget-across-sessions (2026-04-19) ──────────────
+  //
+  // Production-ordering bug: SessionManager.startAgent calls
+  // ConversationStore.startSession() BEFORE buildSessionConfig runs, so a
+  // brand-new 'active' row exists with startedAt=now. The original
+  // assembleConversationBrief used listRecentSessions (no status filter) and
+  // the gap-check collapsed to ~0ms on every daemon boot. This test would
+  // have failed with the old code AND passes with the fixed terminated-only
+  // query.
+  describe("regression: agents-forget-across-sessions (production ordering)", () => {
+    it("ignores the current active session when measuring gap — terminated-only", () => {
+      // (1) Seed a prior terminated session that ended 5h ago (beyond default 4h gap).
+      const fiveHoursAgo = new Date(T - 5 * 3_600_000).toISOString();
+      seedEndedSession(memStore, convStore, "agent-a", fiveHoursAgo, fiveHoursAgo);
+
+      // (2) Seed a summary for it so the brief has something to render.
+      seedSummary(
+        memStore,
+        "s-prior",
+        "Prior session content",
+        new Date(T - 5.5 * 3_600_000).toISOString(),
+      );
+
+      // (3) Simulate production: startSession() was just called and the
+      //     active session sits at the TOP of listRecentSessions(). With the
+      //     old code this row's startedAt collapsed the gap to zero.
+      const activeJustNow = new Date(T - 1_000).toISOString(); // 1s ago
+      seedActiveSession(memStore, convStore, "agent-a", activeJustNow);
+
+      // (4) assembleConversationBrief should skip over the active row and
+      //     evaluate the gap against the terminated row (5h ago > 4h).
+      const result = assembleConversationBrief(
+        { agentName: "agent-a", now: T },
+        { conversationStore: convStore, memoryStore: memStore, config: defaultConfig },
+      );
+
+      expect(result.skipped).toBe(false);
+      if (result.skipped) return;
+      expect(result.brief).toContain("Prior session content");
+    });
+
+    it("still gap-skips when the prior terminated session is within threshold", () => {
+      // Prior terminated session ended 2h ago, threshold 4h — should gap-skip
+      // even though an active session also exists.
+      const twoHoursAgo = new Date(T - 2 * 3_600_000).toISOString();
+      seedEndedSession(memStore, convStore, "agent-a", twoHoursAgo, twoHoursAgo);
+      seedSummary(
+        memStore,
+        "s-recent",
+        "Should not render",
+        new Date(T - 3 * 3_600_000).toISOString(),
+      );
+      const activeJustNow = new Date(T - 500).toISOString();
+      seedActiveSession(memStore, convStore, "agent-a", activeJustNow);
+
+      const result = assembleConversationBrief(
+        { agentName: "agent-a", now: T },
+        { conversationStore: convStore, memoryStore: memStore, config: defaultConfig },
+      );
+
+      expect(result.skipped).toBe(true);
+      if (!result.skipped) return;
+      expect(result.reason).toBe("gap");
+    });
+
+    it("renders brief when only active sessions exist and summaries are present", () => {
+      // No terminated sessions at all (clean first-boot after summaries
+      // somehow pre-existed, or orphan-active case). No previous terminated
+      // session → no gap to measure → fall through to render.
+      const activeJustNow = new Date(T - 500).toISOString();
+      seedActiveSession(memStore, convStore, "agent-a", activeJustNow);
+      seedSummary(
+        memStore,
+        "s-orphan",
+        "Orphan summary body",
+        new Date(T - 12 * 3_600_000).toISOString(),
+      );
+
+      const result = assembleConversationBrief(
+        { agentName: "agent-a", now: T },
+        { conversationStore: convStore, memoryStore: memStore, config: defaultConfig },
+      );
+
+      expect(result.skipped).toBe(false);
+      if (result.skipped) return;
+      expect(result.brief).toContain("Orphan summary body");
+    });
+  });
 });
