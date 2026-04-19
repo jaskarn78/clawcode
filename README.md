@@ -346,6 +346,91 @@ agents:
         retrievalHalfLifeDays: 14              # decay weighting half-life (default 14)
 ```
 
+## OpenAI-Compatible Endpoint (v2.0)
+
+Every ClawCode agent is reachable from any OpenAI-compatible client — the daemon runs a `/v1/chat/completions` + `/v1/models` HTTP surface alongside the Discord bridge. Point the OpenAI Python SDK, LangChain, LibreChat, or any custom app at `http://clawdy:3101/v1` with a bearer key and treat an agent as a model. Each bearer key gets its own persistent conversation (OPENAI-05) — different keys against the same agent are fully isolated.
+
+### Quick start
+
+```bash
+# 1. Start the daemon (OpenAI endpoint enabled by default on port 3101).
+clawcode start-all
+
+# 2. Mint a bearer key for an agent — printed ONCE, stored as SHA-256 hash.
+clawcode openai-key create clawdy --label my-integration
+
+# Output:
+#   Key:     ck_clawdy_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+#   Agent:   clawdy
+#   Label:   my-integration
+#   Expires: never
+#   Hash:    ab12cd34...
+#
+#   Store this key securely — it will not be shown again.
+
+# 3. Call the endpoint from Python.
+python - <<'PY'
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:3101/v1", api_key="ck_clawdy_XXXXXXXX...")
+resp = client.chat.completions.create(
+    model="clawdy",
+    messages=[{"role": "user", "content": "hello"}],
+)
+print(resp.choices[0].message.content)
+PY
+```
+
+### curl
+
+```bash
+curl http://127.0.0.1:3101/v1/models \
+  -H "Authorization: Bearer ck_clawdy_XXXX"
+
+curl http://127.0.0.1:3101/v1/chat/completions \
+  -H "Authorization: Bearer ck_clawdy_XXXX" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"clawdy","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### Integration cookbook
+
+- **OpenClaw** — set the `openai:default` provider `baseUrl` to `http://clawdy:3101/v1` and drop the ClawCode bearer key into `apiKey`. Agent names become model ids.
+- **LibreChat** — same pattern: add an OpenAI-compatible endpoint with `baseUrl: http://clawdy:3101/v1` and the bearer key. Each agent appears as a selectable model in the UI.
+- **LangChain / LlamaIndex** — any `OpenAI(base_url=..., api_key=...)` constructor works unchanged.
+
+### Key management
+
+```bash
+clawcode openai-key create clawdy --label ci-bot --expires 365d
+clawcode openai-key list                          # table view, never shows plaintext
+clawcode openai-key revoke ci-bot                 # by label
+clawcode openai-key revoke ab12cd34               # by 8+ hex prefix of the hash
+```
+
+### Environment
+
+- `CLAWCODE_OPENAI_HOST` — override listener bind (default `0.0.0.0`).
+- `CLAWCODE_OPENAI_PORT` — override listener port (default `3101`).
+- Disable entirely via `defaults.openai.enabled: false` in `clawcode.yaml`.
+
+Port conflicts are non-fatal: the daemon logs a warning and continues without the endpoint.
+
+### End-to-end smoke
+
+```bash
+pip install openai
+python scripts/openai-smoke.py --create-key
+```
+
+Runs OPENAI-01 (non-stream), OPENAI-02 (stream), OPENAI-03 (models list), and OPENAI-05 (per-bearer session continuity) against a live daemon. Exits 0 on all-pass.
+
+### Scope and limits (v2.0)
+
+- One bearer key → one persistent session with the pinned agent.
+- No rate limiting or billing metering (v2.1 territory).
+- No `/v1/embeddings` or legacy `/v1/completions` (out of scope).
+- Admin key-management is CLI only (no admin API).
+
 ## Deployment (Ubuntu)
 
 For production deployment on Ubuntu 25:
