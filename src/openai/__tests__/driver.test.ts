@@ -836,3 +836,56 @@ describe("createOpenAiSessionDriver", () => {
     expect(events.turnEndCalls).toEqual(["success"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Quick task 260419-p51 — OpenAI ↔ Discord parity for subagent-thread skill
+// (P51-SPAWN-SUBAGENT-UX)
+// ---------------------------------------------------------------------------
+
+describe("driver × subagent-thread parity", () => {
+  /**
+   * Parity invariant: `buildSessionConfig` is the SINGLE codepath that wires
+   * the subagent-thread skill guidance into an agent's session. The OpenAI
+   * driver dispatches through the SAME TurnDispatcher + SAME agent session
+   * that the Discord bridge uses — there is no alternate configuration path
+   * that would bypass the guidance for OpenAI-endpoint turns.
+   *
+   * This test is a STATIC assertion against session-config.ts rather than
+   * a runtime integration test, because:
+   *   (a) The full session boot requires booting a real SessionManager +
+   *       MemoryStore, which is not worth the setup cost for a parity check.
+   *   (b) The failure mode we're guarding against is a refactor that
+   *       conditionally includes the subagent-thread guidance based on turn
+   *       origin — that would show up as a source-code change here long
+   *       before it ships.
+   *   (c) The driver test harness already verifies that dispatchStream is
+   *       the daemon's shared instance (see "TurnDispatcher is the same
+   *       instance" assertion in existing tests above).
+   *
+   * If a future refactor stops including the subagent-thread guidance for
+   * non-Discord turns, this test fails fast with a clear signal.
+   */
+  it("session-config.ts injects subagent-thread guidance regardless of turn origin", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const source = await fs.readFile(
+      path.join(import.meta.dirname, "..", "..", "manager", "session-config.ts"),
+      "utf8",
+    );
+
+    // The `subagent-thread` skill check is unconditional — it keys off
+    // `config.skills.includes("subagent-thread")`, which is session-scoped,
+    // NOT per-turn. There is NO branch on origin (Discord / OpenAI / etc.).
+    expect(source).toContain(`includes("subagent-thread")`);
+    expect(source).toContain("spawn_subagent_thread");
+
+    // Paranoia — fail the test if the guidance becomes gated on a turn-origin
+    // check (which would be a regression on P51-SPAWN-SUBAGENT-UX).
+    const guardPattern = /origin[^=]*===\s*"(discord|openai-api)"/;
+    const subagentSection = source.slice(
+      source.indexOf("subagent-thread"),
+      source.indexOf("subagent-thread") + 800,
+    );
+    expect(subagentSection).not.toMatch(guardPattern);
+  });
+});

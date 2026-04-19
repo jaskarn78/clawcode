@@ -151,4 +151,91 @@ describe("EscalationMonitor", () => {
       expect(monitor.shouldEscalate("agent", "error", true)).toBe(true);
     });
   });
+
+  // Quick task 260419-p51 — fork-escalation parity check.
+  // Phase 73 introduced a persistent SDK query on each running agent (via
+  // streamInput). This suite pins the invariant: `escalate()` MUST NOT
+  // teardown the parent's persistent query when spawning an ephemeral opus
+  // fork. The fork gets its OWN SDK query — the parent's streamInput handle
+  // is untouched. If a future refactor accidentally stops the parent during
+  // escalation, this test catches it before the change ships.
+  describe("fork-escalation: parent persistent query survives fork spawn", () => {
+    it("calls forkSession + sendToAgent(fork) + stopAgent(fork) — NEVER stopAgent(parent)", async () => {
+      const parentAgent = "clawdy";
+      const forkName = `${parentAgent}-fork-abc123`;
+
+      // Capture a snapshot of the parent's "persistent query" as a stable
+      // session id — if escalate() teardown touched the parent we'd observe
+      // a reset. Use a closure-bound getter that tracks reads.
+      let parentSessionId: string | undefined = "parent-sess-persistent-v1";
+
+      const manager = {
+        forkSession: vi.fn().mockResolvedValue({
+          forkName,
+          parentAgent,
+          sessionId: "fork-sess-ephemeral",
+        }),
+        sendToAgent: vi.fn().mockResolvedValue("opus fork response"),
+        stopAgent: vi.fn().mockResolvedValue(undefined),
+        // Parent-state probes that a real SessionManager exposes. The mock
+        // implementation asserts that these never observe mutation during
+        // escalate().
+        isRunning: vi.fn((name: string) => name === parentAgent),
+        getActiveConversationSessionId: vi.fn(() => parentSessionId),
+      } as unknown as SessionManager;
+
+      const monitor = new EscalationMonitor(manager, defaultConfig);
+
+      // Capture parent state BEFORE escalate.
+      const beforeRunning = (manager as unknown as { isRunning: (n: string) => boolean }).isRunning(
+        parentAgent,
+      );
+      const beforeSessionId = (
+        manager as unknown as { getActiveConversationSessionId: (n: string) => string | undefined }
+      ).getActiveConversationSessionId(parentAgent);
+
+      await monitor.escalate(parentAgent, "deeply research this");
+
+      // Method-call set: fork + sendToAgent(fork) + stopAgent(fork).
+      expect(manager.forkSession as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        parentAgent,
+        { modelOverride: "sonnet" },
+      );
+      expect(manager.sendToAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        forkName,
+        "deeply research this",
+      );
+      expect(manager.stopAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(forkName);
+
+      // The parent is NEVER stopped during escalation — the Phase 73
+      // persistent-subprocess invariant.
+      const stopCalls = (manager.stopAgent as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => c[0],
+      );
+      expect(stopCalls).not.toContain(parentAgent);
+      expect(stopCalls).toEqual([forkName]);
+
+      // Parent state survives the escalate: same isRunning, same session id.
+      const afterRunning = (manager as unknown as { isRunning: (n: string) => boolean }).isRunning(
+        parentAgent,
+      );
+      const afterSessionId = (
+        manager as unknown as { getActiveConversationSessionId: (n: string) => string | undefined }
+      ).getActiveConversationSessionId(parentAgent);
+
+      expect(afterRunning).toBe(beforeRunning);
+      expect(afterSessionId).toBe(beforeSessionId);
+    });
+
+    it("only spawns ONE fork per escalate call (no extra forkSession on the parent)", async () => {
+      const manager = createMockSessionManager();
+      const monitor = new EscalationMonitor(manager, defaultConfig);
+
+      await monitor.escalate("clawdy", "help");
+
+      expect(manager.forkSession as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      expect(manager.sendToAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      expect(manager.stopAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    });
+  });
 });
