@@ -31,6 +31,7 @@ import {
 import { MemoryStore } from "../../memory/store.js";
 import { ledgerRowSchema, type LedgerRow } from "../ledger.js";
 import type { MemoryEntry } from "../../memory/types.js";
+import type { EmbeddingService } from "../../memory/embedder.js";
 
 const FIXTURE_ROOT = join(
   __dirname,
@@ -255,12 +256,14 @@ function copyFixtureToTmp(): string {
  *     non-reentrant).
  *   - Records call count for the 7-call assertion against the fixture.
  */
+/**
+ * The mock only implements the 3 public methods that translator calls
+ * against. We structurally cast to EmbeddingService at the callsite so
+ * TypeScript accepts it — duck-typing is safe here because the
+ * translator NEVER touches the private pipeline/warmPromise internals.
+ */
 function makeMockEmbedder(): {
-  embedder: {
-    warmup: () => Promise<void>;
-    embed: (text: string) => Promise<Float32Array>;
-    isReady: () => boolean;
-  };
+  embedder: EmbeddingService;
   getCallCount: () => number;
   getPeakInFlight: () => number;
   getCallOrder: () => readonly string[];
@@ -299,7 +302,10 @@ function makeMockEmbedder(): {
     },
   };
   return {
-    embedder,
+    // Structural cast — translator only calls warmup/embed/isReady.
+    // EmbeddingService's private fields (pipeline/warmPromise) are
+    // never touched, so this cast is safe at the call boundary.
+    embedder: embedder as unknown as EmbeddingService,
     getCallCount: () => callCount,
     getPeakInFlight: () => peakInFlight,
     getCallOrder: () => [...callOrder],
@@ -436,17 +442,18 @@ describe("memory-translator discoverWorkspaceMarkdown (Phase 80 Plan 02 Task 2)"
       "utf8",
     );
     expect(out[5]?.content).toBe(learning);
-    // H2 sections: concat(section[0] + "\n" + section[1] + "\n" + section[2]) = MEMORY.md
-    // minus the whitespace preamble (which is whitespace-only by fixture design).
+    // H2 sections: joining with "\n" reconstitutes the original bytes of
+    // MEMORY.md[firstH2:] (splitMemoryMd splits on "\n", so joining with
+    // "\n" inverts the split). MEM-01 verbatim invariant is that the H2
+    // sections concatenated back exactly reproduce the body portion of
+    // MEMORY.md (excluding the whitespace-only preamble).
     const memoryMd = readFileSync(join(FIXTURE_ROOT, "MEMORY.md"), "utf8");
     const stitched = out
       .filter((d) => d.kind === "memory-md-section")
       .map((d) => d.content)
       .join("\n");
-    // The preamble newlines are the only delta — strip them to check the
-    // body is verbatim in aggregate.
     const firstH2 = memoryMd.indexOf("## ");
-    expect(stitched).toBe(memoryMd.slice(firstH2).replace(/\n+$/, ""));
+    expect(stitched).toBe(memoryMd.slice(firstH2));
   });
 });
 
@@ -657,11 +664,13 @@ describe("memory-translator translateAgentMemories (Phase 80 Plan 02 Task 2)", (
     expect(insertMatches.length).toBe(1);
     const embedMatches = src.match(/\bembedder\.embed\s*\(/g) ?? [];
     expect(embedMatches.length).toBe(1);
-    // No Promise.all / allSettled — the serial invariant isn't just
-    // runtime-proven via peakInFlight above, it's also source-pinned
-    // so a regression at the static level is caught by this test.
-    expect(src).not.toMatch(/\bPromise\.all\b/);
-    expect(src).not.toMatch(/\bPromise\.allSettled\b/);
+    // No Promise.all(...) / allSettled(...) CALL EXPRESSION — the serial
+    // invariant isn't just runtime-proven via peakInFlight above, it's
+    // also source-pinned so a regression at the static level is caught.
+    // (Doc-comments may MENTION these identifiers — they're spelling out
+    // the DO-NOT list; we only ban actual invocations.)
+    expect(src).not.toMatch(/\bPromise\.all\s*\(/);
+    expect(src).not.toMatch(/\bPromise\.allSettled\s*\(/);
   });
 
   it("file_hashes key is the relpath (forward-slash normalized)", async () => {
