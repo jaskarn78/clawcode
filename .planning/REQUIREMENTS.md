@@ -54,11 +54,11 @@ Mapping from `openclaw.json` agent entries to `clawcode.yaml` agents array, with
 
 Per-agent file copy from `~/.openclaw/workspace-<name>/` to ClawCode target workspace.
 
-- [ ] **WORK-01**: User (as operator) can trust that each migrated agent's workspace contains the source `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `CLAUDE.md`, `MEMORY.md`, `memory/`, `.learnings/`, and `archive/` — copied with symlink filter that excludes Python venv self-symlinks (`lib64 -> lib` trap verified in finmentum workspace).
+- [x] **WORK-01**: User (as operator) can trust that each migrated agent's workspace contains the source `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `CLAUDE.md`, `MEMORY.md`, `memory/`, `.learnings/`, and `archive/` — copied with symlink filter that excludes Python venv self-symlinks (`lib64 -> lib` trap verified in finmentum workspace).
 - [ ] **WORK-02**: User (as operator) can trust that the 5 finmentum-family agents all resolve to the same ClawCode workspace path (shared `basePath`) while keeping per-agent `memoryPath`, soulFile, identityFile, and inbox in distinct files/subdirs.
-- [ ] **WORK-03**: User (as operator) can trust that any `.git` directory in a source workspace is preserved verbatim (so the agent's existing git history isn't re-initialized or corrupted).
+- [x] **WORK-03**: User (as operator) can trust that any `.git` directory in a source workspace is preserved verbatim (so the agent's existing git history isn't re-initialized or corrupted).
 - [x] **WORK-04**: User (via migrated agent) can read the archived OpenClaw sessions at `<workspace>/archive/openclaw-sessions/*.jsonl` as read-only reference, with the migrator copying the full session tree but NOT replaying into ConversationStore.
-- [ ] **WORK-05**: User (as operator) can trust that file permissions, timestamps, and non-text blobs (images, PDFs in `.learnings/`) survive the copy without corruption — verified by hash-witness post-copy check.
+- [x] **WORK-05**: User (as operator) can trust that file permissions, timestamps, and non-text blobs (images, PDFs in `.learnings/`) survive the copy without corruption — verified by hash-witness post-copy check.
 
 ### Memory Translation (MEM-*)
 
@@ -133,11 +133,11 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | CONF-02 | Phase 78: Config Mapping + YAML Writer | Complete |
 | CONF-03 | Phase 78: Config Mapping + YAML Writer | Complete |
 | CONF-04 | Phase 78: Config Mapping + YAML Writer | Complete |
-| WORK-01 | Phase 79: Workspace Migration | Pending |
+| WORK-01 | Phase 79: Workspace Migration | Complete |
 | WORK-02 | Phase 79: Workspace Migration | Pending |
-| WORK-03 | Phase 79: Workspace Migration | Pending |
+| WORK-03 | Phase 79: Workspace Migration | Complete |
 | WORK-04 | Phase 79: Workspace Migration | Complete |
-| WORK-05 | Phase 79: Workspace Migration | Pending |
+| WORK-05 | Phase 79: Workspace Migration | Complete |
 | MEM-01 | Phase 80: Memory Translation + Re-embedding | Pending |
 | MEM-02 | Phase 80: Memory Translation + Re-embedding | Pending |
 | MEM-03 | Phase 80: Memory Translation + Re-embedding | Pending |

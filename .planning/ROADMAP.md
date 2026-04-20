@@ -221,7 +221,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   4. User opens the migrated agent's Discord channel, sends a message, and the agent can read `<workspace>/archive/openclaw-sessions/*.jsonl` via its filesystem tools — archives are present as read-only reference (copied full tree, filter skips the directory from ConversationStore replay), and `SELECT COUNT(*) FROM turns WHERE provenance LIKE '%openclaw%'` in the ConversationStore returns 0 (no replay occurred).
   5. User runs `apply` on a workspace containing non-text blobs (images in `.learnings/`, PDFs under `archive/`) and inspects the target — file sizes match source byte-for-byte (`stat -c %s`), mtimes match source (`stat -c %Y`), and a visual inspection of copied images renders identically to source.
 **Plans**: 3 plans
-- [ ] 79-01-PLAN.md — workspace-copier module (fs.cp + filter + hash witness + per-agent rollback) (WORK-01, WORK-03, WORK-05)
+- [x] 79-01-PLAN.md — workspace-copier module (fs.cp + filter + hash witness + per-agent rollback) (WORK-01, WORK-03, WORK-05)
 - [x] 79-02-PLAN.md — session-archiver module (copy ~/.openclaw/agents/<name>/sessions/ to <target>/archive/openclaw-sessions/ with ConversationStore isolation) (WORK-04)
 - [ ] 79-03-PLAN.md — CLI wiring + finmentum-aware source resolution + end-to-end integration test pinning all 5 success criteria (WORK-01, WORK-02, WORK-03, WORK-04, WORK-05)
 
@@ -287,7 +287,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
 | 77. Pre-flight Guards + Safety Rails | 3/3 | Complete    | 2026-04-20 |
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
-| 79. Workspace Migration | 1/3 | In Progress|  |
+| 79. Workspace Migration | 2/3 | In Progress|  |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |
 | 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
