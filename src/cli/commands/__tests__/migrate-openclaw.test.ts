@@ -692,3 +692,378 @@ describe("migrate-openclaw CLI — apply subcommand", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------
+// Phase 81 Plan 02 — verify + rollback CLI unit tests
+// ---------------------------------------------------------------------
+
+describe("Phase 81 Plan 02 — verify + rollback CLI", () => {
+  let tmp: string;
+  let ledgerPath: string;
+  let memoryDir: string;
+  let clawcodeRoot: string;
+  let configPath: string;
+  let openclawRoot: string;
+  let stdoutCapture: string[];
+  let stderrCapture: string[];
+  let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
+  let writeStderrSpy: ReturnType<typeof vi.spyOn>;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  // Save originals for DI swap holder restoration.
+  let origVerify: unknown;
+  let origRollback: unknown;
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), "p81p02-unit-"));
+    ledgerPath = join(tmp, "ledger.jsonl");
+    memoryDir = join(tmp, "openclaw-memory");
+    clawcodeRoot = join(tmp, "clawcode-agents");
+    configPath = join(tmp, "clawcode.yaml");
+    openclawRoot = join(tmp, "openclaw");
+
+    stdoutCapture = [];
+    stderrCapture = [];
+    writeStdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stdoutCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stdout.write);
+    writeStderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stderrCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stderr.write);
+    originalEnv = { ...process.env };
+    process.env.CLAWCODE_OPENCLAW_JSON = FIXTURE_PATH;
+    process.env.CLAWCODE_OPENCLAW_MEMORY_DIR = memoryDir;
+    process.env.CLAWCODE_AGENTS_ROOT = clawcodeRoot;
+    process.env.CLAWCODE_LEDGER_PATH = ledgerPath;
+    process.env.CLAWCODE_CONFIG_PATH = configPath;
+    process.env.CLAWCODE_OPENCLAW_ROOT = openclawRoot;
+    process.env.NO_COLOR = "1";
+    delete process.env.FORCE_COLOR;
+    delete process.env.CLAWCODE_DISCORD_TOKEN;
+    delete process.env.CLAWCODE_VERIFY_OFFLINE;
+
+    // Snapshot the handler dispatch holder for per-test restoration.
+    const mod = await import("../migrate-openclaw.js");
+    origVerify = mod.migrateOpenclawHandlers.verifyAgent;
+    origRollback = mod.migrateOpenclawHandlers.rollbackAgent;
+  });
+
+  afterEach(async () => {
+    writeStdoutSpy.mockRestore();
+    writeStderrSpy.mockRestore();
+    rmSync(tmp, { recursive: true, force: true });
+    process.env = originalEnv;
+
+    // Restore dispatch holder so tests can't leak mocks.
+    const mod = await import("../migrate-openclaw.js");
+    if (origVerify !== undefined) {
+      (mod.migrateOpenclawHandlers as unknown as {
+        verifyAgent: unknown;
+      }).verifyAgent = origVerify;
+    }
+    if (origRollback !== undefined) {
+      (mod.migrateOpenclawHandlers as unknown as {
+        rollbackAgent: unknown;
+      }).rollbackAgent = origRollback;
+    }
+  });
+
+  // --- formatVerifyTable tests (Tests 1-3) ----------------------------
+
+  it("Test 1: formatVerifyTable — single agent happy path", async () => {
+    const { formatVerifyTable } = await import("../migrate-openclaw.js");
+    const results = [
+      { check: "workspace-files-present" as const, status: "pass" as const, detail: "all 6 files present" },
+      { check: "memory-count" as const, status: "pass" as const, detail: "source=42 migrated=41 drift=2.4%" },
+      { check: "discord-reachable" as const, status: "pass" as const, detail: "channel 111 reachable (200)" },
+      { check: "daemon-parse" as const, status: "pass" as const, detail: "resolved as personal (model=sonnet)" },
+    ];
+    const out = formatVerifyTable([{ agent: "personal", results }]);
+    expect(out).toContain("Agent: personal");
+    expect(out).toContain("Check");
+    expect(out).toContain("Status");
+    expect(out).toContain("Detail");
+    // 4 pass checks → 4 ✅ emojis
+    expect((out.match(/✅/g) ?? []).length).toBe(4);
+  });
+
+  it("Test 2: formatVerifyTable — mixed status with all 3 emojis", async () => {
+    const { formatVerifyTable } = await import("../migrate-openclaw.js");
+    const results = [
+      { check: "workspace-files-present" as const, status: "pass" as const, detail: "all 6 files present" },
+      { check: "memory-count" as const, status: "fail" as const, detail: "source=42 migrated=10 drift=76.2%" },
+      { check: "discord-reachable" as const, status: "skip" as const, detail: "CLAWCODE_DISCORD_TOKEN absent" },
+      { check: "daemon-parse" as const, status: "pass" as const, detail: "resolved as personal" },
+    ];
+    const out = formatVerifyTable([{ agent: "personal", results }]);
+    expect(out).toContain("✅");
+    expect(out).toContain("❌");
+    expect(out).toContain("⏭");
+    // Detail text preserved verbatim
+    expect(out).toContain("source=42 migrated=10 drift=76.2%");
+    expect(out).toContain("CLAWCODE_DISCORD_TOKEN absent");
+  });
+
+  it("Test 3: formatVerifyTable — multi-agent blocks separated by blank line", async () => {
+    const { formatVerifyTable } = await import("../migrate-openclaw.js");
+    const results = [
+      { check: "workspace-files-present" as const, status: "pass" as const, detail: "ok" },
+    ];
+    const out = formatVerifyTable([
+      { agent: "alpha", results },
+      { agent: "bravo", results },
+    ]);
+    expect(out).toContain("Agent: alpha");
+    expect(out).toContain("Agent: bravo");
+    // Blank line separator — two blocks joined by \n\n
+    expect(out).toMatch(/Agent: alpha[\s\S]+\n\nAgent: bravo/);
+  });
+
+  // --- Subcommand registration tests (Tests 4-5) ----------------------
+
+  it("Test 4: verify subcommand registered with optional [agent] argument", async () => {
+    const { registerMigrateOpenclawCommand } = await import("../migrate-openclaw.js");
+    const { Command } = await import("commander");
+    const program = new Command();
+    registerMigrateOpenclawCommand(program);
+    const migrate = program.commands.find((c) => c.name() === "migrate");
+    expect(migrate).toBeDefined();
+    const openclaw = migrate!.commands.find((c) => c.name() === "openclaw");
+    expect(openclaw).toBeDefined();
+    const verify = openclaw!.commands.find((c) => c.name() === "verify");
+    expect(verify).toBeDefined();
+    // Optional argument — first registered arg with required=false
+    const regArgs = (verify as unknown as {
+      registeredArguments?: Array<{ required: boolean }>;
+    }).registeredArguments;
+    expect(regArgs).toBeDefined();
+    expect(regArgs!.length).toBeGreaterThanOrEqual(1);
+    expect(regArgs![0]!.required).toBe(false);
+  });
+
+  it("Test 5: rollback subcommand registered with REQUIRED <agent> argument", async () => {
+    const { registerMigrateOpenclawCommand } = await import("../migrate-openclaw.js");
+    const { Command } = await import("commander");
+    const program = new Command();
+    registerMigrateOpenclawCommand(program);
+    const migrate = program.commands.find((c) => c.name() === "migrate")!;
+    const openclaw = migrate.commands.find((c) => c.name() === "openclaw")!;
+    const rollback = openclaw.commands.find((c) => c.name() === "rollback");
+    expect(rollback).toBeDefined();
+    const regArgs = (rollback as unknown as {
+      registeredArguments?: Array<{ required: boolean }>;
+    }).registeredArguments;
+    expect(regArgs).toBeDefined();
+    expect(regArgs!.length).toBeGreaterThanOrEqual(1);
+    expect(regArgs![0]!.required).toBe(true);
+  });
+
+  // --- runVerifyAction tests (Tests 6-11) -----------------------------
+
+  it("Test 6: runVerifyAction — all-pass → exit 0 + ledger verify:complete row", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockVerify = vi.fn(async () => [
+      { check: "workspace-files-present" as const, status: "pass" as const, detail: "ok" },
+      { check: "memory-count" as const, status: "pass" as const, detail: "ok" },
+      { check: "discord-reachable" as const, status: "pass" as const, detail: "ok" },
+      { check: "daemon-parse" as const, status: "pass" as const, detail: "ok" },
+    ]);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    // Minimal inventory fixture to support opts.agent path
+    const code = await mod.runVerifyAction({ agent: "general" });
+    expect(code).toBe(0);
+    const rows = await readRows(ledgerPath);
+    const row = rows.find((r) => r.agent === "general" && r.step === "verify:complete");
+    expect(row).toBeDefined();
+    expect(row!.action).toBe("verify");
+    expect(row!.status).toBe("verified");
+    expect(row!.outcome).toBe("allow");
+  });
+
+  it("Test 7: runVerifyAction — any-fail → exit 1 + ledger verify:fail row", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockVerify = vi.fn(async () => [
+      { check: "workspace-files-present" as const, status: "pass" as const, detail: "ok" },
+      { check: "memory-count" as const, status: "fail" as const, detail: "drift too high" },
+      { check: "discord-reachable" as const, status: "pass" as const, detail: "ok" },
+      { check: "daemon-parse" as const, status: "pass" as const, detail: "ok" },
+    ]);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    const code = await mod.runVerifyAction({ agent: "general" });
+    expect(code).toBe(1);
+    const rows = await readRows(ledgerPath);
+    const row = rows.find((r) => r.agent === "general" && r.step === "verify:fail");
+    expect(row).toBeDefined();
+    expect(row!.status).toBe("pending");
+    expect(row!.outcome).toBe("refuse");
+  });
+
+  it("Test 8: runVerifyAction — unknown agent arg → error + no ledger row", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockVerify = vi.fn(async () => []);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    const code = await mod.runVerifyAction({ agent: "nosuch-zzz" });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain("Unknown agent:");
+    expect(mockVerify).not.toHaveBeenCalled();
+    // No ledger file created.
+    expect(existsSync(ledgerPath)).toBe(false);
+  });
+
+  it("Test 9: runVerifyAction — no arg → iterate over migrated+verified+rolled-back, skip pending", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockVerify = vi.fn(async () => [
+      { check: "workspace-files-present" as const, status: "pass" as const, detail: "ok" },
+    ]);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    // Seed ledger: 2 migrated, 1 pending, 1 rolled-back, 1 verified → should iterate 4 (everything except pending)
+    const ts = new Date().toISOString();
+    const { appendRow } = await import("../../../migration/ledger.js");
+    await appendRow(ledgerPath, { ts, action: "apply", agent: "aa", status: "migrated", source_hash: "h1" });
+    await appendRow(ledgerPath, { ts, action: "apply", agent: "bb", status: "migrated", source_hash: "h1" });
+    await appendRow(ledgerPath, { ts, action: "plan", agent: "cc", status: "pending", source_hash: "h1" });
+    await appendRow(ledgerPath, { ts, action: "rollback", agent: "dd", status: "rolled-back", source_hash: "h1" });
+    await appendRow(ledgerPath, { ts, action: "verify", agent: "ee", status: "verified", source_hash: "h1" });
+
+    const code = await mod.runVerifyAction({});
+    expect(code).toBe(0);
+    // Should be called 4 times — everything except the pending agent
+    expect(mockVerify).toHaveBeenCalledTimes(4);
+    const agentsVerified = mockVerify.mock.calls.map((c) => (c[0] as { agentName: string }).agentName);
+    expect(agentsVerified).toContain("aa");
+    expect(agentsVerified).toContain("bb");
+    expect(agentsVerified).toContain("dd");
+    expect(agentsVerified).toContain("ee");
+    expect(agentsVerified).not.toContain("cc");
+  });
+
+  it("Test 10: runVerifyAction — CLAWCODE_DISCORD_TOKEN forwarded to verifyAgent", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockVerify = vi.fn(async () => [
+      { check: "discord-reachable" as const, status: "pass" as const, detail: "ok" },
+    ]);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    process.env.CLAWCODE_DISCORD_TOKEN = "test-bot-token-123";
+    await mod.runVerifyAction({ agent: "general" });
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+    const passedArgs = mockVerify.mock.calls[0]![0] as { discordToken?: string };
+    expect(passedArgs.discordToken).toBe("test-bot-token-123");
+  });
+
+  it("Test 11: runVerifyAction — CLAWCODE_VERIFY_OFFLINE='true' → offline=true", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockVerify = vi.fn(async () => [
+      { check: "discord-reachable" as const, status: "skip" as const, detail: "offline" },
+    ]);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    process.env.CLAWCODE_VERIFY_OFFLINE = "true";
+    await mod.runVerifyAction({ agent: "general" });
+    const passedArgs1 = mockVerify.mock.calls[0]![0] as { offline?: boolean };
+    expect(passedArgs1.offline).toBe(true);
+
+    // Any other value → false
+    mockVerify.mockClear();
+    process.env.CLAWCODE_VERIFY_OFFLINE = "1";
+    await mod.runVerifyAction({ agent: "general" });
+    const passedArgs2 = mockVerify.mock.calls[0]![0] as { offline?: boolean };
+    expect(passedArgs2.offline).toBe(false);
+
+    mockVerify.mockClear();
+    delete process.env.CLAWCODE_VERIFY_OFFLINE;
+    await mod.runVerifyAction({ agent: "general" });
+    const passedArgs3 = mockVerify.mock.calls[0]![0] as { offline?: boolean };
+    expect(passedArgs3.offline).toBe(false);
+  });
+
+  // --- runRollbackAction tests (Tests 12-14) --------------------------
+
+  it("Test 12: runRollbackAction — happy path with removedPaths listed", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockRollback = vi.fn(async () => ({
+      outcome: "rolled-back" as const,
+      removedPaths: ["/tmp/foo", "/tmp/bar"] as readonly string[],
+      sourceHashBefore: {},
+      sourceHashAfter: {},
+    }));
+    (mod.migrateOpenclawHandlers as unknown as {
+      rollbackAgent: typeof mockRollback;
+    }).rollbackAgent = mockRollback;
+
+    const code = await mod.runRollbackAction({ agent: "personal" });
+    expect(code).toBe(0);
+    const out = stdoutCapture.join("");
+    expect(out).toContain("✓ rolled back personal: removed 2 path(s)");
+    expect(out).toContain("/tmp/foo");
+    expect(out).toContain("/tmp/bar");
+  });
+
+  it("Test 13: runRollbackAction — outcome='not-found' → exit 1 + error", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const mockRollback = vi.fn(async () => ({
+      outcome: "not-found" as const,
+      removedPaths: [] as readonly string[],
+      sourceHashBefore: {},
+      sourceHashAfter: {},
+    }));
+    (mod.migrateOpenclawHandlers as unknown as {
+      rollbackAgent: typeof mockRollback;
+    }).rollbackAgent = mockRollback;
+
+    const code = await mod.runRollbackAction({ agent: "ghost-agent" });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain("not found");
+  });
+
+  it("Test 14: runRollbackAction — SourceCorruptionError → exit 1 + mismatches listed", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const { SourceCorruptionError } = await import("../../../migration/rollbacker.js");
+    const mockRollback = vi.fn(async () => {
+      throw new SourceCorruptionError(["workspace/SOUL.md", "workspace/memory/foo.md"]);
+    });
+    (mod.migrateOpenclawHandlers as unknown as {
+      rollbackAgent: typeof mockRollback;
+    }).rollbackAgent = mockRollback;
+
+    const code = await mod.runRollbackAction({ agent: "personal" });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain("source tree was modified during rollback");
+    expect(err).toContain("workspace/SOUL.md");
+  });
+
+  // --- Dispatch holder extension (Test 15) ----------------------------
+
+  it("Test 15: migrateOpenclawHandlers extended with verifyAgent + rollbackAgent", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    expect(mod.migrateOpenclawHandlers.verifyAgent).toBeDefined();
+    expect(typeof mod.migrateOpenclawHandlers.verifyAgent).toBe("function");
+    expect(mod.migrateOpenclawHandlers.rollbackAgent).toBeDefined();
+    expect(typeof mod.migrateOpenclawHandlers.rollbackAgent).toBe("function");
+  });
+});
