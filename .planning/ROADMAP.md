@@ -161,7 +161,10 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   1. User adds two agents to `clawcode.yaml` pointing at the same `basePath` with distinct `memoryPath:` values, restarts the daemon, and observes two distinct `memories.db` files on disk — writes to agent A's memory never touch agent B's memory file (`sqlite3 .clawcode/agents/<base>/memory/A/memories.db "SELECT COUNT(*) FROM memories"` and `.../B/memories.db` return independent counts).
   2. User starts 2+ agents on the same shared basePath and observes each agent gets its own `inbox/<agent>/`, heartbeat log, and session-state directory — chokidar watchers fire once per event per agent (no 2x/5x amplification), `clawcode send <target> "hi" --from <source>` delivers to the target's inbox only, and consolidation jobs target only the invoking agent's memory file.
   3. User boots all 5 finmentum agents (`fin-acquisition`, `fin-research`, `fin-playground`, `fin-tax`, `finmentum-content-creator`) on the same shared workspace and `clawcode fleet status` shows all 5 as `running` with no file-lock errors in daemon logs, no duplicate auto-linker runs across the same `memories.db`, and `memory_lookup` queries against agent A never return entries from agent B.
-**Plans**: TBD
+**Plans**: 3 plans
+- [x] 75-01-PLAN.md — Schema + ResolvedAgentConfig.memoryPath contract + differ non-reloadable classification (SHARED-01)
+- [ ] 75-02-PLAN.md — loader.ts resolution + swap 13 runtime consumers (session-memory, heartbeat, inbox, daemon, bridge) to memoryPath (SHARED-01, SHARED-02)
+- [ ] 75-03-PLAN.md — Integration test covering 2-agent isolation + 5-agent finmentum + conflict rejection (SHARED-02, SHARED-03)
 
 ### Phase 76: Migration CLI Read-Side + Dry-Run
 **Goal**: User (as operator) can run `clawcode migrate openclaw list` and `clawcode migrate openclaw plan` to see every source agent's current state and the per-agent diff that `apply` would produce — with zero writes to `~/.clawcode/` or `clawcode.yaml` — so migration can be planned, reviewed, and re-planned safely before any real change.
@@ -267,7 +270,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Shared-Workspace Runtime Support | 0/? | Not started | - |
+| 75. Shared-Workspace Runtime Support | 1/3 | In Progress|  |
 | 76. Migration CLI Read-Side + Dry-Run | 0/? | Not started | - |
 | 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |

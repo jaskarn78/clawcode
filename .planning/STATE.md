@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Roadmap approved — ready to plan Phase 75
-stopped_at: v2.1 roadmap landed — 8 phases (75-82) covering 31 requirements across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS. Next step is `/gsd:plan-phase 75` (Shared-Workspace Runtime Support — prerequisite that unblocks finmentum migration).
-last_updated: "2026-04-20T12:00:00.000Z"
-last_activity: 2026-04-20 - v2.1 Roadmap created — 8 phases 75-82, 31 requirements mapped 1:1
+status: Ready to execute
+stopped_at: Completed 75-01-PLAN.md (memoryPath contract). Ready for 75-02 (wire runtime consumers).
+last_updated: "2026-04-20T13:56:33.679Z"
+last_activity: 2026-04-20
 progress:
-  total_phases: 8
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_phases: 14
+  completed_phases: 6
+  total_plans: 18
+  completed_plans: 16
 ---
 
 # Project State
@@ -20,20 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.1 OpenClaw Agent Migration — roadmap approved, ready to plan Phase 75
+**Current focus:** Phase 75 — shared-workspace-runtime-support
 
 ## Current Position
 
-Phase: 75 (Shared-Workspace Runtime Support) — not started
-Plan: —
-Status: Roadmap approved; awaiting `/gsd:plan-phase 75`
-Last activity: 2026-04-20 — v2.1 Roadmap created (8 phases, 31 reqs mapped)
-
-**Phase 75 snapshot:**
-- Goal: Multiple agents can share one `basePath` while keeping isolated `memories.db`, inbox, heartbeat, session-state
-- Requirements: SHARED-01, SHARED-02, SHARED-03
-- Code surface: ~15 LOC across `config/schema.ts` + `config/loader.ts` + `manager/session-memory.ts`
-- Blocks: Phase 79 (Workspace Migration) for the 5 finmentum agents; does NOT block the 10 dedicated-workspace agents
+Phase: 75 (shared-workspace-runtime-support) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -71,6 +63,8 @@ Recent decisions affecting current work:
 - [v2.1 Roadmap]: Pilot agent is `personal` or `local-clawdy` — smallest DB, lowest activity, not business-critical. Full end-to-end run + rollback rehearsal on pilot BEFORE the other 14 agents.
 - [v2.1 Roadmap]: Phase ordering is load-bearing — SHARED (prerequisite) → read-side CLI → guards+ledger → config mapping → workspace copy → memory translation → verify/rollback/fork → pilot+cutover+complete. Memory comes AFTER workspace because markdown files must exist at target paths before memory reader parses them.
 - [v2.0 Roadmap]: Bearer-key = session boundary — one isolated ConversationStore session per API key (OPENAI-05). No multi-user-per-key fan-out until v2.1 "Multi-User Foundations".
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 01]: Schema-level raw-string conflict detection via superRefine — path normalization (trailing slashes, ./ prefixes) deferred to loader.ts in Plan 02. Schema test documents boundary.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 01]: ResolvedAgentConfig.memoryPath is REQUIRED (not optional) — loader guarantees fallback to workspace; downstream consumers read unconditionally (no optional-chaining). Forced 13 test-fixture updates but preserves zero-optional-chain runtime pattern.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -129,9 +123,10 @@ Recent decisions affecting current work:
 | Phase 72-image-generation-mcp P02 | 24 min | 2 tasks | 16 files |
 | Phase 74 P01 | 22min | 3 tasks | 10 files |
 | Phase 74 P02 | 19min | 3 tasks | 7 files |
+| Phase 75-shared-workspace-runtime-support P01 | 10min | 2 tasks | 19 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-20 — v2.1 OpenClaw Agent Migration roadmap created (8 phases 75-82, 31 requirements mapped)
-Stopped at: Roadmap approved. Ready for `/gsd:plan-phase 75` (Shared-Workspace Runtime Support — the prerequisite unblocking finmentum migration).
+Last activity: 2026-04-20
+Stopped at: Completed 75-01-PLAN.md (memoryPath contract). Ready for 75-02 (wire runtime consumers).
 Resume file: None
