@@ -84,15 +84,19 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-## Current Milestone: v2.0 Open Endpoint + Eyes & Hands
+## Current Milestone: v2.1 OpenClaw Agent Migration
 
-**Goal:** Make every ClawCode agent reachable from any OpenAI-compatible client AND give them perception + action beyond Discord (browse the web, search the live web, generate images).
+**Goal:** Port all 15 active OpenClaw agents to dedicated ClawCode agents with their memories, workspaces, identities/souls, and tool access preserved — every ported agent gains native fork-to-Opus subagent spawning.
 
 **Target features:**
-- OpenAI-compatible HTTP endpoint — `POST /v1/chat/completions` (SSE streaming) + `GET /v1/models` on the existing daemon; bearer-key auth with per-key session continuity; tool-use translation (OpenAI functions ↔ Claude tool-use); new `TurnOrigin="openai-api"` on the v1.8 TurnDispatcher
-- Browser automation MCP — Playwright-over-CDP server auto-injected per agent; tools: navigate, screenshot, click, fill, extract, wait_for; persistent profile dir per agent; screenshots feed Claude vision
-- Web search MCP — Brave primary (key already configured) + Exa optional; tools: web_search, web_fetch_url with Readability-style extraction; intra-turn idempotent cache
-- Image generation MCP — MiniMax, OpenAI Images, and fal.ai backends selectable by config; tools: image_generate, image_edit, image_variations; output persisted to agent workspace + Discord-renderable via send_attachment
+- Agent config mapping — convert `openclaw.json` per-agent entries (id, model, skills, channels, MCP servers) into `clawcode.yaml` agent definitions with SOUL + IDENTITY embedded from workspace files
+- Workspace migration — copy `~/.openclaw/workspace-<name>/` contents (SOUL.md, IDENTITY.md, USER.md, TOOLS.md, CLAUDE.md, archive/, .learnings/) into ClawCode per-agent workspaces; finmentum family (fin-acquisition, fin-research, fin-playground, fin-tax, finmentum-content-creator) shares ONE workspace while keeping 5 distinct agent identities
+- Memory translation — one-shot migrator reads OpenClaw's file-RAG sqlite (`~/.openclaw/memory/<agent>.sqlite` + workspace `MEMORY.md` + `memory/*.md`) and writes into ClawCode's `memories.db` schema with fresh local embeddings
+- Subagent fork-to-Opus — every migrated agent inherits the v1.5 fork-based escalation path so any Sonnet/Haiku agent can spawn a dedicated Opus subagent
+- MCP + Discord wiring — per-agent mcpServers list (from openclaw.json) + Discord channel binding preserved; auth/credentials flow through existing clawcode config
+- Migration tooling — `clawcode migrate openclaw` CLI that enumerates source agents, shows per-agent diff, and executes migration in dry-run + apply modes
+
+**Previous milestone (v2.0) accomplishments:** OpenAI-compatible HTTP endpoint, browser automation MCP, web search MCP, image generation MCP, OpenClaw-backend seamless routing (Phase 74).
 
 ### Out of Scope
 
@@ -166,5 +170,22 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 - **Embeddings**: Local ONNX inference via @huggingface/transformers (all-MiniLM-L6-v2, 384-dim)
 - **Concurrency**: Multiple Claude Code processes running simultaneously — managed by daemon
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd:transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-04-18 — v2.0 Open Endpoint + Eyes & Hands started*
+*Last updated: 2026-04-20 — v2.1 OpenClaw Agent Migration started*

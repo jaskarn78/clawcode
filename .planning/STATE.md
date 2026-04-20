@@ -1,31 +1,33 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Open Endpoint + Eyes & Hands
-status: Milestone complete
-stopped_at: Completed 74-02-PLAN.md — security.denyScopeAll + cost attribution + shutdown drain + smoke + README. 3 atomic commits on master (NOT pushed). 27 new tests + full regression green; tsc at 29 baseline; 3241 pass / 8 tolerable baseline failures. Phase 74 milestone complete.
-last_updated: "2026-04-20T00:01:58.673Z"
-last_activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
+milestone: v2.1
+milestone_name: OpenClaw Agent Migration
+status: Defining requirements
+stopped_at: Milestone v2.1 started — port 15 active OpenClaw agents to dedicated ClawCode agents with memories/workspaces/souls intact; finmentum family shares workspace, others isolated; fork-to-Opus required.
+last_updated: "2026-04-20T04:45:00.000Z"
+last_activity: 2026-04-20 - Milestone v2.1 OpenClaw Agent Migration started
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 15
-  completed_plans: 15
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-18)
+See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 72 — Image Generation MCP
+**Current focus:** v2.1 OpenClaw Agent Migration — defining requirements
 
 ## Current Position
 
-Phase: 72
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-20 — Milestone v2.1 started
 
 ## Performance Metrics
 
