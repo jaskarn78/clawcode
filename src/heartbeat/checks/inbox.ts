@@ -51,8 +51,10 @@ const inboxCheck: CheckModule = {
       return { status: "healthy", message: "No config available" };
     }
 
-    // 2. Build inbox path: {workspace}/inbox/
-    const inboxDir = join(agentConfig.workspace, "inbox");
+    // 2. Build inbox path: {memoryPath}/inbox/
+    // Phase 75 SHARED-01 — memoryPath (not workspace) so shared-workspace
+    // agents discover only their own inbox, never a sibling agent's.
+    const inboxDir = join(agentConfig.memoryPath, "inbox");
 
     // 3. Read all unprocessed messages via readMessages()
     const allMessages = await readMessages(inboxDir);

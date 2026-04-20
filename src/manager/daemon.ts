@@ -641,7 +641,9 @@ export async function startDaemon(
     if (consolidationConfig.enabled) {
       const memoryStore = manager.getMemoryStore(agentConfig.name);
       const embedder = manager.getEmbedder();
-      const memoryDir = join(agentConfig.workspace, "memory");
+      // Phase 75 SHARED-01 — memoryPath (not workspace) so consolidation
+      // writes weekly/monthly digests into the per-agent memory dir.
+      const memoryDir = join(agentConfig.memoryPath, "memory");
 
       handlerSchedules.push({
         name: "memory-consolidation",
@@ -798,7 +800,9 @@ export async function startDaemon(
       log.warn({ targetAgent: cfg.targetAgent }, "inbox trigger configured for unknown agent — skipping");
       continue;
     }
-    const inboxDir = join(agentConfig.workspace, "inbox");
+    // Phase 75 SHARED-01 — memoryPath (not workspace) so InboxSource
+    // watches only this agent's inbox in the shared-workspace case.
+    const inboxDir = join(agentConfig.memoryPath, "inbox");
     const inboxSource = new InboxSource({
       agentName: cfg.targetAgent,
       inboxDir,
@@ -1703,7 +1707,9 @@ async function routeMethod(
       }
 
       // Write message to target agent's inbox
-      const inboxDir = join(targetConfig.workspace, "inbox");
+      // Phase 75 SHARED-01 — memoryPath (not workspace) so cross-agent
+      // sends deliver to the target's private inbox, never a shared one.
+      const inboxDir = join(targetConfig.memoryPath, "inbox");
       const message = createMessage(from, to, content, priority as "normal" | "high" | "urgent");
       await writeMessage(inboxDir, message);
 
@@ -1749,7 +1755,9 @@ async function routeMethod(
       }
 
       // 1. Always write to filesystem inbox (fallback/record)
-      const inboxDir = join(targetConfig.workspace, "inbox");
+      // Phase 75 SHARED-01 — memoryPath (not workspace) so send-to-agent
+      // writes to the target's private inbox in shared-workspace cases.
+      const inboxDir = join(targetConfig.memoryPath, "inbox");
       const inboxMsg = createMessage(from, to, message, "normal");
       await writeMessage(inboxDir, inboxMsg);
 
@@ -2701,7 +2709,9 @@ async function routeMethod(
         return { messages: [], dates: [] };
       }
 
-      const memoryDir = join(config.workspace, "memory");
+      // Phase 75 SHARED-01 — memoryPath (not workspace) so the health-log
+      // CLI reader loads each agent's private heartbeat.log / digests.
+      const memoryDir = join(config.memoryPath, "memory");
       const { readdir, readFile } = await import("node:fs/promises");
 
       let logFiles: string[] = [];

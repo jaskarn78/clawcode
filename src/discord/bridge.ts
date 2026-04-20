@@ -396,12 +396,14 @@ export class DiscordBridge {
           this.fireTypingIndicator(message, turn);
         }
 
-        // Download attachments for thread messages using agent workspace (not /tmp)
+        // Download attachments for thread messages using agent memoryPath (not /tmp)
+        // Phase 75 SHARED-01 — memoryPath (not workspace) so attachments land
+        // in the receiving agent's private inbox on shared-workspace setups.
         let downloadResults: readonly DownloadResult[] | undefined;
         if (message.attachments.size > 0) {
           const agentConfig = this.sessionManager.getAgentConfig(sessionName);
-          const workspace = agentConfig?.workspace ?? "/tmp";
-          const attachDir = join(workspace, "inbox", "attachments");
+          const memoryPath = agentConfig?.memoryPath ?? "/tmp";
+          const attachDir = join(memoryPath, "inbox", "attachments");
           const attachments = extractAttachments(message.attachments);
           downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
         }
@@ -490,11 +492,13 @@ export class DiscordBridge {
     );
 
     // Download attachments if present, before formatting the message
+    // Phase 75 SHARED-01 — memoryPath (not workspace) so attachments land
+    // in the receiving agent's private inbox on shared-workspace setups.
     let downloadResults: readonly DownloadResult[] | undefined;
     if (message.attachments.size > 0) {
       const agentConfig = this.sessionManager.getAgentConfig(agentName);
-      const workspace = agentConfig?.workspace ?? "/tmp";
-      const attachDir = join(workspace, "inbox", "attachments");
+      const memoryPath = agentConfig?.memoryPath ?? "/tmp";
+      const attachDir = join(memoryPath, "inbox", "attachments");
       const attachments = extractAttachments(message.attachments);
       downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
     }

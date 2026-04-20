@@ -195,7 +195,10 @@ describe("handleMessage attachment integration", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockGetAgentConfig.mockReturnValue({ workspace: "/workspace/test-agent" });
+    // Phase 75 SHARED-01 — attachment download uses memoryPath (not workspace).
+    // For dedicated-workspace agents memoryPath === workspace, mirroring the
+    // loader.ts fallback behavior.
+    mockGetAgentConfig.mockReturnValue({ workspace: "/workspace/test-agent", memoryPath: "/workspace/test-agent" });
     mockStreamFromAgent.mockResolvedValue("agent response");
     mockExtractAttachments.mockReturnValue([makeAttachmentInfo()]);
     mockDownloadAllAttachments.mockResolvedValue([makeDownloadResult()]);
