@@ -926,6 +926,274 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Gap 3 (memory-persistence-gaps) — periodic mid-session flush
+// ---------------------------------------------------------------------------
+
+describe("SessionManager periodic mid-session flush (Gap 3)", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+  let mockSummarize: ReturnType<typeof vi.fn>;
+
+  function makeFlushConfig(name: string, flushIntervalMinutes: number): ResolvedAgentConfig {
+    const base = makeConfig(name);
+    return {
+      ...base,
+      workspace: tmpDir,
+      memoryPath: tmpDir,
+      memory: {
+        ...base.memory,
+        conversation: {
+          enabled: true,
+          turnRetentionDays: 90,
+          resumeSessionCount: 3,
+          resumeGapThresholdHours: 4,
+          conversationContextBudget: 2000,
+          retrievalHalfLifeDays: 14,
+          flushIntervalMinutes,
+        },
+      },
+    } as ResolvedAgentConfig;
+  }
+
+  /**
+   * Wait for an assertion to become true, polling on real time. Preferred
+   * over fixed setTimeout waits because the actual flush completion time
+   * depends on the real embedder's pipeline latency (a few tens of ms in
+   * steady state, but variable on cold start).
+   */
+  async function waitFor(fn: () => boolean, timeoutMs = 3000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (fn()) return;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+  }
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-flush-"));
+    registryPath = join(tmpDir, "registry.json");
+    mockSummarize = vi.fn().mockResolvedValue(
+      "## User Preferences\n- mock\n\n## Decisions\n(none)\n\n## Open Threads\n(none)\n\n## Commitments\n(none)\n",
+    );
+    // flushIntervalMsOverride keeps the tick fast so tests don't wait
+    // 15 real minutes. Config minutes value still must pass schema validation
+    // (>0 means "enabled") — the override wins at timer-start time.
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+      summarizeFn: mockSummarize as unknown as SummarizeFn,
+      flushIntervalMsOverride: 100,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      await rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* non-fatal */
+    }
+  });
+
+  it("writes a mid-session memory row with mid-session+flush:1 tags and leaves the session active", async () => {
+    const agentName = "flush-basic";
+    const config = makeFlushConfig(agentName, 15);
+    await manager.startAgent(agentName, config);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    const convSessionId = manager.getActiveConversationSessionId(agentName)!;
+
+    // Seed 4 turns so the flush hits the Haiku path (minTurns=3).
+    for (let i = 0; i < 4; i++) {
+      convStore.recordTurn({
+        sessionId: convSessionId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `flush turn ${i} content with some substance`,
+      });
+    }
+
+    const memStore = manager.getMemoryStore(agentName)!;
+    const insertSpy = vi.spyOn(memStore, "insert");
+
+    // Wait for the flush to complete — override interval is 100ms, plus
+    // embedder + insert time.
+    await waitFor(() =>
+      insertSpy.mock.calls.some((call) =>
+        (call[0] as { tags?: readonly string[] }).tags?.includes("mid-session"),
+      ),
+    );
+
+    const midSessionCall = insertSpy.mock.calls.find((call) =>
+      (call[0] as { tags?: readonly string[] }).tags?.includes("mid-session"),
+    );
+    expect(midSessionCall).toBeDefined();
+    const input = midSessionCall![0] as {
+      source: string;
+      tags: readonly string[];
+    };
+    expect(input.source).toBe("conversation");
+    expect(input.tags).toContain("mid-session");
+    expect(input.tags).toContain(`session:${convSessionId}`);
+    expect(input.tags).toContain("flush:1");
+    expect(input.tags).not.toContain("session-summary");
+
+    // Session still active; raw turns still present.
+    const session = convStore.getSession(convSessionId);
+    expect(session!.status).toBe("active");
+    expect(convStore.getTurnsForSession(convSessionId)).toHaveLength(4);
+  }, 15_000);
+
+  it("increments flush sequence tag across consecutive intervals (flush:1 then flush:2)", async () => {
+    const agentName = "flush-seq";
+    const config = makeFlushConfig(agentName, 15);
+    await manager.startAgent(agentName, config);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    const convSessionId = manager.getActiveConversationSessionId(agentName)!;
+
+    for (let i = 0; i < 4; i++) {
+      convStore.recordTurn({
+        sessionId: convSessionId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `turn ${i} content`,
+      });
+    }
+
+    const memStore = manager.getMemoryStore(agentName)!;
+    const insertSpy = vi.spyOn(memStore, "insert");
+
+    // Wait until at least two mid-session inserts have landed.
+    await waitFor(
+      () => {
+        const count = insertSpy.mock.calls.filter((call) =>
+          (call[0] as { tags?: readonly string[] }).tags?.includes(
+            "mid-session",
+          ),
+        ).length;
+        return count >= 2;
+      },
+      5000,
+    );
+
+    const midSessionCalls = insertSpy.mock.calls.filter((call) =>
+      (call[0] as { tags?: readonly string[] }).tags?.includes("mid-session"),
+    );
+    const allTags = midSessionCalls.map(
+      (c) => (c[0] as { tags: readonly string[] }).tags,
+    );
+    const hasFlush1 = allTags.some((tags) => tags.includes("flush:1"));
+    const hasFlush2 = allTags.some((tags) => tags.includes("flush:2"));
+    expect(hasFlush1).toBe(true);
+    expect(hasFlush2).toBe(true);
+  }, 15_000);
+
+  it("does not start a flush timer when flushIntervalMinutes is 0 and override is not set", async () => {
+    const localAdapter = createMockAdapter();
+    const localDir = await mkdtemp(join(tmpdir(), "sm-flush-off-"));
+    const localRegistry = join(localDir, "registry.json");
+    // No flushIntervalMsOverride → agent config's 0 wins → timer disabled.
+    const localManager = new SessionManager({
+      adapter: localAdapter,
+      registryPath: localRegistry,
+      backoffConfig: TEST_BACKOFF,
+      summarizeFn: mockSummarize as unknown as SummarizeFn,
+    });
+
+    const agentName = "flush-disabled";
+    const base = makeConfig(agentName);
+    const config: ResolvedAgentConfig = {
+      ...base,
+      workspace: localDir,
+      memoryPath: localDir,
+      memory: {
+        ...base.memory,
+        conversation: {
+          enabled: true,
+          turnRetentionDays: 90,
+          resumeSessionCount: 3,
+          resumeGapThresholdHours: 4,
+          conversationContextBudget: 2000,
+          retrievalHalfLifeDays: 14,
+          flushIntervalMinutes: 0,
+        },
+      },
+    } as ResolvedAgentConfig;
+
+    await localManager.startAgent(agentName, config);
+
+    // Wait 300ms — if a timer were erroneously registered at 100ms cadence
+    // we would see an insert by now.
+    await new Promise((r) => setTimeout(r, 300));
+
+    const memStore = localManager.getMemoryStore(agentName)!;
+    const spy = vi.spyOn(memStore, "insert");
+    await new Promise((r) => setTimeout(r, 150));
+
+    const midSessionCalls = spy.mock.calls.filter((call) =>
+      (call[0] as { tags?: readonly string[] }).tags?.includes("mid-session"),
+    );
+    expect(midSessionCalls).toHaveLength(0);
+
+    try { await localManager.stopAll(); } catch { /* cleanup */ }
+    await new Promise((r) => setTimeout(r, 50));
+    await rm(localDir, { recursive: true, force: true });
+  }, 15_000);
+
+  it("stopAgent clears the flush timer so no post-stop mid-session writes land", async () => {
+    const agentName = "flush-stop";
+    const config = makeFlushConfig(agentName, 15);
+    await manager.startAgent(agentName, config);
+
+    const memStore = manager.getMemoryStore(agentName)!;
+    const insertSpy = vi.spyOn(memStore, "insert");
+
+    await manager.stopAgent(agentName);
+
+    const callCountAfterStop = insertSpy.mock.calls.filter((call) =>
+      (call[0] as { tags?: readonly string[] }).tags?.includes("mid-session"),
+    ).length;
+
+    // Wait 300ms (~3 flush intervals at 100ms) — no additional mid-session
+    // inserts should appear because stopAgent cleared the interval.
+    await new Promise((r) => setTimeout(r, 300));
+
+    const callCountLater = insertSpy.mock.calls.filter((call) =>
+      (call[0] as { tags?: readonly string[] }).tags?.includes("mid-session"),
+    ).length;
+
+    expect(callCountLater).toBe(callCountAfterStop);
+  }, 15_000);
+
+  it("resets the flush sequence counter after stopAgent so restart begins at flush:1", async () => {
+    const agentName = "flush-counter-reset";
+    const config = makeFlushConfig(agentName, 15);
+
+    await manager.startAgent(agentName, config);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const counters = (manager as any).flushSequenceByAgent as Map<string, number>;
+    expect(counters.get(agentName)).toBe(0);
+
+    await manager.stopAgent(agentName);
+    expect(counters.get(agentName)).toBeUndefined();
+
+    await manager.startAgent(agentName, config);
+    expect(counters.get(agentName)).toBe(0);
+  }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 67 Plan 03 — configDeps wiring gap-closure
 // ---------------------------------------------------------------------------
 

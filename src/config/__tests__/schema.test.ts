@@ -763,6 +763,34 @@ describe("conversationConfigSchema (Phase 67)", () => {
       conversationConfigSchema.parse({ retrievalHalfLifeDays: 0 }),
     ).toThrow();
   });
+
+  // Gap 3 (memory-persistence-gaps) — flushIntervalMinutes
+  it("flushIntervalMinutes defaults to 15", () => {
+    const parsed = conversationConfigSchema.parse({});
+    expect(parsed.flushIntervalMinutes).toBe(15);
+  });
+
+  it("flushIntervalMinutes accepts 0 (disables periodic flush)", () => {
+    const parsed = conversationConfigSchema.parse({ flushIntervalMinutes: 0 });
+    expect(parsed.flushIntervalMinutes).toBe(0);
+  });
+
+  it("flushIntervalMinutes accepts custom positive integer", () => {
+    const parsed = conversationConfigSchema.parse({ flushIntervalMinutes: 5 });
+    expect(parsed.flushIntervalMinutes).toBe(5);
+  });
+
+  it("flushIntervalMinutes rejects negative values", () => {
+    expect(() =>
+      conversationConfigSchema.parse({ flushIntervalMinutes: -1 }),
+    ).toThrow();
+  });
+
+  it("flushIntervalMinutes rejects non-integer values", () => {
+    expect(() =>
+      conversationConfigSchema.parse({ flushIntervalMinutes: 1.5 }),
+    ).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------

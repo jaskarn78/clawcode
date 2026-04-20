@@ -14,6 +14,8 @@
 
 import type { ConversationTurn } from "./conversation-types.js";
 import type {
+  FlushSessionInput,
+  FlushSessionResult,
   SummarizeSessionDeps,
   SummarizeSessionInput,
   SummarizeSessionResult,
@@ -407,5 +409,203 @@ export async function summarizeSession(
     memoryId,
     fallback,
     turnCount: turns.length,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Gap 3 (memory-persistence-gaps) — mid-session flush
+// ---------------------------------------------------------------------------
+
+/** Importance for mid-session flush entries — slightly lower than final summaries. */
+export const DEFAULT_FLUSH_IMPORTANCE = 0.65;
+
+/**
+ * Write a non-terminating mid-session summary.
+ *
+ * This is the periodic-flush counterpart to {@link summarizeSession}. Unlike
+ * the session-boundary path, this function:
+ *   - Requires the session to be in status="active" (NOT ended/crashed).
+ *   - Does NOT call markSummarized — the session stays live.
+ *   - Does NOT delete raw turns — they are still needed for future flushes
+ *     and for the final session-boundary summary.
+ *   - Writes a MemoryEntry tagged ["mid-session", `session:${id}`, `flush:${N}`]
+ *     with `skipDedup: true` so multiple flushes coexist.
+ *
+ * Pipeline mirrors summarizeSession (same prompt, same timeout, same fallback
+ * semantics) so the two code paths produce compatible summaries. The only
+ * behavioural difference is the terminal-ness check and the cleanup steps.
+ *
+ * All paths are non-fatal: flushSessionMidway NEVER throws to its caller.
+ * It is safe to wire to a setInterval without a catch block.
+ */
+export async function flushSessionMidway(
+  input: FlushSessionInput,
+  deps: SummarizeSessionDeps,
+): Promise<FlushSessionResult> {
+  const { agentName, sessionId, flushSequence } = input;
+  const timeoutMs = deps.config?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const minTurns = deps.config?.minTurns ?? DEFAULT_MIN_TURNS;
+  const importance = deps.config?.importance ?? DEFAULT_FLUSH_IMPORTANCE;
+
+  // Step 1 — load session
+  const session = deps.conversationStore.getSession(sessionId);
+  if (!session) {
+    deps.log.warn(
+      { agent: agentName, session: sessionId },
+      "flush: session not found",
+    );
+    return Object.freeze({
+      skipped: true as const,
+      reason: "session-not-found" as const,
+    });
+  }
+
+  // Step 2 — state machine: mid-session flush ONLY fires for active sessions.
+  // If the session has already been ended/crashed/summarized, the final-path
+  // summarizer owns this session and the mid-session flush MUST not interfere.
+  if (session.status !== "active") {
+    return Object.freeze({
+      skipped: true as const,
+      reason: "session-not-active" as const,
+    });
+  }
+
+  // Step 3 — load turns
+  const turns = deps.conversationStore.getTurnsForSession(sessionId);
+  if (turns.length === 0) {
+    return Object.freeze({
+      skipped: true as const,
+      reason: "zero-turns" as const,
+    });
+  }
+
+  // Step 4-7 — content source (mirrors summarizeSession)
+  const shortSession = turns.length < minTurns;
+  let summaryContent: string;
+  let fallback: SummarizeSuccessFallback;
+
+  if (shortSession) {
+    summaryContent = buildShortSessionSummary(turns);
+    fallback = "short-session";
+  } else {
+    const prompt = buildSessionSummarizationPrompt(turns);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const llmContent = await Promise.race([
+        deps.summarize(prompt, { signal: controller.signal }),
+        new Promise<string>((_, reject) => {
+          controller.signal.addEventListener("abort", () =>
+            reject(new Error("flush timeout after " + timeoutMs + "ms")),
+          );
+        }),
+      ]);
+      if (!llmContent || llmContent.trim().length === 0) {
+        throw new Error("flush summarize returned empty content");
+      }
+      summaryContent = llmContent;
+      fallback = "llm";
+    } catch (err) {
+      deps.log.warn(
+        {
+          agent: agentName,
+          session: sessionId,
+          flushSequence,
+          error: (err as Error).message,
+        },
+        "flush summarize failed — using raw-turn fallback",
+      );
+      summaryContent = buildRawTurnFallback(turns);
+      fallback = "raw-turn";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Step 8 — embed
+  let embedding: Float32Array;
+  try {
+    embedding = await deps.embedder.embed(summaryContent);
+  } catch (err) {
+    deps.log.warn(
+      {
+        agent: agentName,
+        session: sessionId,
+        flushSequence,
+        error: (err as Error).message,
+      },
+      "flush embedding failed — aborting flush",
+    );
+    return Object.freeze({
+      skipped: true as const,
+      reason: "zero-turns" as const,
+      turnCount: turns.length,
+    });
+  }
+
+  // Step 9 — tags + insert. Note the distinct `mid-session` discriminator
+  // so post-mortem queries can filter final summaries vs. intermediate
+  // checkpoints. `skipDedup: true` because repeated flushes intentionally
+  // produce distinct memory rows.
+  const baseTags: string[] = [
+    "mid-session",
+    `session:${sessionId}`,
+    `flush:${flushSequence}`,
+  ];
+  if (fallback === "raw-turn") baseTags.push("raw-fallback");
+  if (fallback === "short-session") baseTags.push("short");
+  const tags = Object.freeze([...baseTags]);
+  const sourceTurnIds = Object.freeze(turns.map((t) => t.id));
+
+  let memoryId: string;
+  try {
+    const entry = deps.memoryStore.insert(
+      {
+        content: summaryContent,
+        source: "conversation",
+        importance,
+        tags,
+        sourceTurnIds,
+        skipDedup: true,
+      },
+      embedding,
+    );
+    memoryId = entry.id;
+  } catch (err) {
+    deps.log.warn(
+      {
+        agent: agentName,
+        session: sessionId,
+        flushSequence,
+        error: (err as Error).message,
+      },
+      "flush memoryStore.insert failed",
+    );
+    return Object.freeze({
+      skipped: true as const,
+      reason: "zero-turns" as const,
+      turnCount: turns.length,
+    });
+  }
+
+  deps.log.info(
+    {
+      agent: agentName,
+      session: sessionId,
+      memoryId,
+      flushSequence,
+      fallback,
+      turnCount: turns.length,
+    },
+    "mid-session flush written",
+  );
+
+  return Object.freeze({
+    success: true as const,
+    memoryId,
+    fallback,
+    turnCount: turns.length,
+    flushSequence,
   });
 }

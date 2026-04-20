@@ -77,6 +77,13 @@ export const conversationConfigSchema = z.object({
   // 14 days (faster than general-memory default of 30) because conversation
   // recency is disproportionately valuable for "what did we talk about?".
   retrievalHalfLifeDays: z.number().int().min(1).default(14),
+  // Gap 3 (memory-persistence-gaps): how often to write a non-terminating
+  // mid-session summary to the memory DB while a session is live. 0 disables
+  // the periodic flush; positive values produce one MemoryEntry tagged
+  // "mid-session" per interval per active session. Default 15 min balances
+  // catastrophe-recovery coverage (SIGKILL / OOM / power loss between clean
+  // shutdowns) against Haiku spend + DB write volume.
+  flushIntervalMinutes: z.number().int().min(0).default(15),
 });
 
 /** Schema for memory system configuration. */
