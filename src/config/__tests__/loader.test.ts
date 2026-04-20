@@ -11,7 +11,7 @@ import {
 } from "../loader.js";
 import { expandHome } from "../defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../../shared/errors.js";
-import type { AgentConfig, DefaultsConfig } from "../schema.js";
+import type { AgentConfig, DefaultsConfig, Config } from "../schema.js";
 
 describe("resolveAgentConfig", () => {
   const defaults: DefaultsConfig = {
@@ -212,6 +212,150 @@ describe("resolveAgentConfig", () => {
     resolveAgentConfig(agent, defaults);
 
     expect(defaults).toEqual(defaultsCopy);
+  });
+
+  // Phase 75 Plan 02 — memoryPath resolution (SHARED-01, SHARED-02).
+  // loader.ts guarantees ResolvedAgentConfig.memoryPath is populated:
+  //   - expandHome(agent.memoryPath) when set (handles `~/...`)
+  //   - resolvedWorkspace when unset (zero behavior change for dedicated
+  //     workspace agents — they never set memoryPath)
+
+  it("expands memoryPath with leading ~ when explicitly set", () => {
+    const agent: AgentConfig = {
+      name: "fin-acquisition",
+      memoryPath: "~/shared/finmentum/fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryPath).toBe(
+      join(homedir(), "shared/finmentum/fin-acquisition"),
+    );
+  });
+
+  it("falls back memoryPath to workspace when unset (zero behavior change for dedicated-workspace agents)", () => {
+    const agent: AgentConfig = {
+      name: "writer",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryPath).toBe(resolved.workspace);
+    expect(resolved.memoryPath).toBe(
+      join(homedir(), ".clawcode/agents", "writer"),
+    );
+  });
+
+  it("passes ./relative memoryPath through expandHome unchanged (no ~ prefix)", () => {
+    const agent: AgentConfig = {
+      name: "writer",
+      memoryPath: "./relative/subdir",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryPath).toBe("./relative/subdir");
+  });
+
+  it("passes absolute memoryPath through unchanged", () => {
+    const agent: AgentConfig = {
+      name: "writer",
+      memoryPath: "/var/lib/clawcode/writer",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryPath).toBe("/var/lib/clawcode/writer");
+    // workspace is unaffected by memoryPath override
+    expect(resolved.workspace).toBe(
+      join(homedir(), ".clawcode/agents", "writer"),
+    );
+  });
+
+  it("resolveAllAgents: two agents sharing basePath with distinct memoryPaths get distinct resolved paths", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "fin-acquisition",
+          workspace: "~/shared/finmentum",
+          memoryPath: "~/shared/finmentum/fin-acquisition",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [],
+        },
+        {
+          name: "fin-research",
+          workspace: "~/shared/finmentum",
+          memoryPath: "~/shared/finmentum/fin-research",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const resolved = resolveAllAgents(config);
+    const acq = resolved.find((a) => a.name === "fin-acquisition")!;
+    const res = resolved.find((a) => a.name === "fin-research")!;
+
+    // Shared workspace (same YAML value, same resolved string)
+    expect(acq.workspace).toBe(res.workspace);
+
+    // Distinct memoryPaths — the whole point of Phase 75
+    expect(acq.memoryPath).not.toBe(res.memoryPath);
+    expect(acq.memoryPath).toBe(
+      join(homedir(), "shared/finmentum/fin-acquisition"),
+    );
+    expect(res.memoryPath).toBe(
+      join(homedir(), "shared/finmentum/fin-research"),
+    );
   });
 });
 
