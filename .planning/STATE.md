@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: Completed 76-03-PLAN.md — CLI subcommands list+plan wired with zero-write contract proven via vi.mock factories; ready for verifier / Phase 77 planning.
-last_updated: "2026-04-20T16:50:15.226Z"
+status: Ready to execute
+stopped_at: Completed 77-01-PLAN.md — ledgerRowSchema extended with optional step/outcome/file_hashes + LEDGER_OUTCOMES enum; all 17 ledger tests green (9 Phase 76 unchanged + 8 new); ready for Plan 77-02 (pre-flight guards).
+last_updated: "2026-04-20T17:12:45.503Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 8
-  total_plans: 22
-  completed_plans: 22
+  total_plans: 25
+  completed_plans: 23
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 76 — migration-cli-read-side-dry-run
+**Current focus:** Phase 77 — pre-flight-guards-safety-rails
 
 ## Current Position
 
-Phase: 77
-Plan: Not started
+Phase: 77 (pre-flight-guards-safety-rails) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -82,6 +82,8 @@ Recent decisions affecting current work:
 - [Phase 76]: [Phase 76 Plan 03]: vi.mock + vi.hoisted factory pattern replaces vi.spyOn for ESM fs namespaces — node:fs/promises exports are non-configurable in Node 22; idiomatic vitest ESM spy mechanism now standard for Phases 77+.
 - [Phase 76]: [Phase 76 Plan 03]: Env-var override namespace CLAWCODE_OPENCLAW_JSON / _MEMORY_DIR / _AGENTS_ROOT / _LEDGER_PATH — reusable by Phases 77-82 pre-flight/apply/verify tests for tmp-fixture isolation without DI refactor of commander.
 - [Phase 76]: [Phase 76 Plan 03]: Action handlers (runListAction/runPlanAction) return numeric exit codes instead of calling process.exit directly — decouples business logic from CLI harness, integration-testable without process-exit guards.
+- [Phase 77]: [Phase 77 Plan 01]: Ledger schema extension is ADDITIVE-ONLY — step/outcome/file_hashes all .optional(); Phase 76 rows round-trip unchanged; dedicated 'ledger schema extensions (Phase 77)' describe block with isolated fixtures keeps Phase 76 suite byte-stable as regression pin.
+- [Phase 77]: [Phase 77 Plan 01]: LEDGER_OUTCOMES is a CLOSED enum ['allow','refuse'] — narrower than existing LEDGER_STATUSES; refuse pairs with status:'pending' because a refused guard never advances state. file_hashes enforces non-empty keys AND values via z.record(z.string().min(1), z.string().min(1)).
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -147,9 +149,10 @@ Recent decisions affecting current work:
 | Phase 76-migration-cli-read-side-dry-run P01 | 5min | 3 tasks | 7 files |
 | Phase 76 P02 | 4min | 1 tasks | 3 files |
 | Phase 76 P03 | 8min | 3 tasks | 4 files |
+| Phase 77 P01 | 5min | 2 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 76-03-PLAN.md — CLI subcommands list+plan wired with zero-write contract proven via vi.mock factories; ready for verifier / Phase 77 planning.
+Stopped at: Completed 77-01-PLAN.md — ledgerRowSchema extended with optional step/outcome/file_hashes + LEDGER_OUTCOMES enum; all 17 ledger tests green (9 Phase 76 unchanged + 8 new); ready for Plan 77-02 (pre-flight guards).
 Resume file: None

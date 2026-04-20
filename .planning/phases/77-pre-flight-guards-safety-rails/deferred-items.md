@@ -21,3 +21,24 @@ git stash pop
 ```
 
 Plan 77-01 does NOT change this error count. See `77-01-SUMMARY.md` Self-Check.
+
+## Pre-existing vitest timeout in `src/migration/__tests__/source-memory-reader.test.ts`
+
+Confirmed pre-existing via `git stash && npx vitest run …` on a clean master:
+
+```
+FAIL  src/migration/__tests__/source-memory-reader.test.ts
+  × returns the row count for a sqlite with a populated chunks table (6174ms)
+  × does NOT modify the source sqlite file's mtime (read-only open) (5113ms)
+  Error: Test timed out in 5000ms.
+```
+
+Root cause: default vitest `testTimeout` (5000ms) is too short for sqlite-vec
+cold-start on this test suite. Same class of issue as the Phase 75 P03
+per-test timeout extensions (15s/20s for MemoryStore-heavy tests). Fix is
+a one-line `{ timeout: 15000 }` on the affected `it(...)` blocks —
+deferred here because it's out of scope for Plan 77-01 (schema-only change
+to a different module).
+
+Plan 77-01's own tests (`src/migration/__tests__/ledger.test.ts`) all pass
+in ~1s — the timeout regression is isolated to `source-memory-reader.test.ts`.

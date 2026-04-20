@@ -191,7 +191,10 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   3. User runs `apply` when a Discord channel ID from an OpenClaw binding already appears in an existing `clawcode.yaml` agent's `channels:` list and sees a channel-collision report listing the conflict (source agent, target agent, channel ID) + exit code 1 — operator is told exactly which side to unbind.
   4. User inspects `.planning/migration/ledger.jsonl` after any migration action (plan, apply pre-flight fail, partial apply) and sees structured JSONL entries with `{timestamp, agent, step, outcome, file_hashes}` fields — ledger never contains rows for source-file modifications under `~/.openclaw/` (verified by grep).
   5. User runs the full migration end-to-end across all 15 agents and `stat -c %Y` timestamps on every file under `~/.openclaw/` match pre-migration values — source system is fully intact for fallback.
-**Plans**: TBD
+**Plans**: 3 plans
+- [x] 77-01-PLAN.md — Ledger schema extension (additive optional step/outcome/file_hashes fields, backward-compat) (MIGR-06)
+- [ ] 77-02-PLAN.md — Four guard modules (daemon, readonly, secret, channel-collision) + apply-preflight orchestrator with literal error messages (MIGR-02, MIGR-07, OPS-03)
+- [ ] 77-03-PLAN.md — CLI `apply [--only <agent>]` subcommand + runtime fs-guard install/uninstall + integration test covering all 5 success criteria (MIGR-02, MIGR-06, MIGR-07, OPS-03)
 
 ### Phase 78: Config Mapping + YAML Writer
 **Goal**: User (as operator) can trust that `clawcode migrate openclaw apply` produces a `clawcode.yaml` where each migrated agent entry carries `soulFile:` + `identityFile:` pointers to workspace markdown files (no inline soul/identity bloat), `mcpServers:` references to existing ClawCode MCP patterns (clawcode + 1password auto-injection preserved), and a model id mapped from OpenClaw's convention — with the YAML round-trip preserving all existing comments and key ordering via atomic temp+rename writes.
@@ -276,7 +279,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 |-------|----------------|--------|-----------|
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
-| 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
+| 77. Pre-flight Guards + Safety Rails | 1/3 | In Progress|  |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
 | 79. Workspace Migration | 0/? | Not started | - |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |

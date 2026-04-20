@@ -37,7 +37,7 @@ User-facing `clawcode migrate openclaw` command — plan, apply, rollback, resum
 - [ ] **MIGR-03**: User (as operator) can re-run `clawcode migrate openclaw apply` after partial success and have only un-migrated agents processed (idempotent; ledger-driven resume), with already-migrated memories deduped via `origin_id`.
 - [ ] **MIGR-04**: User (as operator) can run `clawcode migrate openclaw verify [<agent>]` after apply and see pass/fail checks for: workspace files present, memory count within ±5% of source, Discord channel reachable, agent boots on daemon restart.
 - [ ] **MIGR-05**: User (as operator) can run `clawcode migrate openclaw rollback <agent>` and have the CLI remove that agent's entries from `clawcode.yaml`, delete its ClawCode workspace + memory DB, and leave the source OpenClaw state fully intact.
-- [ ] **MIGR-06**: User (as operator) can observe that every migration action writes a structured JSONL entry to `.planning/migration/ledger.jsonl` with timestamp, agent, step, outcome, and file-hash witnesses.
+- [x] **MIGR-06**: User (as operator) can observe that every migration action writes a structured JSONL entry to `.planning/migration/ledger.jsonl` with timestamp, agent, step, outcome, and file-hash witnesses.
 - [ ] **MIGR-07**: User (as operator) can trust that the migrator never modifies, deletes, or renames any file under `~/.openclaw/` — source system remains untouched for fallback.
 - [x] **MIGR-08**: User (as operator) can run `clawcode migrate openclaw list` at any time and see which of the 15 agents are `pending` / `migrated` / `verified` / `rolled-back` with the corresponding ledger rows.
 
@@ -126,7 +126,7 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | MIGR-01 | Phase 76: Migration CLI Read-Side + Dry-Run | Complete |
 | MIGR-08 | Phase 76: Migration CLI Read-Side + Dry-Run | Complete |
 | MIGR-02 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
-| MIGR-06 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| MIGR-06 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
 | MIGR-07 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
 | OPS-03 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
 | CONF-01 | Phase 78: Config Mapping + YAML Writer | Pending |
