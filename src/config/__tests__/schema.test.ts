@@ -1153,3 +1153,133 @@ describe("Phase 74 Plan 02 — securityConfigSchema.denyScopeAll", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 75 Plan 01 — SHARED-01: agentSchema.memoryPath + configSchema conflict
+// ---------------------------------------------------------------------------
+
+describe("agentSchema - memoryPath", () => {
+  it("parses an agent with memoryPath set to a ~/... path unchanged (expansion deferred to loader)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      memoryPath: "~/shared/memories/fin-acquisition",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Schema stores raw string; expansion via expandHome() happens in loader.ts (Plan 02).
+      expect(result.data.memoryPath).toBe("~/shared/memories/fin-acquisition");
+    }
+  });
+
+  it("parses an agent without memoryPath (optional — fallback to workspace handled in loader)", () => {
+    const result = agentSchema.safeParse({ name: "researcher" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.memoryPath).toBeUndefined();
+    }
+  });
+
+  it("rejects memoryPath with a non-string (number) value", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      memoryPath: 123,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects memoryPath with an empty string (min(1) guard)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      memoryPath: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts relative paths (./subdir) and absolute paths — schema stores raw strings", () => {
+    const relResult = agentSchema.safeParse({
+      name: "fin-research",
+      memoryPath: "./shared/fin-research",
+    });
+    expect(relResult.success).toBe(true);
+
+    const absResult = agentSchema.safeParse({
+      name: "fin-research",
+      memoryPath: "/var/lib/clawcode/fin-research",
+    });
+    expect(absResult.success).toBe(true);
+  });
+});
+
+describe("configSchema - memoryPath conflict detection", () => {
+  it("rejects two agents sharing the same memoryPath, naming both conflicting agents", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", memoryPath: "~/shared/memories/fin-acquisition" },
+        { name: "fin-research", memoryPath: "~/shared/memories/fin-acquisition" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(" | ");
+      expect(messages).toMatch(/memoryPath.*conflict/i);
+      expect(messages).toContain("fin-acquisition");
+      expect(messages).toContain("fin-research");
+    }
+  });
+
+  it("accepts two agents with the SAME workspace but DIFFERENT memoryPath values (no conflict)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", workspace: "~/shared/finmentum", memoryPath: "~/shared/memories/fin-acquisition" },
+        { name: "fin-research", workspace: "~/shared/finmentum", memoryPath: "~/shared/memories/fin-research" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("lists ONLY conflicting agent names (three-agent case, two collide, one distinct)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", memoryPath: "~/shared/memories/shared-A" },
+        { name: "fin-research", memoryPath: "~/shared/memories/shared-A" },
+        { name: "fin-playground", memoryPath: "~/shared/memories/fin-playground" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(" | ");
+      expect(messages).toContain("fin-acquisition");
+      expect(messages).toContain("fin-research");
+      // Only the conflicting names should appear; the distinct agent should not be flagged as conflicting.
+      expect(messages).not.toContain("fin-playground");
+    }
+  });
+
+  it("accepts a config where memoryPath is omitted on all agents (nothing to compare)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "researcher" },
+        { name: "coder" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("compares raw strings at the schema boundary — trailing slash is NOT normalized (schema accepts; loader handles normalization)", () => {
+    // This documents the schema contract: Zod sees raw strings. `~/shared/A` and `~/shared/A/`
+    // are considered distinct at this layer. Loader.ts (Plan 02) will expand + normalize
+    // before use; any real filesystem collision is caught by downstream invariants.
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", memoryPath: "~/shared/A" },
+        { name: "fin-research", memoryPath: "~/shared/A/" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+});
