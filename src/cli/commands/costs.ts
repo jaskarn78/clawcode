@@ -74,11 +74,15 @@ export function registerCostsCommand(program: Command): void {
     .option("--agent <name>", "Filter by agent name")
     .action(async (opts: { period: string; agent?: string }) => {
       try {
-        const result = (await sendIpcRequest(SOCKET_PATH, "costs", {
+        // IPC handler returns `{ period, costs: [...] }` — unwrap before
+        // rendering. Accept the legacy bare-array shape defensively so older
+        // daemons (pre-Phase-74 fix) keep working.
+        const raw = (await sendIpcRequest(SOCKET_PATH, "costs", {
           period: opts.period,
           agent: opts.agent,
-        })) as CostByAgentModel[];
-        cliLog(formatCostsTable(result));
+        })) as CostByAgentModel[] | { costs: CostByAgentModel[] };
+        const rows = Array.isArray(raw) ? raw : (raw?.costs ?? []);
+        cliLog(formatCostsTable(rows));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
           cliError(
