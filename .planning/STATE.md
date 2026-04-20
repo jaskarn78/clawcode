@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 80-02-PLAN.md
-last_updated: "2026-04-20T21:33:20.754Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 80-03-PLAN.md
+last_updated: "2026-04-20T22:40:11.054Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 34
-  completed_plans: 33
+  completed_plans: 34
 ---
 
 # Project State
@@ -118,6 +118,9 @@ Recent decisions affecting current work:
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 02]: Embedding-null classifier for upserted vs skipped — tied to MemoryStore insert-path bifurcation; replaces fragile ms-granularity timestamp compare that misclassified same-ms back-to-back translate calls.
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 02]: Regex H2 splitter chosen over unified/remark/marked — zero new deps, byte-preserving for MEM-01; H3+ NOT treated as boundary (pinned by test).
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 02]: Serial per-agent translator (no Promise.all) — embedder singleton non-reentrant; enforced at runtime via peak-in-flight mock counter AND static source grep banning Promise.all call expressions.
+- [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: CLI-local embedder singleton — daemon-warmup-probe singleton-invariant widened to 2-site whitelist (daemon + CLI); CLI and daemon are independent processes, each gets their own EmbeddingService.
+- [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: Translator errors count as apply failures (exit 1) via workspaceFailures.push — symmetric with workspace-copy rollback; agent in partially-migrated state divergence must not be silently exit-0.
+- [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: workspace-copier sweepDir existsSync(srcPath) gate — tolerates target-only files (memories.db) so re-runs succeed; target-only ledger witness preserves forensic completeness.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -194,9 +197,10 @@ Recent decisions affecting current work:
 | Phase 79-workspace-migration P03 | 10 | 2 tasks | 8 files |
 | Phase 80 P01 | 14min | 2 tasks | 3 files |
 | Phase 80-memory-translation-re-embedding P02 | 13min | 2 tasks | 7 files |
+| Phase 80-memory-translation-re-embedding P03 | 62 min | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 80-02-PLAN.md
+Stopped at: Completed 80-03-PLAN.md
 Resume file: None

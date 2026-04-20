@@ -238,7 +238,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 80-01-PLAN.md — MemoryStore origin_id schema migration + insert() INSERT OR IGNORE path + type extension (MEM-02, MEM-03)
 - [x] 80-02-PLAN.md — memory-translator module: H2 splitter, origin_id/tag builders, discoverWorkspaceMarkdown, translateAgentMemories with serial embedder (MEM-01, MEM-03, MEM-04, MEM-05)
-- [ ] 80-03-PLAN.md — CLI wiring in runApplyAction + "upserted N, skipped M" output + Phase 80 end-to-end integration test pinning all 5 success criteria (MEM-01..05)
+- [x] 80-03-PLAN.md — CLI wiring in runApplyAction + "upserted N, skipped M" output + Phase 80 end-to-end integration test pinning all 5 success criteria (MEM-01..05)
 
 ### Phase 81: Verify + Rollback + Resume + Fork
 **Goal**: User (as operator) can run `verify`, `rollback`, and a second `apply` against the same agent to get clean pass/fail checks, per-agent reversal, and idempotent resume from partial success — AND every migrated agent (regardless of primary model: Sonnet, Haiku, MiniMax, Gemini) retains the v1.5 fork-to-Opus escalation path with fork turns appearing in `clawcode costs` under no budget ceiling.
