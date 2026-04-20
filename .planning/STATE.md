@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Ready to execute
-stopped_at: Completed 75-01-PLAN.md (memoryPath contract). Ready for 75-02 (wire runtime consumers).
-last_updated: "2026-04-20T13:56:33.679Z"
+stopped_at: Completed 75-02-PLAN.md (runtime consumers wired up). Ready for 75-03 (5-agent finmentum integration test).
+last_updated: "2026-04-20T14:14:43.828Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 6
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-20)
 ## Current Position
 
 Phase: 75 (shared-workspace-runtime-support) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -65,6 +65,8 @@ Recent decisions affecting current work:
 - [v2.0 Roadmap]: Bearer-key = session boundary — one isolated ConversationStore session per API key (OPENAI-05). No multi-user-per-key fan-out until v2.1 "Multi-User Foundations".
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 01]: Schema-level raw-string conflict detection via superRefine — path normalization (trailing slashes, ./ prefixes) deferred to loader.ts in Plan 02. Schema test documents boundary.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 01]: ResolvedAgentConfig.memoryPath is REQUIRED (not optional) — loader guarantees fallback to workspace; downstream consumers read unconditionally (no optional-chaining). Forced 13 test-fixture updates but preserves zero-optional-chain runtime pattern.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 02]: memoryPath expansion is conditional — expandHome called only when agent.memoryPath set; fallback inherits resolvedWorkspace as-is. Preserves pre-existing loader behavior of not expanding agent.workspace when YAML-set.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 02]: Signature renames (logResult: workspace→memoryPath, saveContextSummary: workspace→memoryPath) over config-object threading — minimum-diff change since both methods took path strings.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -124,9 +126,10 @@ Recent decisions affecting current work:
 | Phase 74 P01 | 22min | 3 tasks | 10 files |
 | Phase 74 P02 | 19min | 3 tasks | 7 files |
 | Phase 75-shared-workspace-runtime-support P01 | 10min | 2 tasks | 19 files |
+| Phase 75-shared-workspace-runtime-support P02 | 14min | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 75-01-PLAN.md (memoryPath contract). Ready for 75-02 (wire runtime consumers).
+Stopped at: Completed 75-02-PLAN.md (runtime consumers wired up). Ready for 75-03 (5-agent finmentum integration test).
 Resume file: None

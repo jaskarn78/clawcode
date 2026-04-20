@@ -163,7 +163,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   3. User boots all 5 finmentum agents (`fin-acquisition`, `fin-research`, `fin-playground`, `fin-tax`, `finmentum-content-creator`) on the same shared workspace and `clawcode fleet status` shows all 5 as `running` with no file-lock errors in daemon logs, no duplicate auto-linker runs across the same `memories.db`, and `memory_lookup` queries against agent A never return entries from agent B.
 **Plans**: 3 plans
 - [x] 75-01-PLAN.md — Schema + ResolvedAgentConfig.memoryPath contract + differ non-reloadable classification (SHARED-01)
-- [ ] 75-02-PLAN.md — loader.ts resolution + swap 13 runtime consumers (session-memory, heartbeat, inbox, daemon, bridge) to memoryPath (SHARED-01, SHARED-02)
+- [x] 75-02-PLAN.md — loader.ts resolution + swap 13 runtime consumers (session-memory, heartbeat, inbox, daemon, bridge) to memoryPath (SHARED-01, SHARED-02)
 - [ ] 75-03-PLAN.md — Integration test covering 2-agent isolation + 5-agent finmentum + conflict rejection (SHARED-02, SHARED-03)
 
 ### Phase 76: Migration CLI Read-Side + Dry-Run
@@ -270,7 +270,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Shared-Workspace Runtime Support | 1/3 | In Progress|  |
+| 75. Shared-Workspace Runtime Support | 2/3 | In Progress|  |
 | 76. Migration CLI Read-Side + Dry-Run | 0/? | Not started | - |
 | 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |

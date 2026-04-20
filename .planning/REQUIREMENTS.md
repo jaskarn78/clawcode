@@ -25,7 +25,7 @@
 Prerequisite — add runtime support for multiple agents pointing at one workspace without memory/inbox collisions. Blocks all finmentum-family migration work.
 
 - [x] **SHARED-01**: User (as config author) can declare multiple agents in `clawcode.yaml` that reference the same `basePath` and have each agent open an isolated `memories.db` via a per-agent `memoryPath:` override, with no cross-agent write to another agent's memory file.
-- [ ] **SHARED-02**: User (as operator) can confirm that shared-workspace agents each get their own `inbox/`, heartbeat log, and session-state directory so chokidar watchers, message routing, and consolidation jobs never fire on another agent's events.
+- [x] **SHARED-02**: User (as operator) can confirm that shared-workspace agents each get their own `inbox/`, heartbeat log, and session-state directory so chokidar watchers, message routing, and consolidation jobs never fire on another agent's events.
 - [ ] **SHARED-03**: User (as operator) can observe that all 5 finmentum agents boot cleanly on the same shared workspace with no file-lock errors, no duplicate auto-linker runs, and no cross-agent pollution in `memory_lookup` results.
 
 ### Migration CLI (MIGR-*)
@@ -121,7 +121,7 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
 | SHARED-01 | Phase 75: Shared-Workspace Runtime Support | Complete |
-| SHARED-02 | Phase 75: Shared-Workspace Runtime Support | Pending |
+| SHARED-02 | Phase 75: Shared-Workspace Runtime Support | Complete |
 | SHARED-03 | Phase 75: Shared-Workspace Runtime Support | Pending |
 | MIGR-01 | Phase 76: Migration CLI Read-Side + Dry-Run | Pending |
 | MIGR-08 | Phase 76: Migration CLI Read-Side + Dry-Run | Pending |
