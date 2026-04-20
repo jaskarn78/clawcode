@@ -1,119 +1,123 @@
-# Requirements — Milestone v2.0: Open Endpoint + Eyes & Hands
+# Requirements — Milestone v2.1: OpenClaw Agent Migration
 
 **Status:** Active
-**Started:** 2026-04-18
-**Total requirements:** 20
+**Started:** 2026-04-20
+**Total requirements:** 28
 
-**Milestone goal:** Make every ClawCode agent reachable from any OpenAI-compatible client AND give agents perception + action beyond Discord (browse web, search, generate images).
+**Milestone goal:** Port all 15 active OpenClaw agents to dedicated ClawCode agents with memories, workspaces, identities, souls, and tool access preserved — every migrated agent gains native fork-to-Opus subagent spawning.
 
----
+**User decisions (from research discussion):**
+- SOUL/IDENTITY: hybrid — `soulFile:` + `identityFile:` YAML pointers, content lives in workspace files
+- Bot identity: dual-run during pilot, per-agent cutover after verification
+- Session history: archive-only pointer at `<workspace>/archive/openclaw-sessions/`, no replay
+- Fork-to-Opus budget: unlimited per agent (no new fleet ceiling in this milestone)
 
-## v2.0 Requirements
-
-### OpenAI-Compatible Endpoint (OPENAI-*)
-
-The daemon exposes a stable, OpenAI-compatible HTTP surface so any client that speaks the OpenAI API can reach a ClawCode agent as if it were a model.
-
-- [x] **OPENAI-01**: User (as API client) can send `POST /v1/chat/completions` to the daemon with `model: "<agent-name>"` and receive a valid OpenAI-shape response populated from the named agent's Claude session.
-- [x] **OPENAI-02**: User (as API client) can request `stream: true` and receive `text/event-stream` chunks in OpenAI SSE format (`data: {...}\n\n`, final `data: [DONE]`) with assistant deltas as the agent generates.
-- [x] **OPENAI-03**: User (as API client) can call `GET /v1/models` and see every configured ClawCode agent listed as a model (`id: "<agent-name>"`, `object: "model"`, `owned_by: "clawcode"`).
-- [x] **OPENAI-04**: User (as operator) can generate per-client bearer API keys, pin each key to a specific agent, and have the daemon reject requests with missing, unknown, or agent-mismatched keys with `401` / `403`.
-- [x] **OPENAI-05**: User (as API client) can make a sequence of `POST /v1/chat/completions` requests with the same bearer key and have the agent retain conversational memory across requests (per-bearer-key session — one isolated session per API key, persisted via ConversationStore).
-- [x] **OPENAI-06**: User (as API client) can receive OpenAI-format `tool_calls` in responses when the agent chooses a tool, and can reply with `role: "tool"` messages that the daemon translates bidirectionally to Claude tool-use blocks.
-- [x] **OPENAI-07**: User (as operator) can observe `TurnOrigin = "openai-api"` on every trace row originating from the endpoint, with the bearer key fingerprint and client-sent `X-Request-Id` preserved — no TurnDispatcher refactor, just a new origin kind.
-
-### Browser Automation (BROWSER-*)
-
-Agents can drive a real headless Chromium to read, interact with, and extract data from live web pages.
-
-- [x] **BROWSER-01**: User (via agent) can open a URL with `browser_navigate` and receive a page-loaded signal, with the current URL/title returned.
-- [x] **BROWSER-02**: User (via agent) can capture a full-page or viewport `browser_screenshot` saved to the agent workspace, with the path returned in a form Claude vision can ingest (inline base64 or workspace file reference).
-- [x] **BROWSER-03**: User (via agent) can interact with a page via `browser_click` (selector) and `browser_fill` (selector + value) and observe the resulting page state.
-- [x] **BROWSER-04**: User (via agent) can extract clean text or structured content from a rendered page with `browser_extract` (accepts selector or "main content" mode with Readability-style extraction).
-- [x] **BROWSER-05**: User (via agent) can wait for a condition (`browser_wait_for`) — selector visible, URL match, timeout — before next action, with clear timeout/failure results.
-- [x] **BROWSER-06**: User (as operator) can trust that each agent's browser has a persistent profile dir under `<agent-workspace>/browser/` so cookies and sessions survive daemon restarts, and that the browser warms at daemon start (resident singleton like the embedder) with a boot-time health probe.
-
-### Web Search (SEARCH-*)
-
-Agents can search the live web and fetch clean article content for grounding and citations.
-
-- [x] **SEARCH-01**: User (via agent) can call `web_search` with a query and receive a ranked list of results (title, URL, snippet, published date when available) from Brave Search, with an optional Exa backend selectable per-agent config.
-- [x] **SEARCH-02**: User (via agent) can call `web_fetch_url` on a result URL and receive clean, readable page text (headers + paragraphs, no nav/ads) along with metadata (title, author, publish date when extractable).
-- [x] **SEARCH-03**: User (as operator) can trust that duplicate `web_search` / `web_fetch_url` calls within a single turn return cached results (no double-charging), joining the v1.7 idempotent tool-cache whitelist, with the cache scoped to a single Turn (zero cross-turn leak).
-
-### Image Generation (IMAGE-*)
-
-Agents can produce visual output and deliver it to Discord (or any consumer) via the existing attachment pipeline.
-
-- [x] **IMAGE-01**: User (via agent) can call `image_generate` with a prompt plus optional size/style/model parameters and select a backend (MiniMax, OpenAI Images, or fal.ai) chosen by per-agent config, receiving a workspace-persisted image file path as the result.
-- [x] **IMAGE-02**: User (via agent) can call `image_edit` with an input image path + edit prompt and receive a new image reflecting the edits from whichever backend supports it (config-gated — only backends advertising edit support are available).
-- [x] **IMAGE-03**: User (via agent) can deliver a generated image to a Discord channel by calling the existing `send_attachment` MCP tool with the workspace path returned from `image_generate` — no new delivery surface.
-- [x] **IMAGE-04**: User (as operator) can budget and observe per-agent image-generation spend in the existing `clawcode costs` CLI with image calls recorded as a new cost category alongside tokens.
+**In-scope agents (15):**
+- Finmentum family (5, shared workspace): `fin-acquisition`, `fin-research`, `fin-playground`, `fin-tax`, `finmentum-content-creator`
+- Dedicated workspace (10): `general`, `work`, `projects`, `research`, `personal`, `shopping`, `local-clawdy`, `kimi`, `card-planner`, `card-generator`
 
 ---
 
-## Future Requirements (deferred to later milestones)
+## v2.1 Requirements
 
-These surfaced during v2.0 scoping but are intentionally out of scope here:
+### Shared-Workspace Runtime (SHARED-*)
 
-- Multi-user auth beyond bearer-key-per-client (deferred to v2.1 "Multi-User Foundations")
-- SMS / email / voice reach surfaces (deferred to v2.2+ "Extended Reach")
-- Skill marketplace / agent-initiated install (deferred to v2.1+)
-- Dream state / replay mode / personality evolution (deferred to v2.2+)
-- Billing / usage metering per user (deferred to v2.1+)
-- OpenAI-compatible `/v1/embeddings` and `/v1/completions` (legacy) surfaces — only `/v1/chat/completions` + `/v1/models` in scope
-- Full browser automation parity (download handlers, multi-tab, PDF capture) — v2.0 delivers the 6 core tools; advanced surfaces later
-- Image variations beyond the three named backends (Stable Diffusion / Midjourney via proxy / Recraft) — later
+Prerequisite — add runtime support for multiple agents pointing at one workspace without memory/inbox collisions. Blocks all finmentum-family migration work.
+
+- [ ] **SHARED-01**: User (as config author) can declare multiple agents in `clawcode.yaml` that reference the same `basePath` and have each agent open an isolated `memories.db` via a per-agent `memoryPath:` override, with no cross-agent write to another agent's memory file.
+- [ ] **SHARED-02**: User (as operator) can confirm that shared-workspace agents each get their own `inbox/`, heartbeat log, and session-state directory so chokidar watchers, message routing, and consolidation jobs never fire on another agent's events.
+- [ ] **SHARED-03**: User (as operator) can observe that all 5 finmentum agents boot cleanly on the same shared workspace with no file-lock errors, no duplicate auto-linker runs, and no cross-agent pollution in `memory_lookup` results.
+
+### Migration CLI (MIGR-*)
+
+User-facing `clawcode migrate openclaw` command — plan, apply, rollback, resume. State journal at `.planning/migration/ledger.jsonl`.
+
+- [ ] **MIGR-01**: User (as operator) can run `clawcode migrate openclaw plan` and see a per-agent table (source name, target `basePath`, memory count, MCP servers mapped, Discord channel) with color-coded diff, writes nothing.
+- [ ] **MIGR-02**: User (as operator) can run `clawcode migrate openclaw apply [--only <agent>]` and have the CLI refuse if the OpenClaw daemon (`openclaw-gateway.service`) is running, refuse if any raw non-`op://` secret would be written to `clawcode.yaml`, and refuse if any Discord channel ID already appears on an existing ClawCode agent.
+- [ ] **MIGR-03**: User (as operator) can re-run `clawcode migrate openclaw apply` after partial success and have only un-migrated agents processed (idempotent; ledger-driven resume), with already-migrated memories deduped via `origin_id`.
+- [ ] **MIGR-04**: User (as operator) can run `clawcode migrate openclaw verify [<agent>]` after apply and see pass/fail checks for: workspace files present, memory count within ±5% of source, Discord channel reachable, agent boots on daemon restart.
+- [ ] **MIGR-05**: User (as operator) can run `clawcode migrate openclaw rollback <agent>` and have the CLI remove that agent's entries from `clawcode.yaml`, delete its ClawCode workspace + memory DB, and leave the source OpenClaw state fully intact.
+- [ ] **MIGR-06**: User (as operator) can observe that every migration action writes a structured JSONL entry to `.planning/migration/ledger.jsonl` with timestamp, agent, step, outcome, and file-hash witnesses.
+- [ ] **MIGR-07**: User (as operator) can trust that the migrator never modifies, deletes, or renames any file under `~/.openclaw/` — source system remains untouched for fallback.
+- [ ] **MIGR-08**: User (as operator) can run `clawcode migrate openclaw list` at any time and see which of the 15 agents are `pending` / `migrated` / `verified` / `rolled-back` with the corresponding ledger rows.
+
+### Config Mapping (CONF-*)
+
+Mapping from `openclaw.json` agent entries to `clawcode.yaml` agents array, with SOUL/IDENTITY as file pointers.
+
+- [ ] **CONF-01**: User (as operator) can trust that each migrated agent's `clawcode.yaml` entry carries a `soulFile:` pointing to `<workspace>/SOUL.md` and an `identityFile:` pointing to `<workspace>/IDENTITY.md`, with content read lazily at agent boot — no inline content duplication.
+- [ ] **CONF-02**: User (as operator) can trust that MCP servers declared per-agent in `openclaw.json` are mapped to `mcpServers:` references in the new `clawcode.yaml` entry, with existing ClawCode MCP patterns (clawcode + 1password auto-injection) preserved and unknown servers flagged in the plan output.
+- [ ] **CONF-03**: User (as operator) can trust that each migrated agent's model selection is mapped from OpenClaw's model id to the closest ClawCode-equivalent (e.g. `anthropic-api/claude-sonnet-4-6` passes through, `clawcode/admin-clawdy` stays as-is), with any unmappable model flagged in the plan and configurable via `--model-map` override.
+- [ ] **CONF-04**: User (as operator) can trust that the migrator writes to `clawcode.yaml` via atomic temp-file + rename so the daemon's chokidar watcher never sees a partially-written file, and the YAML round-trip preserves all existing comments and key ordering.
+
+### Workspace Migration (WORK-*)
+
+Per-agent file copy from `~/.openclaw/workspace-<name>/` to ClawCode target workspace.
+
+- [ ] **WORK-01**: User (as operator) can trust that each migrated agent's workspace contains the source `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `CLAUDE.md`, `MEMORY.md`, `memory/`, `.learnings/`, and `archive/` — copied with symlink filter that excludes Python venv self-symlinks (`lib64 -> lib` trap verified in finmentum workspace).
+- [ ] **WORK-02**: User (as operator) can trust that the 5 finmentum-family agents all resolve to the same ClawCode workspace path (shared `basePath`) while keeping per-agent `memoryPath`, soulFile, identityFile, and inbox in distinct files/subdirs.
+- [ ] **WORK-03**: User (as operator) can trust that any `.git` directory in a source workspace is preserved verbatim (so the agent's existing git history isn't re-initialized or corrupted).
+- [ ] **WORK-04**: User (via migrated agent) can read the archived OpenClaw sessions at `<workspace>/archive/openclaw-sessions/*.jsonl` as read-only reference, with the migrator copying the full session tree but NOT replaying into ConversationStore.
+- [ ] **WORK-05**: User (as operator) can trust that file permissions, timestamps, and non-text blobs (images, PDFs in `.learnings/`) survive the copy without corruption — verified by hash-witness post-copy check.
+
+### Memory Translation (MEM-*)
+
+OpenClaw workspace markdown → ClawCode `memories.db` with re-embedding.
+
+- [ ] **MEM-01**: User (as migrated agent) can retrieve memories via `memory_lookup` MCP tool that originated from the source OpenClaw agent's `MEMORY.md` + `memory/*.md` files, with the full text content preserved verbatim (no LLM rewriting, no summarization).
+- [ ] **MEM-02**: User (as operator) can trust that each migrated memory row in ClawCode's `memories` table carries an `origin_id` UNIQUE column (format: `openclaw:<agent>:<source-path-hash>`) so re-running the migrator does not create duplicates.
+- [ ] **MEM-03**: User (as operator) can trust that all migrated memories are re-embedded via the resident `all-MiniLM-L6-v2` singleton (384-dim) and inserted through the public `MemoryStore.insert()` API — never raw SQL against `vec_memories`.
+- [ ] **MEM-04**: User (as migrated agent) can retrieve `.learnings/*.md` entries as first-class memories via `memory_lookup` with a `tag: "learning"` classifier, so legacy learnings become searchable from day one.
+- [ ] **MEM-05**: User (as operator) can trust that the migrator reads the workspace markdown (NOT the OpenClaw `chunks` table from its file-RAG sqlite) as source of truth — the OpenClaw sqlite is a derived index and may be stale.
+
+### Fork-to-Opus Subagents (FORK-*)
+
+Verify every migrated agent retains v1.5 fork-based Opus escalation.
+
+- [ ] **FORK-01**: User (as migrated agent) can invoke the existing fork-to-Opus escalation path (`forkSession` with Opus model override) regardless of the agent's primary model (Sonnet, Haiku, MiniMax, or Gemini) — no per-agent config change required.
+- [ ] **FORK-02**: User (as operator) can confirm via `clawcode costs --agent <name>` that fork-to-Opus turns appear in the cost ledger for each migrated agent, with no budget ceiling enforced (unlimited per user decision).
+
+### Operational Cutover (OPS-*)
+
+Pilot → per-agent cutover → dual-run guardrails.
+
+- [ ] **OPS-01**: User (as operator) can migrate a single low-risk pilot agent (`personal` or `local-clawdy`) first and verify end-to-end behavior before migrating the remaining 14 — pilot selection surfaces in plan output.
+- [ ] **OPS-02**: User (as operator) can run OpenClaw and ClawCode side-by-side during pilot with dual bots present in each migrated agent's Discord channel, with a clear cutover command (`clawcode migrate openclaw cutover <agent>`) that removes the OpenClaw bot's channel access per-agent after user verification.
+- [ ] **OPS-03**: User (as operator) can trust that the migrator refuses to proceed if both bots would otherwise reply to the same message (same channel ID bound to both an OpenClaw agent AND a ClawCode agent with overlapping activation rules) — hard fail with channel collision report.
+- [ ] **OPS-04**: User (as operator) can execute a final `clawcode migrate openclaw complete` step that writes a migration report to `.planning/milestones/v2.1-migration-report.md` summarizing per-agent outcomes, memory-count deltas, Discord cutover timestamps, and any pending rollbacks.
 
 ---
 
-## Out of Scope (explicit exclusions)
+## Future Requirements
 
-- **Gateway layer / separate service** — the OpenAI endpoint is a new listener on the existing daemon process. One binary, one socket, one lifecycle.
-- **Discord-plugin changes** — v2.0 does not touch the Discord bridge. The OpenAI endpoint is an entirely new surface.
-- **TurnDispatcher refactor** — `openai-api` is a new TurnOrigin kind. Zero changes to v1.8's dispatcher contract.
-- **Per-agent opt-in for browser/search/image MCPs** — all three are auto-injected like `clawcode` and `1password`. Agents that want to opt out set `mcpServers: []`.
-- **New runtime or package manager** — Node 22 + npm only.
-- **Voice / TTS** — stays out of scope (user-facing decision from v1.9).
-- **Shared knowledge graph across agents** — workspace isolation is load-bearing.
+Deferred from v2.1 scope — captured for future milestones:
+
+- **Session replay** — import OpenClaw `sessions/*.jsonl` turns into ConversationStore with provenance. Rejected for v2.1 because JSONL shape doesn't cleanly retrofit into v1.9 ConversationStore provenance fields. (considered v2.2+)
+- **Fleet-scale fork budget ceiling** — per-agent daily Opus spending caps enforced daemon-side. Rejected per user decision (unlimited); revisit if costs become a concern.
+- **Memory schema v2** — knowledge-graph edges re-hydrated from OpenClaw relationships. Rejected because OpenClaw's file-RAG has no edge model; v1.6 auto-linker will rebuild edges organically post-migration.
+- **Cross-agent memory sharing** — explicit cross-agent reads within finmentum family. Rejected per PROJECT.md ("Shared global memory — violates workspace isolation").
+- **Multi-bot identity reconciliation** — smart merge of Clawdbot + OpenClaw-bot presence beyond dual-run. Rejected; dual-run → cutover is sufficient.
+
+---
+
+## Out of Scope
+
+Explicitly not in this milestone, with reasoning:
+
+- **Replaying 413+ session JSONL archives into ConversationStore** — cost-prohibitive; provenance fidelity gap; archive-only pointer is the accepted pattern (matches Codex CLI / AnythingLLM).
+- **Automatic personality evolution during migration** — SOUL.md contents copied verbatim; any LLM-rewriting of soul violates PROJECT.md explicit Out-of-Scope.
+- **Translating OpenClaw sqlite embeddings** — dimension mismatch (3072 vs. 384) makes blob copy impossible; re-embed from source text is the only path.
+- **Copying plaintext Discord bot token from `openclaw.json`** — migrator hard-refuses any raw-secret value in `clawcode.yaml`.
+- **Deleting or modifying source OpenClaw state** — migrator is non-destructive; OpenClaw continues to function during and after migration.
+- **Inline SOUL/IDENTITY embedding in clawcode.yaml** — file-pointer hybrid chosen for editability and diff-ability.
+- **Migrating non-active OpenClaw agents** — `0`, `4`, `claude`, `claude-code`, `claude-opus`, `claudecode`, `default`, `finmentum`, `main`, `openai-codex` directories exist but are not in the `agents.list` active set.
 
 ---
 
 ## Traceability
 
-Every v2.0 requirement is mapped to exactly one phase. Coverage: 20/20.
+Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| OPENAI-01 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-02 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-03 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-04 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-05 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-06 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| OPENAI-07 | Phase 69 — OpenAI-Compatible Endpoint | Complete |
-| BROWSER-01 | Phase 70 — Browser Automation MCP | Complete |
-| BROWSER-02 | Phase 70 — Browser Automation MCP | Complete |
-| BROWSER-03 | Phase 70 — Browser Automation MCP | Complete |
-| BROWSER-04 | Phase 70 — Browser Automation MCP | Complete |
-| BROWSER-05 | Phase 70 — Browser Automation MCP | Complete |
-| BROWSER-06 | Phase 70 — Browser Automation MCP | Complete |
-| SEARCH-01 | Phase 71 — Web Search MCP | Complete |
-| SEARCH-02 | Phase 71 — Web Search MCP | Complete |
-| SEARCH-03 | Phase 71 — Web Search MCP | Complete |
-| IMAGE-01 | Phase 72 — Image Generation MCP | Complete |
-| IMAGE-02 | Phase 72 — Image Generation MCP | Complete |
-| IMAGE-03 | Phase 72 — Image Generation MCP | Complete |
-| IMAGE-04 | Phase 72 — Image Generation MCP | Complete |
-
-### Per-phase requirement summary
-
-| Phase | Requirements | Count |
-|-------|--------------|-------|
-| Phase 69 — OpenAI-Compatible Endpoint | OPENAI-01, OPENAI-02, OPENAI-03, OPENAI-04, OPENAI-05, OPENAI-06, OPENAI-07 | 7 |
-| Phase 70 — Browser Automation MCP | BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06 | 6 |
-| Phase 71 — Web Search MCP | SEARCH-01, SEARCH-02, SEARCH-03 | 3 |
-| Phase 72 — Image Generation MCP | IMAGE-01, IMAGE-02, IMAGE-03, IMAGE-04 | 4 |
-| **Total** | | **20** |
-
-**Coverage:** 20/20 requirements mapped to exactly one phase each. No orphans. No duplicates.
+| REQ-ID | Phase | Success Criterion |
+|--------|-------|-------------------|
+| *(empty — filled by gsd-roadmapper)* | | |
