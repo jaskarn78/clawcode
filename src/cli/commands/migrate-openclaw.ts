@@ -56,12 +56,27 @@ import {
   installFsGuard,
   uninstallFsGuard,
 } from "../../migration/fs-guard.js";
-import { parseModelMapFlag } from "../../migration/model-map.js";
+import {
+  parseModelMapFlag,
+  mergeModelMap,
+  DEFAULT_MODEL_MAP,
+} from "../../migration/model-map.js";
+import {
+  mapAgent,
+  type MapAgentWarning,
+} from "../../migration/config-mapper.js";
+import { writeClawcodeYaml } from "../../migration/yaml-writer.js";
+import { loadConfig } from "../../config/loader.js";
+import type { OpenclawSourceEntry } from "../../migration/openclaw-config-reader.js";
 
 /**
- * Phase 77-03 literal: printed to stderr on the all-guards-pass path of
- * `apply`. Phase 77 intentionally has no write body — the actual YAML
- * write is Phase 78's scope. Exported for test assertion.
+ * Phase 77-03 literal: was printed to stderr on the all-guards-pass path of
+ * `apply` while Phase 77 had no write body. Phase 78 Plan 03 replaced the
+ * stub with the real write pipeline; this constant remains EXPORTED for
+ * backward-compat with any external tooling that grepped for the literal.
+ *
+ * @deprecated Phase 78 Plan 03 lands the real apply body. This message is
+ * no longer emitted on the success path.
  */
 export const APPLY_NOT_IMPLEMENTED_MESSAGE =
   "apply not implemented — pre-flight guards only in Phase 77";
@@ -264,15 +279,19 @@ export async function runPlanAction(opts: {
 }
 
 /**
- * Phase 77-03 apply action handler. Runs the 4 pre-flight guards (via
- * runApplyPreflight) inside a process-scoped fs-guard install/uninstall
- * pair. Never writes clawcode.yaml or agent files — Phase 77 stops here
- * with the APPLY_NOT_IMPLEMENTED_MESSAGE literal. Phase 78 will replace
- * that stub with the actual write body.
- *
- * Every path returns 1 this phase (no success case has an actual write).
- * Commander's `.action()` handler calls `process.exit(code)` only when
- * code !== 0 — but here code is always 1, so exit is deferred.
+ * Phase 78 Plan 03 apply action handler — full end-to-end pipeline:
+ *   1. Read openclaw.json + build plan (Phase 76 diff-builder).
+ *   2. --only <unknown> fail-fast (no ledger side-effects).
+ *   3. Load existing clawcode.yaml top-level mcpServers for Plan 02 mapper.
+ *   4. Merge DEFAULT_MODEL_MAP + --model-map overrides.
+ *   5. Call mapAgent per planned agent → MappedAgentNode[] + warnings.
+ *   6. Install fs-guard (Phase 77 MIGR-07 belt-and-suspenders).
+ *   7. Run 4 pre-flight guards (Phase 77 orchestrator). Refuse short-circuits.
+ *   8. Call writeClawcodeYaml (atomic temp+rename, comment preservation,
+ *      pre-write secret scan, unmappable-model gate).
+ *   9. Append ledger witness row {step:"write", outcome:"allow"|"refuse",
+ *      file_hashes:{"clawcode.yaml": sha256}, status:"migrated"|"pending"}.
+ *  10. Uninstall fs-guard in finally.
  *
  * `deps.execaRunner` is the DI hook for tests to control systemctl output
  * without spawning a real subprocess. Commander passes `{}` for deps; tests
@@ -281,7 +300,6 @@ export async function runPlanAction(opts: {
 export async function runApplyAction(
   opts: {
     only?: string;
-    // Plan 02 plumbs this through; Plan 03's yaml-writer will consume it.
     modelMap?: Record<string, string>;
   },
   deps: {
@@ -291,10 +309,6 @@ export async function runApplyAction(
     ) => Promise<{ stdout: string; exitCode: number | null }>;
   } = {},
 ): Promise<number> {
-  // Plan 03 consumes modelMap. Currently plumbed through for test coverage
-  // of the flag wiring; apply-preflight does not yet use it (writer is Plan 03).
-  const _modelMap = opts.modelMap ?? {};
-  void _modelMap;
   const paths = resolvePaths();
   const inventory = await readOpenclawInventory(paths.openclawJson);
   const chunkCounts = await gatherChunkCounts(inventory, paths.openclawMemoryDir);
@@ -306,8 +320,7 @@ export async function runApplyAction(
   });
 
   // --only <unknown>: surfaces as a PlanWarning (diff-builder invariant).
-  // Mirror runPlanAction's handling — emit actionable stderr, return 1
-  // BEFORE touching the ledger so no spurious rows appear.
+  // Fail-fast with actionable stderr, no ledger side-effects.
   const unknownFilter = report.warnings.find(
     (w) => w.kind === "unknown-agent-filter",
   );
@@ -319,12 +332,39 @@ export async function runApplyAction(
     return 1;
   }
 
-  // fs-guard install: belt-and-suspenders for MIGR-07. Any fs.writeFile /
-  // appendFile / mkdir call (via default-import or require; see fs-guard.ts
-  // header for ESM-scope caveat) resolving under ~/.openclaw/ throws
-  // ReadOnlySourceError synchronously. Installed BEFORE the first guard
-  // runs; uninstalled in finally so a thrown guard never leaves the
-  // interceptor live for the next CLI command.
+  // --- Load existing top-level mcpServers (for config-mapper lookup) ---
+  // Tolerates missing or unreadable file — writer itself gates on
+  // file-not-found with its own refuse reason.
+  const existingConfig = await loadExistingClawcodeYaml(paths.clawcodeConfigPath);
+  const existingTopLevelMcp = new Set(
+    Object.keys(existingConfig?.mcpServers ?? {}),
+  );
+
+  // --- Merge model map (DEFAULT + --model-map overrides) ---
+  const finalModelMap = mergeModelMap(DEFAULT_MODEL_MAP, opts.modelMap ?? {});
+
+  // --- Map each planned agent (pure — no I/O) ---
+  const mapResults = report.agents.map((agentPlan) => {
+    const source = inventory.agents.find((a) => a.id === agentPlan.sourceId);
+    if (!source)
+      throw new Error(
+        `internal error: planned agent ${agentPlan.sourceId} not in inventory`,
+      );
+    return mapAgent({
+      source,
+      targetBasePath: agentPlan.targetBasePath,
+      targetMemoryPath: agentPlan.targetMemoryPath,
+      modelMap: finalModelMap,
+      existingTopLevelMcp,
+      perAgentMcpNames: extractPerAgentMcpNames(source),
+    });
+  });
+  const agentsToInsert = mapResults.map((r) => r.node);
+  const allMapWarnings: MapAgentWarning[] = mapResults.flatMap(
+    (r) => r.warnings as MapAgentWarning[],
+  );
+
+  // --- fs-guard install (Phase 77 MIGR-07) ---
   installFsGuard();
   try {
     const result = await runApplyPreflight({
@@ -343,12 +383,86 @@ export async function runApplyAction(
       }
       return 1;
     }
-    // All 4 guards passed — Phase 77 intentionally has no apply body.
-    cliError(APPLY_NOT_IMPLEMENTED_MESSAGE);
-    return 1;
+
+    // --- Phase 78 Plan 03: write clawcode.yaml ---
+    const writeResult = await writeClawcodeYaml({
+      existingConfigPath: paths.clawcodeConfigPath,
+      agentsToInsert,
+      modelMapWarnings: allMapWarnings,
+    });
+
+    if (writeResult.outcome === "refused") {
+      await appendRow(paths.ledgerPath, {
+        ts: new Date().toISOString(),
+        action: "apply",
+        agent: opts.only ?? "ALL",
+        status: "pending",
+        source_hash: report.planHash,
+        step: "write",
+        outcome: "refuse",
+        notes: `${writeResult.step}: ${writeResult.reason}`,
+      });
+      cliError(writeResult.reason);
+      return 1;
+    }
+
+    // Success witness row — CONF-04 / MIGR-06. Carries file_hashes for
+    // forensic verification (operator can `sha256sum clawcode.yaml` and
+    // compare to the recorded witness).
+    await appendRow(paths.ledgerPath, {
+      ts: new Date().toISOString(),
+      action: "apply",
+      agent: opts.only ?? "ALL",
+      status: "migrated",
+      source_hash: report.planHash,
+      target_hash: writeResult.targetSha256,
+      step: "write",
+      outcome: "allow",
+      file_hashes: { "clawcode.yaml": writeResult.targetSha256 },
+      notes: `wrote ${agentsToInsert.length} agent(s) to ${writeResult.destPath}`,
+    });
+    cliLog(
+      green(
+        `✓ wrote ${agentsToInsert.length} agent(s) to ${writeResult.destPath}`,
+      ),
+    );
+    return 0;
   } finally {
     uninstallFsGuard();
   }
+}
+
+/**
+ * Load existing clawcode.yaml for top-level mcpServers lookup. Tolerates
+ * missing or unreadable file (writer's own file-not-found gate will refuse
+ * the apply with a clearer reason in that branch).
+ */
+async function loadExistingClawcodeYaml(
+  path: string,
+): Promise<Awaited<ReturnType<typeof loadConfig>> | null> {
+  try {
+    return await loadConfig(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract per-agent MCP server names from an OpenclawSourceEntry. OpenClaw's
+ * tools.mcp shape is `unknown` per schema (deliberate pass-through in
+ * Phase 76); read cautiously. Phase 78 scope is minimal key-name extraction;
+ * Phase 82 may refine if richer parsing is needed.
+ */
+function extractPerAgentMcpNames(
+  source: OpenclawSourceEntry,
+): readonly string[] {
+  const tools = source.tools;
+  if (tools === null || tools === undefined || typeof tools !== "object") {
+    return [];
+  }
+  const mcp = (tools as { mcp?: unknown }).mcp;
+  if (!mcp || typeof mcp !== "object") return [];
+  return Object.keys(mcp as Record<string, unknown>);
 }
 
 // --- Commander wiring (nested: `migrate openclaw <sub>`) -------------
@@ -430,7 +544,7 @@ export function registerMigrateOpenclawCommand(program: Command): void {
   openclaw
     .command("apply")
     .description(
-      "Run pre-flight guards then write clawcode.yaml (Phase 77 stub: guards only, apply body deferred to Phase 78)",
+      "Run pre-flight guards then write clawcode.yaml (Phase 78 Plan 03 — atomic + comment-preserving)",
     )
     .option(
       "--only <name>",

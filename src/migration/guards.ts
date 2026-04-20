@@ -50,6 +50,19 @@ const SHORT_IDENT_MAX = 40;
 const HIGH_ENTROPY_MIN_LEN = 30;
 const HIGH_ENTROPY_MIN_CLASSES = 3;
 const HIGH_ENTROPY_MIN_BITS = 4.0;
+// Phase 78 Plan 03 additive whitelists — closes the STATE.md Phase 78+ concern:
+// "Static /tmp/cc-agents path... trips scanSecrets high-entropy threshold on
+//  targetBasePath (real production concern for Phase 78+)". Both patterns
+// run AFTER hasSecretPrefix (sk-/MT-) so a literal secret embedded inside a
+// path-like or model-id-like string would still refuse.
+// Absolute filesystem path: starts with `/` or `~/` (POSIX — Windows paths
+// are NFR since ClawCode is Linux-only per stack notes).
+const ABSOLUTE_PATH_PREFIX = /^(?:\/|~\/)/;
+// OpenClaw model id: `<provider>/<name>` where both sides are lowercase
+// alphanumeric-with-hyphens/dots (e.g. "anthropic-api/claude-sonnet-4-6",
+// "minimax/abab6.5"). Capped at 80 chars — real ids are < 50.
+const MODEL_ID_SHAPE = /^[a-z0-9][a-z0-9.\-]*\/[a-z0-9][a-z0-9.\-]*$/;
+const MODEL_ID_MAX = 80;
 
 // ---- Public types ---------------------------------------------------
 
@@ -238,13 +251,30 @@ function characterClasses(s: string): number {
 /**
  * Whitelist — explicit "this is not a secret" shapes. Order matters: OP_REF
  * first (cheapest test), then numeric-only (channel IDs, Unix timestamps),
- * then the short-identifier regex (MCP server names, agent ids).
+ * then the short-identifier regex (MCP server names, agent ids), then the
+ * Phase 78 additions (absolute POSIX paths, OpenClaw model ids).
+ *
+ * CRITICAL: This runs AFTER hasSecretPrefix (sk-/MT-), so an API key that
+ * happens to be embedded inside a path-shaped string would still refuse —
+ * the prefix check short-circuits before whitelist evaluation.
  */
 function isWhitelisted(s: string): boolean {
   if (s === "") return true;
   if (OP_REF.test(s)) return true;
   if (NUMERIC_ONLY.test(s)) return true;
   if (SHORT_IDENT.test(s) && s.length <= SHORT_IDENT_MAX) return true;
+  // Phase 78 Plan 03 — absolute POSIX filesystem paths are migrator-
+  // generated (diff-builder.getTargetBasePath + path.join) and never
+  // contain secrets. Long paths with uppercase filename components
+  // (SOUL.md / IDENTITY.md) push entropy over threshold, so an explicit
+  // path whitelist is needed to use scanSecrets on MappedAgentNode data.
+  if (ABSOLUTE_PATH_PREFIX.test(s)) return true;
+  // Phase 78 Plan 03 — OpenClaw model ids (<provider>/<name>) are shipped
+  // verbatim from openclaw.json; real values like
+  // "anthropic-api/claude-sonnet-4-6" are multi-class + length>=30 +
+  // entropy>=4.0. They are not secrets and must pass cleanly so the
+  // migration pre-flight doesn't refuse every on-box agent.
+  if (MODEL_ID_SHAPE.test(s) && s.length <= MODEL_ID_MAX) return true;
   return false;
 }
 

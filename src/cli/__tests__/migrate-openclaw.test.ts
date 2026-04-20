@@ -455,7 +455,7 @@ describe("migrate openclaw apply — Phase 78 end-to-end", () => {
 
   it("fs-guard remains installed during writer (Phase 77 MIGR-07 regression) (Test 8)", async () => {
     const fx = await setupE2EFixture({
-      agents: [{ id: "new-guard", channelId: "222222222222222222" }],
+      agents: [{ id: "new-guard", channelId: "333300000000000333" }],
     });
     process.env.CLAWCODE_OPENCLAW_JSON = fx.openclawPath;
     process.env.CLAWCODE_LEDGER_PATH = fx.ledgerPath;
