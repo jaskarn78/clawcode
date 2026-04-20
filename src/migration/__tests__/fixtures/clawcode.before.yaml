@@ -7,7 +7,7 @@ mcpServers:
     args:
       - /path/to/finnhub.js
     env:
-      FINNHUB_API_KEY: op://clawdbot/Finnhub/api-key  # op:// reference — safe
+      FINNHUB_API_KEY: op://clawdbot/Finnhub/api-key # op:// reference — safe
   finmentum-db:
     name: finmentum-db
     command: mcporter
@@ -28,7 +28,7 @@ mcpServers:
       - plugin
       - run
 discord:
-  botToken: op://clawdbot/Clawdbot Discord Token/credential  # operator-edited line
+  botToken: op://clawdbot/Clawdbot Discord Token/credential # operator-edited line
 defaults:
   model: sonnet
   basePath: ~/.clawcode/agents

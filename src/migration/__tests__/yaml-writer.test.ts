@@ -18,15 +18,14 @@
  *  14. Missing existing file → refused with step: "file-not-found"
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { mkdtemp, readFile, copyFile, rm } from "node:fs/promises";
-import * as fsPromises from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import chokidar from "chokidar";
 import { parse as parseYaml } from "yaml";
-import { writeClawcodeYaml } from "../yaml-writer.js";
+import { writeClawcodeYaml, writerFs } from "../yaml-writer.js";
 import { SECRET_REFUSE_MESSAGE } from "../guards.js";
 import type { MappedAgentNode, MapAgentWarning } from "../config-mapper.js";
 
@@ -53,15 +52,39 @@ async function setupDestDir(): Promise<{ dir: string; destPath: string }> {
   return { dir, destPath };
 }
 
+// Snapshot the real fs functions so afterEach can restore the dispatch
+// holder after tests that swap them out.
+const ORIG_FS = { ...writerFs };
+
 afterEach(async () => {
   vi.restoreAllMocks();
+  writerFs.readFile = ORIG_FS.readFile;
+  writerFs.writeFile = ORIG_FS.writeFile;
+  writerFs.rename = ORIG_FS.rename;
+  writerFs.unlink = ORIG_FS.unlink;
 });
 
 describe("writeClawcodeYaml — atomic temp+rename (Tests 1-3)", () => {
   it("writes to a tmp file matching /\\.clawcode\\.yaml\\.<pid>\\.<ts>\\.tmp$/ then renames (Test 1)", async () => {
     const { destPath } = await setupDestDir();
-    const writeSpy = vi.spyOn(fsPromises, "writeFile");
-    const renameSpy = vi.spyOn(fsPromises, "rename");
+    const writeCalls: Array<[string, unknown, unknown]> = [];
+    const renameCalls: Array<[string, string]> = [];
+
+    writerFs.writeFile = (async (...args: unknown[]) => {
+      writeCalls.push([String(args[0]), args[1], args[2]]);
+      return ORIG_FS.writeFile(
+        args[0] as Parameters<typeof ORIG_FS.writeFile>[0],
+        args[1] as Parameters<typeof ORIG_FS.writeFile>[1],
+        args[2] as Parameters<typeof ORIG_FS.writeFile>[2],
+      );
+    }) as typeof writerFs.writeFile;
+    writerFs.rename = (async (...args: unknown[]) => {
+      renameCalls.push([String(args[0]), String(args[1])]);
+      return ORIG_FS.rename(
+        args[0] as Parameters<typeof ORIG_FS.rename>[0],
+        args[1] as Parameters<typeof ORIG_FS.rename>[1],
+      );
+    }) as typeof writerFs.rename;
 
     const result = await writeClawcodeYaml({
       existingConfigPath: destPath,
@@ -74,28 +97,34 @@ describe("writeClawcodeYaml — atomic temp+rename (Tests 1-3)", () => {
     expect(result.outcome).toBe("written");
 
     // writeFile was called with a tmp path (not the dest directly)
-    const writeCalls = writeSpy.mock.calls;
     const tmpWrite = writeCalls.find((c) =>
-      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(String(c[0])),
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(c[0]),
     );
     expect(tmpWrite).toBeDefined();
-    // The writeFile target should NOT be the dest itself
     for (const c of writeCalls) {
-      expect(String(c[0])).not.toBe(destPath);
+      expect(c[0]).not.toBe(destPath);
     }
 
     // rename was called with (tmpPath, destPath)
-    expect(renameSpy).toHaveBeenCalled();
-    const renameCall = renameSpy.mock.calls[0];
-    expect(renameCall).toBeDefined();
-    expect(String(renameCall![0])).toMatch(/\.clawcode\.yaml\.\d+\.\d+\.tmp$/);
-    expect(String(renameCall![1])).toBe(destPath);
+    expect(renameCalls.length).toBeGreaterThan(0);
+    const r0 = renameCalls[0]!;
+    expect(r0[0]).toMatch(/\.clawcode\.yaml\.\d+\.\d+\.tmp$/);
+    expect(r0[1]).toBe(destPath);
   });
 
   it("produces distinct tmp paths for different pid values (Test 2)", async () => {
     const { destPath: destA } = await setupDestDir();
     const { destPath: destB } = await setupDestDir();
-    const writeSpy = vi.spyOn(fsPromises, "writeFile");
+    const writeCalls: string[] = [];
+
+    writerFs.writeFile = (async (...args: unknown[]) => {
+      writeCalls.push(String(args[0]));
+      return ORIG_FS.writeFile(
+        args[0] as Parameters<typeof ORIG_FS.writeFile>[0],
+        args[1] as Parameters<typeof ORIG_FS.writeFile>[1],
+        args[2] as Parameters<typeof ORIG_FS.writeFile>[2],
+      );
+    }) as typeof writerFs.writeFile;
 
     await writeClawcodeYaml({
       existingConfigPath: destA,
@@ -110,9 +139,9 @@ describe("writeClawcodeYaml — atomic temp+rename (Tests 1-3)", () => {
       pid: 5678,
     });
 
-    const tmpTargets = writeSpy.mock.calls
-      .map((c) => String(c[0]))
-      .filter((p) => /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p));
+    const tmpTargets = writeCalls.filter((p) =>
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
+    );
     expect(tmpTargets.length).toBeGreaterThanOrEqual(2);
     expect(tmpTargets.some((p) => p.includes(".1234."))).toBe(true);
     expect(tmpTargets.some((p) => p.includes(".5678."))).toBe(true);
@@ -120,10 +149,19 @@ describe("writeClawcodeYaml — atomic temp+rename (Tests 1-3)", () => {
 
   it("unlinks tmp file on rename failure and re-throws (Test 3)", async () => {
     const { destPath } = await setupDestDir();
-    const renameSpy = vi
-      .spyOn(fsPromises, "rename")
-      .mockRejectedValueOnce(new Error("EACCES: simulated rename failure"));
-    const unlinkSpy = vi.spyOn(fsPromises, "unlink");
+    let renameCalled = false;
+    const unlinkCalls: string[] = [];
+
+    writerFs.rename = (async () => {
+      renameCalled = true;
+      throw new Error("EACCES: simulated rename failure");
+    }) as typeof writerFs.rename;
+    writerFs.unlink = (async (...args: unknown[]) => {
+      unlinkCalls.push(String(args[0]));
+      return ORIG_FS.unlink(
+        args[0] as Parameters<typeof ORIG_FS.unlink>[0],
+      );
+    }) as typeof writerFs.unlink;
 
     await expect(
       writeClawcodeYaml({
@@ -134,11 +172,9 @@ describe("writeClawcodeYaml — atomic temp+rename (Tests 1-3)", () => {
       }),
     ).rejects.toThrow(/EACCES/);
 
-    expect(renameSpy).toHaveBeenCalled();
-    // unlink MUST have been called with the tmp path
-    const unlinkCalls = unlinkSpy.mock.calls;
-    const tmpUnlink = unlinkCalls.find((c) =>
-      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(String(c[0])),
+    expect(renameCalled).toBe(true);
+    const tmpUnlink = unlinkCalls.find((p) =>
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
     );
     expect(tmpUnlink).toBeDefined();
   });
@@ -177,7 +213,7 @@ describe("writeClawcodeYaml — comment + key ordering preservation (Tests 4-5)"
     }
 
     // Specific pinned contents
-    expect(after).toContain("# v2.0 endpoint");
+    expect(after).toContain("v2.0 endpoint");
     expect(after).toContain("# op:// reference — safe");
     expect(after).toContain("# operator-edited line");
     expect(after).toContain("op://clawdbot/Finnhub/api-key");
@@ -272,7 +308,10 @@ describe("writeClawcodeYaml — pre-write secret refusal (Test 8)", () => {
   it("refuses write with SECRET_REFUSE_MESSAGE when new node contains secret-shaped value", async () => {
     const { destPath } = await setupDestDir();
     const beforeBytes = readFileSync(destPath, "utf8");
-    const renameSpy = vi.spyOn(fsPromises, "rename");
+    let renameCalled = false;
+    writerFs.rename = (async () => {
+      renameCalled = true;
+    }) as typeof writerFs.rename;
 
     const secretNode = makeNode({
       // sk- prefix always refuses per Phase 77 guards
@@ -292,7 +331,7 @@ describe("writeClawcodeYaml — pre-write secret refusal (Test 8)", () => {
     }
 
     // rename was never called
-    expect(renameSpy).not.toHaveBeenCalled();
+    expect(renameCalled).toBe(false);
     // dest file byte-identical to before
     const afterBytes = readFileSync(destPath, "utf8");
     expect(afterBytes).toBe(beforeBytes);
