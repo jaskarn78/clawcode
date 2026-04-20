@@ -151,34 +151,61 @@ export async function buildSessionConfig(
   // --- Collect identity source ---
   let identityStr = "";
 
-  // Read SOUL.md content for fingerprint extraction (LOAD-02)
-  let soulContent = config.soul ?? "";
+  // Phase 78 CONF-01 — Read SOUL content via 3-branch precedence:
+  //   config.soulFile (absolute path, lazy-read) → <workspace>/SOUL.md → inline config.soul.
+  // Silent fall-through on read errors at every step: a configured soulFile
+  // pointing at a deleted file must not crash session boot; it falls through
+  // to the workspace file, then the inline string. Content is used for
+  // fingerprint extraction only (LOAD-02) — full SOUL.md text is never
+  // embedded in the system prompt.
+  let soulContent = "";
+  if (config.soulFile) {
+    try {
+      soulContent = await readFile(config.soulFile, "utf-8");
+    } catch {
+      // soulFile configured but unreadable — fall through to workspace/SOUL.md
+    }
+  }
   if (!soulContent) {
     try {
       soulContent = await readFile(join(config.workspace, "SOUL.md"), "utf-8");
     } catch {
-      // No SOUL.md
+      // No SOUL.md in workspace
     }
   }
+  if (!soulContent) soulContent = config.soul ?? "";
 
   if (soulContent) {
     const fingerprint = extractFingerprint(soulContent);
     identityStr += formatFingerprint(fingerprint) + "\n\n";
   }
 
-  // Read IDENTITY.md if available
-  if (config.identity) {
-    identityStr += config.identity;
-  } else {
+  // Phase 78 CONF-01 — Read IDENTITY content via 3-branch precedence:
+  //   config.identityFile (absolute path, lazy-read) → <workspace>/IDENTITY.md → inline config.identity.
+  // Same silent fall-through semantics as soul. Unlike soul, the full identity
+  // text is appended to the system prompt (no fingerprint extraction).
+  let identityContent = "";
+  if (config.identityFile) {
     try {
-      const identityContent = await readFile(
+      identityContent = await readFile(config.identityFile, "utf-8");
+    } catch {
+      // identityFile configured but unreadable — fall through
+    }
+  }
+  if (!identityContent) {
+    try {
+      identityContent = await readFile(
         join(config.workspace, "IDENTITY.md"),
         "utf-8",
       );
-      identityStr += identityContent;
     } catch {
       // No IDENTITY.md, that's fine
     }
+  }
+  if (!identityContent) identityContent = config.identity ?? "";
+
+  if (identityContent) {
+    identityStr += identityContent;
   }
 
   // Inject agent name and memory_lookup guidance (LOAD-01)
