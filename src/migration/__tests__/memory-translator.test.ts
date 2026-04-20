@@ -56,9 +56,17 @@ describe("memory-translator pure helpers (Phase 80 Plan 02 Task 1)", () => {
       const sections = splitMemoryMd(input);
       expect(sections).toHaveLength(2);
       expect(sections[0]?.heading).toBeNull();
-      expect(sections[0]?.content).toBe("preamble line\n\n");
+      // Preamble is lines [0, H2-start) rejoined with "\n". For the input
+      // above that's ["preamble line", ""] → "preamble line\n". The "\n"
+      // that used to sit immediately before "## First" is the separator
+      // consumed by split("\n") and is accounted for by the H2 section
+      // starting at its own line. Zero content loss in the verbatim
+      // concat (preamble + "\n" + h2-section === original).
+      expect(sections[0]?.content).toBe("preamble line\n");
       expect(sections[1]?.heading).toBe("First");
       expect(sections[1]?.content).toBe("## First\nbody");
+      // Verbatim invariant: preamble + "\n" + h2 === original input.
+      expect(sections[0]!.content + "\n" + sections[1]!.content).toBe(input);
     });
 
     it("Test 4: whitespace-only preamble is dropped", () => {
