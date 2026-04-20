@@ -27,6 +27,7 @@
  *   - Write anywhere except ledgerPath in these action handlers.
  */
 import type { Command } from "commander";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { cliLog, cliError, green, yellow, red, dim } from "../output.js";
@@ -66,6 +67,8 @@ import {
   type MapAgentWarning,
 } from "../../migration/config-mapper.js";
 import { writeClawcodeYaml } from "../../migration/yaml-writer.js";
+import { copyAgentWorkspace } from "../../migration/workspace-copier.js";
+import { archiveOpenclawSessions } from "../../migration/session-archiver.js";
 import { loadConfig } from "../../config/loader.js";
 import type { OpenclawSourceEntry } from "../../migration/openclaw-config-reader.js";
 
@@ -83,6 +86,7 @@ export const APPLY_NOT_IMPLEMENTED_MESSAGE =
 
 const DEFAULT_OPENCLAW_JSON = join(homedir(), ".openclaw", "openclaw.json");
 const DEFAULT_OPENCLAW_MEMORY_DIR = join(homedir(), ".openclaw", "memory");
+const DEFAULT_OPENCLAW_ROOT = join(homedir(), ".openclaw");
 const DEFAULT_CLAWCODE_AGENTS_ROOT = join(homedir(), ".clawcode", "agents");
 
 // --- Pure formatters (testable in isolation) -------------------------
@@ -182,16 +186,30 @@ type Paths = {
   // Phase 77-03 addition — the user's existing clawcode.yaml path for the
   // channel-collision guard. Defaults to the repo-relative cwd resolution.
   readonly clawcodeConfigPath: string;
+  // Phase 79 Plan 03 additions:
+  // - openclawRoot: source-side root under which per-agent workspace-<id>/
+  //   directories live. Defaults to `${homedir}/.openclaw`.
+  // - workspaceTargetRoot: where copied workspaces land. Defaults to the
+  //   same clawcodeAgentsRoot the YAML writer uses so YAML workspace: paths
+  //   and on-disk tree agree. Kept as a separate env-var so future phases
+  //   can split config root from workspace root without a schema change.
+  readonly openclawRoot: string;
+  readonly workspaceTargetRoot: string;
 };
 
 function resolvePaths(): Paths {
+  const clawcodeAgentsRoot =
+    process.env.CLAWCODE_AGENTS_ROOT ?? DEFAULT_CLAWCODE_AGENTS_ROOT;
   return {
     openclawJson: process.env.CLAWCODE_OPENCLAW_JSON ?? DEFAULT_OPENCLAW_JSON,
     openclawMemoryDir: process.env.CLAWCODE_OPENCLAW_MEMORY_DIR ?? DEFAULT_OPENCLAW_MEMORY_DIR,
-    clawcodeAgentsRoot: process.env.CLAWCODE_AGENTS_ROOT ?? DEFAULT_CLAWCODE_AGENTS_ROOT,
+    clawcodeAgentsRoot,
     ledgerPath: process.env.CLAWCODE_LEDGER_PATH ?? resolve(DEFAULT_LEDGER_PATH),
     clawcodeConfigPath:
       process.env.CLAWCODE_CONFIG_PATH ?? resolve("clawcode.yaml"),
+    openclawRoot: process.env.CLAWCODE_OPENCLAW_ROOT ?? DEFAULT_OPENCLAW_ROOT,
+    workspaceTargetRoot:
+      process.env.CLAWCODE_WORKSPACE_TARGET_ROOT ?? clawcodeAgentsRoot,
   };
 }
 
@@ -276,6 +294,79 @@ export async function runPlanAction(opts: {
     await appendRow(paths.ledgerPath, row);
   }
   return 0;
+}
+
+/**
+ * Phase 79 Plan 03 — resolve the workspace-copy plan for a single agent.
+ *
+ * Finmentum family source layout (verified on-box 2026-04-20):
+ *   - workspace-finmentum/                  — primary, has SOUL/IDENTITY +
+ *                                             memory/ + .learnings/ + archive/
+ *   - workspace-finmentum-content-creator/  — dedicated, own SOUL/IDENTITY
+ *   - workspace-fin-acquisition/            — only uploads/
+ *   - workspace-fin-research/               — only uploads/
+ *   - workspace-fin-playground/             — only uploads/
+ *   - workspace-fin-tax/                    — only uploads/
+ *
+ * Resolution rules (uniform — no finmentum-only branch needed at this layer;
+ * we rely entirely on on-disk shape):
+ *   1. Source dir missing entirely → skip with reason (no rollback, not an
+ *      error — sub-agents without recorded content inherit shared files).
+ *   2. SOUL.md present → full-workspace copy to targetBasePath. This handles
+ *      both non-finmentum agents (dedicated workspace) and finmentum
+ *      primary/content-creator (shared basePath for the family, per-agent
+ *      soulFile/identityFile paths set by Phase 78 config-mapper).
+ *   3. No SOUL.md but uploads/ present → uploads-only mode: copy only
+ *      `<source>/uploads` to `<targetBasePath>/uploads/<agentId>/`. Covers
+ *      finmentum sub-agents whose workspace contains only an uploads dir.
+ *   4. Neither SOUL.md nor uploads/ → skip with reason (empty source).
+ *
+ * Note on finmentum primary-vs-content-creator SOUL collision: both have
+ * SOUL.md and target the same shared basePath. Phase 78 config-mapper
+ * produces soulFile=<shared>/SOUL.md for BOTH agents by design (they share
+ * persona per the roadmap D-Finmentum decision). Iteration order determines
+ * last-write-wins; `openclaw-config-reader.readOpenclawInventory` sorts
+ * agents by id alphabetically, so `finmentum` (primary) sorts before
+ * `finmentum-content-creator` — content-creator's SOUL.md overwrites the
+ * primary's. If this collision ever becomes semantically important, Phase
+ * 81 can introduce per-agent SOUL.<id>.md naming.
+ */
+export type WorkspaceCopyPlan =
+  | { readonly mode: "full"; readonly source: string; readonly target: string }
+  | { readonly mode: "uploads-only"; readonly source: string; readonly target: string }
+  | { readonly mode: "skip-empty-source"; readonly reason: string };
+
+export function resolveWorkspaceCopyPlan(
+  sourceWorkspace: string,
+  targetBasePath: string,
+  agentId: string,
+): WorkspaceCopyPlan {
+  if (!existsSync(sourceWorkspace)) {
+    return {
+      mode: "skip-empty-source",
+      reason: `source workspace not found: ${sourceWorkspace}`,
+    };
+  }
+  const hasSoul = existsSync(join(sourceWorkspace, "SOUL.md"));
+  if (hasSoul) {
+    return {
+      mode: "full",
+      source: sourceWorkspace,
+      target: targetBasePath,
+    };
+  }
+  const uploadsSrc = join(sourceWorkspace, "uploads");
+  if (existsSync(uploadsSrc)) {
+    return {
+      mode: "uploads-only",
+      source: uploadsSrc,
+      target: join(targetBasePath, "uploads", agentId),
+    };
+  }
+  return {
+    mode: "skip-empty-source",
+    reason: `no SOUL.md and no uploads/ at ${sourceWorkspace}`,
+  };
 }
 
 /**
@@ -424,6 +515,85 @@ export async function runApplyAction(
     cliLog(
       green(
         `✓ wrote ${agentsToInsert.length} agent(s) to ${writeResult.destPath}`,
+      ),
+    );
+
+    // --- Phase 79 WORK-01..05 — workspace copy + session archive per agent ---
+    // Sequential (no Promise.all) per 79-CONTEXT embedder-singleton non-
+    // reentrancy constraint (carries forward to Phase 80). Per-agent rollback
+    // on hash-witness failure — one agent's rollback does NOT cascade; other
+    // agents in the run proceed. Final exit code is 1 if ANY agent rolled
+    // back; 0 otherwise. A skip-empty-source branch is NOT a failure — it's
+    // the normal path for finmentum sub-agents whose workspace lacks SOUL.md.
+    const workspaceFailures: string[] = [];
+    for (const agentPlan of report.agents) {
+      const copyPlan = resolveWorkspaceCopyPlan(
+        agentPlan.sourceWorkspace,
+        agentPlan.targetBasePath,
+        agentPlan.sourceId,
+      );
+
+      if (copyPlan.mode === "skip-empty-source") {
+        // Normal path for sub-agents with no on-disk workspace content.
+        // Record the skip so the ledger has a witness trail per agent.
+        await appendRow(paths.ledgerPath, {
+          ts: new Date().toISOString(),
+          action: "apply",
+          agent: agentPlan.sourceId,
+          status: "pending",
+          source_hash: report.planHash,
+          step: "workspace-copy:skip",
+          outcome: "allow",
+          notes: copyPlan.reason,
+        });
+      } else {
+        const copyResult = await copyAgentWorkspace({
+          agentId: agentPlan.sourceId,
+          source: copyPlan.source,
+          target: copyPlan.target,
+          ledgerPath: paths.ledgerPath,
+          sourceHash: report.planHash,
+        });
+        if (!copyResult.pass) {
+          workspaceFailures.push(agentPlan.sourceId);
+          cliError(
+            red(
+              `✗ workspace-copy failed for ${agentPlan.sourceId}: ${copyResult.hashMismatches.length} hash mismatch(es); rolled back`,
+            ),
+          );
+          // Do NOT invoke archiveOpenclawSessions for a rolled-back agent —
+          // the target tree is gone; archive would land in a resurrected dir
+          // that wasn't fully populated. Continue to the next agent.
+          continue;
+        }
+      }
+
+      // Archive OpenClaw sessions for this agent. The archiver handles
+      // missing source gracefully (skip row + pass:true), so we invoke it
+      // uniformly whether the workspace copy was full, uploads-only, or
+      // skipped-empty-source (in which case agentDir may also be missing —
+      // archiver's own existsSync short-circuit handles that).
+      await archiveOpenclawSessions({
+        agentId: agentPlan.sourceId,
+        sourceAgentDir: agentPlan.sourceAgentDir,
+        targetBasePath: agentPlan.targetBasePath,
+        ledgerPath: paths.ledgerPath,
+        sourceHash: report.planHash,
+      });
+    }
+
+    if (workspaceFailures.length > 0) {
+      cliError(
+        red(
+          `${workspaceFailures.length} agent(s) rolled back: ${workspaceFailures.join(", ")}`,
+        ),
+      );
+      return 1;
+    }
+
+    cliLog(
+      green(
+        `✓ workspace migration complete for ${report.agents.length} agent(s)`,
       ),
     );
     return 0;

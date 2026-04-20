@@ -380,12 +380,16 @@ describe("migrate openclaw apply — Phase 78 end-to-end", () => {
     expect(exitCode).toBe(0);
 
     const rows = await readRows(fx.ledgerPath);
-    // last-write-wins per agent — the final row for new-status must be status:migrated
-    const forAgent = rows.filter(
-      (r) => r.agent === "new-status" || r.agent === "ALL",
+    // The write-step row for the agent (or ALL, since --only funnels through
+    // opts.only ?? "ALL") must carry status:"migrated". Phase 79 adds
+    // additional per-agent witness rows with status:"pending" AFTER the
+    // write row (workspace-copy:hash-witness + session-archive:skip) —
+    // those are forensic file-level rows, not state transitions, so we
+    // narrow the assertion to the write-step row specifically.
+    const writeRow = rows.find(
+      (r) => r.step === "write" && r.outcome === "allow",
     );
-    const lastWrite = forAgent[forAgent.length - 1];
-    expect(lastWrite?.status).toBe("migrated");
+    expect(writeRow?.status).toBe("migrated");
   });
 
   it("APPLY_NOT_IMPLEMENTED_MESSAGE is NOT emitted on success path (Test 6)", async () => {
