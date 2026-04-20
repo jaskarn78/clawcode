@@ -1,0 +1,467 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.4.15",
+    "lastTouchedAt": "2026-04-19T16:06:03.379Z"
+  },
+  "agents": {
+    "list": [
+      {
+        "id": "general",
+        "name": "Clawdy (General)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-general",
+        "agentDir": "/home/jjagpal/.openclaw/agents/general/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6",
+            "google/gemini-2.5-flash"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "💠"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        }
+      },
+      {
+        "id": "work",
+        "name": "Clawdy (Work)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-work",
+        "agentDir": "/home/jjagpal/.openclaw/agents/work/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6",
+            "google/gemini-2.5-flash"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "💠"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        }
+      },
+      {
+        "id": "projects",
+        "name": "Clawdy (Projects)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-projects",
+        "agentDir": "/home/jjagpal/.openclaw/agents/projects/agent",
+        "model": {
+          "primary": "clawcode/admin-clawdy",
+          "fallbacks": [
+            "minimax/MiniMax-M2.7"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "💠"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        }
+      },
+      {
+        "id": "research",
+        "name": "Clawdy (Research)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-research",
+        "agentDir": "/home/jjagpal/.openclaw/agents/research/agent",
+        "model": {
+          "primary": "google/gemini-3.1-pro-preview",
+          "fallbacks": [
+            "google/gemini-2.5-pro",
+            "anthropic-api/claude-sonnet-4-6",
+            "google/gemini-2.5-flash"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "💠"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        }
+      },
+      {
+        "id": "personal",
+        "name": "Clawdy (Personal)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-personal",
+        "agentDir": "/home/jjagpal/.openclaw/agents/personal/agent",
+        "model": {
+          "primary": "minimax/MiniMax-M2.7",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "🔒"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        }
+      },
+      {
+        "id": "shopping",
+        "name": "Clawdy (Shopping)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-shopping",
+        "agentDir": "/home/jjagpal/.openclaw/agents/shopping/agent",
+        "model": {
+          "primary": "minimax/MiniMax-M2.7",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6",
+            "google/gemini-2.5-flash"
+          ]
+        },
+        "heartbeat": {
+          "every": "60m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "🛒"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        }
+      },
+      {
+        "id": "local-clawdy",
+        "name": "Local Clawdy",
+        "workspace": "/home/jjagpal/.openclaw/workspace-local-clawdy",
+        "agentDir": "/home/jjagpal/.openclaw/agents/local-clawdy/agent",
+        "model": {
+          "primary": "ollama/qwen3:14b-fast",
+          "fallbacks": [
+            "ollama/qwen2.5:14b",
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "🏠"
+        }
+      },
+      {
+        "id": "kimi",
+        "name": "Kimi",
+        "workspace": "/home/jjagpal/.openclaw/workspace-kimi",
+        "agentDir": "/home/jjagpal/.openclaw/agents/kimi/agent",
+        "model": {
+          "primary": "moonshot/kimi-k2.5",
+          "fallbacks": [
+            "moonshot/kimi-latest",
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "identity": {
+          "name": "Kimi",
+          "emoji": "🌙"
+        }
+      },
+      {
+        "id": "fin-acquisition",
+        "name": "Finance Clawdy (Acquisition)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+        "agentDir": "/home/jjagpal/.openclaw/agents/fin-acquisition/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "thinkingDefault": "adaptive",
+        "reasoningDefault": "on",
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Finance Clawdy",
+          "emoji": "🤝"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        },
+        "tools": {
+          "deny": [
+            "gateway"
+          ],
+          "fs": {
+            "workspaceOnly": false
+          }
+        }
+      },
+      {
+        "id": "fin-research",
+        "name": "Finance Clawdy (Research)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+        "agentDir": "/home/jjagpal/.openclaw/agents/fin-research/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Finance Clawdy",
+          "emoji": "🔬"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        },
+        "tools": {
+          "deny": [
+            "gateway"
+          ],
+          "fs": {
+            "workspaceOnly": false
+          }
+        }
+      },
+      {
+        "id": "fin-playground",
+        "name": "Finance Clawdy (Playground)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+        "agentDir": "/home/jjagpal/.openclaw/agents/fin-playground/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Finance Clawdy",
+          "emoji": "🎮"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        },
+        "tools": {
+          "deny": [
+            "gateway"
+          ],
+          "fs": {
+            "workspaceOnly": false
+          }
+        }
+      },
+      {
+        "id": "fin-tax",
+        "name": "Finance Clawdy (Tax)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+        "agentDir": "/home/jjagpal/.openclaw/agents/fin-tax/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "heartbeat": {
+          "every": "50m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Finance Clawdy",
+          "emoji": "🧾"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        },
+        "tools": {
+          "deny": [
+            "gateway"
+          ],
+          "fs": {
+            "workspaceOnly": false
+          }
+        }
+      },
+      {
+        "id": "finmentum-content-creator",
+        "name": "Clawdy (Finmentum Content Creator)",
+        "workspace": "/home/jjagpal/.openclaw/workspace-finmentum-content-creator",
+        "agentDir": "/home/jjagpal/.openclaw/agents/finmentum-content-creator/agent",
+        "model": {
+          "primary": "clawcode/fin-test",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6"
+          ]
+        },
+        "thinkingDefault": "adaptive",
+        "reasoningDefault": "on",
+        "heartbeat": {
+          "every": "30m",
+          "model": "anthropic-api/claude-haiku-4-5",
+          "prompt": "Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK."
+        },
+        "identity": {
+          "name": "Clawdy",
+          "emoji": "🎬"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-opus-4-7"
+        },
+        "tools": {
+          "deny": [
+            "gateway",
+            "browser",
+            "tts",
+            "image_generate"
+          ],
+          "fs": {
+            "workspaceOnly": false
+          }
+        }
+      },
+      {
+        "id": "card-planner",
+        "name": "Card Planner",
+        "workspace": "/home/jjagpal/.openclaw/workspace-card-planner",
+        "agentDir": "/home/jjagpal/.openclaw/agents/card-planner/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6",
+            "google/gemini-2.5-flash"
+          ]
+        },
+        "identity": {
+          "name": "Card Planner"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-sonnet-4-6"
+        }
+      },
+      {
+        "id": "card-generator",
+        "name": "Card Generator",
+        "workspace": "/home/jjagpal/.openclaw/workspace-card-generator",
+        "agentDir": "/home/jjagpal/.openclaw/agents/card-generator/agent",
+        "model": {
+          "primary": "anthropic-api/claude-sonnet-4-6",
+          "fallbacks": [
+            "anthropic-api/claude-sonnet-4-6",
+            "google/gemini-2.5-flash"
+          ]
+        },
+        "identity": {
+          "name": "Card Generator"
+        },
+        "subagents": {
+          "model": "anthropic-api/claude-sonnet-4-6"
+        }
+      }
+    ]
+  },
+  "bindings": [
+    {
+      "agentId": "research",
+      "match": {
+        "channel": "discord",
+        "peer": {
+          "kind": "channel",
+          "id": "1480605887247814656"
+        }
+      }
+    },
+    {
+      "agentId": "fin-acquisition",
+      "match": {
+        "channel": "discord",
+        "peer": {
+          "kind": "channel",
+          "id": "1481670479017414767"
+        }
+      }
+    },
+    {
+      "agentId": "fin-research",
+      "match": {
+        "channel": "discord",
+        "peer": {
+          "kind": "channel",
+          "id": "1481659546337411234"
+        }
+      }
+    },
+    {
+      "agentId": "fin-playground",
+      "match": {
+        "channel": "discord",
+        "peer": {
+          "kind": "channel",
+          "id": "1481659547985641603"
+        }
+      }
+    },
+    {
+      "agentId": "fin-tax",
+      "match": {
+        "channel": "discord",
+        "peer": {
+          "kind": "channel",
+          "id": "1482492797784297683"
+        }
+      }
+    },
+    {
+      "agentId": "projects",
+      "match": {
+        "channel": "discord",
+        "peer": {
+          "kind": "channel",
+          "id": "1471307765401129002"
+        }
+      }
+    },
+    {
+      "type": "route",
+      "agentId": "finmentum-content-creator",
+      "match": {
+        "channel": "discord",
+        "accountId": "default",
+        "peer": {
+          "kind": "channel",
+          "id": "1486348188763029648"
+        }
+      }
+    }
+  ]
+}
