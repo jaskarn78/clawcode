@@ -331,8 +331,10 @@ export async function summarizeSession(
   }
 
   // Step 13 — markSummarized (non-fatal if race/state mismatch)
+  let markSummarizedSucceeded = false;
   try {
     deps.conversationStore.markSummarized(sessionId, memoryId);
+    markSummarizedSucceeded = true;
   } catch (err) {
     deps.log.warn(
       {
@@ -345,6 +347,42 @@ export async function summarizeSession(
     );
     // Non-fatal: the memory exists and is searchable; the session FK
     // just wasn't set. Operators can reconcile later.
+  }
+
+  // Step 13b — Gap 2 (memory-persistence-gaps): prune raw conversation turns
+  // for this session. Only runs AFTER markSummarized succeeded so a partial
+  // failure (insert OK, markSummarized failed) leaves turns intact for
+  // operator reconcile. The summary row's content already carries either a
+  // Haiku compression (LLM path), a raw-turn dump (raw-turn fallback), or a
+  // short-session recap — the raw rows are redundant going forward. Session
+  // row itself stays intact so the resume-brief gap check keeps working.
+  // Non-fatal: delete failures log and return — the caller already has a
+  // successful summary result.
+  if (markSummarizedSucceeded) {
+    try {
+      const deleted = deps.conversationStore.deleteTurnsForSession(sessionId);
+      if (deleted > 0) {
+        deps.log.info(
+          {
+            agent: agentName,
+            session: sessionId,
+            memoryId,
+            deletedTurns: deleted,
+          },
+          "pruned raw turns after summarization",
+        );
+      }
+    } catch (err) {
+      deps.log.warn(
+        {
+          agent: agentName,
+          session: sessionId,
+          memoryId,
+          error: (err as Error).message,
+        },
+        "raw-turn pruning failed after summarization (non-fatal — turns will persist)",
+      );
+    }
   }
 
   // 260419-q2z Fix A — emit a distinct info log for short-session summaries

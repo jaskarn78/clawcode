@@ -100,6 +100,8 @@ type ConversationStatements = {
   readonly searchTurnsFtsUntrusted: Statement;
   readonly searchTurnsCount: Statement;
   readonly searchTurnsCountUntrusted: Statement;
+  // Gap 2 (memory-persistence-gaps): prune raw turns after summarization.
+  readonly deleteTurnsForSession: Statement;
 };
 
 /** Convert a raw SQLite session row to an immutable ConversationSession. */
@@ -415,6 +417,24 @@ export class ConversationStore {
   }
 
   /**
+   * Gap 2 (memory-persistence-gaps) — delete all raw turns for a session.
+   *
+   * Called by `summarizeSession` after `markSummarized` succeeds. The session
+   * row itself is LEFT INTACT so the state machine stays valid and the
+   * resume-brief gap check (Phase 67 SESS-03) still has a terminated session
+   * to compute against.
+   *
+   * Returns the number of rows deleted. Safe to call on a session with zero
+   * turns (returns 0). The `conversation_turns_ad` trigger on the FTS5
+   * virtual table (src/memory/store.ts:800-804) keeps `conversation_turns_fts`
+   * in sync automatically.
+   */
+  deleteTurnsForSession(sessionId: string): number {
+    const result = this.stmts.deleteTurnsForSession.run(sessionId);
+    return result.changes;
+  }
+
+  /**
    * Full-text search over conversation_turns.content via FTS5.
    *
    * Query is phrase-quoted via `escapeFtsQuery` so agent-crafted natural
@@ -614,6 +634,12 @@ export class ConversationStore {
         `SELECT COUNT(*) AS total
          FROM conversation_turns_fts
          WHERE conversation_turns_fts MATCH ?`,
+      ),
+      // Gap 2 (memory-persistence-gaps): bulk-delete raw turns after a
+      // session has been summarized. The AFTER DELETE trigger on
+      // conversation_turns_fts keeps the FTS index in sync automatically.
+      deleteTurnsForSession: this.db.prepare(
+        `DELETE FROM conversation_turns WHERE session_id = ?`,
       ),
     };
   }
