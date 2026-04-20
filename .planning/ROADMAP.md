@@ -250,7 +250,10 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   3. User runs `clawcode migrate openclaw rollback <agent>` and sees the agent's entry removed from `clawcode.yaml` (verified by `yq '.agents[] | select(.name == "<name>")' clawcode.yaml` returning nothing), its ClawCode workspace + memory DB deleted (`ls <basePath>/<agent>` returns not-found for dedicated-workspace agents; for finmentum family only the per-agent `memoryPath:` subdir + per-agent soulFile/identityFile removed, shared `basePath` preserved), and `~/.openclaw/workspace-<agent>/` + `~/.openclaw/memory/<agent>.sqlite` unchanged (hash-witness match).
   4. User migrates a Haiku-primary agent, sends a Discord message triggering the existing fork-to-Opus escalation path (3-consecutive-error trigger OR keyword trigger from v1.5), and observes the forked session boots on Opus without any per-agent config change — verified by trace metadata showing `model: "opus-*"` on the forked Turn and `forked_from: <parent-turn-id>` linkage.
   5. User runs `clawcode costs --agent <migrated-agent>` after at least one fork-to-Opus turn and sees the Opus turn appear as a row in the cost ledger (non-zero token cost, model prefix matches Opus) — with no budget ceiling enforcement (v2.1 user decision: unlimited per agent); `clawcode costs` shows the Opus spend distinctly from the agent's primary-model spend.
-**Plans**: TBD
+**Plans**: 3 plans
+- [x] 81-01-PLAN.md — verifier.ts (4 checks) + rollbacker.ts (atomic removal + source hash-witness) + removeAgentFromConfig YAML extension (MIGR-04, MIGR-05)
+- [ ] 81-02-PLAN.md — verify + rollback CLI subcommands + resume-idempotency integration test + end-to-end verify/rollback/reapply cycle tests (MIGR-03, MIGR-04, MIGR-05)
+- [ ] 81-03-PLAN.md — fork-to-Opus regression across 4 primary models (Haiku/Sonnet/MiniMax/Gemini) + fork cost-visibility regression proving FORK-02 no-budget-ceiling (FORK-01, FORK-02)
 
 ### Phase 82: Pilot + Cutover + Completion
 **Goal**: User (as operator) can migrate one low-risk pilot agent (`personal` or `local-clawdy`) first, verify end-to-end behavior, then execute per-agent `cutover` to unbind the OpenClaw bot from each migrated agent's Discord channel (dual-run guardrails during the observation window), then run `complete` to write a final migration report to `.planning/milestones/v2.1-migration-report.md` summarizing per-agent outcomes.
@@ -292,7 +295,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
 | 79. Workspace Migration | 3/3 | Complete    | 2026-04-20 |
 | 80. Memory Translation + Re-embedding | 2/3 | Complete    | 2026-04-20 |
-| 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |
+| 81. Verify + Rollback + Resume + Fork | 1/3 | In Progress|  |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
 
 ---

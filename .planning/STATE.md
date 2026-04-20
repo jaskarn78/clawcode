@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: Completed 80-03-PLAN.md
-last_updated: "2026-04-20T22:44:25.579Z"
+status: Ready to execute
+stopped_at: Completed 81-01-PLAN.md
+last_updated: "2026-04-20T23:34:37.870Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 12
-  total_plans: 34
-  completed_plans: 34
+  total_plans: 37
+  completed_plans: 35
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 80 — memory-translation-re-embedding
+**Current focus:** Phase 81 — verify-rollback-resume-fork
 
 ## Current Position
 
-Phase: 81
-Plan: Not started
+Phase: 81 (verify-rollback-resume-fork) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -121,6 +121,8 @@ Recent decisions affecting current work:
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: CLI-local embedder singleton — daemon-warmup-probe singleton-invariant widened to 2-site whitelist (daemon + CLI); CLI and daemon are independent processes, each gets their own EmbeddingService.
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: Translator errors count as apply failures (exit 1) via workspaceFailures.push — symmetric with workspace-copy rollback; agent in partially-migrated state divergence must not be silently exit-0.
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: workspace-copier sweepDir existsSync(srcPath) gate — tolerates target-only files (memories.db) so re-runs succeed; target-only ledger witness preserves forensic completeness.
+- [Phase 81-verify-rollback-resume-fork]: Source-invariant hash-witness for atomic rollback: per-agent pre/post sha256 maps enforce SOURCE read-only contract — TDD discipline — RED commits already in place from prior sessions; executor verified tests fail without impl, then made GREEN commit
+- [Phase 81-verify-rollback-resume-fork]: Finmentum detection via memoryPath !== workspace config shape (Phase 75 signal) keeps rollbacker agent-agnostic — No hardcoded family ID list; future shared-basePath agent families automatically picked up without rollbacker changes
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -198,9 +200,10 @@ Recent decisions affecting current work:
 | Phase 80 P01 | 14min | 2 tasks | 3 files |
 | Phase 80-memory-translation-re-embedding P02 | 13min | 2 tasks | 7 files |
 | Phase 80-memory-translation-re-embedding P03 | 62 min | 2 tasks | 7 files |
+| Phase 81-verify-rollback-resume-fork P01 | 9min | 2 tasks | 1 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 80-03-PLAN.md
+Stopped at: Completed 81-01-PLAN.md
 Resume file: None
