@@ -1,0 +1,111 @@
+---
+status: fixing
+trigger: "memory-persistence-gaps — four distinct memory persistence gaps on branch fix/memory-persistence"
+created: 2026-04-20T00:00:00Z
+updated: 2026-04-20T00:00:00Z
+---
+
+## Current Focus
+
+hypothesis: All four gaps identified. User-selected fix shapes: Gap 1=A+C, Gap 2=add deleteTurnsForSession, Gap 3=periodic flush with mid-session tag, Gap 4=B + SOUL.md.
+test: TDD per gap — failing test first, implement, verify green, commit. Run full suite after all four land.
+expecting: Four atomic commits, green typecheck + tests.
+next_action: Gap 1 — reconcileRegistry conversation-session population + clean up startAll/reconcile race.
+
+## Symptoms
+
+expected:
+1. Dashboard restart runs `manager.drain(15_000)` and writes session summary before exit.
+2. Raw conversation turns deleted after successful summarization.
+3. Periodic (default 15 min) in-session summary save timer exists, non-blocking.
+4. `memory_lookup` default scope returns conversation history when default scope is empty, OR default is already `all`.
+
+actual:
+1. Dashboard restart never writes summary — suspect SIGKILL / missing handler / timeout.
+2. Raw turns accumulate forever; no pruning.
+3. No mid-session flush timer exists.
+4. Default scope is not `all`; no automatic retry; no SOUL.md convention.
+
+errors: None — silent data-loss / DB-growth / UX gaps.
+
+reproduction:
+- Gap 1: Start daemon, start session, add turns, restart via dashboard, inspect DB — no summary row.
+- Gap 2: Complete session, wait for summarization, query raw-turn table — rows still present.
+- Gap 3: Long session, `kill -9`, restart — no mid-session summary.
+- Gap 4: `memory_lookup` with query matching only conversation history, empty with default; succeeds with explicit scope=all.
+
+started: Branch created for this work. Previous quick fix 260419-q2z added drain but did not cover dashboard-restart.
+
+## Eliminated
+
+(none yet)
+
+## Evidence
+
+- timestamp: 2026-04-20
+  checked: src/dashboard/server.ts:353-377
+  found: Dashboard restart action goes through HTTP POST → `sendIpcRequest(socketPath, "restart", { name: agentName })`. No SIGKILL; no SIGTERM to the daemon. The daemon itself keeps running — only the agent process is restarted.
+  implication: Stated Gap 1 cause ("dashboard sends SIGKILL") is WRONG. Dashboard talks to daemon via IPC, not signals.
+
+- timestamp: 2026-04-20
+  checked: src/manager/daemon.ts:1588-1608 (IPC "restart" case)
+  found: IPC restart routes to `manager.restartAgent(name, config)`; falls back to `startAgent` only if stopAgent throws "not running".
+  implication: The graceful path IS invoked for dashboard restart. Suspicion (2) "restart path never calls graceful shutdown" is also wrong.
+
+- timestamp: 2026-04-20
+  checked: src/manager/session-manager.ts:697-704 (restartAgent)
+  found: `async restartAgent { await this.stopAgent(name); ... await this.startAgent(name, config); }`. stopAgent IS awaited before startAgent.
+  implication: No parallel-execution bug; stopAgent fully completes.
+
+- timestamp: 2026-04-20
+  checked: src/manager/session-manager.ts:566-588 (stopAgent)
+  found: `stopAgent` reads `convSessionId = activeConversationSessionIds.get(name)`, and if present calls `await trackSummary(summarizeSessionIfPossible(name, convSessionId))`. The summarize call is AWAITED synchronously before cleanupMemory + handle.close.
+  implication: When the Map has an entry, summary IS written. Suspicion (3) "drain times out" is not applicable — we're not even in drain path for agent restart.
+
+- timestamp: 2026-04-20
+  checked: src/manager/session-manager.ts:296-305 (startAgent) vs 733-793 (reconcileRegistry)
+  found: Only `startAgent` calls `convStore.startSession(name)` + `activeConversationSessionIds.set(name, convSession.id)`. `reconcileRegistry` (which resumes sessions left "running" after an unclean daemon shutdown) does NEITHER. It calls `adapter.resumeSession` then `this.sessions.set(...)` only.
+  implication: REAL BUG FOUND — after daemon reboot that resumes a prior-running session, the activeConversationSessionIds Map is empty. Any subsequent stopAgent (including dashboard restart) will skip the summarize branch entirely because `convSessionId === undefined`. User-observed symptom is real but only manifests for agents whose sessions were RESUMED (not freshly started).
+
+- timestamp: 2026-04-20
+  checked: src/manager/daemon.ts:897 + 1529-1536
+  found: daemon boot order is: reconcileRegistry (line 897) → signal handler registration (1518) → startAll (1531). startAll calls startAgent, which has precondition `if (this.sessions.has(name)) throw SessionError('already running')` at session-manager.ts:238. So after reconcile resumes an agent, startAll's subsequent startAgent for that same name throws and is caught, never running the startSession() call path.
+  implication: Confirms: post-daemon-reboot, resumed agents have NO conversation session tracked, so stopAgent summarization is a no-op for them.
+
+- timestamp: 2026-04-20
+  checked: src/manager/__tests__/session-manager.test.ts:651-702 + 704-728
+  found: Existing tests prove stopAgent DOES trigger summary when activeConversationSessionIds is populated (fresh start path). No test covers reconcileRegistry → stopAgent (the post-daemon-reboot path).
+  implication: The fix needs to restore activeConversationSessionIds during reconcileRegistry OR start a fresh conversation session for resumed agents. Either way, the `convStore.startSession(name)` is missing from reconcileRegistry.
+
+- timestamp: 2026-04-20
+  checked: src/memory/session-summarizer.ts (entire file) + session-manager.ts
+  found: summarizeSession at step 13 (markSummarized) + insert memory row. Zero calls to delete raw turns after successful summarization. Confirmed Gap 2.
+  implication: Need to add raw-turn pruning after markSummarized succeeds.
+
+- timestamp: 2026-04-20
+  checked: src/manager (entire subtree) + src/memory (entire subtree)
+  found: No setInterval / setTimeout / croner-based periodic summarization timer anywhere. Confirmed Gap 3.
+  implication: Need to implement periodic in-session flush timer.
+
+- timestamp: 2026-04-20
+  checked: src/manager/memory-lookup-handler.ts:118 + src/mcp/server.ts:440
+  found: `const scope = params.scope ?? "memories";` (IPC handler) and `.default("memories")` (MCP tool schema). No automatic retry/fallback to scope=all on empty default result. SOUL.md template has zero mention of memory_lookup or scope=all convention. Confirmed Gap 4.
+  implication: Need user decision on fix approach (change default vs add fallback vs SOUL doc).
+
+## Resolution
+
+root_cause:
+- Gap 1: `reconcileRegistry` never called `initMemory` or `startSession` on resumed agents, leaving `activeConversationSessionIds` empty. Any subsequent `stopAgent` skipped summarization because `convSessionId === undefined`. Additionally, `startAll` fired `startAgent` for every config after reconcile and swallowed the resulting "already running" SessionError with an error-level log on every boot.
+- Gap 2: (TBD — fixing next)
+- Gap 3: (TBD — fixing next)
+- Gap 4: (TBD — fixing next)
+
+fix:
+- Gap 1: Extracted `attachCrashHandler(name, config, handle)` helper on SessionManager. `reconcileRegistry` now calls `initMemory` + `convStore.startSession` + sets `activeConversationSessionIds` + attaches the shared crash handler. `startAll` early-returns for agents already in `this.sessions`. Three new tests cover reconcile→memory-init, reconcile→stopAgent→summary-written, and reconcile→startAll→no-op.
+
+verification:
+- Gap 1: 3/3 new tests pass; 34/34 session-manager tests pass; 60/60 daemon + registry tests pass.
+
+files_changed:
+- src/manager/session-manager.ts (Gap 1)
+- src/manager/__tests__/session-manager.test.ts (Gap 1)

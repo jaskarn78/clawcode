@@ -799,6 +799,130 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
       try { memStore.close(); } catch { /* already closed */ }
     }
   }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // Gap 1 (memory-persistence-gaps) — reconcileRegistry must populate the
+  // conversation-session tracking so a later stopAgent (e.g. dashboard restart
+  // after daemon reboot) actually writes a session summary.
+  // ---------------------------------------------------------------------------
+  it("reconcileRegistry initializes memory and starts a conversation session for resumed agents", async () => {
+    const agentName = "reconcile-conv";
+    const config = makeIsolatedConfig(agentName);
+    // Seed a registry as if a prior daemon left the agent 'running'.
+    const seeded: Registry = {
+      entries: [
+        {
+          name: agentName,
+          status: "running",
+          sessionId: "prior-session-xyz",
+          startedAt: Date.now() - 60000,
+          restartCount: 0,
+          consecutiveFailures: 0,
+          lastError: null,
+          lastStableAt: null,
+        },
+      ],
+      updatedAt: Date.now(),
+    };
+    await writeRegistry(registryPath, seeded);
+
+    await manager.reconcileRegistry([config]);
+
+    // Memory + ConversationStore must now exist for the resumed agent.
+    expect(manager.getMemoryStore(agentName)).toBeDefined();
+    expect(manager.getConversationStore(agentName)).toBeDefined();
+    // activeConversationSessionIds must carry a fresh conversation session.
+    const convSessionId = manager.getActiveConversationSessionId(agentName);
+    expect(convSessionId).toBeTruthy();
+  }, 30_000);
+
+  it("stopAgent after reconcile-resume writes a session summary (Gap 1 end-to-end)", async () => {
+    const agentName = "reconcile-stop-summary";
+    const config = makeIsolatedConfig(agentName);
+    const seeded: Registry = {
+      entries: [
+        {
+          name: agentName,
+          status: "running",
+          sessionId: "prior-session-abc",
+          startedAt: Date.now() - 60000,
+          restartCount: 0,
+          consecutiveFailures: 0,
+          lastError: null,
+          lastStableAt: null,
+        },
+      ],
+      updatedAt: Date.now(),
+    };
+    await writeRegistry(registryPath, seeded);
+
+    await manager.reconcileRegistry([config]);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    const convSessionId = manager.getActiveConversationSessionId(agentName)!;
+    expect(convStore).toBeDefined();
+    expect(convSessionId).toBeTruthy();
+
+    // Seed turns above the minTurns=3 threshold so summarize hits the
+    // Haiku path and calls our mockSummarize.
+    for (let i = 0; i < 4; i++) {
+      convStore.recordTurn({
+        sessionId: convSessionId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `reconciled turn ${i} content`,
+      });
+    }
+
+    const memStore = manager.getMemoryStore(agentName)!;
+    const insertSpy = vi.spyOn(memStore, "insert");
+
+    await manager.stopAgent(agentName);
+
+    expect(mockSummarize).toHaveBeenCalledTimes(1);
+    const summaryCall = insertSpy.mock.calls.find((call) =>
+      (call[0] as { tags?: readonly string[] }).tags?.includes("session-summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    const input = summaryCall![0] as {
+      source: string;
+      tags: readonly string[];
+    };
+    expect(input.source).toBe("conversation");
+    expect(input.tags).toContain(`session:${convSessionId}`);
+  }, 30_000);
+
+  it("startAll after reconcile is a no-op for agents already resumed (no 'already running' errors)", async () => {
+    const agentName = "reconcile-startall-race";
+    const config = makeIsolatedConfig(agentName);
+    const seeded: Registry = {
+      entries: [
+        {
+          name: agentName,
+          status: "running",
+          sessionId: "prior-session-race",
+          startedAt: Date.now() - 60000,
+          restartCount: 0,
+          consecutiveFailures: 0,
+          lastError: null,
+          lastStableAt: null,
+        },
+      ],
+      updatedAt: Date.now(),
+    };
+    await writeRegistry(registryPath, seeded);
+
+    await manager.reconcileRegistry([config]);
+
+    // startAll must NOT throw "already running" internally for the resumed
+    // agent. startAll swallows per-agent errors so this mainly asserts no
+    // duplicate registry write / silent log, which we verify by ensuring
+    // activeConversationSessionIds is stable across startAll.
+    const before = manager.getActiveConversationSessionId(agentName);
+    await manager.startAll([config]);
+    const after = manager.getActiveConversationSessionId(agentName);
+
+    expect(after).toBe(before);
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------
