@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 75-02-PLAN.md (runtime consumers wired up). Ready for 75-03 (5-agent finmentum integration test).
-last_updated: "2026-04-20T14:14:43.828Z"
+status: Phase complete — ready for verification
+stopped_at: "Completed 75-03-PLAN.md (integration test green). Phase 75 done — 3/3 plans landed. Ready for verification + /gsd:transition to Phase 76."
+last_updated: "2026-04-20T14:30:21.946Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 18
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -67,6 +67,8 @@ Recent decisions affecting current work:
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 01]: ResolvedAgentConfig.memoryPath is REQUIRED (not optional) — loader guarantees fallback to workspace; downstream consumers read unconditionally (no optional-chaining). Forced 13 test-fixture updates but preserves zero-optional-chain runtime pattern.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 02]: memoryPath expansion is conditional — expandHome called only when agent.memoryPath set; fallback inherits resolvedWorkspace as-is. Preserves pre-existing loader behavior of not expanding agent.workspace when YAML-set.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 02]: Signature renames (logResult: workspace→memoryPath, saveContextSummary: workspace→memoryPath) over config-object threading — minimum-diff change since both methods took path strings.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 03]: Per-test timeout extensions (15s/20s) on MemoryStore-heavy tests — sqlite-vec cold-start + migrations + auto-linker exceed the 5s vitest default under parallel test load. Pure test-framework config; zero production impact.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 03]: Integration test asserts error-message TEXT not just success===false — pins the UX contract that schema + loadConfig both surface BOTH conflicting agent names when memoryPath collides.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -127,9 +129,10 @@ Recent decisions affecting current work:
 | Phase 74 P02 | 19min | 3 tasks | 7 files |
 | Phase 75-shared-workspace-runtime-support P01 | 10min | 2 tasks | 19 files |
 | Phase 75-shared-workspace-runtime-support P02 | 14min | 2 tasks | 10 files |
+| Phase 75-shared-workspace-runtime-support P03 | 11min | 1 tasks | 1 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 75-02-PLAN.md (runtime consumers wired up). Ready for 75-03 (5-agent finmentum integration test).
+Stopped at: Completed 75-03-PLAN.md (integration test green). Phase 75 done — 3/3 plans landed. Ready for verification + /gsd:transition to Phase 76.
 Resume file: None

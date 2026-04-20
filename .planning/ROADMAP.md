@@ -116,7 +116,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 ### v2.1 OpenClaw Agent Migration (Active)
 
-- [ ] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration.
+- [x] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration. (completed 2026-04-20)
 - [ ] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume.
 - [ ] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write.
 - [ ] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering.
@@ -164,7 +164,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 75-01-PLAN.md — Schema + ResolvedAgentConfig.memoryPath contract + differ non-reloadable classification (SHARED-01)
 - [x] 75-02-PLAN.md — loader.ts resolution + swap 13 runtime consumers (session-memory, heartbeat, inbox, daemon, bridge) to memoryPath (SHARED-01, SHARED-02)
-- [ ] 75-03-PLAN.md — Integration test covering 2-agent isolation + 5-agent finmentum + conflict rejection (SHARED-02, SHARED-03)
+- [x] 75-03-PLAN.md — Integration test covering 2-agent isolation + 5-agent finmentum + conflict rejection (SHARED-02, SHARED-03)
 
 ### Phase 76: Migration CLI Read-Side + Dry-Run
 **Goal**: User (as operator) can run `clawcode migrate openclaw list` and `clawcode migrate openclaw plan` to see every source agent's current state and the per-agent diff that `apply` would produce — with zero writes to `~/.clawcode/` or `clawcode.yaml` — so migration can be planned, reviewed, and re-planned safely before any real change.
@@ -270,7 +270,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Shared-Workspace Runtime Support | 2/3 | In Progress|  |
+| 75. Shared-Workspace Runtime Support | 3/3 | Complete   | 2026-04-20 |
 | 76. Migration CLI Read-Side + Dry-Run | 0/? | Not started | - |
 | 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
