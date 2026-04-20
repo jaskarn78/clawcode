@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: Completed 77-03-PLAN.md
-last_updated: "2026-04-20T17:58:52.402Z"
+status: Ready to execute
+stopped_at: Completed 78-01-PLAN.md
+last_updated: "2026-04-20T18:47:11.922Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 9
-  total_plans: 25
-  completed_plans: 25
+  total_plans: 28
+  completed_plans: 26
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 77 — pre-flight-guards-safety-rails
+**Current focus:** Phase 78 — config-mapping-yaml-writer
 
 ## Current Position
 
-Phase: 78
-Plan: Not started
+Phase: 78 (config-mapping-yaml-writer) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -90,6 +90,10 @@ Recent decisions affecting current work:
 - [Phase 77]: fs-guard uses CJS-module patching (ESM namespace objects frozen) — default-import callers covered; named-import callers not, static-grep regression is primary MIGR-07 line of defense
 - [Phase 77]: Static /tmp/cc-agents path in tests — mkdtempSync's alnum suffix trips scanSecrets high-entropy threshold on targetBasePath (real production concern for Phase 78+)
 - [Phase 77]: stripEntropicModels fixture helper normalizes real model names (anthropic-api/claude-sonnet-4-6, 4.0+ entropy) to whitelist short-idents for non-secret-path tests
+- [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: Phase 78 mutual-exclusion guard appended INSIDE existing Phase 75 superRefine arrow function (single superRefine chain — Zod doesn't support chaining a second). Regression test asserts both blocks fire independently.
+- [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: Error message copy pinned verbatim — literal 'cannot be used together' substring with agent name inline; grep-verifiable contract called out in critical_constraints.
+- [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: Silent fall-through on read errors at every precedence step — configured-but-deleted soulFile doesn't crash session boot; last branch falls back to config.soul ?? ''.
+- [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: storeSoulMemory + differ.ts intentionally untouched per plan scope; follow-ups tracked in deferred-items.md for Plan 02/03 to address once yaml-writer is in place.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -158,9 +162,10 @@ Recent decisions affecting current work:
 | Phase 77 P01 | 5min | 2 tasks | 2 files |
 | Phase 77 P02 | ~7min | 2 tasks | 5 files |
 | Phase 77 P03 | 25min | 2 tasks | 3 files |
+| Phase 78-config-mapping-yaml-writer P01 | 6min | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 77-03-PLAN.md
+Stopped at: Completed 78-01-PLAN.md
 Resume file: None

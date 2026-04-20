@@ -205,7 +205,10 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   2. User runs `apply` against an agent with per-agent MCP servers declared in `openclaw.json` and sees the migrated agent's `mcpServers:` list in `clawcode.yaml` contains string references to matching entries in the top-level `mcpServers:` map — with `clawcode` and `1password` auto-injection preserved (every migrated agent gets both), and any MCP server not found in the top-level map flagged in `plan` output as a warning.
   3. User runs `plan` against an agent whose OpenClaw model id doesn't match any known ClawCode mapping and sees the diff output flag it (`⚠ unmappable model: <id> — pass --model-map "<id>=<clawcode-id>" or edit plan.json`); passing `--model-map` overrides the mapping and the override lands in the written YAML entry.
   4. User runs `apply` while a hand-edit is in `clawcode.yaml` with inline comments (`# v2.0 endpoint`, `# op://...` references), and after the write the file still contains every pre-existing comment verbatim + key ordering is preserved — chokidar watcher observes exactly one file event (not a half-written intermediate state) because the write uses temp-file + atomic rename.
-**Plans**: TBD
+**Plans**: 3 plans
+- [x] 78-01-PLAN.md — Schema extension (soulFile/identityFile + mutual exclusion + loader expansion + session-config lazy-read precedence) (CONF-01)
+- [ ] 78-02-PLAN.md — Model-map module + config-mapper module (pure logic) + --model-map CLI flag (CONF-02, CONF-03)
+- [ ] 78-03-PLAN.md — YAML writer (Document AST + atomic temp+rename + comment preservation) + apply pipeline wiring + end-to-end integration test (CONF-01, CONF-02, CONF-03, CONF-04)
 
 ### Phase 79: Workspace Migration
 **Goal**: User (as operator) can trust that `clawcode migrate openclaw apply` copies each agent's workspace contents (SOUL.md, IDENTITY.md, USER.md, TOOLS.md, CLAUDE.md, MEMORY.md, memory/, .learnings/, archive/) from `~/.openclaw/workspace-<name>/` to the target ClawCode workspace with verbatim file preservation — and that the 5 finmentum agents all resolve to one shared basePath while keeping per-agent memoryPath/soulFile/identityFile/inbox distinct.
@@ -280,7 +283,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
 | 77. Pre-flight Guards + Safety Rails | 3/3 | Complete    | 2026-04-20 |
-| 78. Config Mapping + YAML Writer | 0/? | Not started | - |
+| 78. Config Mapping + YAML Writer | 1/3 | In Progress|  |
 | 79. Workspace Migration | 0/? | Not started | - |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |
 | 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |
