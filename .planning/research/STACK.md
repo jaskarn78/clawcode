@@ -1,333 +1,294 @@
-# Stack Research: v1.9 Persistent Conversation Memory
+# Stack Research: OpenClaw → ClawCode Migration Tooling
 
-**Domain:** Conversation persistence + retrieval for multi-agent orchestration
-**Researched:** 2026-04-17
+**Domain:** One-shot data migration tooling inside an existing TypeScript/Node CLI codebase
+**Researched:** 2026-04-20
 **Confidence:** HIGH
+**Milestone:** v2.1 OpenClaw Agent Migration
 
-## Scope
+## TL;DR — Stack Delta
 
-This research covers ONLY what is needed for v1.9: conversation turn persistence, session-boundary summarization, auto-inject on resume, and relevance-decay-weighted retrieval. The existing validated stack (TypeScript 6.0, Node.js 22 LTS, better-sqlite3 12.x, sqlite-vec 0.1.9, @huggingface/transformers 4.x, @anthropic-ai/tokenizer 0.0.4, croner 10.x, zod 4.x, pino 9.x, nanoid 5.x, date-fns 4.x, commander 14.x) is NOT re-evaluated.
+**ZERO new runtime dependencies required.** The migration CLI ships entirely on ClawCode's existing stack. The only candidate library with a real benefit (pretty structured diff output for the dry-run UI) is `jsondiffpatch`, and even that is replaceable with a hand-rolled diff since the objects being compared are small and structured. Default recommendation: ship with current deps.
 
-The existing substrate already provides:
-- Per-agent SQLite databases with WAL mode, sqlite-vec loaded, prepared statements (`src/memory/store.ts`)
-- Schema migration pattern: savepoint-test or `PRAGMA table_info` detection (`migrateSchema()`, `migrateTierColumn()`, `migrateEpisodeSource()`, `migrateGraphLinks()`)
-- MemoryEntry CRUD with embedding storage, dedup, auto-linking, importance scoring
-- SemanticSearch with 2x over-fetch, relevance-decay re-ranking, importance weighting (`src/memory/search.ts`)
-- EmbeddingService singleton with ~50ms/embed latency (`src/memory/embedder.ts`)
-- Context assembler with stable/mutable split, per-section token budgets, resumeSummary slot (`src/manager/context-assembler.ts`)
-- Resume summary budget enforcement: configurable cap (default 1500 tokens, floor 500), regeneration loop, hard-truncate fallback (`src/memory/context-summary.ts`)
-- Token counting via @anthropic-ai/tokenizer wrapped in `countTokens()` (`src/performance/token-count.ts`)
-- SessionLogger writing daily markdown logs (`src/memory/session-log.ts`)
-- Consolidation pipeline with LLM summarization callback, prompt builders, digest writing (`src/memory/consolidation.ts`)
-- EpisodeStore as a pattern for domain-specific MemoryEntry wrappers (`src/memory/episode-store.ts`)
-- TurnDispatcher as the single chokepoint for all agent turns with TurnOrigin metadata (`src/manager/turn-dispatcher.ts`)
-- Relevance decay scoring with configurable half-life (`src/memory/decay.ts`, `src/memory/relevance.ts`)
-- Hot/warm/cold tier management, knowledge graph auto-linking, memory dedup
-- `memory_lookup` MCP tool for on-demand semantic search
+**One forced-hand finding:** re-embedding is **mandatory, not optional**. See `## Reality Check: Embeddings` below. This is the single biggest cost driver for the milestone and must be surfaced to the roadmapper.
 
-## Recommended Stack Additions
+---
 
-### New Dependencies Required
+## Reality Check: Embeddings (read before anything else)
 
-**None.**
+Direct inspection of the 15 source DBs at `~/.openclaw/memory/*.sqlite`:
 
-v1.9 requires zero new npm dependencies. Every capability is buildable on the existing stack.
+| Source agent | Chunks | Embedding model | Dims | Storage format |
+|---|---|---|---|---|
+| fin-acquisition | 597 | gemini-embedding-001 | **3072** | JSON text (~66KB/row) |
+| finmentum-content-creator | 224 | gemini-embedding-001 | 3072 | JSON text |
+| finmentum | 65 | gemini-embedding-001 | 3072 | JSON text |
+| general | 878 | gemini-embedding-001 | 3072 | JSON text |
+| personal | 47 | **embeddinggemma-300m (local GGUF)** | **768** | JSON text |
+| projects | 519 | gemini-embedding-001 | 3072 | JSON text |
+| research | 287 | gemini-embedding-001 | 3072 | JSON text |
+| fin-research, fin-playground, fin-tax, shopping, work, kimi, local-clawdy, 0 | **0** | — | — | empty |
 
-### Existing Stack -- What Each Component Does for v1.9
+**Totals:** ~2,617 populated chunks across 7 agents. 8 agents have empty memory DBs (nothing to translate).
 
-| Technology | Current Version | v1.9 Role | Integration Point |
-|------------|----------------|-----------|-------------------|
-| better-sqlite3 | ^12.8.0 | New `conversation_turns` + `conversation_sessions` tables in per-agent memory.db | MemoryStore schema migration pattern |
-| sqlite-vec | ^0.1.9 | Session summaries stored as MemoryEntries participate in existing vec_memories KNN search | SemanticSearch.search() -- zero changes needed |
-| @huggingface/transformers | ^4.0.1 | Embed session summaries on creation | EmbeddingService.embed() -- zero changes needed |
-| @anthropic-ai/tokenizer | ^0.0.4 | Per-turn token counting, auto-inject budget enforcement | countTokens() -- zero changes needed |
-| date-fns | ^4.1.0 | Session duration, turn timestamps, retention window calculation | differenceInMinutes(), formatISO() -- already available |
-| nanoid | ^5.1.7 | IDs for conversation turns and session records | Already used throughout MemoryStore |
-| zod | ^4.3.6 | Schema validation for conversation config | Same pattern as memoryConfigSchema |
-| pino | ^9 | Structured logging for conversation persistence | shared/logger.ts -- zero changes needed |
-| croner | ^10.0.1 | Scheduled retention cleanup of old raw turns | Already used for memory consolidation cron |
-| commander | ^14.0.3 | CLI commands for conversation history browsing | Existing CLI framework |
+**ClawCode target:** `vec_memories USING vec0(embedding float[384] distance_metric=cosine)` — locked at 384 dims by every consumer (`session-memory.ts`, `graph-search.ts`, `tier-manager.ts`).
 
-## Architecture-Driving Decisions
+**Implication — there is no "reuse embeddings directly" path:**
+- Dimensional mismatch (3072 vs 384, and 768 vs 384) is not solvable by re-slicing or projecting without quality loss.
+- Provider mismatch (Gemini cloud vs local MiniLM) means vectors aren't in the same semantic space — cosine similarity between them is meaningless.
+- The `personal` agent's embeddinggemma is also not ClawCode's MiniLM, so even same-family local vectors don't carry over.
 
-### 1. Same Database, New Tables (NOT a Separate Database)
+**Re-embedding cost estimate (HIGH confidence):**
+- 2,617 chunks × ~50ms/embedding (observed singleton perf in `src/memory/embedding.ts`) = **~131 seconds total** if serial, ~20–30s with warmup amortized across agents.
+- Zero API cost (local ONNX).
+- Model is already resident (warm-path optimization in v1.7).
 
-**Decision:** Add `conversation_turns` and `conversation_sessions` tables to the existing per-agent `memory.db` via MemoryStore migration.
+This reframes the memory-translator phase from "blob copy" to "text → re-embed → insert." Still trivial in wall time, but the roadmapper should NOT scope it as "just translate schemas."
 
-**Why:** MemoryStore is the single database owner per agent. It already handles WAL mode, busy_timeout, sqlite-vec extension loading, and schema migrations. Adding tables here:
-- Maintains single-writer simplicity (no cross-db WAL contention with 14+ agents)
-- Enables JOIN queries between conversation turns and memory entries (e.g., "find memories created during session X")
-- Follows the established migration pattern exactly (see `migrateGraphLinks()` as the closest prior art)
-- Keeps per-agent backup/restore atomic
+---
 
-**NOT a separate `conversations.db`** because cross-db JOINs in SQLite require ATTACH which complicates prepared statements, and two databases per agent doubles WAL contention risk.
+## Recommended Stack (Delta)
 
-### 2. Session Summaries as MemoryEntries (NOT a Separate Retrieval System)
+### Additions: NONE
 
-**Decision:** Session-boundary summaries are stored as standard `MemoryEntry` objects with `source="conversation"` and tagged `["session-summary", "session:{id}"]`.
+The migration CLI is a greenfield `src/cli/commands/migrate-openclaw.ts` subcommand + supporting module under `src/migration/`. Every dependency it needs is already locked in `package.json`.
 
-**Why:** This is the exact pattern used by:
-- `EpisodeStore`: source="episode", tagged ["episode"]
-- Consolidation pipeline: source="consolidation", tagged ["weekly-digest", weekStr]
+### Existing Dependencies — How Each Is Reused
 
-By storing session summaries as MemoryEntries, they automatically:
-- Participate in semantic search via `SemanticSearch.search()` -- zero search changes
-- Get relevance decay scoring via `calculateRelevanceScore()` -- zero decay changes
-- Get importance-based ranking via `scoreAndRank()` -- zero ranking changes
-- Flow through hot/warm/cold tier system -- zero tier changes
-- Appear in `memory_lookup` MCP tool results -- zero MCP changes
-- Get auto-linked by the knowledge graph auto-linker -- zero graph changes
-- Get dedup-checked against similar existing memories -- zero dedup changes
+| Existing dep | Version | Role in migration tool | Why no substitute is needed |
+|---|---|---|---|
+| `better-sqlite3` | ^12.8.0 | Read source `chunks` table, write target `memories` + `vec_memories` | Sync API + `ATTACH DATABASE` verified working end-to-end against real OpenClaw DB (see Verified Spike below). No driver swap can improve this. |
+| `sqlite-vec` | ^0.1.9 | `.load(db)` on the destination handle before inserting float32 vectors into `vec_memories` | Already how `MemoryStore` works. The source DB's vectors are plain TEXT columns, not `vec0` virtual tables, so no extension is needed to *read* source — just to *write* target. |
+| `@huggingface/transformers` | ^4.0.1 | Re-embed every source chunk's `text` column into 384-dim MiniLM before insert | Mandatory: 3072-dim Gemini vectors can't feed a 384-dim `vec0` table. Singleton embedder is already cached (`src/memory/embedding.ts`), ~50ms/row warm. |
+| `commander` | ^14.0.3 | `clawcode migrate openclaw [--dry-run] [--agent <id>] [--apply]` subcommand | CLI is already wired (`src/cli/index.ts`); just register a new command module. |
+| `yaml` | ^2.8.3 | Read existing `clawcode.yaml`, merge new agent entries back, preserve comments where possible | Already in use via `src/config/loader.ts`. The `yaml` package (eemeli/yaml) has `Document` AST for comment-preserving edits — `js-yaml` does NOT. Don't swap. |
+| `zod` | ^4.3.6 | Validate parsed `openclaw.json` entries before mapping, validate emitted `clawcode.yaml` block round-trips | Already the project's validator of choice. |
+| `nanoid` | ^5.1.7 | Generate ClawCode-shaped memory IDs if source IDs collide or aren't in the `memories.id` TEXT format | Already project-wide. Source chunks use SHA256 hash IDs; these are fine to reuse as-is, but nanoid is available if we need fresh IDs for derived summary memories. |
+| `pino` | ^9 | Structured migration log → `~/.clawcode/migration/<timestamp>.jsonl` for audit trail | Already the project logger. |
+| `date-fns` | ^4.1.0 | Translate OpenClaw `mtime` (unix seconds) → ClawCode `created_at` / `accessed_at` (ISO strings, per `memories` schema) | Already in deps; `formatISO(fromUnixTime(mtime))` is one line. |
+| `chokidar` | ^5.0.0 | NOT needed for migration, but confirms no file-watching dep gap | — |
+| Node 22 built-in `fs.promises.cp` | — | Workspace directory copy with `{ recursive: true, verbatimSymlinks: true, preserveTimestamps: true, filter }` | Verified via docs: preserves symlinks without dereferencing, preserves mtimes, takes a per-entry filter function (skip `node_modules`, `.git`, virtualenv `lib64` symlinks, etc.). See "Why not fs-extra" below. |
 
-Zero new retrieval infrastructure needed.
+### Supporting Modules (code, not deps)
 
-### 3. Auto-Inject via Context Assembler's resumeSummary Slot (NOT a New Pipeline Section)
+New files under `src/migration/`, all using only the table above:
 
-**Decision:** Auto-inject on resume extends the existing `ContextSources.resumeSummary` path in `context-assembler.ts`.
+| Module | Purpose |
+|---|---|
+| `openclaw-config-reader.ts` | Parse `~/.openclaw/openclaw.json` via `JSON.parse` + zod schema |
+| `source-memory-reader.ts` | Open source `.sqlite` read-only, stream `chunks` rows with prepared statements |
+| `config-mapper.ts` | OpenClaw agent entry → ClawCode YAML node (identity/soul pulled from workspace files) |
+| `workspace-copier.ts` | `fs.promises.cp` with filter — covered in detail below |
+| `memory-translator.ts` | `ATTACH` source → read chunks → re-embed → insert into target `memories` + `vec_memories` |
+| `diff-planner.ts` | Build per-agent plan object: `{ configChanges, filesToCopy, chunksToTranslate, collisions, warnings }` |
+| `dry-run-renderer.ts` | Structured console output of the plan (table per agent, summary totals) |
 
-**Why:** The context assembler already has:
-- A `resumeSummary` field that lands in the mutable suffix (uncached, per-turn)
-- Budget enforcement via `enforceSummaryBudget()` with configurable token cap (default 1500, floor 500)
-- Per-section token counting for audit (`section_tokens.resume_summary`)
-- The stable/mutable split for prompt caching compatibility
+---
 
-The auto-inject enhancement loads N most recent session summaries, formats them into a structured brief, and feeds the result into `resumeSummary`. Adding a new section would change `SectionTokenCounts`, `ContextSources`, `SectionName`, `MemoryAssemblyBudgets`, and `DEFAULT_PHASE53_BUDGETS` -- cascading through 20+ files. Reusing `resumeSummary` avoids this entirely.
+## Answers to the Specific Questions
 
-### 4. Turn Recording via TurnDispatcher Post-Dispatch Hook (NOT Discord Bridge)
+### 1. Can we reuse OpenClaw's embeddings directly?
 
-**Decision:** Conversation turn recording hooks into TurnDispatcher's `dispatch()`/`dispatchStream()` return path.
+**NO.** Dimensional and provider mismatch (3072-dim Gemini / 768-dim embeddinggemma vs ClawCode's 384-dim MiniLM). Re-embedding is mandatory. Cost is ~131 seconds wall time for the full 2,617-chunk corpus, zero API spend — acceptable. No library addition changes this.
 
-**Why:** TurnDispatcher (v1.8) is "the single chokepoint for every agent-turn initiation." Every Discord message, scheduler invocation, and handoff flows through it. Recording turns here:
-- Captures ALL turn sources (Discord, scheduler, handoff) in one place
-- Has access to `origin.rootTurnId`, `origin` type, agent name, and channel ID via `DispatchOptions`
-- Has access to both the input message and the response string (the return value)
-- Avoids scattering persistence logic across Discord bridge, scheduler bridge, and handoff receiver
-- The `TurnOrigin` type already carries source metadata for attributing turns
+### 2. Any schema-diff / dry-run utility?
 
-### 5. Raw Turns WITHOUT Per-Turn Embedding (Embed Only Session Summaries)
+**Not needed as a library.** Dry-run output for this scale (15 agents × a handful of config fields × some file paths) is better rendered by hand-rolled table/list printing. Reasons:
 
-**Decision:** Store raw conversation turns as text without computing embeddings. Only session summaries get embedded.
+- The diff isn't between two free-form JSON blobs; it's between a structured `OpenclawAgentEntry` and the derived `ClawcodeAgentSpec`. The "diff" is really a **plan preview**, not a structural diff.
+- Rendering the preview as a markdown-ish table in the terminal gives ops a readable audit — `jsondiffpatch` output (HTML or colored JSON) is less readable for this shape.
+- `diff@9.0.0` or `jsondiffpatch@0.7.3` would be optional if we later want unified-diff output for the YAML merge preview. Leave as a v2.1.x follow-up, not a v2.1 blocker.
 
-**Why:**
-- 14 agents x ~50 turns/session x ~50ms/embed = 35 seconds of embedding compute per full session per agent -- unacceptable latency per message
-- Individual turns are low-signal for semantic search ("hi", "thanks", "yes do that")
-- Session summaries distill turns into high-signal searchable facts -- this is where embedding adds value
-- Raw turns remain queryable via SQL (WHERE content LIKE ? or exact session_id lookup) for precise recall
-- If full-text search over raw turns proves necessary: SQLite's built-in FTS5 requires zero new dependencies (compiled into better-sqlite3's bundled SQLite). Add as a v1.9.1 enhancement if SQL LIKE proves insufficient.
+**Recommendation:** ship without. If reviewers specifically ask for unified YAML diff output, add `diff@^9` (tiny, no deps, MIT) — but prove the need first.
 
-### 6. LLM Summarization via Existing Callback Pattern
+### 3. Better than `fs.cp` for workspace copy?
 
-**Decision:** Reuse the consolidation pipeline's `summarize: (prompt: string) => Promise<string>` callback pattern for session-boundary summarization.
+**NO — Node 22's built-in `fs.promises.cp` is strictly sufficient.** Verified options:
 
-**Why:** The consolidation pipeline (`consolidation.ts`) already:
-- Accepts a `summarize` callback injected by the caller (pure dependency injection)
-- Uses it for weekly/monthly digest generation
-- Has prompt-building helpers (`buildWeeklySummarizationPrompt`, `buildMonthlySummarizationPrompt`)
-- Handles truncation of long inputs (`MAX_PROMPT_CHARS = 30000`)
-
-Session-end summarization follows the identical pattern: collect turns, build a summarization prompt, call the injected summarizer, store the result. The summarizer implementation (which model, how to invoke) is the caller's concern, keeping the persistence module pure.
-
-## Schema Design
-
-### conversation_sessions Table
-
-```sql
-CREATE TABLE IF NOT EXISTS conversation_sessions (
-  id TEXT PRIMARY KEY,
-  agent_name TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  ended_at TEXT,
-  turn_count INTEGER NOT NULL DEFAULT 0,
-  total_tokens INTEGER NOT NULL DEFAULT 0,
-  summary_memory_id TEXT,
-  status TEXT NOT NULL DEFAULT 'active'
-    CHECK(status IN ('active', 'ended', 'summarized')),
-  FOREIGN KEY (summary_memory_id) REFERENCES memories(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_agent
-  ON conversation_sessions(agent_name);
-CREATE INDEX IF NOT EXISTS idx_sessions_status
-  ON conversation_sessions(status);
-CREATE INDEX IF NOT EXISTS idx_sessions_started
-  ON conversation_sessions(started_at);
-```
-
-### conversation_turns Table
-
-```sql
-CREATE TABLE IF NOT EXISTS conversation_turns (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  turn_id TEXT,
-  role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-  content TEXT NOT NULL,
-  channel_id TEXT,
-  origin TEXT,
-  token_count INTEGER,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES conversation_sessions(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_turns_session
-  ON conversation_turns(session_id);
-CREATE INDEX IF NOT EXISTS idx_turns_created
-  ON conversation_turns(created_at);
-```
-
-### Config Schema Addition
-
-```typescript
-export const conversationConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  autoSummarize: z.boolean().default(true),
-  summaryModel: z.enum(["sonnet", "opus", "haiku"]).default("haiku"),
-  resumeSessionCount: z.number().int().min(1).max(10).default(3),
-  resumeTokenBudget: z.number().int().min(500).max(4000).default(1500),
-  turnRetentionDays: z.number().int().min(7).default(90),
-  summaryImportance: z.number().min(0.1).max(1).default(0.75),
+```ts
+await fs.cp(src, dest, {
+  recursive: true,
+  verbatimSymlinks: true,     // preserves symlinks verbatim, no dereference
+  preserveTimestamps: true,
+  errorOnExist: true,
+  force: false,
+  filter: (src) => !src.includes("/node_modules/") &&
+                   !src.includes("/.git/") &&
+                   !src.endsWith("/instagram-env/lib64"), // venv symlink pitfall
 });
 ```
 
-### New MemorySource Value
+Why not `fs-extra@11.3.4`? It was the standard choice in Node 14–18 when `fs.cp` didn't exist or lacked symlink/timestamp options. In Node 22, `fs.cp` is feature-parity for our needs (`copy`, `copySync`, symlink preservation, filter). Adding it is 500KB + a transitive `graceful-fs` for zero benefit.
 
-The existing `memorySourceSchema` already includes `"conversation"` -- no CHECK constraint migration needed. Session summaries use `source: "conversation"` with tags to distinguish them from other conversation-sourced memories.
+Why not `cpy@11.x`? It's glob-first and streams — overkill. We know exactly which directory to copy per agent.
 
-## New Files (Following Existing Patterns)
+**Scale check:** `.learnings/` dirs are 16–24KB each (verified via `du -sh`). Whole workspaces are a few hundred MB max. `fs.cp` handles this in seconds; streaming isn't needed.
 
-| New File | Pattern From | Purpose |
-|----------|-------------|---------|
-| `src/memory/conversation-store.ts` | `episode-store.ts` | ConversationStore class: session CRUD, turn recording, session listing, turn retrieval |
-| `src/memory/conversation-summarizer.ts` | `consolidation.ts` | Prompt builder for session-end summarization, summary-to-MemoryEntry pipeline |
-| `src/memory/conversation-resume.ts` | `context-summary.ts` | Load N recent session summaries, format as structured brief, enforce token budget |
+**Symlink pitfall to document:** `workspace-general/finmentum/instagram-env/lib64` is a Python venv self-reference symlink. The `filter` function must skip these or the copy will succeed but ClawCode's chokidar watcher may choke on recursive symlink traversal later. This is a PITFALL.md entry, not a library choice.
+
+### 4. Does better-sqlite3 + sqlite-vec support the source schema?
+
+**YES — verified by live spike.** Source DBs use plain TEXT columns for embeddings (JSON arrays), no `vec0` virtual tables, no extensions required to read them. The destination needs `sqlite-vec` loaded to write `vec_memories`, which is already how `MemoryStore` works.
+
+Live verification run on `fin-acquisition.sqlite` (597 chunks):
+
+```js
+const db = new Database(":memory:");
+sqliteVec.load(db);                                      // load ext on destination-shaped handle
+db.exec("ATTACH DATABASE '…/fin-acquisition.sqlite' AS src");
+db.prepare("SELECT COUNT(*) FROM src.chunks").get();     // → { n: 597 } ✅
+db.prepare("SELECT id, path, length(embedding), model FROM src.chunks LIMIT 1").get();
+// → { id: "fea2ef…", path: "memory/graph/entities/alpha_vantage.md",
+//     "length(embedding)": 66268, model: "gemini-embedding-001" } ✅
+```
+
+So: read source via ATTACH, ignore source `embedding` TEXT column (can't reuse — see Q1), re-embed `text` with the existing `getEmbedder()` singleton, insert into destination `memories` + `vec_memories` in one transaction per agent.
+
+### 5. Is there an ATTACH DATABASE single-transaction pattern?
+
+**YES — and it's the recommended shape.** Because:
+
+- `better-sqlite3` supports `db.exec("ATTACH DATABASE '…/source.sqlite' AS src")` — verified.
+- Since source and target live on the same filesystem, ATTACH is O(open fd) with zero copy.
+- Wrapping the per-agent translation in `db.transaction(() => { ... })()` gives atomicity: either the full agent migration commits or nothing does.
+- Don't attempt a single mega-transaction across all 15 agents — keep transactions per-agent so one agent's failure doesn't block the rest, and so dry-run vs apply has clean per-agent boundaries.
+- `PRAGMA foreign_keys = ON` isn't needed here; destination `vec_memories` is a virtual table and has no FK relationship to `memories` at the schema level — application code must delete from both (already handled in `MemoryStore.delete`).
+
+**Pseudocode shape (for planner):**
+```ts
+const target = new Database(targetPath);
+sqliteVec.load(target);
+target.exec(`ATTACH DATABASE '${sourcePath}' AS src`);
+
+const migrate = target.transaction((agentId: string) => {
+  const rows = target.prepare(`
+    SELECT c.id, c.path, c.text, c.start_line, c.end_line, c.updated_at,
+           f.mtime, f.source AS file_source
+    FROM src.chunks c JOIN src.files f ON c.path = f.path
+  `).all();
+  for (const r of rows) {
+    const vec = embedder.embedSync(r.text);  // 384-dim Float32Array
+    insertMemory.run(mapMemory(r));
+    insertVec.run(r.id, Buffer.from(vec.buffer));
+  }
+});
+migrate(agentId);
+target.exec("DETACH DATABASE src");
+```
+
+---
+
+## Installation
+
+```bash
+# NONE. All required packages are already in package.json.
+# Migration CLI is additive TypeScript code under src/migration/ + src/cli/commands/migrate-openclaw.ts.
+```
+
+---
 
 ## Alternatives Considered
 
-| Recommended | Alternative | When to Use Alternative |
-|-------------|-------------|-------------------------|
-| Same memory.db, new tables | Separate conversations.db per agent | Never. Cross-db JOINs need ATTACH; two dbs per agent doubles WAL contention. |
-| Raw turns without embedding | Embed every turn individually | Only if per-turn semantic search is mandatory. Adds ~50ms latency per message per agent. Unlikely to be needed -- session summaries cover this. |
-| MemoryEntry for session summaries | Separate summary table with own vector index | Never. Duplicates search, decay, tier management. The whole point of unified MemoryEntry is unified retrieval. |
-| SQL LIKE for raw turn search | FTS5 virtual table | Consider FTS5 if LIKE queries over raw turns are too slow at >100K turns per agent. FTS5 is built into SQLite, zero new deps. Add as v1.9.1 if needed. |
-| LLM summarization callback | Rule-based extractive summarization | Never for quality. LLM captures nuance, decisions, preferences. Rule-based misses context. |
-| Context assembler resumeSummary | New context pipeline section | Never. New section changes SectionTokenCounts, ContextSources, SectionName, MemoryAssemblyBudgets, DEFAULT_PHASE53_BUDGETS -- cascades through 20+ files. |
-| TurnDispatcher hook | Discord bridge hook | Never. TurnDispatcher is the single chokepoint (v1.8). Discord bridge hook would miss scheduler and handoff turns. |
-| Haiku for session summarization | Sonnet/Opus for session summarization | Use sonnet only if haiku summaries consistently miss important context. Haiku is 10x cheaper and session summarization is a structured extraction task well within haiku's capability. |
+| Recommended | Alternative | When to Use Alternative | Verdict |
+|---|---|---|---|
+| `fs.promises.cp` (Node 22 built-in) | `fs-extra@11.3.4` | If targeting Node ≤18 where `fs.cp` lacked symlink options | **Reject** — Node 22 is locked. |
+| `fs.promises.cp` | `cpy@11.3.4` | Glob-based, streaming copy for millions of files | **Reject** — our scale is MB, not GB. |
+| `yaml@2.x` (eemeli) already in deps | `js-yaml@4.1.1` | If another part of ClawCode required it | **Reject** — `yaml` is already wired and preserves comments; `js-yaml` doesn't. No reason to fork YAML libs. |
+| hand-rolled plan renderer | `jsondiffpatch@0.7.3` | If ops asks for colored/HTML structural diff | **Defer** — add only if reviewers demand it. |
+| hand-rolled plan renderer | `diff@9.0.0` | If we want unified-diff output of the YAML merge | **Defer** — same reason. |
+| per-agent transaction | SQLite online backup API (`sqlite3_backup_init`) | If we wanted bit-exact mirroring of source DB into target | **Reject** — schemas differ, can't use backup API; ATTACH + SELECT is the correct pattern. |
+| local re-embedding (existing singleton) | Gemini API re-embedding | If we wanted to preserve the original 3072-dim vectors in a separate sidecar table | **Reject** — ClawCode has no 3072-dim consumer. Pointless fidelity. |
+| stream chunks one at a time | load all chunks in memory per agent | — | **Use the loaded approach.** Max agent has 878 chunks at ~1KB text each ≈ 1MB. Fits easily. |
+| `commander@14` (existing) | `yargs@18`, `citty`, `clipanion` | If we wanted subcommand autocompletion or nicer help formatting | **Reject** — CLI is already built on `commander`. |
+| `pino@9` (existing) | `winston` | If other log consumers expected winston | **Reject** — project standard. |
+| Node 22 `fs.cp` `filter` option | `globby@14` / `picomatch@4` to enumerate first | If the filter logic was complex enough to need glob patterns | **Reject** — three substring excludes is enough for our case. If it grows, revisit. |
+
+---
 
 ## What NOT to Use
 
 | Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| Redis for turn buffering | SQLite INSERT is <1ms synchronous. No need to buffer in-memory then flush. | Direct better-sqlite3 INSERT in TurnDispatcher return path |
-| LangChain memory abstractions | Massive dependency (300+ transitive deps) for what is 2 SQL tables and a summarization prompt. Fights the existing MemoryStore pattern. | Custom ConversationStore following EpisodeStore's pattern (~100 lines) |
-| Separate embedding model for conversations | One embedding model is sufficient. MiniLM-L6-v2 at 384-dim handles both general memory and session summaries. | Same EmbeddingService singleton |
-| ChromaDB / Pinecone / Weaviate | External vector DB is overkill for per-agent conversation history at this scale. | sqlite-vec (already loaded in each agent's db) |
-| OpenAI / Voyage / Cohere embeddings for summaries | Adds cost, latency, network dependency. Local embeddings at ~50ms/call are fine for 1 embed per session. | @huggingface/transformers (already loaded) |
-| Custom token counter | @anthropic-ai/tokenizer is already wrapped in countTokens(). chars/4 approximation is unreliable for budget enforcement. | Existing countTokens() from performance/token-count.ts |
-| Markdown files for conversation history | SessionLogger already writes daily markdown logs. A second markdown system creates confusion and duplicates data. SQLite is the right choice for structured, queryable conversation data. | SQLite conversation_turns table |
-| Prisma / Drizzle ORM | ORM overhead for what are simple INSERTs and SELECTs with prepared statements. | Raw better-sqlite3 prepared statements (established pattern) |
-| A new MCP tool for conversation search | Session summaries are MemoryEntries. The existing memory_lookup MCP tool already searches MemoryEntries by semantic similarity. | Existing memory_lookup MCP tool |
+|---|---|---|
+| `fs-extra` | Node 22's built-in `fs.cp` has every option we need (symlinks, timestamps, filter). Adding fs-extra re-introduces a redundant `graceful-fs` dependency. | `fs.promises.cp` |
+| `sqlite3` (node-sqlite3, async) | Async callback API clashes with ClawCode's sync `better-sqlite3` patterns. Would need a second driver for no reason. | `better-sqlite3` (already loaded) |
+| SQLite online backup API | Designed for whole-DB bit-mirror, not schema translation. Source and target schemas differ. | `ATTACH DATABASE` + transaction |
+| Re-embedding via Gemini API | Paid, network-dependent, and ClawCode has no 3072-dim consumer. Migration tool would need API keys that 15 agents don't share. | Local MiniLM via `@huggingface/transformers` singleton |
+| Preserving OpenClaw chunk IDs as-is into `memories.id` | Source IDs are SHA256 hex (64 chars) — technically fine, but collide across agents if we ever merge memory stores later. | Namespaced ID: `openclaw-migrate:<agent>:<sha>` |
+| Trying to replay `~/.openclaw/agents/<name>/sessions/*.jsonl` | Hundreds of files per agent, undocumented format drift, high risk. Explicitly OUT OF SCOPE per milestone. | Skip entirely; rely on workspace MEMORY.md + chunks |
+| Writing a new YAML serializer | `yaml@2.8.3` (eemeli) already preserves comments via its Document AST | Use `YAML.parseDocument` / `.toString()` from existing `yaml` dep |
+| `libsql` / Turso client | Overkill — they're for distributed SQLite. Not needed for a local one-shot migration. | `better-sqlite3` |
+| `prisma-migrate` or any ORM migration tool | ORM migrations target schema evolution, not data translation. Different problem. | Hand-written translator |
+| `chokidar` watching during migration | The migrator is one-shot, not a daemon. Adding watching expands the surface area. | Run migrator, then restart daemon |
 
-## Stack Patterns by Variant
+---
 
-**If agent has high conversation volume (>100 turns/day):**
-- Enable FTS5 virtual table over conversation_turns for efficient full-text search
-- Batch turn INSERTs (accumulate in-memory buffer, flush every 10 turns or 30 seconds)
-- Run turn retention cleanup as a weekly croner job instead of daily
-- FTS5 is zero-dependency (compiled into better-sqlite3's bundled SQLite)
+## Integration Risks
 
-**If agent is primarily scheduled/automated (few Discord conversations):**
-- Set `conversationConfig.autoSummarize: false`
-- Scheduler-originated turns are still recorded (for audit trail and observability)
-- Resume auto-inject pulls from existing memory system only (no conversation brief)
+### ESM / Node 22 compatibility — NONE NEW
+All proposed usage is of already-loaded deps. No ESM/CJS interop concerns beyond what the project already handles.
 
-**If agent needs cross-session topic threading:**
-- Tag session summaries with extracted topic tags (reuse importance.ts entity detection)
-- Link session summary MemoryEntries via knowledge graph wikilinks (`[[session:{id}]]`)
-- Auto-linker heartbeat discovers similarity edges between session summaries automatically
+### `better-sqlite3` sync model — OK
+ATTACH + SELECT + INSERT is all synchronous. The only async boundary is the embedder (`@huggingface/transformers` returns a Promise). Pattern: batch-read chunks synchronously, await embeddings, then open a `db.transaction()` to bulk-insert. Don't hold a transaction open across an `await` — well-known footgun.
 
-**If session summaries prove too lossy (rare conversations with high-value details):**
-- Increase `summaryImportance` to 0.9 so summaries decay slower
-- Add a `preserveVerbatim` flag that stores select turns as individual MemoryEntries (with embedding)
-- Keep this as a v1.9.1 enhancement -- do not over-engineer on the first pass
+### Read-only source safety
+Open source DBs in read-only mode: `new Database(sourcePath, { readonly: true, fileMustExist: true })` — or open the destination and `ATTACH` source read-only via `?mode=ro`. **Recommended:** always ATTACH read-only so an OpenClaw daemon (if still running) and the migrator can't race. Verified syntax: `ATTACH DATABASE 'file:/.../fin-acquisition.sqlite?mode=ro' AS src` requires opening main DB with URI support (`new Database(target, { fileMustExist: false })` + `PRAGMA journal_mode=WAL`).
+
+### OpenClaw daemon must be stopped during migration
+Even read-only ATTACH, if OpenClaw has WAL pending writes, can produce inconsistent reads. **PITFALL:** migration runbook must `systemctl stop openclaw` (or equivalent) before `clawcode migrate openclaw --apply`. Add a pre-flight check that scans for OpenClaw process PIDs and refuses to proceed if found.
+
+### Embedding singleton warmup amortization
+First embed call is ~500ms (model load); subsequent calls ~50ms. For 2,617 chunks, amortized cost is dominated by per-chunk time. Do NOT spin up a fresh embedder per agent — load once, reuse across all 7 populated agents. The existing `getEmbedder()` singleton in `src/memory/embedding.ts` already handles this.
+
+### `vec_memories` float32 encoding
+ClawCode's `MemoryStore.insert` writes `Buffer.from(new Float32Array(embedding).buffer)` into `vec_memories.embedding`. The migrator MUST use the same byte encoding — there is no JSON-to-vec path. Reusing `MemoryStore.insert(input, embedding)` directly (instead of re-implementing INSERT statements) is strongly preferred — it keeps the serialization contract in one place.
+
+**Recommended:** migrator uses the existing `MemoryStore` public API rather than raw SQL. Not a new dep, just a code-organization note for planner.
+
+---
 
 ## Version Compatibility
 
 | Package A | Compatible With | Notes |
-|-----------|-----------------|-------|
-| better-sqlite3@12.8.0 | FTS5 virtual tables | FTS5 is built into the SQLite amalgamation that better-sqlite3 bundles. No separate extension needed. Enabled by default. |
-| better-sqlite3@12.8.0 | New conversation_* tables alongside existing memories + vec_memories | Same db, same WAL, same busy_timeout. Validated pattern (memory_links table added in v1.5). |
-| @anthropic-ai/tokenizer@0.0.4 | Per-turn token counting | Already wrapped in countTokens(). Deterministic, same BPE tokenizer as Claude. |
-| date-fns@4.1.0 | Session duration, retention window | differenceInMinutes(), subDays(), isAfter() all available. Already used in consolidation. |
-| zod@4.3.6 | conversationConfigSchema | Same validation pattern as memoryConfigSchema, decayConfigSchema, etc. |
-| croner@10.0.1 | Turn retention cleanup cron | Same scheduler used for memory consolidation. Add another handler entry. |
+|---|---|---|
+| `better-sqlite3@12.8.0` | `sqlite-vec@0.1.9` loaded on ATTACH-capable handle | Verified via live spike against real OpenClaw DB |
+| `better-sqlite3@12.8.0` | `ATTACH DATABASE` on readonly URIs | Standard SQLite feature; no version-specific issue |
+| `@huggingface/transformers@4.0.1` | Same singleton, cross-agent reuse | Warm: ~50ms/chunk verified in v1.7 latency benchmarks |
+| `yaml@2.8.3` (eemeli) | `Document` AST round-trip for YAML edits that preserve comments | Required to avoid nuking existing `clawcode.yaml` comments |
+| Node `fs.promises.cp` | `verbatimSymlinks: true` + `preserveTimestamps: true` + `filter` | Node ≥20; confirmed in Node 22 docs |
+| `commander@14.0.3` | Nested subcommands (`migrate openclaw`) | Already used in `src/cli/index.ts` |
+| `zod@4.3.6` | Schema for OpenClaw agent entry | Already project standard |
 
-## Integration Points with Existing Memory System
-
-### Where v1.9 Plugs In
-
-| Existing File | What v1.9 Adds | How |
-|---------------|----------------|-----|
-| `src/memory/store.ts` | conversation_turns + conversation_sessions tables | New migration method `migrateConversationTables()` following `migrateGraphLinks()` pattern. Called in constructor chain. |
-| `src/memory/schema.ts` | conversationConfigSchema | New Zod schema export. Added to memoryConfigSchema as optional `conversation` field. |
-| `src/memory/types.ts` | ConversationTurn, ConversationSession, ConversationConfig types | New type exports alongside existing MemoryEntry, EpisodeInput. |
-| `src/manager/turn-dispatcher.ts` | Post-dispatch turn recording | After sendToAgent()/streamFromAgent() returns, call ConversationStore.recordTurn() with input + output. Non-fatal: catch and log errors so persistence failures never block message delivery. |
-| `src/manager/context-assembler.ts` | Enhanced resumeSummary source | No changes to assembler code. The caller (session-config) loads conversation brief via new `loadConversationBrief()` and passes it as `resumeSummary`. |
-| `src/memory/context-summary.ts` | loadConversationBrief() helper | New function alongside existing loadLatestSummary(). Loads N recent session summaries, formats as structured brief, calls enforceSummaryBudget(). |
-
-### Modules That Need Zero Changes
-
-| Module | Why No Changes |
-|--------|---------------|
-| `src/memory/search.ts` | Session summaries are MemoryEntries -- already searchable via SemanticSearch |
-| `src/memory/relevance.ts` | Decay scoring applies to session summaries via their accessed_at field |
-| `src/memory/decay.ts` | Half-life decay formula works on any MemoryEntry |
-| `src/memory/embedder.ts` | Same EmbeddingService.embed() call for session summaries |
-| `src/memory/dedup.ts` | Dedup checking runs on session summary insert automatically |
-| `src/memory/similarity.ts` | Auto-linking runs on session summary insert automatically |
-| `src/memory/graph.ts` | Wikilink extraction works on session summary content |
-| `src/memory/tiers.ts` | Tier promotion/demotion applies to session summaries |
-| `src/memory/tier-manager.ts` | Tier sweeps include session summaries |
-| `src/memory/importance.ts` | Importance scoring applies (though we override with summaryImportance config) |
-
-## What Already Exists (DO NOT Rebuild)
-
-| Capability | Existing Location | v1.9 Relationship |
-|------------|-------------------|-------------------|
-| Per-agent SQLite with WAL + sqlite-vec | memory/store.ts | Schema host |
-| Relevance decay scoring | memory/decay.ts + memory/relevance.ts | Session summaries scored identically |
-| Semantic search with re-ranking | memory/search.ts | Deep search over session summaries |
-| Hot/warm/cold tier management | memory/tiers.ts + memory/tier-manager.ts | Session summaries flow through tiers |
-| Memory deduplication | memory/dedup.ts | Prevents duplicate session summaries |
-| Knowledge graph auto-linking | memory/similarity.ts + memory/graph.ts | Links session summaries to related memories |
-| Context assembly with budget enforcement | manager/context-assembler.ts | Auto-inject lands in resumeSummary slot |
-| Resume summary budget enforcer | memory/context-summary.ts | Enforces token cap on conversation brief |
-| Token counting | performance/token-count.ts | Per-turn and per-brief measurement |
-| Consolidation pipeline | memory/consolidation.ts | Pattern for LLM summarization callback |
-| Episode store | memory/episode-store.ts | Pattern for domain-specific MemoryEntry wrappers |
-| Importance scoring | memory/importance.ts | Auto-scores session summaries on insert |
-| Memory lookup MCP tool | mcp/ | Session summaries searchable via existing tool |
-| TurnDispatcher chokepoint | manager/turn-dispatcher.ts | Hook point for recording turns |
-| SessionLogger | memory/session-log.ts | Continues writing markdown daily logs (complementary, not replaced) |
+---
 
 ## Sources
 
-- Codebase analysis: `src/memory/store.ts` -- schema, migration pattern, MemoryStore class, prepared statements (Confidence: HIGH)
-- Codebase analysis: `src/memory/episode-store.ts` -- domain-specific MemoryEntry wrapper pattern (Confidence: HIGH)
-- Codebase analysis: `src/memory/consolidation.ts` -- LLM summarization callback, prompt building, digest pipeline (Confidence: HIGH)
-- Codebase analysis: `src/manager/context-assembler.ts` -- resumeSummary slot, budget enforcement, SectionTokenCounts shape (Confidence: HIGH)
-- Codebase analysis: `src/memory/context-summary.ts` -- enforceSummaryBudget(), loadLatestSummary(), DEFAULT_RESUME_SUMMARY_BUDGET (Confidence: HIGH)
-- Codebase analysis: `src/manager/turn-dispatcher.ts` -- single chokepoint, TurnOrigin, DispatchOptions (Confidence: HIGH)
-- Codebase analysis: `src/memory/search.ts` -- SemanticSearch, relevance-decay re-ranking, importance weighting (Confidence: HIGH)
-- Codebase analysis: `src/memory/relevance.ts` -- scoreAndRank(), distanceToSimilarity() (Confidence: HIGH)
-- Codebase analysis: `src/memory/decay.ts` -- calculateRelevanceScore(), half-life exponential decay (Confidence: HIGH)
-- Codebase analysis: `src/memory/embedder.ts` -- EmbeddingService singleton, ~50ms/embed, 384-dim (Confidence: HIGH)
-- Codebase analysis: `src/memory/types.ts` -- MemoryEntry, MemorySource includes "conversation" (Confidence: HIGH)
-- Codebase analysis: `src/memory/schema.ts` -- memorySourceSchema includes "conversation", Zod patterns (Confidence: HIGH)
-- Codebase analysis: `src/memory/session-log.ts` -- SessionLogger markdown pattern (Confidence: HIGH)
-- Codebase analysis: `package.json` -- all dependency versions verified (Confidence: HIGH)
-- SQLite documentation: FTS5 compiled into amalgamation, available in better-sqlite3 by default (Confidence: HIGH)
+- **Live inspection** — `sqlite3 ~/.openclaw/memory/*.sqlite ".schema"` + `SELECT * FROM meta` across 15 DBs (2026-04-20). Ground truth for embedding model, dims, format. HIGH confidence.
+- **Live spike** — Node script loading `sqlite-vec` into `better-sqlite3`, ATTACHing real OpenClaw source DB, reading 597 chunks. Confirms read path end-to-end. HIGH confidence.
+- **ClawCode source** — `src/memory/store.ts` (insert pattern, vec0 schema), `src/config/loader.ts` (`yaml` package usage), `src/cli/index.ts` (`commander` wiring), `src/memory/embedding.ts` (embedder singleton). HIGH confidence.
+- [Node 22 `fs.promises.cp` docs](https://nodejs.org/docs/latest-v22.x/api/fs.html#fspromisescpsrc-dest-options) — verified `verbatimSymlinks`, `preserveTimestamps`, `filter` options exist and behave as expected. HIGH confidence.
+- [sqlite-vec JS docs](https://alexgarcia.xyz/sqlite-vec/js.html) — ATTACH + extension loading pattern. MEDIUM confidence (docs are slim; live spike upgraded to HIGH).
+- [better-sqlite3 API](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md) — sync txn, ATTACH, prepared statements. HIGH confidence.
+- `npm view` registry (2026-04-20) — version numbers verified current.
+- `package.json` of this workspace — authoritative for what's already locked in.
 
 ---
-*Stack research for: v1.9 Persistent Conversation Memory*
-*Researched: 2026-04-17*
+
+## Roadmap Implications (hand-off to planner)
+
+1. **No dep-add phase is needed.** Migration tool phases (config-mapper, workspace-copier, memory-translator, dry-run UI) all ship as pure TypeScript against the existing stack.
+
+2. **Memory-translator phase must budget re-embedding wall time** (~2–3 minutes for full corpus including warmup). This is CPU/memory time on the daemon host, not API cost. Phase should include a progress bar output (hand-rolled or add `cli-progress@3.12.0` if reviewers want polish — but not a blocker).
+
+3. **Workspace-copier phase needs a symlink-skip filter,** documented in PITFALLS. The `venv/lib64` self-symlink is a real trap.
+
+4. **Dry-run UI phase** should render plan tables in plain text. If anyone asks for colored JSON diff, evaluate `jsondiffpatch` then — not before.
+
+5. **Pre-flight check phase** (or included in config-mapper): detect running OpenClaw daemon, refuse apply if found, print the systemctl command to stop it.
+
+6. **Migration is forward-only:** re-running `migrate --apply` against already-migrated agents should be idempotent (UPSERT on `memories.id`, skip if vec already present) — this is implementation detail, not stack detail, but flag it to planner.
+
+7. **8 of 15 source agents have empty memory DBs** — the migrator should cleanly no-op on these rather than error. Log "no memory to migrate" and proceed to workspace + config.
+
+---
+
+*Stack research for: OpenClaw → ClawCode migration tooling (v2.1)*
+*Researched: 2026-04-20*
