@@ -116,7 +116,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 ### v2.1 OpenClaw Agent Migration (Active)
 
-- [x] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration. (completed 2026-04-20)
+- [ ] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration. (Plans 01-03 shipped 2026-04-20; gap-closure Plan 04 pending — session-resume context-summary read path swap)
 - [ ] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume.
 - [ ] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write.
 - [ ] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering.
@@ -161,10 +161,11 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   1. User adds two agents to `clawcode.yaml` pointing at the same `basePath` with distinct `memoryPath:` values, restarts the daemon, and observes two distinct `memories.db` files on disk — writes to agent A's memory never touch agent B's memory file (`sqlite3 .clawcode/agents/<base>/memory/A/memories.db "SELECT COUNT(*) FROM memories"` and `.../B/memories.db` return independent counts).
   2. User starts 2+ agents on the same shared basePath and observes each agent gets its own `inbox/<agent>/`, heartbeat log, and session-state directory — chokidar watchers fire once per event per agent (no 2x/5x amplification), `clawcode send <target> "hi" --from <source>` delivers to the target's inbox only, and consolidation jobs target only the invoking agent's memory file.
   3. User boots all 5 finmentum agents (`fin-acquisition`, `fin-research`, `fin-playground`, `fin-tax`, `finmentum-content-creator`) on the same shared workspace and `clawcode fleet status` shows all 5 as `running` with no file-lock errors in daemon logs, no duplicate auto-linker runs across the same `memories.db`, and `memory_lookup` queries against agent A never return entries from agent B.
-**Plans**: 3 plans
+**Plans**: 4 plans (1 gap-closure)
 - [x] 75-01-PLAN.md — Schema + ResolvedAgentConfig.memoryPath contract + differ non-reloadable classification (SHARED-01)
 - [x] 75-02-PLAN.md — loader.ts resolution + swap 13 runtime consumers (session-memory, heartbeat, inbox, daemon, bridge) to memoryPath (SHARED-01, SHARED-02)
 - [x] 75-03-PLAN.md — Integration test covering 2-agent isolation + 5-agent finmentum + conflict rejection (SHARED-02, SHARED-03)
+- [ ] 75-04-PLAN.md — **Gap closure** (VERIFICATION Truth #7): swap session-config.ts:318 loadLatestSummary from workspace/memory to memoryPath/memory + regression test for shared-workspace session-resume (SHARED-02)
 
 ### Phase 76: Migration CLI Read-Side + Dry-Run
 **Goal**: User (as operator) can run `clawcode migrate openclaw list` and `clawcode migrate openclaw plan` to see every source agent's current state and the per-agent diff that `apply` would produce — with zero writes to `~/.clawcode/` or `clawcode.yaml` — so migration can be planned, reviewed, and re-planned safely before any real change.
@@ -270,7 +271,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Shared-Workspace Runtime Support | 3/3 | Complete   | 2026-04-20 |
+| 75. Shared-Workspace Runtime Support | 3/4 | Gap closure (Plan 04 pending) | — |
 | 76. Migration CLI Read-Side + Dry-Run | 0/? | Not started | - |
 | 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
