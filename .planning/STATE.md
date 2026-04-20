@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 76-02-PLAN.md — diff engine with SHA256 determinism + finmentum collapse. Ready for 76-03 CLI wiring.
-last_updated: "2026-04-20T16:34:02.865Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 76-03-PLAN.md — CLI subcommands list+plan wired with zero-write contract proven via vi.mock factories; ready for verifier / Phase 77 planning.
+last_updated: "2026-04-20T16:46:17.799Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 22
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -79,6 +79,9 @@ Recent decisions affecting current work:
 - [Phase 76]: [Phase 76 Plan 02]: Finmentum 5-agent collapse resolved via getTargetBasePath returning shared <root>/finmentum + getTargetMemoryPath returning distinct <root>/finmentum/memory/<id> — honors SHARED-01 workspace contract from Phase 75.
 - [Phase 76]: [Phase 76 Plan 02]: Warnings-as-data (never throw) — buildPlan emits 4-kind PlanWarning array; unknown-agent-filter warning is what Wave 3 CLI translates to exit(1), kept out of buildPlan to preserve pure-function contract.
 - [Phase 76]: [Phase 76 Plan 02]: Pinned expected-diff.json fixture with FIXED_NOW 2026-04-20T00:00Z — 15 agents, 17 warnings, planHash 46a8f3b5b278; byte-parity test catches shape drift, forces intentional fixture updates on any AgentPlan/PlanReport field change.
+- [Phase 76]: [Phase 76 Plan 03]: vi.mock + vi.hoisted factory pattern replaces vi.spyOn for ESM fs namespaces — node:fs/promises exports are non-configurable in Node 22; idiomatic vitest ESM spy mechanism now standard for Phases 77+.
+- [Phase 76]: [Phase 76 Plan 03]: Env-var override namespace CLAWCODE_OPENCLAW_JSON / _MEMORY_DIR / _AGENTS_ROOT / _LEDGER_PATH — reusable by Phases 77-82 pre-flight/apply/verify tests for tmp-fixture isolation without DI refactor of commander.
+- [Phase 76]: [Phase 76 Plan 03]: Action handlers (runListAction/runPlanAction) return numeric exit codes instead of calling process.exit directly — decouples business logic from CLI harness, integration-testable without process-exit guards.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -143,9 +146,10 @@ Recent decisions affecting current work:
 | Phase 75-shared-workspace-runtime-support P04 | 8min | 2 tasks | 2 files |
 | Phase 76-migration-cli-read-side-dry-run P01 | 5min | 3 tasks | 7 files |
 | Phase 76 P02 | 4min | 1 tasks | 3 files |
+| Phase 76 P03 | 8min | 3 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 76-02-PLAN.md — diff engine with SHA256 determinism + finmentum collapse. Ready for 76-03 CLI wiring.
+Stopped at: Completed 76-03-PLAN.md — CLI subcommands list+plan wired with zero-write contract proven via vi.mock factories; ready for verifier / Phase 77 planning.
 Resume file: None

@@ -117,7 +117,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 ### v2.1 OpenClaw Agent Migration (Active)
 
 - [x] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration. (Plans 01-03 shipped 2026-04-20; gap-closure Plan 04 pending — session-resume context-summary read path swap) (completed 2026-04-20)
-- [ ] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume.
+- [x] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume. (completed 2026-04-20)
 - [ ] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write.
 - [ ] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering.
 - [ ] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only.
@@ -179,7 +179,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 76-01-PLAN.md — Pure readers + zod schemas + JSONL ledger (openclaw-config-reader.ts, source-memory-reader.ts, ledger.ts + fixture) (MIGR-01, MIGR-08)
 - [x] 76-02-PLAN.md — Deterministic diff builder with finmentum grouping + SHA256 plan hash (diff-builder.ts) (MIGR-01)
-- [ ] 76-03-PLAN.md — CLI wiring (migrate openclaw list + plan [--agent]) + color helpers + zero-write integration test (MIGR-01, MIGR-08)
+- [x] 76-03-PLAN.md — CLI wiring (migrate openclaw list + plan [--agent]) + color helpers + zero-write integration test (MIGR-01, MIGR-08)
 
 ### Phase 77: Pre-flight Guards + Safety Rails
 **Goal**: User (as operator) can trust that `clawcode migrate openclaw apply` will refuse to run — with a clear actionable error — if any of four safety invariants is violated: (a) OpenClaw daemon is running, (b) a secret-shaped value would be written to `clawcode.yaml`, (c) a Discord channel ID is already bound on an existing ClawCode agent, or (d) the migrator is about to modify any file under `~/.openclaw/`. The ledger JSONL is created and every pre-flight outcome lands in it.
@@ -275,7 +275,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
-| 76. Migration CLI Read-Side + Dry-Run | 2/3 | In Progress|  |
+| 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete   | 2026-04-20 |
 | 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
 | 79. Workspace Migration | 0/? | Not started | - |
