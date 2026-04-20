@@ -167,3 +167,92 @@ describe("ledger", () => {
     expect(result.success).toBe(true);
   });
 });
+
+// =============================================================================
+// Phase 77 schema extension — full round-trip, backward-compat, and
+// negative-shape coverage for the three new optional fields on
+// ledgerRowSchema. Kept in its OWN describe block with isolated fixtures
+// so the Phase 76 suite above remains byte-stable as a regression pin.
+// =============================================================================
+describe("ledger schema extensions (Phase 77)", () => {
+  let tmpDir: string;
+  let ledgerPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "ledger-p77-test-"));
+    ledgerPath = join(tmpDir, "planning", "migration", "ledger.jsonl");
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("round-trips a row with step + outcome + file_hashes populated", async () => {
+    const row: LedgerRow = {
+      ts: "2026-04-20T12:00:00.000Z",
+      action: "apply",
+      agent: "general",
+      status: "pending",
+      source_hash: "src-abc",
+      step: "pre-flight:daemon",
+      outcome: "refuse",
+      file_hashes: { "/home/u/.clawcode/clawcode.yaml": "deadbeef" },
+    };
+    await appendRow(ledgerPath, row);
+    const rows = await readRows(ledgerPath);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.step).toBe("pre-flight:daemon");
+    expect(rows[0]?.outcome).toBe("refuse");
+    expect(rows[0]?.file_hashes).toEqual({
+      "/home/u/.clawcode/clawcode.yaml": "deadbeef",
+    });
+  });
+
+  it("backward-compat: a Phase 76 row with NO new fields still validates and round-trips", async () => {
+    // Explicit regression guard against additive-drift. If this ever fails,
+    // someone made the schema non-additive and must revert.
+    await appendRow(ledgerPath, goodRow());
+    const rows = await readRows(ledgerPath);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.step).toBeUndefined();
+    expect(rows[0]?.outcome).toBeUndefined();
+    expect(rows[0]?.file_hashes).toBeUndefined();
+  });
+
+  it("rejects an invalid outcome value at schema level", () => {
+    const bad = { ...goodRow(), outcome: "maybe" } as unknown;
+    const result = ledgerRowSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects file_hashes with empty-string key", () => {
+    const bad = { ...goodRow(), file_hashes: { "": "abc" } } as unknown;
+    const result = ledgerRowSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects file_hashes with empty-string value", () => {
+    const bad = { ...goodRow(), file_hashes: { path: "" } } as unknown;
+    const result = ledgerRowSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("latestStatusByAgent is unaffected by presence of step/outcome/file_hashes (Phase 76 regression pin)", async () => {
+    await appendRow(ledgerPath, {
+      ...goodRow({ agent: "a", status: "pending", ts: "2026-04-20T10:00:00.000Z" }),
+      step: "pre-flight:daemon",
+      outcome: "allow",
+    });
+    await appendRow(
+      ledgerPath,
+      goodRow({
+        agent: "a",
+        status: "migrated",
+        action: "apply",
+        ts: "2026-04-20T10:01:00.000Z",
+      }),
+    );
+    const map = await latestStatusByAgent(ledgerPath);
+    expect(map.get("a")).toBe("migrated");
+  });
+});
