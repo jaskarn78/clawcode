@@ -359,7 +359,7 @@ export function createMockAdapter(): MockSessionAdapter {
  * subprocess uses OAuth subscription auth instead of a potentially stale
  * external API key.
  */
-function buildCleanEnv(): Record<string, string | undefined> {
+export function buildCleanEnv(): Record<string, string | undefined> {
   const { ANTHROPIC_API_KEY: _stripped, ...rest } = process.env;
   return rest;
 }
