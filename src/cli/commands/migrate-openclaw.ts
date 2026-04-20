@@ -56,6 +56,7 @@ import {
   installFsGuard,
   uninstallFsGuard,
 } from "../../migration/fs-guard.js";
+import { parseModelMapFlag } from "../../migration/model-map.js";
 
 /**
  * Phase 77-03 literal: printed to stderr on the all-guards-pass path of
@@ -118,6 +119,9 @@ export function renderWarnings(warnings: readonly PlanWarning[]): string {
       w.kind === "missing-discord-binding" ? yellow :
       w.kind === "empty-source-memory" ? yellow :
       w.kind === "source-db-no-chunks-table" ? yellow :
+      // Phase 78 CONF-02/CONF-03 soft warnings — yellow per CONTEXT.
+      w.kind === "unknown-mcp-server" ? yellow :
+      w.kind === "unmappable-model" ? yellow :
       dim;
     const detail = w.detail ? ` (${w.detail})` : "";
     return color(`  ! ${w.kind}: ${w.agent}${detail}`);
@@ -208,7 +212,15 @@ export async function runListAction(): Promise<void> {
   cliLog(formatListTable(rows));
 }
 
-export async function runPlanAction(opts: { agent?: string }): Promise<number> {
+export async function runPlanAction(opts: {
+  agent?: string;
+  // Plan 02 plumbs this through; Plan 03's yaml-writer will consume it.
+  modelMap?: Record<string, string>;
+}): Promise<number> {
+  // Plan 03 consumes modelMap. Currently plumbed through for test coverage
+  // of the flag wiring; buildPlan does not yet use it (writer is Plan 03).
+  const _modelMap = opts.modelMap ?? {};
+  void _modelMap;
   const paths = resolvePaths();
   const inventory = await readOpenclawInventory(paths.openclawJson);
   const chunkCounts = await gatherChunkCounts(inventory, paths.openclawMemoryDir);
@@ -267,7 +279,11 @@ export async function runPlanAction(opts: { agent?: string }): Promise<number> {
  * pass a mocked runner.
  */
 export async function runApplyAction(
-  opts: { only?: string },
+  opts: {
+    only?: string;
+    // Plan 02 plumbs this through; Plan 03's yaml-writer will consume it.
+    modelMap?: Record<string, string>;
+  },
   deps: {
     execaRunner?: (
       cmd: string,
@@ -275,6 +291,10 @@ export async function runApplyAction(
     ) => Promise<{ stdout: string; exitCode: number | null }>;
   } = {},
 ): Promise<number> {
+  // Plan 03 consumes modelMap. Currently plumbed through for test coverage
+  // of the flag wiring; apply-preflight does not yet use it (writer is Plan 03).
+  const _modelMap = opts.modelMap ?? {};
+  void _modelMap;
   const paths = resolvePaths();
   const inventory = await readOpenclawInventory(paths.openclawJson);
   const chunkCounts = await gatherChunkCounts(inventory, paths.openclawMemoryDir);
@@ -333,6 +353,27 @@ export async function runApplyAction(
 
 // --- Commander wiring (nested: `migrate openclaw <sub>`) -------------
 
+/**
+ * Mutable handler dispatch object. Commander actions call handlers via this
+ * holder instead of binding the named `runPlanAction` / `runApplyAction`
+ * imports directly; tests monkey-patch the holder to assert wiring without
+ * running the real handlers.
+ *
+ * Direct named-import references are frozen in ESM (export bindings are
+ * read-only after the module initializes), so a simple `vi.spyOn` on the
+ * module namespace would not rebind the commander closure. The dispatch
+ * holder is a mutable object — its properties can be swapped by tests.
+ *
+ * Exported for test visibility only; production code should never mutate it.
+ */
+export const migrateOpenclawHandlers: {
+  runPlanAction: typeof runPlanAction;
+  runApplyAction: typeof runApplyAction;
+} = {
+  runPlanAction,
+  runApplyAction,
+};
+
 export function registerMigrateOpenclawCommand(program: Command): void {
   const migrate = program.command("migrate").description("Migration commands");
   const openclaw = migrate
@@ -355,9 +396,30 @@ export function registerMigrateOpenclawCommand(program: Command): void {
     .command("plan")
     .description("Show the per-agent diff that `apply` would produce (writes ledger JSONL, nothing else)")
     .option("--agent <name>", "Filter to a single OpenClaw agent")
-    .action(async (opts: { agent?: string }) => {
+    .option(
+      "--model-map <mapping...>",
+      "Override model mapping (repeatable, syntax: 'oc-id=cc-id')",
+    )
+    .action(async (opts: { agent?: string; modelMap?: string[] }) => {
+      // Fail-fast on malformed --model-map BEFORE runPlanAction touches
+      // anything. A typo in a CLI flag surfaces as exit 1 with stderr copy,
+      // not as a silent missing mapping downstream.
+      let modelMap: Record<string, string>;
       try {
-        const code = await runPlanAction(opts);
+        modelMap = parseModelMapFlag(opts.modelMap ?? []);
+      } catch (err) {
+        cliError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+        return;
+      }
+      try {
+        // Indirect through the exported dispatch object so tests can
+        // monkey-patch the handler in ESM (direct named-import references
+        // are frozen; the dispatch holder is a mutable object).
+        const code = await migrateOpenclawHandlers.runPlanAction({
+          agent: opts.agent,
+          modelMap,
+        });
         if (code !== 0) process.exit(code);
       } catch (err) {
         cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
@@ -374,9 +436,26 @@ export function registerMigrateOpenclawCommand(program: Command): void {
       "--only <name>",
       "Filter pre-flight checks to a single OpenClaw agent",
     )
-    .action(async (opts: { only?: string }) => {
+    .option(
+      "--model-map <mapping...>",
+      "Override model mapping (repeatable, syntax: 'oc-id=cc-id')",
+    )
+    .action(async (opts: { only?: string; modelMap?: string[] }) => {
+      // Fail-fast on malformed --model-map BEFORE runApplyAction installs
+      // the fs-guard or touches the ledger.
+      let modelMap: Record<string, string>;
       try {
-        const code = await runApplyAction(opts);
+        modelMap = parseModelMapFlag(opts.modelMap ?? []);
+      } catch (err) {
+        cliError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+        return;
+      }
+      try {
+        const code = await migrateOpenclawHandlers.runApplyAction({
+          only: opts.only,
+          modelMap,
+        });
         if (code !== 0) process.exit(code);
       } catch (err) {
         cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);

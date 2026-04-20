@@ -5,3 +5,7 @@ dist/
 
 # Phase 51 bench reports (transient, not git-tracked)
 .planning/benchmarks/reports/
+
+# Phase 76+ migration ledger (runtime state, per-host, not git-tracked)
+.planning/migration/
+

@@ -6,38 +6,54 @@
  * runPlanAction / runApplyAction handlers. Plan 03 will use the parsed
  * map inside the writer; here we only assert the flag parses, propagates,
  * and fails fast on malformed input.
+ *
+ * ESM note: the CLI dispatches via a mutable `migrateOpenclawHandlers`
+ * holder because named-import bindings are frozen in ESM — `vi.spyOn` on
+ * the module namespace cannot rebind commander closures. Tests monkey-
+ * patch the holder's properties instead.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Command } from "commander";
-import * as migrateModule from "../commands/migrate-openclaw.js";
+import {
+  registerMigrateOpenclawCommand,
+  migrateOpenclawHandlers,
+} from "../commands/migrate-openclaw.js";
 
 describe("migrate openclaw --model-map flag", () => {
   let program: Command;
-  let planSpy: ReturnType<typeof vi.spyOn>;
-  let applySpy: ReturnType<typeof vi.spyOn>;
+  let planMock: ReturnType<typeof vi.fn>;
+  let applyMock: ReturnType<typeof vi.fn>;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
+  let origPlan: typeof migrateOpenclawHandlers.runPlanAction;
+  let origApply: typeof migrateOpenclawHandlers.runApplyAction;
 
   beforeEach(() => {
     program = new Command();
-    program.exitOverride(); // prevent commander from calling process.exit on parse errors
-    migrateModule.registerMigrateOpenclawCommand(program);
+    program.exitOverride();
+    registerMigrateOpenclawCommand(program);
 
-    planSpy = vi
-      .spyOn(migrateModule, "runPlanAction")
-      .mockResolvedValue(0);
-    applySpy = vi
-      .spyOn(migrateModule, "runApplyAction")
-      .mockResolvedValue(0);
+    origPlan = migrateOpenclawHandlers.runPlanAction;
+    origApply = migrateOpenclawHandlers.runApplyAction;
+
+    planMock = vi.fn().mockResolvedValue(0);
+    applyMock = vi.fn().mockResolvedValue(0);
+    migrateOpenclawHandlers.runPlanAction = planMock as never;
+    migrateOpenclawHandlers.runApplyAction = applyMock as never;
+
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation(((code?: number) => {
         throw new Error(`process.exit(${code ?? 0})`);
       }) as never);
-    errorSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    errorSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
   });
 
   afterEach(() => {
+    migrateOpenclawHandlers.runPlanAction = origPlan;
+    migrateOpenclawHandlers.runApplyAction = origApply;
     vi.restoreAllMocks();
   });
 
@@ -45,10 +61,8 @@ describe("migrate openclaw --model-map flag", () => {
     await program.parseAsync(
       ["node", "clawcode", "migrate", "openclaw", "plan", "--model-map", "foo=sonnet"],
     );
-    expect(planSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelMap: { foo: "sonnet" },
-      }),
+    expect(planMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modelMap: { foo: "sonnet" } }),
     );
   });
 
@@ -66,10 +80,8 @@ describe("migrate openclaw --model-map flag", () => {
         "b=2",
       ],
     );
-    expect(applySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelMap: { a: "1", b: "2" },
-      }),
+    expect(applyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modelMap: { a: "1", b: "2" } }),
     );
   });
 
@@ -83,10 +95,10 @@ describe("migrate openclaw --model-map flag", () => {
       caught = err as Error;
     }
     expect(caught?.message).toMatch(/process\.exit\(1\)/);
-    // planSpy should NOT have been called (fail-fast BEFORE handler runs)
-    expect(planSpy).not.toHaveBeenCalled();
-    // stderr should have received the literal 'invalid --model-map syntax'
-    const allStderrArgs = errorSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(planMock).not.toHaveBeenCalled();
+    const allStderrArgs = errorSpy.mock.calls
+      .map((c: readonly unknown[]) => String(c[0]))
+      .join("");
     expect(allStderrArgs).toContain("invalid --model-map syntax");
   });
 
@@ -94,10 +106,14 @@ describe("migrate openclaw --model-map flag", () => {
     await program.parseAsync(
       ["node", "clawcode", "migrate", "openclaw", "plan"],
     );
-    expect(planSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelMap: {},
-      }),
+    expect(planMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modelMap: {} }),
     );
+  });
+
+  // Keep exitSpy referenced so lint doesn't complain — it's used implicitly
+  // via the throw-on-exit behavior above.
+  it("exitSpy is installed (smoke)", () => {
+    expect(exitSpy).toBeDefined();
   });
 });

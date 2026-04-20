@@ -476,12 +476,15 @@ describe("buildPlan — per-agent field population", () => {
 });
 
 describe("WARNING_KINDS const export", () => {
-  it("exposes the 4 warning kinds plus nothing else", () => {
+  it("exposes the 6 warning kinds plus nothing else (Phase 76 x4 + Phase 78 x2)", () => {
     expect([...WARNING_KINDS]).toEqual([
       "missing-discord-binding",
       "empty-source-memory",
       "source-db-no-chunks-table",
       "unknown-agent-filter",
+      // Phase 78 CONF-02 / CONF-03 additions:
+      "unknown-mcp-server",
+      "unmappable-model",
     ]);
   });
 });

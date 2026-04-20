@@ -59,6 +59,14 @@ export const WARNING_KINDS = [
   "empty-source-memory",
   "source-db-no-chunks-table",
   "unknown-agent-filter",
+  // Phase 78 CONF-02 — per-agent MCP server name has no match in the
+  // top-level `mcpServers:` map of the existing clawcode.yaml. Soft
+  // warning (not error) per 78-CONTEXT — operator curates the map.
+  "unknown-mcp-server",
+  // Phase 78 CONF-03 — OpenClaw model id is not in DEFAULT_MODEL_MAP and
+  // not covered by --model-map overrides. Soft warning in `plan`; `apply`
+  // refuses unless the override lands the mapping (Plan 03 enforces).
+  "unmappable-model",
 ] as const;
 export type WarningKind = (typeof WARNING_KINDS)[number];
 
