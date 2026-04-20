@@ -203,8 +203,10 @@ export class HeartbeatRunner {
         this.lastRun.set(runKey, now);
 
         // Log to NDJSON file
+        // Phase 75 SHARED-01 — memoryPath (not workspace) so shared-workspace
+        // agents write heartbeat.log into their private per-agent memory dir.
         if (agentConfig) {
-          this.logResult(agentConfig.workspace, agentName, check.name, result, timestamp);
+          this.logResult(agentConfig.memoryPath, agentName, check.name, result, timestamp);
         }
 
         // Critical results logged at warn level
@@ -326,15 +328,18 @@ export class HeartbeatRunner {
   /**
    * Log a check result to the agent's NDJSON heartbeat.log file.
    * Creates the memory directory defensively.
+   *
+   * Phase 75 SHARED-01 — takes memoryPath (not workspace) so shared-workspace
+   * agents get isolated heartbeat.log files in their private memory dirs.
    */
   private logResult(
-    workspace: string,
+    memoryPath: string,
     agentName: string,
     checkName: string,
     result: CheckResult,
     timestamp: string,
   ): void {
-    const memoryDir = join(workspace, "memory");
+    const memoryDir = join(memoryPath, "memory");
     try {
       mkdirSync(memoryDir, { recursive: true });
     } catch {

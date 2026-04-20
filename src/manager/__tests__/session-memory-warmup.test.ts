@@ -26,6 +26,9 @@ function makeConfig(workspace: string, name: string): ResolvedAgentConfig {
     model: "sonnet",
     effort: "medium",
     workspace,
+    // Phase 75 SHARED-01 — fallback to workspace for dedicated-workspace
+    // agents. This fixture does not exercise shared workspaces.
+    memoryPath: workspace,
     systemPrompt: "",
     channels: [],
     memory: {

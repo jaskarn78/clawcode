@@ -50,7 +50,11 @@ export class AgentMemoryManager {
    */
   initMemory(name: string, config: ResolvedAgentConfig): void {
     try {
-      const memoryDir = join(config.workspace, "memory");
+      // Phase 75 SHARED-01 — all per-agent runtime DBs/dirs live under
+      // memoryPath, not workspace. For dedicated-workspace agents the two
+      // paths are identical (loader fallback); for shared-workspace agents
+      // (finmentum family) this gives each agent an isolated memories.db.
+      const memoryDir = join(config.memoryPath, "memory");
       if (!existsSync(memoryDir)) {
         mkdirSync(memoryDir, { recursive: true });
       }
@@ -109,10 +113,12 @@ export class AgentMemoryManager {
       this.usageTrackers.set(name, usageTracker);
 
       // Create TraceStore + TraceCollector for this agent (Phase 50)
-      // Per-agent traces.db at <workspace>/traces.db mirrors usage.db isolation pattern.
+      // Per-agent traces.db at <memoryPath>/traces.db mirrors usage.db isolation pattern.
       // Turn lifecycle is caller-owned (DiscordBridge/Scheduler construct Turn via
       // TraceCollector.startTurn) — SessionManager is pure passthrough.
-      const tracesDbPath = join(config.workspace, "traces.db");
+      // Phase 75 SHARED-01 — memoryPath (not workspace) so shared-workspace
+      // agents get isolated traces.db.
+      const tracesDbPath = join(config.memoryPath, "traces.db");
       const traceStore = new TraceStore(tracesDbPath);
       this.traceStores.set(name, traceStore);
       const traceCollector = new TraceCollector(
@@ -187,13 +193,16 @@ export class AgentMemoryManager {
   /**
    * Persist a context summary after compaction.
    * Saves to the agent's memory directory for injection on next resume.
+   *
+   * Phase 75 SHARED-01 — takes memoryPath (not workspace) so shared-workspace
+   * agents write context summaries into their private per-agent memory dir.
    */
   async saveContextSummary(
     agentName: string,
-    workspace: string,
+    memoryPath: string,
     summary: string,
   ): Promise<void> {
-    const memoryDir = join(workspace, "memory");
+    const memoryDir = join(memoryPath, "memory");
     await saveSummary(memoryDir, agentName, summary);
     this.log.info({ agent: agentName }, "context summary saved");
   }

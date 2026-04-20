@@ -843,7 +843,9 @@ export class SessionManager {
       this.log.warn({ agent: agentName }, "cannot save context summary: config not found");
       return;
     }
-    await this.memory.saveContextSummary(agentName, config.workspace, summary);
+    // Phase 75 SHARED-01 — pass memoryPath (not workspace) so shared-workspace
+    // agents write context summaries into their per-agent memory dir.
+    await this.memory.saveContextSummary(agentName, config.memoryPath, summary);
   }
 
   async warmupEmbeddings(): Promise<void> { await this.memory.warmupEmbeddings(); }

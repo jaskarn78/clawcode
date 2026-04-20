@@ -154,11 +154,13 @@ export function resolveAgentConfig(
   return {
     name: agent.name,
     workspace: resolvedWorkspace,
-    // TEMP Plan 01 — Plan 02 replaces with expandHome(agent.memoryPath ?? agent.workspace ?? basePath/name)
-    // Plan 01 only lands the type contract + schema validation; this stub keeps
-    // `npx tsc --noEmit` green so the ResolvedAgentConfig.memoryPath field can
-    // be consumed by Plan 02 which wires session-memory/inbox/heartbeat/etc.
-    memoryPath: resolvedWorkspace,
+    // Phase 75 SHARED-01 — per-agent runtime state dir (memories.db, traces.db,
+    // inbox/, heartbeat.log, memory/). Fallback to resolvedWorkspace for the 10
+    // dedicated-workspace agents — zero behavior change. Expansion via
+    // expandHome handles `~/...` and passes `./relative` + absolute paths
+    // through unchanged. Only expand when explicitly set; the fallback path
+    // inherits whatever resolvedWorkspace already is.
+    memoryPath: agent.memoryPath ? expandHome(agent.memoryPath) : resolvedWorkspace,
     channels: agent.channels,
     model: agent.model ?? defaults.model,
     effort: agent.effort ?? defaults.effort,
