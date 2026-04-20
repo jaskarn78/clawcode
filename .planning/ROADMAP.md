@@ -287,7 +287,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
 | 77. Pre-flight Guards + Safety Rails | 3/3 | Complete    | 2026-04-20 |
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
-| 79. Workspace Migration | 3/3 | Complete   | 2026-04-20 |
+| 79. Workspace Migration | 3/3 | Complete    | 2026-04-20 |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |
 | 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
