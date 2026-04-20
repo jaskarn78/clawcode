@@ -51,6 +51,19 @@ import {
   DEFAULT_LEDGER_PATH,
   type LedgerRow,
 } from "../../migration/ledger.js";
+import { runApplyPreflight } from "../../migration/apply-preflight.js";
+import {
+  installFsGuard,
+  uninstallFsGuard,
+} from "../../migration/fs-guard.js";
+
+/**
+ * Phase 77-03 literal: printed to stderr on the all-guards-pass path of
+ * `apply`. Phase 77 intentionally has no write body — the actual YAML
+ * write is Phase 78's scope. Exported for test assertion.
+ */
+export const APPLY_NOT_IMPLEMENTED_MESSAGE =
+  "apply not implemented — pre-flight guards only in Phase 77";
 
 const DEFAULT_OPENCLAW_JSON = join(homedir(), ".openclaw", "openclaw.json");
 const DEFAULT_OPENCLAW_MEMORY_DIR = join(homedir(), ".openclaw", "memory");
@@ -147,6 +160,9 @@ type Paths = {
   readonly openclawMemoryDir: string;
   readonly clawcodeAgentsRoot: string;
   readonly ledgerPath: string;
+  // Phase 77-03 addition — the user's existing clawcode.yaml path for the
+  // channel-collision guard. Defaults to the repo-relative cwd resolution.
+  readonly clawcodeConfigPath: string;
 };
 
 function resolvePaths(): Paths {
@@ -155,6 +171,8 @@ function resolvePaths(): Paths {
     openclawMemoryDir: process.env.CLAWCODE_OPENCLAW_MEMORY_DIR ?? DEFAULT_OPENCLAW_MEMORY_DIR,
     clawcodeAgentsRoot: process.env.CLAWCODE_AGENTS_ROOT ?? DEFAULT_CLAWCODE_AGENTS_ROOT,
     ledgerPath: process.env.CLAWCODE_LEDGER_PATH ?? resolve(DEFAULT_LEDGER_PATH),
+    clawcodeConfigPath:
+      process.env.CLAWCODE_CONFIG_PATH ?? resolve("clawcode.yaml"),
   };
 }
 
@@ -233,6 +251,86 @@ export async function runPlanAction(opts: { agent?: string }): Promise<number> {
   return 0;
 }
 
+/**
+ * Phase 77-03 apply action handler. Runs the 4 pre-flight guards (via
+ * runApplyPreflight) inside a process-scoped fs-guard install/uninstall
+ * pair. Never writes clawcode.yaml or agent files — Phase 77 stops here
+ * with the APPLY_NOT_IMPLEMENTED_MESSAGE literal. Phase 78 will replace
+ * that stub with the actual write body.
+ *
+ * Every path returns 1 this phase (no success case has an actual write).
+ * Commander's `.action()` handler calls `process.exit(code)` only when
+ * code !== 0 — but here code is always 1, so exit is deferred.
+ *
+ * `deps.execaRunner` is the DI hook for tests to control systemctl output
+ * without spawning a real subprocess. Commander passes `{}` for deps; tests
+ * pass a mocked runner.
+ */
+export async function runApplyAction(
+  opts: { only?: string },
+  deps: {
+    execaRunner?: (
+      cmd: string,
+      args: string[],
+    ) => Promise<{ stdout: string; exitCode: number | null }>;
+  } = {},
+): Promise<number> {
+  const paths = resolvePaths();
+  const inventory = await readOpenclawInventory(paths.openclawJson);
+  const chunkCounts = await gatherChunkCounts(inventory, paths.openclawMemoryDir);
+  const report = buildPlan({
+    inventory,
+    chunkCounts,
+    clawcodeAgentsRoot: paths.clawcodeAgentsRoot,
+    targetFilter: opts.only,
+  });
+
+  // --only <unknown>: surfaces as a PlanWarning (diff-builder invariant).
+  // Mirror runPlanAction's handling — emit actionable stderr, return 1
+  // BEFORE touching the ledger so no spurious rows appear.
+  const unknownFilter = report.warnings.find(
+    (w) => w.kind === "unknown-agent-filter",
+  );
+  if (unknownFilter) {
+    const available = inventory.agents.map((a) => a.id).join(", ");
+    cliError(
+      `Unknown OpenClaw agent: '${unknownFilter.agent}'. Available: ${available}`,
+    );
+    return 1;
+  }
+
+  // fs-guard install: belt-and-suspenders for MIGR-07. Any fs.writeFile /
+  // appendFile / mkdir call (via default-import or require; see fs-guard.ts
+  // header for ESM-scope caveat) resolving under ~/.openclaw/ throws
+  // ReadOnlySourceError synchronously. Installed BEFORE the first guard
+  // runs; uninstalled in finally so a thrown guard never leaves the
+  // interceptor live for the next CLI command.
+  installFsGuard();
+  try {
+    const result = await runApplyPreflight({
+      inventory,
+      report,
+      existingConfigPath: paths.clawcodeConfigPath,
+      ledgerPath: paths.ledgerPath,
+      sourceHash: report.planHash,
+      filter: opts.only,
+      execaRunner: deps.execaRunner,
+    });
+    if (result.exitCode !== 0 && result.firstRefusal) {
+      cliError(result.firstRefusal.message);
+      if (result.firstRefusal.reportBody) {
+        cliError("\n" + result.firstRefusal.reportBody);
+      }
+      return 1;
+    }
+    // All 4 guards passed — Phase 77 intentionally has no apply body.
+    cliError(APPLY_NOT_IMPLEMENTED_MESSAGE);
+    return 1;
+  } finally {
+    uninstallFsGuard();
+  }
+}
+
 // --- Commander wiring (nested: `migrate openclaw <sub>`) -------------
 
 export function registerMigrateOpenclawCommand(program: Command): void {
@@ -260,6 +358,25 @@ export function registerMigrateOpenclawCommand(program: Command): void {
     .action(async (opts: { agent?: string }) => {
       try {
         const code = await runPlanAction(opts);
+        if (code !== 0) process.exit(code);
+      } catch (err) {
+        cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  openclaw
+    .command("apply")
+    .description(
+      "Run pre-flight guards then write clawcode.yaml (Phase 77 stub: guards only, apply body deferred to Phase 78)",
+    )
+    .option(
+      "--only <name>",
+      "Filter pre-flight checks to a single OpenClaw agent",
+    )
+    .action(async (opts: { only?: string }) => {
+      try {
+        const code = await runApplyAction(opts);
         if (code !== 0) process.exit(code);
       } catch (err) {
         cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
