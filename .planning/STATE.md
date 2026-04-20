@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Defining requirements
-stopped_at: Milestone v2.1 started — port 15 active OpenClaw agents to dedicated ClawCode agents with memories/workspaces/souls intact; finmentum family shares workspace, others isolated; fork-to-Opus required.
-last_updated: "2026-04-20T04:45:00.000Z"
-last_activity: 2026-04-20 - Milestone v2.1 OpenClaw Agent Migration started
+status: Roadmap approved — ready to plan Phase 75
+stopped_at: v2.1 roadmap landed — 8 phases (75-82) covering 31 requirements across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS. Next step is `/gsd:plan-phase 75` (Shared-Workspace Runtime Support — prerequisite that unblocks finmentum migration).
+last_updated: "2026-04-20T12:00:00.000Z"
+last_activity: 2026-04-20 - v2.1 Roadmap created — 8 phases 75-82, 31 requirements mapped 1:1
 progress:
-  total_phases: 0
+  total_phases: 8
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,26 +20,32 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.1 OpenClaw Agent Migration — defining requirements
+**Current focus:** v2.1 OpenClaw Agent Migration — roadmap approved, ready to plan Phase 75
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 75 (Shared-Workspace Runtime Support) — not started
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-20 — Milestone v2.1 started
+Status: Roadmap approved; awaiting `/gsd:plan-phase 75`
+Last activity: 2026-04-20 — v2.1 Roadmap created (8 phases, 31 reqs mapped)
+
+**Phase 75 snapshot:**
+- Goal: Multiple agents can share one `basePath` while keeping isolated `memories.db`, inbox, heartbeat, session-state
+- Requirements: SHARED-01, SHARED-02, SHARED-03
+- Code surface: ~15 LOC across `config/schema.ts` + `config/loader.ts` + `manager/session-memory.ts`
+- Blocks: Phase 79 (Workspace Migration) for the 5 finmentum agents; does NOT block the 10 dedicated-workspace agents
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 63+ (v1.0-v1.9 across 10 milestones)
+- Total plans completed: 70+ (v1.0-v2.0 across 11 milestones)
 - Average duration: ~3.5 min
-- Total execution time: ~3.7+ hours
+- Total execution time: ~4+ hours
 
 **Recent Trend:**
 
-- v1.9 plans: stable 5-30min each
+- v2.0 plans: stable 10-32min each
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -51,85 +57,54 @@ Last activity: 2026-04-20 — Milestone v2.1 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [v2.1 Roadmap]: Zero new npm deps — entire milestone runs on existing stack (better-sqlite3, sqlite-vec, @huggingface/transformers, yaml, zod, pino, Node 22 fs.cp).
+- [v2.1 Roadmap]: Re-embedding is MANDATORY not optional — OpenClaw uses gemini-embedding-001 (3072-dim) or embeddinggemma (768-dim); ClawCode vec_memories is locked to 384-dim MiniLM. ~131 seconds wall time for 2,617 real chunks, zero API spend.
+- [v2.1 Roadmap]: Source of truth for memory translation is WORKSPACE MARKDOWN (MEMORY.md + memory/*.md + .learnings/*.md), not the OpenClaw sqlite chunks table (which is a derived file-RAG index and may be stale).
+- [v2.1 Roadmap]: SOUL/IDENTITY stored as workspace files with `soulFile:` + `identityFile:` YAML pointers — never inlined into clawcode.yaml (avoids 3k-line config bloat and preserves file-based editing workflow).
+- [v2.1 Roadmap]: Secret guard is a HARD REFUSAL not a warning — migrator rejects any raw secret-shaped value in clawcode.yaml; whitelists only opaque references (channel IDs, op:// refs, named MCP server refs).
+- [v2.1 Roadmap]: Shared-workspace support (Phase 75) is a PREREQUISITE runtime feature addition — not a migration concern. Blocks all finmentum migration; zero impact on 10 dedicated-workspace agents. ~15 LOC across 3 files.
+- [v2.1 Roadmap]: Non-destructive to source — migrator NEVER modifies, deletes, or renames any file under `~/.openclaw/`. OpenClaw daemon runs fine during/after migration (until per-agent cutover removes its Discord bindings).
+- [v2.1 Roadmap]: Discord cutover is dual-run → per-agent — both bots are present during pilot, then `clawcode migrate openclaw cutover <agent>` unbinds the OpenClaw bot per-agent after user verification. Hard pre-flight check: refuse apply if a channel ID is bound on both sides with overlapping activation.
+- [v2.1 Roadmap]: Session history is archive-only (copied to `<workspace>/archive/openclaw-sessions/`), NOT replayed into v1.9 ConversationStore — format/provenance mismatch makes replay cost-prohibitive and correctness-risky.
+- [v2.1 Roadmap]: Fork-to-Opus is unlimited per migrated agent (user decision) — no new fleet ceiling in v2.1; revisit if costs become a concern (deferred to future milestone).
+- [v2.1 Roadmap]: Per-agent atomic cutover — memory → workspace → config (YAML append is the commit point). Agents in sequence, not parallel (YAML write contention + embedder singleton non-reentrancy).
+- [v2.1 Roadmap]: Pilot agent is `personal` or `local-clawdy` — smallest DB, lowest activity, not business-critical. Full end-to-end run + rollback rehearsal on pilot BEFORE the other 14 agents.
+- [v2.1 Roadmap]: Phase ordering is load-bearing — SHARED (prerequisite) → read-side CLI → guards+ledger → config mapping → workspace copy → memory translation → verify/rollback/fork → pilot+cutover+complete. Memory comes AFTER workspace because markdown files must exist at target paths before memory reader parses them.
 - [v2.0 Roadmap]: Bearer-key = session boundary — one isolated ConversationStore session per API key (OPENAI-05). No multi-user-per-key fan-out until v2.1 "Multi-User Foundations".
-- [v2.0 Roadmap]: New `TurnOrigin="openai-api"` kind on the v1.8 TurnDispatcher (OPENAI-07). Zero dispatcher refactor — just a new origin discriminant consumed by existing trace pipeline.
-- [v2.0 Roadmap]: OpenAI endpoint is a new HTTP listener on the existing daemon process. One binary, one socket, one lifecycle. No gateway layer, no separate service.
-- [v2.0 Roadmap]: Browser / search / image MCP servers all follow the existing `clawcode` + `1password` auto-injection pattern. Opt-out via `mcpServers: []`, not opt-in.
-- [v2.0 Roadmap]: Phase 69 ships FIRST — hardest phase (session mapping, tool translation, streaming) and also unblocks dev-loop testing for Phases 70-72 (OpenAI endpoint replaces Discord round-trip during MCP development).
-- [v2.0 Roadmap]: Phases 70-72 sequenced 70 → 71 → 72. Browser front-loads Playwright integration risk. Search is self-contained. Image-gen benefits from search being in place (agents commonly search → find reference → edit).
-- [v2.0 Roadmap]: v1.7 prompt-cache hit rate + first-token p95 SLO is a non-regression gate on every phase. Every v2.0 phase carries a success criterion pinning this.
-- [v2.0 Roadmap]: Browser is a resident singleton that warms at daemon boot (following the v1.7 embedder pattern from Phase 56) — NOT lazy-per-request. Search + image backends are lazy-per-first-call to keep idle daemon-boot SLO clean.
-- [v2.0 Roadmap]: Scope locked at `/v1/chat/completions` + `/v1/models` only. Legacy `/v1/completions` and `/v1/embeddings` explicitly out of scope.
-- [v2.0 Roadmap]: Image delivery reuses the existing `send_attachment` MCP tool — zero new Discord delivery surface introduced.
-- [Phase 69]: Phase 69-01: SHA-256 (not Argon2) for bearer-key storage — high-entropy tokens don't need password KDFs
-- [Phase 69]: Phase 69-01: length-guard BEFORE timingSafeEqual in verifyKey (Pitfall 6 — prevents RangeError on mismatched-length buffers)
-- [Phase 69-openai-compatible-endpoint]: Phase 69-02: OpenAiSessionDriver is a DI interface on server.ts, NOT a SessionAdapter extension — Plan 03 provides the real impl while Plan 02 stays hermetic from src/manager/
-- [Phase 69-openai-compatible-endpoint]: Phase 69-02: Translator uses Map<tool_use_id, openaiIndex> primary + Map<sdkBlockIndex, openaiIndex> secondary for streamed tool-call accumulation (Pitfall 1 guard)
-- [Phase 69-openai-compatible-endpoint]: Phase 69-02: Body-too-large uses req.pause() (not req.destroy()) so the 413 response body can still be written before the socket closes
-- [Phase 69-openai-compatible-endpoint]: Phase 69-02: Both req.on('close') AND res.on('close') wired to AbortController — Node event ordering varies on SSE connections, wiring both is the robust disconnect guard
-- [Phase 69-openai-compatible-endpoint]: Phase 69-03: NO additive fields on TurnDispatcher — clientSystemAppend routed via user-message body with delimiter (Pitfall 8 preserved, Discord path byte-for-byte unchanged)
-- [Phase 69-openai-compatible-endpoint]: Phase 69-03: SdkStreamEvent synthesis in driver.ts — bridges TurnDispatcher's (accumulated:string) callback into async-iterable of content_block_delta+result events via bounded queue + pending-resolver
-- [Phase 69-openai-compatible-endpoint]: Phase 69-03: Handler-arrow-fn intercepts openai-key-* IPC methods BEFORE routeMethod — avoids growing 23-arg signature; new handlers reach daemon state via closures over pre-declared let openAiEndpointRef
-- [Phase 69-openai-compatible-endpoint]: Phase 69-03: Factored startOpenAiEndpoint into src/openai/endpoint-bootstrap.ts specifically so 10 integration tests drive boot + env + EADDRINUSE + shutdown ordering without booting full daemon
-- [Phase 70-browser-automation-mcp]: Option 2 architecture locked: shared chromium.launch() + per-agent newContext({ storageState }) — Pitfall 1 guard via grep, Pitfall 2 (--no-sandbox) absent
-- [Phase 70-browser-automation-mcp]: Plan 70-01: BrowserManager warm/getContext/close mirrors embedder.ts warmPromise pattern; DI driver seam lets manager tests run without real Chromium
-- [Phase 70-browser-automation-mcp]: Plan 70-01: storageState persistence uses atomic .tmp → rename with indexedDB:true; zero-byte guard (Pitfall 10) returns undefined on partial-write recovery; debounced 5s saver collapses burst writes
-- [Phase 70-browser-automation-mcp]: Plan 70-02: tools.ts stays PURE — MCP content envelope shaping lives in mcp-server.ts; 35 test cases run against vi.fn() BrowserContext mock with no Chromium
-- [Phase 70-browser-automation-mcp]: Plan 70-02: action-timeout on click/fill maps to element_not_found (common root cause = selector never actionable); browser_wait_for keeps 'timeout' type for BROWSER-05 contract
-- [Phase 70-browser-automation-mcp]: Plan 70-02: agent-name resolution precedence arg > CLAWCODE_AGENT env > invalid_argument error — no IPC round-trip on the error path
-- [Phase 70-browser-automation-mcp]: Plan 70-02: __testOnly_buildHandler DI seam — MCP SDK doesn't expose clean tool introspection; returning the exact registered handler lets tests pin the forward-to-daemon contract without a real StdioServerTransport
-- [Phase 70-browser-automation-mcp]: Plan 70-02: src/ipc/types.ts created as new module — project previously kept IPC types in protocol.ts (Zod schemas); Phase 70 introduces a separate types module so Plan 02 declares the contract without touching protocol.ts's IPC_METHODS enum (Plan 03 appends)
-- [Phase 70-browser-automation-mcp]: Plan 70-03: Extracted handleBrowserToolCall into src/browser/daemon-handler.ts — pure deps-based dispatcher gives tests a clean seam against real BrowserManager + mock driver without IPC transport or real Chromium
-- [Phase 70-browser-automation-mcp]: Plan 70-03: Browser IPC handler intercepted BEFORE routeMethod (mirrors Phase 69 openai-key-* pattern) — keeps 24-arg routeMethod signature from growing
-- [Phase 70-browser-automation-mcp]: Plan 70-03: WRITE_PRODUCING_TOOLS set (navigate/click/fill) gates saveAgentState — read-only tools (screenshot/extract/wait_for) skip the flush, preventing write amplification
-- [Phase 70-browser-automation-mcp]: Plan 70-03: daemon shutdown orders browserManager.close() BEFORE server.close() — in-flight browser-tool-call requests fail cleanly rather than hang (Pitfall 5 end-to-end)
-- [Phase 70-browser-automation-mcp]: Plan 70-03: Smoke script is zero-dependency Node ESM — inlines a minimal JSON-RPC-over-Unix-socket client so it works on a fresh clone with no build step; exit 2 on daemon-not-running distinguishes infra-skip from assertion-fail
-- [Phase 71]: Plan 71-01: Reuse Phase 70 parseArticle via direct import from src/browser/readability.js — no hoist to src/shared/
-- [Phase 71]: Plan 71-01: Lazy API-key reads at client search() call time — missing key surfaces as invalid_argument on first call, not daemon-boot crash
-- [Phase 71]: Plan 71-01: Native fetch over provider wrapper packages (no @brave/search-client, no exa-js) — zero npm deps, error mapping under our control
-- [Phase 71]: Plan 71-01: vi.spyOn(globalThis,'fetch') for all test mocking — mirrors attachments.test.ts, zero new test deps; error taxonomy locked at 7 discriminants (CONTEXT D-02)
-- [Phase 71-web-search-mcp]: Plan 71-02: IPC handler intercepted BEFORE routeMethod (same closure pattern as Phase 70 browser-tool-call + Phase 69 openai-key-*) — keeps 24-arg routeMethod signature stable
-- [Phase 71-web-search-mcp]: Plan 71-02: Daemon-owned BraveClient + ExaClient singletons constructed unconditionally at boot — lazy API-key reads inside .search() keep daemon bootable without keys present
-- [Phase 71-web-search-mcp]: Plan 71-02: No warm-path probe for search — HTTP clients hold no state, Phase 70's warm-path probe pattern does not apply. Keeps daemon boot + v1.7 SLO ceiling intact with zero new measurement surface
-- [Phase 71-web-search-mcp]: Plan 71-02: SEARCH-03 intra-turn cache is end-to-end operational with zero net-new code in src/mcp/ or src/performance/ — Plan 01's IDEMPOTENT_TOOL_DEFAULTS extension + existing v1.7 invokeWithCache machinery covers both tools automatically
-- [Phase 72-image-generation-mcp]: Plan 72-01: Zero new npm deps — native fetch + native FormData + native Blob (Node 22) replaced node-fetch / form-data / axios / got
-- [Phase 72-image-generation-mcp]: Plan 72-01: image_generate / image_edit / image_variations explicitly NOT in IDEMPOTENT_TOOL_DEFAULTS — same prompt yields different images (caching = correctness bug)
-- [Phase 72-image-generation-mcp]: Plan 72-01: UsageTracker schema migration is idempotent ALTER TABLE × 3 with try/catch swallowing only 'duplicate column' — pre-Phase-72 DBs auto-migrate on construction; second construction does not throw
-- [Phase 72-image-generation-mcp]: Plan 72-01: recordCost failure is non-fatal (try/catch + console.warn) — generation already cost real money, can't fail the tool just because the local cost-DB locked
-- [Phase 72-image-generation-mcp]: Plan 72-01: composite model column model='${backend}:${model}' for image rows — keeps existing CostByAgentModel grouping splitting image rows from token rows for the same agent without schema break
-- [Phase 72-image-generation-mcp]: Plan 72-02: IPC handler intercepted BEFORE routeMethod (same closure pattern as browser-tool-call + search-tool-call + openai-key-*) — keeps 24-arg routeMethod signature from growing
-- [Phase 72-image-generation-mcp]: Plan 72-02: usageTrackerLookup as callback (not bound tracker) — keeps handler agent-agnostic AND lets call succeed when agent's tracker DB isn't open yet (recordCost no-op rather than crash)
-- [Phase 72-image-generation-mcp]: Plan 72-02: Daemon-owned image clients constructed unconditionally at boot but lazy API-key reads keep daemon bootable without any keys present — missing keys surface as invalid_input on first tool call
-- [Phase 72-image-generation-mcp]: Plan 72-02: Costs CLI Category column between Agent and Model — legacy null/undefined category displays as 'tokens' for back-compat; image rows distinct at a glance (closes IMAGE-04 end-to-end)
-- [Phase 74]: Phase 74-01: caller-identity routing runs BEFORE scope-aware authz — enables malformed openclaw: syntax on pinned key to surface as 400 malformed_caller; zero Phase 69 regression
-- [Phase 74]: Phase 74-01: systemPrompt passed as STRING (Pitfall 2) to createPersistentSessionHandle — REPLACES SDK kernel prompt for transient sessions; preset+append NOT used
-- [Phase 74]: Phase 74-01: CLAWCODE_TRANSIENT_CWD fixed at module scope (~/.clawcode/manager/transient); driver never reads caller workspace/cwd/metadata (Pitfall 4 guard, grep-enforced)
-- [Phase 74]: Phase 74-01: TransientSessionCache LRU+TTL with close-on-evict — handle.close() errors caught + logged; cache invariants hold under SDK subprocess crash
-- [Phase 74]: Phase 74-01: dynamic SDK import fallback in endpoint-bootstrap keeps daemon.ts zero-touch for Plan 01; deps.sdk stays optional; missing SDK → 501 template_driver_disabled
-- [Phase 74]: Phase 74-02: denyScopeAll gate placement inside scope='all' branch (not pre-branch) — colocates with other scope-resolution logic; pinned-key mismatch stays agent_mismatch, openclaw-template branch bypasses entirely
-- [Phase 74]: Phase 74-02: getAgentConfig returns narrow structural subset, not full ResolvedAgentConfig — keeps server.ts hermetic from src/config; endpoint-bootstrap narrows at call site
-- [Phase 74]: Phase 74-02: Fleet-anchor UsageTracker lookup for transient turns — agent column ('openclaw:<slug>') keeps rows distinguishable; zero schema change required; Pitfall 8 non-fatal on missing tracker
-- [Phase 74]: Phase 74-02: Tier encoded in model column NEVER agent column — CONTEXT D-04 confirmed: one cost row per caller, not per (caller, tier); agent='openclaw:<slug>' never contains tier suffix
-- [Phase 74]: Phase 74-02: Shutdown drain order — transientCache.closeAll() BEFORE server.close() — in-flight SDK subprocesses abort cleanly before socket yanking; extends SessionManager.drain pattern from quick task 260419-q2z
+
+### Phase 74 / v2.0 closing decisions (for reference)
+
+- [Phase 74]: caller-identity routing runs BEFORE scope-aware authz — enables malformed openclaw: syntax on pinned key to surface as 400 malformed_caller; zero Phase 69 regression
+- [Phase 74]: systemPrompt passed as STRING (Pitfall 2) to createPersistentSessionHandle — REPLACES SDK kernel prompt for transient sessions; preset+append NOT used
+- [Phase 74]: CLAWCODE_TRANSIENT_CWD fixed at module scope (~/.clawcode/manager/transient); driver never reads caller workspace/cwd/metadata (Pitfall 4 guard, grep-enforced)
+- [Phase 74]: TransientSessionCache LRU+TTL with close-on-evict — handle.close() errors caught + logged; cache invariants hold under SDK subprocess crash
+- [Phase 74]: denyScopeAll gate placement inside scope='all' branch (not pre-branch) — colocates with other scope-resolution logic; pinned-key mismatch stays agent_mismatch, openclaw-template branch bypasses entirely
+- [Phase 74]: Fleet-anchor UsageTracker lookup for transient turns — agent column ('openclaw:<slug>') keeps rows distinguishable; zero schema change required; Pitfall 8 non-fatal on missing tracker
+- [Phase 74]: Tier encoded in model column NEVER agent column — CONTEXT D-04 confirmed: one cost row per caller, not per (caller, tier); agent='openclaw:<slug>' never contains tier suffix
+- [Phase 74]: Shutdown drain order — transientCache.closeAll() BEFORE server.close() — in-flight SDK subprocesses abort cleanly before socket yanking
 
 ### Roadmap Evolution
 
 - 2026-04-18: Milestone v1.9 Persistent Conversation Memory shipped (Phases 64-68 + 68.1)
 - 2026-04-18: Milestone v2.0 Open Endpoint + Eyes & Hands started — 20 requirements defined across 4 categories
 - 2026-04-18: v2.0 roadmap created — 4 phases (69-72), 20/20 requirements mapped 1:1, zero orphans
-- 2026-04-19: Phase 73 added — OpenClaw endpoint latency (research integration, TTFB instrumentation, persistent subprocess via streamInput, brief cache, readiness-wait tune). Dir: `.planning/phases/73-openclaw-endpoint-latency/`
-- 2026-04-19: Phase 74 added — Seamless OpenClaw backend (caller-provided agent config on /v1/chat/completions). Research-first before planning. Dir: `.planning/phases/74-seamless-openclaw-backend-caller-provided-agent-config/`
+- 2026-04-19: Phase 73 added — OpenClaw endpoint latency
+- 2026-04-19: Phase 74 added — Seamless OpenClaw backend (caller-provided agent config)
+- 2026-04-20: v2.0 complete (Phases 69-74 shipped); v2.1 OpenClaw Agent Migration milestone opened
+- 2026-04-20: v2.1 research complete — STACK/FEATURES/ARCHITECTURE/PITFALLS/SUMMARY across `.planning/research/`
+- 2026-04-20: v2.1 roadmap created — 8 phases (75-82), 31 requirements mapped 1:1 across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS
 
 ### Pending Todos
 
-None yet.
+- `/gsd:plan-phase 75` — decompose Shared-Workspace Runtime Support into plans (estimated 1-2 plans given the ~15 LOC surface)
+- Consider `/gsd:research-phase 80` before planning Memory Translation — source sqlite schema is already in STACK.md but markdown-section splitting rules and origin_id format need confirmation
 
 ### Blockers/Concerns
 
-- **OpenAI SDK compatibility surface breadth unknown** — need to verify real-world OpenAI SDK clients (Python `openai`, LangChain, Vercel AI SDK) all round-trip cleanly against our `/v1/chat/completions` implementation. Validate with the OpenAI SDK's own happy-path tests in Phase 69.
-- **Playwright warm-singleton memory footprint unknown** — a resident Chromium per daemon adds baseline RSS; must verify with N=14 agents that we don't need per-agent Chromium processes. Measure in Phase 70.
-- **Tool-use bidirectional translation edge cases** — OpenAI `tool_calls` array vs. Claude `tool_use` blocks differ in parallel-call semantics and streaming delta shape. Phase 69 must handle streamed tool-call accumulation correctly (OpenAI emits per-tool-call deltas; Claude emits per-block deltas).
-- **Bearer-key-to-session mapping persistence** — one session per bearer key must survive daemon restarts (ConversationStore handles the session rows, but we need a bearer_key → session_id index with zero-leak enforcement). Locked design gap to resolve in Phase 69 research.
+- **OpenClaw daemon must be stopped during `apply`** — pre-flight guard (Phase 77) enforces this; operator-side systemctl command needs to be documented in runbook.
+- **Finmentum workspace internal layout** — which markdown files inside `workspace-finmentum/` are per-agent memory vs. shared project files vs. financial data that should NOT be embedded. Requires a one-time inspection walk during Phase 79 / Phase 80 planning.
+- **Credential reference format across all 15 agents' MCP configs** — confirmed `op://` for the top-level Discord token, but unclear whether all 15 agent-level MCP configs use `op://` consistently. Pre-flight validation in Phase 77 catches this; Phase 78 secret-guard enforces it.
+- **Hot-reload cannot activate new agents** — `config/differ.ts` marks added agents `reloadable: false`. Migration workflow requires `systemctl stop clawcode && apply && systemctl start clawcode` per the Phase 77 pre-flight check.
 - **12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)** — legacy carry-over, not blocking.
 
 ### Quick Tasks Completed
@@ -157,6 +132,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
-Stopped at: Completed 74-02-PLAN.md — security.denyScopeAll + cost attribution + shutdown drain + smoke + README. 3 atomic commits on master (NOT pushed). 27 new tests + full regression green; tsc at 29 baseline; 3241 pass / 8 tolerable baseline failures. Phase 74 milestone complete.
+Last activity: 2026-04-20 — v2.1 OpenClaw Agent Migration roadmap created (8 phases 75-82, 31 requirements mapped)
+Stopped at: Roadmap approved. Ready for `/gsd:plan-phase 75` (Shared-Workspace Runtime Support — the prerequisite unblocking finmentum migration).
 Resume file: None

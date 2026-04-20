@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Started:** 2026-04-20
-**Total requirements:** 28
+**Total requirements:** 31
 
 **Milestone goal:** Port all 15 active OpenClaw agents to dedicated ClawCode agents with memories, workspaces, identities, souls, and tool access preserved — every migrated agent gains native fork-to-Opus subagent spawning.
 
@@ -118,6 +118,38 @@ Explicitly not in this milestone, with reasoning:
 
 Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 
-| REQ-ID | Phase | Success Criterion |
-|--------|-------|-------------------|
-| *(empty — filled by gsd-roadmapper)* | | |
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| SHARED-01 | Phase 75: Shared-Workspace Runtime Support | Pending |
+| SHARED-02 | Phase 75: Shared-Workspace Runtime Support | Pending |
+| SHARED-03 | Phase 75: Shared-Workspace Runtime Support | Pending |
+| MIGR-01 | Phase 76: Migration CLI Read-Side + Dry-Run | Pending |
+| MIGR-08 | Phase 76: Migration CLI Read-Side + Dry-Run | Pending |
+| MIGR-02 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| MIGR-06 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| MIGR-07 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| OPS-03 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| CONF-01 | Phase 78: Config Mapping + YAML Writer | Pending |
+| CONF-02 | Phase 78: Config Mapping + YAML Writer | Pending |
+| CONF-03 | Phase 78: Config Mapping + YAML Writer | Pending |
+| CONF-04 | Phase 78: Config Mapping + YAML Writer | Pending |
+| WORK-01 | Phase 79: Workspace Migration | Pending |
+| WORK-02 | Phase 79: Workspace Migration | Pending |
+| WORK-03 | Phase 79: Workspace Migration | Pending |
+| WORK-04 | Phase 79: Workspace Migration | Pending |
+| WORK-05 | Phase 79: Workspace Migration | Pending |
+| MEM-01 | Phase 80: Memory Translation + Re-embedding | Pending |
+| MEM-02 | Phase 80: Memory Translation + Re-embedding | Pending |
+| MEM-03 | Phase 80: Memory Translation + Re-embedding | Pending |
+| MEM-04 | Phase 80: Memory Translation + Re-embedding | Pending |
+| MEM-05 | Phase 80: Memory Translation + Re-embedding | Pending |
+| MIGR-03 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| MIGR-04 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| MIGR-05 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| FORK-01 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| FORK-02 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| OPS-01 | Phase 82: Pilot + Cutover + Completion | Pending |
+| OPS-02 | Phase 82: Pilot + Cutover + Completion | Pending |
+| OPS-04 | Phase 82: Pilot + Cutover + Completion | Pending |
+
+**Coverage:** 31/31 requirements mapped — zero orphans, zero duplicates.
