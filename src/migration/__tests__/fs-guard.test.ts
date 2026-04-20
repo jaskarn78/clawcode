@@ -11,20 +11,33 @@
  *      ~/.openclaw/ does NOT throw ReadOnlySourceError (filesystem-level
  *      error/success resumes).
  *   4. Install is idempotent — calling twice does NOT double-wrap (verified
- *      via call-counting on the underlying implementation for a benign write).
+ *      via a second install+uninstall cycle leaving the surface clean).
  *   5. Path extraction handles string, Buffer, and URL argument forms
  *      (fd `number` is a no-op pass-through per node:fs semantics).
  *
- * IMPORTANT: these tests do NOT vi.mock node:fs or node:fs/promises — the
- * whole point of fs-guard is to patch the REAL node:fs surface. Tests use
+ * ### ESM-scope note
+ * The fs-guard patches the CJS module objects returned by `require("node:fs")`
+ * and `require("node:fs/promises")` — those are the same objects that the
+ * default-export import style binds to. Callers using `import * as fs from
+ * "node:fs"` or `import { writeFile } from "node:fs/promises"` receive
+ * ESM-frozen bindings that CANNOT be patched at runtime (Node.js
+ * fundamental — not a bug in this module).
+ *
+ * Therefore these tests exercise the guard through `createRequire()` access —
+ * matching how dynamic-path production code that wants to be covered would
+ * access fs. The static-grep regression test in migrate-openclaw.test.ts is
+ * the primary MIGR-07 line of defense against named-import code; the
+ * runtime guard is the belt-and-suspenders fallback.
+ *
+ * These tests do NOT vi.mock node:fs or node:fs/promises — the whole point
+ * of fs-guard is to patch the REAL underlying module objects. Tests use
  * mkdtemp + real writes + real stat to assert on-disk behavior.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
-import { mkdtempSync, rmSync, existsSync, writeFileSync as wfsReal } from "node:fs";
+import { createRequire } from "node:module";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   installFsGuard,
@@ -32,7 +45,15 @@ import {
 } from "../fs-guard.js";
 import { ReadOnlySourceError } from "../guards.js";
 
-// Each test owns a fresh tmpdir; afterEach uninstalls any leftover guard.
+// Access fs through createRequire — this returns the SAME underlying CJS
+// object that the fs-guard patches. Using named ESM imports would capture
+// the original function at import time and never see the patched version.
+const localRequire = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fs: any = localRequire("node:fs");
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fsp: any = localRequire("node:fs/promises");
+
 describe("fs-guard runtime interceptor", () => {
   let tmp: string;
 
@@ -52,9 +73,7 @@ describe("fs-guard runtime interceptor", () => {
     await expect(fsp.writeFile(forbidden, "x")).rejects.toBeInstanceOf(
       ReadOnlySourceError,
     );
-    // Nothing should exist on disk at the forbidden path. (A real dev's
-    // actual ~/.openclaw/openclaw.json is fine to exist — we only assert on
-    // the canary filename this test created.)
+    // Nothing should exist on disk at the forbidden canary path.
     expect(existsSync(forbidden)).toBe(false);
   });
 
@@ -78,12 +97,10 @@ describe("fs-guard runtime interceptor", () => {
     installFsGuard();
     uninstallFsGuard();
     // After uninstall, the guard must NOT fire. We do not actually attempt
-    // to write into the real ~/.openclaw/ tree (don't want to pollute it) —
-    // instead we point at a fake parent under tmp that contains ".openclaw"
-    // in its path as a substring, then re-prove that the NON-forbidden path
-    // also works. The positive proof is: a write to ~/.openclaw/<canary>
-    // would throw a NON-ReadOnlySourceError (e.g., EACCES / EISDIR) rather
-    // than a ReadOnlySourceError.
+    // to pollute the real ~/.openclaw/ tree — instead we assert the positive
+    // proof: a write to ~/.openclaw/<canary> would either succeed or raise a
+    // NON-ReadOnlySourceError (e.g., EACCES / EISDIR) — never the guard's
+    // dedicated error type.
     const target = join(homedir(), ".openclaw", "post-uninstall-canary");
     let thrown: unknown;
     try {
@@ -94,22 +111,19 @@ describe("fs-guard runtime interceptor", () => {
     } catch (e) {
       thrown = e;
     }
-    // The guard must NOT be the thing that threw. Either it wrote (no throw)
-    // or the real fs raised its own error (EACCES/EISDIR/ENOENT on the
-    // parent dir). Neither should be a ReadOnlySourceError.
     expect(thrown).not.toBeInstanceOf(ReadOnlySourceError);
   });
 
   it("install is idempotent — calling twice does not double-wrap", async () => {
     installFsGuard();
     installFsGuard(); // second call MUST be a no-op
-    // Prove idempotency by showing uninstall fully restores: after one
-    // uninstall, the original fs.writeFile surface is back (no guard throws).
+    // Prove idempotency by showing uninstall fully restores after a single
+    // uninstall call: the original fs.writeFile surface is back (no guard).
     uninstallFsGuard();
     const allowed = join(tmp, "after-double-install.txt");
     await fsp.writeFile(allowed, "ok");
     expect(existsSync(allowed)).toBe(true);
-    // Additionally: re-install + re-uninstall still restores clean state.
+    // Re-install + re-uninstall still restores clean state.
     installFsGuard();
     uninstallFsGuard();
     const allowed2 = join(tmp, "after-cycle.txt");
@@ -118,7 +132,8 @@ describe("fs-guard runtime interceptor", () => {
   });
 
   it("uninstall without prior install is a safe no-op", async () => {
-    // Fresh suite — no prior install in this test.
+    // Fresh suite — no prior install in this test. (beforeEach did not
+    // install; afterEach's uninstall is the one we're testing here.)
     uninstallFsGuard();
     // Writes must still work normally.
     const allowed = join(tmp, "never-installed.txt");
@@ -149,7 +164,6 @@ describe("fs-guard runtime interceptor", () => {
 
   it("appendFile to a path outside ~/.openclaw/ (e.g. the ledger path) passes through", async () => {
     installFsGuard();
-    // Simulate the ledger path — NOT under ~/.openclaw/, so append must work.
     const ledgerLike = join(tmp, ".planning", "migration", "ledger.jsonl");
     await fsp.mkdir(join(tmp, ".planning", "migration"), { recursive: true });
     await fsp.appendFile(ledgerLike, '{"row":1}\n');
@@ -162,7 +176,7 @@ describe("fs-guard runtime interceptor", () => {
     installFsGuard();
     // Open a real fd to a legit file, write via fd — must not throw.
     const allowed = join(tmp, "fd-write.txt");
-    wfsReal(allowed, ""); // create
+    fs.writeFileSync(allowed, ""); // create
     const fd = fs.openSync(allowed, "w");
     try {
       expect(() => fs.writeFileSync(fd, "via-fd")).not.toThrow();
@@ -175,9 +189,9 @@ describe("fs-guard runtime interceptor", () => {
   it("mkdir async under ~/.openclaw/ throws ReadOnlySourceError", async () => {
     installFsGuard();
     const forbidden = join(homedir(), ".openclaw", "mkdir-canary");
-    await expect(fsp.mkdir(forbidden, { recursive: true })).rejects.toBeInstanceOf(
-      ReadOnlySourceError,
-    );
+    await expect(
+      fsp.mkdir(forbidden, { recursive: true }),
+    ).rejects.toBeInstanceOf(ReadOnlySourceError);
   });
 
   it("mkdirSync under ~/.openclaw/ throws ReadOnlySourceError", () => {
