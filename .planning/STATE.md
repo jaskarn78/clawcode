@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Ready to execute
-stopped_at: Completed 79-01-PLAN.md
-last_updated: "2026-04-20T20:17:11.858Z"
+stopped_at: Completed 79-03-PLAN.md — Phase 79 workspace migration fully implemented (all 5 WORK-* requirements closed)
+last_updated: "2026-04-20T20:32:03.432Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 31
-  completed_plans: 30
+  completed_plans: 31
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-20)
 ## Current Position
 
 Phase: 79 (workspace-migration) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -111,6 +111,8 @@ Recent decisions affecting current work:
 - [Phase 79]: [Phase 79 Plan 02]: fs.cp with force:true + errorOnExist:false + preserveTimestamps:true — idempotent re-runs for Phase 81 rollback-then-retry (no EEXIST surprises); WORK-05 mtime preservation extended to archive subtree.
 - [Phase 79]: workspace-copier: self-symlink heuristic extended to cover lateral sibling-dir symlinks (venv lib64->lib trap) in addition to ancestor references
 - [Phase 79]: hash-witness: per-file sha256 ledger rows (one row per file) — forensic JSONL ordering; symlinks compared via readlink (not dereferenced content)
+- [Phase 79-workspace-migration]: Plan 03: Full-before-uploads processing order (deviation) — primary workspace copies must land in shared basePath before sub-agents' uploads-only copies, or the primary's post-copy sweep will walk over sub-agents' files with no matching source.
+- [Phase 79-workspace-migration]: Plan 03: resolveWorkspaceCopyPlan routes by on-disk shape (SOUL.md present → full; uploads/ only → uploads-only; neither → skip) — no finmentum-specific branching needed. Finmentum routing emerges naturally from the shape + Phase 78 getTargetBasePath family collapse.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -184,9 +186,10 @@ Recent decisions affecting current work:
 | Phase 78 P03 | 32min | 2 tasks | 9 files |
 | Phase 79 P02 | 4min | 1 tasks | 2 files |
 | Phase 79 P01 | 4 | 1 tasks | 2 files |
+| Phase 79-workspace-migration P03 | 10 | 2 tasks | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 79-01-PLAN.md
+Stopped at: Completed 79-03-PLAN.md — Phase 79 workspace migration fully implemented (all 5 WORK-* requirements closed)
 Resume file: None

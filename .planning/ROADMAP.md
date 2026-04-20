@@ -120,7 +120,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 - [x] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume. (completed 2026-04-20)
 - [x] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write. (completed 2026-04-20)
 - [x] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering. (completed 2026-04-20)
-- [ ] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only.
+- [x] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only. (completed 2026-04-20)
 - [ ] **Phase 80: Memory Translation + Re-embedding** — Read workspace markdown (disk as truth, not sqlite chunks), insert through `MemoryStore.insert()` with `origin_id UNIQUE` for idempotency, re-embed via MiniLM singleton (384-dim); `.learnings/*.md` land as first-class memories tagged `"learning"`.
 - [ ] **Phase 81: Verify + Rollback + Resume + Fork** — `verify`, idempotent re-run via ledger, per-agent `rollback`, and proof that every migrated agent (Sonnet/Haiku/MiniMax/Gemini) retains fork-to-Opus escalation with unbudgeted cost-ledger rows.
 - [ ] **Phase 82: Pilot + Cutover + Completion** — Migrate low-risk pilot (`personal` or `local-clawdy`) first, run dual-bot guardrails during observation, per-agent `cutover` unbinds OpenClaw, and `complete` writes the v2.1-migration-report.md summarizing fleet outcomes.
@@ -223,7 +223,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 79-01-PLAN.md — workspace-copier module (fs.cp + filter + hash witness + per-agent rollback) (WORK-01, WORK-03, WORK-05)
 - [x] 79-02-PLAN.md — session-archiver module (copy ~/.openclaw/agents/<name>/sessions/ to <target>/archive/openclaw-sessions/ with ConversationStore isolation) (WORK-04)
-- [ ] 79-03-PLAN.md — CLI wiring + finmentum-aware source resolution + end-to-end integration test pinning all 5 success criteria (WORK-01, WORK-02, WORK-03, WORK-04, WORK-05)
+- [x] 79-03-PLAN.md — CLI wiring + finmentum-aware source resolution + end-to-end integration test pinning all 5 success criteria (WORK-01, WORK-02, WORK-03, WORK-04, WORK-05)
 
 ### Phase 80: Memory Translation + Re-embedding
 **Goal**: User (as migrated agent) can retrieve memories via `memory_lookup` that originated from the source OpenClaw agent's workspace markdown (MEMORY.md + memory/*.md + .learnings/*.md) with full text preserved verbatim, fresh 384-dim MiniLM embeddings, idempotent re-insertion via `origin_id UNIQUE`, and `.learnings/` entries tagged as first-class `"learning"` memories — never via raw SQL against `vec_memories`.
@@ -287,7 +287,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
 | 77. Pre-flight Guards + Safety Rails | 3/3 | Complete    | 2026-04-20 |
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
-| 79. Workspace Migration | 2/3 | In Progress|  |
+| 79. Workspace Migration | 3/3 | Complete   | 2026-04-20 |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |
 | 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
