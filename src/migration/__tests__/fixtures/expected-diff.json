@@ -1,0 +1,289 @@
+{
+  "agents": [
+    {
+      "sourceId": "card-generator",
+      "sourceName": "Card Generator",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-card-generator",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/card-generator/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/card-generator",
+      "targetMemoryPath": "/tmp/clawcode-agents/card-generator",
+      "targetAgentName": "card-generator"
+    },
+    {
+      "sourceId": "card-planner",
+      "sourceName": "Card Planner",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-card-planner",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/card-planner/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/card-planner",
+      "targetMemoryPath": "/tmp/clawcode-agents/card-planner",
+      "targetAgentName": "card-planner"
+    },
+    {
+      "sourceId": "fin-acquisition",
+      "sourceName": "Finance Clawdy (Acquisition)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/fin-acquisition/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 597,
+      "memoryStatus": "present",
+      "discordChannelId": "1481670479017414767",
+      "isFinmentumFamily": true,
+      "targetBasePath": "/tmp/clawcode-agents/finmentum",
+      "targetMemoryPath": "/tmp/clawcode-agents/finmentum/memory/fin-acquisition",
+      "targetAgentName": "fin-acquisition"
+    },
+    {
+      "sourceId": "fin-playground",
+      "sourceName": "Finance Clawdy (Playground)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/fin-playground/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "discordChannelId": "1481659547985641603",
+      "isFinmentumFamily": true,
+      "targetBasePath": "/tmp/clawcode-agents/finmentum",
+      "targetMemoryPath": "/tmp/clawcode-agents/finmentum/memory/fin-playground",
+      "targetAgentName": "fin-playground"
+    },
+    {
+      "sourceId": "fin-research",
+      "sourceName": "Finance Clawdy (Research)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/fin-research/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "discordChannelId": "1481659546337411234",
+      "isFinmentumFamily": true,
+      "targetBasePath": "/tmp/clawcode-agents/finmentum",
+      "targetMemoryPath": "/tmp/clawcode-agents/finmentum/memory/fin-research",
+      "targetAgentName": "fin-research"
+    },
+    {
+      "sourceId": "fin-tax",
+      "sourceName": "Finance Clawdy (Tax)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-finmentum",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/fin-tax/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "discordChannelId": "1482492797784297683",
+      "isFinmentumFamily": true,
+      "targetBasePath": "/tmp/clawcode-agents/finmentum",
+      "targetMemoryPath": "/tmp/clawcode-agents/finmentum/memory/fin-tax",
+      "targetAgentName": "fin-tax"
+    },
+    {
+      "sourceId": "finmentum-content-creator",
+      "sourceName": "Clawdy (Finmentum Content Creator)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-finmentum-content-creator",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/finmentum-content-creator/agent",
+      "sourceModel": "clawcode/fin-test",
+      "memoryChunkCount": 224,
+      "memoryStatus": "present",
+      "discordChannelId": "1486348188763029648",
+      "isFinmentumFamily": true,
+      "targetBasePath": "/tmp/clawcode-agents/finmentum",
+      "targetMemoryPath": "/tmp/clawcode-agents/finmentum/memory/finmentum-content-creator",
+      "targetAgentName": "finmentum-content-creator"
+    },
+    {
+      "sourceId": "general",
+      "sourceName": "Clawdy (General)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-general",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/general/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 878,
+      "memoryStatus": "present",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/general",
+      "targetMemoryPath": "/tmp/clawcode-agents/general",
+      "targetAgentName": "general"
+    },
+    {
+      "sourceId": "kimi",
+      "sourceName": "Kimi",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-kimi",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/kimi/agent",
+      "sourceModel": "moonshot/kimi-k2.5",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/kimi",
+      "targetMemoryPath": "/tmp/clawcode-agents/kimi",
+      "targetAgentName": "kimi"
+    },
+    {
+      "sourceId": "local-clawdy",
+      "sourceName": "Local Clawdy",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-local-clawdy",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/local-clawdy/agent",
+      "sourceModel": "ollama/qwen3:14b-fast",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/local-clawdy",
+      "targetMemoryPath": "/tmp/clawcode-agents/local-clawdy",
+      "targetAgentName": "local-clawdy"
+    },
+    {
+      "sourceId": "personal",
+      "sourceName": "Clawdy (Personal)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-personal",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/personal/agent",
+      "sourceModel": "minimax/MiniMax-M2.7",
+      "memoryChunkCount": 47,
+      "memoryStatus": "present",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/personal",
+      "targetMemoryPath": "/tmp/clawcode-agents/personal",
+      "targetAgentName": "personal"
+    },
+    {
+      "sourceId": "projects",
+      "sourceName": "Clawdy (Projects)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-projects",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/projects/agent",
+      "sourceModel": "clawcode/admin-clawdy",
+      "memoryChunkCount": 519,
+      "memoryStatus": "present",
+      "discordChannelId": "1471307765401129002",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/projects",
+      "targetMemoryPath": "/tmp/clawcode-agents/projects",
+      "targetAgentName": "projects"
+    },
+    {
+      "sourceId": "research",
+      "sourceName": "Clawdy (Research)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-research",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/research/agent",
+      "sourceModel": "google/gemini-3.1-pro-preview",
+      "memoryChunkCount": 287,
+      "memoryStatus": "present",
+      "discordChannelId": "1480605887247814656",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/research",
+      "targetMemoryPath": "/tmp/clawcode-agents/research",
+      "targetAgentName": "research"
+    },
+    {
+      "sourceId": "shopping",
+      "sourceName": "Clawdy (Shopping)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-shopping",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/shopping/agent",
+      "sourceModel": "minimax/MiniMax-M2.7",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/shopping",
+      "targetMemoryPath": "/tmp/clawcode-agents/shopping",
+      "targetAgentName": "shopping"
+    },
+    {
+      "sourceId": "work",
+      "sourceName": "Clawdy (Work)",
+      "sourceWorkspace": "/home/jjagpal/.openclaw/workspace-work",
+      "sourceAgentDir": "/home/jjagpal/.openclaw/agents/work/agent",
+      "sourceModel": "anthropic-api/claude-sonnet-4-6",
+      "memoryChunkCount": 0,
+      "memoryStatus": "missing",
+      "isFinmentumFamily": false,
+      "targetBasePath": "/tmp/clawcode-agents/work",
+      "targetMemoryPath": "/tmp/clawcode-agents/work",
+      "targetAgentName": "work"
+    }
+  ],
+  "warnings": [
+    {
+      "kind": "empty-source-memory",
+      "agent": "card-generator",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "card-planner",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "fin-playground",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "fin-research",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "fin-tax",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "kimi",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "local-clawdy",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "shopping",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "empty-source-memory",
+      "agent": "work",
+      "detail": "sqlite file not found"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "card-generator"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "card-planner"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "general"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "kimi"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "local-clawdy"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "personal"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "shopping"
+    },
+    {
+      "kind": "missing-discord-binding",
+      "agent": "work"
+    }
+  ],
+  "sourcePath": "/home/jjagpal/.openclaw/workspace-coding/src/migration/__tests__/fixtures/openclaw.sample.json",
+  "targetRoot": "/tmp/clawcode-agents",
+  "generatedAt": "2026-04-20T00:00:00.000Z",
+  "planHash": "46a8f3b5b278326fddf4a864c1b273e83c339f9198df3d9bfb0fc0b4984267e6"
+}
