@@ -27,10 +27,13 @@
  *   - Write anywhere except ledgerPath in these action handlers.
  */
 import type { Command } from "commander";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { cliLog, cliError, green, yellow, red, dim } from "../output.js";
+import { translateAgentMemories } from "../../migration/memory-translator.js";
+import { MemoryStore } from "../../memory/store.js";
+import { EmbeddingService } from "../../memory/embedder.js";
 import {
   readOpenclawInventory,
   type OpenclawSourceInventory,
@@ -88,6 +91,35 @@ const DEFAULT_OPENCLAW_JSON = join(homedir(), ".openclaw", "openclaw.json");
 const DEFAULT_OPENCLAW_MEMORY_DIR = join(homedir(), ".openclaw", "memory");
 const DEFAULT_OPENCLAW_ROOT = join(homedir(), ".openclaw");
 const DEFAULT_CLAWCODE_AGENTS_ROOT = join(homedir(), ".clawcode", "agents");
+
+/**
+ * Phase 80 Plan 03 — CLI-local embedder singleton for the migrate-openclaw
+ * process. The CLI is a DIFFERENT process from the daemon; the daemon has
+ * its own `EmbeddingService` in `manager/session-memory.ts`. The
+ * singleton-invariant test in `daemon-warmup-probe.test.ts` has been
+ * updated to whitelist BOTH construction sites — CLI + daemon are
+ * independent entrypoints that each need their own embedder.
+ *
+ * Lazy init on first use. The embedder's first `embed()` triggers ONNX
+ * warmup (~200ms cold-start, ~23MB model download if not cached); all
+ * subsequent embeds reuse the warmed pipeline.
+ *
+ * Tests that inject a mock translator via `migrateOpenclawHandlers.
+ * translateAgentMemories` never reach this code path — the mock returns
+ * without ever calling `embedder.embed()`. `_resetMigrationEmbedderForTests`
+ * is exported so integration tests that DO exercise the real translator
+ * can reset the singleton between runs.
+ */
+let _migrationEmbedder: EmbeddingService | null = null;
+export function getMigrationEmbedder(): EmbeddingService {
+  if (_migrationEmbedder === null) {
+    _migrationEmbedder = new EmbeddingService();
+  }
+  return _migrationEmbedder;
+}
+export function _resetMigrationEmbedderForTests(): void {
+  _migrationEmbedder = null;
+}
 
 // --- Pure formatters (testable in isolation) -------------------------
 
@@ -606,6 +638,72 @@ export async function runApplyAction(
         ledgerPath: paths.ledgerPath,
         sourceHash: report.planHash,
       });
+
+      // --- Phase 80 Plan 03 — memory translation per agent ---
+      //
+      // Reads target-workspace markdown (MEMORY.md + memory/*.md +
+      // .learnings/*.md) and upserts memories via MemoryStore.insert()
+      // with origin_id UNIQUE idempotency (Plan 01). The translator is
+      // invoked through `migrateOpenclawHandlers.translateAgentMemories`
+      // so unit tests can inject a mock without exercising ONNX.
+      //
+      // Skipped when:
+      //   - copyPlan was skip-empty-source (continue'd earlier; target
+      //     tree never existed, no markdown to read)
+      //   - workspace-copy rolled back (continue'd earlier; target tree
+      //     is gone, nothing to read)
+      //
+      // Non-fatal: a translator throw records a refuse ledger row and
+      // counts toward workspaceFailures (exit 1), but other agents in
+      // this run still proceed — matches the workspace-copy failure
+      // semantics and preserves forensic completeness.
+      if (copyPlan.mode !== "skip-empty-source") {
+        const memDir = join(agentPlan.targetMemoryPath, "memory");
+        if (!existsSync(memDir)) {
+          mkdirSync(memDir, { recursive: true });
+        }
+        const dbPath = join(memDir, "memories.db");
+        const store = new MemoryStore(dbPath);
+        try {
+          const embedder = getMigrationEmbedder();
+          const result = await migrateOpenclawHandlers.translateAgentMemories({
+            agentId: agentPlan.sourceId,
+            targetWorkspace: copyPlan.target,
+            memoryPath: agentPlan.targetMemoryPath,
+            store,
+            embedder,
+            sourceHash: report.planHash,
+          });
+          for (const row of result.ledgerRows) {
+            await appendRow(paths.ledgerPath, row);
+          }
+          cliLog(
+            green(
+              `\u2713 ${agentPlan.sourceId}: upserted ${result.upserted}, skipped ${result.skipped}`,
+            ),
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await appendRow(paths.ledgerPath, {
+            ts: new Date().toISOString(),
+            action: "apply",
+            agent: agentPlan.sourceId,
+            status: "pending",
+            source_hash: report.planHash,
+            step: "memory-translate:error",
+            outcome: "refuse",
+            notes: `translator threw: ${msg}`,
+          });
+          workspaceFailures.push(agentPlan.sourceId);
+          cliError(
+            red(
+              `\u2717 memory-translate failed for ${agentPlan.sourceId}: ${msg}`,
+            ),
+          );
+        } finally {
+          store.close();
+        }
+      }
     }
 
     if (workspaceFailures.length > 0) {
@@ -679,9 +777,15 @@ function extractPerAgentMcpNames(
 export const migrateOpenclawHandlers: {
   runPlanAction: typeof runPlanAction;
   runApplyAction: typeof runApplyAction;
+  // Phase 80 Plan 03 — tests swap this property to inject a mock translator
+  // without exercising the real ONNX embedder. runApplyAction's memory-
+  // translate block indirects through the holder so ESM named-import
+  // bindings don't block the swap.
+  translateAgentMemories: typeof translateAgentMemories;
 } = {
   runPlanAction,
   runApplyAction,
+  translateAgentMemories,
 };
 
 export function registerMigrateOpenclawCommand(program: Command): void {
