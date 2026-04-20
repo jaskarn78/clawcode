@@ -237,7 +237,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   5. User migrates an agent whose source `~/.openclaw/memory/<agent>.sqlite` shows N chunks but whose workspace `MEMORY.md` + `memory/*.md` shows a different count — the migrated `memories` table row count matches the WORKSPACE MARKDOWN count (disk is truth), not the sqlite chunk count; any "file in sqlite but not on disk" is logged in the ledger as `skipped: file-deleted-from-source`.
 **Plans**: 3 plans
 - [x] 80-01-PLAN.md — MemoryStore origin_id schema migration + insert() INSERT OR IGNORE path + type extension (MEM-02, MEM-03)
-- [ ] 80-02-PLAN.md — memory-translator module: H2 splitter, origin_id/tag builders, discoverWorkspaceMarkdown, translateAgentMemories with serial embedder (MEM-01, MEM-03, MEM-04, MEM-05)
+- [x] 80-02-PLAN.md — memory-translator module: H2 splitter, origin_id/tag builders, discoverWorkspaceMarkdown, translateAgentMemories with serial embedder (MEM-01, MEM-03, MEM-04, MEM-05)
 - [ ] 80-03-PLAN.md — CLI wiring in runApplyAction + "upserted N, skipped M" output + Phase 80 end-to-end integration test pinning all 5 success criteria (MEM-01..05)
 
 ### Phase 81: Verify + Rollback + Resume + Fork
@@ -291,7 +291,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 77. Pre-flight Guards + Safety Rails | 3/3 | Complete    | 2026-04-20 |
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
 | 79. Workspace Migration | 3/3 | Complete    | 2026-04-20 |
-| 80. Memory Translation + Re-embedding | 1/3 | In Progress|  |
+| 80. Memory Translation + Re-embedding | 2/3 | In Progress|  |
 | 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
 
