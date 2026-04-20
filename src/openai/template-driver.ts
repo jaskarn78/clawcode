@@ -180,11 +180,12 @@ function runTemplateDispatch(
       const modelId = TIER_MODEL_MAP[input.tier];
       // Build baseOptions — Pitfall 2 (string systemPrompt) + Pitfall 4 (fixed
       // cwd) + isolation (mcpServers:{}, settingSources:[], tools:[]).
-      // Phase 74 hotfix — inherit process.env (minus ANTHROPIC_API_KEY) so the
-      // Claude Agent SDK subprocess can resolve the `claude` CLI via PATH, same
-      // as native agents through session-adapter.ts's buildCleanEnv. Without
-      // this the SDK fails with "Claude Code executable not found at
-      // <sdk-bundle-path>/cli.js" the moment it tries to spawn the subprocess.
+      // Phase 74 hotfix — inherit process.env (minus ANTHROPIC_API_KEY) and
+      // keep settingSources:["project"] to match the native agent path. Empty
+      // settingSources made the CLI subprocess crash with
+      // `error_during_execution`. The "project" source is required for the
+      // Claude Code kernel to bootstrap; we still isolate from caller
+      // workspace by using a fixed CLAWCODE_TRANSIENT_CWD.
       const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
       const baseOptions = {
         systemPrompt: input.soulPrompt, // STRING — REPLACES kernel prompt.
@@ -193,7 +194,7 @@ function runTemplateDispatch(
         permissionMode: "bypassPermissions" as const,
         allowDangerouslySkipPermissions: true,
         mcpServers: {},
-        settingSources: [] as ReadonlyArray<string>,
+        settingSources: ["project"] as ReadonlyArray<string>,
         env: cleanEnv,
       } satisfies SdkQueryOptions;
 

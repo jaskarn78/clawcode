@@ -159,7 +159,7 @@ describe("OpenClawTemplateDriver", () => {
     expect(baseOptions.model).toBe("claude-sonnet-4-6");
     expect(baseOptions.permissionMode).toBe("bypassPermissions");
     expect(baseOptions.mcpServers).toEqual({});
-    expect(baseOptions.settingSources).toEqual([]);
+    expect(baseOptions.settingSources).toEqual(["project"]);
   });
 
   it("Test 2: second dispatch with same cache key reuses the handle (createHandle called once)", async () => {
