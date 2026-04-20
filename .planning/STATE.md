@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Phase complete — ready for verification
-stopped_at: "Completed 75-03-PLAN.md (integration test green). Phase 75 done — 3/3 plans landed. Ready for verification + /gsd:transition to Phase 76."
-last_updated: "2026-04-20T14:30:21.946Z"
+stopped_at: "Completed 75-04-PLAN.md — gap closure. Truth #7 closed (memoryPath vs workspace for context-summary READ). Phase 75 has 4 plans landed; re-run /gsd:verify-phase 75 to mark fully VERIFIED."
+last_updated: "2026-04-20T14:53:58.467Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 7
-  total_plans: 18
-  completed_plans: 18
+  total_plans: 19
+  completed_plans: 19
 ---
 
 # Project State
@@ -69,6 +69,8 @@ Recent decisions affecting current work:
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 02]: Signature renames (logResult: workspace→memoryPath, saveContextSummary: workspace→memoryPath) over config-object threading — minimum-diff change since both methods took path strings.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 03]: Per-test timeout extensions (15s/20s) on MemoryStore-heavy tests — sqlite-vec cold-start + migrations + auto-linker exceed the 5s vitest default under parallel test load. Pure test-framework config; zero production impact.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 03]: Integration test asserts error-message TEXT not just success===false — pins the UX contract that schema + loadConfig both surface BOTH conflicting agent names when memoryPath collides.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 04]: Context-summary READ path in session-config.ts:318 now resolves against config.memoryPath (not config.workspace) — closes 75-VERIFICATION.md Truth #7 asymmetry. One-line fix with inline rationale comment + pinned regression test.
+- [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 04]: Context-summary test assertion uses (systemPrompt + mutableSuffix) combined block — Phase 52 two-block wiring routes resume summary into MUTABLE suffix; plan spec asked for systemPrompt only, primary regression guard (toHaveBeenCalledWith) is unchanged and unambiguous.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -130,9 +132,10 @@ Recent decisions affecting current work:
 | Phase 75-shared-workspace-runtime-support P01 | 10min | 2 tasks | 19 files |
 | Phase 75-shared-workspace-runtime-support P02 | 14min | 2 tasks | 10 files |
 | Phase 75-shared-workspace-runtime-support P03 | 11min | 1 tasks | 1 files |
+| Phase 75-shared-workspace-runtime-support P04 | 8min | 2 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 75-03-PLAN.md (integration test green). Phase 75 done — 3/3 plans landed. Ready for verification + /gsd:transition to Phase 76.
+Stopped at: Completed 75-04-PLAN.md — gap closure. Truth #7 closed (memoryPath vs workspace for context-summary READ). Phase 75 has 4 plans landed; re-run /gsd:verify-phase 75 to mark fully VERIFIED.
 Resume file: None
