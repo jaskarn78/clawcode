@@ -9,6 +9,9 @@ import {
   computeBriefFingerprint,
 } from "../conversation-brief-cache.js";
 import * as briefModule from "../../memory/conversation-brief.js";
+// Phase 75 SHARED-02 — named import so the file-scoped loadLatestSummary mock
+// can be accessed via vi.mocked(loadLatestSummary) in the regression test below.
+import { loadLatestSummary } from "../../memory/context-summary.js";
 
 // Mock filesystem reads so buildSessionConfig doesn't hit disk
 vi.mock("node:fs/promises", () => ({
@@ -936,5 +939,48 @@ describe("buildSessionConfig — Phase 73 brief cache wiring", () => {
     // Second call also hits the assembler (no cache in play).
     await buildSessionConfig(config, deps);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Phase 75 SHARED-02 — shared-workspace session-resume context summary ────
+
+describe("buildSessionConfig — shared-workspace context summary resume (Phase 75 gap)", () => {
+  beforeEach(() => {
+    vi.mocked(loadLatestSummary).mockReset();
+    // Default: behave like the file-scoped mock (no persisted summary).
+    vi.mocked(loadLatestSummary).mockResolvedValue(undefined);
+  });
+
+  it("reads context-summary.md from memoryPath/memory (not workspace/memory) for a shared-workspace agent", async () => {
+    // Phase 75 VERIFICATION Truth #7 regression: the WRITE path
+    // (AgentMemoryManager.saveContextSummary) targets memoryPath/memory/,
+    // so the READ path (buildSessionConfig -> loadLatestSummary) must
+    // target the SAME directory. Prior to the fix this test fails
+    // because session-config.ts:318 passed config.workspace.
+    const config = makeConfig({
+      workspace: "/shared/fin",
+      memoryPath: "/shared/fin/fin-A",
+    });
+
+    // Path-aware mock: returns the sentinel only when called with the
+    // memoryPath-derived memory dir. If session-config.ts passes the
+    // workspace-derived dir (/shared/fin/memory), the mock returns
+    // undefined and the assertion below fails — which is exactly the
+    // RED state on master.
+    vi.mocked(loadLatestSummary).mockImplementation(async (dir: string) => {
+      if (dir === "/shared/fin/fin-A/memory") {
+        return "SHARED_WORKSPACE_RESUME_MARKER";
+      }
+      return undefined;
+    });
+
+    const result = await buildSessionConfig(config, makeDeps());
+
+    // The loader MUST have been called with the memoryPath-derived dir.
+    expect(vi.mocked(loadLatestSummary)).toHaveBeenCalledWith(
+      "/shared/fin/fin-A/memory",
+    );
+    // And the summary content must have flowed into the assembled prompt.
+    expect(result.systemPrompt).toContain("SHARED_WORKSPACE_RESUME_MARKER");
   });
 });
