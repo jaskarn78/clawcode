@@ -113,7 +113,7 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
 - [x] **Phase 71: Web Search MCP** — Brave-primary (Exa optional) auto-injected MCP server with `web_search` + `web_fetch_url` tools joining the v1.7 intra-turn idempotent cache whitelist. (completed 2026-04-19)
 - [x] **Phase 72: Image Generation MCP** — Auto-injected MCP server with MiniMax / OpenAI Images / fal.ai backends selectable by per-agent config, `image_generate` + `image_edit` tools, workspace-persisted output, and `clawcode costs` integration. (completed 2026-04-19)
 - [x] **Phase 73: OpenClaw endpoint latency** — TTFB instrumentation + persistent per-agent `streamInput()` subprocess + conversation-brief cache + tuned readiness wait. Achieved sub-2s TTFB (1.67-1.87s measured, 3.7-4.2× speedup vs ~7s baseline). (completed 2026-04-19)
-- [ ] **Phase 74: Seamless OpenClaw backend** — caller-provided agent config on `/v1/chat/completions`. OpenClaw-side agents (their own SOUL/tools/model/memory/workspace) use ClawCode as a rendering backend without pre-registration on ClawCode. Research first.
+- [x] **Phase 74: Seamless OpenClaw backend** — caller-provided agent config on `/v1/chat/completions`. OpenClaw-side agents (their own SOUL/tools/model/memory/workspace) use ClawCode as a rendering backend without pre-registration on ClawCode. Research first. (completed 2026-04-20)
 
 ## Phase Details
 
@@ -199,8 +199,8 @@ Phases 64-68 delivered: ConversationStore schema + lifecycle (per-agent sessions
   4. Isolation: caller-provided configs cannot escape into ClawCode's own agents' workspaces, memory stores, or MCP tool surface. Security audit passes — no path traversal via workspace, no SOUL-as-instruction-injection into the ClawCode kernel.
   5. OpenClaw side needs ONE provider entry with ONE bearer key (multi-agent key from Phase 73) — all OpenClaw-side agents route through it; the `model:` field carries the identifier OpenClaw expects back.
 **Plans**: 2 plans
-  - [ ] 74-01-PLAN.md — Caller-identity routing + transient-session cache + OpenClawTemplateDriver + server.ts routing branch (BACKEND-01, BACKEND-02 infrastructure, BACKEND-05)
-  - [ ] 74-02-PLAN.md — `security.denyScopeAll` gate + UsageTracker caller-attributed cost rows + shutdown drain + smoke + README (BACKEND-02 E2E, BACKEND-03, BACKEND-04)
+  - [x] 74-01-PLAN.md — Caller-identity routing + transient-session cache + OpenClawTemplateDriver + server.ts routing branch (BACKEND-01, BACKEND-02 infrastructure, BACKEND-05)
+  - [x] 74-02-PLAN.md — `security.denyScopeAll` gate + UsageTracker caller-attributed cost rows + shutdown drain + smoke + README (BACKEND-02 E2E, BACKEND-03, BACKEND-04)
 **UI hint**: no
 
 ## Progress

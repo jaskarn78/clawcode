@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Open Endpoint + Eyes & Hands
 status: Milestone complete
-stopped_at: Completed 74-01-PLAN.md — transient session cache + OpenClawTemplateDriver + caller-identity routing. 3 atomic commits on master (NOT pushed). 66 new tests + 228 Phase 69 regressions all green; tsc at 29 baseline; 3214 pass / 8 tolerable baseline failures.
-last_updated: "2026-04-19T23:39:04.344Z"
+stopped_at: Completed 74-02-PLAN.md — security.denyScopeAll + cost attribution + shutdown drain + smoke + README. 3 atomic commits on master (NOT pushed). 27 new tests + full regression green; tsc at 29 baseline; 3241 pass / 8 tolerable baseline failures. Phase 74 milestone complete.
+last_updated: "2026-04-20T00:01:58.673Z"
 last_activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -104,6 +104,11 @@ Recent decisions affecting current work:
 - [Phase 74]: Phase 74-01: CLAWCODE_TRANSIENT_CWD fixed at module scope (~/.clawcode/manager/transient); driver never reads caller workspace/cwd/metadata (Pitfall 4 guard, grep-enforced)
 - [Phase 74]: Phase 74-01: TransientSessionCache LRU+TTL with close-on-evict — handle.close() errors caught + logged; cache invariants hold under SDK subprocess crash
 - [Phase 74]: Phase 74-01: dynamic SDK import fallback in endpoint-bootstrap keeps daemon.ts zero-touch for Plan 01; deps.sdk stays optional; missing SDK → 501 template_driver_disabled
+- [Phase 74]: Phase 74-02: denyScopeAll gate placement inside scope='all' branch (not pre-branch) — colocates with other scope-resolution logic; pinned-key mismatch stays agent_mismatch, openclaw-template branch bypasses entirely
+- [Phase 74]: Phase 74-02: getAgentConfig returns narrow structural subset, not full ResolvedAgentConfig — keeps server.ts hermetic from src/config; endpoint-bootstrap narrows at call site
+- [Phase 74]: Phase 74-02: Fleet-anchor UsageTracker lookup for transient turns — agent column ('openclaw:<slug>') keeps rows distinguishable; zero schema change required; Pitfall 8 non-fatal on missing tracker
+- [Phase 74]: Phase 74-02: Tier encoded in model column NEVER agent column — CONTEXT D-04 confirmed: one cost row per caller, not per (caller, tier); agent='openclaw:<slug>' never contains tier suffix
+- [Phase 74]: Phase 74-02: Shutdown drain order — transientCache.closeAll() BEFORE server.close() — in-flight SDK subprocesses abort cleanly before socket yanking; extends SessionManager.drain pattern from quick task 260419-q2z
 
 ### Roadmap Evolution
 
@@ -146,9 +151,10 @@ None yet.
 | Phase 72-image-generation-mcp P01 | 32min | 3 tasks | 20 files |
 | Phase 72-image-generation-mcp P02 | 24 min | 2 tasks | 16 files |
 | Phase 74 P01 | 22min | 3 tasks | 10 files |
+| Phase 74 P02 | 19min | 3 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-19 - Completed quick task 260419-q2z (registry atomic write + repair CLI + short-session summarizer + graceful shutdown drain)
-Stopped at: Completed 74-01-PLAN.md — transient session cache + OpenClawTemplateDriver + caller-identity routing. 3 atomic commits on master (NOT pushed). 66 new tests + 228 Phase 69 regressions all green; tsc at 29 baseline; 3214 pass / 8 tolerable baseline failures.
+Stopped at: Completed 74-02-PLAN.md — security.denyScopeAll + cost attribution + shutdown drain + smoke + README. 3 atomic commits on master (NOT pushed). 27 new tests + full regression green; tsc at 29 baseline; 3241 pass / 8 tolerable baseline failures. Phase 74 milestone complete.
 Resume file: None
