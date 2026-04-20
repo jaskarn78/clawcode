@@ -249,6 +249,23 @@ export async function startOpenAiEndpoint(
         sdk: templateSdk,
         cache: transientCache,
         log,
+        // Phase 74 hotfix — without ensureCwd the SDK subprocess tries to
+        // chdir to a non-existent directory and dies with a misleading "Claude
+        // Code executable not found" error. Pre-create the transient cwd
+        // idempotently on every first-handle-materialization.
+        ensureCwd: (p) => {
+          try {
+            // Lazy require so test hermeticity stays intact.
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const fs = require("node:fs") as typeof import("node:fs");
+            fs.mkdirSync(p, { recursive: true });
+          } catch (err) {
+            log.warn(
+              { err: (err as Error).message, path: p },
+              "ensureCwd: mkdir failed (non-fatal, SDK will surface spawn error)",
+            );
+          }
+        },
         // Phase 74 Plan 02 — caller-attributed cost rows. Every completed
         // transient turn fires this callback; we route UsageTracker.record
         // with agent='openclaw:<slug>' (tier encoded in the model field,
