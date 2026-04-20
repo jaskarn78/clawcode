@@ -74,6 +74,16 @@ import { copyAgentWorkspace } from "../../migration/workspace-copier.js";
 import { archiveOpenclawSessions } from "../../migration/session-archiver.js";
 import { loadConfig } from "../../config/loader.js";
 import type { OpenclawSourceEntry } from "../../migration/openclaw-config-reader.js";
+import {
+  verifyAgent as verifyAgentModule,
+  computeVerifyExitCode,
+  type VerifyCheckResult,
+} from "../../migration/verifier.js";
+import {
+  rollbackAgent as rollbackAgentModule,
+  SourceCorruptionError,
+  type RollbackResult,
+} from "../../migration/rollbacker.js";
 
 /**
  * Phase 77-03 literal: was printed to stderr on the all-guards-pass path of
@@ -759,6 +769,224 @@ function extractPerAgentMcpNames(
   return Object.keys(mcp as Record<string, unknown>);
 }
 
+// --- Phase 81 Plan 02 — verify + rollback action handlers -----------
+
+/**
+ * Status emoji literals per 81-CONTEXT — load-bearing, grep-verifiable.
+ * Do NOT substitute ASCII equivalents; the CONTEXT pins these exact
+ * Unicode codepoints (✅ U+2705, ❌ U+274C, ⏭ U+23ED) and downstream
+ * tests grep for them verbatim.
+ */
+export const VERIFY_STATUS_EMOJI = Object.freeze({
+  pass: "✅",
+  fail: "❌",
+  skip: "⏭",
+} as const);
+
+/**
+ * Pure formatter — renders verify results as an aligned-column table
+ * with one "Agent: <name>" block per agent, separated by a blank line.
+ * Mirrors the padEnd column-width calculation used by formatListTable
+ * (Phase 76) and formatCostsTable (Phase 74) — no cli-table3 dep.
+ */
+export function formatVerifyTable(
+  perAgent: readonly {
+    readonly agent: string;
+    readonly results: readonly VerifyCheckResult[];
+  }[],
+): string {
+  if (perAgent.length === 0) return "No agents to verify.";
+  const blocks: string[] = [];
+  for (const { agent, results } of perAgent) {
+    const header = `Agent: ${agent}`;
+    const colHead = ["Check", "Status", "Detail"];
+    const rows: string[][] = results.map((r) => [
+      r.check,
+      VERIFY_STATUS_EMOJI[r.status],
+      r.detail,
+    ]);
+    const all: string[][] = [colHead, ...rows];
+    // Column widths: max of header + any cell in that column. Emoji width
+    // is the JS string-length of the single codepoint; pad matches the
+    // visual alignment on monospace terminals well enough for forensic
+    // scanning (CLI isn't a UI — we optimize for grep-verifiable output,
+    // not perfect Unicode monospace rendering).
+    const widths = colHead.map((_, c) =>
+      Math.max(...all.map((row) => (row[c] ?? "").length)),
+    );
+    const fmt = (row: readonly string[]): string =>
+      row.map((cell, c) => cell.padEnd(widths[c]!)).join(" | ");
+    const sep = widths.map((w) => "-".repeat(w)).join("-|-");
+    blocks.push([header, fmt(colHead), sep, ...rows.map(fmt)].join("\n"));
+  }
+  return blocks.join("\n\n");
+}
+
+/**
+ * `clawcode migrate openclaw verify [agent]` action handler.
+ *
+ * Without agent: iterates every agent whose latest ledger status is one
+ * of {migrated, verified, rolled-back}. Agents that are `pending` (never
+ * successfully applied) or absent from the ledger entirely are skipped
+ * — verify has nothing to witness for those.
+ *
+ * With agent: validates the name against the OpenClaw inventory (not the
+ * ledger — an operator may call verify before the first apply, so the
+ * ledger may not yet have a row for the agent). Unknown names fail fast
+ * with exit 1 and NO ledger side-effect.
+ *
+ * Per-agent: calls migrateOpenclawHandlers.verifyAgent (indirected through
+ * the dispatch holder so tests can mock), appends ONE ledger row per
+ * agent based on the aggregate pass/fail result, and contributes a table
+ * block to the final stdout emission. Exit code is 0 iff ALL agents pass
+ * (any fail → 1).
+ *
+ * Env-var plumbing:
+ *   CLAWCODE_DISCORD_TOKEN → discordToken (Discord REST bearer)
+ *   CLAWCODE_VERIFY_OFFLINE === "true" → offline=true (skip Discord call)
+ */
+export async function runVerifyAction(opts: {
+  agent?: string;
+}): Promise<number> {
+  const paths = resolvePaths();
+
+  // Which agents to verify?
+  let agents: string[];
+  if (opts.agent) {
+    const inventory = await readOpenclawInventory(paths.openclawJson);
+    const known = new Set(inventory.agents.map((a) => a.id));
+    if (!known.has(opts.agent)) {
+      cliError(
+        `Unknown agent: ${opts.agent}. Run \`clawcode migrate openclaw list\` to see migrated agents.`,
+      );
+      return 1;
+    }
+    agents = [opts.agent];
+  } else {
+    const statusMap = await latestStatusByAgent(paths.ledgerPath);
+    agents = [];
+    for (const [name, status] of statusMap.entries()) {
+      if (
+        status === "migrated" ||
+        status === "verified" ||
+        status === "rolled-back"
+      ) {
+        agents.push(name);
+      }
+    }
+    agents.sort();
+  }
+
+  const discordToken = process.env.CLAWCODE_DISCORD_TOKEN;
+  const offline = process.env.CLAWCODE_VERIFY_OFFLINE === "true";
+
+  const perAgent: Array<{
+    agent: string;
+    results: readonly VerifyCheckResult[];
+  }> = [];
+  let aggregateExit: 0 | 1 = 0;
+
+  for (const agentName of agents) {
+    const results = await migrateOpenclawHandlers.verifyAgent({
+      agentName,
+      clawcodeConfigPath: paths.clawcodeConfigPath,
+      openclawRoot: paths.openclawRoot,
+      openclawMemoryDir: paths.openclawMemoryDir,
+      discordToken,
+      offline,
+    });
+    perAgent.push({ agent: agentName, results });
+    const agentExit = computeVerifyExitCode(results);
+    if (agentExit !== 0) aggregateExit = 1;
+
+    // Per-agent ledger witness — verify:complete (allow) OR verify:fail (refuse).
+    if (agentExit === 0) {
+      await appendRow(paths.ledgerPath, {
+        ts: new Date().toISOString(),
+        action: "verify",
+        agent: agentName,
+        status: "verified",
+        source_hash: "n/a",
+        step: "verify:complete",
+        outcome: "allow",
+        notes: `${results.length} checks — all pass/skip`,
+      });
+    } else {
+      const fails = results
+        .filter((r) => r.status === "fail")
+        .map((r) => r.check);
+      await appendRow(paths.ledgerPath, {
+        ts: new Date().toISOString(),
+        action: "verify",
+        agent: agentName,
+        status: "pending",
+        source_hash: "n/a",
+        step: "verify:fail",
+        outcome: "refuse",
+        notes: `fail: ${fails.join(", ")}`,
+      });
+    }
+  }
+
+  cliLog(formatVerifyTable(perAgent));
+  return aggregateExit;
+}
+
+/**
+ * `clawcode migrate openclaw rollback <agent>` action handler.
+ *
+ * Per-agent only — no batch mode (81-CONTEXT: "Per-agent only. No batch
+ * mode.") Wraps Plan 01's rollbackAgent module. Three outcomes:
+ *   - rolled-back: print success line + removedPaths as dim bullet list;
+ *     exit 0. Ledger rows written by rollbackAgent itself.
+ *   - not-found: agent absent from resolved config; cliError + exit 1.
+ *   - SourceCorruptionError thrown: cliError with mismatches list + the
+ *     literal "source tree was modified during rollback" copy; exit 1.
+ *     Refuse ledger row already written by rollbackAgent before throw.
+ */
+export async function runRollbackAction(opts: {
+  agent: string;
+}): Promise<number> {
+  const paths = resolvePaths();
+  try {
+    const result: RollbackResult = await migrateOpenclawHandlers.rollbackAgent({
+      agentName: opts.agent,
+      clawcodeConfigPath: paths.clawcodeConfigPath,
+      openclawRoot: paths.openclawRoot,
+      openclawMemoryDir: paths.openclawMemoryDir,
+      ledgerPath: paths.ledgerPath,
+    });
+    if (result.outcome === "not-found") {
+      cliError(
+        red(`✗ rollback: agent '${opts.agent}' not found in clawcode.yaml`),
+      );
+      return 1;
+    }
+    // outcome === "rolled-back"
+    cliLog(
+      green(
+        `✓ rolled back ${opts.agent}: removed ${result.removedPaths.length} path(s)`,
+      ),
+    );
+    for (const p of result.removedPaths) cliLog(dim(`  ${p}`));
+    return 0;
+  } catch (err) {
+    if (err instanceof SourceCorruptionError) {
+      cliError(
+        red(
+          `✗ rollback ABORTED for ${opts.agent}: source tree was modified during rollback`,
+        ),
+      );
+      cliError(red(`  mismatches: ${err.mismatches.join(", ")}`));
+      cliError(
+        "Source invariant violated — ~/.openclaw/ must remain byte-identical.",
+      );
+      return 1;
+    }
+    throw err;
+  }
+}
+
 // --- Commander wiring (nested: `migrate openclaw <sub>`) -------------
 
 /**
@@ -782,11 +1010,38 @@ export const migrateOpenclawHandlers: {
   // translate block indirects through the holder so ESM named-import
   // bindings don't block the swap.
   translateAgentMemories: typeof translateAgentMemories;
+  // Phase 81 Plan 02 — tests swap these properties to intercept verify/
+  // rollback without exercising the real disk+network modules. The holder
+  // extension mirrors the Phase 80 translator pattern.
+  verifyAgent: typeof verifyAgentModule;
+  rollbackAgent: typeof rollbackAgentModule;
+  // Phase 81 Plan 02 — Commander wiring dispatches through these fields
+  // so tests can mock the action handlers without rebinding module
+  // namespace exports (ESM frozen bindings). Assigned post-definition
+  // below because the fns are declared later in the file.
+  runVerifyAction: (opts: { agent?: string }) => Promise<number>;
+  runRollbackAction: (opts: { agent: string }) => Promise<number>;
 } = {
   runPlanAction,
   runApplyAction,
   translateAgentMemories,
+  verifyAgent: verifyAgentModule,
+  rollbackAgent: rollbackAgentModule,
+  // Placeholders — late-bound to runVerifyAction / runRollbackAction once
+  // those functions are defined. The intermediate `async () => 0` is never
+  // invoked in production (late-bind fires at module load).
+  runVerifyAction: async () => 0,
+  runRollbackAction: async () => 0,
 };
+
+// Late-bind Phase 81 Plan 02 actions into the dispatch holder. The holder
+// was initialized above with harmless placeholder values because the
+// action fns (runVerifyAction / runRollbackAction) are defined earlier
+// in the file but the HOLDER itself sits below them for historical
+// reasons (Phase 76 layout). Production code + tests both go through the
+// holder, and tests can swap the fields freely without namespace rebind.
+migrateOpenclawHandlers.runVerifyAction = runVerifyAction;
+migrateOpenclawHandlers.runRollbackAction = runRollbackAction;
 
 export function registerMigrateOpenclawCommand(program: Command): void {
   const migrate = program.command("migrate").description("Migration commands");
@@ -870,6 +1125,40 @@ export function registerMigrateOpenclawCommand(program: Command): void {
           only: opts.only,
           modelMap,
         });
+        if (code !== 0) process.exit(code);
+      } catch (err) {
+        cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  // Phase 81 Plan 02 — verify [agent]
+  openclaw
+    .command("verify")
+    .argument("[agent]", "Verify a single migrated agent (omit for all)")
+    .description(
+      "Run 4 post-migration checks (workspace-files/memory-count/discord-reachable/daemon-parse)",
+    )
+    .action(async (agent: string | undefined) => {
+      try {
+        const code = await migrateOpenclawHandlers.runVerifyAction({ agent });
+        if (code !== 0) process.exit(code);
+      } catch (err) {
+        cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  // Phase 81 Plan 02 — rollback <agent>
+  openclaw
+    .command("rollback")
+    .argument("<agent>", "Agent to roll back (per-agent only, no batch mode)")
+    .description(
+      "Remove agent from clawcode.yaml + delete its target workspace/memory; source ~/.openclaw/ untouched",
+    )
+    .action(async (agent: string) => {
+      try {
+        const code = await migrateOpenclawHandlers.runRollbackAction({ agent });
         if (code !== 0) process.exit(code);
       } catch (err) {
         cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);

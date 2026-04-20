@@ -69,6 +69,7 @@ import {
   readFileSync,
   statSync,
   writeFileSync,
+  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as pathResolve } from "node:path";
@@ -948,7 +949,8 @@ describe("Phase 81 Plan 02 — verify + rollback CLI", () => {
     expect(code).toBe(0);
     // Should be called 4 times — everything except the pending agent
     expect(mockVerify).toHaveBeenCalledTimes(4);
-    const agentsVerified = mockVerify.mock.calls.map((c) => (c[0] as { agentName: string }).agentName);
+    const calls = mockVerify.mock.calls as unknown as Array<[{ agentName: string }]>;
+    const agentsVerified = calls.map((c) => c[0].agentName);
     expect(agentsVerified).toContain("aa");
     expect(agentsVerified).toContain("bb");
     expect(agentsVerified).toContain("dd");
@@ -968,7 +970,8 @@ describe("Phase 81 Plan 02 — verify + rollback CLI", () => {
     process.env.CLAWCODE_DISCORD_TOKEN = "test-bot-token-123";
     await mod.runVerifyAction({ agent: "general" });
     expect(mockVerify).toHaveBeenCalledTimes(1);
-    const passedArgs = mockVerify.mock.calls[0]![0] as { discordToken?: string };
+    const calls = mockVerify.mock.calls as unknown as Array<[{ discordToken?: string }]>;
+    const passedArgs = calls[0]![0];
     expect(passedArgs.discordToken).toBe("test-bot-token-123");
   });
 
@@ -981,23 +984,22 @@ describe("Phase 81 Plan 02 — verify + rollback CLI", () => {
       verifyAgent: typeof mockVerify;
     }).verifyAgent = mockVerify;
 
+    const typedCalls = () => mockVerify.mock.calls as unknown as Array<[{ offline?: boolean }]>;
+
     process.env.CLAWCODE_VERIFY_OFFLINE = "true";
     await mod.runVerifyAction({ agent: "general" });
-    const passedArgs1 = mockVerify.mock.calls[0]![0] as { offline?: boolean };
-    expect(passedArgs1.offline).toBe(true);
+    expect(typedCalls()[0]![0].offline).toBe(true);
 
     // Any other value → false
     mockVerify.mockClear();
     process.env.CLAWCODE_VERIFY_OFFLINE = "1";
     await mod.runVerifyAction({ agent: "general" });
-    const passedArgs2 = mockVerify.mock.calls[0]![0] as { offline?: boolean };
-    expect(passedArgs2.offline).toBe(false);
+    expect(typedCalls()[0]![0].offline).toBe(false);
 
     mockVerify.mockClear();
     delete process.env.CLAWCODE_VERIFY_OFFLINE;
     await mod.runVerifyAction({ agent: "general" });
-    const passedArgs3 = mockVerify.mock.calls[0]![0] as { offline?: boolean };
-    expect(passedArgs3.offline).toBe(false);
+    expect(typedCalls()[0]![0].offline).toBe(false);
   });
 
   // --- runRollbackAction tests (Tests 12-14) --------------------------
