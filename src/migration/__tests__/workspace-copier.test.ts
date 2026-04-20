@@ -31,7 +31,7 @@ import {
   lstat,
   readlink,
 } from "node:fs/promises";
-import { existsSync, randomBytes } from "node:fs";
+import { existsSync } from "node:fs";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
