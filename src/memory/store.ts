@@ -19,6 +19,7 @@ type PreparedStatements = {
   readonly insertMemory: Statement;
   readonly insertVec: Statement;
   readonly getById: Statement;
+  readonly getByOriginId: Statement;
   readonly updateAccess: Statement;
   readonly deleteMemory: Statement;
   readonly deleteVec: Statement;
@@ -99,8 +100,15 @@ export class MemoryStore {
    */
   insert(input: CreateMemoryInput, embedding: Float32Array): MemoryEntry {
     try {
-      // Dedup check: if enabled and not skipped, check for near-duplicates
-      if (this.dedupConfig.enabled && !input.skipDedup) {
+      // Phase 80 MEM-02 — origin_id path skips dedup entirely. Idempotency
+      // by hash is the contract; content-similarity merging is a different
+      // semantic that does not apply to migrated imports.
+      const hasOriginId =
+        typeof input.origin_id === "string" && input.origin_id.length > 0;
+
+      // Existing dedup path (preserved verbatim) — only runs when origin_id
+      // is absent AND dedupConfig.enabled AND !skipDedup.
+      if (!hasOriginId && this.dedupConfig.enabled && !input.skipDedup) {
         const dedupResult = checkForDuplicate(embedding, this.db, {
           similarityThreshold: this.dedupConfig.similarityThreshold,
         });
@@ -155,9 +163,11 @@ export class MemoryStore {
         input.sourceTurnIds && input.sourceTurnIds.length > 0
           ? JSON.stringify([...input.sourceTurnIds])
           : null;
+      const originIdOrNull = hasOriginId ? (input.origin_id as string) : null;
 
+      let inserted = true;
       this.db.transaction(() => {
-        this.stmts.insertMemory.run(
+        const result = this.stmts.insertMemory.run(
           id,
           input.content,
           input.source,
@@ -167,7 +177,26 @@ export class MemoryStore {
           now,
           now,
           sourceTurnIdsJson,
+          originIdOrNull,
         );
+        if (result.changes === 0) {
+          if (!hasOriginId) {
+            // INSERT OR IGNORE suppresses CHECK-constraint failures too
+            // (e.g., invalid `source` value). Without an origin_id this is
+            // NEVER a legitimate idempotent skip — re-raise to preserve the
+            // pre-existing validation contract (461 tests depend on invalid
+            // source throwing).
+            throw new MemoryError(
+              `INSERT suppressed with no origin_id — likely constraint violation (source="${input.source}")`,
+              this.dbPath,
+            );
+          }
+          // origin_id collision — INSERT OR IGNORE fired. Do NOT write
+          // vec_memories and do NOT extract wikilinks for this run (they
+          // were already extracted on the original insert).
+          inserted = false;
+          return;
+        }
         this.stmts.insertVec.run(id, embedding);
 
         // Extract wikilinks and create edges to existing targets
@@ -179,6 +208,22 @@ export class MemoryStore {
           }
         }
       })();
+
+      if (!inserted && hasOriginId) {
+        // Idempotent skip — return the existing row. Callers (Plan 02
+        // translator) compare returned entry.createdAt against a
+        // "this run" marker to classify upserted vs skipped for the CLI.
+        const existing = this.stmts.getByOriginId.get(input.origin_id) as
+          | MemoryRow
+          | undefined;
+        if (!existing) {
+          throw new MemoryError(
+            `origin_id ${input.origin_id} collision but SELECT returned no row`,
+            this.dbPath,
+          );
+        }
+        return rowToEntry(existing);
+      }
 
       // Eager auto-link: discover similar memories and create edges
       try {
@@ -866,9 +911,13 @@ export class MemoryStore {
 
   private prepareStatements(): PreparedStatements {
     return {
+      // Phase 80 MEM-02 — INSERT OR IGNORE. Safe even when origin_id is NULL
+      // because SQLite UNIQUE on a nullable column does not match NULL=NULL
+      // (and the partial UNIQUE index excludes NULLs entirely). The IGNORE
+      // clause is inert on the no-origin_id path, preserving backward-compat.
       insertMemory: this.db.prepare(`
-        INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier, source_turn_ids)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'warm', ?)
+        INSERT OR IGNORE INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier, source_turn_ids, origin_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'warm', ?, ?)
       `),
       insertVec: this.db.prepare(`
         INSERT INTO vec_memories (memory_id, embedding)
@@ -878,6 +927,12 @@ export class MemoryStore {
         SELECT id, content, source, importance, access_count, tags,
                created_at, updated_at, accessed_at, tier, source_turn_ids
         FROM memories WHERE id = ?
+      `),
+      // Phase 80 MEM-02 — origin_id lookup for idempotent collision read-back.
+      getByOriginId: this.db.prepare(`
+        SELECT id, content, source, importance, access_count, tags,
+               created_at, updated_at, accessed_at, tier, source_turn_ids
+        FROM memories WHERE origin_id = ?
       `),
       updateAccess: this.db.prepare(`
         UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?
