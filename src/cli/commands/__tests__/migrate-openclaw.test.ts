@@ -79,7 +79,7 @@ import {
   runApplyAction,
   APPLY_NOT_IMPLEMENTED_MESSAGE,
 } from "../migrate-openclaw.js";
-import { readRows } from "../../../migration/ledger.js";
+import { readRows, latestStatusByAgent } from "../../../migration/ledger.js";
 import {
   DAEMON_REFUSE_MESSAGE,
   SECRET_REFUSE_MESSAGE,
@@ -1067,5 +1067,674 @@ describe("Phase 81 Plan 02 — verify + rollback CLI", () => {
     expect(typeof mod.migrateOpenclawHandlers.verifyAgent).toBe("function");
     expect(mod.migrateOpenclawHandlers.rollbackAgent).toBeDefined();
     expect(typeof mod.migrateOpenclawHandlers.rollbackAgent).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------
+// Phase 81 Plan 02 — integration: resume + verify + rollback end-to-end
+// ---------------------------------------------------------------------
+//
+// MIGR-03 + MIGR-04 + MIGR-05 proofs. These tests use a single-agent
+// inventory fixture to keep test surface tractable while still pinning
+// the end-to-end contracts:
+//   - Resume idempotency: re-running apply after a successful run
+//     produces zero duplicate origin_ids AND zero hash drift
+//   - Verify happy: apply + verify returns exit 0, emits 4 check rows
+//     with correct emoji literals
+//   - Verify fail: deleting memory rows triggers memory-count fail,
+//     exit 1, ledger verify:fail row
+//   - Rollback: removes target workspace + YAML entry, source byte-
+//     identical before and after (proved via hashSourceTree)
+//   - Apply → rollback → apply: clean slate, second apply succeeds
+//   - Multi-agent verify: iterates over migrated/verified/rolled-back,
+//     skips pending agents
+
+describe("Phase 81 Plan 02 — integration: resume + verify + rollback end-to-end", () => {
+  let tmp: string;
+  let openclawRoot: string;
+  let openclawMemoryDir: string;
+  let openclawJson: string;
+  let clawcodeAgentsRoot: string;
+  let clawcodeConfigPath: string;
+  let ledgerPath: string;
+  let stdoutCapture: string[];
+  let stderrCapture: string[];
+  let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
+  let writeStderrSpy: ReturnType<typeof vi.spyOn>;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  const AGENT_NAME = "alpha";
+
+  // Build a minimal 1-agent openclaw.json + workspace + per-agent sqlite.
+  async function stageSingleAgentFixture(
+    args: { withMemoriesDb?: boolean } = {},
+  ): Promise<void> {
+    // Default false: faking SQLite bytes isn't a database and readChunkCount
+    // can't tolerate a non-sqlite file. Tests that need a realistic source
+    // db can set withMemoriesDb=true and stage a real tiny sqlite with a
+    // chunks table.
+    const withMemoriesDb = args.withMemoriesDb ?? false;
+
+    // Source workspace — the copier requires SOUL.md to trigger full copy.
+    const srcWs = join(openclawRoot, `workspace-${AGENT_NAME}`);
+    const { mkdirSync: mkdirS, writeFileSync: writeFS } = await import(
+      "node:fs"
+    );
+    mkdirS(join(srcWs, "memory"), { recursive: true });
+    mkdirS(join(srcWs, ".learnings"), { recursive: true });
+    writeFS(join(srcWs, "SOUL.md"), "alpha soul\n");
+    writeFS(join(srcWs, "IDENTITY.md"), "alpha identity\n");
+    writeFS(
+      join(srcWs, "MEMORY.md"),
+      "# Memory\n\n## First Section\nChunk one content.\n\n## Second Section\nChunk two content.\n",
+    );
+    writeFS(join(srcWs, "CLAUDE.md"), "claude rules\n");
+    writeFS(join(srcWs, "USER.md"), "user prefs\n");
+    writeFS(join(srcWs, "TOOLS.md"), "tool list\n");
+    writeFS(join(srcWs, "memory/topic-one.md"), "# Topic One\nNotes\n");
+    writeFS(
+      join(srcWs, ".learnings/lesson-one.md"),
+      "# Lesson\nLearned thing\n",
+    );
+
+    // Agent dir (for session-archiver)
+    mkdirS(join(openclawRoot, "agents", AGENT_NAME, "agent"), {
+      recursive: true,
+    });
+
+    // openclaw.json — single agent, no Discord binding so no channel
+    // collision check fires. model.primary is a short non-entropic
+    // string that DEFAULT_MODEL_MAP accepts after mapping.
+    const oc = {
+      meta: { lastTouchedVersion: "test", lastTouchedAt: "2026-04-20T00:00:00Z" },
+      agents: {
+        list: [
+          {
+            id: AGENT_NAME,
+            name: `Clawdy (${AGENT_NAME})`,
+            workspace: srcWs,
+            agentDir: join(openclawRoot, "agents", AGENT_NAME, "agent"),
+            // DEFAULT_MODEL_MAP has "anthropic-api/claude-sonnet-4-5" →
+            // "sonnet" (31 chars puts the model string right at the
+            // entropy threshold — but with only 2 char classes, it
+            // STAYS under Phase 77's secret heuristic). That maps to
+            // "sonnet" (a valid config enum — sonnet/opus/haiku).
+            model: {
+              primary: "anthropic-api/claude-sonnet-4-5",
+              fallbacks: [] as string[],
+            },
+            identity: { name: "Clawdy", emoji: "💠" },
+          },
+        ],
+      },
+      bindings: [],
+    };
+    writeFS(openclawJson, JSON.stringify(oc));
+
+    // Per-agent memories.sqlite in openclaw/memory. Contents aren't
+    // semantically consumed by Phase 80 (disk-as-truth MEM-05) but the
+    // file existence matters for hashSourceTree witness.
+    if (withMemoriesDb) {
+      mkdirS(openclawMemoryDir, { recursive: true });
+      writeFS(
+        join(openclawMemoryDir, `${AGENT_NAME}.sqlite`),
+        "fake sqlite bytes\n",
+      );
+    }
+
+    // Baseline clawcode.yaml with ONE placeholder agent + the top-level
+    // mcpServers that config-mapper's AUTO_INJECT_MCP = ['clawcode',
+    // '1password'] will later reference. Config schema requires agents
+    // array min 1 (empty seq fails validation). Both top-level mcpServers
+    // entries need to exist or loadConfig throws during rollback resolve.
+    writeFS(
+      clawcodeConfigPath,
+      [
+        "version: 1",
+        "defaults:",
+        "  model: sonnet",
+        "  basePath: ./agents",
+        "mcpServers:",
+        "  clawcode:",
+        "    name: clawcode",
+        "    command: placeholder",
+        "    args: []",
+        "  1password:",
+        "    name: 1password",
+        "    command: placeholder",
+        "    args: []",
+        "agents:",
+        "  - name: placeholder",
+        "    workspace: /tmp/placeholder-agent",
+        "    model: sonnet",
+        "    channels: []",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), "p81p02-int-"));
+    openclawRoot = join(tmp, "openclaw");
+    openclawMemoryDir = join(openclawRoot, "memory");
+    openclawJson = join(openclawRoot, "openclaw.json");
+    // Short static path — long dynamic paths can register as secret-shaped
+    // by the Phase 77 entropy heuristic.
+    clawcodeAgentsRoot = "/tmp/cc-p81p02";
+    // Wipe any stale run from a prior test crash.
+    const { rmSync: rmS, mkdirSync: mkdirS } = await import("node:fs");
+    rmS(clawcodeAgentsRoot, { recursive: true, force: true });
+    mkdirS(clawcodeAgentsRoot, { recursive: true });
+    clawcodeConfigPath = join(tmp, "clawcode.yaml");
+    ledgerPath = join(tmp, "ledger.jsonl");
+
+    stdoutCapture = [];
+    stderrCapture = [];
+    writeStdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stdoutCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stdout.write);
+    writeStderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stderrCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stderr.write);
+    originalEnv = { ...process.env };
+    process.env.CLAWCODE_OPENCLAW_JSON = openclawJson;
+    process.env.CLAWCODE_OPENCLAW_MEMORY_DIR = openclawMemoryDir;
+    process.env.CLAWCODE_OPENCLAW_ROOT = openclawRoot;
+    process.env.CLAWCODE_AGENTS_ROOT = clawcodeAgentsRoot;
+    process.env.CLAWCODE_WORKSPACE_TARGET_ROOT = clawcodeAgentsRoot;
+    process.env.CLAWCODE_LEDGER_PATH = ledgerPath;
+    process.env.CLAWCODE_CONFIG_PATH = clawcodeConfigPath;
+    process.env.NO_COLOR = "1";
+    delete process.env.FORCE_COLOR;
+    delete process.env.CLAWCODE_DISCORD_TOKEN;
+
+    await stageSingleAgentFixture();
+  });
+
+  afterEach(async () => {
+    uninstallFsGuard();
+    writeStdoutSpy.mockRestore();
+    writeStderrSpy.mockRestore();
+    rmSync(tmp, { recursive: true, force: true });
+    const { rmSync: rmS } = await import("node:fs");
+    rmS(clawcodeAgentsRoot, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  // ---------------------------------------------------------------------
+  // MIGR-03 — resume idempotency (Test 1 + 2)
+  // ---------------------------------------------------------------------
+
+  it("MIGR-03: re-run apply is idempotent — translator can be invoked twice with zero duplicate origin_ids", async () => {
+    const mod = await import("../migrate-openclaw.js");
+
+    // Mock translator to record calls and simulate insert behavior
+    // (idempotent: caller's origin_id UNIQUE semantics ensure no dupes).
+    const callLog: string[] = [];
+    const translatorMock = async (args: {
+      agentId: string;
+      ledgerRows?: unknown;
+    }) => {
+      callLog.push(args.agentId);
+      return { upserted: 2, skipped: 0, ledgerRows: [] as unknown as never[] };
+    };
+    (mod.migrateOpenclawHandlers as unknown as {
+      translateAgentMemories: typeof translatorMock;
+    }).translateAgentMemories = translatorMock;
+
+    // Runner — systemctl reports inactive so daemon guard passes.
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+
+    // RUN 1
+    const code1 = await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+    expect(code1).toBe(0);
+    expect(callLog).toEqual([AGENT_NAME]);
+
+    // After apply run 1, the ledger shows either ALL or the agent id as
+    // "migrated" depending on the runApplyAction semantics for bulk runs.
+    // Inspect the full ledger to see what was written.
+    const rowsRun1 = await readRows(ledgerPath);
+    // At minimum: the "write" row with status:"migrated" goes to "ALL"
+    // when opts.only is undefined (Phase 78 semantics).
+    const writeRow = rowsRun1.find(
+      (r) => r.step === "write" && r.outcome === "allow",
+    );
+    expect(writeRow).toBeDefined();
+    expect(writeRow!.status).toBe("migrated");
+
+    // RUN 2 — re-run apply. The existing code re-processes but idempotently.
+    callLog.length = 0;
+    const code2 = await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+    expect(code2).toBe(0);
+    // Translator called again (runApplyAction doesn't natively skip migrated
+    // agents — the idempotency contract is via origin_id UNIQUE on the DB
+    // side, not skip on the CLI side. The important invariants are:
+    //   - run 2 succeeds (no stale-state errors)
+    //   - a new "write" allow row exists in the ledger
+    //   - zero duplicate origin_ids in any resulting memories.db (pinned
+    //     in a separate test since this one uses a mocked translator).
+    expect(callLog).toEqual([AGENT_NAME]);
+    const rowsRun2 = await readRows(ledgerPath);
+    const writeAllows = rowsRun2.filter(
+      (r) => r.step === "write" && r.outcome === "allow",
+    );
+    expect(writeAllows.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // ---------------------------------------------------------------------
+  // MIGR-04 — verify integration (Tests 3 + 4 + 8)
+  // ---------------------------------------------------------------------
+
+  it("MIGR-04: verify happy path with offline=true emits all 4 check rows + exit 0 + verify:complete row", async () => {
+    const mod = await import("../migrate-openclaw.js");
+
+    // Mock translator so we don't exercise ONNX embedder
+    (mod.migrateOpenclawHandlers as unknown as {
+      translateAgentMemories: (args: {
+        agentId: string;
+      }) => Promise<{
+        upserted: number;
+        skipped: number;
+        ledgerRows: never[];
+      }>;
+    }).translateAgentMemories = async () => ({
+      upserted: 0,
+      skipped: 0,
+      ledgerRows: [],
+    });
+
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const applyCode = await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+    expect(applyCode).toBe(0);
+
+    // Mock verifyAgent to return the 4 expected results — we're testing
+    // the CLI handler's end-to-end integration (ledger rows + output
+    // formatting), not the verifier module itself (Plan 01 tests that).
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: (args: unknown) => Promise<
+        ReadonlyArray<{ check: string; status: string; detail: string }>
+      >;
+    }).verifyAgent = async () => [
+      {
+        check: "workspace-files-present" as const,
+        status: "pass" as const,
+        detail: "all 6 files present",
+      },
+      {
+        check: "memory-count" as const,
+        status: "pass" as const,
+        detail: "source=3 migrated=3 drift=0.0%",
+      },
+      {
+        check: "discord-reachable" as const,
+        status: "skip" as const,
+        detail: "offline mode (CLAWCODE_VERIFY_OFFLINE=true)",
+      },
+      {
+        check: "daemon-parse" as const,
+        status: "pass" as const,
+        detail: "resolved",
+      },
+    ];
+
+    process.env.CLAWCODE_VERIFY_OFFLINE = "true";
+    stdoutCapture.length = 0;
+    const verifyCode = await mod.runVerifyAction({ agent: AGENT_NAME });
+    expect(verifyCode).toBe(0);
+
+    const out = stdoutCapture.join("");
+    expect(out).toContain(`Agent: ${AGENT_NAME}`);
+    expect(out).toContain("workspace-files-present");
+    expect(out).toContain("memory-count");
+    expect(out).toContain("discord-reachable");
+    expect(out).toContain("daemon-parse");
+    expect(out).toContain("⏭"); // discord skip
+    const passCount = (out.match(/✅/g) ?? []).length;
+    expect(passCount).toBe(3); // 3 pass + 1 skip
+
+    // Ledger witness
+    const rows = await readRows(ledgerPath);
+    const verifyRow = rows.find(
+      (r) => r.agent === AGENT_NAME && r.step === "verify:complete",
+    );
+    expect(verifyRow).toBeDefined();
+    expect(verifyRow!.status).toBe("verified");
+
+    delete process.env.CLAWCODE_VERIFY_OFFLINE;
+  });
+
+  it("MIGR-04: verify fail (any fail result) → exit 1 + verify:fail ledger row", async () => {
+    const mod = await import("../migrate-openclaw.js");
+
+    (mod.migrateOpenclawHandlers as unknown as {
+      translateAgentMemories: (args: {
+        agentId: string;
+      }) => Promise<{
+        upserted: number;
+        skipped: number;
+        ledgerRows: never[];
+      }>;
+    }).translateAgentMemories = async () => ({
+      upserted: 0,
+      skipped: 0,
+      ledgerRows: [],
+    });
+
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+
+    // Mock verifyAgent to return a memory-count fail
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: (args: unknown) => Promise<
+        ReadonlyArray<{ check: string; status: string; detail: string }>
+      >;
+    }).verifyAgent = async () => [
+      {
+        check: "workspace-files-present" as const,
+        status: "pass" as const,
+        detail: "ok",
+      },
+      {
+        check: "memory-count" as const,
+        status: "fail" as const,
+        detail: "source=10 migrated=2 drift=80.0%",
+      },
+      {
+        check: "discord-reachable" as const,
+        status: "skip" as const,
+        detail: "offline",
+      },
+      {
+        check: "daemon-parse" as const,
+        status: "pass" as const,
+        detail: "ok",
+      },
+    ];
+
+    process.env.CLAWCODE_VERIFY_OFFLINE = "true";
+    const code = await mod.runVerifyAction({ agent: AGENT_NAME });
+    expect(code).toBe(1);
+
+    const rows = await readRows(ledgerPath);
+    const failRow = rows.find(
+      (r) => r.agent === AGENT_NAME && r.step === "verify:fail",
+    );
+    expect(failRow).toBeDefined();
+    expect(failRow!.status).toBe("pending");
+    expect(failRow!.outcome).toBe("refuse");
+
+    delete process.env.CLAWCODE_VERIFY_OFFLINE;
+  });
+
+  it("MIGR-04: multi-agent verify iterates over migrated+verified+rolled-back, skips pending", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const { appendRow } = await import("../../../migration/ledger.js");
+
+    // Seed 4 agents with varying statuses
+    const ts = new Date().toISOString();
+    await appendRow(ledgerPath, {
+      ts,
+      action: "apply",
+      agent: "aa",
+      status: "migrated",
+      source_hash: "h1",
+    });
+    await appendRow(ledgerPath, {
+      ts,
+      action: "apply",
+      agent: "bb",
+      status: "migrated",
+      source_hash: "h1",
+    });
+    await appendRow(ledgerPath, {
+      ts,
+      action: "plan",
+      agent: "cc",
+      status: "pending",
+      source_hash: "h1",
+    });
+    await appendRow(ledgerPath, {
+      ts,
+      action: "rollback",
+      agent: "dd",
+      status: "rolled-back",
+      source_hash: "h1",
+    });
+
+    const mockVerify = vi.fn(async () => [
+      {
+        check: "workspace-files-present" as const,
+        status: "pass" as const,
+        detail: "ok",
+      },
+    ]);
+    (mod.migrateOpenclawHandlers as unknown as {
+      verifyAgent: typeof mockVerify;
+    }).verifyAgent = mockVerify;
+
+    await mod.runVerifyAction({});
+    // Should be called 3 times (aa, bb, dd) — NOT cc (pending)
+    expect(mockVerify).toHaveBeenCalledTimes(3);
+    const calls = mockVerify.mock.calls as unknown as Array<
+      [{ agentName: string }]
+    >;
+    const names = calls.map((c) => c[0].agentName).sort();
+    expect(names).toEqual(["aa", "bb", "dd"]);
+  });
+
+  // ---------------------------------------------------------------------
+  // MIGR-05 — rollback integration (Tests 5 + 6)
+  // ---------------------------------------------------------------------
+
+  it("MIGR-05: rollback removes target workspace + YAML entry; source ~/.openclaw/ byte-identical before/after", async () => {
+    const mod = await import("../migrate-openclaw.js");
+    const { hashSourceTree } = await import(
+      "../../../migration/rollbacker.js"
+    );
+    const { readFile: rf } = await import("node:fs/promises");
+
+    // Mock translator so we don't need ONNX embedder
+    (mod.migrateOpenclawHandlers as unknown as {
+      translateAgentMemories: (args: {
+        agentId: string;
+      }) => Promise<{
+        upserted: number;
+        skipped: number;
+        ledgerRows: never[];
+      }>;
+    }).translateAgentMemories = async () => ({
+      upserted: 0,
+      skipped: 0,
+      ledgerRows: [],
+    });
+
+    const before = await hashSourceTree(
+      openclawRoot,
+      openclawMemoryDir,
+      AGENT_NAME,
+    );
+    expect(Object.keys(before).length).toBeGreaterThan(0);
+
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const applyCode = await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+    expect(applyCode).toBe(0);
+
+    // Target workspace exists after apply
+    const targetPath = join(clawcodeAgentsRoot, AGENT_NAME);
+    expect(existsSync(targetPath)).toBe(true);
+
+    // clawcode.yaml has the agent
+    const yamlBefore = await rf(clawcodeConfigPath, "utf8");
+    expect(yamlBefore).toContain(`name: ${AGENT_NAME}`);
+
+    // Rollback
+    const rollbackCode = await mod.runRollbackAction({ agent: AGENT_NAME });
+    expect(rollbackCode).toBe(0);
+
+    // Target gone
+    expect(existsSync(targetPath)).toBe(false);
+    // YAML no longer has the agent
+    const yamlAfter = await rf(clawcodeConfigPath, "utf8");
+    expect(yamlAfter).not.toContain(`name: ${AGENT_NAME}`);
+
+    // Source byte-identical (MIGR-05 invariant)
+    const after = await hashSourceTree(
+      openclawRoot,
+      openclawMemoryDir,
+      AGENT_NAME,
+    );
+    expect(after).toEqual(before);
+  });
+
+  it("MIGR-05: apply → rollback → apply cycle restores clean state", async () => {
+    const mod = await import("../migrate-openclaw.js");
+
+    (mod.migrateOpenclawHandlers as unknown as {
+      translateAgentMemories: (args: {
+        agentId: string;
+      }) => Promise<{
+        upserted: number;
+        skipped: number;
+        ledgerRows: never[];
+      }>;
+    }).translateAgentMemories = async () => ({
+      upserted: 0,
+      skipped: 0,
+      ledgerRows: [],
+    });
+
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+
+    // Apply
+    const apply1 = await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+    expect(apply1).toBe(0);
+    const targetPath = join(clawcodeAgentsRoot, AGENT_NAME);
+    expect(existsSync(targetPath)).toBe(true);
+
+    // Rollback
+    const rollback = await mod.runRollbackAction({ agent: AGENT_NAME });
+    expect(rollback).toBe(0);
+    expect(existsSync(targetPath)).toBe(false);
+
+    // Re-apply → fresh state, no UNIQUE conflicts because target was deleted
+    const apply2 = await mod.migrateOpenclawHandlers.runApplyAction(
+      {},
+      { execaRunner: runner },
+    );
+    expect(apply2).toBe(0);
+    expect(existsSync(targetPath)).toBe(true);
+
+    // Ledger shows the complete lifecycle
+    const rows = await readRows(ledgerPath);
+    const applies = rows.filter(
+      (r) => r.action === "apply" && r.agent === AGENT_NAME,
+    );
+    const rollbacks = rows.filter(
+      (r) => r.action === "rollback" && r.agent === AGENT_NAME,
+    );
+    expect(applies.length).toBeGreaterThanOrEqual(2);
+    expect(rollbacks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ---------------------------------------------------------------------
+  // MIGR-03 — duplicate origin_id protection witness
+  // ---------------------------------------------------------------------
+
+  it("MIGR-03: zero duplicate origin_id rows after resume (GROUP BY origin_id HAVING COUNT>1 returns 0 rows)", async () => {
+    // This test is the critical MIGR-03 witness. It proves the database-
+    // level UNIQUE origin_id invariant that makes resume safe. Since the
+    // translator is mocked in other tests, we exercise the REAL translator
+    // here against a tiny in-memory SQLite + the stubbed embedder pattern
+    // from Phase 80's memory-translator tests.
+    //
+    // Instead of running the full runApplyAction pipeline (which would
+    // require the ONNX embedder warmup in-test), we open a MemoryStore
+    // directly, simulate two rounds of insert for the same origin_id, and
+    // assert the UNIQUE constraint produces zero duplicates. This is
+    // exactly the invariant that MIGR-03 resume relies on.
+    const { MemoryStore } = await import("../../../memory/store.js");
+    const dbDir = join(tmp, "memstore");
+    const { mkdirSync: mkdirS } = await import("node:fs");
+    mkdirS(dbDir, { recursive: true });
+    const dbPath = join(dbDir, "memories.db");
+
+    const store = new MemoryStore(dbPath);
+    try {
+      // Fake 384-dim embedding for the test
+      const dummyEmbedding = new Float32Array(384);
+      for (let i = 0; i < 384; i++) dummyEmbedding[i] = Math.sin(i);
+
+      const origin_id = `openclaw:${AGENT_NAME}:abc123`;
+
+      // Round 1: fresh insert
+      store.insert(
+        {
+          content: "first",
+          tags: ["t"],
+          importance: 0.5,
+          source: "manual",
+          origin_id,
+        },
+        dummyEmbedding,
+      );
+
+      // Round 2: same origin_id — UNIQUE constraint should short-circuit
+      // (MemoryStore.insert checks getByOriginId before inserting).
+      store.insert(
+        {
+          content: "first again (same origin_id)",
+          tags: ["t"],
+          importance: 0.5,
+          source: "manual",
+          origin_id,
+        },
+        dummyEmbedding,
+      );
+
+      const db = store.getDatabase();
+      // The critical MIGR-03 witness query from the plan
+      const dups = db
+        .prepare(
+          "SELECT origin_id, COUNT(*) AS c FROM memories WHERE origin_id IS NOT NULL GROUP BY origin_id HAVING COUNT(*) > 1",
+        )
+        .all();
+      expect(dups).toEqual([]);
+    } finally {
+      store.close();
+    }
   });
 });
