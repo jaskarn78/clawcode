@@ -79,6 +79,7 @@ export class MemoryStore {
       this.migrateInstructionFlags();
       this.migrateConversationTurnsFts();
       this.migrateApiKeySessionsTable();
+      this.migrateOriginIdColumn();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -837,6 +838,30 @@ export class MemoryStore {
         `);
       }
     })();
+  }
+
+  /**
+   * Phase 80 MEM-02 — add `origin_id TEXT` column + UNIQUE partial index to
+   * memories. Idempotent: PRAGMA-check pattern identical to
+   * migrateSourceTurnIds. UNIQUE index uses WHERE origin_id IS NOT NULL so
+   * pre-existing rows (NULL) coexist — SQLite already treats NULLs as
+   * non-equal for plain UNIQUE, but the partial index makes the intent
+   * explicit and slightly reduces index size. CREATE UNIQUE INDEX IF NOT
+   * EXISTS guards re-opens.
+   */
+  private migrateOriginIdColumn(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(memories)")
+      .all() as ReadonlyArray<{ name: string }>;
+    const hasColumn = columns.some((c) => c.name === "origin_id");
+    if (!hasColumn) {
+      this.db.exec(
+        "ALTER TABLE memories ADD COLUMN origin_id TEXT DEFAULT NULL",
+      );
+    }
+    this.db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_origin_id ON memories(origin_id) WHERE origin_id IS NOT NULL",
+    );
   }
 
   private prepareStatements(): PreparedStatements {

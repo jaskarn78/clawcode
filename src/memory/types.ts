@@ -44,6 +44,15 @@ export type CreateMemoryInput = {
   readonly skipDedup?: boolean;
   /** Conversation turn IDs this memory was derived from (CONV-03 lineage). Omit for non-conversation memories. */
   readonly sourceTurnIds?: readonly string[];
+  /**
+   * Phase 80 MEM-02 — stable per-source-path identifier used to de-duplicate
+   * imports across re-runs. Format: "openclaw:<agent>:<sha256-of-relpath>"
+   * (path-only hash — content changes don't create duplicates). When
+   * provided, insert() uses INSERT OR IGNORE semantics and returns the
+   * existing row on collision. Dedup (content-similarity merging) is
+   * SKIPPED on the origin_id path — idempotency is the contract.
+   */
+  readonly origin_id?: string;
 };
 
 /** A search result extends MemoryEntry with distance score. */
