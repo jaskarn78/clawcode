@@ -350,44 +350,7 @@ export class SessionManager {
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
 
-    handle.onError((error: Error) => {
-      // Phase 65: crash the ConversationStore session
-      const convSessionId = this.activeConversationSessionIds.get(name);
-      const convStoreForCrash = this.memory.conversationStores.get(name);
-      if (convStoreForCrash && convSessionId) {
-        try { convStoreForCrash.crashSession(convSessionId); } catch { /* best-effort */ }
-        // Phase 66 -- fire-and-forget summarization (non-fatal, non-blocking).
-        // BEFORE recovery.handleCrash so summarize starts even if recovery
-        // synchronously resets state. Detached so crash recovery is never
-        // delayed waiting on Haiku (up to 10s internal timeout).
-        // 260419-q2z Fix B — track the crash-path summary so shutdown drain
-        // waits for it even though we're fire-and-forget at this callsite.
-        void this.trackSummary(
-          this.summarizeSessionIfPossible(name, convSessionId),
-        ).catch((err) => {
-          this.log.warn(
-            {
-              agent: name,
-              session: convSessionId,
-              error: (err as Error).message,
-            },
-            "crash-path summarization failed (non-fatal)",
-          );
-        });
-      }
-      this.activeConversationSessionIds.delete(name);
-      this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
-
-      this.recovery.handleCrash(name, config, error, this.sessions);
-      // Invoke session end callback on crash (e.g., subagent thread cleanup)
-      const endCallback = this.sessionEndCallbacks.get(name);
-      if (endCallback) {
-        this.sessionEndCallbacks.delete(name);
-        endCallback().catch((err) => {
-          this.log.warn({ agent: name, error: (err as Error).message }, "session end callback failed on crash");
-        });
-      }
-    });
+    this.attachCrashHandler(name, config, handle);
     this.recovery.setStabilityTimer(name);
 
     // Phase 56 Plan 02 — warm-path ready gate. Registry stays in 'starting'
@@ -706,6 +669,19 @@ export class SessionManager {
   async startAll(configs: readonly ResolvedAgentConfig[]): Promise<void> {
     const errors: Array<{ name: string; error: Error }> = [];
     for (const config of configs) {
+      // Gap 1 (memory-persistence-gaps): skip agents already resumed by
+      // reconcileRegistry. Before this guard, startAll would call startAgent
+      // for every config in the list, startAgent's `this.sessions.has(name)`
+      // precondition would throw "already running", and the error was
+      // caught + logged as a noisy `error` on every daemon boot even though
+      // the outcome was correct (agent IS running).
+      if (this.sessions.has(config.name)) {
+        this.log.debug(
+          { agent: config.name },
+          "startAll: agent already running (resumed by reconcile) — skipping",
+        );
+        continue;
+      }
       try { await this.startAgent(config.name, config); }
       catch (error) {
         errors.push({ name: config.name, error: error as Error });
@@ -739,6 +715,20 @@ export class SessionManager {
 
       if (entry.status === "running" && entry.sessionId && config) {
         try {
+          // Gap 1 (memory-persistence-gaps): initialize memory BEFORE
+          // buildSessionConfig so the resumed agent has a MemoryStore +
+          // ConversationStore. Without this, stopAgent's summarization
+          // branch is a no-op because activeConversationSessionIds stays
+          // empty and conversationStores.get() returns undefined.
+          try {
+            this.memory.initMemory(entry.name, config);
+          } catch (initErr) {
+            this.log.warn(
+              { agent: entry.name, error: (initErr as Error).message },
+              "failed to initialize memory during reconcile (resumed agent will have no memory persistence)",
+            );
+          }
+
           const sessionConfig = await buildSessionConfig(
             config,
             this.configDeps(entry.name),
@@ -763,9 +753,27 @@ export class SessionManager {
           );
           this.sessions.set(entry.name, handle);
           this.configs.set(entry.name, config);
-          handle.onError((error: Error) => {
-            this.recovery.handleCrash(entry.name, config, error, this.sessions);
-          });
+
+          // Gap 1 (memory-persistence-gaps): start a FRESH ConversationStore
+          // session for the resumed agent. We intentionally do NOT try to
+          // reattach to any orphaned 'active' row in the DB — conversation-
+          // store.ts:298-303 already documents that orphans are unrecoverable
+          // (we don't know when they truly ended). A fresh session keeps the
+          // state machine clean and guarantees stopAgent summarization fires.
+          const convStore = this.memory.conversationStores.get(entry.name);
+          if (convStore) {
+            try {
+              const convSession = convStore.startSession(entry.name);
+              this.activeConversationSessionIds.set(entry.name, convSession.id);
+            } catch (err) {
+              this.log.warn(
+                { agent: entry.name, error: (err as Error).message },
+                "failed to start conversation session during reconcile (non-fatal)",
+              );
+            }
+          }
+
+          this.attachCrashHandler(entry.name, config, handle);
           this.recovery.setStabilityTimer(entry.name);
           resumed++;
           this.log.info({ agent: entry.name, sessionId: entry.sessionId }, "session resumed");
@@ -989,6 +997,61 @@ export class SessionManager {
     } finally {
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }
+  }
+
+  /**
+   * Gap 1 (memory-persistence-gaps) — shared onError handler used by
+   * `startAgent` (fresh start) AND `reconcileRegistry` (resume-after-reboot).
+   *
+   * Previously this block lived inline inside `startAgent`. `reconcileRegistry`
+   * attached a DIFFERENT onError that only delegated to `recovery.handleCrash`,
+   * leaving resumed sessions without crash-time summarization. Extracting the
+   * handler keeps both call sites identical and guarantees conversation
+   * summaries survive daemon reboots.
+   */
+  private attachCrashHandler(
+    name: string,
+    config: ResolvedAgentConfig,
+    handle: SessionHandle,
+  ): void {
+    handle.onError((error: Error) => {
+      // Phase 65: crash the ConversationStore session
+      const convSessionId = this.activeConversationSessionIds.get(name);
+      const convStoreForCrash = this.memory.conversationStores.get(name);
+      if (convStoreForCrash && convSessionId) {
+        try { convStoreForCrash.crashSession(convSessionId); } catch { /* best-effort */ }
+        // Phase 66 -- fire-and-forget summarization (non-fatal, non-blocking).
+        // BEFORE recovery.handleCrash so summarize starts even if recovery
+        // synchronously resets state. Detached so crash recovery is never
+        // delayed waiting on Haiku (up to 10s internal timeout).
+        // 260419-q2z Fix B — track the crash-path summary so shutdown drain
+        // waits for it even though we're fire-and-forget at this callsite.
+        void this.trackSummary(
+          this.summarizeSessionIfPossible(name, convSessionId),
+        ).catch((err) => {
+          this.log.warn(
+            {
+              agent: name,
+              session: convSessionId,
+              error: (err as Error).message,
+            },
+            "crash-path summarization failed (non-fatal)",
+          );
+        });
+      }
+      this.activeConversationSessionIds.delete(name);
+      this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
+
+      this.recovery.handleCrash(name, config, error, this.sessions);
+      // Invoke session end callback on crash (e.g., subagent thread cleanup)
+      const endCallback = this.sessionEndCallbacks.get(name);
+      if (endCallback) {
+        this.sessionEndCallbacks.delete(name);
+        endCallback().catch((err) => {
+          this.log.warn({ agent: name, error: (err as Error).message }, "session end callback failed on crash");
+        });
+      }
+    });
   }
 
   private async summarizeSessionIfPossible(
