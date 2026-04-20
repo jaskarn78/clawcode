@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Ready to execute
-stopped_at: Completed 78-01-PLAN.md
-last_updated: "2026-04-20T18:47:11.922Z"
+stopped_at: Completed 78-02-PLAN.md
+last_updated: "2026-04-20T19:03:03.890Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 28
-  completed_plans: 26
+  completed_plans: 27
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-20)
 ## Current Position
 
 Phase: 78 (config-mapping-yaml-writer) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -94,6 +94,12 @@ Recent decisions affecting current work:
 - [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: Error message copy pinned verbatim — literal 'cannot be used together' substring with agent name inline; grep-verifiable contract called out in critical_constraints.
 - [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: Silent fall-through on read errors at every precedence step — configured-but-deleted soulFile doesn't crash session boot; last branch falls back to config.soul ?? ''.
 - [Phase 78-config-mapping-yaml-writer]: [Phase 78 Plan 01]: storeSoulMemory + differ.ts intentionally untouched per plan scope; follow-ups tracked in deferred-items.md for Plan 02/03 to address once yaml-writer is in place.
+- [Phase 78]: [Phase 78 Plan 02]: UNMAPPABLE_MODEL_WARNING_TEMPLATE literal pinned byte-exact — em-dash U+2014, angle-bracket placeholders, double-quotes inside override example. renderUnmappableModelWarning(id) substitutes <id> twice; <clawcode-id> stays literal so operators see override shape.
+- [Phase 78]: [Phase 78 Plan 02]: config-mapper emits STRUCTURED warnings only ({kind,id,agent} | {kind,name,agent}) — literal warning copy render deferred to CLI/Plan 03. Keeps mapper decoupled from copy format and PlanWarning-assignable via field widening (id/name -> detail).
+- [Phase 78]: [Phase 78 Plan 02]: AUTO_INJECT_MCP = ['clawcode', '1password'] dedup-aware — explicit user declaration silently absorbed via seen Set<string>; prevents duplicate YAML refs. Unknown per-agent MCP names emit soft unknown-mcp-server warning (not hard error) per 78-CONTEXT D-mcp.
+- [Phase 78]: [Phase 78 Plan 02]: migrateOpenclawHandlers mutable dispatch holder over vi.spyOn/vi.mock — ESM named-import bindings frozen; dispatch-holder property swap works at commander closure call-time. Simpler than vi.hoisted + vi.mock factory for CLI integration tests.
+- [Phase 78]: [Phase 78 Plan 02]: --model-map parse error inside .action() handler (NOT commander argParser) — fail-fast exit(1) + literal 'invalid --model-map syntax' stderr BEFORE ledger/fs-guard touch. Matches Phase 77 error surfacing convention.
+- [Phase 78]: [Phase 78 Plan 02]: runPlanAction/runApplyAction plumb modelMap but don't consume yet — Plan 03 yaml-writer is the actual consumer. void _modelMap + inline 'Plan 03 consumes' comment documents intent; tsc satisfied by typed parameter.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -163,9 +169,10 @@ Recent decisions affecting current work:
 | Phase 77 P02 | ~7min | 2 tasks | 5 files |
 | Phase 77 P03 | 25min | 2 tasks | 3 files |
 | Phase 78-config-mapping-yaml-writer P01 | 6min | 2 tasks | 7 files |
+| Phase 78 P02 | 11min | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 78-01-PLAN.md
+Stopped at: Completed 78-02-PLAN.md
 Resume file: None
