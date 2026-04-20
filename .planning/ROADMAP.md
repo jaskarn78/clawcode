@@ -119,7 +119,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 - [x] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration. (Plans 01-03 shipped 2026-04-20; gap-closure Plan 04 pending — session-resume context-summary read path swap) (completed 2026-04-20)
 - [x] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume. (completed 2026-04-20)
 - [x] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write. (completed 2026-04-20)
-- [ ] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering.
+- [x] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering. (completed 2026-04-20)
 - [ ] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only.
 - [ ] **Phase 80: Memory Translation + Re-embedding** — Read workspace markdown (disk as truth, not sqlite chunks), insert through `MemoryStore.insert()` with `origin_id UNIQUE` for idempotency, re-embed via MiniLM singleton (384-dim); `.learnings/*.md` land as first-class memories tagged `"learning"`.
 - [ ] **Phase 81: Verify + Rollback + Resume + Fork** — `verify`, idempotent re-run via ledger, per-agent `rollback`, and proof that every migrated agent (Sonnet/Haiku/MiniMax/Gemini) retains fork-to-Opus escalation with unbudgeted cost-ledger rows.
@@ -208,7 +208,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 78-01-PLAN.md — Schema extension (soulFile/identityFile + mutual exclusion + loader expansion + session-config lazy-read precedence) (CONF-01)
 - [x] 78-02-PLAN.md — Model-map module + config-mapper module (pure logic) + --model-map CLI flag (CONF-02, CONF-03)
-- [ ] 78-03-PLAN.md — YAML writer (Document AST + atomic temp+rename + comment preservation) + apply pipeline wiring + end-to-end integration test (CONF-01, CONF-02, CONF-03, CONF-04)
+- [x] 78-03-PLAN.md — YAML writer (Document AST + atomic temp+rename + comment preservation) + apply pipeline wiring + end-to-end integration test (CONF-01, CONF-02, CONF-03, CONF-04)
 
 ### Phase 79: Workspace Migration
 **Goal**: User (as operator) can trust that `clawcode migrate openclaw apply` copies each agent's workspace contents (SOUL.md, IDENTITY.md, USER.md, TOOLS.md, CLAUDE.md, MEMORY.md, memory/, .learnings/, archive/) from `~/.openclaw/workspace-<name>/` to the target ClawCode workspace with verbatim file preservation — and that the 5 finmentum agents all resolve to one shared basePath while keeping per-agent memoryPath/soulFile/identityFile/inbox distinct.
@@ -283,7 +283,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
 | 77. Pre-flight Guards + Safety Rails | 3/3 | Complete    | 2026-04-20 |
-| 78. Config Mapping + YAML Writer | 2/3 | In Progress|  |
+| 78. Config Mapping + YAML Writer | 3/3 | Complete   | 2026-04-20 |
 | 79. Workspace Migration | 0/? | Not started | - |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |
 | 81. Verify + Rollback + Resume + Fork | 0/? | Not started | - |

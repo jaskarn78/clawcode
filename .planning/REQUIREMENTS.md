@@ -48,7 +48,7 @@ Mapping from `openclaw.json` agent entries to `clawcode.yaml` agents array, with
 - [x] **CONF-01**: User (as operator) can trust that each migrated agent's `clawcode.yaml` entry carries a `soulFile:` pointing to `<workspace>/SOUL.md` and an `identityFile:` pointing to `<workspace>/IDENTITY.md`, with content read lazily at agent boot — no inline content duplication.
 - [x] **CONF-02**: User (as operator) can trust that MCP servers declared per-agent in `openclaw.json` are mapped to `mcpServers:` references in the new `clawcode.yaml` entry, with existing ClawCode MCP patterns (clawcode + 1password auto-injection) preserved and unknown servers flagged in the plan output.
 - [x] **CONF-03**: User (as operator) can trust that each migrated agent's model selection is mapped from OpenClaw's model id to the closest ClawCode-equivalent (e.g. `anthropic-api/claude-sonnet-4-6` passes through, `clawcode/admin-clawdy` stays as-is), with any unmappable model flagged in the plan and configurable via `--model-map` override.
-- [ ] **CONF-04**: User (as operator) can trust that the migrator writes to `clawcode.yaml` via atomic temp-file + rename so the daemon's chokidar watcher never sees a partially-written file, and the YAML round-trip preserves all existing comments and key ordering.
+- [x] **CONF-04**: User (as operator) can trust that the migrator writes to `clawcode.yaml` via atomic temp-file + rename so the daemon's chokidar watcher never sees a partially-written file, and the YAML round-trip preserves all existing comments and key ordering.
 
 ### Workspace Migration (WORK-*)
 
@@ -132,7 +132,7 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | CONF-01 | Phase 78: Config Mapping + YAML Writer | Complete |
 | CONF-02 | Phase 78: Config Mapping + YAML Writer | Complete |
 | CONF-03 | Phase 78: Config Mapping + YAML Writer | Complete |
-| CONF-04 | Phase 78: Config Mapping + YAML Writer | Pending |
+| CONF-04 | Phase 78: Config Mapping + YAML Writer | Complete |
 | WORK-01 | Phase 79: Workspace Migration | Pending |
 | WORK-02 | Phase 79: Workspace Migration | Pending |
 | WORK-03 | Phase 79: Workspace Migration | Pending |

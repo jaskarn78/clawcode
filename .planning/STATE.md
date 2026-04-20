@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 78-02-PLAN.md
-last_updated: "2026-04-20T19:03:03.890Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 78-03-PLAN.md
+last_updated: "2026-04-20T19:41:07.575Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 28
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -100,6 +100,11 @@ Recent decisions affecting current work:
 - [Phase 78]: [Phase 78 Plan 02]: migrateOpenclawHandlers mutable dispatch holder over vi.spyOn/vi.mock — ESM named-import bindings frozen; dispatch-holder property swap works at commander closure call-time. Simpler than vi.hoisted + vi.mock factory for CLI integration tests.
 - [Phase 78]: [Phase 78 Plan 02]: --model-map parse error inside .action() handler (NOT commander argParser) — fail-fast exit(1) + literal 'invalid --model-map syntax' stderr BEFORE ledger/fs-guard touch. Matches Phase 77 error surfacing convention.
 - [Phase 78]: [Phase 78 Plan 02]: runPlanAction/runApplyAction plumb modelMap but don't consume yet — Plan 03 yaml-writer is the actual consumer. void _modelMap + inline 'Plan 03 consumes' comment documents intent; tsc satisfied by typed parameter.
+- [Phase 78]: [Phase 78 Plan 03]: Pre-write scanSecrets shim walks operator-input-ish fields only (name/model/channels/mcpServers) — path fields excluded to avoid false-positive high-entropy refusal on SOUL.md-terminated absolute paths. hasSecretPrefix still runs for sk-/MT- embedded in those shapes.
+- [Phase 78]: [Phase 78 Plan 03]: guards.ts isWhitelisted additively widened with ABSOLUTE_PATH_PREFIX + MODEL_ID_SHAPE — closes Phase 77 STATE.md 'Phase 78+ concern' on migrator-generated data. Order: hasSecretPrefix → whitelist → high-entropy fallback preserved; 21/21 guards tests unchanged.
+- [Phase 78]: [Phase 78 Plan 03]: writerFs mutable dispatch holder (readFile/writeFile/rename/unlink) for ESM-safe test monkey-patching — mirrors Phase 78-02 migrateOpenclawHandlers. Avoids vi.spyOn on frozen node:fs/promises bindings.
+- [Phase 78]: [Phase 78 Plan 03]: APPLY_NOT_IMPLEMENTED_MESSAGE kept as @deprecated EXPORT (not deleted) — backward-compat for external tooling that grepped during Phase 77 ship. Runtime no longer emits on success; JSDoc @deprecated signals intent.
+- [Phase 78]: [Phase 78 Plan 03]: yaml package normalizes double-space comments to single-space on round-trip — fixture clawcode.before.yaml uses single-space form so byte-exact line-subsequence check passes without a normalization step.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -170,9 +175,10 @@ Recent decisions affecting current work:
 | Phase 77 P03 | 25min | 2 tasks | 3 files |
 | Phase 78-config-mapping-yaml-writer P01 | 6min | 2 tasks | 7 files |
 | Phase 78 P02 | 11min | 2 tasks | 9 files |
+| Phase 78 P03 | 32min | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 78-02-PLAN.md
+Stopped at: Completed 78-03-PLAN.md
 Resume file: None
