@@ -96,16 +96,22 @@ started: Branch created for this work. Previous quick fix 260419-q2z added drain
 
 root_cause:
 - Gap 1: `reconcileRegistry` never called `initMemory` or `startSession` on resumed agents, leaving `activeConversationSessionIds` empty. Any subsequent `stopAgent` skipped summarization because `convSessionId === undefined`. Additionally, `startAll` fired `startAgent` for every config after reconcile and swallowed the resulting "already running" SessionError with an error-level log on every boot.
-- Gap 2: (TBD — fixing next)
+- Gap 2: `summarizeSession` wrote the memory row and marked the session summarized, but never deleted the raw conversation_turns rows. Raw turns accumulated forever alongside summaries, so `memories.db` grew unbounded as sessions piled up.
 - Gap 3: (TBD — fixing next)
 - Gap 4: (TBD — fixing next)
 
 fix:
 - Gap 1: Extracted `attachCrashHandler(name, config, handle)` helper on SessionManager. `reconcileRegistry` now calls `initMemory` + `convStore.startSession` + sets `activeConversationSessionIds` + attaches the shared crash handler. `startAll` early-returns for agents already in `this.sessions`. Three new tests cover reconcile→memory-init, reconcile→stopAgent→summary-written, and reconcile→startAll→no-op.
+- Gap 2: Added `ConversationStore.deleteTurnsForSession(sessionId): number` (prepared statement, returns rows deleted). `summarizeSession` calls it as Step 13b, only after `markSummarized` succeeded — so partial failures (insert OK, markSummarized failed) leave turns intact for operator reconcile. Delete is non-fatal; session row stays intact so resume-brief gap accounting keeps working. FTS5 stays in sync via existing `conversation_turns_ad` trigger.
 
 verification:
 - Gap 1: 3/3 new tests pass; 34/34 session-manager tests pass; 60/60 daemon + registry tests pass.
+- Gap 2: 4/4 new ConversationStore unit tests pass; 5/5 new summarizer integration tests pass (LLM path, short-session path, raw-turn fallback, insert-failure no-delete, embed-failure no-delete); 424/424 tests across src/manager + src/memory pass.
 
 files_changed:
 - src/manager/session-manager.ts (Gap 1)
 - src/manager/__tests__/session-manager.test.ts (Gap 1)
+- src/memory/conversation-store.ts (Gap 2)
+- src/memory/__tests__/conversation-store.test.ts (Gap 2)
+- src/memory/session-summarizer.ts (Gap 2)
+- src/memory/__tests__/session-summarizer.test.ts (Gap 2)

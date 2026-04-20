@@ -770,4 +770,150 @@ describe("SessionSummarizer", () => {
       expect(match).toBeDefined();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Gap 2 (memory-persistence-gaps) — raw conversation turns must be deleted
+  // after a successful summarization so the turn table does not grow
+  // unbounded. Failure paths (embed failure, insert failure) MUST NOT delete.
+  // ---------------------------------------------------------------------------
+  describe("raw-turn pruning after summarization (Gap 2)", () => {
+    it("deletes raw turns after a successful LLM-path summarization", async () => {
+      const { sessionId, turnIds } = seedEndedSession(4);
+
+      // Sanity check: turns exist pre-summarize.
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(4);
+
+      const mockSummarize: SummarizeFn = vi
+        .fn()
+        .mockResolvedValue("## User Preferences\n(none)\n");
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: mockSummarize,
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+      expect("success" in result && result.success).toBe(true);
+
+      // Raw turns gone.
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(0);
+
+      // Session row survives (needed for resume-brief gap accounting).
+      const session = convStore.getSession(sessionId);
+      expect(session).not.toBeNull();
+      expect(session!.status).toBe("summarized");
+
+      // Summary memory row also survives and still references the pre-delete turnIds.
+      if ("success" in result && result.success) {
+        const entry = memStore.getById(result.memoryId);
+        expect(entry).not.toBeNull();
+        expect(entry!.sourceTurnIds).toEqual(turnIds);
+      }
+    });
+
+    it("deletes raw turns after a short-session summarization", async () => {
+      const { sessionId } = seedEndedSession(2);
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(2);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn(),
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+
+      expect("success" in result && result.success).toBe(true);
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(0);
+    });
+
+    it("deletes raw turns after raw-turn fallback (LLM error)", async () => {
+      const { sessionId } = seedEndedSession(3);
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(3);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn().mockRejectedValue(new Error("LLM error")),
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+      expect(result).toMatchObject({ success: true, fallback: "raw-turn" });
+      // Session still summarized (for idempotency), so pruning IS correct here —
+      // the raw-turn fallback already embedded the turn text verbatim into
+      // the memory row's content, so the raw rows are redundant.
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(0);
+    });
+
+    it("does NOT delete turns when memoryStore.insert fails", async () => {
+      const { sessionId } = seedEndedSession(3);
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(3);
+
+      // Force insert to throw.
+      const insertSpy = vi
+        .spyOn(memStore, "insert")
+        .mockImplementation(() => {
+          throw new Error("forced insert failure");
+        });
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn().mockResolvedValue("## User Preferences\n(none)\n"),
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+      expect(result).toMatchObject({ skipped: true });
+      // Turns still present — we haven't summarized yet, so pruning would be destructive.
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(3);
+
+      insertSpy.mockRestore();
+    });
+
+    it("does NOT delete turns when embedding fails", async () => {
+      const { sessionId } = seedEndedSession(3);
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(3);
+
+      const failingEmbedder: EmbeddingService = {
+        embed: vi.fn().mockRejectedValue(new Error("embed failure")),
+        warmup: vi.fn().mockResolvedValue(undefined),
+        isReady: vi.fn().mockReturnValue(true),
+      } as unknown as EmbeddingService;
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: failingEmbedder,
+        summarize: vi.fn().mockResolvedValue("## User Preferences\n(none)\n"),
+        log: silentLog(),
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId },
+        deps,
+      );
+      expect(result).toMatchObject({ skipped: true });
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(3);
+    });
+  });
 });

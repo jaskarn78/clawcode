@@ -1238,4 +1238,56 @@ describe("ConversationStore", () => {
       expect(escapeFtsQueryUnderTest("a:b(c)")).toBe('"a:b(c)"');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Gap 2 (memory-persistence-gaps) — deleteTurnsForSession
+  // -------------------------------------------------------------------------
+  describe("deleteTurnsForSession", () => {
+    it("removes all turns for the given session and returns the count", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      for (let i = 0; i < 5; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: `turn ${i}`,
+        });
+      }
+      expect(convStore.getTurnsForSession(session.id)).toHaveLength(5);
+
+      const deleted = convStore.deleteTurnsForSession(session.id);
+      expect(deleted).toBe(5);
+      expect(convStore.getTurnsForSession(session.id)).toHaveLength(0);
+    });
+
+    it("returns 0 and is a no-op when the session has no turns", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      expect(convStore.deleteTurnsForSession(session.id)).toBe(0);
+    });
+
+    it("only deletes turns for the target session (isolation)", () => {
+      setup();
+      const s1 = convStore.startSession("agent-a");
+      const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s1.id, role: "user", content: "a1" });
+      convStore.recordTurn({ sessionId: s1.id, role: "assistant", content: "a2" });
+      convStore.recordTurn({ sessionId: s2.id, role: "user", content: "b1" });
+
+      expect(convStore.deleteTurnsForSession(s1.id)).toBe(2);
+      expect(convStore.getTurnsForSession(s1.id)).toHaveLength(0);
+      expect(convStore.getTurnsForSession(s2.id)).toHaveLength(1);
+    });
+
+    it("leaves the session row intact after deleting its turns", () => {
+      setup();
+      const session = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: session.id, role: "user", content: "x" });
+      convStore.deleteTurnsForSession(session.id);
+
+      const stillThere = convStore.getSession(session.id);
+      expect(stillThere).not.toBeNull();
+      expect(stillThere!.id).toBe(session.id);
+    });
+  });
 });
