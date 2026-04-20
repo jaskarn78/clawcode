@@ -525,14 +525,40 @@ export async function runApplyAction(
     // agents in the run proceed. Final exit code is 1 if ANY agent rolled
     // back; 0 otherwise. A skip-empty-source branch is NOT a failure — it's
     // the normal path for finmentum sub-agents whose workspace lacks SOUL.md.
-    const workspaceFailures: string[] = [];
-    for (const agentPlan of report.agents) {
-      const copyPlan = resolveWorkspaceCopyPlan(
+    //
+    // Ordering rule (load-bearing for finmentum shared basePath): process
+    // "full"-mode copies BEFORE "uploads-only" copies. Rationale: multiple
+    // agents may target the same basePath (finmentum family); the primary
+    // full-workspace copy must land first, then sub-agents' uploads/ trees
+    // are added additively. If uploads-only agents ran first, the primary's
+    // post-copy sweep would walk over the sub-agents' upload files and
+    // attempt to hash-witness them against a non-existent source path
+    // (the primary's source has no matching uploads/<id>/ entries).
+    // "skip-empty-source" agents have no ordering impact — they don't
+    // touch the filesystem beyond a ledger witness row.
+    const copyPlansByAgent: Array<{
+      readonly agentPlan: AgentPlan;
+      readonly copyPlan: WorkspaceCopyPlan;
+    }> = report.agents.map((agentPlan) => ({
+      agentPlan,
+      copyPlan: resolveWorkspaceCopyPlan(
         agentPlan.sourceWorkspace,
         agentPlan.targetBasePath,
         agentPlan.sourceId,
-      );
+      ),
+    }));
+    const modeRank = (m: WorkspaceCopyPlan["mode"]): number =>
+      m === "full" ? 0 : m === "uploads-only" ? 1 : 2;
+    const sortedCopyPlans = [...copyPlansByAgent].sort((a, b) => {
+      const rankDiff = modeRank(a.copyPlan.mode) - modeRank(b.copyPlan.mode);
+      if (rankDiff !== 0) return rankDiff;
+      // Within the same mode, preserve inventory order (alphabetical by id)
+      // so the overall processing order is deterministic.
+      return a.agentPlan.sourceId.localeCompare(b.agentPlan.sourceId);
+    });
 
+    const workspaceFailures: string[] = [];
+    for (const { agentPlan, copyPlan } of sortedCopyPlans) {
       if (copyPlan.mode === "skip-empty-source") {
         // Normal path for sub-agents with no on-disk workspace content.
         // Record the skip so the ledger has a witness trail per agent.
