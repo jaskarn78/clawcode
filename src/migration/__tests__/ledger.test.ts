@@ -10,6 +10,7 @@ import {
   DEFAULT_LEDGER_PATH,
   LEDGER_ACTIONS,
   LEDGER_STATUSES,
+  LEDGER_OUTCOMES,
   type LedgerRow,
 } from "../ledger.js";
 
@@ -143,5 +144,26 @@ describe("ledger", () => {
     expect(caught).toBeDefined();
     // File must NOT have been created — validation happens pre-mkdir.
     expect(existsSync(ledgerPath)).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 77+ additive schema extension — minimal RED guard for Task 1.
+  // Verifies the closed-enum tuple is exposed and the schema accepts the
+  // three new optional fields. Round-trip + full negative-shape coverage
+  // lives in the dedicated `ledger schema extensions (Phase 77)` suite below.
+  // ---------------------------------------------------------------------------
+  it("exposes LEDGER_OUTCOMES as readonly tuple ['allow','refuse']", () => {
+    expect(LEDGER_OUTCOMES).toEqual(["allow", "refuse"]);
+  });
+
+  it("accepts a row with step + outcome + file_hashes populated (schema-level)", () => {
+    const row = {
+      ...goodRow(),
+      step: "pre-flight:daemon",
+      outcome: "refuse" as const,
+      file_hashes: { "/home/u/.clawcode/clawcode.yaml": "deadbeef" },
+    };
+    const result = ledgerRowSchema.safeParse(row);
+    expect(result.success).toBe(true);
   });
 });
