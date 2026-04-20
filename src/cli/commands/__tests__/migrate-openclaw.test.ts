@@ -62,14 +62,28 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as pathResolve } from "node:path";
 import {
   runListAction,
   runPlanAction,
+  runApplyAction,
+  APPLY_NOT_IMPLEMENTED_MESSAGE,
 } from "../migrate-openclaw.js";
 import { readRows } from "../../../migration/ledger.js";
+import {
+  DAEMON_REFUSE_MESSAGE,
+  SECRET_REFUSE_MESSAGE,
+} from "../../../migration/guards.js";
+import { uninstallFsGuard } from "../../../migration/fs-guard.js";
 import { green, colorEnabled } from "../../output.js";
 
 const FIXTURE_PATH = pathResolve("src/migration/__tests__/fixtures/openclaw.sample.json");
@@ -273,5 +287,358 @@ describe("migrate-openclaw CLI", () => {
     const out = stdoutCapture.join("");
     const warningLines = (out.match(/missing-discord-binding/g) ?? []).length;
     expect(warningLines).toBe(8);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Phase 77-03: runApplyAction integration tests
+// ---------------------------------------------------------------------
+//
+// These tests exercise the full apply-preflight chain wired through the
+// CLI action handler — including runtime fs-guard install/uninstall and
+// literal-message propagation to stderr. Each test takes a tmpdir mtime
+// snapshot of source fixtures before the run and asserts zero modification
+// afterwards (success criterion #5 — MIGR-07 source-tree mtime invariant).
+//
+// Notes on isolation:
+//   - The fs.mock at file top (Phase 76's zero-write contract) stays in
+//     place. It passes through to the real fs, only capturing paths.
+//   - Each test uninstalls any leftover fs-guard in its own afterEach to
+//     defend against a prior test crashing mid-apply.
+//   - Daemon state is controlled via the `execaRunner` DI parameter on
+//     runApplyAction — tests never spawn real systemctl.
+
+describe("migrate-openclaw CLI — apply subcommand", () => {
+  let tmp: string;
+  let ledgerPath: string;
+  let memoryDir: string;
+  let clawcodeRoot: string;
+  let configPath: string;
+  let sourceFixture: string;
+  let stdoutCapture: string[];
+  let stderrCapture: string[];
+  let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
+  let writeStderrSpy: ReturnType<typeof vi.spyOn>;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  // Copy the real fixture into a tmp location so we can mtime-snapshot the
+  // entire tree safely without touching the repo copy. This is the
+  // success-criterion-#5 fixture — the "source tree" whose mtimes must be
+  // unchanged after any apply invocation.
+  function seedSourceFixture(dir: string): string {
+    const original = readFileSync(FIXTURE_PATH, "utf8");
+    const targetJson = join(dir, "openclaw.json");
+    writeFileSync(targetJson, original);
+    return targetJson;
+  }
+
+  // Recursively stat every file/dir under a path. Returns a map of
+  // relative-path → mtimeMs. Used to pin the MIGR-07 mtime invariant.
+  function mtimeSnapshot(root: string): Map<string, number> {
+    const out = new Map<string, number>();
+    function walk(p: string): void {
+      const st = statSync(p);
+      out.set(p, st.mtimeMs);
+      if (st.isDirectory()) {
+        for (const child of readdirSync(p)) walk(join(p, child));
+      }
+    }
+    walk(root);
+    return out;
+  }
+
+  function writeClawcodeYaml(
+    path: string,
+    agents: Array<{ name: string; channels: string[] }>,
+  ): void {
+    const yaml = [
+      "version: 1",
+      "defaults:",
+      "  model: sonnet",
+      "agents:",
+      ...agents.flatMap((a) => [
+        `  - name: ${a.name}`,
+        `    channels: [${a.channels.map((c) => `"${c}"`).join(", ")}]`,
+      ]),
+    ].join("\n");
+    writeFileSync(path, yaml);
+  }
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "apply-subcmd-"));
+    ledgerPath = join(tmp, "ledger.jsonl");
+    memoryDir = join(tmp, "openclaw-memory");
+    clawcodeRoot = join(tmp, "clawcode-agents-would-be-here");
+    configPath = join(tmp, "clawcode.yaml");
+    // Seed the source fixture in a dedicated subdir so mtime snapshots are
+    // scoped to the fixture tree and not the whole tmp.
+    const srcDir = join(tmp, "source");
+    mkdtempSync; // noop to appease lint about unused
+    rmSync(srcDir, { recursive: true, force: true });
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(srcDir, { recursive: true });
+    sourceFixture = seedSourceFixture(srcDir);
+
+    stdoutCapture = [];
+    stderrCapture = [];
+    writeStdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stdoutCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stdout.write);
+    writeStderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stderrCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stderr.write);
+    originalEnv = { ...process.env };
+    process.env.CLAWCODE_OPENCLAW_JSON = sourceFixture;
+    process.env.CLAWCODE_OPENCLAW_MEMORY_DIR = memoryDir;
+    process.env.CLAWCODE_AGENTS_ROOT = clawcodeRoot;
+    process.env.CLAWCODE_LEDGER_PATH = ledgerPath;
+    process.env.CLAWCODE_CONFIG_PATH = configPath;
+    process.env.NO_COLOR = "1";
+    delete process.env.FORCE_COLOR;
+  });
+
+  afterEach(() => {
+    // Defensive — if a mid-test crash left the guard installed, wipe it.
+    uninstallFsGuard();
+    writeStdoutSpy.mockRestore();
+    writeStderrSpy.mockRestore();
+    rmSync(tmp, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  // --- Test A: daemon-running refuse, literal message match -----------
+  it("A: daemon active → stderr contains DAEMON_REFUSE_MESSAGE + ledger has daemon refuse row", async () => {
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "active\n", exitCode: 0 });
+    const code = await runApplyAction({}, { execaRunner: runner });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain(DAEMON_REFUSE_MESSAGE);
+    const rows = await readRows(ledgerPath);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.step).toBe("pre-flight:daemon");
+    expect(rows[0]?.outcome).toBe("refuse");
+  });
+
+  // --- Test B: secret-shape refuse, literal message match -------------
+  it("B: sk- prefix secret in fixture → stderr contains SECRET_REFUSE_MESSAGE", async () => {
+    // Inject a secret-shaped string into the source fixture by mutating the
+    // copy in our tmp source dir. The diff-builder's AgentPlan projection
+    // exposes `sourceModel` as a scalar string — overwriting a model.primary
+    // puts a secret-shaped token into the PlanReport's walked tree.
+    const sourceJson = JSON.parse(readFileSync(sourceFixture, "utf8"));
+    sourceJson.agents.list[0].model.primary =
+      "sk-abcdefghijklmnopqrstuvwxyz12";
+    writeFileSync(sourceFixture, JSON.stringify(sourceJson));
+
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const code = await runApplyAction({}, { execaRunner: runner });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain(SECRET_REFUSE_MESSAGE);
+    const rows = await readRows(ledgerPath);
+    // daemon (allow) + readonly (allow) + secret (refuse)
+    expect(rows.map((r) => r.step)).toEqual([
+      "pre-flight:daemon",
+      "pre-flight:readonly",
+      "pre-flight:secret",
+    ]);
+    expect(rows[0]?.outcome).toBe("allow");
+    expect(rows[1]?.outcome).toBe("allow");
+    expect(rows[2]?.outcome).toBe("refuse");
+  });
+
+  // --- Test C: channel collision report -------------------------------
+  it("C: channel collision → stderr contains aligned-column header + resolution footer", async () => {
+    // Fixture has a research agent bound to channel 1481659546337411234.
+    // Write a clawcode.yaml containing a pre-existing agent with that
+    // same channel to trigger a collision.
+    writeClawcodeYaml(configPath, [
+      { name: "pre-existing-target", channels: ["1481659546337411234"] },
+    ]);
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const code = await runApplyAction({}, { execaRunner: runner });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain("Source agent (OpenClaw)");
+    expect(err).toContain("Target agent (ClawCode)");
+    expect(err).toContain("Channel ID");
+    expect(err).toContain(
+      "Resolution: unbind the OpenClaw side — ClawCode is the migration target.",
+    );
+    const rows = await readRows(ledgerPath);
+    // daemon + readonly + secret + channel, all produced before refuse.
+    expect(rows).toHaveLength(4);
+    expect(rows[3]?.step).toBe("pre-flight:channel");
+    expect(rows[3]?.outcome).toBe("refuse");
+  });
+
+  // --- Test D: all guards pass → APPLY_NOT_IMPLEMENTED_MESSAGE + exit 1 -
+  it("D: all 4 guards pass → stderr contains APPLY_NOT_IMPLEMENTED_MESSAGE, ledger has 4 allow rows", async () => {
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const code = await runApplyAction({}, { execaRunner: runner });
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain(APPLY_NOT_IMPLEMENTED_MESSAGE);
+    const rows = await readRows(ledgerPath);
+    expect(rows).toHaveLength(4);
+    for (const r of rows) expect(r.outcome).toBe("allow");
+    expect(rows.map((r) => r.step)).toEqual([
+      "pre-flight:daemon",
+      "pre-flight:readonly",
+      "pre-flight:secret",
+      "pre-flight:channel",
+    ]);
+  });
+
+  // --- Test E: --only <unknown> → actionable error, no ledger rows ----
+  it("E: --only <unknown> → Unknown OpenClaw agent on stderr, exits 1, ledger empty", async () => {
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const code = await runApplyAction(
+      { only: "nosuch-agent-xyz" },
+      { execaRunner: runner },
+    );
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain("Unknown OpenClaw agent: 'nosuch-agent-xyz'");
+    expect(err).toContain("general");
+    expect(err).toContain("fin-acquisition");
+    // Ledger must be untouched — we fail before runApplyPreflight.
+    const rows = await readRows(ledgerPath);
+    expect(rows).toHaveLength(0);
+  });
+
+  // --- Test F: --only <known> narrows channel-collision check ---------
+  it("F: --only <known> narrows channel collision scope to that agent only", async () => {
+    // Fixture bindings: research → 1481659546337411234, fin-acquisition →
+    // 1481659547985641603. Put BOTH in clawcode.yaml so without filter,
+    // both would collide. Then --only research should only report the one.
+    writeClawcodeYaml(configPath, [
+      { name: "existing-a", channels: ["1481659546337411234"] },
+      { name: "existing-b", channels: ["1481659547985641603"] },
+    ]);
+    const runner = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    const code = await runApplyAction(
+      { only: "research" },
+      { execaRunner: runner },
+    );
+    expect(code).toBe(1);
+    const err = stderrCapture.join("");
+    expect(err).toContain("research");
+    expect(err).toContain("1481659546337411234");
+    // fin-acquisition's binding is filtered out — must not appear.
+    expect(err).not.toContain("1481659547985641603");
+    expect(err).not.toContain("fin-acquisition");
+  });
+
+  // --- Test G: source-tree mtime stable across all 4 scenarios (MIGR-07) -
+  it("G: MIGR-07 — source fixture tree mtime unchanged across all 4 scenarios", async () => {
+    const sourceDir = join(tmp, "source");
+    const snap0 = mtimeSnapshot(sourceDir);
+
+    // Scenario 1: daemon-active refuse
+    const runnerActive = vi
+      .fn()
+      .mockResolvedValue({ stdout: "active\n", exitCode: 0 });
+    await runApplyAction({}, { execaRunner: runnerActive });
+    const snap1 = mtimeSnapshot(sourceDir);
+    for (const [p, t] of snap0) {
+      expect(snap1.get(p), `mtime changed at ${p}`).toBe(t);
+    }
+
+    // Scenario 2: all-pass APPLY_NOT_IMPLEMENTED
+    const runnerInactive = vi
+      .fn()
+      .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
+    await runApplyAction({}, { execaRunner: runnerInactive });
+    const snap2 = mtimeSnapshot(sourceDir);
+    for (const [p, t] of snap0) {
+      expect(snap2.get(p), `mtime changed at ${p}`).toBe(t);
+    }
+
+    // Scenario 3: channel collision (with existing clawcode.yaml)
+    writeClawcodeYaml(configPath, [
+      { name: "target-x", channels: ["1481659546337411234"] },
+    ]);
+    await runApplyAction({}, { execaRunner: runnerInactive });
+    const snap3 = mtimeSnapshot(sourceDir);
+    for (const [p, t] of snap0) {
+      expect(snap3.get(p), `mtime changed at ${p}`).toBe(t);
+    }
+
+    // Scenario 4: secret-shape refuse (mutate fixture's in-place copy —
+    // but we capture the NEW baseline AFTER the mutation so we assert
+    // the apply run didn't touch even the mutated tree).
+    const sourceJson = JSON.parse(readFileSync(sourceFixture, "utf8"));
+    sourceJson.agents.list[0].model.primary =
+      "sk-abcdefghijklmnopqrstuvwxyz12";
+    writeFileSync(sourceFixture, JSON.stringify(sourceJson));
+    const snap4pre = mtimeSnapshot(sourceDir);
+    await runApplyAction({}, { execaRunner: runnerInactive });
+    const snap4post = mtimeSnapshot(sourceDir);
+    for (const [p, t] of snap4pre) {
+      expect(snap4post.get(p), `mtime changed at ${p}`).toBe(t);
+    }
+
+    // Ledger must NOT contain any file_hashes keys referencing the source
+    // fixture path prefix (witness invariant — no source files are hashed
+    // as part of apply-preflight).
+    const rows = await readRows(ledgerPath);
+    for (const r of rows) {
+      if (r.file_hashes) {
+        for (const k of Object.keys(r.file_hashes)) {
+          expect(k).not.toContain(sourceDir);
+        }
+      }
+    }
+  });
+
+  // --- Test H: static-grep regression (MIGR-07 literal-string) --------
+  it("H: no literal ~/.openclaw/ in write-context calls across src/migration/", () => {
+    const dir = "src/migration";
+    const offenders: string[] = [];
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".ts")) continue;
+      // fs-guard.ts documents the path concept in comments — it's the
+      // module that CONTAINS the enforcement logic, so its comments
+      // mention the path. Exclude it from the offender scan.
+      if (f === "fs-guard.ts") continue;
+      // guards.ts's assertReadOnlySource MENTIONS the path in comments and
+      // uses homedir() + ".openclaw" at runtime — no literal write-context
+      // call, but a conservative exclusion matches the plan's intent.
+      if (f === "guards.ts") continue;
+      const fullPath = join(dir, f);
+      const content = readFileSync(fullPath, "utf8");
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i] ?? "";
+        if (!ln.includes("~/.openclaw/")) continue;
+        if (
+          /\b(writeFile|appendFile|mkdir|writeFileSync|appendFileSync|mkdirSync)\b/.test(
+            ln,
+          )
+        ) {
+          offenders.push(`${fullPath}:${i + 1}: ${ln.trim()}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
