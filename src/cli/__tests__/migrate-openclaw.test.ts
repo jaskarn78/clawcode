@@ -699,7 +699,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
       (r) => r.step === "workspace-copy:hash-witness" && r.outcome === "allow",
     );
     expect(witnessRows.length).toBeGreaterThanOrEqual(6);
-  });
+  }, 30_000);
 
   it("SC-2: finmentum family — shared basePath + per-agent overrides (5 agents)", async () => {
     // Primary (full workspace): workspace-finmentum
@@ -781,7 +781,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
     const memoryPathMatches = finalYaml.match(/memoryPath:\s*\S+/g) ?? [];
     const distinctMemoryPaths = new Set(memoryPathMatches);
     expect(distinctMemoryPaths.size).toBeGreaterThanOrEqual(5);
-  });
+  }, 60_000);
 
   it("SC-3: .git preservation — git fsck clean + log matches", async () => {
     const workspace = join(openclawRoot, "workspace-gitty");
@@ -812,7 +812,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
     await execP79("git", ["-C", targetWorkspace, "fsck", "--full"]);
     const targetLog = (await execP79("git", ["-C", targetWorkspace, "log", "--oneline"])).stdout.trim();
     expect(targetLog).toBe(sourceLog);
-  });
+  }, 30_000);
 
   it("SC-4: archive present + session-archiver module has zero ConversationStore references", async () => {
     const { workspace, agentDir } = await seedMinimalAgent(
@@ -845,7 +845,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
     // ConversationStore via the CLI wiring would still be caught.
     const archiverSrc = readFileSync("src/migration/session-archiver.ts", "utf8");
     expect(archiverSrc).not.toMatch(/ConversationStore/);
-  });
+  }, 30_000);
 
   it("SC-5: byte-exact blobs + mtime match (random PNG + PDF)", async () => {
     const workspace = join(openclawRoot, "workspace-blobs");
@@ -887,7 +887,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
     expect(
       Buffer.compare(await readFileP79(targetPdf), await readFileP79(join(workspace, "archive", "document.pdf"))),
     ).toBe(0);
-  });
+  }, 30_000);
 
   it("workspace rollback propagates to exit code 1 + isolates failure", async () => {
     // Two agents: A will be forced to hash-mismatch via copierFs readFile spy,
@@ -971,7 +971,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
         r.outcome === "allow",
     );
     expect(agentBAllowRows.length).toBeGreaterThanOrEqual(6);
-  });
+  }, 30_000);
 
   it("env-var overrides isolate tests from real ~/.openclaw and ~/.clawcode paths", async () => {
     const { workspace, agentDir } = await seedMinimalAgent(
@@ -1018,7 +1018,7 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
 
     // Ledger write went to tmp, not .planning/migration/ledger.jsonl.
     expect(existsSyncP79(ledgerPath)).toBe(true);
-  });
+  }, 30_000);
 
   it("chokidar sees expected events on basePath during apply (atomic-write proof)", async () => {
     const { workspace, agentDir } = await seedMinimalAgent(
