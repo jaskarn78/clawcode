@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import chokidar from "chokidar";
 import { parse as parseYaml } from "yaml";
-import { writeClawcodeYaml, writerFs } from "../yaml-writer.js";
+import { writeClawcodeYaml, writerFs, removeAgentFromConfig } from "../yaml-writer.js";
 import { SECRET_REFUSE_MESSAGE } from "../guards.js";
 import type { MappedAgentNode, MapAgentWarning } from "../config-mapper.js";
 
@@ -452,5 +452,153 @@ describe("writeClawcodeYaml — missing existing file (Test 14)", () => {
       expect(result.reason).toMatch(/not found/i);
       expect(result.step).toBe("file-not-found");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 81 Plan 01 Task 1 — removeAgentFromConfig extension tests.
+// Additive: existing yaml-writer tests above are Phase 78 regression pins
+// and remain untouched. These 5 tests land the new export contract.
+// ---------------------------------------------------------------------------
+
+describe("removeAgentFromConfig — Phase 81 extension (Tests 19-23)", () => {
+  async function setupRemoveFixture(
+    yaml: string,
+  ): Promise<{ destPath: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-remove-"));
+    const destPath = join(dir, "clawcode.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(destPath, yaml, "utf8");
+    return { destPath };
+  }
+
+  const THREE_AGENTS_YAML = `version: 1
+defaults:
+  model: sonnet
+  basePath: ~/.clawcode/agents
+agents:
+  # alpha header comment
+  - name: alpha
+    workspace: ~/.clawcode/agents/alpha
+    model: sonnet
+    channels:
+      - "111"
+    mcpServers: []
+  # middle header comment (for victim)
+  - name: victim
+    workspace: ~/.clawcode/agents/victim
+    model: haiku
+    channels:
+      - "222"
+    mcpServers: []
+  # beta header comment
+  - name: beta
+    workspace: ~/.clawcode/agents/beta
+    model: sonnet
+    channels:
+      - "333"
+    mcpServers: []
+`;
+
+  it("removes the named middle agent — remaining agents + alpha/beta comments preserved (Test 19)", async () => {
+    const { destPath } = await setupRemoveFixture(THREE_AGENTS_YAML);
+    const result = await removeAgentFromConfig({
+      existingConfigPath: destPath,
+      agentName: "victim",
+    });
+    expect(result.outcome).toBe("removed");
+    if (result.outcome !== "removed") return;
+    expect(result.destPath).toBe(destPath);
+    expect(result.targetSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const after = readFileSync(destPath, "utf8");
+    // Agents reparsed — victim gone, other two remain.
+    const parsed = parseYaml(after) as { agents: Array<{ name: string }> };
+    expect(parsed.agents.map((a) => a.name)).toEqual(["alpha", "beta"]);
+    // Comments on surviving agents preserved (yaml lib may rewire the
+    // orphan 'middle header comment' onto beta — we only pin survivors).
+    expect(after).toContain("# alpha header comment");
+    expect(after).toContain("# beta header comment");
+    expect(after).not.toContain("name: victim");
+  });
+
+  it("returns not-found when agent missing; file bytes unchanged (Test 20)", async () => {
+    const { destPath } = await setupRemoveFixture(THREE_AGENTS_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+    const beforeHash = createHash("sha256")
+      .update(beforeBytes, "utf8")
+      .digest("hex");
+
+    const result = await removeAgentFromConfig({
+      existingConfigPath: destPath,
+      agentName: "does-not-exist",
+    });
+    expect(result.outcome).toBe("not-found");
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    const afterHash = createHash("sha256")
+      .update(afterBytes, "utf8")
+      .digest("hex");
+    expect(afterHash).toBe(beforeHash);
+  });
+
+  it("returns file-not-found when config path does not exist (Test 21)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-remove-noexist-"));
+    const missing = join(dir, "does-not-exist.yaml");
+    const result = await removeAgentFromConfig({
+      existingConfigPath: missing,
+      agentName: "anyone",
+    });
+    expect(result.outcome).toBe("file-not-found");
+  });
+
+  it("uses atomic temp+rename — tmp path matches .clawcode.yaml.<pid>.<ts>.tmp (Test 22)", async () => {
+    const { destPath } = await setupRemoveFixture(THREE_AGENTS_YAML);
+    const renameCalls: Array<[string, string]> = [];
+    writerFs.rename = (async (...args: unknown[]) => {
+      renameCalls.push([String(args[0]), String(args[1])]);
+      return ORIG_FS.rename(
+        args[0] as Parameters<typeof ORIG_FS.rename>[0],
+        args[1] as Parameters<typeof ORIG_FS.rename>[1],
+      );
+    }) as typeof writerFs.rename;
+
+    await removeAgentFromConfig({
+      existingConfigPath: destPath,
+      agentName: "victim",
+      pid: 4242,
+    });
+
+    expect(renameCalls.length).toBeGreaterThan(0);
+    expect(renameCalls[0]![0]).toMatch(
+      /\.clawcode\.yaml\.4242\.\d+\.tmp$/,
+    );
+    expect(renameCalls[0]![1]).toBe(destPath);
+  });
+
+  it("unlinks tmp file on rename failure and re-throws (Test 23)", async () => {
+    const { destPath } = await setupRemoveFixture(THREE_AGENTS_YAML);
+    const unlinkCalls: string[] = [];
+    writerFs.rename = (async () => {
+      throw new Error("EACCES: simulated rename failure");
+    }) as typeof writerFs.rename;
+    writerFs.unlink = (async (...args: unknown[]) => {
+      unlinkCalls.push(String(args[0]));
+      return ORIG_FS.unlink(
+        args[0] as Parameters<typeof ORIG_FS.unlink>[0],
+      );
+    }) as typeof writerFs.unlink;
+
+    await expect(
+      removeAgentFromConfig({
+        existingConfigPath: destPath,
+        agentName: "victim",
+      }),
+    ).rejects.toThrow(/EACCES/);
+
+    const tmpUnlink = unlinkCalls.find((p) =>
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
+    );
+    expect(tmpUnlink).toBeDefined();
   });
 });
