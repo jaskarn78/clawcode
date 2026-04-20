@@ -487,6 +487,96 @@ describe("MemoryStore", () => {
     });
   });
 
+  describe("origin_id idempotency (Phase 80 MEM-02)", () => {
+    it("origin_id column exists after MemoryStore construction", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const columns = db
+        .prepare("PRAGMA table_info(memories)")
+        .all() as Array<{ name: string; type: string }>;
+      const originRow = columns.find((c) => c.name === "origin_id");
+      expect(originRow).toBeDefined();
+      expect(originRow!.type).toBe("TEXT");
+    });
+
+    it("origin_id UNIQUE index is present on memories table", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const indexes = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memories'",
+        )
+        .all() as Array<{ name: string }>;
+      const hasOriginIdIndex = indexes.some((i) => /origin_id/i.test(i.name));
+      expect(hasOriginIdIndex).toBe(true);
+    });
+
+    it("migration is idempotent — re-opening DB does not throw and column count is stable", () => {
+      // Use a tmp-file DB so it survives close/reopen (":memory:" doesn't).
+      const tmpPath = `/tmp/store-origin-id-idempotent-${Date.now()}-${Math.random().toString(36).slice(2)}.db`;
+      const first = new MemoryStore(tmpPath);
+      const colsBefore = (first.getDatabase()
+        .prepare("PRAGMA table_info(memories)")
+        .all() as Array<{ name: string }>).length;
+      first.close();
+
+      // Re-opening must not throw and must leave column count unchanged.
+      expect(() => {
+        const second = new MemoryStore(tmpPath);
+        const colsAfter = (second.getDatabase()
+          .prepare("PRAGMA table_info(memories)")
+          .all() as Array<{ name: string }>).length;
+        expect(colsAfter).toBe(colsBefore);
+        second.close();
+      }).not.toThrow();
+    });
+
+    it("existing rows with NULL origin_id coexist under UNIQUE (no collision on NULL=NULL)", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+
+      store.insert(
+        { content: "row one", source: "manual" },
+        randomEmbedding(),
+      );
+      store.insert(
+        { content: "row two", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const nullCount = db
+        .prepare(
+          "SELECT COUNT(*) as cnt FROM memories WHERE origin_id IS NULL",
+        )
+        .get() as { cnt: number };
+      expect(nullCount.cnt).toBe(2);
+    });
+
+    it("CreateMemoryInput.origin_id is optional — insert accepts with AND without", () => {
+      store = createTestStore();
+
+      // Without origin_id (existing behavior).
+      const withoutOrigin = store.insert(
+        { content: "no origin", source: "manual", skipDedup: true },
+        randomEmbedding(),
+      );
+      expect(withoutOrigin.id).toBeTruthy();
+
+      // With origin_id (Task 2 tests full semantics; here we only assert the
+      // type accepts the field and insert() does not throw).
+      const withOrigin = store.insert(
+        {
+          content: "has origin",
+          source: "manual",
+          skipDedup: true,
+          origin_id: "openclaw:test:column-accepts-field",
+        },
+        randomEmbedding(),
+      );
+      expect(withOrigin.id).toBeTruthy();
+    });
+  });
+
   describe("sourceTurnIds (CONV-03 write path)", () => {
     it("sourceTurnIds input is returned on insert (not null)", () => {
       store = createTestStore();
