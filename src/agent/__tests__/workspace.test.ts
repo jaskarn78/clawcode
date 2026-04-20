@@ -17,6 +17,7 @@ async function makeTempDir(): Promise<string> {
 function makeAgent(overrides: Partial<ResolvedAgentConfig> & { workspace: string }): ResolvedAgentConfig {
   return {
     name: "test-agent",
+    memoryPath: overrides.workspace, // Phase 75 SHARED-01 — mirror workspace for test fixtures
     channels: [],
     model: "sonnet",
     effort: "low",

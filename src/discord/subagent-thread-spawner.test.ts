@@ -17,6 +17,7 @@ function makeAgentConfig(
   return {
     name: "agent-a",
     workspace: "/tmp/agent-a",
+    memoryPath: "/tmp/agent-a", // Phase 75 SHARED-01
     channels: ["channel-1"],
     model: "sonnet",
     effort: "low",

@@ -10,6 +10,7 @@ import type { ResolvedAgentConfig } from "../../shared/types.js";
 function makeConfig(overrides: Partial<ResolvedAgentConfig> & { workspace: string }): ResolvedAgentConfig {
   return {
     name: "test-agent",
+    memoryPath: overrides.workspace, // Phase 75 SHARED-01 — mirror workspace for test fixtures
     channels: ["#general"],
     model: "sonnet",
     effort: "low",

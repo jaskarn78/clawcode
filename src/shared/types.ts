@@ -5,6 +5,15 @@
 export type ResolvedAgentConfig = {
   readonly name: string;
   readonly workspace: string;
+  /**
+   * Phase 75 SHARED-01 — resolved filesystem path for the agent's
+   * private runtime state (memories.db, traces.db, inbox/, heartbeat.log,
+   * context-summary files, session-state). When the YAML omitted
+   * `memoryPath:`, loader.ts populates this from `workspace` so downstream
+   * consumers can always read it unconditionally. Always absolute
+   * (expanded via expandHome in loader.ts Plan 02).
+   */
+  readonly memoryPath: string;
   readonly channels: readonly string[];
   readonly model: "sonnet" | "opus" | "haiku";
   readonly effort: "low" | "medium" | "high" | "max";

@@ -94,6 +94,7 @@ describe("HeartbeatRunner", () => {
     const agentConfig: ResolvedAgentConfig = {
       name: "agent-a",
       workspace: join(tempDir, "agent-a"),
+      memoryPath: join(tempDir, "agent-a"), // Phase 75 SHARED-01
       channels: [],
       model: "sonnet",
       effort: "low",
@@ -113,7 +114,7 @@ describe("HeartbeatRunner", () => {
     };
     runner.setAgentConfigs([
       agentConfig,
-      { ...agentConfig, name: "agent-b", workspace: join(tempDir, "agent-b") },
+      { ...agentConfig, name: "agent-b", workspace: join(tempDir, "agent-b"), memoryPath: join(tempDir, "agent-b") },
     ]);
 
     await runner.tick();
@@ -188,6 +189,7 @@ describe("HeartbeatRunner", () => {
     const agentConfig: ResolvedAgentConfig = {
       name: "agent-a",
       workspace: join(tempDir, "agent-a"),
+      memoryPath: join(tempDir, "agent-a"), // Phase 75 SHARED-01
       channels: [],
       model: "sonnet",
       effort: "low",
@@ -302,6 +304,7 @@ describe("HeartbeatRunner", () => {
     const agentConfig: ResolvedAgentConfig = {
       name: "agent-a",
       workspace: join(tempDir, "agent-a"),
+      memoryPath: join(tempDir, "agent-a"), // Phase 75 SHARED-01
       channels: [],
       model: "sonnet",
       effort: "low",
@@ -355,6 +358,7 @@ describe("HeartbeatRunner", () => {
     const agentConfig: ResolvedAgentConfig = {
       name: "agent-a",
       workspace,
+      memoryPath: workspace, // Phase 75 SHARED-01
       channels: [],
       model: "sonnet",
       effort: "low",
@@ -393,6 +397,7 @@ describe("HeartbeatRunner", () => {
       return {
         name,
         workspace,
+        memoryPath: workspace, // Phase 75 SHARED-01
         channels: [],
         model: "sonnet",
         effort: "low",

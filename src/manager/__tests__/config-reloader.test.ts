@@ -11,6 +11,7 @@ import { pino } from "pino";
 function makeAgent(overrides: Partial<ResolvedAgentConfig> & { name: string }): ResolvedAgentConfig {
   return {
     workspace: `/tmp/agents/${overrides.name}`,
+    memoryPath: `/tmp/agents/${overrides.name}`, // Phase 75 SHARED-01
     channels: [],
     model: "sonnet",
     effort: "low",

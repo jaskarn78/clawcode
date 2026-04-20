@@ -640,6 +640,13 @@ export type ImageConfig = z.infer<typeof imageConfigSchema>;
 export const agentSchema = z.object({
   name: z.string().min(1),
   workspace: z.string().optional(),
+  // Phase 75 SHARED-01 — per-agent override for the directory that owns
+  // this agent's private runtime state (memories.db, traces.db, inbox/,
+  // heartbeat.log, context-summary files). When unset, loader.ts falls
+  // back to `workspace`. Enables multiple agents (e.g., the finmentum family)
+  // to share one basePath while keeping memory/inbox/heartbeat isolated.
+  // Raw string — expansion via expandHome() happens in loader.ts (Plan 02).
+  memoryPath: z.string().min(1).optional(),
   channels: z.array(z.string()).default([]),
   model: modelSchema.optional(),
   skills: z.array(z.string()).default([]),
@@ -922,6 +929,29 @@ export const configSchema = z.object({
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   triggers: triggersConfigSchema,
   agents: z.array(agentSchema).min(1),
+}).superRefine((cfg, ctx) => {
+  // Phase 75 SHARED-01 — detect two agents declaring the SAME memoryPath.
+  // Raw-string comparison is sufficient at this layer: loader.ts handles
+  // expansion + path resolution; identical user-facing YAML values are
+  // guaranteed to collide post-expansion. Path-normalization edge cases
+  // (trailing slash, ./ prefixes) are explicitly out of scope per the
+  // deferred section of 75-CONTEXT.md and are handled downstream.
+  const byPath = new Map<string, string[]>();
+  for (const agent of cfg.agents) {
+    if (!agent.memoryPath) continue;
+    const list = byPath.get(agent.memoryPath) ?? [];
+    list.push(agent.name);
+    byPath.set(agent.memoryPath, list);
+  }
+  for (const [path, names] of byPath) {
+    if (names.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agents"],
+        message: `memoryPath conflict: "${path}" is declared by multiple agents (${names.join(", ")}). Each agent must have a distinct memoryPath or omit it to fall back to workspace.`,
+      });
+    }
+  }
 });
 
 /** Fully parsed and validated config. */

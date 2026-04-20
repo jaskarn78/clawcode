@@ -35,6 +35,7 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
   return {
     name: "test-agent",
     workspace: "/tmp/test-workspace",
+    memoryPath: "/tmp/test-workspace", // Phase 75 SHARED-01
     channels: [],
     model: "sonnet",
     effort: "low",

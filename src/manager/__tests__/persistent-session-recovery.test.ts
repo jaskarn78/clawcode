@@ -42,6 +42,7 @@ function makeConfig(name: string): ResolvedAgentConfig {
   return {
     name,
     workspace: "/tmp/test-workspace",
+    memoryPath: "/tmp/test-workspace", // Phase 75 SHARED-01
     channels: ["#general"],
     model: "sonnet",
     effort: "low",

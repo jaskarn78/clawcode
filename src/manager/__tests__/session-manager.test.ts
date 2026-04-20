@@ -20,6 +20,7 @@ function makeConfig(name: string): ResolvedAgentConfig {
   return {
     name,
     workspace: "/tmp/test-workspace",
+    memoryPath: "/tmp/test-workspace", // Phase 75 SHARED-01
     channels: ["#general"],
     model: "sonnet",
     effort: "low",
@@ -605,7 +606,7 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
   // ConversationStore. Shared /tmp/test-workspace across tests would mean
   // a previous test's sessions persist, inflating turn counts.
   function makeIsolatedConfig(name: string): ResolvedAgentConfig {
-    return { ...makeConfig(name), workspace: tmpDir };
+    return { ...makeConfig(name), workspace: tmpDir, memoryPath: tmpDir };
   }
 
   beforeEach(async () => {
@@ -863,6 +864,7 @@ describe("configDeps wiring — Phase 67 gap-closure", () => {
     const config: ResolvedAgentConfig = {
       ...makeConfig(agentName),
       workspace: tmpDir,
+      memoryPath: tmpDir,
     };
 
     await manager.startAgent(agentName, config);
@@ -940,6 +942,7 @@ describe("brief cache invalidation", () => {
     const config: ResolvedAgentConfig = {
       ...makeConfig(agentName),
       workspace: tmpDir,
+      memoryPath: tmpDir,
     };
 
     await manager.startAgent(agentName, config);
@@ -957,6 +960,7 @@ describe("brief cache invalidation", () => {
     const config: ResolvedAgentConfig = {
       ...makeConfig(agentName),
       workspace: tmpDir,
+      memoryPath: tmpDir,
     };
 
     await manager.startAgent(agentName, config);
@@ -982,6 +986,7 @@ describe("brief cache invalidation", () => {
     const config: ResolvedAgentConfig = {
       ...makeConfig(agentName),
       workspace: tmpDir,
+      memoryPath: tmpDir,
     };
 
     await manager.startAgent(agentName, config);

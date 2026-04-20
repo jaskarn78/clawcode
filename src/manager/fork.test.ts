@@ -19,6 +19,7 @@ describe("buildForkConfig", () => {
   const parentConfig: ResolvedAgentConfig = {
     name: "researcher",
     workspace: "/home/test/.clawcode/agents/researcher",
+    memoryPath: "/home/test/.clawcode/agents/researcher", // Phase 75 SHARED-01
     channels: ["123456"],
     model: "sonnet",
     effort: "low",
