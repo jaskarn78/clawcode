@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: "Completed 75-04-PLAN.md — gap closure. Truth #7 closed (memoryPath vs workspace for context-summary READ). Phase 75 has 4 plans landed; re-run /gsd:verify-phase 75 to mark fully VERIFIED."
-last_updated: "2026-04-20T14:57:01.466Z"
+status: Ready to execute
+stopped_at: Completed 76-01-PLAN.md — read-side foundation (reader/sqlite/ledger). Ready for 76-02 CLI wiring.
+last_updated: "2026-04-20T16:25:46.719Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 7
-  total_plans: 19
-  completed_plans: 19
+  total_plans: 22
+  completed_plans: 20
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 75 — shared-workspace-runtime-support
+**Current focus:** Phase 76 — migration-cli-read-side-dry-run
 
 ## Current Position
 
-Phase: 76
-Plan: Not started
+Phase: 76 (migration-cli-read-side-dry-run) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -71,6 +71,10 @@ Recent decisions affecting current work:
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 03]: Integration test asserts error-message TEXT not just success===false — pins the UX contract that schema + loadConfig both surface BOTH conflicting agent names when memoryPath collides.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 04]: Context-summary READ path in session-config.ts:318 now resolves against config.memoryPath (not config.workspace) — closes 75-VERIFICATION.md Truth #7 asymmetry. One-line fix with inline rationale comment + pinned regression test.
 - [Phase 75-shared-workspace-runtime-support]: [Phase 75 Plan 04]: Context-summary test assertion uses (systemPrompt + mutableSuffix) combined block — Phase 52 two-block wiring routes resume summary into MUTABLE suffix; plan spec asked for systemPrompt only, primary regression guard (toHaveBeenCalledWith) is unchanged and unambiguous.
+- [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: FINMENTUM_FAMILY_IDS hardcoded (D-Finmentum) — dynamic heuristic risks mis-grouping finmentum-dashboard/studio; 5 ids frozen.
+- [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: openclawBindingSchema uses .passthrough() — tolerates real on-box extra fields (type:'route', accountId) without weakening required-field checks; needed for the finmentum-content-creator binding.
+- [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: Ledger validated on WRITE pre-mkdir — bad rows never create .planning/migration/ directory; enforces append-only invariant at write side, not reader side.
+- [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: latestStatusByAgent uses insert-order last-write-wins (NOT ts-sort) — append-only file ordering is the truth source; wall-clock skew across apply/verify rows would misreshuffle under ts-sort.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -133,9 +137,10 @@ Recent decisions affecting current work:
 | Phase 75-shared-workspace-runtime-support P02 | 14min | 2 tasks | 10 files |
 | Phase 75-shared-workspace-runtime-support P03 | 11min | 1 tasks | 1 files |
 | Phase 75-shared-workspace-runtime-support P04 | 8min | 2 tasks | 2 files |
+| Phase 76-migration-cli-read-side-dry-run P01 | 5min | 3 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 75-04-PLAN.md — gap closure. Truth #7 closed (memoryPath vs workspace for context-summary READ). Phase 75 has 4 plans landed; re-run /gsd:verify-phase 75 to mark fully VERIFIED.
+Stopped at: Completed 76-01-PLAN.md — read-side foundation (reader/sqlite/ledger). Ready for 76-02 CLI wiring.
 Resume file: None
