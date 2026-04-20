@@ -46,3 +46,22 @@ re-read lazily at next session boot; no DB connection to reopen.
 **Impact if skipped:** Operators editing `clawcode.yaml` to swap soulFile
 paths will be told to restart the daemon. Semantically correct but slightly
 heavier than strictly required.
+
+## 78-03 Deferrals
+
+### 3. Pre-existing failures in unrelated manager tests (out of scope)
+
+**Files:**
+- `src/manager/__tests__/bootstrap-integration.test.ts` (2 failures)
+- `src/manager/__tests__/daemon-openai.test.ts` (6 failures)
+- `src/manager/__tests__/session-manager.test.ts` (1 failure)
+
+**Status:** All 9 failures are PRE-EXISTING — verified via `git stash` +
+rerun: the same 9 tests fail on a clean tree without Plan 03 changes.
+
+**Root cause (bootstrap-integration):** Test mocks omit `memoryPath` on
+the ResolvedAgentConfig fixture; `buildSessionConfig` now calls
+`join(config.memoryPath, "memory")` unconditionally (Phase 75 SHARED-02).
+
+**Out of scope:** SCOPE BOUNDARY per deviation-rules. Phase 78 Plan 03
+introduces no changes to manager/ code; logging for transparency only.

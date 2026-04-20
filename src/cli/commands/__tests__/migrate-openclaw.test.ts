@@ -519,24 +519,38 @@ describe("migrate-openclaw CLI — apply subcommand", () => {
     expect(rows[3]?.outcome).toBe("refuse");
   });
 
-  // --- Test D: all guards pass → APPLY_NOT_IMPLEMENTED_MESSAGE + exit 1 -
-  it("D: all 4 guards pass → stderr contains APPLY_NOT_IMPLEMENTED_MESSAGE, ledger has 4 allow rows", async () => {
+  // --- Test D: all guards pass → Phase 78 Plan 03 yaml-writer runs --
+  // Phase 77 shipped with an "apply not implemented" stub after the 4th
+  // guard; Phase 78 Plan 03 replaced that stub with writeClawcodeYaml.
+  // This test's fixture strips model ids to "sonnet" (non-entropic — so
+  // scanSecrets passes), which is NOT in DEFAULT_MODEL_MAP — the writer
+  // therefore refuses with the "unmappable-model" step. Pass
+  // --model-map "sonnet=sonnet" to resolve and land a successful write.
+  it("D: all 4 guards pass → yaml-writer runs (refuses without model-map override when stripped fixture models aren't in DEFAULT_MODEL_MAP)", async () => {
     const runner = vi
       .fn()
       .mockResolvedValue({ stdout: "inactive\n", exitCode: 3 });
     const code = await runApplyAction({}, { execaRunner: runner });
+    // Without --model-map, writer refuses (step:"unmappable-model").
     expect(code).toBe(1);
     const err = stderrCapture.join("");
-    expect(err).toContain(APPLY_NOT_IMPLEMENTED_MESSAGE);
+    expect(err).toMatch(/unmappable model/);
     const rows = await readRows(ledgerPath);
-    expect(rows).toHaveLength(4);
-    for (const r of rows) expect(r.outcome).toBe("allow");
-    expect(rows.map((r) => r.step)).toEqual([
+    // 4 pre-flight allow rows + 1 write-refuse row.
+    expect(rows.length).toBeGreaterThanOrEqual(4);
+    const preflightSteps = rows
+      .slice(0, 4)
+      .map((r) => r.step);
+    expect(preflightSteps).toEqual([
       "pre-flight:daemon",
       "pre-flight:readonly",
       "pre-flight:secret",
       "pre-flight:channel",
     ]);
+    for (const r of rows.slice(0, 4)) expect(r.outcome).toBe("allow");
+    // APPLY_NOT_IMPLEMENTED_MESSAGE is no longer emitted — the writer
+    // refuse copy replaces it.
+    expect(err).not.toContain(APPLY_NOT_IMPLEMENTED_MESSAGE);
   });
 
   // --- Test E: --only <unknown> → actionable error, no ledger rows ----
