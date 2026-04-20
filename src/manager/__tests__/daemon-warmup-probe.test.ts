@@ -284,7 +284,7 @@ describe("daemon.ts image wiring (Phase 72 Plan 02 — source grep)", () => {
 });
 
 describe("EmbeddingService singleton invariant (src-level grep)", () => {
-  it("src/ has exactly one production construction of EmbeddingService", () => {
+  it("src/ production constructions of EmbeddingService are limited to known entrypoints", () => {
     // Resolve src/ from this test file (works regardless of cwd in vitest).
     const srcDir = new URL("../../", import.meta.url).pathname;
     const files = walkTs(srcDir);
@@ -298,10 +298,26 @@ describe("EmbeddingService singleton invariant (src-level grep)", () => {
       }
     }
 
-    // Exactly one production construction, and it must live in
-    // manager/session-memory.ts (the AgentMemoryManager singleton).
-    expect(hits).toHaveLength(1);
-    expect(hits[0].file).toBe("manager/session-memory.ts");
-    expect(hits[0].matches).toBe(1);
+    // Phase 80 Plan 03 — added cli/commands/migrate-openclaw.ts as a SECOND
+    // valid production construction site. Rationale: the CLI is a different
+    // process from the daemon, and needs its own embedder for memory
+    // translation during `clawcode migrate openclaw apply`. Both are
+    // legitimate singletons WITHIN their own process — the daemon-warmup
+    // singleton invariant applies to the daemon process, the CLI-local
+    // lazy singleton applies to the CLI process.
+    const ALLOWED: ReadonlySet<string> = new Set([
+      "manager/session-memory.ts",
+      "cli/commands/migrate-openclaw.ts",
+    ]);
+    expect(hits.length).toBeLessThanOrEqual(ALLOWED.size);
+    for (const hit of hits) {
+      expect(ALLOWED.has(hit.file)).toBe(true);
+      expect(hit.matches).toBe(1);
+    }
+    // At least one of the allowed sites must be present (pins that nobody
+    // accidentally removed the daemon-side construction).
+    expect(hits.some((h) => h.file === "manager/session-memory.ts")).toBe(
+      true,
+    );
   });
 });

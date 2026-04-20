@@ -1065,3 +1065,335 @@ describe("migrate openclaw apply — Phase 79 end-to-end workspace migration", (
     expect(addEvents.length).toBeGreaterThanOrEqual(1);
   }, 20_000);
 });
+
+// ---- Phase 80 Plan 03 Task 1 — memory-translate wiring unit tests --------
+//
+// These tests exercise the per-agent memory-translate block inside
+// runApplyAction without running the real translator (translateAgentMemories
+// is a heavy ONNX-backed embedding path). The translator is monkey-patched
+// on migrateOpenclawHandlers — the production code indirects through that
+// holder so ESM named-import bindings don't block the swap.
+//
+// The read_first gate for Task 1 is satisfied via the existing Phase 79
+// Plan 03 fixture workspace-personal (seedMinimalAgent helper below).
+
+import type { TranslateAgentMemoriesArgs } from "../../migration/memory-translator.js";
+import { _resetMigrationEmbedderForTests } from "../commands/migrate-openclaw.js";
+import { MemoryStore as P80MemoryStore } from "../../memory/store.js";
+
+describe("Phase 80 Plan 03 Task 1 — runApplyAction memory-translate wiring", () => {
+  let tmp: string;
+  let openclawRoot: string;
+  let targetRoot: string;
+  let configPath: string;
+  let openclawJson: string;
+  let ledgerPath: string;
+  let envSnap: P79Env;
+  let originalTranslator: typeof migrateOpenclawHandlers.translateAgentMemories;
+  let translatorCalls: TranslateAgentMemoriesArgs[];
+
+  beforeEach(async () => {
+    envSnap = snapshotP79Env();
+    tmp = await mkdtempP79(join(tmpdir(), "cc-p80-t1-"));
+    openclawRoot = join(tmp, "openclaw-fake");
+    targetRoot = join(tmp, "target-fake");
+    configPath = join(tmp, "clawcode.yaml");
+    openclawJson = join(openclawRoot, "openclaw.json");
+    ledgerPath = join(tmp, "ledger.jsonl");
+    await mkdirP79(openclawRoot, { recursive: true });
+    await mkdirP79(targetRoot, { recursive: true });
+    await mkdirP79(join(openclawRoot, "agents"), { recursive: true });
+    await copyFileP79(FIXTURE_CLAWCODE_YAML, configPath);
+
+    process.env.CLAWCODE_OPENCLAW_JSON = openclawJson;
+    process.env.CLAWCODE_LEDGER_PATH = ledgerPath;
+    process.env.CLAWCODE_CONFIG_PATH = configPath;
+    process.env.CLAWCODE_OPENCLAW_ROOT = openclawRoot;
+    process.env.CLAWCODE_AGENTS_ROOT = targetRoot;
+    process.env.CLAWCODE_WORKSPACE_TARGET_ROOT = targetRoot;
+    process.env.CLAWCODE_OPENCLAW_MEMORY_DIR = join(openclawRoot, "memory");
+    await mkdirP79(join(openclawRoot, "memory"), { recursive: true });
+
+    // Reset CLI-local embedder so each test starts from a clean slate.
+    _resetMigrationEmbedderForTests();
+    originalTranslator = migrateOpenclawHandlers.translateAgentMemories;
+    translatorCalls = [];
+  });
+
+  afterEach(async () => {
+    migrateOpenclawHandlers.translateAgentMemories = originalTranslator;
+    restoreP79Env(envSnap);
+    await rmP79(tmp, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  async function writeP80OpenclawJson(
+    agents: Array<{ id: string; workspace: string; agentDir: string }>,
+  ): Promise<void> {
+    await writeFileP79(
+      openclawJson,
+      JSON.stringify({
+        meta: { lastTouchedVersion: "test", lastTouchedAt: "2026-04-20T00:00:00Z" },
+        agents: {
+          list: agents.map((a) => ({
+            id: a.id,
+            name: a.id,
+            workspace: a.workspace,
+            agentDir: a.agentDir,
+            model: {
+              primary: "anthropic-api/claude-sonnet-4-6",
+              fallbacks: [],
+            },
+            identity: { name: a.id, emoji: "X" },
+          })),
+        },
+        bindings: [],
+      }),
+    );
+  }
+
+  async function seedAgent(id: string, wsSubdir: string): Promise<{ workspace: string; agentDir: string }> {
+    const workspace = join(openclawRoot, wsSubdir);
+    const agentDir = join(openclawRoot, "agents", id);
+    await cpP79("src/migration/__tests__/fixtures/workspace-personal", workspace, {
+      recursive: true,
+    });
+    await mkdirP79(agentDir, { recursive: true });
+    return { workspace, agentDir };
+  }
+
+  /** Swap in a mock translator that records calls AND stubs a result. */
+  function installMockTranslator(result: {
+    upserted: number;
+    skipped: number;
+    rowCount?: number;
+  }): void {
+    migrateOpenclawHandlers.translateAgentMemories = (async (args: TranslateAgentMemoriesArgs) => {
+      translatorCalls.push(args);
+      const rowCount = result.rowCount ?? result.upserted + result.skipped;
+      const ledgerRows = Array.from({ length: rowCount }, (_, i) => ({
+        ts: new Date().toISOString(),
+        action: "apply" as const,
+        agent: args.agentId,
+        status: "pending" as const,
+        source_hash: args.sourceHash,
+        step: "memory-translate:embed-insert",
+        outcome: "allow" as const,
+        file_hashes: { [`fixture-${i}.md`]: "deadbeef" + i },
+        notes: i < result.upserted ? "new" : "already-imported",
+      }));
+      return Object.freeze({
+        upserted: result.upserted,
+        skipped: result.skipped,
+        ledgerRows: Object.freeze(ledgerRows),
+      });
+    }) as typeof migrateOpenclawHandlers.translateAgentMemories;
+  }
+
+  it("Test 1: calls translateAgentMemories once per successfully-copied agent", async () => {
+    installMockTranslator({ upserted: 2, skipped: 0 });
+    const a = await seedAgent("ag-a", "workspace-ag-a");
+    const b = await seedAgent("ag-b", "workspace-ag-b");
+    await writeP80OpenclawJson([
+      { id: "ag-a", workspace: a.workspace, agentDir: a.agentDir },
+      { id: "ag-b", workspace: b.workspace, agentDir: b.agentDir },
+    ]);
+
+    const code = await runApplyAction(
+      {},
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+    expect(translatorCalls).toHaveLength(2);
+    const ids = translatorCalls.map((c) => c.agentId).sort();
+    expect(ids).toEqual(["ag-a", "ag-b"]);
+    // targetWorkspace points to the copied target dir for each agent.
+    for (const call of translatorCalls) {
+      expect(call.targetWorkspace).toBe(join(targetRoot, call.agentId));
+    }
+  });
+
+  it("Test 2: skip-empty-source agents don't call translator", async () => {
+    installMockTranslator({ upserted: 0, skipped: 0 });
+    // workspace dir missing entirely → skip-empty-source
+    const agentDir = join(openclawRoot, "agents", "ghost");
+    await mkdirP79(agentDir, { recursive: true });
+    const ghostWs = join(openclawRoot, "workspace-ghost-missing");
+    // deliberately NOT created
+    await writeP80OpenclawJson([
+      { id: "ghost", workspace: ghostWs, agentDir },
+    ]);
+
+    const code = await runApplyAction(
+      {},
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+    expect(translatorCalls).toHaveLength(0);
+  });
+
+  it("Test 3: rolled-back agents don't call translator; other agents still processed", async () => {
+    installMockTranslator({ upserted: 1, skipped: 0 });
+    const a = await seedAgent("fail-a", "workspace-fail-a");
+    const b = await seedAgent("pass-b", "workspace-pass-b");
+    await writeP80OpenclawJson([
+      { id: "fail-a", workspace: a.workspace, agentDir: a.agentDir },
+      { id: "pass-b", workspace: b.workspace, agentDir: b.agentDir },
+    ]);
+
+    // Force fail-a's SOUL.md source read to return garbage during hash-witness.
+    const { copierFs } = await import("../../migration/workspace-copier.js");
+    const realReadFile = copierFs.readFile;
+    const spy = vi.spyOn(copierFs, "readFile").mockImplementation(
+      (async (path: Parameters<typeof realReadFile>[0], ...rest: unknown[]) => {
+        const p = typeof path === "string" ? path : String(path);
+        if (p.includes("workspace-fail-a") && p.endsWith("SOUL.md")) {
+          return Buffer.from("CORRUPTED");
+        }
+        return (realReadFile as (p: unknown, ...rest: unknown[]) => Promise<Buffer>)(
+          path,
+          ...(rest as []),
+        );
+      }) as typeof realReadFile,
+    );
+
+    try {
+      const code = await runApplyAction(
+        {},
+        { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+      );
+      expect(code).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    // translator called ONLY for pass-b.
+    expect(translatorCalls).toHaveLength(1);
+    expect(translatorCalls[0]?.agentId).toBe("pass-b");
+  });
+
+  it("Test 4: literal CLI output contains 'upserted N, skipped M'", async () => {
+    installMockTranslator({ upserted: 3, skipped: 2 });
+    const a = await seedAgent("cli-out", "workspace-cli-out");
+    await writeP80OpenclawJson([
+      { id: "cli-out", workspace: a.workspace, agentDir: a.agentDir },
+    ]);
+    const stdoutWrites: string[] = [];
+    const outSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+    try {
+      const code = await runApplyAction(
+        { only: "cli-out" },
+        { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+      );
+      expect(code).toBe(0);
+    } finally {
+      outSpy.mockRestore();
+    }
+    const allStdout = stdoutWrites.join("");
+    expect(allStdout).toContain("upserted 3, skipped 2");
+  });
+
+  it("Test 5: translator ledger rows are appended to ledger.jsonl", async () => {
+    installMockTranslator({ upserted: 3, skipped: 0, rowCount: 3 });
+    const a = await seedAgent("ledger-a", "workspace-ledger-a");
+    await writeP80OpenclawJson([
+      { id: "ledger-a", workspace: a.workspace, agentDir: a.agentDir },
+    ]);
+    const code = await runApplyAction(
+      { only: "ledger-a" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+    const rows = await readRows(ledgerPath);
+    const translateRows = rows.filter((r) => r.step === "memory-translate:embed-insert");
+    expect(translateRows).toHaveLength(3);
+    for (const r of translateRows) {
+      expect(r.agent).toBe("ledger-a");
+      expect(r.outcome).toBe("allow");
+    }
+  });
+
+  it("Test 6: per-agent MemoryStore opens at <targetMemoryPath>/memory/memories.db and closes", async () => {
+    installMockTranslator({ upserted: 1, skipped: 0 });
+    const a = await seedAgent("mstore", "workspace-mstore");
+    await writeP80OpenclawJson([
+      { id: "mstore", workspace: a.workspace, agentDir: a.agentDir },
+    ]);
+    const code = await runApplyAction(
+      { only: "mstore" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+    // The translator's memoryPath argument is agentPlan.targetMemoryPath.
+    // Plan 03 production code constructs MemoryStore at <memoryPath>/memory/memories.db.
+    // After runApplyAction returns, the store must be closed — re-opening for read should succeed.
+    const storeArg = translatorCalls[0]?.store;
+    expect(storeArg).toBeDefined();
+    const memoryPath = translatorCalls[0]!.memoryPath;
+    const dbPath = join(memoryPath, "memory", "memories.db");
+    expect(existsSyncP79(dbPath)).toBe(true);
+    // Opening a second handle would fail if the first still held an exclusive lock.
+    const re = new P80MemoryStore(dbPath);
+    try {
+      expect(re.listRecent(1)).toBeDefined();
+    } finally {
+      re.close();
+    }
+  });
+
+  it("Test 7: translator error is non-fatal for other agents; refuse ledger row; exit code 1", async () => {
+    const a = await seedAgent("err-a", "workspace-err-a");
+    const b = await seedAgent("ok-b", "workspace-ok-b");
+    await writeP80OpenclawJson([
+      { id: "err-a", workspace: a.workspace, agentDir: a.agentDir },
+      { id: "ok-b", workspace: b.workspace, agentDir: b.agentDir },
+    ]);
+
+    migrateOpenclawHandlers.translateAgentMemories = (async (args: TranslateAgentMemoriesArgs) => {
+      translatorCalls.push(args);
+      if (args.agentId === "err-a") {
+        throw new Error("synthetic translator failure");
+      }
+      return Object.freeze({
+        upserted: 1,
+        skipped: 0,
+        ledgerRows: Object.freeze([]),
+      });
+    }) as typeof migrateOpenclawHandlers.translateAgentMemories;
+
+    const stderrWrites: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    });
+    try {
+      const code = await runApplyAction(
+        {},
+        { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+      );
+      expect(code).toBe(1);
+    } finally {
+      errSpy.mockRestore();
+    }
+
+    // Both agents saw the translator invocation.
+    expect(translatorCalls.map((c) => c.agentId).sort()).toEqual(["err-a", "ok-b"]);
+
+    // Refuse ledger row for err-a.
+    const rows = await readRows(ledgerPath);
+    const refuseRow = rows.find(
+      (r) =>
+        r.agent === "err-a" &&
+        r.step === "memory-translate:error" &&
+        r.outcome === "refuse",
+    );
+    expect(refuseRow).toBeDefined();
+    expect(refuseRow?.notes).toContain("synthetic translator failure");
+
+    // stderr names err-a.
+    expect(stderrWrites.join("")).toMatch(/memory-translate failed for err-a/);
+  });
+});
+
