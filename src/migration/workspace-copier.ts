@@ -49,7 +49,7 @@ import {
   readlink,
   rm,
 } from "node:fs/promises";
-import { lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
 import { appendRow } from "./ledger.js";
@@ -250,6 +250,29 @@ async function sweepDir(
   for (const entry of entries) {
     const dstPath = join(currentDst, entry.name);
     const srcPath = join(currentSrc, entry.name);
+    // Phase 80 — tolerate target-only files that have no source counterpart.
+    // Plan 03 writes <targetMemoryPath>/memory/memories.db INSIDE the target
+    // workspace (for dedicated-workspace agents targetMemoryPath === workspace).
+    // On a re-run of `apply`, fs.cp overwrites source files in the target but
+    // does NOT delete extras; the sweep would otherwise ENOENT on memories.db's
+    // non-existent source. Skip target-only entries with a ledger witness so
+    // forensic ordering stays intact but the sweep doesn't crash.
+    if (!existsSync(srcPath)) {
+      const relPath = relative(args.target, dstPath);
+      await appendRow(args.ledgerPath, {
+        ts: ts(),
+        action: "apply",
+        agent: args.agentId,
+        status: "pending",
+        source_hash: args.sourceHash,
+        step: "workspace-copy:hash-witness",
+        outcome: "allow",
+        file_hashes: { [relPath]: "target-only" },
+        notes: "target-only file (no source counterpart — skipped)",
+      });
+      onFile();
+      continue;
+    }
     if (entry.isSymbolicLink()) {
       // Compare readlink targets — not dereferenced content. A symlink's
       // target may live outside the workspace; that content is not part of

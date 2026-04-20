@@ -1397,3 +1397,324 @@ describe("Phase 80 Plan 03 Task 1 — runApplyAction memory-translate wiring", (
   });
 });
 
+// ---- Phase 80 Plan 03 Task 2 — end-to-end memory-translation integration --
+//
+// These tests run the REAL translator against a real MemoryStore with a
+// real EmbeddingService (first test triggers ONNX warmup ~200ms). Each
+// test asserts one of the five phase-level success criteria plus a ledger
+// step-ordering invariant. No mocks on the translator or store — this is
+// a full-stack integration suite.
+
+import { discoverWorkspaceMarkdown } from "../../migration/memory-translator.js";
+
+describe("Phase 80 Plan 03 Task 2 — end-to-end memory translation integration", () => {
+  let tmp: string;
+  let openclawRoot: string;
+  let targetRoot: string;
+  let configPath: string;
+  let openclawJson: string;
+  let ledgerPath: string;
+  let envSnap: P79Env;
+
+  beforeEach(async () => {
+    envSnap = snapshotP79Env();
+    tmp = await mkdtempP79(join(tmpdir(), "cc-p80-t2-"));
+    openclawRoot = join(tmp, "openclaw-fake");
+    targetRoot = join(tmp, "target-fake");
+    configPath = join(tmp, "clawcode.yaml");
+    openclawJson = join(openclawRoot, "openclaw.json");
+    ledgerPath = join(tmp, "ledger.jsonl");
+    await mkdirP79(openclawRoot, { recursive: true });
+    await mkdirP79(targetRoot, { recursive: true });
+    await mkdirP79(join(openclawRoot, "agents"), { recursive: true });
+    await copyFileP79(FIXTURE_CLAWCODE_YAML, configPath);
+
+    process.env.CLAWCODE_OPENCLAW_JSON = openclawJson;
+    process.env.CLAWCODE_LEDGER_PATH = ledgerPath;
+    process.env.CLAWCODE_CONFIG_PATH = configPath;
+    process.env.CLAWCODE_OPENCLAW_ROOT = openclawRoot;
+    process.env.CLAWCODE_AGENTS_ROOT = targetRoot;
+    process.env.CLAWCODE_WORKSPACE_TARGET_ROOT = targetRoot;
+    process.env.CLAWCODE_OPENCLAW_MEMORY_DIR = join(openclawRoot, "memory");
+    await mkdirP79(join(openclawRoot, "memory"), { recursive: true });
+    // Do NOT reset the CLI embedder between tests — the ONNX warmup cost
+    // is per-process, not per-test. Persisting the singleton makes the
+    // full integration suite run ~2-5s instead of ~30s.
+  });
+
+  afterEach(async () => {
+    restoreP79Env(envSnap);
+    await rmP79(tmp, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  async function writeP80IntegOpenclawJson(id: string, workspace: string, agentDir: string): Promise<void> {
+    await writeFileP79(
+      openclawJson,
+      JSON.stringify({
+        meta: { lastTouchedVersion: "test", lastTouchedAt: "2026-04-20T00:00:00Z" },
+        agents: {
+          list: [
+            {
+              id,
+              name: id,
+              workspace,
+              agentDir,
+              model: {
+                primary: "anthropic-api/claude-sonnet-4-6",
+                fallbacks: [],
+              },
+              identity: { name: id, emoji: "X" },
+            },
+          ],
+        },
+        bindings: [],
+      }),
+    );
+  }
+
+  async function seedFixture(id: string, wsSubdir: string): Promise<{
+    workspace: string;
+    agentDir: string;
+    targetWorkspace: string;
+    memoryDbPath: string;
+  }> {
+    const workspace = join(openclawRoot, wsSubdir);
+    const agentDir = join(openclawRoot, "agents", id);
+    await cpP79("src/migration/__tests__/fixtures/workspace-personal", workspace, {
+      recursive: true,
+    });
+    await mkdirP79(agentDir, { recursive: true });
+    await writeP80IntegOpenclawJson(id, workspace, agentDir);
+    const targetWorkspace = join(targetRoot, id);
+    const memoryDbPath = join(targetWorkspace, "memory", "memories.db");
+    return { workspace, agentDir, targetWorkspace, memoryDbPath };
+  }
+
+  it("MEM-01 — byte-identical verbatim retrieval via findByTag('workspace-memory')", async () => {
+    const fx = await seedFixture("mem01", "workspace-mem01");
+    const code = await runApplyAction(
+      { only: "mem01" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+    expect(existsSyncP79(fx.memoryDbPath)).toBe(true);
+
+    const store = new P80MemoryStore(fx.memoryDbPath);
+    try {
+      const entries = store.findByTag("workspace-memory");
+      expect(entries.length).toBeGreaterThan(0);
+
+      const sourceMd = readFileSync(
+        join(fx.targetWorkspace, "MEMORY.md"),
+        "utf8",
+      );
+      // Every migrated section's content must be a verbatim substring of MEMORY.md.
+      for (const e of entries) {
+        expect(sourceMd).toContain(e.content);
+      }
+
+      // Specific-phrase witness — the fixture's "Discord Setup" section
+      // has a known phrase that should be retrievable verbatim.
+      const discordSection = entries.find((e) =>
+        e.content.includes("Discord bot token"),
+      );
+      expect(discordSection).toBeDefined();
+      expect(discordSection!.content).toContain(
+        "Discord bot token lives in 1Password",
+      );
+    } finally {
+      store.close();
+    }
+  }, 60_000);
+
+  it("MEM-02 — re-run prints 'upserted 0, skipped N'; no duplicate rows", async () => {
+    const fx = await seedFixture("mem02", "workspace-mem02");
+
+    // First run — populates memories.
+    const code1 = await runApplyAction(
+      { only: "mem02" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code1).toBe(0);
+
+    const storeBefore = new P80MemoryStore(fx.memoryDbPath);
+    const countBefore = storeBefore.listRecent(Number.MAX_SAFE_INTEGER).length;
+    expect(countBefore).toBeGreaterThan(0);
+    // origin_id invariant — all migrated rows are tagged with the
+    // openclaw:mem02:* prefix (per Plan 02's computeOriginId).
+    const originRowsBefore = storeBefore
+      .getDatabase()
+      .prepare(
+        "SELECT COUNT(*) AS n FROM memories WHERE origin_id LIKE 'openclaw:mem02:%'",
+      )
+      .get() as { n: number };
+    expect(originRowsBefore.n).toBe(countBefore);
+    storeBefore.close();
+
+    // Second run — must be a full skip.
+    const stdoutWrites: string[] = [];
+    const outSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+    let code2: number;
+    try {
+      code2 = await runApplyAction(
+        { only: "mem02" },
+        { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+      );
+    } finally {
+      outSpy.mockRestore();
+    }
+    expect(code2).toBe(0);
+
+    const secondRunLog = stdoutWrites.join("");
+    expect(secondRunLog).toMatch(/upserted 0, skipped \d+/);
+    // Extract the skipped number from the second run and assert it
+    // equals the first run's migrated count.
+    const skipMatch = secondRunLog.match(/upserted 0, skipped (\d+)/);
+    expect(skipMatch).not.toBeNull();
+    expect(Number(skipMatch![1])).toBe(countBefore);
+
+    // Row count stable.
+    const storeAfter = new P80MemoryStore(fx.memoryDbPath);
+    const countAfter = storeAfter.listRecent(Number.MAX_SAFE_INTEGER).length;
+    const originRowsAfter = storeAfter
+      .getDatabase()
+      .prepare(
+        "SELECT COUNT(*) AS n FROM memories WHERE origin_id LIKE 'openclaw:mem02:%'",
+      )
+      .get() as { n: number };
+    storeAfter.close();
+    expect(countAfter).toBe(countBefore);
+    expect(originRowsAfter.n).toBe(originRowsBefore.n);
+  }, 90_000);
+
+  it("MEM-03 — every vec_memories row has length 384; zero raw INSERT INTO vec_memories in src/migration + src/cli/commands", async () => {
+    const fx = await seedFixture("mem03", "workspace-mem03");
+    const code = await runApplyAction(
+      { only: "mem03" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+
+    const store = new P80MemoryStore(fx.memoryDbPath);
+    try {
+      const db = store.getDatabase();
+      const rows = db
+        .prepare("SELECT vec_length(embedding) AS n FROM vec_memories")
+        .all() as Array<{ n: number }>;
+      expect(rows.length).toBeGreaterThan(0);
+      for (const r of rows) expect(r.n).toBe(384);
+    } finally {
+      store.close();
+    }
+
+    // Static grep — zero raw `INSERT INTO vec_memories` in src/migration + src/cli/commands.
+    const walkP80 = (dir: string, out: string[] = []): string[] => {
+      for (const entry of readdirSyncP79(dir, { withFileTypes: true })) {
+        if (entry.name === "__tests__") continue;
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) walkP80(p, out);
+        else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) out.push(p);
+      }
+      return out;
+    };
+    for (const dir of ["src/migration", "src/cli/commands"]) {
+      for (const f of walkP80(dir)) {
+        const src = readFileSync(f, "utf8");
+        expect(src).not.toMatch(/INSERT\s+INTO\s+vec_memories/);
+      }
+    }
+  }, 60_000);
+
+  it("MEM-04 — .learnings/*.md retrievable via findByTag('learning')", async () => {
+    const fx = await seedFixture("mem04", "workspace-mem04");
+    const code = await runApplyAction(
+      { only: "mem04" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+
+    const store = new P80MemoryStore(fx.memoryDbPath);
+    try {
+      const entries = store.findByTag("learning");
+      // Fixture .learnings/ has exactly 2 *.md files: lesson.md + pattern-immutability.md.
+      const fixtureLearnings = readdirSyncP79(
+        join(fx.targetWorkspace, ".learnings"),
+      ).filter((n) => n.endsWith(".md"));
+      expect(entries.length).toBe(fixtureLearnings.length);
+      expect(entries.length).toBeGreaterThanOrEqual(2);
+
+      // Each entry's content matches the source file byte-for-byte AND its
+      // tags include both "learning" and the file basename.
+      for (const e of entries) {
+        // The basename tag is the one that is NOT "migrated"/"openclaw-import"/"learning".
+        const common = new Set(["migrated", "openclaw-import", "learning"]);
+        const basenameTag = e.tags.find((t) => !common.has(t));
+        expect(basenameTag).toBeDefined();
+        expect(e.tags).toContain("learning");
+        const sourceContent = readFileSync(
+          join(fx.targetWorkspace, ".learnings", `${basenameTag}.md`),
+          "utf8",
+        );
+        expect(e.content).toBe(sourceContent);
+      }
+    } finally {
+      store.close();
+    }
+  }, 60_000);
+
+  it("MEM-05 — migrated count equals workspace markdown count (disk is truth)", async () => {
+    const fx = await seedFixture("mem05", "workspace-mem05");
+    const code = await runApplyAction(
+      { only: "mem05" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+
+    const discovered = await discoverWorkspaceMarkdown(fx.targetWorkspace, "mem05");
+    const store = new P80MemoryStore(fx.memoryDbPath);
+    try {
+      const migrated = store.listRecent(Number.MAX_SAFE_INTEGER);
+      expect(migrated.length).toBe(discovered.length);
+    } finally {
+      store.close();
+    }
+  }, 60_000);
+
+  it("ledger step ordering — workspace-copy:* → session-archive:* → memory-translate:* per agent", async () => {
+    await seedFixture("ordtest", "workspace-ordtest");
+    const code = await runApplyAction(
+      { only: "ordtest" },
+      { execaRunner: async () => ({ stdout: "inactive", exitCode: 3 }) },
+    );
+    expect(code).toBe(0);
+
+    const rows = await readRows(ledgerPath);
+    const personalRows = rows.filter((r) => r.agent === "ordtest" && r.step);
+    expect(personalRows.length).toBeGreaterThan(0);
+
+    const steps = personalRows.map((r) => r.step!);
+    const firstTranslateIdx = steps.findIndex((s) =>
+      s.startsWith("memory-translate"),
+    );
+    const lastArchiveIdx = steps.reduce(
+      (acc, s, i) => (s.startsWith("session-archive") ? i : acc),
+      -1,
+    );
+    const lastCopyIdx = steps.reduce(
+      (acc, s, i) => (s.startsWith("workspace-copy") ? i : acc),
+      -1,
+    );
+    expect(firstTranslateIdx).toBeGreaterThanOrEqual(0);
+    expect(lastArchiveIdx).toBeGreaterThanOrEqual(0);
+    expect(lastCopyIdx).toBeGreaterThanOrEqual(0);
+    expect(firstTranslateIdx).toBeGreaterThan(lastArchiveIdx);
+    // session-archive rows come AFTER workspace-copy rows. For a fixture
+    // with no agent sessions dir, the archiver emits a :skip row after
+    // the last hash-witness row, so lastArchiveIdx > lastCopyIdx always.
+    expect(lastArchiveIdx).toBeGreaterThan(lastCopyIdx);
+  }, 60_000);
+});
