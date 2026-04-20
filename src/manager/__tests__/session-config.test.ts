@@ -12,6 +12,10 @@ import * as briefModule from "../../memory/conversation-brief.js";
 // Phase 75 SHARED-02 — named import so the file-scoped loadLatestSummary mock
 // can be accessed via vi.mocked(loadLatestSummary) in the regression test below.
 import { loadLatestSummary } from "../../memory/context-summary.js";
+// Phase 78 CONF-01 — named import so the file-scoped readFile mock can be
+// reconfigured per-test via vi.mocked(readFile).mockImplementation to simulate
+// soulFile → workspace/SOUL.md → inline precedence scenarios.
+import { readFile } from "node:fs/promises";
 
 // Mock filesystem reads so buildSessionConfig doesn't hit disk
 vi.mock("node:fs/promises", () => ({
@@ -985,5 +989,173 @@ describe("buildSessionConfig — shared-workspace context summary resume (Phase 
     // suffix (never stable prefix), so assert against the combined output.
     const assembledPrompt = result.systemPrompt + (result.mutableSuffix ?? "");
     expect(assembledPrompt).toContain("SHARED_WORKSPACE_RESUME_MARKER");
+  });
+});
+
+// ── Phase 78 CONF-01 — lazy-read precedence for soulFile / identityFile ─────
+//
+// Precedence chain (BOTH soul and identity):
+//   config.soulFile (absolute path) → <workspace>/SOUL.md → inline config.soul
+//   config.identityFile (absolute path) → <workspace>/IDENTITY.md → inline config.identity
+//
+// Silent fall-through on read errors at every step: a configured soulFile
+// pointing at a deleted file falls through to workspace/SOUL.md and then
+// to the inline string.
+
+describe("buildSessionConfig — soulFile / identityFile lazy-read precedence (Phase 78 CONF-01)", () => {
+  beforeEach(() => {
+    vi.mocked(readFile).mockReset();
+    // Default: behave like the file-scoped mock (every path ENOENT).
+    vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+  });
+
+  /**
+   * Path-aware readFile mock helper. Returns content for paths in the map;
+   * rejects for everything else. Mimics real disk I/O by path.
+   */
+  function mockFiles(files: Record<string, string>) {
+    vi.mocked(readFile).mockImplementation(async (path: any) => {
+      const p = typeof path === "string" ? path : String(path);
+      if (p in files) return files[p];
+      throw new Error(`ENOENT: ${p}`);
+    });
+  }
+
+  it("Test 1 — reads soulFile content into systemPrompt when set and file exists", async () => {
+    // SOUL content gets passed through extractFingerprint → formatFingerprint.
+    // We use SOUL.md syntax so the fingerprint extractor produces stable output,
+    // but the marker string appears in the result because the name is injected.
+    mockFiles({
+      "/custom/path/SOUL.md":
+        "# Agent: TestBot\n\n## Soul\n- SOUL_FROM_FILE_POINTER\n- Direct\n\n## Style\nConcise.\n",
+    });
+    const config = makeConfig({ soulFile: "/custom/path/SOUL.md" });
+    const result = await buildSessionConfig(config, makeDeps());
+    // Fingerprint section emitted → SOUL pathway exercised.
+    expect(result.systemPrompt).toContain("## Identity");
+    // readFile was called with the soulFile path.
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/custom/path/SOUL.md",
+      "utf-8",
+    );
+  });
+
+  it("Test 2 — falls through to <workspace>/SOUL.md when soulFile is unreadable", async () => {
+    // soulFile is SET but only the workspace/SOUL.md resolves on disk.
+    mockFiles({
+      "/tmp/test-workspace/SOUL.md":
+        "# Agent: Test\n\n## Soul\n- SOUL_FROM_WORKSPACE\n",
+    });
+    const config = makeConfig({
+      workspace: "/tmp/test-workspace",
+      soulFile: "/path/does/not/exist/SOUL.md",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    // Fallback fired — workspace SOUL.md was read.
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/tmp/test-workspace/SOUL.md",
+      "utf-8",
+    );
+    // Fingerprint section still renders (SOUL content was obtained).
+    expect(result.systemPrompt).toContain("## Identity");
+  });
+
+  it("Test 3 — falls through to inline config.soul when neither file exists", async () => {
+    // No readFile calls resolve — only inline soul remains.
+    const config = makeConfig({
+      workspace: "/tmp/empty-workspace",
+      soul: "# Agent: Test\n\n## Soul\n- INLINE_SOUL_FALLBACK\n",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    // Fingerprint section rendered from inline string.
+    expect(result.systemPrompt).toContain("## Identity");
+  });
+
+  it("Test 4 — no crash when soulFile, workspace/SOUL.md, AND inline soul are all absent", async () => {
+    // All three branches dead — SOUL section empty, but no throws.
+    const config = makeConfig({ workspace: "/tmp/empty" });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toBeDefined();
+    // No "undefined" string leaking in.
+    expect(result.systemPrompt).not.toContain("undefined");
+  });
+
+  it("Test 5 — reads identityFile content into identity block when set and file exists", async () => {
+    mockFiles({
+      "/custom/path/IDENTITY.md":
+        "# IDENTITY_FROM_FILE\nDetailed identity prose.",
+    });
+    const config = makeConfig({ identityFile: "/custom/path/IDENTITY.md" });
+    const result = await buildSessionConfig(config, makeDeps());
+    // The identity file content flows into systemPrompt verbatim.
+    expect(result.systemPrompt).toContain("IDENTITY_FROM_FILE");
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/custom/path/IDENTITY.md",
+      "utf-8",
+    );
+  });
+
+  it("Test 6 — identity precedence mirrors soul: identityFile > workspace/IDENTITY.md > inline identity", async () => {
+    // identityFile UNSET, workspace IDENTITY.md present — workspace wins.
+    mockFiles({
+      "/tmp/ws/IDENTITY.md": "IDENTITY_FROM_WORKSPACE",
+    });
+    const configA = makeConfig({ workspace: "/tmp/ws" });
+    const resultA = await buildSessionConfig(configA, makeDeps());
+    expect(resultA.systemPrompt).toContain("IDENTITY_FROM_WORKSPACE");
+
+    // Neither file — inline wins.
+    vi.mocked(readFile).mockReset();
+    vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+    const configB = makeConfig({
+      workspace: "/tmp/empty",
+      identity: "INLINE_IDENTITY_FALLBACK",
+    });
+    const resultB = await buildSessionConfig(configB, makeDeps());
+    expect(resultB.systemPrompt).toContain("INLINE_IDENTITY_FALLBACK");
+  });
+
+  it("Test 7 — soulFile wins over <workspace>/SOUL.md when BOTH exist (precedence correctness)", async () => {
+    mockFiles({
+      "/custom/path/SOUL.md":
+        "# Agent: T\n\n## Soul\n- FROM_FILE_POINTER\n",
+      "/tmp/ws/SOUL.md":
+        "# Agent: T\n\n## Soul\n- FROM_WORKSPACE\n",
+    });
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      soulFile: "/custom/path/SOUL.md",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    // The soulFile branch short-circuits — workspace SOUL.md was never read.
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/custom/path/SOUL.md",
+      "utf-8",
+    );
+    const workspaceCall = vi
+      .mocked(readFile)
+      .mock.calls.find((c) => c[0] === "/tmp/ws/SOUL.md");
+    expect(workspaceCall).toBeUndefined();
+  });
+
+  it("Test 8 — regression: workspace SOUL.md + IDENTITY.md still load when soulFile/identityFile unset (Phase 45/LOAD-02 preserved)", async () => {
+    mockFiles({
+      "/tmp/ws/SOUL.md":
+        "# Agent: Legacy\n\n## Soul\n- LEGACY_WORKSPACE_SOUL\n",
+      "/tmp/ws/IDENTITY.md": "LEGACY_WORKSPACE_IDENTITY",
+    });
+    const config = makeConfig({ workspace: "/tmp/ws" });
+    const result = await buildSessionConfig(config, makeDeps());
+    // Both workspace files loaded byte-for-byte.
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/tmp/ws/SOUL.md",
+      "utf-8",
+    );
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/tmp/ws/IDENTITY.md",
+      "utf-8",
+    );
+    expect(result.systemPrompt).toContain("LEGACY_WORKSPACE_IDENTITY");
+    expect(result.systemPrompt).toContain("## Identity");
   });
 });
