@@ -33,12 +33,12 @@ Prerequisite — add runtime support for multiple agents pointing at one workspa
 User-facing `clawcode migrate openclaw` command — plan, apply, rollback, resume. State journal at `.planning/migration/ledger.jsonl`.
 
 - [x] **MIGR-01**: User (as operator) can run `clawcode migrate openclaw plan` and see a per-agent table (source name, target `basePath`, memory count, MCP servers mapped, Discord channel) with color-coded diff, writes nothing.
-- [ ] **MIGR-02**: User (as operator) can run `clawcode migrate openclaw apply [--only <agent>]` and have the CLI refuse if the OpenClaw daemon (`openclaw-gateway.service`) is running, refuse if any raw non-`op://` secret would be written to `clawcode.yaml`, and refuse if any Discord channel ID already appears on an existing ClawCode agent.
+- [x] **MIGR-02**: User (as operator) can run `clawcode migrate openclaw apply [--only <agent>]` and have the CLI refuse if the OpenClaw daemon (`openclaw-gateway.service`) is running, refuse if any raw non-`op://` secret would be written to `clawcode.yaml`, and refuse if any Discord channel ID already appears on an existing ClawCode agent.
 - [ ] **MIGR-03**: User (as operator) can re-run `clawcode migrate openclaw apply` after partial success and have only un-migrated agents processed (idempotent; ledger-driven resume), with already-migrated memories deduped via `origin_id`.
 - [ ] **MIGR-04**: User (as operator) can run `clawcode migrate openclaw verify [<agent>]` after apply and see pass/fail checks for: workspace files present, memory count within ±5% of source, Discord channel reachable, agent boots on daemon restart.
 - [ ] **MIGR-05**: User (as operator) can run `clawcode migrate openclaw rollback <agent>` and have the CLI remove that agent's entries from `clawcode.yaml`, delete its ClawCode workspace + memory DB, and leave the source OpenClaw state fully intact.
 - [x] **MIGR-06**: User (as operator) can observe that every migration action writes a structured JSONL entry to `.planning/migration/ledger.jsonl` with timestamp, agent, step, outcome, and file-hash witnesses.
-- [ ] **MIGR-07**: User (as operator) can trust that the migrator never modifies, deletes, or renames any file under `~/.openclaw/` — source system remains untouched for fallback.
+- [x] **MIGR-07**: User (as operator) can trust that the migrator never modifies, deletes, or renames any file under `~/.openclaw/` — source system remains untouched for fallback.
 - [x] **MIGR-08**: User (as operator) can run `clawcode migrate openclaw list` at any time and see which of the 15 agents are `pending` / `migrated` / `verified` / `rolled-back` with the corresponding ledger rows.
 
 ### Config Mapping (CONF-*)
@@ -83,7 +83,7 @@ Pilot → per-agent cutover → dual-run guardrails.
 
 - [ ] **OPS-01**: User (as operator) can migrate a single low-risk pilot agent (`personal` or `local-clawdy`) first and verify end-to-end behavior before migrating the remaining 14 — pilot selection surfaces in plan output.
 - [ ] **OPS-02**: User (as operator) can run OpenClaw and ClawCode side-by-side during pilot with dual bots present in each migrated agent's Discord channel, with a clear cutover command (`clawcode migrate openclaw cutover <agent>`) that removes the OpenClaw bot's channel access per-agent after user verification.
-- [ ] **OPS-03**: User (as operator) can trust that the migrator refuses to proceed if both bots would otherwise reply to the same message (same channel ID bound to both an OpenClaw agent AND a ClawCode agent with overlapping activation rules) — hard fail with channel collision report.
+- [x] **OPS-03**: User (as operator) can trust that the migrator refuses to proceed if both bots would otherwise reply to the same message (same channel ID bound to both an OpenClaw agent AND a ClawCode agent with overlapping activation rules) — hard fail with channel collision report.
 - [ ] **OPS-04**: User (as operator) can execute a final `clawcode migrate openclaw complete` step that writes a migration report to `.planning/milestones/v2.1-migration-report.md` summarizing per-agent outcomes, memory-count deltas, Discord cutover timestamps, and any pending rollbacks.
 
 ---
@@ -125,10 +125,10 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | SHARED-03 | Phase 75: Shared-Workspace Runtime Support | Complete |
 | MIGR-01 | Phase 76: Migration CLI Read-Side + Dry-Run | Complete |
 | MIGR-08 | Phase 76: Migration CLI Read-Side + Dry-Run | Complete |
-| MIGR-02 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| MIGR-02 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
 | MIGR-06 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
-| MIGR-07 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
-| OPS-03 | Phase 77: Pre-flight Guards + Safety Rails | Pending |
+| MIGR-07 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
+| OPS-03 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
 | CONF-01 | Phase 78: Config Mapping + YAML Writer | Pending |
 | CONF-02 | Phase 78: Config Mapping + YAML Writer | Pending |
 | CONF-03 | Phase 78: Config Mapping + YAML Writer | Pending |

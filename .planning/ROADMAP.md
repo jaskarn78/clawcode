@@ -193,7 +193,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   5. User runs the full migration end-to-end across all 15 agents and `stat -c %Y` timestamps on every file under `~/.openclaw/` match pre-migration values — source system is fully intact for fallback.
 **Plans**: 3 plans
 - [x] 77-01-PLAN.md — Ledger schema extension (additive optional step/outcome/file_hashes fields, backward-compat) (MIGR-06)
-- [ ] 77-02-PLAN.md — Four guard modules (daemon, readonly, secret, channel-collision) + apply-preflight orchestrator with literal error messages (MIGR-02, MIGR-07, OPS-03)
+- [x] 77-02-PLAN.md — Four guard modules (daemon, readonly, secret, channel-collision) + apply-preflight orchestrator with literal error messages (MIGR-02, MIGR-07, OPS-03)
 - [ ] 77-03-PLAN.md — CLI `apply [--only <agent>]` subcommand + runtime fs-guard install/uninstall + integration test covering all 5 success criteria (MIGR-02, MIGR-06, MIGR-07, OPS-03)
 
 ### Phase 78: Config Mapping + YAML Writer
@@ -279,7 +279,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 |-------|----------------|--------|-----------|
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
-| 77. Pre-flight Guards + Safety Rails | 1/3 | In Progress|  |
+| 77. Pre-flight Guards + Safety Rails | 2/3 | In Progress|  |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
 | 79. Workspace Migration | 0/? | Not started | - |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |

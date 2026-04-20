@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Ready to execute
-stopped_at: Completed 77-01-PLAN.md — ledgerRowSchema extended with optional step/outcome/file_hashes + LEDGER_OUTCOMES enum; all 17 ledger tests green (9 Phase 76 unchanged + 8 new); ready for Plan 77-02 (pre-flight guards).
-last_updated: "2026-04-20T17:12:45.503Z"
+stopped_at: Completed 77-02-PLAN.md — 4 pre-flight guards + orchestrator with fail-fast ordering; 28 unit tests; zero new deps; ready for Plan 77-03 (CLI wiring + fs interceptor).
+last_updated: "2026-04-20T17:24:39.159Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 8
   total_plans: 25
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-20)
 ## Current Position
 
 Phase: 77 (pre-flight-guards-safety-rails) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -84,6 +84,9 @@ Recent decisions affecting current work:
 - [Phase 76]: [Phase 76 Plan 03]: Action handlers (runListAction/runPlanAction) return numeric exit codes instead of calling process.exit directly — decouples business logic from CLI harness, integration-testable without process-exit guards.
 - [Phase 77]: [Phase 77 Plan 01]: Ledger schema extension is ADDITIVE-ONLY — step/outcome/file_hashes all .optional(); Phase 76 rows round-trip unchanged; dedicated 'ledger schema extensions (Phase 77)' describe block with isolated fixtures keeps Phase 76 suite byte-stable as regression pin.
 - [Phase 77]: [Phase 77 Plan 01]: LEDGER_OUTCOMES is a CLOSED enum ['allow','refuse'] — narrower than existing LEDGER_STATUSES; refuse pairs with status:'pending' because a refused guard never advances state. file_hashes enforces non-empty keys AND values via z.record(z.string().min(1), z.string().min(1)).
+- [Phase 77]: [Phase 77 Plan 02]: Zero new deps — replaced execa (listed in CONTEXT as in-deps but missing from package.json) with node:child_process.execFile shim behind the execaRunner DI param. Default runner wraps execFile with execa-compatible {stdout, exitCode} Promise shape.
+- [Phase 77]: [Phase 77 Plan 02]: Secret classification three-phase order: explicit known-secret prefix (sk-/MT-) ALWAYS refuses over whitelist over high-entropy fallback. Discovered during TDD — sk- tokens satisfy SHORT_IDENT (/[a-z0-9-]+/) and whitelist-first silently passed them. Pinned in sk-refuse + op://allow regression tests.
+- [Phase 77]: [Phase 77 Plan 02]: pre-flight:readonly orchestrator witness row (not a stub) — Plan 03 owns the actual fs.writeFile/appendFile/mkdir interceptor install. Orchestrator records the canonical row so 4-row ledger sequence is intact even before Plan 03 lands.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -150,9 +153,10 @@ Recent decisions affecting current work:
 | Phase 76 P02 | 4min | 1 tasks | 3 files |
 | Phase 76 P03 | 8min | 3 tasks | 4 files |
 | Phase 77 P01 | 5min | 2 tasks | 2 files |
+| Phase 77 P02 | ~7min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 77-01-PLAN.md — ledgerRowSchema extended with optional step/outcome/file_hashes + LEDGER_OUTCOMES enum; all 17 ledger tests green (9 Phase 76 unchanged + 8 new); ready for Plan 77-02 (pre-flight guards).
+Stopped at: Completed 77-02-PLAN.md — 4 pre-flight guards + orchestrator with fail-fast ordering; 28 unit tests; zero new deps; ready for Plan 77-03 (CLI wiring + fs interceptor).
 Resume file: None
