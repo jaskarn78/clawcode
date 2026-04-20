@@ -19,7 +19,7 @@ import type { DocumentStore } from "../documents/store.js";
 import type { TraceStore } from "../performance/trace-store.js";
 import type { TraceCollector, Turn } from "../performance/trace-collector.js";
 import type { ConversationStore } from "../memory/conversation-store.js";
-import { summarizeSession } from "../memory/session-summarizer.js";
+import { summarizeSession, flushSessionMidway } from "../memory/session-summarizer.js";
 import type { SummarizeFn } from "../memory/session-summarizer.types.js";
 import { summarizeWithHaiku } from "./summarize-with-haiku.js";
 import { AgentMemoryManager } from "./session-memory.js";
@@ -44,6 +44,15 @@ export type SessionManagerOptions = {
    * summarizeWithHaiku so integration tests can inject a mock.
    */
   readonly summarizeFn?: SummarizeFn;
+  /**
+   * Gap 3 (memory-persistence-gaps) -- test-only override that bypasses the
+   * minutes→ms conversion for the periodic mid-session flush timer. When set
+   * to a positive number, the flush timer fires every `flushIntervalMsOverride`
+   * milliseconds regardless of the per-agent config value. Used to keep the
+   * Gap 3 integration tests fast (real-timer-based). Production leaves this
+   * undefined so the agent-level knob controls the interval.
+   */
+  readonly flushIntervalMsOverride?: number;
 };
 
 /**
@@ -110,11 +119,35 @@ export class SessionManager {
   private readonly summarizeFn: SummarizeFn;
 
   /**
+   * Gap 3 (memory-persistence-gaps) -- test-only override for the flush
+   * interval in milliseconds. When set, bypasses the per-agent
+   * `flushIntervalMinutes` config so tests can exercise the timer path with
+   * real timers in ~100ms instead of ~15min.
+   */
+  private readonly flushIntervalMsOverride: number | undefined;
+
+  /**
    * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
    * at daemon shutdown. Each call to `summarizeSessionIfPossible` is wrapped
    * in {@link trackSummary} so SIGTERM never truncates an unfinished summary.
    */
   private readonly pendingSummaries: Set<Promise<void>> = new Set();
+
+  /**
+   * Gap 3 (memory-persistence-gaps) — per-agent periodic flush timers. Each
+   * timer fires a non-terminating `flushSessionMidway` call so the current
+   * conversation is checkpointed to the memory DB at the configured interval,
+   * protecting against data loss on unclean shutdowns (SIGKILL, OOM, power).
+   * Cleared on stopAgent + crash + drain.
+   */
+  private readonly flushTimers: Map<string, NodeJS.Timeout> = new Map();
+
+  /**
+   * Gap 3 (memory-persistence-gaps) — per-agent flush sequence counter.
+   * Encoded into the memory row's `flush:N` tag so operators can trace the
+   * evolution of a long session. Resets on agent stop.
+   */
+  private readonly flushSequenceByAgent: Map<string, number> = new Map();
 
   /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
@@ -129,6 +162,7 @@ export class SessionManager {
     this.registryPath = options.registryPath;
     this.log = options.log ?? logger;
     this.summarizeFn = options.summarizeFn ?? summarizeWithHaiku;
+    this.flushIntervalMsOverride = options.flushIntervalMsOverride;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -423,6 +457,12 @@ export class SessionManager {
       },
       "warm-path ready — agent started",
     );
+
+    // Gap 3 (memory-persistence-gaps): start mid-session flush timer AFTER
+    // warm-path success. Before the gate is green there is no active
+    // conversation to flush, and starting the timer earlier would waste a
+    // tick if warm-path fails.
+    this.startFlushTimer(name, config);
   }
 
   /**
@@ -524,6 +564,10 @@ export class SessionManager {
     this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
     this.recovery.clearStabilityTimer(name);
     this.recovery.clearRestartTimer(name);
+    // Gap 3 (memory-persistence-gaps): stop the flush timer BEFORE
+    // summarization so a timer tick cannot race against endSession and
+    // try to flush a session that has just transitioned out of 'active'.
+    this.stopFlushTimer(name);
 
     // Phase 65: end the ConversationStore session before memory cleanup
     const convSessionId = this.activeConversationSessionIds.get(name);
@@ -775,6 +819,10 @@ export class SessionManager {
 
           this.attachCrashHandler(entry.name, config, handle);
           this.recovery.setStabilityTimer(entry.name);
+          // Gap 3 (memory-persistence-gaps): resumed sessions also get the
+          // periodic flush timer so a daemon reboot doesn't silently extend
+          // the at-risk window between persistence checkpoints.
+          this.startFlushTimer(entry.name, config);
           resumed++;
           this.log.info({ agent: entry.name, sessionId: entry.sessionId }, "session resumed");
         } catch (error) {
@@ -1041,6 +1089,10 @@ export class SessionManager {
       }
       this.activeConversationSessionIds.delete(name);
       this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
+      // Gap 3 (memory-persistence-gaps): crash also stops the flush timer —
+      // crashSession transitioned the session out of 'active' so flushes
+      // would now skip anyway, but killing the timer here saves wakeups.
+      this.stopFlushTimer(name);
 
       this.recovery.handleCrash(name, config, error, this.sessions);
       // Invoke session end callback on crash (e.g., subagent thread cleanup)
@@ -1052,6 +1104,121 @@ export class SessionManager {
         });
       }
     });
+  }
+
+  /**
+   * Gap 3 (memory-persistence-gaps) — start the periodic mid-session flush
+   * timer for an agent. Reads `config.memory.conversation.flushIntervalMinutes`
+   * (default 15, `0` disables). Safe to call from startAgent and
+   * reconcileRegistry. Clears any pre-existing timer first (so hot-reloads
+   * that re-enter this path do not leak).
+   */
+  private startFlushTimer(name: string, config: ResolvedAgentConfig): void {
+    this.stopFlushTimer(name); // defensive: never leak a prior timer
+
+    // Test-only override takes precedence so Gap 3 integration tests can
+    // exercise the timer path without waiting real minutes.
+    const intervalMs =
+      this.flushIntervalMsOverride !== undefined
+        ? this.flushIntervalMsOverride
+        : (config.memory.conversation?.flushIntervalMinutes ?? 15) * 60_000;
+
+    if (intervalMs <= 0) {
+      this.log.debug(
+        { agent: name },
+        "flush timer disabled (interval <= 0)",
+      );
+      return;
+    }
+    this.flushSequenceByAgent.set(name, 0);
+    const timer = setInterval(() => {
+      // Non-blocking: fire-and-forget through trackSummary so drain() at
+      // daemon shutdown waits for an in-flight flush.
+      const convSessionId = this.activeConversationSessionIds.get(name);
+      if (!convSessionId) return; // no active session — skip this tick
+      if (this.draining) return; // shutdown in progress — new flushes pointless
+      const nextSeq = (this.flushSequenceByAgent.get(name) ?? 0) + 1;
+      this.flushSequenceByAgent.set(name, nextSeq);
+      void this.trackSummary(
+        this.flushSessionIfPossible(name, convSessionId, nextSeq),
+      ).catch((err) => {
+        this.log.warn(
+          {
+            agent: name,
+            session: convSessionId,
+            flushSequence: nextSeq,
+            error: (err as Error).message,
+          },
+          "mid-session flush failed (non-fatal)",
+        );
+      });
+    }, intervalMs);
+    // Never keep the event loop alive just for this timer — if everything
+    // else shuts down, the flush timer should not stop the process.
+    timer.unref?.();
+    this.flushTimers.set(name, timer);
+
+    this.log.info(
+      { agent: name, intervalMs },
+      "mid-session flush timer started",
+    );
+  }
+
+  /**
+   * Gap 3 (memory-persistence-gaps) — stop the flush timer for an agent.
+   * Safe to call when no timer is registered (no-op).
+   */
+  private stopFlushTimer(name: string): void {
+    const timer = this.flushTimers.get(name);
+    if (timer !== undefined) {
+      clearInterval(timer);
+      this.flushTimers.delete(name);
+    }
+    this.flushSequenceByAgent.delete(name);
+  }
+
+  /**
+   * Gap 3 (memory-persistence-gaps) — invoke the mid-session flush pipeline.
+   * Mirrors summarizeSessionIfPossible's shape so tests can exercise the
+   * production wiring end-to-end.
+   */
+  private async flushSessionIfPossible(
+    agentName: string,
+    sessionId: string,
+    flushSequence: number,
+  ): Promise<void> {
+    const memoryStore = this.memory.memoryStores.get(agentName);
+    const conversationStore = this.memory.conversationStores.get(agentName);
+    if (!memoryStore || !conversationStore) {
+      this.log.warn(
+        { agent: agentName, session: sessionId, flushSequence },
+        "flush: missing memoryStore or conversationStore (non-fatal)",
+      );
+      return;
+    }
+    try {
+      await flushSessionMidway(
+        { agentName, sessionId, flushSequence },
+        {
+          conversationStore,
+          memoryStore,
+          embedder: this.memory.embedder,
+          summarize: this.summarizeFn,
+          log: this.log,
+        },
+      );
+    } catch (err) {
+      // flushSessionMidway is designed to never throw, but log defensively.
+      this.log.warn(
+        {
+          agent: agentName,
+          session: sessionId,
+          flushSequence,
+          error: (err as Error).message,
+        },
+        "flush threw unexpectedly (non-fatal)",
+      );
+    }
   }
 
   private async summarizeSessionIfPossible(

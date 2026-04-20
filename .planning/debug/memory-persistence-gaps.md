@@ -97,21 +97,26 @@ started: Branch created for this work. Previous quick fix 260419-q2z added drain
 root_cause:
 - Gap 1: `reconcileRegistry` never called `initMemory` or `startSession` on resumed agents, leaving `activeConversationSessionIds` empty. Any subsequent `stopAgent` skipped summarization because `convSessionId === undefined`. Additionally, `startAll` fired `startAgent` for every config after reconcile and swallowed the resulting "already running" SessionError with an error-level log on every boot.
 - Gap 2: `summarizeSession` wrote the memory row and marked the session summarized, but never deleted the raw conversation_turns rows. Raw turns accumulated forever alongside summaries, so `memories.db` grew unbounded as sessions piled up.
-- Gap 3: (TBD — fixing next)
+- Gap 3: No periodic flush mechanism existed. Sessions only persisted summaries at clean shutdown boundaries (stopAgent/crash via onError). An unclean daemon exit between summaries (kill -9, OOM, power) lost everything recorded since the last boundary event.
 - Gap 4: (TBD — fixing next)
 
 fix:
 - Gap 1: Extracted `attachCrashHandler(name, config, handle)` helper on SessionManager. `reconcileRegistry` now calls `initMemory` + `convStore.startSession` + sets `activeConversationSessionIds` + attaches the shared crash handler. `startAll` early-returns for agents already in `this.sessions`. Three new tests cover reconcile→memory-init, reconcile→stopAgent→summary-written, and reconcile→startAll→no-op.
 - Gap 2: Added `ConversationStore.deleteTurnsForSession(sessionId): number` (prepared statement, returns rows deleted). `summarizeSession` calls it as Step 13b, only after `markSummarized` succeeded — so partial failures (insert OK, markSummarized failed) leave turns intact for operator reconcile. Delete is non-fatal; session row stays intact so resume-brief gap accounting keeps working. FTS5 stays in sync via existing `conversation_turns_ad` trigger.
+- Gap 3: Added `flushSessionMidway` in src/memory/session-summarizer.ts — non-terminating variant of summarizeSession. Writes MemoryEntry tagged ["mid-session", `session:{id}`, `flush:{N}`], does NOT mark session summarized, does NOT delete turns. SessionManager owns per-agent `flushTimers` (setInterval, unref'd) + `flushSequenceByAgent` counter; `startFlushTimer(name, config)` called from startAgent and reconcileRegistry after warm-path-ready, `stopFlushTimer(name)` called from stopAgent and the crash handler. Config knob `conversation.flushIntervalMinutes` (z.number().int().min(0).default(15)); 0 disables. Test-only `flushIntervalMsOverride` on SessionManagerOptions keeps integration tests fast.
 
 verification:
 - Gap 1: 3/3 new tests pass; 34/34 session-manager tests pass; 60/60 daemon + registry tests pass.
 - Gap 2: 4/4 new ConversationStore unit tests pass; 5/5 new summarizer integration tests pass (LLM path, short-session path, raw-turn fallback, insert-failure no-delete, embed-failure no-delete); 424/424 tests across src/manager + src/memory pass.
+- Gap 3: 5/5 new schema tests pass; 7/7 new flushSessionMidway unit tests pass; 5/5 new SessionManager periodic-flush integration tests pass (basic flush:1 write, flush:1→flush:2 incrementing, disabled when interval=0, stopAgent clears timer, counter reset on restart); 270/270 tests across the affected files pass.
 
 files_changed:
-- src/manager/session-manager.ts (Gap 1)
-- src/manager/__tests__/session-manager.test.ts (Gap 1)
+- src/manager/session-manager.ts (Gap 1 + Gap 3)
+- src/manager/__tests__/session-manager.test.ts (Gap 1 + Gap 3)
 - src/memory/conversation-store.ts (Gap 2)
 - src/memory/__tests__/conversation-store.test.ts (Gap 2)
-- src/memory/session-summarizer.ts (Gap 2)
-- src/memory/__tests__/session-summarizer.test.ts (Gap 2)
+- src/memory/session-summarizer.ts (Gap 2 + Gap 3)
+- src/memory/session-summarizer.types.ts (Gap 3)
+- src/memory/__tests__/session-summarizer.test.ts (Gap 2 + Gap 3)
+- src/memory/schema.ts (Gap 3)
+- src/config/__tests__/schema.test.ts (Gap 3)

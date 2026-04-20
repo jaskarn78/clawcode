@@ -95,3 +95,46 @@ export type SummarizeSessionResult =
         | "zero-turns"; // 260419-q2z Fix A — distinct from insufficient-turns
       readonly turnCount?: number;
     };
+
+// ---------------------------------------------------------------------------
+// Gap 3 (memory-persistence-gaps) — mid-session flush types
+// ---------------------------------------------------------------------------
+
+/** Input to flushSessionMidway. */
+export type FlushSessionInput = {
+  readonly agentName: string;
+  readonly sessionId: string;
+  /**
+   * 1-based sequence number for this flush (first flush = 1, second = 2, ...).
+   * Encoded into the memory row's tags as `flush:N` so operators can
+   * trace the evolution of a long-running session post-mortem.
+   */
+  readonly flushSequence: number;
+};
+
+/**
+ * Outcome of a mid-session flush.
+ *
+ * `success: true` — a MemoryEntry tagged "mid-session" was written. The
+ * underlying conversation session remains status="active" and its raw
+ * turns remain intact — this is a checkpoint, not a termination.
+ *
+ * `skipped: true` — the session was not in a flushable state (wrong status,
+ * not found, zero turns).
+ */
+export type FlushSessionResult =
+  | {
+      readonly success: true;
+      readonly memoryId: string;
+      readonly fallback: SummarizeSuccessFallback;
+      readonly turnCount: number;
+      readonly flushSequence: number;
+    }
+  | {
+      readonly skipped: true;
+      readonly reason:
+        | "session-not-found"
+        | "session-not-active"
+        | "zero-turns";
+      readonly turnCount?: number;
+    };

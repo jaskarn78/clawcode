@@ -19,9 +19,11 @@ import type {
 } from "../session-summarizer.types.js";
 import {
   summarizeSession,
+  flushSessionMidway,
   buildSessionSummarizationPrompt,
   buildRawTurnFallback,
   DEFAULT_IMPORTANCE,
+  DEFAULT_FLUSH_IMPORTANCE,
 } from "../session-summarizer.js";
 import type { ConversationTurn } from "../conversation-types.js";
 
@@ -914,6 +916,209 @@ describe("SessionSummarizer", () => {
       );
       expect(result).toMatchObject({ skipped: true });
       expect(convStore.getTurnsForSession(sessionId)).toHaveLength(3);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Gap 3 (memory-persistence-gaps) — flushSessionMidway: non-terminating
+  // periodic summary. Writes a MemoryEntry tagged "mid-session" without
+  // ending the conversation session or deleting its turns.
+  // ---------------------------------------------------------------------------
+  describe("flushSessionMidway (Gap 3)", () => {
+    /** Seed an ACTIVE session with N turns — do NOT end it. */
+    function seedActiveSession(turnCount: number): {
+      sessionId: string;
+      turnIds: string[];
+    } {
+      const session = convStore.startSession("agent-a");
+      const turnIds: string[] = [];
+      for (let i = 0; i < turnCount; i++) {
+        const turn = convStore.recordTurn({
+          sessionId: session.id,
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: `Flush-turn ${i} content with some substance.`,
+        });
+        turnIds.push(turn.id);
+      }
+      return { sessionId: session.id, turnIds };
+    }
+
+    it("writes a MemoryEntry with mid-session + flush:N tags and leaves the session active", async () => {
+      const { sessionId, turnIds } = seedActiveSession(4);
+
+      const mockSummarize: SummarizeFn = vi
+        .fn()
+        .mockResolvedValue("## User Preferences\n(none)\n");
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: mockSummarize,
+        log: silentLog(),
+      };
+
+      const result = await flushSessionMidway(
+        { agentName: "agent-a", sessionId, flushSequence: 1 },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        fallback: "llm",
+        turnCount: 4,
+        flushSequence: 1,
+      });
+
+      if ("success" in result && result.success) {
+        const entry = memStore.getById(result.memoryId);
+        expect(entry).not.toBeNull();
+        expect(entry!.tags).toContain("mid-session");
+        expect(entry!.tags).toContain(`session:${sessionId}`);
+        expect(entry!.tags).toContain("flush:1");
+        expect(entry!.tags).not.toContain("session-summary");
+        expect(entry!.importance).toBe(DEFAULT_FLUSH_IMPORTANCE);
+        expect(entry!.sourceTurnIds).toEqual(turnIds);
+        expect(entry!.source).toBe("conversation");
+      }
+
+      // Session stays active; raw turns stay intact.
+      const session = convStore.getSession(sessionId);
+      expect(session!.status).toBe("active");
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(4);
+    });
+
+    it("encodes flushSequence into the flush:N tag across multiple flushes", async () => {
+      const { sessionId } = seedActiveSession(3);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn().mockResolvedValue("## User Preferences\n(none)\n"),
+        log: silentLog(),
+      };
+
+      const r1 = await flushSessionMidway(
+        { agentName: "agent-a", sessionId, flushSequence: 1 },
+        deps,
+      );
+      const r2 = await flushSessionMidway(
+        { agentName: "agent-a", sessionId, flushSequence: 2 },
+        deps,
+      );
+
+      expect("success" in r1 && r1.success).toBe(true);
+      expect("success" in r2 && r2.success).toBe(true);
+      if ("success" in r1 && r1.success && "success" in r2 && r2.success) {
+        expect(r1.memoryId).not.toBe(r2.memoryId);
+        const e1 = memStore.getById(r1.memoryId);
+        const e2 = memStore.getById(r2.memoryId);
+        expect(e1!.tags).toContain("flush:1");
+        expect(e2!.tags).toContain("flush:2");
+      }
+    });
+
+    it("uses short-session fallback for sessions below minTurns (no Haiku call)", async () => {
+      const { sessionId } = seedActiveSession(2);
+
+      const mockSummarize: SummarizeFn = vi.fn();
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: mockSummarize,
+        log: silentLog(),
+      };
+
+      const result = await flushSessionMidway(
+        { agentName: "agent-a", sessionId, flushSequence: 1 },
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        fallback: "short-session",
+        turnCount: 2,
+      });
+      expect(mockSummarize).not.toHaveBeenCalled();
+    });
+
+    it("skips when the session has zero turns", async () => {
+      const session = convStore.startSession("agent-a");
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn(),
+        log: silentLog(),
+      };
+
+      const result = await flushSessionMidway(
+        { agentName: "agent-a", sessionId: session.id, flushSequence: 1 },
+        deps,
+      );
+      expect(result).toMatchObject({ skipped: true, reason: "zero-turns" });
+    });
+
+    it("skips when the session is not active (ended)", async () => {
+      const { sessionId } = seedActiveSession(3);
+      convStore.endSession(sessionId);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn(),
+        log: silentLog(),
+      };
+
+      const result = await flushSessionMidway(
+        { agentName: "agent-a", sessionId, flushSequence: 1 },
+        deps,
+      );
+      expect(result).toMatchObject({
+        skipped: true,
+        reason: "session-not-active",
+      });
+    });
+
+    it("skips when the session does not exist", async () => {
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn(),
+        log: silentLog(),
+      };
+
+      const result = await flushSessionMidway(
+        { agentName: "agent-a", sessionId: "no-such-session", flushSequence: 1 },
+        deps,
+      );
+      expect(result).toMatchObject({
+        skipped: true,
+        reason: "session-not-found",
+      });
+    });
+
+    it("does not delete turns after a successful flush", async () => {
+      const { sessionId } = seedActiveSession(4);
+
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: vi.fn().mockResolvedValue("## User Preferences\n(none)\n"),
+        log: silentLog(),
+      };
+
+      await flushSessionMidway(
+        { agentName: "agent-a", sessionId, flushSequence: 1 },
+        deps,
+      );
+
+      expect(convStore.getTurnsForSession(sessionId)).toHaveLength(4);
     });
   });
 });
