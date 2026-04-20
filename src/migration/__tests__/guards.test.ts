@@ -89,9 +89,13 @@ function writeYaml(
   dir: string,
   agents: { name: string; channels: string[] }[],
 ): string {
+  // Minimal valid clawcode.yaml per src/config/schema.ts:857 — requires
+  // `version: 1`, a `defaults` block with a recognized model enum, and
+  // at least one agent. Test fixtures only care about agents[].channels[].
   const yaml = [
+    "version: 1",
     "defaults:",
-    "  model: claude-sonnet-4-5",
+    "  model: sonnet",
     "agents:",
     ...agents.flatMap((a) => [
       `  - name: ${a.name}`,
