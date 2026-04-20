@@ -1283,3 +1283,153 @@ describe("configSchema - memoryPath conflict detection", () => {
     expect(result.success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 78 Plan 01 — CONF-01: agentSchema.soulFile + agentSchema.identityFile
+// + configSchema mutual-exclusion guard (inline soul/identity vs file pointers)
+// ---------------------------------------------------------------------------
+
+describe("agentSchema - soulFile / identityFile (Phase 78 CONF-01)", () => {
+  it("accepts optional soulFile with ~/... path (raw, no expansion at schema layer)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      soulFile: "~/workspace-fin-acquisition/SOUL.md",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Schema stores raw string; expandHome() runs in loader.ts.
+      expect(result.data.soulFile).toBe(
+        "~/workspace-fin-acquisition/SOUL.md",
+      );
+    }
+  });
+
+  it("accepts optional identityFile with ~/... path (raw, no expansion at schema layer)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      identityFile: "~/workspace-fin-acquisition/IDENTITY.md",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.identityFile).toBe(
+        "~/workspace-fin-acquisition/IDENTITY.md",
+      );
+    }
+  });
+
+  it("leaves both soulFile and identityFile undefined when omitted", () => {
+    const result = agentSchema.safeParse({ name: "writer" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.soulFile).toBeUndefined();
+      expect(result.data.identityFile).toBeUndefined();
+    }
+  });
+
+  it("rejects soulFile with an empty string (min(1) guard)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      soulFile: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects soulFile with a non-string (number) value", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      soulFile: 123,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("configSchema - soul/soulFile + identity/identityFile mutual exclusion (Phase 78 CONF-01)", () => {
+  it("rejects an agent that sets BOTH inline soul AND soulFile — error names the agent", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        {
+          name: "fin-acquisition",
+          soul: "inline soul text",
+          soulFile: "~/workspace-fin-acquisition/SOUL.md",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const msg = result.error.issues.map((i) => i.message).join(" | ");
+      expect(msg).toMatch(/soul.*soulFile.*cannot be used together/i);
+      expect(msg).toContain("fin-acquisition");
+    }
+  });
+
+  it("rejects an agent that sets BOTH inline identity AND identityFile — error names the agent", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        {
+          name: "fin-acquisition",
+          identity: "inline identity text",
+          identityFile: "~/workspace-fin-acquisition/IDENTITY.md",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const msg = result.error.issues.map((i) => i.message).join(" | ");
+      expect(msg).toMatch(/identity.*identityFile.*cannot be used together/i);
+      expect(msg).toContain("fin-acquisition");
+    }
+  });
+
+  it("accepts an agent setting ONLY soulFile and ONLY identityFile (no inline counterparts)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        {
+          name: "fin-acquisition",
+          soulFile: "~/workspace-fin-acquisition/SOUL.md",
+          identityFile: "~/workspace-fin-acquisition/IDENTITY.md",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a mix across agents: A uses inline soul, B uses soulFile (exclusion is per-agent)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "agent-a", soul: "inline text for A" },
+        { name: "agent-b", soulFile: "~/workspace-b/SOUL.md" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("preserves existing Phase 75 memoryPath conflict detection (regression — both superRefine blocks fire)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        {
+          name: "fin-acquisition",
+          memoryPath: "~/shared/A",
+          soulFile: "~/workspace-fin-acquisition/SOUL.md",
+        },
+        {
+          name: "fin-research",
+          memoryPath: "~/shared/A",
+          soulFile: "~/workspace-fin-research/SOUL.md",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(" | ");
+      // Phase 75 guard still fires despite adding the Phase 78 block.
+      expect(messages).toMatch(/memoryPath.*conflict/i);
+      expect(messages).toContain("fin-acquisition");
+      expect(messages).toContain("fin-research");
+    }
+  });
+});

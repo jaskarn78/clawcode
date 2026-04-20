@@ -357,6 +357,113 @@ describe("resolveAgentConfig", () => {
       join(homedir(), "shared/finmentum/fin-research"),
     );
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 78 Plan 01 — CONF-01: soulFile / identityFile expansion
+  // loader.ts guarantees ResolvedAgentConfig.soulFile / .identityFile are
+  //   - expandHome(agent.soulFile) when set (handles `~/...`)
+  //   - undefined when unset (session-config.ts skips the file branch)
+  // -------------------------------------------------------------------------
+
+  it("expands soulFile with leading ~ when set", () => {
+    const agent: AgentConfig = {
+      name: "fin-acquisition",
+      soulFile: "~/workspace-fin-acquisition/SOUL.md",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.soulFile).toBe(
+      join(homedir(), "workspace-fin-acquisition/SOUL.md"),
+    );
+  });
+
+  it("leaves soulFile undefined when unset (no fallback to workspace/SOUL.md)", () => {
+    const agent: AgentConfig = {
+      name: "writer",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.soulFile).toBeUndefined();
+  });
+
+  it("expands identityFile with leading ~ when set; leaves undefined when unset", () => {
+    const agentSet: AgentConfig = {
+      name: "fin-research",
+      identityFile: "~/workspace-fin-research/IDENTITY.md",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+    const resolvedSet = resolveAgentConfig(agentSet, defaults);
+    expect(resolvedSet.identityFile).toBe(
+      join(homedir(), "workspace-fin-research/IDENTITY.md"),
+    );
+
+    const agentUnset: AgentConfig = {
+      name: "writer",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+    const resolvedUnset = resolveAgentConfig(agentUnset, defaults);
+    expect(resolvedUnset.identityFile).toBeUndefined();
+  });
+
+  it("expands soulFile independently of workspace (soulFile expansion doesn't depend on workspace being set)", () => {
+    const agent: AgentConfig = {
+      name: "fin-acquisition",
+      // workspace omitted — loader falls back to basePath + name
+      soulFile: "~/external/custom-soul.md",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.soulFile).toBe(
+      join(homedir(), "external/custom-soul.md"),
+    );
+    // Workspace still resolved from basePath — independent from soulFile.
+    expect(resolved.workspace).toBe(
+      join(homedir(), ".clawcode/agents", "fin-acquisition"),
+    );
+  });
 });
 
 describe("resolveAgentConfig - mcpServers", () => {
