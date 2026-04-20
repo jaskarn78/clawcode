@@ -46,9 +46,25 @@ export const LEDGER_STATUSES = ["pending", "migrated", "verified", "rolled-back"
 export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
 
 /**
+ * Canonical per-guard outcome enum for pre-flight rows (Phase 77+).
+ * Narrower than `status`: `refuse` always pairs with `status: "pending"`
+ * because a refused guard never advances state. `allow` pairs with
+ * whatever `status` the caller chose (typically `"pending"` at apply-
+ * pre-flight time — the apply phase itself is Phase 78+).
+ */
+export const LEDGER_OUTCOMES = ["allow", "refuse"] as const;
+export type LedgerOutcome = (typeof LEDGER_OUTCOMES)[number];
+
+/**
  * Zod validator for a single ledger row. `ts` must parse via Date.parse
  * AND contain a "T" separator — rules out ambiguous "2026-04-20" date-only
  * strings that Date.parse accepts but aren't full ISO 8601.
+ *
+ * Phase 77+ additive extension: `step`, `outcome`, `file_hashes` are all
+ * optional — a row that omits them continues to validate exactly as before.
+ * This is the load-bearing backward-compat invariant for every Phase 76
+ * consumer (`appendRow` / `readRows` / `latestStatusByAgent` / the `list`
+ * CLI subcommand): adding fields MUST NOT break any existing row.
  */
 export const ledgerRowSchema = z.object({
   ts: z
@@ -63,6 +79,17 @@ export const ledgerRowSchema = z.object({
   source_hash: z.string().min(1),
   target_hash: z.string().optional(),
   notes: z.string().optional(),
+  // Phase 77+ additive extension (backward-compatible — all optional).
+  // `step` identifies which guard produced the row, e.g.
+  //   "pre-flight:daemon" / "pre-flight:secret" /
+  //   "pre-flight:channel" / "pre-flight:readonly".
+  step: z.string().min(1).optional(),
+  // `outcome` is narrower than `status` — only `allow` / `refuse`.
+  outcome: z.enum(LEDGER_OUTCOMES).optional(),
+  // `file_hashes` is a map of path → sha256 for witness rows. Both keys
+  // AND values must be non-empty strings — rules out `{"": "abc"}` and
+  // `{"path": ""}` which carry no witness information.
+  file_hashes: z.record(z.string().min(1), z.string().min(1)).optional(),
 });
 export type LedgerRow = z.infer<typeof ledgerRowSchema>;
 
