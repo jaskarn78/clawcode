@@ -65,8 +65,8 @@ Per-agent file copy from `~/.openclaw/workspace-<name>/` to ClawCode target work
 OpenClaw workspace markdown → ClawCode `memories.db` with re-embedding.
 
 - [ ] **MEM-01**: User (as migrated agent) can retrieve memories via `memory_lookup` MCP tool that originated from the source OpenClaw agent's `MEMORY.md` + `memory/*.md` files, with the full text content preserved verbatim (no LLM rewriting, no summarization).
-- [ ] **MEM-02**: User (as operator) can trust that each migrated memory row in ClawCode's `memories` table carries an `origin_id` UNIQUE column (format: `openclaw:<agent>:<source-path-hash>`) so re-running the migrator does not create duplicates.
-- [ ] **MEM-03**: User (as operator) can trust that all migrated memories are re-embedded via the resident `all-MiniLM-L6-v2` singleton (384-dim) and inserted through the public `MemoryStore.insert()` API — never raw SQL against `vec_memories`.
+- [x] **MEM-02**: User (as operator) can trust that each migrated memory row in ClawCode's `memories` table carries an `origin_id` UNIQUE column (format: `openclaw:<agent>:<source-path-hash>`) so re-running the migrator does not create duplicates.
+- [x] **MEM-03**: User (as operator) can trust that all migrated memories are re-embedded via the resident `all-MiniLM-L6-v2` singleton (384-dim) and inserted through the public `MemoryStore.insert()` API — never raw SQL against `vec_memories`.
 - [ ] **MEM-04**: User (as migrated agent) can retrieve `.learnings/*.md` entries as first-class memories via `memory_lookup` with a `tag: "learning"` classifier, so legacy learnings become searchable from day one.
 - [ ] **MEM-05**: User (as operator) can trust that the migrator reads the workspace markdown (NOT the OpenClaw `chunks` table from its file-RAG sqlite) as source of truth — the OpenClaw sqlite is a derived index and may be stale.
 
@@ -139,8 +139,8 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | WORK-04 | Phase 79: Workspace Migration | Complete |
 | WORK-05 | Phase 79: Workspace Migration | Complete |
 | MEM-01 | Phase 80: Memory Translation + Re-embedding | Pending |
-| MEM-02 | Phase 80: Memory Translation + Re-embedding | Pending |
-| MEM-03 | Phase 80: Memory Translation + Re-embedding | Pending |
+| MEM-02 | Phase 80: Memory Translation + Re-embedding | Complete |
+| MEM-03 | Phase 80: Memory Translation + Re-embedding | Complete |
 | MEM-04 | Phase 80: Memory Translation + Re-embedding | Pending |
 | MEM-05 | Phase 80: Memory Translation + Re-embedding | Pending |
 | MIGR-03 | Phase 81: Verify + Rollback + Resume + Fork | Pending |

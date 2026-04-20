@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: Completed 79-03-PLAN.md — Phase 79 workspace migration fully implemented (all 5 WORK-* requirements closed)
-last_updated: "2026-04-20T20:35:45.663Z"
+status: Ready to execute
+stopped_at: Completed 80-01-PLAN.md
+last_updated: "2026-04-20T21:16:54.794Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 11
-  total_plans: 31
-  completed_plans: 31
+  total_plans: 34
+  completed_plans: 32
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 79 — workspace-migration
+**Current focus:** Phase 80 — memory-translation-re-embedding
 
 ## Current Position
 
-Phase: 80
-Plan: Not started
+Phase: 80 (memory-translation-re-embedding) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -113,6 +113,8 @@ Recent decisions affecting current work:
 - [Phase 79]: hash-witness: per-file sha256 ledger rows (one row per file) — forensic JSONL ordering; symlinks compared via readlink (not dereferenced content)
 - [Phase 79-workspace-migration]: Plan 03: Full-before-uploads processing order (deviation) — primary workspace copies must land in shared basePath before sub-agents' uploads-only copies, or the primary's post-copy sweep will walk over sub-agents' files with no matching source.
 - [Phase 79-workspace-migration]: Plan 03: resolveWorkspaceCopyPlan routes by on-disk shape (SOUL.md present → full; uploads/ only → uploads-only; neither → skip) — no finmentum-specific branching needed. Finmentum routing emerges naturally from the shape + Phase 78 getTargetBasePath family collapse.
+- [Phase 80]: origin_id UNIQUE partial index (WHERE IS NOT NULL) for idempotent path-hash imports at MemoryStore layer
+- [Phase 80]: INSERT OR IGNORE requires CHECK-constraint guard: re-raise MemoryError when changes===0 without origin_id
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -187,9 +189,10 @@ Recent decisions affecting current work:
 | Phase 79 P02 | 4min | 1 tasks | 2 files |
 | Phase 79 P01 | 4 | 1 tasks | 2 files |
 | Phase 79-workspace-migration P03 | 10 | 2 tasks | 8 files |
+| Phase 80 P01 | 14min | 2 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 79-03-PLAN.md — Phase 79 workspace migration fully implemented (all 5 WORK-* requirements closed)
+Stopped at: Completed 80-01-PLAN.md
 Resume file: None
