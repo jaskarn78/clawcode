@@ -45,14 +45,13 @@
 
 import path from "node:path";
 import { homedir } from "node:os";
-import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 
 import type { OpenAiSessionDriver } from "./server.js";
 import type { SdkStreamEvent, TemplateDriverInput } from "./types.js";
 import { TIER_MODEL_MAP } from "./types.js";
 import type { SessionHandle, UsageCallback } from "../manager/session-adapter.js";
-import type { SdkModule, SdkQueryOptions } from "../manager/sdk-types.js";
+import type { SdkModule, SdkQueryOptions, SdkQuery } from "../manager/sdk-types.js";
 import { createPersistentSessionHandle } from "../manager/persistent-session-handle.js";
 import {
   TransientSessionCache,
@@ -166,62 +165,91 @@ function runTemplateDispatch(
     tier: input.tier,
   });
 
-  // Resolve (or materialize) the persistent handle. Any synchronous throw
-  // from createPersistentSessionHandle (e.g. SDK init failure) propagates
-  // through the async iterator's first .next() call below — we capture it
-  // into `pendingCtorError` so the iterator can reject cleanly.
+  // Fast-path cache hit — handle already materialized (prior request). Bypass
+  // the drain entirely. Cache miss takes the async materialization branch
+  // inside kickoff() below.
   let handle: SessionHandle | undefined = deps.cache.get(cacheKey);
-  let pendingCtorError: Error | undefined;
   const startedAt = Date.now();
 
-  if (!handle) {
-    try {
-      if (deps.ensureCwd) deps.ensureCwd(CLAWCODE_TRANSIENT_CWD);
-      const modelId = TIER_MODEL_MAP[input.tier];
-      // Build baseOptions — Pitfall 2 (string systemPrompt) + Pitfall 4 (fixed
-      // cwd) + isolation (mcpServers:{}, settingSources:[], tools:[]).
-      // Phase 74 hotfix — inherit process.env (minus ANTHROPIC_API_KEY) and
-      // keep settingSources:["project"] to match the native agent path. Empty
-      // settingSources made the CLI subprocess crash with
-      // `error_during_execution`. The "project" source is required for the
-      // Claude Code kernel to bootstrap; we still isolate from caller
-      // workspace by using a fixed CLAWCODE_TRANSIENT_CWD.
-      const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
-      const baseOptions = {
-        systemPrompt: input.soulPrompt, // STRING — REPLACES kernel prompt.
-        model: modelId,
-        cwd: CLAWCODE_TRANSIENT_CWD,
-        permissionMode: "bypassPermissions" as const,
-        allowDangerouslySkipPermissions: true,
-        mcpServers: {},
-        settingSources: ["project"] as ReadonlyArray<string>,
-        env: cleanEnv,
-      } satisfies SdkQueryOptions;
+  /**
+   * Phase 74 hotfix — match the native path's two-step handle materialization
+   * (session-adapter.ts:422-436):
+   *
+   *   1. Drain `sdk.query({ prompt: "Session initialized.", options })` to
+   *      establish a real SDK-assigned session_id on disk.
+   *   2. Hand that session_id to createPersistentSessionHandle so the single
+   *      long-lived query can `resume:` it successfully.
+   *
+   * Without the drain, the persistent handle's `resume: randomUUID()` tries
+   * to load conversation history from a session the SDK never created,
+   * causing the Claude CLI subprocess to emit `error_during_execution` after
+   * ~1.5s. See `sdk.d.ts:1310-1312` — `resume` REQUIRES an existing session;
+   * use of a fresh UUID is undefined behavior that surfaces as CLI crash.
+   *
+   * The drain is async (awaits the SDK subprocess's first result message),
+   * so this helper lives inside the async kickoff below — kept off the
+   * synchronous iterator-construction path so that test-only fakes (which
+   * never call sdk.query) still work.
+   */
+  async function materializeHandle(): Promise<SessionHandle> {
+    if (deps.ensureCwd) deps.ensureCwd(CLAWCODE_TRANSIENT_CWD);
+    const modelId = TIER_MODEL_MAP[input.tier];
+    // Build baseOptions — Pitfall 2 (string systemPrompt) + Pitfall 4 (fixed
+    // cwd) + isolation (mcpServers:{}, tools:[]). settingSources:["project"]
+    // matches the native agent path; empty settingSources makes the CLI
+    // subprocess crash with `error_during_execution`. The "project" source
+    // is required for the Claude Code kernel to bootstrap; we still isolate
+    // from caller workspace by using a fixed CLAWCODE_TRANSIENT_CWD.
+    //
+    // env inherits process.env (minus ANTHROPIC_API_KEY) so the subprocess
+    // uses OAuth subscription auth instead of a potentially-stale external
+    // API key (mirrors buildCleanEnv in session-adapter.ts).
+    const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
+    const baseOptions = {
+      systemPrompt: input.soulPrompt, // STRING — REPLACES kernel prompt.
+      model: modelId,
+      cwd: CLAWCODE_TRANSIENT_CWD,
+      permissionMode: "bypassPermissions" as const,
+      allowDangerouslySkipPermissions: true,
+      mcpServers: {},
+      settingSources: ["project"] as ReadonlyArray<string>,
+      env: cleanEnv,
+    } satisfies SdkQueryOptions;
 
-      // Bind a usage callback that reports back via deps.onUsage — Plan 02
-      // hooks UsageTracker here so `openclaw:<slug>` rows land in the DB.
-      const usageCb: UsageCallback | undefined = deps.onUsage
-        ? (u) => {
-            try {
-              if (handle) {
-                deps.onUsage!(input, u, handle.sessionId, Date.now() - startedAt);
-              }
-            } catch (err) {
-              deps.log.warn({ err }, "transient usage callback threw (non-fatal)");
+    // Step 1 — drain initial query to get the SDK-assigned session_id. The
+    // CLI subprocess exits after emitting the `result` message; the session
+    // JSONL persists on disk and the persistent handle resumes it below.
+    const initialQuery: SdkQuery = deps.sdk.query({
+      prompt: "Session initialized.",
+      options: baseOptions as SdkQueryOptions,
+    });
+    const sessionId = await drainForSessionId(initialQuery);
+
+    // Bind a usage callback that reports back via deps.onUsage — Plan 02
+    // hooks UsageTracker here so `openclaw:<slug>` rows land in the DB.
+    // Declared before mkHandle so the closure over `newHandle` is visible.
+    let newHandle: SessionHandle | undefined;
+    const usageCb: UsageCallback | undefined = deps.onUsage
+      ? (u) => {
+          try {
+            if (newHandle) {
+              deps.onUsage!(input, u, newHandle.sessionId, Date.now() - startedAt);
             }
+          } catch (err) {
+            deps.log.warn({ err }, "transient usage callback threw (non-fatal)");
           }
-        : undefined;
+        }
+      : undefined;
 
-      handle = mkHandle(
-        deps.sdk,
-        baseOptions as SdkQueryOptions,
-        randomUUID(),
-        usageCb,
-      );
-      deps.cache.set(cacheKey, handle);
-    } catch (err) {
-      pendingCtorError = err instanceof Error ? err : new Error(String(err));
-    }
+    // Step 2 — hand the SDK-assigned sessionId to the persistent handle.
+    newHandle = mkHandle(
+      deps.sdk,
+      baseOptions as SdkQueryOptions,
+      sessionId,
+      usageCb,
+    );
+    deps.cache.set(cacheKey, newHandle);
+    return newHandle;
   }
 
   // --- Bridge handle.sendAndStream (callback) → AsyncIterable<SdkStreamEvent> ---
@@ -272,55 +300,59 @@ function runTemplateDispatch(
     flushNext();
   };
 
-  // If handle materialization failed, surface the error on first next().
-  if (pendingCtorError) {
-    queue.push({ kind: "error", error: pendingCtorError });
-  } else if (handle) {
-    // Kick off the turn. The SDK emits chunks via onChunk(accumulated); we
-    // convert each delta into a content_block_delta event.
-    const onChunk = (accumulated: string): void => {
-      if (!emittedTextBlockStart) {
-        emittedTextBlockStart = true;
-        pushEvent({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "text" },
-          },
-        });
-      }
-      if (accumulated.length <= accumulatedSoFar.length) return;
-      const delta = accumulated.slice(accumulatedSoFar.length);
-      accumulatedSoFar = accumulated;
-      if (delta.length === 0) return;
+  // Kick off the turn. The SDK emits chunks via onChunk(accumulated); we
+  // convert each delta into a content_block_delta event.
+  const onChunk = (accumulated: string): void => {
+    if (!emittedTextBlockStart) {
+      emittedTextBlockStart = true;
       pushEvent({
         type: "stream_event",
         event: {
-          type: "content_block_delta",
+          type: "content_block_start",
           index: 0,
-          delta: { type: "text_delta", text: delta },
+          content_block: { type: "text" },
         },
       });
-    };
+    }
+    if (accumulated.length <= accumulatedSoFar.length) return;
+    const delta = accumulated.slice(accumulatedSoFar.length);
+    accumulatedSoFar = accumulated;
+    if (delta.length === 0) return;
+    pushEvent({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: delta },
+      },
+    });
+  };
 
-    void handle
-      .sendAndStream(input.lastUserMessage, onChunk, undefined, {
+  // Async kickoff: (a) resolve handle from cache OR materialize async via
+  // drain-then-mkHandle, (b) run sendAndStream, (c) push end/error. Any
+  // throw from materializeHandle (including synchronous throws from
+  // mkHandle in tests — wrapped in the async boundary) becomes a rejection
+  // on the pushError channel, matching the pre-fix sync-throw semantics
+  // from the iterator consumer's perspective.
+  //
+  // Abort plumbing — handle.sendAndStream already honors options.signal
+  // (SendOptions.signal races the SDK's interrupt deadline). Nothing else
+  // to wire here — the .catch path below translates AbortError into the
+  // iterator's error channel.
+  void (async () => {
+    try {
+      const liveHandle = handle ?? (await materializeHandle());
+      // eslint-disable-next-line require-atomic-updates
+      handle = liveHandle;
+      await liveHandle.sendAndStream(input.lastUserMessage, onChunk, undefined, {
         signal: input.signal,
-      })
-      .then(() => {
-        // handle.sessionId is stable for the life of the handle (Phase 73).
-        pushEnd(handle!.sessionId);
-      })
-      .catch((err: unknown) => {
-        pushError(err instanceof Error ? err : new Error(String(err)));
       });
-
-    // Abort plumbing — handle.sendAndStream already honors options.signal
-    // (SendOptions.signal races the SDK's interrupt deadline). Nothing else
-    // to wire here — the .catch path above translates AbortError into the
-    // iterator's error channel.
-  }
+      // handle.sessionId is stable for the life of the handle (Phase 73).
+      pushEnd(liveHandle.sessionId);
+    } catch (err) {
+      pushError(err instanceof Error ? err : new Error(String(err)));
+    }
+  })();
 
   const iterator: AsyncIterator<SdkStreamEvent> = {
     next(): Promise<IteratorResult<SdkStreamEvent>> {
@@ -340,4 +372,49 @@ function runTemplateDispatch(
     },
   };
   return iterator;
+}
+
+/**
+ * Drain an initial SDK query until its `result` message arrives and return
+ * the SDK-assigned session_id.
+ *
+ * Mirrors `drainInitialQuery` in session-adapter.ts but throws instead of
+ * falling back to a pending-timestamp id. The template driver has no prior
+ * session on disk — if the drain fails we CANNOT safely proceed: passing a
+ * bogus id to `resume:` inside createPersistentSessionHandle is exactly
+ * what produced the `error_during_execution` symptom this fix addresses.
+ * Surfacing the drain failure to the iterator's error channel lets the
+ * server return a proper 500 driver_error with visible diagnostics.
+ */
+async function drainForSessionId(query: SdkQuery): Promise<string> {
+  for await (const msg of query) {
+    if (msg.type === "result") {
+      const resultMsg = msg as {
+        session_id?: string;
+        is_error?: boolean;
+        subtype?: string;
+      };
+      // If the drain itself errored (e.g., auth failure, CLI crash, missing
+      // model, unsupported settings), do NOT feed the SDK-minted session_id
+      // forward — even though the session exists on disk, the underlying
+      // failure will recur on the persistent handle's first turn. Surface
+      // the error NOW with the SDK's own subtype so server.ts returns a
+      // meaningful 500 body instead of the downstream `resume:` hang.
+      if (resultMsg.is_error) {
+        throw new Error(
+          `template-driver: initial drain query failed (${resultMsg.subtype ?? "unknown"})`,
+        );
+      }
+      // SDK always populates session_id on result messages (sdk.d.ts:2581 +
+      // 2604). Defensive narrow keeps strictNullChecks happy.
+      if (typeof resultMsg.session_id === "string" && resultMsg.session_id.length > 0) {
+        return resultMsg.session_id;
+      }
+      // Result without session_id is malformed — fall through to post-loop throw.
+      break;
+    }
+  }
+  throw new Error(
+    "template-driver: initial drain query produced no session_id result; cannot establish transient session",
+  );
 }

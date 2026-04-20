@@ -31,10 +31,21 @@ import type { createPersistentSessionHandle as CreatePersistentFn } from "../../
 // Fixtures
 // ---------------------------------------------------------------------------
 
-function fakeSdk(): SdkModule {
-  return {
-    query: vi.fn() as unknown as SdkModule["query"],
-  };
+/**
+ * SDK stub that emits a synthetic `result` message so the template driver's
+ * drainForSessionId (Phase 74 hotfix — mirrors session-adapter.ts:426) can
+ * resolve and proceed to createPersistentSessionHandle. createHandle itself
+ * remains mocked via the createHandle seam.
+ */
+function fakeSdk(opts?: { sessionId?: string }): SdkModule {
+  const sessionId = opts?.sessionId ?? "drained-sess-" + Math.random().toString(36).slice(2);
+  const query = vi.fn((_params: unknown) => {
+    async function* gen(): AsyncGenerator<unknown, void> {
+      yield { type: "result", subtype: "success", is_error: false, session_id: sessionId };
+    }
+    return gen() as unknown as ReturnType<SdkModule["query"]>;
+  });
+  return { query } as unknown as SdkModule;
 }
 
 /**

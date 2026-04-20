@@ -32,15 +32,46 @@ import type { createPersistentSessionHandle as CreatePersistentFn } from "../../
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal SDK module stub. The template driver doesn't call sdk.query
- * directly — that's inside createPersistentSessionHandle, which we mock via
- * the createHandle seam. We still need to pass SOMETHING for the driver's
- * deps.sdk field.
+ * Minimal SDK module stub. Phase 74 hotfix — the template driver NOW calls
+ * `sdk.query({ prompt: "Session initialized.", options })` as an initial
+ * drain step to obtain a real SDK-assigned session_id before handing off to
+ * createPersistentSessionHandle (mirrors session-adapter.ts:426 pattern).
+ * Without this the persistent handle's `resume: <bogus-uuid>` crashes the
+ * Claude CLI subprocess with `error_during_execution`.
+ *
+ * Tests that go through createHandle must therefore provide a query() stub
+ * that yields a `result` message with a session_id so drainForSessionId can
+ * resolve. createHandle itself is still mocked; the drain query is the only
+ * real sdk.query() path the driver exercises.
+ *
+ * `queryResult` lets tests pin a specific session_id (for assertions on
+ * sessionId propagation). `throwOnQuery` lets tests exercise the drain
+ * failure path.
  */
-function fakeSdk(): SdkModule {
-  return {
-    query: vi.fn() as unknown as SdkModule["query"],
-  };
+function fakeSdk(opts?: {
+  sessionId?: string;
+  throwOnQuery?: Error;
+  emitNoSessionId?: boolean;
+}): SdkModule {
+  const sessionId = opts?.sessionId ?? "drained-sess-" + Math.random().toString(36).slice(2);
+  const query = vi.fn((_params: unknown) => {
+    if (opts?.throwOnQuery) throw opts.throwOnQuery;
+    async function* gen(): AsyncGenerator<unknown, void> {
+      // Emit a single result message so drainForSessionId can extract the id.
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: opts?.emitNoSessionId ? undefined : sessionId,
+      };
+    }
+    const g = gen();
+    // drainForSessionId only iterates — .interrupt/.close/etc are not called
+    // on the drain query. Return the plain generator; cast so it satisfies
+    // SdkQuery's extra method shape without implementing them.
+    return g as unknown as ReturnType<SdkModule["query"]>;
+  });
+  return { query } as unknown as SdkModule;
 }
 
 /**
