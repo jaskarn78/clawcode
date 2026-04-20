@@ -252,7 +252,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   5. User runs `clawcode costs --agent <migrated-agent>` after at least one fork-to-Opus turn and sees the Opus turn appear as a row in the cost ledger (non-zero token cost, model prefix matches Opus) — with no budget ceiling enforcement (v2.1 user decision: unlimited per agent); `clawcode costs` shows the Opus spend distinctly from the agent's primary-model spend.
 **Plans**: 3 plans
 - [x] 81-01-PLAN.md — verifier.ts (4 checks) + rollbacker.ts (atomic removal + source hash-witness) + removeAgentFromConfig YAML extension (MIGR-04, MIGR-05)
-- [ ] 81-02-PLAN.md — verify + rollback CLI subcommands + resume-idempotency integration test + end-to-end verify/rollback/reapply cycle tests (MIGR-03, MIGR-04, MIGR-05)
+- [x] 81-02-PLAN.md — verify + rollback CLI subcommands + resume-idempotency integration test + end-to-end verify/rollback/reapply cycle tests (MIGR-03, MIGR-04, MIGR-05)
 - [ ] 81-03-PLAN.md — fork-to-Opus regression across 4 primary models (Haiku/Sonnet/MiniMax/Gemini) + fork cost-visibility regression proving FORK-02 no-budget-ceiling (FORK-01, FORK-02)
 
 ### Phase 82: Pilot + Cutover + Completion
@@ -295,7 +295,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
 | 79. Workspace Migration | 3/3 | Complete    | 2026-04-20 |
 | 80. Memory Translation + Re-embedding | 2/3 | Complete    | 2026-04-20 |
-| 81. Verify + Rollback + Resume + Fork | 1/3 | In Progress|  |
+| 81. Verify + Rollback + Resume + Fork | 2/3 | In Progress|  |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
 
 ---

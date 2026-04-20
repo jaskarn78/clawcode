@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Ready to execute
-stopped_at: Completed 81-01-PLAN.md
-last_updated: "2026-04-20T23:34:37.870Z"
+stopped_at: Completed 81-02-PLAN.md
+last_updated: "2026-04-20T23:56:12.333Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 12
   total_plans: 37
-  completed_plans: 35
+  completed_plans: 36
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-20)
 ## Current Position
 
 Phase: 81 (verify-rollback-resume-fork) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -123,6 +123,9 @@ Recent decisions affecting current work:
 - [Phase 80-memory-translation-re-embedding]: [Phase 80 Plan 03]: workspace-copier sweepDir existsSync(srcPath) gate — tolerates target-only files (memories.db) so re-runs succeed; target-only ledger witness preserves forensic completeness.
 - [Phase 81-verify-rollback-resume-fork]: Source-invariant hash-witness for atomic rollback: per-agent pre/post sha256 maps enforce SOURCE read-only contract — TDD discipline — RED commits already in place from prior sessions; executor verified tests fail without impl, then made GREEN commit
 - [Phase 81-verify-rollback-resume-fork]: Finmentum detection via memoryPath !== workspace config shape (Phase 75 signal) keeps rollbacker agent-agnostic — No hardcoded family ID list; future shared-basePath agent families automatically picked up without rollbacker changes
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 02]: Resume safety is a DB-level invariant (origin_id UNIQUE), not a CLI-level skip — runApplyAction re-processes migrated agents idempotently; MIGR-03 witness test inserts same origin_id twice and asserts GROUP BY HAVING COUNT>1 returns zero rows
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 02]: Late-bind action handlers into migrateOpenclawHandlers (placeholder async () => 0 at init, real fn assigned post-definition) — preserves Phase 76 file layout (handlers below holder) without reshuffling, while keeping the Phase 78 dispatch-holder test DI pattern intact
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 02]: Verify iterates ledger statuses ∈ {migrated, verified, rolled-back} — rolled-back agents re-verifiable (rollback→re-apply→verify is a valid forensic flow); pending agents (never applied) silently skipped
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -201,9 +204,10 @@ Recent decisions affecting current work:
 | Phase 80-memory-translation-re-embedding P02 | 13min | 2 tasks | 7 files |
 | Phase 80-memory-translation-re-embedding P03 | 62 min | 2 tasks | 7 files |
 | Phase 81-verify-rollback-resume-fork P01 | 9min | 2 tasks | 1 files |
+| Phase 81-verify-rollback-resume-fork P02 | 17min | 2 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 81-01-PLAN.md
+Stopped at: Completed 81-02-PLAN.md
 Resume file: None

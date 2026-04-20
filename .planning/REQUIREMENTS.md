@@ -34,7 +34,7 @@ User-facing `clawcode migrate openclaw` command — plan, apply, rollback, resum
 
 - [x] **MIGR-01**: User (as operator) can run `clawcode migrate openclaw plan` and see a per-agent table (source name, target `basePath`, memory count, MCP servers mapped, Discord channel) with color-coded diff, writes nothing.
 - [x] **MIGR-02**: User (as operator) can run `clawcode migrate openclaw apply [--only <agent>]` and have the CLI refuse if the OpenClaw daemon (`openclaw-gateway.service`) is running, refuse if any raw non-`op://` secret would be written to `clawcode.yaml`, and refuse if any Discord channel ID already appears on an existing ClawCode agent.
-- [ ] **MIGR-03**: User (as operator) can re-run `clawcode migrate openclaw apply` after partial success and have only un-migrated agents processed (idempotent; ledger-driven resume), with already-migrated memories deduped via `origin_id`.
+- [x] **MIGR-03**: User (as operator) can re-run `clawcode migrate openclaw apply` after partial success and have only un-migrated agents processed (idempotent; ledger-driven resume), with already-migrated memories deduped via `origin_id`.
 - [x] **MIGR-04**: User (as operator) can run `clawcode migrate openclaw verify [<agent>]` after apply and see pass/fail checks for: workspace files present, memory count within ±5% of source, Discord channel reachable, agent boots on daemon restart.
 - [x] **MIGR-05**: User (as operator) can run `clawcode migrate openclaw rollback <agent>` and have the CLI remove that agent's entries from `clawcode.yaml`, delete its ClawCode workspace + memory DB, and leave the source OpenClaw state fully intact.
 - [x] **MIGR-06**: User (as operator) can observe that every migration action writes a structured JSONL entry to `.planning/migration/ledger.jsonl` with timestamp, agent, step, outcome, and file-hash witnesses.
@@ -143,7 +143,7 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | MEM-03 | Phase 80: Memory Translation + Re-embedding | Complete |
 | MEM-04 | Phase 80: Memory Translation + Re-embedding | Complete |
 | MEM-05 | Phase 80: Memory Translation + Re-embedding | Complete |
-| MIGR-03 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| MIGR-03 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | MIGR-04 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | MIGR-05 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | FORK-01 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
