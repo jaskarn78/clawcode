@@ -315,7 +315,12 @@ export async function buildSessionConfig(
   let contextSummaryStr = "";
   const loadedSummary =
     contextSummary ??
-    (await loadLatestSummary(join(config.workspace, "memory")));
+    // Phase 75 SHARED-02 — loadLatestSummary must resolve against
+    // memoryPath (not workspace) so shared-workspace agents find the
+    // context-summary.md that saveContextSummary wrote under
+    // memoryPath/memory/. For dedicated-workspace agents the loader
+    // fallback makes workspace === memoryPath, so this is a no-op.
+    (await loadLatestSummary(join(config.memoryPath, "memory")));
   if (loadedSummary) {
     const resumeBudget =
       config.perf?.resumeSummaryBudget ?? DEFAULT_RESUME_SUMMARY_BUDGET;

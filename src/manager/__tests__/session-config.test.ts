@@ -981,6 +981,9 @@ describe("buildSessionConfig — shared-workspace context summary resume (Phase 
       "/shared/fin/fin-A/memory",
     );
     // And the summary content must have flowed into the assembled prompt.
-    expect(result.systemPrompt).toContain("SHARED_WORKSPACE_RESUME_MARKER");
+    // Phase 52 two-block wiring routes context summary to the mutable
+    // suffix (never stable prefix), so assert against the combined output.
+    const assembledPrompt = result.systemPrompt + (result.mutableSuffix ?? "");
+    expect(assembledPrompt).toContain("SHARED_WORKSPACE_RESUME_MARKER");
   });
 });
