@@ -575,6 +575,135 @@ describe("MemoryStore", () => {
       );
       expect(withOrigin.id).toBeTruthy();
     });
+
+    it("origin_id insert returns new entry on first call and persists origin_id + vec row", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const originId = "openclaw:test:abc123";
+
+      const entry = store.insert(
+        { content: "first-import", source: "manual", origin_id: originId },
+        randomEmbedding(),
+      );
+      expect(entry.id).toBeTruthy();
+      expect(entry.content).toBe("first-import");
+
+      const memRow = db
+        .prepare("SELECT origin_id FROM memories WHERE id = ?")
+        .get(entry.id) as { origin_id: string };
+      expect(memRow.origin_id).toBe(originId);
+
+      const memCount = db
+        .prepare("SELECT COUNT(*) as cnt FROM memories")
+        .get() as { cnt: number };
+      expect(memCount.cnt).toBe(1);
+
+      const vecCount = db
+        .prepare("SELECT COUNT(*) as cnt FROM vec_memories")
+        .get() as { cnt: number };
+      expect(vecCount.cnt).toBe(1);
+    });
+
+    it("origin_id insert on duplicate returns the EXISTING entry (INSERT OR IGNORE — no upsert)", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const originId = "openclaw:test:duplicate-path";
+
+      const first = store.insert(
+        { content: "FIRST content", source: "manual", origin_id: originId },
+        randomEmbedding(),
+      );
+
+      // Same origin_id, DIFFERENT content + embedding.
+      const second = store.insert(
+        { content: "SECOND content", source: "manual", origin_id: originId },
+        randomEmbedding(),
+      );
+
+      // Collision returns the existing row. Content is NOT updated.
+      expect(second.id).toBe(first.id);
+      expect(second.content).toBe("FIRST content");
+
+      const memCount = db
+        .prepare("SELECT COUNT(*) as cnt FROM memories")
+        .get() as { cnt: number };
+      expect(memCount.cnt).toBe(1);
+
+      // Crucially: no orphan vec row for the IGNORED insert.
+      const vecCount = db
+        .prepare("SELECT COUNT(*) as cnt FROM vec_memories")
+        .get() as { cnt: number };
+      expect(vecCount.cnt).toBe(1);
+    });
+
+    it("origin_id path SKIPS dedup — different origin_ids with near-duplicate embeddings create 2 rows", () => {
+      store = new MemoryStore(":memory:", { enabled: true, similarityThreshold: 0.85 });
+
+      // Construct identical direction vectors that would normally trigger merge.
+      const vec = new Float32Array(384);
+      vec[0] = 1.0;
+
+      store.insert(
+        {
+          content: "near-dup A",
+          source: "manual",
+          origin_id: "openclaw:test:A",
+        },
+        vec,
+      );
+      store.insert(
+        {
+          content: "near-dup B",
+          source: "manual",
+          origin_id: "openclaw:test:B",
+        },
+        vec,
+      );
+
+      // Both rows exist — dedup was skipped because origin_id was present.
+      const list = store.listRecent(100);
+      expect(list.length).toBe(2);
+    });
+
+    it("absent origin_id preserves existing dedup behavior (461-test baseline regression pin)", () => {
+      store = new MemoryStore(":memory:", { enabled: true, similarityThreshold: 0.85 });
+      const vec = new Float32Array(384);
+      vec[0] = 1.0;
+
+      // No origin_id on either insert → dedup merge path fires as before.
+      store.insert({ content: "original", source: "manual" }, vec);
+      store.insert({ content: "duplicate", source: "manual" }, vec);
+
+      const list = store.listRecent(100);
+      expect(list.length).toBe(1);
+      expect(list[0].content).toBe("duplicate");
+    });
+
+    it("duplicate-origin_id insert preserves the FIRST row's createdAt (CLI upserted-vs-skipped contract)", () => {
+      store = createTestStore();
+      const originId = "openclaw:test:timestamp-contract";
+
+      const first = store.insert(
+        { content: "first", source: "manual", origin_id: originId },
+        randomEmbedding(),
+      );
+
+      // Small busy-wait to ensure wall-clock ISO timestamp would differ if
+      // the second insert were actually writing its own row.
+      const waitUntil = Date.now() + 5;
+      while (Date.now() < waitUntil) { /* spin */ }
+
+      const second = store.insert(
+        { content: "second", source: "manual", origin_id: originId },
+        randomEmbedding(),
+      );
+
+      // Plan 02's translator compares entry.createdAt to its "this run"
+      // marker to classify upserted vs skipped. Test pins the contract:
+      // the returned entry from a collision is the FIRST row, bit-for-bit.
+      expect(second.createdAt).toBe(first.createdAt);
+      expect(second.id).toBe(first.id);
+    });
   });
 
   describe("sourceTurnIds (CONV-03 write path)", () => {
