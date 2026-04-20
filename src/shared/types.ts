@@ -20,6 +20,19 @@ export type ResolvedAgentConfig = {
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;
+  /**
+   * Phase 78 CONF-01 — absolute expanded path to a SOUL markdown file.
+   * Undefined unless the agent's YAML entry set `soulFile:`. When set,
+   * session-config.ts reads this file lazily at session boot and prefers
+   * it over `<workspace>/SOUL.md` and the inline `soul` field.
+   * Expansion via expandHome() happens in loader.ts — never raw `~/...`.
+   */
+  readonly soulFile?: string;
+  /**
+   * Phase 78 CONF-01 — absolute expanded path to an IDENTITY markdown file.
+   * Same precedence rules as soulFile; session-config.ts reads lazily.
+   */
+  readonly identityFile?: string;
   readonly memory: {
     readonly compactionThreshold: number;
     readonly searchTopK: number;

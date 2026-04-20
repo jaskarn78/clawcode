@@ -652,6 +652,14 @@ export const agentSchema = z.object({
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
+  // Phase 78 CONF-01 — file-pointer SOUL/IDENTITY. Mutually exclusive with
+  // inline `soul` / `identity` (enforced at configSchema level via
+  // superRefine below). Raw string stored here — expansion via
+  // expandHome() happens in loader.ts in the same plan. Absolute or
+  // `~/...` paths. When set, the daemon reads the file lazily at session
+  // boot (see src/manager/session-config.ts precedence chain).
+  soulFile: z.string().min(1).optional(),
+  identityFile: z.string().min(1).optional(),
   memory: memorySchema.optional(),
   heartbeat: z.boolean().default(true),
   schedules: z.array(scheduleEntrySchema).default([]),
@@ -949,6 +957,27 @@ export const configSchema = z.object({
         code: z.ZodIssueCode.custom,
         path: ["agents"],
         message: `memoryPath conflict: "${path}" is declared by multiple agents (${names.join(", ")}). Each agent must have a distinct memoryPath or omit it to fall back to workspace.`,
+      });
+    }
+  }
+
+  // Phase 78 CONF-01 — mutual exclusion: inline `soul`/`identity` cannot
+  // coexist with file-pointer `soulFile`/`identityFile` on the same agent.
+  // Ambiguous precedence would silently prefer one over the other; we fail
+  // loud at load time instead. Per-agent scope (cross-agent mix is fine).
+  for (const agent of cfg.agents) {
+    if (agent.soul !== undefined && agent.soulFile !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agents"],
+        message: `agent "${agent.name}": inline "soul" and "soulFile" cannot be used together — pick one (soulFile is preferred for migrated agents).`,
+      });
+    }
+    if (agent.identity !== undefined && agent.identityFile !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agents"],
+        message: `agent "${agent.name}": inline "identity" and "identityFile" cannot be used together — pick one (identityFile is preferred for migrated agents).`,
       });
     }
   }

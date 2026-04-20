@@ -161,6 +161,11 @@ export function resolveAgentConfig(
     // through unchanged. Only expand when explicitly set; the fallback path
     // inherits whatever resolvedWorkspace already is.
     memoryPath: agent.memoryPath ? expandHome(agent.memoryPath) : resolvedWorkspace,
+    // Phase 78 CONF-01 — file-pointer SOUL/IDENTITY expansion. Conditional:
+    // only expand when the raw field is set (otherwise leave undefined so
+    // session-config.ts skips the soulFile branch in its precedence chain).
+    soulFile: agent.soulFile ? expandHome(agent.soulFile) : undefined,
+    identityFile: agent.identityFile ? expandHome(agent.identityFile) : undefined,
     channels: agent.channels,
     model: agent.model ?? defaults.model,
     effort: agent.effort ?? defaults.effort,
