@@ -27,6 +27,7 @@
  */
 
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import type { Logger } from "pino";
 
 import { ApiKeysStore } from "./keys.js";
@@ -255,10 +256,7 @@ export async function startOpenAiEndpoint(
         // idempotently on every first-handle-materialization.
         ensureCwd: (p) => {
           try {
-            // Lazy require so test hermeticity stays intact.
-            // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const fs = require("node:fs") as typeof import("node:fs");
-            fs.mkdirSync(p, { recursive: true });
+            mkdirSync(p, { recursive: true });
           } catch (err) {
             log.warn(
               { err: (err as Error).message, path: p },
