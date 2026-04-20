@@ -258,3 +258,147 @@ describe("diffConfigs", () => {
     expect(pathChange!.reloadable).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 75 Plan 01 — SHARED-01: memoryPath classified as non-reloadable
+// ---------------------------------------------------------------------------
+
+describe("diffConfigs - memoryPath non-reloadable", () => {
+  it("marks a changed memoryPath as non-reloadable (swapping memoryPath requires daemon restart)", () => {
+    const oldCfg = makeConfig({
+      agents: [
+        {
+          name: "fin-acquisition",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [],
+          memoryPath: "~/shared/finmentum/fin-acquisition",
+        },
+      ],
+    });
+    const newCfg = makeConfig({
+      agents: [
+        { ...oldCfg.agents[0], memoryPath: "~/shared/finmentum/fin-research" },
+      ],
+    });
+    const diff = diffConfigs(oldCfg, newCfg);
+    const change = diff.changes.find(
+      (c) => c.fieldPath === "agents.fin-acquisition.memoryPath",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(false);
+    expect(diff.hasNonReloadableChanges).toBe(true);
+  });
+
+  it("produces no diff entry when memoryPath is identical on both sides", () => {
+    const agent = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low" as const,
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      memoryPath: "~/shared/finmentum/fin-acquisition",
+    };
+    const oldCfg = makeConfig({ agents: [agent] });
+    const newCfg = makeConfig({ agents: [{ ...agent }] });
+    const diff = diffConfigs(oldCfg, newCfg);
+    const change = diff.changes.find((c) => c.fieldPath.includes("memoryPath"));
+    expect(change).toBeUndefined();
+  });
+
+  it("marks adding memoryPath (undefined -> defined) as non-reloadable", () => {
+    const agent = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low" as const,
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+    const oldCfg = makeConfig({ agents: [agent] });
+    const newCfg = makeConfig({
+      agents: [{ ...agent, memoryPath: "~/shared/finmentum/fin-acquisition" }],
+    });
+    const diff = diffConfigs(oldCfg, newCfg);
+    const change = diff.changes.find(
+      (c) => c.fieldPath === "agents.fin-acquisition.memoryPath",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(false);
+  });
+
+  it("marks removing memoryPath (defined -> undefined) as non-reloadable", () => {
+    const agentWithMemoryPath = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low" as const,
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      memoryPath: "~/shared/finmentum/fin-acquisition",
+    };
+    const agentWithoutMemoryPath = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low" as const,
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+    const oldCfg = makeConfig({ agents: [agentWithMemoryPath] });
+    const newCfg = makeConfig({ agents: [agentWithoutMemoryPath] });
+    const diff = diffConfigs(oldCfg, newCfg);
+    const change = diff.changes.find(
+      (c) => c.fieldPath === "agents.fin-acquisition.memoryPath",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(false);
+  });
+
+  it("hasNonReloadableChanges is true when only a memoryPath change is present", () => {
+    const agent = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low" as const,
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      memoryPath: "~/shared/finmentum/fin-acquisition",
+    };
+    const oldCfg = makeConfig({ agents: [agent] });
+    const newCfg = makeConfig({
+      agents: [{ ...agent, memoryPath: "~/shared/finmentum/fin-research" }],
+    });
+    const diff = diffConfigs(oldCfg, newCfg);
+    expect(diff.hasNonReloadableChanges).toBe(true);
+    // Should NOT also set hasReloadableChanges (memoryPath-only diff).
+    expect(diff.hasReloadableChanges).toBe(false);
+  });
+});

@@ -56,6 +56,17 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
 export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "agents.*.model",
   "agents.*.workspace",
+  // Phase 75 SHARED-01 — memoryPath determines which memories.db / inbox/ /
+  // heartbeat.log / session-state dir this agent owns. Swapping those at
+  // runtime would require (a) closing the live MemoryStore + UsageTracker +
+  // TraceStore, (b) re-opening against new paths, and (c) re-attaching the
+  // chokidar InboxSource watcher and heartbeat runner — none of which are
+  // implemented and all of which risk data loss. Operators must run
+  // `systemctl stop clawcode && apply && systemctl start clawcode`.
+  // The classifier falls through to `false` for any field not in
+  // RELOADABLE_FIELDS, so this entry is documentation-of-intent; the
+  // differ tests in differ.test.ts assert memoryPath ends up reloadable:false.
+  "agents.*.memoryPath",
   "defaults.model",
   "defaults.basePath",
 ]);
