@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Ready to execute
-stopped_at: Completed 76-01-PLAN.md — read-side foundation (reader/sqlite/ledger). Ready for 76-02 CLI wiring.
-last_updated: "2026-04-20T16:25:46.719Z"
+stopped_at: Completed 76-02-PLAN.md — diff engine with SHA256 determinism + finmentum collapse. Ready for 76-03 CLI wiring.
+last_updated: "2026-04-20T16:34:02.865Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 7
   total_plans: 22
-  completed_plans: 20
+  completed_plans: 21
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-20)
 ## Current Position
 
 Phase: 76 (migration-cli-read-side-dry-run) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -75,6 +75,10 @@ Recent decisions affecting current work:
 - [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: openclawBindingSchema uses .passthrough() — tolerates real on-box extra fields (type:'route', accountId) without weakening required-field checks; needed for the finmentum-content-creator binding.
 - [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: Ledger validated on WRITE pre-mkdir — bad rows never create .planning/migration/ directory; enforces append-only invariant at write side, not reader side.
 - [Phase 76-migration-cli-read-side-dry-run]: [Phase 76 Plan 01]: latestStatusByAgent uses insert-order last-write-wins (NOT ts-sort) — append-only file ordering is the truth source; wall-clock skew across apply/verify rows would misreshuffle under ts-sort.
+- [Phase 76]: [Phase 76 Plan 02]: generatedAt excluded from planHash via Omit<PlanReport, 'planHash'|'generatedAt'> — compiler prevents tainting; canonicalize() sorts keys at every nesting level (V8 insertion-order is unsafe across refactors).
+- [Phase 76]: [Phase 76 Plan 02]: Finmentum 5-agent collapse resolved via getTargetBasePath returning shared <root>/finmentum + getTargetMemoryPath returning distinct <root>/finmentum/memory/<id> — honors SHARED-01 workspace contract from Phase 75.
+- [Phase 76]: [Phase 76 Plan 02]: Warnings-as-data (never throw) — buildPlan emits 4-kind PlanWarning array; unknown-agent-filter warning is what Wave 3 CLI translates to exit(1), kept out of buildPlan to preserve pure-function contract.
+- [Phase 76]: [Phase 76 Plan 02]: Pinned expected-diff.json fixture with FIXED_NOW 2026-04-20T00:00Z — 15 agents, 17 warnings, planHash 46a8f3b5b278; byte-parity test catches shape drift, forces intentional fixture updates on any AgentPlan/PlanReport field change.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -138,9 +142,10 @@ Recent decisions affecting current work:
 | Phase 75-shared-workspace-runtime-support P03 | 11min | 1 tasks | 1 files |
 | Phase 75-shared-workspace-runtime-support P04 | 8min | 2 tasks | 2 files |
 | Phase 76-migration-cli-read-side-dry-run P01 | 5min | 3 tasks | 7 files |
+| Phase 76 P02 | 4min | 1 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 76-01-PLAN.md — read-side foundation (reader/sqlite/ledger). Ready for 76-02 CLI wiring.
+Stopped at: Completed 76-02-PLAN.md — diff engine with SHA256 determinism + finmentum collapse. Ready for 76-03 CLI wiring.
 Resume file: None

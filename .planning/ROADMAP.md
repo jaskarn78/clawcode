@@ -178,7 +178,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   4. User runs `clawcode migrate openclaw plan --agent <name>` for a single agent and sees only that agent's diff, with exit code 0 on success and exit code 1 + actionable error message if `<name>` is not an active OpenClaw agent.
 **Plans**: 3 plans
 - [x] 76-01-PLAN.md — Pure readers + zod schemas + JSONL ledger (openclaw-config-reader.ts, source-memory-reader.ts, ledger.ts + fixture) (MIGR-01, MIGR-08)
-- [ ] 76-02-PLAN.md — Deterministic diff builder with finmentum grouping + SHA256 plan hash (diff-builder.ts) (MIGR-01)
+- [x] 76-02-PLAN.md — Deterministic diff builder with finmentum grouping + SHA256 plan hash (diff-builder.ts) (MIGR-01)
 - [ ] 76-03-PLAN.md — CLI wiring (migrate openclaw list + plan [--agent]) + color helpers + zero-write integration test (MIGR-01, MIGR-08)
 
 ### Phase 77: Pre-flight Guards + Safety Rails
@@ -275,7 +275,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
-| 76. Migration CLI Read-Side + Dry-Run | 1/3 | In Progress|  |
+| 76. Migration CLI Read-Side + Dry-Run | 2/3 | In Progress|  |
 | 77. Pre-flight Guards + Safety Rails | 0/? | Not started | - |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
 | 79. Workspace Migration | 0/? | Not started | - |
