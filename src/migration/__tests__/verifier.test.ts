@@ -196,8 +196,10 @@ describe("verifier — workspace-files-present check (Tests 1-2)", () => {
 
   it("missing MEMORY.md → fail with filename in detail (Test 2)", async () => {
     const fx = await setupHappyFixture();
-    // Re-stage workspace, omitting MEMORY.md
-    await stageTargetWorkspace(fx.workspace, { omit: ["MEMORY.md"] });
+    // Delete MEMORY.md from the workspace — setupHappyFixture already staged
+    // all 6 files; stageTargetWorkspace is additive (won't remove existing).
+    const { rm } = await import("node:fs/promises");
+    await rm(join(fx.workspace, "MEMORY.md"));
     const results = await verifyAgent({
       agentName: fx.agentName,
       clawcodeConfigPath: fx.configPath,

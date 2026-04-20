@@ -219,3 +219,127 @@ export async function writeClawcodeYaml(
     targetSha256,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 81 Plan 01 — removeAgentFromConfig.
+//
+// Mirror-image of writeClawcodeYaml. Removes one agent entry from the
+// `agents:` seq (by name), preserves every other node + comment via the
+// Document AST, and writes back via the same atomic temp+rename pattern.
+//
+// Contract:
+//   - outcome: "removed" — agent was present and is now gone
+//   - outcome: "not-found" — clawcode.yaml exists, file is valid, agent is
+//       NOT in the seq; file bytes unchanged; no rename fires
+//   - outcome: "file-not-found" — clawcode.yaml does not exist at path;
+//       no side effects
+//   - throws — rename failure (tmp unlinked, error re-thrown); yaml
+//       top-level not a map (structural corruption — operator must fix)
+//
+// DO NOT:
+//   - Re-run the Phase 78 secret scan — we are REMOVING nodes, not inserting
+//     new operator-input-ish scalars. Existing nodes were already validated
+//     when they landed via writeClawcodeYaml.
+//   - Trigger the Phase 78 unmappable-model gate — same rationale.
+//   - Reorder surviving agents — splice preserves order.
+// ---------------------------------------------------------------------------
+
+export type RemoveAgentFromConfigArgs = Readonly<{
+  existingConfigPath: string;
+  agentName: string;
+  /** DI for test determinism — unused currently but mirrors writer shape. */
+  ts?: () => string;
+  /** DI for test determinism — defaults to process.pid. */
+  pid?: number;
+}>;
+
+export type RemoveAgentFromConfigResult =
+  | {
+      readonly outcome: "removed";
+      readonly destPath: string;
+      readonly targetSha256: string;
+    }
+  | { readonly outcome: "not-found"; readonly reason: string }
+  | { readonly outcome: "file-not-found"; readonly reason: string };
+
+export async function removeAgentFromConfig(
+  args: RemoveAgentFromConfigArgs,
+): Promise<RemoveAgentFromConfigResult> {
+  const pid = args.pid ?? process.pid;
+
+  if (!existsSync(args.existingConfigPath)) {
+    return {
+      outcome: "file-not-found",
+      reason: `clawcode.yaml not found at ${args.existingConfigPath}`,
+    };
+  }
+
+  const existingText = await writerFs.readFile(
+    args.existingConfigPath,
+    "utf8",
+  );
+  const doc = parseDocument(existingText, { prettyErrors: true });
+  const contents = doc.contents;
+  if (!(contents instanceof YAMLMap)) {
+    throw new Error(
+      `clawcode.yaml top-level is not a map: ${args.existingConfigPath}`,
+    );
+  }
+  const rootMap = contents as unknown as YAMLMap<unknown, unknown>;
+  const agentsSeq = rootMap.get("agents") as unknown;
+  if (!(agentsSeq instanceof YAMLSeq)) {
+    return {
+      outcome: "not-found",
+      reason: `no agents seq in clawcode.yaml`,
+    };
+  }
+  // Items is the YAMLSeq's internal ordered array. Splicing is safe because
+  // parseDocument returned an owned Document instance — this is the ONLY
+  // reference to the seq, so a positional splice removes exactly one agent
+  // without aliasing surprises.
+  const items = (agentsSeq as YAMLSeq).items as unknown as Array<unknown>;
+  const idx = items.findIndex((it) => {
+    if (it === null || typeof it !== "object") return false;
+    const maybeMap = it as { get?: (k: string) => unknown };
+    if (typeof maybeMap.get !== "function") return false;
+    const name = maybeMap.get("name");
+    return name === args.agentName;
+  });
+  if (idx < 0) {
+    return {
+      outcome: "not-found",
+      reason: `agent '${args.agentName}' not in agents seq`,
+    };
+  }
+  items.splice(idx, 1);
+
+  const newText = doc.toString({ lineWidth: 0 });
+
+  // Atomic temp+rename — identical pattern to writeClawcodeYaml. Same-dir
+  // tmp preserves filesystem atomicity on rename.
+  const destDir = dirname(args.existingConfigPath);
+  const tmpPath = join(
+    destDir,
+    `.clawcode.yaml.${pid}.${Date.now()}.tmp`,
+  );
+  await writerFs.writeFile(tmpPath, newText, "utf8");
+  try {
+    await writerFs.rename(tmpPath, args.existingConfigPath);
+  } catch (err) {
+    try {
+      await writerFs.unlink(tmpPath);
+    } catch {
+      // already gone or never created — best-effort cleanup
+    }
+    throw err;
+  }
+
+  const targetSha256 = createHash("sha256")
+    .update(newText, "utf8")
+    .digest("hex");
+  return {
+    outcome: "removed",
+    destPath: args.existingConfigPath,
+    targetSha256,
+  };
+}
