@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: Completed 78-03-PLAN.md
-last_updated: "2026-04-20T19:45:36.886Z"
+status: Executing Phase 79
+stopped_at: Completed 79-02-PLAN.md
+last_updated: "2026-04-20T20:16:15.318Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
   completed_phases: 10
-  total_plans: 28
-  completed_plans: 28
+  total_plans: 31
+  completed_plans: 29
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 78 — config-mapping-yaml-writer
+**Current focus:** Phase 79 — workspace-migration
 
 ## Current Position
 
-Phase: 79
-Plan: Not started
+Phase: 79 (workspace-migration) — EXECUTING
+Plan: 1 of 3
 
 ## Performance Metrics
 
@@ -105,6 +105,10 @@ Recent decisions affecting current work:
 - [Phase 78]: [Phase 78 Plan 03]: writerFs mutable dispatch holder (readFile/writeFile/rename/unlink) for ESM-safe test monkey-patching — mirrors Phase 78-02 migrateOpenclawHandlers. Avoids vi.spyOn on frozen node:fs/promises bindings.
 - [Phase 78]: [Phase 78 Plan 03]: APPLY_NOT_IMPLEMENTED_MESSAGE kept as @deprecated EXPORT (not deleted) — backward-compat for external tooling that grepped during Phase 77 ship. Runtime no longer emits on success; JSDoc @deprecated signals intent.
 - [Phase 78]: [Phase 78 Plan 03]: yaml package normalizes double-space comments to single-space on round-trip — fixture clawcode.before.yaml uses single-space form so byte-exact line-subsequence check passes without a normalization step.
+- [Phase 79]: [Phase 79 Plan 02]: Dedicated session-archiver module (not a workspace-copier arg) — source path + filter semantics differ, and ConversationStore isolation is enforceable by static grep on the module file (cheaper than runtime assertion).
+- [Phase 79]: [Phase 79 Plan 02]: Manifest-sha witness (sha256 over sorted <relpath>:<size> lines) for archive subtree — workspace-copier owns full-byte witness for primary content; archive is read-only reference material, manifest witness is sufficient forensic record at lower cost.
+- [Phase 79]: [Phase 79 Plan 02]: Missing-source tolerance via existsSync on BOTH sourceAgentDir AND sessions subdir — covers agent-never-existed AND agent-exists-but-no-sessions (normal case for finmentum sub-agents per 79-CONTEXT). Returns {pass:true, skipped:true} with ledger :skip row instead of throwing.
+- [Phase 79]: [Phase 79 Plan 02]: fs.cp with force:true + errorOnExist:false + preserveTimestamps:true — idempotent re-runs for Phase 81 rollback-then-retry (no EEXIST surprises); WORK-05 mtime preservation extended to archive subtree.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -176,9 +180,10 @@ Recent decisions affecting current work:
 | Phase 78-config-mapping-yaml-writer P01 | 6min | 2 tasks | 7 files |
 | Phase 78 P02 | 11min | 2 tasks | 9 files |
 | Phase 78 P03 | 32min | 2 tasks | 9 files |
+| Phase 79 P02 | 4min | 1 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 78-03-PLAN.md
+Stopped at: Completed 79-02-PLAN.md
 Resume file: None
