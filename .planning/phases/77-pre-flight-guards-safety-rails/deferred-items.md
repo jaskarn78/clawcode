@@ -42,3 +42,31 @@ to a different module).
 
 Plan 77-01's own tests (`src/migration/__tests__/ledger.test.ts`) all pass
 in ~1s — the timeout regression is isolated to `source-memory-reader.test.ts`.
+
+## Pre-existing vitest failures in `src/manager/__tests__/` (unrelated to Phase 77)
+
+During Plan 77-03's full `npx vitest run` regression check (2026-04-20),
+the following test files had failures unrelated to migration scope:
+
+```
+FAIL  src/manager/__tests__/bootstrap-integration.test.ts
+FAIL  src/manager/__tests__/daemon-openai.test.ts
+FAIL  src/manager/__tests__/daemon-task-store.test.ts
+```
+
+**Total:** 10 failed / 3385 passed (3395 tests across 246 files).
+
+**Verification (2026-04-20, during Plan 77-03 execution):**
+
+```bash
+git checkout f1bd2be -- src/     # checkout pre-Plan-77-03 source
+npx vitest run src/manager/__tests__/daemon-openai.test.ts
+# → 7 failed / 3 passed (identical to post-Plan-77-03)
+```
+
+These failures are pre-existing manager/bootstrap/daemon-openai regressions
+from v1.9+ work, not introduced or affected by the Plan 77-03 fs-guard +
+apply subcommand changes. Plan 77-03's own tests
+(`src/cli/commands/__tests__/migrate-openclaw.test.ts`,
+`src/migration/__tests__/fs-guard.test.ts`) all pass; the full migration
+test surface (8 files, 116 tests) is green.

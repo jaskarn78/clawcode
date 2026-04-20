@@ -118,7 +118,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 
 - [x] **Phase 75: Shared-Workspace Runtime Support** — Add optional `memoryPath` field to agentSchema so multiple agents can share one workspace basePath while keeping isolated memories/inboxes/session-state; unblocks the 5-agent finmentum family migration. (Plans 01-03 shipped 2026-04-20; gap-closure Plan 04 pending — session-resume context-summary read path swap) (completed 2026-04-20)
 - [x] **Phase 76: Migration CLI Read-Side + Dry-Run** — `clawcode migrate openclaw list` + `plan` surface per-agent diff tables (config, memory count, MCP servers, Discord channels) with zero writes; establishes the state-file ledger schema downstream phases consume. (completed 2026-04-20)
-- [ ] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write.
+- [x] **Phase 77: Pre-flight Guards + Safety Rails** — Daemon-running check, secret-pattern hard refusal, Discord channel-collision check, non-destructive-to-source invariant, and ledger JSONL scaffolding so `apply` can fail fast before any write. (completed 2026-04-20)
 - [ ] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering.
 - [ ] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only.
 - [ ] **Phase 80: Memory Translation + Re-embedding** — Read workspace markdown (disk as truth, not sqlite chunks), insert through `MemoryStore.insert()` with `origin_id UNIQUE` for idempotency, re-embed via MiniLM singleton (384-dim); `.learnings/*.md` land as first-class memories tagged `"learning"`.
@@ -194,7 +194,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 77-01-PLAN.md — Ledger schema extension (additive optional step/outcome/file_hashes fields, backward-compat) (MIGR-06)
 - [x] 77-02-PLAN.md — Four guard modules (daemon, readonly, secret, channel-collision) + apply-preflight orchestrator with literal error messages (MIGR-02, MIGR-07, OPS-03)
-- [ ] 77-03-PLAN.md — CLI `apply [--only <agent>]` subcommand + runtime fs-guard install/uninstall + integration test covering all 5 success criteria (MIGR-02, MIGR-06, MIGR-07, OPS-03)
+- [x] 77-03-PLAN.md — CLI `apply [--only <agent>]` subcommand + runtime fs-guard install/uninstall + integration test covering all 5 success criteria (MIGR-02, MIGR-06, MIGR-07, OPS-03)
 
 ### Phase 78: Config Mapping + YAML Writer
 **Goal**: User (as operator) can trust that `clawcode migrate openclaw apply` produces a `clawcode.yaml` where each migrated agent entry carries `soulFile:` + `identityFile:` pointers to workspace markdown files (no inline soul/identity bloat), `mcpServers:` references to existing ClawCode MCP patterns (clawcode + 1password auto-injection preserved), and a model id mapped from OpenClaw's convention — with the YAML round-trip preserving all existing comments and key ordering via atomic temp+rename writes.
@@ -279,7 +279,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 |-------|----------------|--------|-----------|
 | 75. Shared-Workspace Runtime Support | 4/4 | Complete    | 2026-04-20 |
 | 76. Migration CLI Read-Side + Dry-Run | 3/3 | Complete    | 2026-04-20 |
-| 77. Pre-flight Guards + Safety Rails | 2/3 | In Progress|  |
+| 77. Pre-flight Guards + Safety Rails | 3/3 | Complete   | 2026-04-20 |
 | 78. Config Mapping + YAML Writer | 0/? | Not started | - |
 | 79. Workspace Migration | 0/? | Not started | - |
 | 80. Memory Translation + Re-embedding | 0/? | Not started | - |

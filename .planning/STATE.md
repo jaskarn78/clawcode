@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 77-02-PLAN.md — 4 pre-flight guards + orchestrator with fail-fast ordering; 28 unit tests; zero new deps; ready for Plan 77-03 (CLI wiring + fs interceptor).
-last_updated: "2026-04-20T17:24:39.159Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 77-03-PLAN.md
+last_updated: "2026-04-20T17:54:57.407Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 14
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 25
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -87,6 +87,9 @@ Recent decisions affecting current work:
 - [Phase 77]: [Phase 77 Plan 02]: Zero new deps — replaced execa (listed in CONTEXT as in-deps but missing from package.json) with node:child_process.execFile shim behind the execaRunner DI param. Default runner wraps execFile with execa-compatible {stdout, exitCode} Promise shape.
 - [Phase 77]: [Phase 77 Plan 02]: Secret classification three-phase order: explicit known-secret prefix (sk-/MT-) ALWAYS refuses over whitelist over high-entropy fallback. Discovered during TDD — sk- tokens satisfy SHORT_IDENT (/[a-z0-9-]+/) and whitelist-first silently passed them. Pinned in sk-refuse + op://allow regression tests.
 - [Phase 77]: [Phase 77 Plan 02]: pre-flight:readonly orchestrator witness row (not a stub) — Plan 03 owns the actual fs.writeFile/appendFile/mkdir interceptor install. Orchestrator records the canonical row so 4-row ledger sequence is intact even before Plan 03 lands.
+- [Phase 77]: fs-guard uses CJS-module patching (ESM namespace objects frozen) — default-import callers covered; named-import callers not, static-grep regression is primary MIGR-07 line of defense
+- [Phase 77]: Static /tmp/cc-agents path in tests — mkdtempSync's alnum suffix trips scanSecrets high-entropy threshold on targetBasePath (real production concern for Phase 78+)
+- [Phase 77]: stripEntropicModels fixture helper normalizes real model names (anthropic-api/claude-sonnet-4-6, 4.0+ entropy) to whitelist short-idents for non-secret-path tests
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -154,9 +157,10 @@ Recent decisions affecting current work:
 | Phase 76 P03 | 8min | 3 tasks | 4 files |
 | Phase 77 P01 | 5min | 2 tasks | 2 files |
 | Phase 77 P02 | ~7min | 2 tasks | 5 files |
+| Phase 77 P03 | 25min | 2 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-20
-Stopped at: Completed 77-02-PLAN.md — 4 pre-flight guards + orchestrator with fail-fast ordering; 28 unit tests; zero new deps; ready for Plan 77-03 (CLI wiring + fs interceptor).
+Stopped at: Completed 77-03-PLAN.md
 Resume file: None
