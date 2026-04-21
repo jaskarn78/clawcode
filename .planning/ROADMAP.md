@@ -274,7 +274,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 |-------|----------------|--------|-----------|
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
-| 85. MCP Tool Awareness & Reliability | 3/3 | Complete   | 2026-04-21 |
+| 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
 | 87. Native CC Slash Commands | 0/? | Not started | - |
 | 88. Skills Marketplace | 0/? | Not started | - |

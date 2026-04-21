@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Executing
+status: Ready to plan
 stopped_at: Completed 85-03-PLAN.md — /clawcode-tools Discord slash + clawcode mcp-status CLI shipped (TOOL-06 / UI-01); Phase 85 complete
-last_updated: "2026-04-21T20:21:53.289Z"
+last_updated: "2026-04-21T20:23:32.242Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 
 ## Current Position
 
-Phase: 85 (complete)
-Plan: — (awaiting next phase decomposition)
+Phase: 86
+Plan: Not started
 
 ## Performance Metrics
 
