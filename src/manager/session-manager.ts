@@ -1032,6 +1032,22 @@ export class SessionManager {
   getRunningAgents(): readonly string[] { return [...this.sessions.keys()]; }
 
   /**
+   * Phase 87 CMD-01 — expose the per-agent SessionHandle for consumers that
+   * need to read SDK-surfaced state without going through a named accessor.
+   *
+   * Current consumers:
+   *   - SlashCommandHandler.register() — calls handle.getSupportedCommands()
+   *     per agent to build the native-CC registration set (CMD-01)
+   *   - Plan 02 dispatch paths — will reach through this to invoke
+   *     handle.setPermissionMode / other SDK control-plane methods
+   *
+   * Returns undefined when the agent has never started or has been stopped.
+   */
+  getSessionHandle(name: string): SessionHandle | undefined {
+    return this.sessions.get(name);
+  }
+
+  /**
    * Post-v2.0 hardening — single-name boolean readiness probe.
    *
    * Used by the OpenAI endpoint (src/openai/server.ts) to bound the warm-path

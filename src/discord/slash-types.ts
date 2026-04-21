@@ -88,6 +88,12 @@ export type SlashCommandDef = {
   readonly nativeBehavior?: "control-plane" | "prompt-channel";
 };
 
+// Phase 87 CMD-04 — clawcode-compact + clawcode-usage REMOVED from
+// DEFAULT_SLASH_COMMANDS. They are re-provided by the SDK registration loop
+// in slash-commands.ts via native-cc-commands.buildNativeCommandDefs as
+// native-dispatch entries (nativeBehavior:"prompt-channel"). The native
+// path is the ONLY path for /compact and /cost going forward.
+
 /**
  * Default slash commands available to all agents.
  * Agents can override or extend these via clawcode.yaml config.
@@ -130,18 +136,6 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     name: "clawcode-health",
     description: "Get the agent's health status",
     claudeCommand: "Report your health status including context usage and memory stats",
-    options: [],
-  },
-  {
-    name: "clawcode-compact",
-    description: "Trigger context compaction",
-    claudeCommand: "Trigger context compaction now and report the result",
-    options: [],
-  },
-  {
-    name: "clawcode-usage",
-    description: "Show token usage and costs",
-    claudeCommand: "Report your usage statistics: session totals and this week's usage. Include tokens in/out, cost, turns, and duration.",
     options: [],
   },
   {

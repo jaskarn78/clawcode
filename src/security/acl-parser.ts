@@ -93,6 +93,70 @@ export async function parseSecurityMd(
 }
 
 /**
+ * Phase 87 CMD-05 — parse the optional `## Command ACLs` section of
+ * SECURITY.md to decide whether a native Claude Code command should be
+ * registered as a Discord slash command for this agent.
+ *
+ * Expected format (admin-command deny list):
+ *
+ *   ## Command ACLs
+ *   - deny: [init, security-review, batch]
+ *
+ * Precedence:
+ *   - Missing file → "allow" (permissive default)
+ *   - Missing `## Command ACLs` section → "allow"
+ *   - Empty section → "allow"
+ *   - Command name present in the deny list → "deny"
+ *   - Otherwise → "allow"
+ *
+ * `commandName` is the bare SDK name (no leading slash, no `clawcode-`
+ * prefix). A leading slash in the deny list is stripped so both `/init`
+ * and `init` spellings match.
+ */
+export async function resolveCommandAcl(
+  securityMdPath: string,
+  commandName: string,
+): Promise<"allow" | "deny"> {
+  const denied = await resolveDeniedCommands(securityMdPath);
+  return denied.has(commandName) ? "deny" : "allow";
+}
+
+/**
+ * Phase 87 CMD-05 — batch helper used by SlashCommandHandler.register().
+ *
+ * Reads SECURITY.md once and returns a Set of every denied command name
+ * in the `## Command ACLs` section. Register iterates per-command and
+ * passes this Set into native-cc-commands.buildNativeCommandDefs as the
+ * `acl.denied` field — one file read per agent per registration pass,
+ * not per command.
+ *
+ * Missing file / missing section / empty section → empty Set.
+ */
+export async function resolveDeniedCommands(
+  securityMdPath: string,
+): Promise<ReadonlySet<string>> {
+  let content: string;
+  try {
+    content = await readFile(securityMdPath, "utf-8");
+  } catch {
+    return new Set<string>();
+  }
+  const sectionMatch = content.match(
+    /##\s*Command\s+ACLs\s*\n([\s\S]*?)(?=\n##\s|\n#\s|$)/,
+  );
+  if (!sectionMatch) return new Set<string>();
+
+  const denyMatch = sectionMatch[1].match(/^\s*-\s*deny:\s*\[([^\]]*)\]/m);
+  if (!denyMatch) return new Set<string>();
+
+  const denied = denyMatch[1]
+    .split(",")
+    .map((s) => s.trim().replace(/^\/+/, ""))
+    .filter((s) => s.length > 0);
+  return new Set(denied);
+}
+
+/**
  * Check if a user has access to a channel based on ACLs.
  *
  * Returns true if:

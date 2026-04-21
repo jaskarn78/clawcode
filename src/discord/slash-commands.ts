@@ -21,12 +21,19 @@ import {
   type Interaction,
   type StringSelectMenuInteraction,
 } from "discord.js";
+import { join } from "node:path";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
+// Phase 87 CMD-01 — SDK-driven native command registration.
+import {
+  buildNativeCommandDefs,
+  mergeAndDedupe,
+} from "../manager/native-cc-commands.js";
+import { resolveDeniedCommands } from "../security/acl-parser.js";
 import { sendIpcRequest } from "../ipc/client.js";
 import { SOCKET_PATH } from "../manager/daemon.js";
 import type { RegistryEntry } from "../manager/types.js";
@@ -67,6 +74,14 @@ const DISCORD_SELECT_CAP = 25;
  * decision window to hold in their head).
  */
 const MODEL_CONFIRM_TTL_MS = 30_000;
+
+/**
+ * Phase 87 CMD-07 — Discord's per-guild slash-command cap is 100. Reserve a
+ * 10-slot buffer so future admin-only additions don't immediately trip the
+ * limit. Exceeding this ceiling throws BEFORE rest.put — no partial registration,
+ * no silent truncation.
+ */
+const MAX_COMMANDS_PER_GUILD = 90;
 
 // ---------------------------------------------------------------------------
 // Phase 85 Plan 03 TOOL-06 / UI-01 — /clawcode-tools inline handler helpers.
@@ -162,6 +177,20 @@ export type SlashCommandHandlerConfig = {
    * no per-skill override behavior.
    */
   readonly skillsCatalog?: SkillsCatalog;
+  /**
+   * Phase 87 CMD-05 — optional test-time override for the per-agent ACL deny
+   * sets. Production code reads SECURITY.md via resolveDeniedCommands inside
+   * register(); tests inject the pre-computed Map directly so the integration
+   * test doesn't have to fs-write fixture SECURITY.md files.
+   *
+   * When absent, register() derives `<memoryPath>/SECURITY.md` (or
+   * `<workspace>/SECURITY.md`) per agent and calls resolveDeniedCommands
+   * itself.
+   */
+  readonly aclDeniedByAgent?: ReadonlyMap<string, ReadonlySet<string>> | Record<
+    string,
+    ReadonlySet<string>
+  >;
 };
 
 /**
@@ -180,6 +209,12 @@ export class SlashCommandHandler {
   private readonly log: Logger;
   private readonly turnDispatcher: TurnDispatcher | null;
   private readonly skillsCatalog: SkillsCatalog | null;
+  /**
+   * Phase 87 CMD-05 — optional DI for per-agent ACL deny sets. Tests pass a
+   * Map/Record to bypass SECURITY.md file lookups; production derives it at
+   * register time.
+   */
+  private readonly aclDeniedByAgent: ReadonlyMap<string, ReadonlySet<string>> | null;
   private client: Client | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
 
@@ -192,6 +227,18 @@ export class SlashCommandHandler {
     this.log = config.log ?? logger;
     this.turnDispatcher = config.turnDispatcher ?? null;
     this.skillsCatalog = config.skillsCatalog ?? null;
+    // Phase 87 CMD-05 — accept either a Map or a plain Record from config.
+    if (config.aclDeniedByAgent) {
+      if (config.aclDeniedByAgent instanceof Map) {
+        this.aclDeniedByAgent = config.aclDeniedByAgent;
+      } else {
+        this.aclDeniedByAgent = new Map(
+          Object.entries(config.aclDeniedByAgent as Record<string, ReadonlySet<string>>),
+        );
+      }
+    } else {
+      this.aclDeniedByAgent = null;
+    }
   }
 
   /**
@@ -219,6 +266,20 @@ export class SlashCommandHandler {
   /**
    * Register guild-scoped slash commands via Discord REST API.
    * Uses bulk overwrite (PUT) per guild to sync all commands at once.
+   *
+   * Phase 87 CMD-01/04/05/07 — the registration loop now:
+   *   1. Iterates each agent's SessionHandle via SessionManager.getSessionHandle
+   *      and calls `getSupportedCommands()` to learn what the SDK reports.
+   *   2. Resolves a per-agent deny set (SECURITY.md `## Command ACLs` or the
+   *      DI'd override) and filters native commands through it.
+   *   3. Builds `clawcode-<name>` SlashCommandDef[] entries via
+   *      native-cc-commands.buildNativeCommandDefs with a nativeBehavior
+   *      discriminator.
+   *   4. Merges with each agent's static slashCommands + CONTROL_COMMANDS via
+   *      mergeAndDedupe; native wins on name collision (re-provides
+   *      compact/usage removed from DEFAULT_SLASH_COMMANDS per CMD-04).
+   *   5. Asserts the per-guild body length stays <= 90 BEFORE rest.put —
+   *      over-cap throws without partial registration.
    */
   async register(): Promise<void> {
     if (!this.client?.user) {
@@ -243,7 +304,58 @@ export class SlashCommandHandler {
 
       for (const agent of this.resolvedAgents) {
         const agentCommands = resolveAgentCommands(agent.slashCommands);
-        for (const cmd of agentCommands) {
+
+        // Phase 87 CMD-01 — discover SDK-reported native commands per agent.
+        // A missing handle (agent not yet started, failed warm-path, etc.)
+        // or a thrown getSupportedCommands() falls back to an empty list so
+        // the static DEFAULT_SLASH_COMMANDS still register. Never throw out of
+        // the register loop because of SDK flakiness during startup.
+        let sdkCommands: readonly import("../manager/sdk-types.js").SlashCommand[] = [];
+        try {
+          const handle = this.sessionManager.getSessionHandle?.(agent.name);
+          if (handle && typeof handle.getSupportedCommands === "function") {
+            sdkCommands = await handle.getSupportedCommands();
+          }
+        } catch (err) {
+          this.log.warn(
+            { agent: agent.name, error: (err as Error).message },
+            "sdk getSupportedCommands failed — falling back to DEFAULT_SLASH_COMMANDS only",
+          );
+        }
+
+        // Phase 87 CMD-05 — ACL filter. Prefer the DI'd map when set; else
+        // read `<memoryPath>/SECURITY.md` (or `<workspace>/SECURITY.md`) and
+        // call resolveDeniedCommands. Missing file / missing section → no
+        // denies (permissive default).
+        let denied: ReadonlySet<string> = new Set();
+        if (this.aclDeniedByAgent) {
+          denied = this.aclDeniedByAgent.get(agent.name) ?? new Set();
+        } else {
+          const basePath = agent.memoryPath || agent.workspace;
+          if (basePath) {
+            try {
+              denied = await resolveDeniedCommands(
+                join(basePath, "SECURITY.md"),
+              );
+            } catch (err) {
+              this.log.warn(
+                { agent: agent.name, error: (err as Error).message },
+                "resolveDeniedCommands failed — defaulting to permissive ACL",
+              );
+              denied = new Set();
+            }
+          }
+        }
+
+        // Phase 87 CMD-01 — build native-CC entries via pure classifier.
+        const nativeDefs = buildNativeCommandDefs(sdkCommands, { denied });
+
+        // Phase 87 CMD-04 — mergeAndDedupe: native wins on name collision so
+        // the removed clawcode-compact / clawcode-usage duplicates get
+        // re-provided with nativeBehavior="prompt-channel".
+        const merged = mergeAndDedupe(agentCommands, nativeDefs);
+
+        for (const cmd of merged) {
           if (!seenNames.has(cmd.name)) {
             seenNames.add(cmd.name);
             allCommands.push(cmd);
@@ -281,6 +393,21 @@ export class SlashCommandHandler {
             : {}),
         })),
       }));
+
+      // Phase 87 CMD-07 — pre-flight cap assertion. Thrown BEFORE rest.put so
+      // no partial registration lands; operators see the full over-cap error
+      // in the warn log below and can prune before retry.
+      if (body.length > MAX_COMMANDS_PER_GUILD) {
+        this.log.error(
+          {
+            guildId,
+            commandCount: body.length,
+            limit: MAX_COMMANDS_PER_GUILD,
+          },
+          "too many commands for guild — refusing to register (CMD-07)",
+        );
+        continue;
+      }
 
       try {
         await rest.put(
