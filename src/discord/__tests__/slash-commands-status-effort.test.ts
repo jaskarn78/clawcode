@@ -181,8 +181,12 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
       agentToChannels: new Map([["clawdy", ["chan-1"]]]),
     };
     const getEffortForAgent = vi.fn().mockReturnValue("max");
+    // Phase 86 MODEL-07 — /clawcode-status now also calls
+    // getModelForAgent. Falls back to resolved-config model when undefined.
+    const getModelForAgent = vi.fn().mockReturnValue(undefined);
     const sessionManager = {
       getEffortForAgent,
+      getModelForAgent,
     } as unknown as SessionManager;
 
     const fakeClient = {
@@ -242,8 +246,11 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
       agentToChannels: new Map([["clawdy", ["chan-1"]]]),
     };
     const getEffortForAgent = vi.fn().mockReturnValue("xhigh");
+    // Phase 86 MODEL-07 — same fallback stub as above.
+    const getModelForAgent = vi.fn().mockReturnValue(undefined);
     const sessionManager = {
       getEffortForAgent,
+      getModelForAgent,
     } as unknown as SessionManager;
 
     const fakeClient = {

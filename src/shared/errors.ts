@@ -100,11 +100,24 @@ function extractFieldPath(path: readonly (string | number)[]): string {
 
 /**
  * General manager error — base class for manager-specific failures.
+ *
+ * Phase 86 Plan 02 — optional `code` / `data` fields propagate through the
+ * IPC server's JSON-RPC error handler so typed domain errors (e.g.
+ * ModelNotAllowedError) can surface structured payloads (the allowed model
+ * list, the rejected alias) to the Discord slash-command renderer without a
+ * second round-trip. Callers that don't set these keep the pre-existing
+ * behaviour — code defaults to -32603 (internal error) at the IPC layer and
+ * data is omitted.
  */
 export class ManagerError extends Error {
-  constructor(message: string) {
+  public readonly code?: number;
+  public readonly data?: unknown;
+
+  constructor(message: string, opts?: { code?: number; data?: unknown }) {
     super(message);
     this.name = "ManagerError";
+    if (opts?.code !== undefined) this.code = opts.code;
+    if (opts?.data !== undefined) this.data = opts.data;
   }
 }
 

@@ -379,9 +379,15 @@ export class SlashCommandHandler {
     if (commandName === "clawcode-status") {
       try {
         const effort = this.sessionManager.getEffortForAgent(agentName);
-        const model =
+        // Phase 86 MODEL-07 — prefer the live handle's model (may reflect a
+        // recent /clawcode-model swap before the YAML write); fall back to
+        // the resolved-config alias when the handle reports undefined
+        // (fresh boot, no setModel call yet).
+        const liveModel = this.sessionManager.getModelForAgent(agentName);
+        const configModel =
           this.resolvedAgents.find((a) => a.name === agentName)?.model ??
           "(unknown)";
+        const model = liveModel ?? configModel;
         await interaction.editReply(
           `📋 ${agentName}\n🤖 Model: ${model}\n🎚️ Effort: ${effort}`,
         );

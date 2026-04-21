@@ -107,18 +107,13 @@ afterEach(() => {
 describe("handleSetModelIpc — Phase 86 Plan 02 (D1-D5)", () => {
   it("D1: success — calls setModelForAgent BEFORE updateAgentModel and returns persisted payload", async () => {
     const configPath = await setupYamlFixture();
-    updateAgentModelMock.mockResolvedValueOnce({
-      outcome: "updated",
-      destPath: configPath,
-      targetSha256: "a".repeat(64),
-    });
 
     const configs: ResolvedAgentConfig[] = [makeAgent("clawdy", "haiku")];
     const callOrder: string[] = [];
     const manager = makeManagerStub((name, alias) => {
       callOrder.push(`setModel:${name}:${alias}`);
     });
-    updateAgentModelMock.mockImplementationOnce((...args: unknown[]) => {
+    updateAgentModelMock.mockImplementationOnce((..._args: unknown[]) => {
       callOrder.push("updateAgentModel");
       return Promise.resolve({
         outcome: "updated",

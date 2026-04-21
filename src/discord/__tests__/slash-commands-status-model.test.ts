@@ -153,9 +153,8 @@ describe("Phase 86 MODEL-07 — /clawcode-status sources model from live handle"
     const agent = makeAgent("clawdy", "sonnet"); // static config says sonnet
     const routingTable: RoutingTable = {
       channelToAgent: new Map([["chan-1", "clawdy"]]),
-      agentToChannels: new Map([["clawdy", ["clawdy"]]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
     };
-    routingTable.agentToChannels.set("clawdy", ["chan-1"]);
     const getEffortForAgent = vi.fn().mockReturnValue("low");
     const getModelForAgent = vi.fn().mockReturnValue(undefined);
     const sessionManager = {

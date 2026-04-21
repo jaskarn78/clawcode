@@ -85,6 +85,9 @@ import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+// Phase 86 Plan 02 MODEL-04 — atomic YAML persistence for `agents[*].model`.
+import { updateAgentModel } from "../migration/yaml-writer.js";
+import { ModelNotAllowedError } from "./model-errors.js";
 import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
 import type {
@@ -334,6 +337,166 @@ export function evaluateFirstTokenHeadline(
     slo_status: evaluateSloStatus(row, slo.thresholdMs, slo.metric),
     slo_threshold_ms: slo.thresholdMs,
     slo_metric: slo.metric,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 86 Plan 02 MODEL-04 — set-model IPC handler (pure, testable).
+//
+// Extracted from the daemon's `case "set-model":` so `src/manager/__tests__/
+// daemon-set-model.test.ts` can drive the full behaviour (live SDK swap BEFORE
+// YAML persist, typed ModelNotAllowedError → ManagerError w/ code -32602 +
+// data.allowed, atomic YAML round-trip, non-rollback on persistence failure)
+// without spinning up the full daemon surface.
+//
+// Contract:
+//   - setModelForAgent fires FIRST (Plan 01 SDK swap). If it throws:
+//       * ModelNotAllowedError → ManagerError w/ code=-32602 + data.allowed
+//       * any other error → rethrown as-is
+//   - On successful swap, updateAgentModel is called. Persistence failure
+//     does NOT undo the live swap (rationale: SDK swap is irreversible —
+//     see Plan 02 non-rollback decision). `persisted: false` + `persist_error`
+//     are surfaced in the response.
+//   - In-memory configs[] is updated AFTER the persist attempt so a fresh
+//     restart reads the same value the operator just set (ref matches disk).
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal manager surface the set-model IPC handler needs — defined as a
+ * structural type so tests can inject a stub without constructing a full
+ * SessionManager. Matches the real SessionManager method signatures byte for
+ * byte (setModelForAgent throws ModelNotAllowedError on allowlist violation).
+ */
+export type SetModelIpcManager = {
+  setModelForAgent: (
+    name: string,
+    alias: "haiku" | "sonnet" | "opus",
+  ) => void;
+  setAllAgentConfigs: (configs: readonly ResolvedAgentConfig[]) => void;
+};
+
+/**
+ * Dependencies for the pure set-model handler. `configs` is mutable by design
+ * — the handler splices the updated frozen entry in place to mirror the
+ * pre-existing daemon invariant that `configs[idx].model` reflects the most
+ * recent runtime value (read by subsequent IPC methods + /clawcode-status
+ * fallback when the handle isn't yet swapped).
+ */
+export type SetModelIpcDeps = {
+  readonly manager: SetModelIpcManager;
+  readonly configs: ResolvedAgentConfig[];
+  readonly configPath: string;
+  readonly params: Record<string, unknown>;
+};
+
+/**
+ * Response payload for the set-model IPC method.
+ * `persisted: true` — YAML write succeeded (or was a no-op because the bytes
+ * already matched); `persisted: false` — live swap succeeded but the YAML
+ * write threw (operator must reconcile by hand or re-invoke).
+ */
+export type SetModelIpcResult = Readonly<{
+  agent: string;
+  old_model: "haiku" | "sonnet" | "opus";
+  new_model: "haiku" | "sonnet" | "opus";
+  persisted: boolean;
+  persist_error: string | null;
+  note: string;
+}>;
+
+export async function handleSetModelIpc(
+  deps: SetModelIpcDeps,
+): Promise<SetModelIpcResult> {
+  const { manager, configs, configPath, params } = deps;
+
+  const agentName = validateStringParam(params, "agent");
+  const modelParam = validateStringParam(params, "model");
+
+  // --- Defense-in-depth: validate alias before any side effect ------
+  // SessionManager.setModelForAgent validates too, but failing fast here
+  // produces a clean ManagerError message instead of a runtime type
+  // error from inside the SDK wiring.
+  const parsed = modelSchema.safeParse(modelParam);
+  if (!parsed.success) {
+    throw new ManagerError(
+      `Invalid model '${modelParam}'. Must be one of: haiku, sonnet, opus`,
+    );
+  }
+  const newModel = parsed.data;
+
+  // --- Agent lookup --------------------------------------------------
+  const idx = configs.findIndex((c) => c.name === agentName);
+  if (idx === -1) {
+    throw new ManagerError(`Agent '${agentName}' not found in config`);
+  }
+  const oldModel = configs[idx]!.model;
+
+  // --- Live SDK swap FIRST (Plan 01) --------------------------------
+  // Throws ModelNotAllowedError when alias is not in the resolved
+  // allowedModels. Mapped to a typed IPC error so Plan 03's Discord
+  // slash-command renderer reads `data.allowed` ephemerally.
+  try {
+    manager.setModelForAgent(agentName, newModel);
+  } catch (err) {
+    if (err instanceof ModelNotAllowedError) {
+      throw new ManagerError(err.message, {
+        code: -32602, // JSON-RPC "Invalid params" per Phase 86 Plan 02 contract
+        data: {
+          kind: "model-not-allowed",
+          agent: err.agent,
+          attempted: err.attempted,
+          allowed: err.allowed,
+        },
+      });
+    }
+    throw err;
+  }
+
+  // --- Atomic YAML persist (Plan 02 MODEL-04) -----------------------
+  // Runs AFTER the live swap so the Discord UX is instant; persistence
+  // is a durable side-effect, not a gate. Failure here does NOT roll
+  // back the swap (SDK swap is irreversible). Operator sees the error
+  // in the response + can reconcile by hand.
+  let persisted = false;
+  let persistError: string | null = null;
+  try {
+    const result = await updateAgentModel({
+      existingConfigPath: configPath,
+      agentName,
+      newModel,
+    });
+    if (result.outcome === "updated" || result.outcome === "no-op") {
+      persisted = true;
+    } else {
+      persistError = result.reason;
+    }
+  } catch (err) {
+    persistError = err instanceof Error ? err.message : String(err);
+    // Do NOT re-throw: the live swap already succeeded and is visible to
+    // the next turn via getModelForAgent. Operator receives a
+    // persisted:false response and can re-invoke /clawcode-model to
+    // retry YAML write.
+  }
+
+  // --- Mirror in-memory config (matches pre-Plan-02 invariant) ------
+  // Updated AFTER the persist attempt so a fresh restart reads the
+  // same alias the operator just set. The frozen-copy pattern matches
+  // CLAUDE.md immutability rules (never mutate ResolvedAgentConfig in
+  // place; replace the ref).
+  const existingConfig = configs[idx]!;
+  const updatedConfig = Object.freeze({ ...existingConfig, model: newModel });
+  configs[idx] = updatedConfig;
+  manager.setAllAgentConfigs(configs);
+
+  return Object.freeze({
+    agent: agentName,
+    old_model: oldModel,
+    new_model: newModel,
+    persisted,
+    persist_error: persistError,
+    note: persisted
+      ? "Live swap + clawcode.yaml updated"
+      : `Live swap OK; persistence failed: ${persistError ?? "unknown"}`,
   });
 }
 
@@ -2573,42 +2736,17 @@ async function routeMethod(
     }
 
     case "set-model": {
-      const agentName = validateStringParam(params, "agent");
-      const modelParam = validateStringParam(params, "model");
-
-      // Validate model name
-      const parsed = modelSchema.safeParse(modelParam);
-      if (!parsed.success) {
-        throw new ManagerError(
-          `Invalid model '${modelParam}'. Must be one of: haiku, sonnet, opus`,
-        );
-      }
-      const newModel = parsed.data;
-
-      // Find agent config
-      const idx = configs.findIndex((c) => c.name === agentName);
-      if (idx === -1) {
-        throw new ManagerError(`Agent '${agentName}' not found in config`);
-      }
-
-      const existingConfig = configs[idx];
-      const oldModel = existingConfig.model;
-
-      // Create new frozen config with updated model (immutability per CLAUDE.md)
-      const updatedConfig = Object.freeze({ ...existingConfig, model: newModel });
-
-      // Replace in configs array (mutable array, readonly elements)
-      (configs as ResolvedAgentConfig[])[idx] = updatedConfig;
-
-      // Update SessionManager's reference so next session uses new model
-      manager.setAllAgentConfigs(configs);
-
-      return {
-        agent: agentName,
-        old_model: oldModel,
-        new_model: newModel,
-        note: "Takes effect on next session",
-      };
+      // Phase 86 Plan 02 MODEL-04 — delegate to the pure testable handler.
+      // Live SDK swap fires FIRST (Plan 01 SessionHandle.setModel); atomic
+      // clawcode.yaml persist follows via the v2.1 writer pipeline. The old
+      // next-session deferral note is retired — the live handle now swaps
+      // in-turn, and next-boot persistence is handled by updateAgentModel.
+      return await handleSetModelIpc({
+        manager,
+        configs: configs as ResolvedAgentConfig[],
+        configPath,
+        params,
+      });
     }
 
     case "costs": {
