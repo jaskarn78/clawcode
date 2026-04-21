@@ -28,6 +28,7 @@ import { logger } from "../shared/logger.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import type { TurnOrigin } from "../manager/turn-origin.js";
 import { makeRootOrigin } from "../manager/turn-origin.js";
+import type { SkillsCatalog } from "../skills/types.js";
 
 /**
  * Maximum Discord message length (API limit).
@@ -52,6 +53,16 @@ export type SlashCommandHandlerConfig = {
    * replies with a clear "steer unavailable" message.
    */
   readonly turnDispatcher?: TurnDispatcher;
+  /**
+   * Phase 83 EFFORT-05 — optional skills catalog used to resolve per-skill
+   * effort overrides on slash-command invocation. When a slash command name
+   * (e.g. `clawcode-<skill>`) maps to a catalog entry with an `effort:`
+   * frontmatter value, the handler applies that level for the duration of
+   * the turn (setEffortForAgent) and reverts in a finally block. Optional
+   * so existing callers (tests, pre-Phase-83 wiring) continue to work with
+   * no per-skill override behavior.
+   */
+  readonly skillsCatalog?: SkillsCatalog;
 };
 
 /**
@@ -69,6 +80,7 @@ export class SlashCommandHandler {
   private readonly botToken: string;
   private readonly log: Logger;
   private readonly turnDispatcher: TurnDispatcher | null;
+  private readonly skillsCatalog: SkillsCatalog | null;
   private client: Client | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
 
@@ -80,6 +92,7 @@ export class SlashCommandHandler {
     this.client = config.client ?? null;
     this.log = config.log ?? logger;
     this.turnDispatcher = config.turnDispatcher ?? null;
+    this.skillsCatalog = config.skillsCatalog ?? null;
   }
 
   /**
@@ -355,6 +368,31 @@ export class SlashCommandHandler {
       editIntervalMs: 1500,
     });
 
+    // Phase 83 EFFORT-05 — per-skill effort override. Resolve the command
+    // name against the skills catalog (with or without the `clawcode-` prefix
+    // that the Discord convention requires) and, when the skill has an
+    // `effort:` frontmatter, apply that level for the duration of the turn.
+    // Revert in a finally block so error paths can't strand the agent at an
+    // elevated level. Zero side effects when the catalog isn't injected or
+    // the command doesn't map to a skill with an override.
+    const skillEntry =
+      this.skillsCatalog?.get(commandName) ??
+      this.skillsCatalog?.get(commandName.replace(/^clawcode-/, ""));
+    const skillEffort = skillEntry?.effort;
+    let priorEffort: EffortLevel | null = null;
+    if (skillEffort) {
+      try {
+        priorEffort = this.sessionManager.getEffortForAgent(agentName);
+        this.sessionManager.setEffortForAgent(agentName, skillEffort);
+      } catch (err) {
+        this.log.warn(
+          { agent: agentName, command: commandName, skillEffort, error: (err as Error).message },
+          "slash-command: skill-effort apply failed — continuing without override",
+        );
+        priorEffort = null;
+      }
+    }
+
     try {
       // Stream from agent with progressive updates
       const response = await this.sessionManager.streamFromAgent(
@@ -391,6 +429,21 @@ export class SlashCommandHandler {
         await interaction.editReply(`Command failed: ${msg}`);
       } catch {
         // Interaction may have expired
+      }
+    } finally {
+      // Phase 83 EFFORT-05 — revert to the snapshot-at-dispatch-time effort.
+      // Runs on both success AND error paths (try/finally). Swallows revert
+      // failures (logged) so a transient SDK failure cannot propagate past
+      // the interaction boundary.
+      if (priorEffort !== null) {
+        try {
+          this.sessionManager.setEffortForAgent(agentName, priorEffort);
+        } catch (err) {
+          this.log.warn(
+            { agent: agentName, command: commandName, priorEffort, error: (err as Error).message },
+            "slash-command: skill-effort revert failed — agent may be at wrong level",
+          );
+        }
       }
     }
   }

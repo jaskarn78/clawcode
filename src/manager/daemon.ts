@@ -1320,6 +1320,10 @@ export async function startDaemon(
     botToken,
     client: discordBridge?.discordClient,
     turnDispatcher,
+    // Phase 83 EFFORT-05 — inject the catalog so slash-command dispatch can
+    // resolve per-skill `effort:` frontmatter overrides and apply them for
+    // the duration of the turn.
+    skillsCatalog,
     log,
   });
   if (botToken) {

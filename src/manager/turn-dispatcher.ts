@@ -23,6 +23,7 @@ import { logger } from "../shared/logger.js";
 import type { SessionManager } from "./session-manager.js";
 import type { TurnOrigin } from "./turn-origin.js";
 import type { Turn } from "../performance/trace-collector.js";
+import type { EffortLevel } from "../config/schema.js";
 
 /** Thrown when dispatch is called with invalid arguments. */
 export class TurnDispatcherError extends Error {
@@ -62,6 +63,28 @@ export type DispatchOptions = {
    * the SDK's native Options.abortController (sdk.d.ts:957).
    */
   readonly signal?: AbortSignal;
+  /**
+   * Phase 83 EFFORT-05 — per-skill effort override for this single turn.
+   *
+   * When set, the dispatcher:
+   *   1. Snapshots the agent's current effort via sessionManager.getEffortForAgent.
+   *   2. Calls setEffortForAgent(agentName, skillEffort) BEFORE sendToAgent /
+   *      streamFromAgent — the SDK's q.setMaxThinkingTokens fires before
+   *      the turn starts (Plan 01 wired the synchronous path).
+   *   3. After the send completes (success OR error, via try/finally),
+   *      calls setEffortForAgent(agentName, priorEffort) to restore.
+   *
+   * Intended caller: Discord slash-command dispatch site that resolves
+   * `skillsCatalog.get(commandName)?.effort` and threads it here. When
+   * the invoked skill has no `effort:` frontmatter (or the command isn't
+   * a skill at all), omit the field / pass undefined — the dispatcher
+   * short-circuits to zero effort-touching side effects.
+   *
+   * Turn-boundary revert (not tool-call / interrupt granularity) — the SDK's
+   * serialTurnQueue guarantees at most one turn per handle at a time, so
+   * pre-turn apply + post-turn revert is the correct locking window.
+   */
+  readonly skillEffort?: EffortLevel;
 };
 
 export type TurnDispatcherOptions = {
@@ -103,12 +126,22 @@ export class TurnDispatcher {
       throw new TurnDispatcherError("agentName must be non-empty", agentName, origin.rootTurnId);
     }
 
+    // Phase 83 EFFORT-05 — capture prior effort + apply per-skill override.
+    // Only reaches into the session handle when options.skillEffort is set
+    // (zero side effects on the normal path). Snapshot happens AT dispatch
+    // time so live /clawcode-effort changes between turns propagate correctly.
+    const priorEffort = this.applySkillEffort(agentName, options.skillEffort);
+
     // Phase 57 Plan 03: caller-owned Turn branch. When the caller provided
     // their own Turn (DiscordBridge pre-opens the Turn + receive-span before
     // calling us), attach the origin and forward — caller retains end() ownership.
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal — trace side-effect */ }
-      return this.sessionManager.sendToAgent(agentName, message, options.turn, { signal: options.signal });
+      try {
+        return await this.sessionManager.sendToAgent(agentName, message, options.turn, { signal: options.signal });
+      } finally {
+        this.restoreEffort(agentName, priorEffort);
+      }
     }
 
     const turn = this.openTurn(origin, agentName, options.channelId ?? null);
@@ -122,6 +155,8 @@ export class TurnDispatcher {
     } catch (err) {
       try { turn?.end("error"); } catch { /* non-fatal */ }
       throw err;
+    } finally {
+      this.restoreEffort(agentName, priorEffort);
     }
   }
 
@@ -140,10 +175,17 @@ export class TurnDispatcher {
       throw new TurnDispatcherError("agentName must be non-empty", agentName, origin.rootTurnId);
     }
 
+    // Phase 83 EFFORT-05 — same pre/post wrap as dispatch().
+    const priorEffort = this.applySkillEffort(agentName, options.skillEffort);
+
     // Phase 57 Plan 03: caller-owned Turn branch (see dispatch() for rationale).
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal */ }
-      return this.sessionManager.streamFromAgent(agentName, message, onChunk, options.turn, { signal: options.signal });
+      try {
+        return await this.sessionManager.streamFromAgent(agentName, message, onChunk, options.turn, { signal: options.signal });
+      } finally {
+        this.restoreEffort(agentName, priorEffort);
+      }
     }
 
     const turn = this.openTurn(origin, agentName, options.channelId ?? null);
@@ -163,6 +205,56 @@ export class TurnDispatcher {
     } catch (err) {
       try { turn?.end("error"); } catch { /* non-fatal */ }
       throw err;
+    } finally {
+      this.restoreEffort(agentName, priorEffort);
+    }
+  }
+
+  /**
+   * Phase 83 EFFORT-05 — apply a per-skill effort override, returning the
+   * prior level so the caller can revert in a finally block.
+   *
+   * Returns null when no override is requested (skillEffort undefined) —
+   * the caller uses this sentinel to short-circuit the revert. Never
+   * throws: if the snapshot or setEffort calls fail (agent not running,
+   * SDK rejection), we log a warning and return null so the turn still
+   * proceeds without the override. The revert path is gated on non-null,
+   * so a failed apply means a failed no-op revert — state stays coherent.
+   */
+  private applySkillEffort(agentName: string, skillEffort: EffortLevel | undefined): EffortLevel | null {
+    if (!skillEffort) return null;
+    try {
+      const prior = this.sessionManager.getEffortForAgent(agentName);
+      this.sessionManager.setEffortForAgent(agentName, skillEffort);
+      return prior;
+    } catch (err) {
+      this.log.warn(
+        { agent: agentName, skillEffort, error: (err as Error).message },
+        "turn-dispatcher: skill-effort apply failed — continuing without override",
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Phase 83 EFFORT-05 — revert to the prior effort level in the finally block.
+   *
+   * Pairs with applySkillEffort: invoked even on error paths so a runaway
+   * turn cannot leave an agent stuck at an elevated level. Null priorEffort
+   * means "no override was applied" → no-op. Revert failures are logged
+   * and swallowed (same rationale as apply: a transient SDK failure must
+   * never propagate past the turn boundary as a hidden exception on top
+   * of whatever the original dispatch returned).
+   */
+  private restoreEffort(agentName: string, priorEffort: EffortLevel | null): void {
+    if (priorEffort === null) return;
+    try {
+      this.sessionManager.setEffortForAgent(agentName, priorEffort);
+    } catch (err) {
+      this.log.warn(
+        { agent: agentName, priorEffort, error: (err as Error).message },
+        "turn-dispatcher: skill-effort revert failed — agent may be at wrong level",
+      );
     }
   }
 
