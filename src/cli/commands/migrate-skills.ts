@@ -40,6 +40,7 @@
 import type { Command } from "commander";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   installFsGuard,
   uninstallFsGuard,
@@ -58,6 +59,22 @@ import {
   type SkillsLedgerRow,
   type SkillsLedgerStatus,
 } from "../../migration/skills-ledger.js";
+import {
+  copySkillDirectory,
+  type CopyResult,
+} from "../../migration/skills-copier.js";
+import { normalizeSkillFrontmatter } from "../../migration/skills-transformer.js";
+import {
+  verifySkillLinkages,
+  type LinkVerification,
+} from "../../migration/skills-linker-verifier.js";
+import {
+  readLearningsDir,
+  dedupeLearnings,
+} from "../../migration/skills-learnings-dedup.js";
+import { scanSkillsDirectory } from "../../skills/scanner.js";
+import { loadConfig, resolveAllAgents } from "../../config/loader.js";
+import { MemoryStore } from "../../memory/store.js";
 
 /**
  * Options for `runMigrateSkillsAction`. Exported for unit-test invocation
@@ -68,6 +85,30 @@ export type MigrateSkillsOptions = {
   readonly ledgerPath: string;
   readonly dryRun: boolean;
   readonly includeUnknown?: boolean;
+  /**
+   * Plan 02 — target directory for the actual copy on apply. Defaults to
+   * `~/.clawcode/skills` when omitted. Tests supply a tmpdir.
+   */
+  readonly skillsTargetDir?: string;
+  /**
+   * Plan 02 — optional path to `clawcode.yaml`. When supplied AND apply
+   * mode is active, the CLI runs a per-agent linker verification against
+   * the freshly-migrated catalog and emits a `=== linker verification ===`
+   * section.
+   */
+  readonly clawcodeYamlPath?: string;
+  /**
+   * Plan 02 — SKILL-08 scope gate: when true, bypass finmentum/personal
+   * scope rules during linker verification. Default false.
+   */
+  readonly forceScope?: boolean;
+  /**
+   * Plan 02 — path to a MemoryStore SQLite database for
+   * self-improving-agent `.learnings/*.md` import + dedup. When omitted,
+   * learnings import is skipped (report still shows the skill as migrated).
+   * Tests supply an ephemeral tmpdir path.
+   */
+  readonly memoryDbPath?: string;
 };
 
 type Bucket =
@@ -75,6 +116,7 @@ type Bucket =
   | "skipped (secret-scan)"
   | "skipped (deprecated)"
   | "skipped (idempotent)"
+  | "skipped (copy-failed)"
   | "skipped (p2-out-of-scope)";
 
 type BucketedEntry = {
@@ -103,6 +145,7 @@ const SECTION_ORDER: readonly Bucket[] = [
   "skipped (secret-scan)",
   "skipped (deprecated)",
   "skipped (idempotent)",
+  "skipped (copy-failed)",
   "skipped (p2-out-of-scope)",
 ];
 
@@ -122,6 +165,8 @@ function bucketToStatus(bucket: Bucket): SkillsLedgerStatus {
       return "pending";
     case "skipped (secret-scan)":
       return "refused";
+    case "skipped (copy-failed)":
+      return "refused";
     case "skipped (deprecated)":
     case "skipped (idempotent)":
     case "skipped (p2-out-of-scope)":
@@ -135,7 +180,9 @@ function bucketToStatus(bucket: Bucket): SkillsLedgerStatus {
  * skips — they are a valid flow, not a rejection).
  */
 function bucketToOutcome(bucket: Bucket): "allow" | "refuse" {
-  return bucket === "skipped (secret-scan)" ? "refuse" : "allow";
+  if (bucket === "skipped (secret-scan)") return "refuse";
+  if (bucket === "skipped (copy-failed)") return "refuse";
+  return "allow";
 }
 
 /**
@@ -149,6 +196,9 @@ export async function runMigrateSkillsAction(
   opts: MigrateSkillsOptions,
 ): Promise<number> {
   const sourceDir = expandHome(opts.sourceDir);
+  const skillsTargetDir = opts.skillsTargetDir
+    ? expandHome(opts.skillsTargetDir)
+    : join(homedir(), ".clawcode", "skills");
 
   // Wrap the entire action body in the fs-guard so any write attempt under
   // ~/.openclaw/ throws ReadOnlySourceError. uninstall in finally so a
@@ -160,9 +210,7 @@ export async function runMigrateSkillsAction(
     // Build the ledger index ONCE before the loop — capture the latest
     // "migrated" row per skill with its source_hash so idempotency is
     // snapshotted and the per-skill classify loop never re-reads the file.
-    const ledgerRows = opts.dryRun
-      ? await readSkillRows(opts.ledgerPath).catch(() => [])
-      : await readSkillRows(opts.ledgerPath).catch(() => []);
+    const ledgerRows = await readSkillRows(opts.ledgerPath).catch(() => []);
     const migratedHashBySkill = new Map<string, string>();
     for (const row of ledgerRows) {
       if (row.status === "migrated") {
@@ -173,10 +221,20 @@ export async function runMigrateSkillsAction(
     }
 
     const entries: BucketedEntry[] = [];
+    // Plan 02 — track successfully-migrated (or idempotent-skipped) skills
+    // so the linker verification and the report know which names to expect
+    // in the target catalog.
+    const migratedSkillNames: string[] = [];
+
+    // Lazily construct the MemoryStore the first time a learning-import
+    // is attempted. Single handle for the entire apply run.
+    let learningsMemoryStore: MemoryStore | null = null;
 
     for (const skill of skills) {
       let bucket: Bucket;
       let lineDetail = "";
+      // Track apply-mode artifacts (copy result) for the ledger row.
+      let copyResult: CopyResult | null = null;
 
       switch (skill.classification) {
         case "deprecate": {
@@ -194,12 +252,7 @@ export async function runMigrateSkillsAction(
         }
         case "unknown": {
           if (opts.includeUnknown === true) {
-            // Treat as P1 and run the normal flow.
-            const result = await classifyP1(
-              skill,
-              migratedHashBySkill,
-              opts.dryRun,
-            );
+            const result = await classifyP1(skill, migratedHashBySkill);
             bucket = result.bucket;
             lineDetail = result.detail;
           } else {
@@ -209,15 +262,41 @@ export async function runMigrateSkillsAction(
           break;
         }
         case "p1": {
-          const result = await classifyP1(
-            skill,
-            migratedHashBySkill,
-            opts.dryRun,
-          );
+          const result = await classifyP1(skill, migratedHashBySkill);
           bucket = result.bucket;
           lineDetail = result.detail;
           break;
         }
+      }
+
+      // Plan 02 apply path — when we're actually migrating (not dry-run)
+      // AND classification put us in the "migrated" bucket, perform the
+      // copy. Mismatches downgrade the bucket to "skipped (copy-failed)"
+      // and write a refused ledger row.
+      if (!opts.dryRun && bucket === "migrated") {
+        const targetDir = join(skillsTargetDir, skill.name);
+        copyResult = await copySkillDirectory(skill.path, targetDir, {
+          transformSkillMd: (c) =>
+            normalizeSkillFrontmatter(c, skill.name),
+        });
+        if (!copyResult.pass) {
+          const mmCount = copyResult.mismatches?.length ?? 0;
+          bucket = "skipped (copy-failed)";
+          lineDetail = `hash-witness mismatch: ${mmCount} file(s)`;
+        } else {
+          // Decorate the line detail with the new target hash prefix.
+          lineDetail =
+            lineDetail === "ready to migrate"
+              ? `copied → target_hash ${copyResult.targetHash.slice(0, 12)}…`
+              : `${lineDetail}; target_hash ${copyResult.targetHash.slice(0, 12)}…`;
+          migratedSkillNames.push(skill.name);
+        }
+      }
+
+      // For idempotent-skipped P1 skills, still include them in the
+      // linker-verification universe — they WERE previously migrated.
+      if (bucket === "skipped (idempotent)") {
+        migratedSkillNames.push(skill.name);
       }
 
       entries.push({
@@ -228,17 +307,68 @@ export async function runMigrateSkillsAction(
 
       // Apply-mode ledger row. Dry-run writes nothing.
       if (!opts.dryRun) {
+        const action: "plan" | "apply" =
+          bucket === "migrated" || bucket === "skipped (copy-failed)"
+            ? "apply"
+            : "plan";
+        const status: SkillsLedgerStatus =
+          bucket === "migrated" ? "migrated" : bucketToStatus(bucket);
         const row: SkillsLedgerRow = {
           ts: new Date().toISOString(),
-          action: "plan",
+          action,
           skill: skill.name,
-          status: bucketToStatus(bucket),
+          status,
           source_hash: skill.sourceHash,
-          step: "classify",
+          ...(copyResult?.pass && copyResult.targetHash
+            ? { target_hash: copyResult.targetHash }
+            : {}),
+          step: bucket === "migrated" ? "copy" : "classify",
           outcome: bucketToOutcome(bucket),
           notes: lineDetail || undefined,
         };
         await appendSkillRow(opts.ledgerPath, row);
+      }
+
+      // Plan 02 — learnings import hook (self-improving-agent only).
+      if (
+        !opts.dryRun &&
+        bucket === "migrated" &&
+        skill.name === "self-improving-agent" &&
+        opts.memoryDbPath
+      ) {
+        if (learningsMemoryStore === null) {
+          learningsMemoryStore = new MemoryStore(opts.memoryDbPath);
+        }
+        const learningsDir = join(skill.path, ".learnings");
+        const learnings = await readLearningsDir(learningsDir);
+        const { toImport, skipped } = await dedupeLearnings(
+          learnings,
+          learningsMemoryStore,
+        );
+        // Import each new entry with origin_id — hard idempotency via
+        // Phase 80 MEM-02 UNIQUE(origin_id) partial index.
+        const zeroEmbed = new Float32Array(384);
+        for (const entry of toImport) {
+          try {
+            learningsMemoryStore.insert(
+              {
+                content: entry.content.trim(),
+                source: "manual",
+                importance: 0.5,
+                tags: ["learning", "migrated-from-openclaw"],
+                origin_id: `openclaw-learning-${entry.hash.slice(0, 16)}`,
+              },
+              zeroEmbed,
+            );
+          } catch {
+            // origin_id collision or similar — non-fatal, continue.
+          }
+        }
+        cliLog(
+          dim(
+            `  [learnings] imported=${toImport.length} skipped=${skipped.length} (${learningsDir})`,
+          ),
+        );
       }
     }
 
@@ -258,11 +388,75 @@ export async function runMigrateSkillsAction(
       }
     }
 
+    // Plan 02 — per-agent linker verification (apply mode only, when
+    // clawcodeYamlPath is supplied).
+    const verificationFailures: LinkVerification[] = [];
+    if (
+      !opts.dryRun &&
+      opts.clawcodeYamlPath &&
+      existsSync(opts.clawcodeYamlPath)
+    ) {
+      try {
+        const config = await loadConfig(opts.clawcodeYamlPath);
+        const resolvedAgents = resolveAllAgents(config);
+        const catalog = await scanSkillsDirectory(skillsTargetDir);
+        const verifications = verifySkillLinkages({
+          catalog,
+          resolvedAgents,
+          migratedSkillNames,
+          force: opts.forceScope === true,
+        });
+        cliLog(headerFor("linker verification" as Bucket));
+        if (verifications.length === 0) {
+          cliLog(dim("(none)"));
+        } else {
+          for (const v of verifications) {
+            const statusTxt =
+              v.status === "linked"
+                ? green(v.status)
+                : v.status === "not-assigned"
+                  ? dim(v.status)
+                  : yellow(v.status);
+            const reason = v.reason ? ` — ${v.reason}` : "";
+            cliLog(`  ${v.agent}  ${v.skill}  ${statusTxt}${reason}`);
+            if (
+              v.status === "missing-from-catalog" ||
+              v.status === "scope-refused"
+            ) {
+              verificationFailures.push(v);
+            }
+            // Append a ledger row per verification (verify step).
+            await appendSkillRow(opts.ledgerPath, {
+              ts: new Date().toISOString(),
+              action: "verify",
+              skill: v.skill,
+              status: v.status === "linked" ? "migrated" : "refused",
+              source_hash: "verify-only",
+              step: "linker-verify",
+              outcome: v.status === "linked" ? "allow" : "refuse",
+              notes: `${v.agent}: ${v.status}${v.reason ? ` — ${v.reason}` : ""}`,
+            });
+          }
+        }
+      } catch (err) {
+        cliError(
+          `  linker verification failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     // Exit code logic: dry-run always 0 (informational).
-    // Apply mode: 1 if any secret-scan refusal, 0 otherwise.
+    // Apply mode: 1 if any secret-scan refusal OR copy-failed OR
+    // missing-from-catalog verification failure, 0 otherwise.
     if (opts.dryRun) return 0;
     const refusals = byBucket.get("skipped (secret-scan)")!;
-    return refusals.length > 0 ? 1 : 0;
+    const copyFails = byBucket.get("skipped (copy-failed)")!;
+    const verifyMisses = verificationFailures.filter(
+      (v) => v.status === "missing-from-catalog",
+    );
+    return refusals.length > 0 || copyFails.length > 0 || verifyMisses.length > 0
+      ? 1
+      : 0;
   } finally {
     uninstallFsGuard();
   }
@@ -275,9 +469,7 @@ export async function runMigrateSkillsAction(
 async function classifyP1(
   skill: DiscoveredSkill,
   migratedHashBySkill: ReadonlyMap<string, string>,
-  _dryRun: boolean,
 ): Promise<{ bucket: Bucket; detail: string }> {
-  void _dryRun;
   // Idempotency: prior 'migrated' row + matching source_hash.
   const priorHash = migratedHashBySkill.get(skill.name);
   if (priorHash !== undefined && priorHash === skill.sourceHash) {
@@ -326,6 +518,8 @@ function formatEntryLine(
       return `  ${green(name)} — ${detail}`;
     case "skipped (secret-scan)":
       return `  ${red(name)} — ${detail}`;
+    case "skipped (copy-failed)":
+      return `  ${red(name)} — ${detail}`;
     case "skipped (deprecated)":
       return `  ${dim(name)} — ${detail}`;
     case "skipped (idempotent)":
@@ -367,12 +561,34 @@ export function registerMigrateSkillsCommand(
       "--include-unknown",
       "Treat unknown skills as P1 candidates (default: skip)",
     )
+    .option(
+      "--skills-target <path>",
+      "Target directory for the copy on apply",
+      "~/.clawcode/skills",
+    )
+    .option(
+      "--clawcode-yaml <path>",
+      "Path to clawcode.yaml (enables per-agent linker verification)",
+      "clawcode.yaml",
+    )
+    .option(
+      "--force-scope",
+      "Bypass finmentum/personal scope gates during linker verification",
+    )
+    .option(
+      "--memory-db <path>",
+      "MemoryStore DB path for self-improving-agent .learnings import",
+    )
     .action(
       async (opts: {
         sourceDir: string;
         ledgerPath: string;
         dryRun: boolean;
         includeUnknown?: boolean;
+        skillsTarget?: string;
+        clawcodeYaml?: string;
+        forceScope?: boolean;
+        memoryDb?: string;
       }) => {
         try {
           const ledgerPath =
@@ -382,6 +598,10 @@ export function registerMigrateSkillsCommand(
             ledgerPath,
             dryRun: opts.dryRun,
             includeUnknown: opts.includeUnknown,
+            skillsTargetDir: opts.skillsTarget,
+            clawcodeYamlPath: opts.clawcodeYaml,
+            forceScope: opts.forceScope,
+            memoryDbPath: opts.memoryDb,
           });
           if (code !== 0) process.exit(code);
         } catch (err) {

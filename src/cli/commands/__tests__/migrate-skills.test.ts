@@ -409,6 +409,7 @@ describe("migrate-skills CLI", () => {
     await writeFile(
       yamlPath,
       [
+        "version: 1",
         "agents:",
         "  - name: fin-research",
         "    workspace: /tmp/fin-ws",
@@ -451,6 +452,7 @@ describe("migrate-skills CLI", () => {
     await writeFile(
       yamlPath,
       [
+        "version: 1",
         "agents:",
         "  - name: fin-research",
         "    workspace: /tmp/fin-ws",

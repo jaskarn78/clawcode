@@ -89,7 +89,7 @@ describe("skills-learnings-dedup — dedupeLearnings", () => {
     store.insert(
       {
         content: aContent.trim(),
-        source: "migration",
+        source: "manual",
         importance: 0.5,
         tags: ["learning", "seed"],
         origin_id: "seed-A",
@@ -121,7 +121,7 @@ describe("skills-learnings-dedup — dedupeLearnings", () => {
       store.insert(
         {
           content: e.content.trim(),
-          source: "migration",
+          source: "manual",
           importance: 0.5,
           tags: ["learning", "migrated-from-openclaw"],
           origin_id: `openclaw-learning-${e.hash.slice(0, 16)}`,

@@ -30,6 +30,13 @@ type PreparedStatements = {
   readonly getBacklinks: Statement;
   readonly getForwardLinks: Statement;
   readonly checkMemoryExists: Statement;
+  /**
+   * Phase 84 SKILL-04 — tag+content exact-match lookup for
+   * self-improving-agent `.learnings/*.md` dedup during migration.
+   * Uses LIKE '%tag%' to match a JSON-encoded tags column containing
+   * the tag as a substring; content is compared literally.
+   */
+  readonly findByTagAndContent: Statement;
 };
 
 /**
@@ -975,7 +982,33 @@ export class MemoryStore {
       checkMemoryExists: this.db.prepare(
         "SELECT 1 FROM memories WHERE id = ?",
       ),
+      // Phase 84 SKILL-04 — narrow lookup for the migration dedup path.
+      // Tags are stored as a JSON array string (e.g. '["learning","seed"]'),
+      // so we LIKE '%"tag"%' to match the exact token. Content is compared
+      // verbatim via '='.
+      findByTagAndContent: this.db.prepare(
+        `SELECT id FROM memories WHERE tags LIKE ? AND content = ? LIMIT 1`,
+      ),
     };
+  }
+
+  /**
+   * Phase 84 SKILL-04 — migration-only narrow lookup. Returns the id of a
+   * memory whose `tags` JSON-array contains the given tag AND whose
+   * `content` exactly matches. Returns undefined when no row matches.
+   *
+   * Scope is intentionally tight: used by src/migration/skills-learnings-dedup.ts
+   * to dedupe `.learnings/*.md` imports against pre-existing
+   * tag-"learning" rows seeded by v2.1 memory translation.
+   */
+  findByTagAndContent(
+    tag: string,
+    content: string,
+  ): { id: string } | undefined {
+    const likePattern = `%"${tag}"%`;
+    return this.stmts.findByTagAndContent.get(likePattern, content) as
+      | { id: string }
+      | undefined;
   }
 }
 
