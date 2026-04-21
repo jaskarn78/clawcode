@@ -32,6 +32,11 @@ import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 import type { SkillTrackingConfig } from "./session-adapter.js";
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "./warm-path-check.js";
 import { ConversationBriefCache } from "./conversation-brief-cache.js";
+import {
+  readEffortState,
+  writeEffortState,
+  DEFAULT_EFFORT_STATE_PATH,
+} from "./effort-state-store.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -54,6 +59,12 @@ export type SessionManagerOptions = {
    * undefined so the agent-level knob controls the interval.
    */
   readonly flushIntervalMsOverride?: number;
+  /**
+   * Phase 83 Plan 02 EFFORT-03 — path to the per-agent runtime effort-state
+   * JSON store. Defaults to `~/.clawcode/manager/effort-state.json`. Tests
+   * inject a tmpdir-rooted path for isolation.
+   */
+  readonly effortStatePath?: string;
 };
 
 /**
@@ -128,6 +139,14 @@ export class SessionManager {
   private readonly flushIntervalMsOverride: number | undefined;
 
   /**
+   * Phase 83 Plan 02 EFFORT-03 — resolved path to the effort-state JSON
+   * store. Set once at construction; all persistence / re-apply paths
+   * reference this field so test-time paths and production defaults never
+   * diverge.
+   */
+  private readonly effortStatePath: string;
+
+  /**
    * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
    * at daemon shutdown. Each call to `summarizeSessionIfPossible` is wrapped
    * in {@link trackSummary} so SIGTERM never truncates an unfinished summary.
@@ -164,6 +183,8 @@ export class SessionManager {
     this.log = options.log ?? logger;
     this.summarizeFn = options.summarizeFn ?? summarizeWithHaiku;
     this.flushIntervalMsOverride = options.flushIntervalMsOverride;
+    // Phase 83 Plan 02 EFFORT-03 — persist path resolves via DI or default.
+    this.effortStatePath = options.effortStatePath ?? DEFAULT_EFFORT_STATE_PATH;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -385,6 +406,35 @@ export class SessionManager {
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
 
+    // Phase 83 Plan 02 EFFORT-03 — re-apply persisted runtime effort override
+    // so `/clawcode-effort` survives `clawcode restart <agent>`. Read happens
+    // BEFORE warm-path to keep startup ordering predictable; a corrupt /
+    // missing state file falls back to the config default (no throw). MUST
+    // NOT block startup on persistence — any error is logged and swallowed.
+    try {
+      const persisted = await readEffortState(this.effortStatePath, name, this.log);
+      if (persisted && persisted !== config.effort) {
+        handle.setEffort(persisted);
+        this.log.info(
+          { agent: name, effort: persisted, configDefault: config.effort },
+          "re-applied persisted effort override",
+        );
+      } else if (persisted) {
+        // Persistence matches config default — no-op, but record at debug for
+        // operator traceability.
+        this.log.debug(
+          { agent: name, effort: persisted },
+          "persisted effort matches config default",
+        );
+      }
+    } catch (err) {
+      // Observational — never block startup on persistence.
+      this.log.warn(
+        { agent: name, error: (err as Error).message },
+        "effort-state read failed on start (non-fatal)",
+      );
+    }
+
     this.attachCrashHandler(name, config, handle);
     this.recovery.setStabilityTimer(name);
 
@@ -527,11 +577,22 @@ export class SessionManager {
   /**
    * Set the reasoning effort level for a running agent. Takes effect on next turn.
    * Phase 83 EFFORT-04 — accepts the full v2.2 EffortLevel set.
+   * Phase 83 Plan 02 EFFORT-03 — persist to disk so the override survives
+   * `clawcode restart <name>`. Fire-and-forget: the runtime side-effect is
+   * already on the handle; persistence is best-effort. A persistence failure
+   * MUST NOT block the caller — the SDK call has already fired.
    */
   setEffortForAgent(name: string, level: EffortLevel): void {
     const handle = this.requireSession(name);
     handle.setEffort(level);
     this.log.info({ agent: name, effort: level }, "effort level updated");
+    // Best-effort persistence — see docblock above.
+    void writeEffortState(this.effortStatePath, name, level, this.log).catch((err) => {
+      this.log.warn(
+        { agent: name, error: (err as Error).message },
+        "effort-state persist failed (non-fatal)",
+      );
+    });
   }
 
   /** Get the current reasoning effort level for a running agent. */

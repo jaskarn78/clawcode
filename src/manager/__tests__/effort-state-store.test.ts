@@ -31,6 +31,23 @@ import { SessionManager } from "../session-manager.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
 import type { BackoffConfig } from "../types.js";
 
+// Mock the warm-path gate so agents transition to "running" without needing
+// a real embedder — mirrors the established pattern in session-manager.test.ts.
+vi.mock("../warm-path-check.js", async () => {
+  const actual = await vi.importActual<typeof import("../warm-path-check.js")>(
+    "../warm-path-check.js",
+  );
+  return {
+    ...actual,
+    runWarmPathCheck: vi.fn(async () => ({
+      ready: true,
+      durations_ms: { sqlite: 50, embedder: 80, session: 1, browser: 0 },
+      total_ms: 131,
+      errors: [],
+    })),
+  };
+});
+
 const TEST_BACKOFF: BackoffConfig = {
   baseMs: 100,
   maxMs: 1000,
@@ -199,9 +216,15 @@ describe("SessionManager ↔ effort-state-store integration (EFFORT-03)", () => 
     const cfg = makeConfig("clawdy");
     await manager.startAgent("clawdy", cfg);
     manager.setEffortForAgent("clawdy", "max");
-    // Fire-and-forget persistence — give the microtask a tick.
-    await new Promise((r) => setImmediate(r));
-    const persisted = await readEffortState(effortStatePath, "clawdy");
+    // Fire-and-forget persistence — poll the file for up to ~500ms because
+    // writeEffortState does mkdir → writeFile(tmp) → rename which can take a
+    // couple event-loop turns.
+    let persisted: string | null = null;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      persisted = await readEffortState(effortStatePath, "clawdy");
+      if (persisted) break;
+    }
     expect(persisted).toBe("max");
   });
 
