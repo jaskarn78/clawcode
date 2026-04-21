@@ -204,7 +204,10 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
   3. When a real MCP tool call fails, the agent's tool-result contains the actual JSON-RPC error code + message verbatim (not a generic "tool unavailable"); pinned via a regression test
   4. When an MCP server drops, the v1.3 health-check heartbeat auto-reconnects it and the reconnect outcome surfaces in `/clawcode-status` within one heartbeat cycle
   5. `/clawcode-tools` lists every configured MCP server with live status (ready / degraded / failed), last-successful-call timestamp, and recent failure count — surfacing any phantom-error contradiction to the operator
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 85-01-PLAN.md — Readiness gate (JSON-RPC initialize on startup, mandatory vs optional classification) + heartbeat reconnect + verbatim JSON-RPC error pass-through (TOOL-01, TOOL-03, TOOL-04)
+- [ ] 85-02-PLAN.md — System prompt assembly: pre-authenticated framing + live tool-status table + verbatim-error rule in v1.7 stable cached prefix (TOOL-02, TOOL-05, TOOL-07)
+- [ ] 85-03-PLAN.md — /clawcode-tools Discord slash (EmbedBuilder, UI-01) + clawcode tools CLI parity (TOOL-06 + UI-01)
 
 ### Phase 86: Dual Discord Model Picker (Core)
 **Goal**: Users can change a running agent's model from Discord via a direct IPC dispatch (no LLM-prompt round-trip), restricted to the per-agent `allowedModels` allowlist, persisted atomically to `clawcode.yaml`, with cache-invalidation UX that mirrors native `/model`.
@@ -271,7 +274,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 |-------|----------------|--------|-----------|
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
-| 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
+| 85. MCP Tool Awareness & Reliability | 0/3 | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
 | 87. Native CC Slash Commands | 0/? | Not started | - |
 | 88. Skills Marketplace | 0/? | Not started | - |
