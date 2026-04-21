@@ -76,6 +76,13 @@ export type ResolvedAgentConfig = {
       readonly conversationContextBudget: number;
       /** Phase 68 — RETR-03: half-life (days) for retrieval-time decay weighting over conversation search results. */
       readonly retrievalHalfLifeDays: number;
+      /**
+       * Gap 3 (memory-persistence-gaps) — how often to write a non-terminating
+       * mid-session summary while a session is live. 0 disables the timer;
+       * positive values produce one MemoryEntry tagged "mid-session" per
+       * interval. Default 15 min.
+       */
+      readonly flushIntervalMinutes: number;
     };
   };
   readonly heartbeat: {
