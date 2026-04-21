@@ -156,6 +156,17 @@ export class SlashCommandHandler {
           type: opt.type,
           description: opt.description,
           required: opt.required,
+          // Phase 83 UI-01 — forward choices when defined so Discord renders
+          // a dropdown. Spread-only: options without choices stay byte-identical
+          // to the pre-Phase-83 payload (back-compat for every other option).
+          ...(opt.choices && opt.choices.length > 0
+            ? {
+                choices: opt.choices.map((c) => ({
+                  name: c.name,
+                  value: c.value,
+                })),
+              }
+            : {}),
         })),
       }));
 
@@ -259,6 +270,39 @@ export class SlashCommandHandler {
           options.set(opt.name, raw);
         }
       }
+    }
+
+    // Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit.
+    // Pulls the authoritative runtime effort + model directly from the
+    // running session handle; does NOT consume an LLM turn. Mirrors the
+    // clawcode-effort shortcut below (same no-turn-cost pattern).
+    //
+    // Trade-off: the old prompt-routed `/clawcode-status` produced a rich
+    // agent-authored block (tokens, context fill, compactions, etc.). That
+    // data lives only in the agent's context — not in the daemon — so we
+    // can't reproduce it server-side without asking the agent. The concise
+    // server-side view is authoritative, cheap, and always available
+    // (including when the agent is hung mid-turn). Plan 83-03 scope is
+    // EFFORT-07's VISIBILITY requirement only; a future `/clawcode-status-detail`
+    // can restore the rich prompt-routed form if needed.
+    if (commandName === "clawcode-status") {
+      try {
+        const effort = this.sessionManager.getEffortForAgent(agentName);
+        const model =
+          this.resolvedAgents.find((a) => a.name === agentName)?.model ??
+          "(unknown)";
+        await interaction.editReply(
+          `📋 ${agentName}\n🤖 Model: ${model}\n🎚️ Effort: ${effort}`,
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        try {
+          await interaction.editReply(`Failed to read status: ${msg}`);
+        } catch {
+          /* expired */
+        }
+      }
+      return;
     }
 
     // Handle /effort directly — no need to route through the agent.

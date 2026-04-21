@@ -20,14 +20,16 @@ import type { RoutingTable } from "../types.js";
 // -- REST mock plumbing ------------------------------------------------------
 // We intercept the `new REST().setToken().put(...)` chain used by
 // SlashCommandHandler.register() and capture the body sent to Discord.
-const putSpy = vi.fn(async () => undefined);
+const putSpy = vi.fn(
+  async (_route: unknown, _opts: { body: unknown }): Promise<unknown> => undefined,
+);
 
 vi.mock("discord.js", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("discord.js");
   class MockREST {
     setToken(_t: string): this { return this; }
-    async put(_route: unknown, opts: { body: unknown }): Promise<unknown> {
-      return putSpy(_route, opts);
+    async put(route: unknown, opts: { body: unknown }): Promise<unknown> {
+      return putSpy(route, opts);
     }
   }
   return {
@@ -83,7 +85,10 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
 
   it("includes a `choices` field on clawcode-effort.options[0] in the REST body", async () => {
     const agent = makeAgent("clawdy");
-    const routingTable: RoutingTable = new Map([["chan-1", "clawdy"]]);
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
     // Fake Client surface — just enough for register().
     const fakeClient = {
       user: { id: "app-id-1" },
@@ -96,15 +101,18 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
       sessionManager: {} as unknown as SessionManager,
       resolvedAgents: [agent],
       botToken: "fake-token",
-      client: fakeClient as unknown as Parameters<typeof SlashCommandHandler>[0] extends infer _ ? never : never,
+      client: fakeClient as never,
       log: makeStubLogger(),
     } as never);
 
     await handler.register();
 
     expect(putSpy).toHaveBeenCalledTimes(1);
-    const putArgs = putSpy.mock.calls[0];
-    const payload = putArgs[1] as { body: Array<{ name: string; options: Array<{ name: string; choices?: unknown }> }> };
+    const putArgs = putSpy.mock.calls[0] as unknown as [
+      unknown,
+      { body: Array<{ name: string; options: Array<{ name: string; choices?: unknown }> }> },
+    ];
+    const payload = putArgs[1];
     const effortCmd = payload.body.find((c) => c.name === "clawcode-effort");
     expect(effortCmd).toBeDefined();
     expect(effortCmd!.options).toHaveLength(1);
@@ -127,7 +135,10 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
 
   it("does NOT add a `choices` field to options that don't have one (back-compat)", async () => {
     const agent = makeAgent("clawdy");
-    const routingTable: RoutingTable = new Map([["chan-1", "clawdy"]]);
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
     const fakeClient = {
       user: { id: "app-id-1" },
       guilds: { cache: new Map([["guild-1", { id: "guild-1" }]]) },
@@ -144,9 +155,11 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
     } as never);
 
     await handler.register();
-    const payload = putSpy.mock.calls[0][1] as {
-      body: Array<{ name: string; options: Array<{ name: string; choices?: unknown }> }>;
-    };
+    const putArgs2 = putSpy.mock.calls[0] as unknown as [
+      unknown,
+      { body: Array<{ name: string; options: Array<{ name: string; choices?: unknown }> }> },
+    ];
+    const payload = putArgs2[1];
     // clawcode-memory has a `query` option with no choices — it must stay clean.
     const memoryCmd = payload.body.find((c) => c.name === "clawcode-memory");
     expect(memoryCmd).toBeDefined();
@@ -163,7 +176,10 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
 
   it("replies with `🎚️ Effort: <level>` pulled from sessionManager.getEffortForAgent", async () => {
     const agent = makeAgent("clawdy");
-    const routingTable: RoutingTable = new Map([["chan-1", "clawdy"]]);
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
     const getEffortForAgent = vi.fn().mockReturnValue("max");
     const sessionManager = {
       getEffortForAgent,
@@ -221,7 +237,10 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
 
   it("includes the agent name and model in the status reply", async () => {
     const agent = makeAgent("clawdy");
-    const routingTable: RoutingTable = new Map([["chan-1", "clawdy"]]);
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
     const getEffortForAgent = vi.fn().mockReturnValue("xhigh");
     const sessionManager = {
       getEffortForAgent,
@@ -271,7 +290,10 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
 
   it("gracefully reports failure if getEffortForAgent throws", async () => {
     const agent = makeAgent("clawdy");
-    const routingTable: RoutingTable = new Map([["chan-1", "clawdy"]]);
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
     const getEffortForAgent = vi.fn().mockImplementation(() => {
       throw new Error("agent not running");
     });

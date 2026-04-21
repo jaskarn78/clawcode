@@ -26,7 +26,39 @@ export type SlashCommandOption = {
   readonly type: number;
   readonly description: string;
   readonly required: boolean;
+  /**
+   * Phase 83 UI-01 — Discord native structured choices for STRING options
+   * (type 3). When present, Discord renders a dropdown of the provided values
+   * and refuses free-text input. Each choice: `{ name: <display>, value: <sent-to-handler> }`.
+   *
+   * Discord hard-caps this at 25 entries per option (zod-enforced at
+   * slashCommandOptionSchema). Omit the field entirely for free-text options
+   * (existing /clawcode-memory, /clawcode-model, control-command agent args).
+   */
+  readonly choices?: readonly { readonly name: string; readonly value: string }[];
 };
+
+/**
+ * Phase 83 UI-01 — canonical EffortLevel picker for `/clawcode-effort`.
+ *
+ * Seven entries, one per level in the v2.2 effortSchema. Order matches the
+ * schema's z.enum tuple (low → max) with auto and off tail-positioned because
+ * they're semantically distinct from the graded scale (auto = model default,
+ * off = explicit disable via setMaxThinkingTokens(0)).
+ *
+ * Wired into DEFAULT_SLASH_COMMANDS.clawcode-effort.options[0].choices below
+ * AND forwarded by slash-commands.ts:register() into the Discord REST body so
+ * the user sees a dropdown, not a text box.
+ */
+export const EFFORT_CHOICES = [
+  { name: "low (fastest)",        value: "low"    },
+  { name: "medium",               value: "medium" },
+  { name: "high",                 value: "high"   },
+  { name: "xhigh",                value: "xhigh"  },
+  { name: "max (deepest)",        value: "max"    },
+  { name: "auto (model default)", value: "auto"   },
+  { name: "off (disabled)",       value: "off"    },
+] as const;
 
 /**
  * Definition of a single slash command.
@@ -114,14 +146,17 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     name: "clawcode-effort",
-    description: "Set reasoning effort level (low/medium/high/max)",
+    description: "Set reasoning effort level",
     claudeCommand: "__effort__{level}",
     options: [
       {
         name: "level",
         type: 3,
-        description: "Effort level: low (fastest), medium, high, max (deepest thinking)",
+        description: "Effort level for Claude's next turn",
         required: true,
+        // Phase 83 UI-01 — forces Discord to render a 7-item dropdown instead
+        // of a free-text input. No invalid level can be typed.
+        choices: EFFORT_CHOICES,
       },
     ],
   },

@@ -112,6 +112,19 @@ export const slashCommandOptionSchema = z.object({
   type: z.number().int().min(1).max(11),
   description: z.string().min(1),
   required: z.boolean().default(false),
+  // Phase 83 UI-01 — optional structured choices for STRING options (type 3).
+  // When present, Discord renders a dropdown instead of a free-text input.
+  // Capped at 25 entries per Discord API; each name/value must be 1..100 chars.
+  // Optional + backward-compatible: pre-existing YAML configs parse unchanged.
+  choices: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(100),
+        value: z.string().min(1).max(100),
+      }),
+    )
+    .max(25)
+    .optional(),
 });
 
 /**
