@@ -8,19 +8,37 @@ import {
 
 describe("slash-types", () => {
   describe("DEFAULT_SLASH_COMMANDS", () => {
-    it("contains exactly 8 commands with clawcode- prefix", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(8);
+    // Phase 87 CMD-04 — clawcode-compact and clawcode-usage were REMOVED from
+    // DEFAULT_SLASH_COMMANDS. They are re-provided at registration time by the
+    // SDK discovery loop via native-cc-commands.buildNativeCommandDefs so the
+    // native-dispatch path is the ONLY path for /compact and /cost going forward.
+    it("contains exactly 6 commands with clawcode- prefix (Phase 87 CMD-04 removed compact + usage)", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(6);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
         "clawcode-memory",
         "clawcode-schedule",
         "clawcode-health",
-        "clawcode-compact",
-        "clawcode-usage",
         "clawcode-model",
         "clawcode-effort",
       ]);
+    });
+
+    it("does NOT contain clawcode-compact (Phase 87 CMD-04 regression pin)", () => {
+      const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
+      expect(names).not.toContain("clawcode-compact");
+    });
+
+    it("does NOT contain clawcode-usage (Phase 87 CMD-04 regression pin)", () => {
+      const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
+      expect(names).not.toContain("clawcode-usage");
+    });
+
+    it("every remaining entry matches /^clawcode-/ (Pitfall 10 namespace guard)", () => {
+      for (const cmd of DEFAULT_SLASH_COMMANDS) {
+        expect(cmd.name).toMatch(/^clawcode-/);
+      }
     });
 
     it("each default command has name, description fields (non-empty strings); claudeCommand is a string (may be empty for inline handlers)", () => {
@@ -59,9 +77,11 @@ describe("slash-types", () => {
     });
 
     it("commands without options have an empty options array", () => {
+      // Phase 87 CMD-04 — after removing compact + usage, the no-options set
+      // shrinks from 5 to 3 (status, schedule, health).
       const withOptions = new Set(["clawcode-memory", "clawcode-model", "clawcode-effort"]);
       const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
-      expect(noOptionCmds.length).toBe(5);
+      expect(noOptionCmds.length).toBe(3);
       for (const cmd of noOptionCmds) {
         expect(cmd.options).toEqual([]);
       }
