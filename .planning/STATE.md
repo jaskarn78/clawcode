@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Ready to execute
-stopped_at: Completed 83-03-PLAN.md (UI-01 choices + EFFORT-07 status line + EFFORT-05 per-skill frontmatter override)
-last_updated: "2026-04-21T17:56:44.266Z"
+stopped_at: Completed 83-02-PLAN.md (effort persistence + fork quarantine shipped)
+last_updated: "2026-04-21T18:01:52.990Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 83 (Extended-Thinking Effort Mapping) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -67,6 +67,8 @@ Recent decisions affecting current work:
 - [Phase 83]: Plan 83-03 — UI-01 StringChoices 7-entry dropdown for /clawcode-effort replaces free-text (schema extended with optional choices capped at 25 per Discord).
 - [Phase 83]: Plan 83-03 — /clawcode-status is a daemon-side short-circuit returning authoritative 🎚️ Effort line from sessionManager.getEffortForAgent (no LLM turn consumed, trades rich self-report for reliability).
 - [Phase 83]: Plan 83-03 — SKILL.md effort: frontmatter → SkillEntry.effort → TurnDispatcher.dispatch skillEffort option with try/finally revert at turn boundary; slash-command path wraps streamFromAgent with same apply+revert contract.
+- [Phase 83]: Plan 83-02 — Runtime effort persistence via dedicated ~/.clawcode/manager/effort-state.json (NOT registry.json extension); atomic temp+rename write; graceful null fallback on corruption/missing/invalid; fire-and-forget persist at setEffortForAgent, re-apply in startAgent BEFORE warm-path gate.
+- [Phase 83]: Plan 83-02 — Fork effort quarantine (EFFORT-06) pinned by explicit 'effort: parentConfig.effort' line in buildForkConfig + 6 tests (3 unit + 3 SessionManager integration). Prevents v1.5 fork-to-Opus cost spike: runtime override on parent does NOT propagate into fork; fork launches at parent CONFIG default.
 
 ### v2.1 closing decisions (for reference)
 
@@ -128,9 +130,10 @@ Recent decisions affecting current work:
 | 260419-q2z | Registry atomic write + recovery + `clawcode registry repair` CLI + always-summarize short sessions + graceful shutdown drain (FIX A+B+C) | 2026-04-19 | fa34ef3 | [260419-q2z-registry-atomic-write-graceful-shutdown-](./quick/260419-q2z-registry-atomic-write-graceful-shutdown-/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
+| Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 83-03-PLAN.md (UI-01 choices + EFFORT-07 status line + EFFORT-05 per-skill frontmatter override)
+Stopped at: Completed 83-02-PLAN.md (effort persistence + fork quarantine shipped)
 Resume: Run `/gsd:plan-phase 83` to decompose Extended-Thinking Effort Mapping into plans

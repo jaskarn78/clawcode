@@ -126,7 +126,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 ### v2.2 OpenClaw Parity & Polish (Phases 83-88) - ACTIVE
 
-- [ ] **Phase 83: Extended-Thinking Effort Mapping** — Close the P0 silent no-op at persistent-session-handle.ts:599; wire `/clawcode-effort` through to SDK `Query.setMaxThinkingTokens()`; SDK canary for Phases 86/87.
+- [x] **Phase 83: Extended-Thinking Effort Mapping** — Close the P0 silent no-op at persistent-session-handle.ts:599; wire `/clawcode-effort` through to SDK `Query.setMaxThinkingTokens()`; SDK canary for Phases 86/87. (completed 2026-04-21)
 - [ ] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns.
 - [ ] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface.
 - [ ] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87.
@@ -174,7 +174,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
   6. `/clawcode-status` shows the current effort level for every agent, and a SKILL.md `effort:` frontmatter override takes effect for turns invoking that skill then reverts at turn boundary
 **Plans**: 3 plans
 - [x] 83-01-PLAN.md — Schema extension (7 effort levels) + P0 SDK wire (Query.setMaxThinkingTokens spy test)
-- [ ] 83-02-PLAN.md — Runtime effort persistence across restart + fork quarantine
+- [x] 83-02-PLAN.md — Runtime effort persistence across restart + fork quarantine
 - [x] 83-03-PLAN.md — UI-01 StringChoices picker + effort in /clawcode-status + per-skill effort frontmatter
 **UI hint**: yes
 
@@ -266,7 +266,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 83. Extended-Thinking Effort Mapping | 2/3 | In Progress|  |
+| 83. Extended-Thinking Effort Mapping | 3/3 | Complete   | 2026-04-21 |
 | 84. Skills Library Migration | 0/? | Not started | - |
 | 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
