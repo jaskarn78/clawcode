@@ -1,31 +1,33 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.1
-milestone_name: OpenClaw Agent Migration
-status: v2.1 milestone complete
-stopped_at: Completed 82.1-01-PLAN.md (v2.1 milestone gap closure)
-last_updated: "2026-04-21T02:21:00.525Z"
+milestone: v2.2
+milestone_name: OpenClaw Parity & Polish
+status: Defining requirements
+stopped_at: v2.2 milestone opened — requirements not yet defined
+last_updated: "2026-04-21T14:45:00.000Z"
 last_activity: 2026-04-21
 progress:
-  total_phases: 15
-  completed_phases: 15
-  total_plans: 40
-  completed_plans: 40
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-20)
+See: .planning/PROJECT.md (updated 2026-04-21)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 82 — pilot-cutover-completion
+**Current focus:** v2.2 — OpenClaw Parity & Polish (requirements in progress)
 
 ## Current Position
 
-Phase: 82
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-21 — Milestone v2.2 started
 
 ## Performance Metrics
 
@@ -159,6 +161,8 @@ Recent decisions affecting current work:
 - 2026-04-20: v2.0 complete (Phases 69-74 shipped); v2.1 OpenClaw Agent Migration milestone opened
 - 2026-04-20: v2.1 research complete — STACK/FEATURES/ARCHITECTURE/PITFALLS/SUMMARY across `.planning/research/`
 - 2026-04-20: v2.1 roadmap created — 8 phases (75-82), 31 requirements mapped 1:1 across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS
+- 2026-04-21: v2.1 shipped (phases 75-82.1, 40 plans) — OpenClaw Agent Migration complete
+- 2026-04-21: v2.2 milestone opened — OpenClaw Parity & Polish (skills migration, thinking-effort mapping, dual model picker, native CC slash commands)
 
 ### Pending Todos
 
@@ -224,5 +228,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 82.1-01-PLAN.md (v2.1 milestone gap closure)
+Stopped at: v2.2 milestone opened — requirements not yet defined
 Resume file: None

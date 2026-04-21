@@ -93,7 +93,15 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-(None — v2.1 shipped; awaiting next milestone definition via /gsd:new-milestone)
+## Current Milestone: v2.2 OpenClaw Parity & Polish
+
+**Goal:** Close remaining parity gaps between OpenClaw and ClawCode so agents operate at feature parity for day-to-day use after the v2.1 migration.
+
+**Target features:**
+- Skills library migration — audit and port applicable domain skills from `~/.openclaw/skills/` (cognitive-memory, finmentum-crm, power-apps-builder, remotion, tuya-ac, workspace-janitor, self-improving-agent, ...) into ClawCode's skill system with per-agent linker verification
+- Extended-thinking effort mapping — `reasoning_effort` level → `MAX_THINKING_TOKENS` control, mirroring OpenClaw's `--effort` flag (source: `openclaw-claude-bridge/src/claude.js`)
+- Dual Discord model picker — keep OpenClaw's existing picker alive but make it read from the bound agent's `clawcode.yaml` allowed-model list, AND build a native `/clawcode-model` Discord slash command; per-agent allowed-model list is the source of truth
+- Native Claude Code slash commands in Discord — register the full native CC command set (e.g., `/clear`, `/compact`, `/model`, `/memory`, `/agents`, `/mcp`, `/cost`, `/todos`, `/init`, `/permissions`, `/review`, `/security-review`, and whatever else the CC CLI exposes) as per-agent Discord slash commands that route to the bound agent's Claude Code session
 
 ### Out of Scope
 
@@ -185,4 +193,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-21 — v2.1 OpenClaw Agent Migration shipped*
+*Last updated: 2026-04-21 — v2.2 OpenClaw Parity & Polish milestone opened*
