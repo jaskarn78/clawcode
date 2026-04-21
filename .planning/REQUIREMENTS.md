@@ -46,10 +46,10 @@ Replace the current `/clawcode-model` LLM-prompt routing with direct IPC dispatc
 - [x] **MODEL-01**: Agent config supports `defaults.allowedModels: string[]` and per-agent `agents[*].allowedModels` (both optional, additive)
 - [ ] **MODEL-02**: `/clawcode-model` with no argument opens a Discord string-select menu showing the bound agent's `allowedModels` (max 25 per Discord UI cap)
 - [x] **MODEL-03**: Model change dispatches via IPC to `SessionManager.setModelForAgent()` → `SessionHandle.setModel()` → SDK `Query.setModel()` — no LLM prompt routing
-- [ ] **MODEL-04**: Selected model persists atomically to `clawcode.yaml` using the v2.1 atomic temp+rename writer pattern (preserves comments, passes secret-guard)
+- [x] **MODEL-04**: Selected model persists atomically to `clawcode.yaml` using the v2.1 atomic temp+rename writer pattern (preserves comments, passes secret-guard)
 - [ ] **MODEL-05**: Model change during an active conversation shows an ephemeral confirmation prompt warning about prompt-cache invalidation (mirrors native `/model` behavior)
 - [x] **MODEL-06**: Model change with an argument not in the agent's `allowedModels` list is rejected with an ephemeral error listing allowed values
-- [ ] **MODEL-07**: `/clawcode-status` output includes current model for every agent
+- [x] **MODEL-07**: `/clawcode-status` output includes current model for every agent
 
 ### Native CC Slash Commands (CMD-*)
 

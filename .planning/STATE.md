@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Ready to plan
-stopped_at: Completed 86-01-PLAN.md — SessionHandle.setModel wired to q.setModel (spy-test pinned), SessionManager.setModelForAgent w/ ModelNotAllowedError allowlist guard, allowedModels additive schema. Plan 02 + Plan 03 unblocked.
-last_updated: "2026-04-21T21:01:30.274Z"
+status: Ready to execute
+stopped_at: Completed 86-02-PLAN.md — IPC set-model persists atomically via updateAgentModel; /clawcode-status shows live-handle model; handleSetModelIpc pure-helper blueprint ready for Phase 87. Plan 03 unblocked.
+last_updated: "2026-04-21T21:19:16.129Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 3
   total_plans: 12
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 86
-Plan: 02 of 03 (Plan 01 complete)
+Plan: 3 of 03 (Plan 01 complete)
 
 ## Performance Metrics
 
@@ -103,6 +103,10 @@ Recent decisions affecting current work:
 - [Phase 86]: Plan 86-01 — allowedModels classified RELOADABLE (Discord picker re-reads on invocation) but agents.*.model stays NON-reloadable. Runtime model swaps go through SessionHandle.setModel, not through a YAML hot-reload event.
 - [Phase 86]: Plan 86-01 — SDK canary blueprint (Phase 83) applied verbatim to setModel: synchronous caller + fire-and-forget + .catch log-and-swallow. Pinned by 5 spy tests asserting toHaveBeenCalledWith(exact model id).
 - [Phase 86]: Plan 86-01 — ModelNotAllowedError (typed) raised at SessionManager BEFORE SDK call; carries agent+attempted+allowed list so Discord slash / IPC error rendering needs no second round-trip.
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — Retired 'Takes effect on next session' lie; IPC set-model now routes live SDK swap FIRST then atomic YAML persist; non-rollback on persistence failure (surface persisted:false + persist_error)
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — Extracted handleSetModelIpc as pure exported helper from daemon.ts (DI'd). First application of pure-IPC-handler blueprint; Phase 87 setPermissionMode follows the same shape
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — Extended ManagerError with optional {code, data}; IPC server.ts propagates. Typed ModelNotAllowedError surfaces as ManagerError w/ code=-32602 + data.allowed for Plan 03 ephemeral Discord error render (no second round-trip)
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — updateAgentModel uses parseDocument AST + atomic temp+rename (Phase 78/81 reuse). 5 typed outcomes (updated/no-op/not-found/file-not-found/refused). Comment preservation + round-trip re-parse pinned
 
 ### v2.1 closing decisions (for reference)
 
@@ -172,9 +176,10 @@ Recent decisions affecting current work:
 | Phase 85 P02 | 13min 24s | 2 tasks | 6 files |
 | Phase 85 P03 | 20min 0s | 2 tasks | 5 files |
 | Phase 86 P01 | 31min | 2 tasks | 14 files |
+| Phase 86-dual-discord-model-picker-core P02 | 12min 6s | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 86-01-PLAN.md — SessionHandle.setModel wired to q.setModel (spy-test pinned), SessionManager.setModelForAgent w/ ModelNotAllowedError allowlist guard, allowedModels additive schema. Plan 02 + Plan 03 unblocked.
+Stopped at: Completed 86-02-PLAN.md — IPC set-model persists atomically via updateAgentModel; /clawcode-status shows live-handle model; handleSetModelIpc pure-helper blueprint ready for Phase 87. Plan 03 unblocked.
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

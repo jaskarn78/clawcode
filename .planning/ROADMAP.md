@@ -221,7 +221,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
   5. v2.1 migrated configs (15 agents) parse unchanged — `allowedModels` is additive and optional; `clawcode migrate openclaw verify` still passes after the schema extension
 **Plans**: 3 plans
 - [x] 86-01-PLAN.md — Schema allowedModels + SessionHandle.setModel SDK wire (spy-test canary per Phase 83 blueprint) + ModelNotAllowedError (MODEL-01, MODEL-03, MODEL-06)
-- [ ] 86-02-PLAN.md — Atomic YAML persistence (updateAgentModel) + /clawcode-status live model line (MODEL-04, MODEL-07)
+- [x] 86-02-PLAN.md — Atomic YAML persistence (updateAgentModel) + /clawcode-status live model line (MODEL-04, MODEL-07)
 - [ ] 86-03-PLAN.md — Discord StringSelectMenuBuilder picker + cache-invalidation button confirmation (MODEL-02, MODEL-05 + UI-01 co-validation)
 **UI hint**: yes
 
@@ -278,7 +278,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
-| 86. Dual Discord Model Picker (Core) | 1/3 | In Progress|  |
+| 86. Dual Discord Model Picker (Core) | 2/3 | In Progress|  |
 | 87. Native CC Slash Commands | 0/? | Not started | - |
 | 88. Skills Marketplace | 0/? | Not started | - |
 
