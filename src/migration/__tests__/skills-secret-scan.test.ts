@@ -11,10 +11,9 @@
  *   (7) dir containing a .png binary file → binary skipped, no false positive
  *   (8) empty dir (no SKILL.md) → ALLOWED (nothing to scan)
  *
- * IMPORTANT: this test MUST NOT contain the literal password
- * `KME6fka2nuy@cmu@pmj` — the scanner is exercised against the real
- * on-disk skill dir; spelling the secret in the test source would leak it
- * into the ClawCode repo.
+ * IMPORTANT: this test MUST NOT contain the literal finmentum-crm password
+ * — the scanner is exercised against the real on-disk skill dir; spelling
+ * the secret in the test source would leak it into the ClawCode repo.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
