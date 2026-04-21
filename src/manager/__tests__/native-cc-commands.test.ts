@@ -23,6 +23,7 @@ import {
   classifyCommand,
   buildNativeCommandDefs,
   mergeAndDedupe,
+  buildNativePromptString,
   type CommandAcl,
 } from "../native-cc-commands.js";
 import type { SlashCommand } from "../sdk-types.js";
@@ -335,5 +336,81 @@ describe("mergeAndDedupe — existing + native merge, native wins", () => {
       "clawcode-status",
       "clawcode-compact",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 87 Plan 03 CMD-03 — buildNativePromptString canonical prompt format.
+//
+// Single source of truth for the `/` + bare-name + optional-args string that
+// Plan 03's prompt-channel carve-out sends through TurnDispatcher. The SDK's
+// local-command dispatcher parses this LITERAL against its own slash-command
+// table (no clawcode- prefix knowledge), so over-prefixing or over-escaping
+// silently breaks the local_command_output emission path.
+// ---------------------------------------------------------------------------
+
+describe("buildNativePromptString — canonical prompt-channel format", () => {
+  it("clawcode-compact with undefined args → '/compact'", () => {
+    expect(buildNativePromptString("clawcode-compact", undefined)).toBe(
+      "/compact",
+    );
+  });
+
+  it("clawcode-compact with empty-string args → '/compact' (empty treated as no args)", () => {
+    expect(buildNativePromptString("clawcode-compact", "")).toBe("/compact");
+  });
+
+  it("clawcode-compact with 'do a thing' args → '/compact do a thing'", () => {
+    expect(buildNativePromptString("clawcode-compact", "do a thing")).toBe(
+      "/compact do a thing",
+    );
+  });
+
+  it("clawcode-context with undefined args → '/context'", () => {
+    expect(buildNativePromptString("clawcode-context", undefined)).toBe(
+      "/context",
+    );
+  });
+
+  it("clawcode-cost with undefined args → '/cost'", () => {
+    expect(buildNativePromptString("clawcode-cost", undefined)).toBe("/cost");
+  });
+
+  it("accepts BARE name 'compact' (prefix strip is idempotent, both forms → '/compact')", () => {
+    expect(buildNativePromptString("compact", undefined)).toBe("/compact");
+  });
+
+  it("clawcode-hooks with empty args → '/hooks' (empty string treated as no args)", () => {
+    expect(buildNativePromptString("clawcode-hooks", "")).toBe("/hooks");
+  });
+
+  it("clawcode-help with 'commands' arg → '/help commands'", () => {
+    expect(buildNativePromptString("clawcode-help", "commands")).toBe(
+      "/help commands",
+    );
+  });
+
+  it("does NOT prepend `/clawcode-` (SDK expects bare command names)", () => {
+    const result = buildNativePromptString("clawcode-compact", undefined);
+    expect(result.startsWith("/clawcode-")).toBe(false);
+    expect(result).toBe("/compact");
+  });
+
+  it("does NOT escape/quote args (SDK parses verbatim — over-escaping breaks passthrough)", () => {
+    // Quotes, brackets, and special chars must pass through untouched.
+    const result = buildNativePromptString(
+      "clawcode-help",
+      `"quoted" [bracket] 'single' $var`,
+    );
+    expect(result).toBe(`/help "quoted" [bracket] 'single' $var`);
+  });
+
+  it("trims leading/trailing whitespace in args (Discord form padding)", () => {
+    // Whitespace-only args collapse to no-args; leading/trailing whitespace
+    // around real args is trimmed.
+    expect(buildNativePromptString("clawcode-compact", "   ")).toBe("/compact");
+    expect(buildNativePromptString("clawcode-compact", "  trimmed  ")).toBe(
+      "/compact trimmed",
+    );
   });
 });
