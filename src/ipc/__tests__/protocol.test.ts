@@ -27,6 +27,8 @@ describe("IPC_METHODS", () => {
       "episode-list",
       "delivery-queue-status",
       "mcp-servers",
+      // Phase 85 Plan 01 TOOL-01 — per-agent MCP state snapshot
+      "list-mcp-status",
       // Messaging
       "send-message",
       "send-to-agent",

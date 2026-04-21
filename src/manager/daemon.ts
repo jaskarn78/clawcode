@@ -500,6 +500,60 @@ export async function handleSetModelIpc(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Phase 87 Plan 02 CMD-02 — set-permission-mode IPC handler (pure, testable).
+//
+// Thin wrapper around SessionManager.setPermissionModeForAgent. Unlike
+// set-model, permission mode is intentionally ephemeral — NO YAML
+// persistence. Runtime swap only; state resets on agent restart. Mirrors
+// the set-effort shape (validate params → dispatch → ok-envelope).
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal manager surface the set-permission-mode IPC handler needs.
+ * Structural type so tests can inject a stub without a full SessionManager.
+ */
+export type SetPermissionModeIpcManager = {
+  setPermissionModeForAgent: (name: string, mode: string) => void;
+};
+
+export type SetPermissionModeIpcDeps = {
+  readonly manager: SetPermissionModeIpcManager;
+  readonly params: Record<string, unknown>;
+};
+
+export type SetPermissionModeIpcResult = Readonly<{
+  ok: true;
+  agent: string;
+  permission_mode: string;
+}>;
+
+/**
+ * Dispatch `set-permission-mode` via SessionManager.setPermissionModeForAgent.
+ *
+ * Rethrows invalid-mode / unknown-agent errors from the SessionManager as
+ * ManagerError so the IPC envelope carries a clean JSON-RPC message instead
+ * of a bare Error / SessionError instance the transport cannot serialize
+ * with its type information.
+ */
+export async function handleSetPermissionModeIpc(
+  deps: SetPermissionModeIpcDeps,
+): Promise<SetPermissionModeIpcResult> {
+  const { manager, params } = deps;
+  const name = validateStringParam(params, "name");
+  const mode = validateStringParam(params, "mode");
+  try {
+    manager.setPermissionModeForAgent(name, mode);
+  } catch (err) {
+    // Normalize into ManagerError so the IPC JSON-RPC envelope carries the
+    // message consistently (SessionError / Error subclasses are stripped to
+    // a plain string at the transport boundary).
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new ManagerError(msg);
+  }
+  return { ok: true, agent: name, permission_mode: mode };
+}
+
 /**
  * Base directory for manager runtime files.
  */
@@ -1981,6 +2035,14 @@ async function routeMethod(
       const name = validateStringParam(params, "name");
       const level = manager.getEffortForAgent(name);
       return { ok: true, agent: name, effort: level };
+    }
+
+    case "set-permission-mode": {
+      // Phase 87 CMD-02 — live SDK permission-mode swap. Delegates to the
+      // pure testable handler (mirror of handleSetModelIpc). No YAML
+      // persistence — permission mode is runtime-only by design (see Plan 02
+      // non-rollback / ephemeral decision).
+      return await handleSetPermissionModeIpc({ manager, params });
     }
 
     case "send-attachment": {

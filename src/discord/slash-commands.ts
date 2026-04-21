@@ -475,6 +475,16 @@ export class SlashCommandHandler {
       return;
     }
 
+    // Phase 87 CMD-02 — /clawcode-permissions inline handler.
+    // Routes through IPC set-permission-mode (control-plane, NOT prompt
+    // channel). Carved out BEFORE the generic CONTROL_COMMANDS branch so
+    // the IPC dispatch path can't be short-circuited by the text-formatting
+    // branch downstream. Mirrors the /clawcode-model carve-out above.
+    if (commandName === "clawcode-permissions") {
+      await this.handlePermissionsCommand(interaction);
+      return;
+    }
+
     // Check if this is a control command (daemon-direct, no agent needed)
     const controlCmd = CONTROL_COMMANDS.find((c) => c.name === commandName);
     if (controlCmd) {
@@ -1181,6 +1191,85 @@ export class SlashCommandHandler {
     }
 
     return isConfirm ? "confirmed" : "cancelled";
+  }
+
+  /**
+   * Phase 87 CMD-02 — /clawcode-permissions inline handler.
+   *
+   * Routes the live SDK permission-mode swap via IPC set-permission-mode
+   * (control-plane path — NOT prompt routing). Mirrors the Phase 83
+   * clawcode-effort inline shortcut but surfaces through the daemon
+   * IPC envelope so daemon-level validation (6-value union) runs once.
+   *
+   * Contract:
+   *   - Unbound channel → ephemeral "not bound" reply, no IPC call.
+   *   - Missing/empty mode arg → ephemeral usage reply, no IPC call.
+   *   - IPC success → ephemeral confirmation mentioning the mode + agent.
+   *   - IPC error → ephemeral error message (daemon error bubbles up
+   *     verbatim so the valid-modes list from the server-side rejection
+   *     surfaces to the user).
+   */
+  private async handlePermissionsCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const agentName = getAgentForChannel(
+      this.routingTable,
+      interaction.channelId,
+    );
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content: "This channel is not bound to an agent.",
+          ephemeral: true,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const modeArg = interaction.options.get("mode")?.value;
+    const mode =
+      typeof modeArg === "string" && modeArg.length > 0 ? modeArg : undefined;
+    if (!mode) {
+      try {
+        await interaction.reply({
+          content:
+            "Usage: /clawcode-permissions mode:<default|acceptEdits|bypassPermissions|plan|dontAsk|auto>",
+          ephemeral: true,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch {
+      return;
+    }
+
+    try {
+      await sendIpcRequest(SOCKET_PATH, "set-permission-mode", {
+        name: agentName,
+        mode,
+      });
+      try {
+        await interaction.editReply(
+          `Permission mode set to **${mode}** for ${agentName}`,
+        );
+      } catch {
+        /* expired */
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(`Failed to set permission mode: ${msg}`);
+      } catch {
+        /* expired */
+      }
+    }
   }
 
   /**
