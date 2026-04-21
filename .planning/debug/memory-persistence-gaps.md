@@ -1,16 +1,16 @@
 ---
-status: fixing
+status: awaiting_human_verify
 trigger: "memory-persistence-gaps — four distinct memory persistence gaps on branch fix/memory-persistence"
 created: 2026-04-20T00:00:00Z
-updated: 2026-04-20T00:00:00Z
+updated: 2026-04-21T00:00:00Z
 ---
 
 ## Current Focus
 
-hypothesis: All four gaps identified. User-selected fix shapes: Gap 1=A+C, Gap 2=add deleteTurnsForSession, Gap 3=periodic flush with mid-session tag, Gap 4=B + SOUL.md.
-test: TDD per gap — failing test first, implement, verify green, commit. Run full suite after all four land.
-expecting: Four atomic commits, green typecheck + tests.
-next_action: Gap 1 — reconcileRegistry conversation-session population + clean up startAll/reconcile race.
+hypothesis: All four gaps fixed with atomic commits. Typecheck clean for all touched files. Full suite pre-existing failures unchanged (16 failures in daemon-openai / bootstrap-integration / migration suites — none in files I modified).
+test: Tests added + passing for each gap; full suite delta vs master branch = 0 new failures.
+expecting: User end-to-end verification that the four reproduction cases documented in Symptoms now behave as expected in a real running daemon.
+next_action: User verification — start daemon, reproduce Gap 1/2/3/4 scenarios, confirm fix behavior.
 
 ## Symptoms
 
@@ -127,3 +127,11 @@ files_changed:
 - src/templates/SOUL.md (Gap 4)
 - src/config/defaults.ts (Gap 4)
 - src/agent/__tests__/workspace.test.ts (Gap 4)
+- src/shared/types.ts (follow-up sync for Gap 3 — hand-written ResolvedAgentConfig.memory.conversation gets flushIntervalMinutes)
+
+commits:
+- 4af0595 fix(memory): populate conversation session on reconcile resume
+- 83f91a7 fix(memory): prune raw turns after session summarization
+- 5a0dba1 fix(memory): periodic in-session summary flush
+- 49a39b9 fix(memory): memory_lookup default scope includes conversations
+- f863af3 fix(memory): add flushIntervalMinutes to ResolvedAgentConfig type
