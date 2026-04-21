@@ -7,6 +7,8 @@
 
 import {
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   ComponentType,
   EmbedBuilder,
@@ -14,6 +16,7 @@ import {
   Routes,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Interaction,
   type StringSelectMenuInteraction,
@@ -56,6 +59,14 @@ const MODEL_PICKER_TTL_MS = 30_000;
  * than 25 options at registration time.
  */
 const DISCORD_SELECT_CAP = 25;
+
+/**
+ * Phase 86 MODEL-05 — TTL for the cache-invalidation confirmation collector.
+ * Users get 30s to confirm before the dialog auto-dismisses. Mirrors the
+ * picker TTL above for consistency (operators only have one "model switch"
+ * decision window to hold in their head).
+ */
+const MODEL_CONFIRM_TTL_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Phase 85 Plan 03 TOOL-06 / UI-01 — /clawcode-tools inline handler helpers.
@@ -849,6 +860,49 @@ export class SlashCommandHandler {
       }
     }
 
+    // Phase 86 MODEL-05 — cache-invalidation confirmation for mid-conversation
+    // changes. Skip when the handle has no active model (fresh boot — no
+    // turn has executed yet). Being too conservative (always show confirm)
+    // is cheap; being too permissive (never show confirm) misses the prompt-
+    // cache invalidation warning, so when in doubt we show it.
+    let activeModel: string | undefined;
+    try {
+      activeModel = this.sessionManager.getModelForAgent(agentName);
+    } catch {
+      activeModel = undefined;
+    }
+    if (activeModel !== undefined) {
+      const outcome = await this.promptCacheInvalidationConfirm(
+        interaction,
+        agentName,
+        activeModel,
+        model,
+      );
+      if (outcome === "cancelled") {
+        try {
+          await interaction.editReply({
+            content: "Model change cancelled.",
+            components: [],
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      if (outcome === "timeout") {
+        try {
+          await interaction.editReply({
+            content: "Confirmation timed out.",
+            components: [],
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      // outcome === "confirmed" — fall through to IPC dispatch.
+    }
+
     try {
       const res = (await sendIpcRequest(SOCKET_PATH, "set-model", {
         agent: agentName,
@@ -893,6 +947,92 @@ export class SlashCommandHandler {
         /* expired */
       }
     }
+  }
+
+  /**
+   * Phase 86 MODEL-05 — native Discord button confirmation.
+   *
+   * Renders two buttons (Confirm = danger style, Cancel = secondary) with
+   * agent + nonce namespaced customIds; awaits the user's click for up to
+   * MODEL_CONFIRM_TTL_MS. Returns "confirmed" | "cancelled" | "timeout".
+   *
+   * UI-01 compliance: buttons are native ButtonBuilder components — NOT a
+   * free-text "yes/no" LLM prompt or a reaction-emoji pattern.
+   *
+   * The filter accepts any customId whose prefix matches the namespaced
+   * confirm OR cancel id for THIS agent (collision safety across parallel
+   * picker invocations in the same channel — e.g. two operators picking
+   * for different agents at once).
+   */
+  private async promptCacheInvalidationConfirm(
+    interaction: ChatInputCommandInteraction,
+    agentName: string,
+    oldModel: string,
+    newModel: string,
+  ): Promise<"confirmed" | "cancelled" | "timeout"> {
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const confirmId = `model-confirm:${agentName}:${nonce}`;
+    const cancelId = `model-cancel:${agentName}:${nonce}`;
+    // Prefixes pinned by C7 — the filter below must accept only THIS agent's
+    // buttons, not a parallel picker's buttons for a different agent.
+    const confirmPrefix = `model-confirm:${agentName}:`;
+    const cancelPrefix = `model-cancel:${agentName}:`;
+
+    const confirm = new ButtonBuilder()
+      .setCustomId(confirmId)
+      .setLabel("Switch & invalidate cache")
+      .setStyle(ButtonStyle.Danger);
+    const cancel = new ButtonBuilder()
+      .setCustomId(cancelId)
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Secondary);
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      confirm,
+      cancel,
+    );
+
+    const warning =
+      `Changing from **${oldModel}** to **${newModel}** will invalidate the prompt cache ` +
+      `for ${agentName}. The next turn will pay full-prefix token cost. Proceed?`;
+
+    try {
+      await interaction.editReply({ content: warning, components: [row] });
+    } catch {
+      // Interaction expired — treat as cancel (no side effect fired yet).
+      return "cancelled";
+    }
+
+    let btn: ButtonInteraction;
+    try {
+      const channel = interaction.channel;
+      if (!channel) {
+        throw new Error("interaction has no channel — cannot collect");
+      }
+      btn = (await channel.awaitMessageComponent({
+        componentType: ComponentType.Button,
+        filter: (i: { user: { id: string }; customId: string }) =>
+          i.user.id === interaction.user.id &&
+          (i.customId.startsWith(confirmPrefix) ||
+            i.customId.startsWith(cancelPrefix)),
+        time: MODEL_CONFIRM_TTL_MS,
+      })) as ButtonInteraction;
+    } catch {
+      return "timeout";
+    }
+
+    const isConfirm = btn.customId.startsWith(confirmPrefix);
+    try {
+      await btn.update({
+        content: isConfirm
+          ? `Switching ${agentName} to **${newModel}**...`
+          : "Cancelled.",
+        components: [],
+      });
+    } catch {
+      /* expired — outcome below still derives from btn.customId */
+    }
+
+    return isConfirm ? "confirmed" : "cancelled";
   }
 
   /**
