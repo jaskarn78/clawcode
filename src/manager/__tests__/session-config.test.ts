@@ -147,7 +147,7 @@ describe("buildSessionConfig — MCP tools injection", () => {
     expect(result.systemPrompt).toContain("finnhub");
   });
 
-  it("lists each server name and command in the MCP tools section", async () => {
+  it("lists each server name in the MCP tools status table (Phase 85 TOOL-02 — command/args NOT leaked; Pitfall 12 closure)", async () => {
     const config = makeConfig({
       mcpServers: [
         { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {}, optional: false },
@@ -155,23 +155,35 @@ describe("buildSessionConfig — MCP tools injection", () => {
       ],
     });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).toContain("**finnhub**");
-    expect(result.systemPrompt).toContain("`npx -y finnhub-mcp`");
-    expect(result.systemPrompt).toContain("**google-workspace**");
-    expect(result.systemPrompt).toContain("`node gw-server.js`");
+    // Phase 85 Plan 02 — new markdown-table format replaces the legacy
+    // bullet-list that leaked `command` + `args` into every prompt.
+    expect(result.systemPrompt).toContain("| Server | Status | Tools | Last Error |");
+    expect(result.systemPrompt).toMatch(/\| finnhub \| unknown \|/);
+    expect(result.systemPrompt).toMatch(/\| google-workspace \| unknown \|/);
+    // Regression pin for the removed leak — none of these fields should
+    // appear anywhere in the rendered prompt.
+    expect(result.systemPrompt).not.toContain("`npx -y finnhub-mcp`");
+    expect(result.systemPrompt).not.toContain("`node gw-server.js`");
+    expect(result.systemPrompt).not.toContain("API_KEY");
   });
 
   it("does NOT include MCP tools content when agent has empty mcpServers", async () => {
     const config = makeConfig({ mcpServers: [] });
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).not.toContain("MCP servers are configured");
+    expect(result.systemPrompt).not.toContain("MCP tools are pre-authenticated");
+    expect(result.systemPrompt).not.toContain(
+      "| Server | Status | Tools | Last Error |",
+    );
   });
 
   it("does NOT include MCP tools content when mcpServers is undefined (defaults to empty)", async () => {
     // mcpServers defaults to [] via ?? in buildSessionConfig
     const config = makeConfig();
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).not.toContain("MCP servers are configured");
+    expect(result.systemPrompt).not.toContain("MCP tools are pre-authenticated");
+    expect(result.systemPrompt).not.toContain(
+      "| Server | Status | Tools | Last Error |",
+    );
   });
 });
 

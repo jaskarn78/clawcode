@@ -1100,6 +1100,10 @@ export class SessionManager {
       conversationStores: this.memory.conversationStores,
       memoryStores: this.memory.memoryStores,
       briefCache: this.briefCache, // Phase 73 Plan 02 — LAT-02
+      // Phase 85 Plan 02 — thread per-agent MCP readiness state so
+      // renderMcpPromptBlock can populate the live status table in the
+      // stable prefix (TOOL-02 / TOOL-07).
+      mcpStateProvider: (name: string) => this.getMcpStateForAgent(name),
     };
   }
 

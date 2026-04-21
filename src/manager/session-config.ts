@@ -35,6 +35,9 @@ import {
   ConversationBriefCache,
   computeBriefFingerprint,
 } from "./conversation-brief-cache.js";
+// Phase 85 Plan 02 — MCP section renderer (TOOL-02 / TOOL-05 / TOOL-07).
+import { renderMcpPromptBlock } from "./mcp-prompt-block.js";
+import type { McpServerState } from "../mcp/readiness.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -105,6 +108,18 @@ export type SessionConfigDeps = {
    * call). Owned by SessionManager; invalidated on stopAgent + crash.
    */
   readonly briefCache?: ConversationBriefCache;
+  /**
+   * Phase 85 Plan 02 — per-agent MCP state provider (TOOL-02).
+   *
+   * When absent (tests, legacy bootstrap paths, first-boot before the
+   * readiness handshake runs), the MCP renderer falls back to an empty
+   * Map and every server renders as `status: unknown`. Production
+   * SessionManager wires this to `this.getMcpStateForAgent` so the
+   * prompt carries live readiness state.
+   */
+  readonly mcpStateProvider?: (
+    agentName: string,
+  ) => ReadonlyMap<string, McpServerState>;
 };
 
 /**
@@ -286,15 +301,28 @@ export async function buildSessionConfig(
     toolDefinitionsStr += "computations, file operations that don't need a thread).\n";
   }
 
-  // MCP tools section (MCPC-03)
+  // Phase 85 TOOL-02 / TOOL-05 / TOOL-07 — MCP block rendered by a pure
+  // helper that includes (a) the pre-authenticated framing, (b) a live
+  // status table sourced from mcpStateProvider, (c) the verbatim-error
+  // rule. The concatenation lands in `sources.toolDefinitions`, which the
+  // v1.7 two-block assembler places in the STABLE PREFIX — survives
+  // compaction-driven prompt-cache eviction.
+  //
+  // Pitfall 12 closure: the replaced block leaked `command`/`args` into
+  // every prompt. renderMcpPromptBlock reads only `name`, `optional`, and
+  // `state.lastError.message` — command/args/env values never reach the
+  // prompt surface.
   const mcpServers = config.mcpServers ?? [];
   if (mcpServers.length > 0) {
-    toolDefinitionsStr += toolDefinitionsStr.length > 0 ? "\n\n" : "";
-    toolDefinitionsStr += "The following external MCP servers are configured and available to you:\n\n";
-    for (const server of mcpServers) {
-      toolDefinitionsStr += `- **${server.name}**: \`${server.command} ${server.args.join(" ")}\`\n`;
+    const mcpState = deps.mcpStateProvider?.(config.name) ?? new Map();
+    const mcpBlock = renderMcpPromptBlock({
+      servers: mcpServers,
+      stateByName: mcpState,
+    });
+    if (mcpBlock.length > 0) {
+      toolDefinitionsStr += toolDefinitionsStr.length > 0 ? "\n\n" : "";
+      toolDefinitionsStr += mcpBlock;
     }
-    toolDefinitionsStr += "\nThese servers are activated automatically. Use their tools as needed for your tasks.\n";
   }
 
   // Admin agent information (per D-11, D-12)
