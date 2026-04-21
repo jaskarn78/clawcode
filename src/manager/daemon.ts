@@ -86,8 +86,20 @@ import { modelSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 // Phase 86 Plan 02 MODEL-04 — atomic YAML persistence for `agents[*].model`.
-import { updateAgentModel } from "../migration/yaml-writer.js";
+import { updateAgentModel, updateAgentSkills } from "../migration/yaml-writer.js";
 import { ModelNotAllowedError } from "./model-errors.js";
+// Phase 88 Plan 02 MKT-01..07 — marketplace catalog + single-skill installer.
+import {
+  loadMarketplaceCatalog,
+  type MarketplaceEntry,
+} from "../marketplace/catalog.js";
+import {
+  installSingleSkill,
+  type SkillInstallOutcome,
+} from "../marketplace/install-single-skill.js";
+import { DEFAULT_SKILLS_LEDGER_PATH } from "../migration/skills-ledger.js";
+import { resolveMarketplaceSources } from "../config/loader.js";
+import type { Logger } from "pino";
 import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
 import type {
@@ -554,6 +566,268 @@ export async function handleSetPermissionModeIpc(
   return { ok: true, agent: name, permission_mode: mode };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 88 Plan 02 MKT-01..07 — marketplace IPC handlers (pure, testable).
+//
+// MIRROR Phase 86 Plan 02 handleSetModelIpc blueprint:
+//   - Exported pure helpers with DI surface
+//   - ManagerError for typed domain errors
+//   - case delegation in <10 lines at the bottom switch
+//
+// Post-install rewire:
+//   After installSingleSkill succeeds with outcome in
+//   {installed, installed-persist-failed, already-installed}, the handler
+//   rescans skillsTargetDir (scanSkillsDirectory) and calls linkAgentSkills
+//   against the target agent. This closes MKT-04's "hot-reload" requirement
+//   — the new skill becomes linker-visible without a daemon restart.
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared dependency bundle for the three marketplace IPC handlers. `configs`
+ * is mutable by design — the install/remove handlers splice updated frozen
+ * entries in place so subsequent IPC methods (e.g. the `skills` observability
+ * call) see the new `skills:` list without a daemon restart.
+ *
+ * The DI hooks (`loadCatalog`, `installSkill`, `updateSkills`, `scanCatalog`,
+ * `linkSkills`) default to the real production implementations. Tests inject
+ * stubs without needing `vi.mock`.
+ */
+export type MarketplaceIpcDeps = Readonly<{
+  configs: ResolvedAgentConfig[];
+  configPath: string;
+  marketplaceSources: readonly { readonly path: string; readonly label?: string }[];
+  localSkillsPath: string;
+  skillsTargetDir: string;
+  ledgerPath: string;
+  log: Logger;
+  // DI hooks — default to real impls when omitted.
+  loadCatalog?: typeof loadMarketplaceCatalog;
+  installSkill?: typeof installSingleSkill;
+  updateSkills?: typeof updateAgentSkills;
+  scanCatalog?: typeof scanSkillsDirectory;
+  linkSkills?: typeof linkAgentSkills;
+}>;
+
+export type MarketplaceListIpcResult = Readonly<{
+  agent: string;
+  installed: readonly string[];
+  available: readonly MarketplaceEntry[];
+}>;
+
+export type MarketplaceInstallIpcResult = Readonly<{
+  outcome: SkillInstallOutcome;
+  /** True iff post-install linkAgentSkills was invoked. */
+  rewired: boolean;
+}>;
+
+export type MarketplaceRemoveIpcResult = Readonly<{
+  agent: string;
+  skill: string;
+  removed: boolean;
+  persisted: boolean;
+  persist_error: string | null;
+  reason?: string;
+}>;
+
+/**
+ * `marketplace-list` — returns the installed-skills list AND the available
+ * catalog (catalog minus already-installed) for the given agent.
+ *
+ * Plan 02's /clawcode-skills-browse handler consumes `available` directly
+ * into a StringSelectMenuBuilder; /clawcode-skills consumes `installed`
+ * directly into the remove-picker.
+ */
+export async function handleMarketplaceListIpc(
+  deps: MarketplaceIpcDeps & { params: Record<string, unknown> },
+): Promise<MarketplaceListIpcResult> {
+  const agentName = validateStringParam(deps.params, "agent");
+  const idx = deps.configs.findIndex((c) => c.name === agentName);
+  if (idx === -1) {
+    throw new ManagerError(`Agent '${agentName}' not found in config`);
+  }
+  const agent = deps.configs[idx]!;
+
+  const loadCatalog = deps.loadCatalog ?? loadMarketplaceCatalog;
+  const catalog = await loadCatalog({
+    localSkillsPath: deps.localSkillsPath,
+    sources: deps.marketplaceSources,
+    log: deps.log,
+  });
+
+  const installed = [...agent.skills];
+  const installedSet = new Set(installed);
+  const available = Object.freeze(
+    catalog.filter((e) => !installedSet.has(e.name)),
+  );
+
+  return Object.freeze({
+    agent: agentName,
+    installed,
+    available,
+  });
+}
+
+/**
+ * `marketplace-install` — installs ONE skill on the given agent and (on
+ * successful copy) rewires the agent's workspace/skills/ symlink tree so
+ * the new skill is linker-visible without a daemon restart.
+ *
+ * Rewire runs on `installed`, `installed-persist-failed`, and
+ * `already-installed` outcomes (any outcome where the filesystem state
+ * might be behind the intended symlinks). Refusal outcomes skip the
+ * rewire.
+ */
+export async function handleMarketplaceInstallIpc(
+  deps: MarketplaceIpcDeps & { params: Record<string, unknown> },
+): Promise<MarketplaceInstallIpcResult> {
+  const agentName = validateStringParam(deps.params, "agent");
+  const skillName = validateStringParam(deps.params, "skill");
+  const force = deps.params.force === true;
+
+  // Fast-fail: agent lookup runs BEFORE catalog load so an unknown agent
+  // doesn't pay the catalog-scan cost.
+  const idx = deps.configs.findIndex((c) => c.name === agentName);
+  if (idx === -1) {
+    throw new ManagerError(`Agent '${agentName}' not found in config`);
+  }
+
+  const loadCatalog = deps.loadCatalog ?? loadMarketplaceCatalog;
+  const catalog = await loadCatalog({
+    localSkillsPath: deps.localSkillsPath,
+    sources: deps.marketplaceSources,
+    log: deps.log,
+  });
+
+  const installSkill = deps.installSkill ?? installSingleSkill;
+  const outcome = await installSkill({
+    skillName,
+    agentName,
+    catalog,
+    skillsTargetDir: deps.skillsTargetDir,
+    clawcodeYamlPath: deps.configPath,
+    ledgerPath: deps.ledgerPath,
+    force,
+  });
+
+  // Rewire on any outcome that left the filesystem in a state the
+  // symlink tree should reflect.
+  const shouldRewire =
+    outcome.kind === "installed" ||
+    outcome.kind === "installed-persist-failed" ||
+    outcome.kind === "already-installed";
+
+  let rewired = false;
+  if (shouldRewire) {
+    // In-memory mirror of the new skills list (installSingleSkill persisted
+    // to YAML on `installed`, but the in-memory ResolvedAgentConfig needs
+    // manual update). `already-installed` is a no-op; `installed-persist-
+    // failed` still adds in-memory so the next invocation sees the skill
+    // and the symlink matches.
+    const existing = deps.configs[idx]!;
+    const alreadyInList = existing.skills.includes(skillName);
+    let updatedSkills = existing.skills as readonly string[];
+    if (
+      (outcome.kind === "installed" ||
+        outcome.kind === "installed-persist-failed") &&
+      !alreadyInList
+    ) {
+      updatedSkills = [...existing.skills, skillName];
+      deps.configs[idx] = Object.freeze({
+        ...existing,
+        skills: updatedSkills,
+      });
+    }
+
+    // Rescan the target dir so the fresh copy is in the catalog map.
+    const scanCatalog = deps.scanCatalog ?? scanSkillsDirectory;
+    const linkSkills = deps.linkSkills ?? linkAgentSkills;
+    const freshCatalog = await scanCatalog(deps.skillsTargetDir, deps.log);
+    await linkSkills(
+      join(deps.configs[idx]!.workspace, "skills"),
+      deps.configs[idx]!.skills,
+      freshCatalog,
+      deps.log,
+    );
+    rewired = true;
+  }
+
+  return Object.freeze({ outcome, rewired });
+}
+
+/**
+ * `marketplace-remove` — removes ONE skill from the given agent's
+ * `skills:` list in clawcode.yaml. Does NOT rewire symlinks (stale
+ * symlink is harmless; scanner re-reads the YAML at next daemon boot).
+ */
+export async function handleMarketplaceRemoveIpc(
+  deps: MarketplaceIpcDeps & { params: Record<string, unknown> },
+): Promise<MarketplaceRemoveIpcResult> {
+  const agentName = validateStringParam(deps.params, "agent");
+  const skillName = validateStringParam(deps.params, "skill");
+
+  const idx = deps.configs.findIndex((c) => c.name === agentName);
+  if (idx === -1) {
+    throw new ManagerError(`Agent '${agentName}' not found in config`);
+  }
+
+  const updateSkills = deps.updateSkills ?? updateAgentSkills;
+  let removed = false;
+  let persisted = false;
+  let persistError: string | null = null;
+  let reason: string | undefined;
+
+  try {
+    const result = await updateSkills({
+      existingConfigPath: deps.configPath,
+      agentName,
+      skillName,
+      op: "remove",
+    });
+    switch (result.outcome) {
+      case "updated":
+        removed = true;
+        persisted = true;
+        break;
+      case "no-op":
+        removed = false;
+        persisted = true;
+        reason = result.reason;
+        break;
+      case "not-found":
+      case "file-not-found":
+        removed = false;
+        persisted = false;
+        persistError = result.reason;
+        break;
+    }
+  } catch (err) {
+    // Non-rollback: even though persistence failed, the operator intent
+    // was to remove — surface removed:true so the UI reports the
+    // requested change and persisted:false so the operator sees the
+    // reconciliation hint.
+    removed = true;
+    persisted = false;
+    persistError = err instanceof Error ? err.message : String(err);
+  }
+
+  // Mirror in-memory config so subsequent IPC calls (e.g. marketplace-list)
+  // reflect the removal, regardless of persistence outcome.
+  if (removed) {
+    const existing = deps.configs[idx]!;
+    const nextSkills = existing.skills.filter((s) => s !== skillName);
+    deps.configs[idx] = Object.freeze({ ...existing, skills: nextSkills });
+  }
+
+  return Object.freeze({
+    agent: agentName,
+    skill: skillName,
+    removed,
+    persisted,
+    persist_error: persistError,
+    ...(reason !== undefined ? { reason } : {}),
+  });
+}
+
 /**
  * Base directory for manager runtime files.
  */
@@ -675,6 +949,14 @@ export async function startDaemon(
   for (const agent of resolvedAgents) {
     await linkAgentSkills(join(agent.workspace, "skills"), agent.skills, skillsCatalog, log);
   }
+
+  // Phase 88 Plan 02 MKT-01 — resolve marketplace legacy sources once at
+  // boot. Empty `[]` when `defaults.marketplaceSources` is omitted (v2.1/v2.2
+  // configs are unchanged). Closed over by the marketplace-* IPC intercepts
+  // below so /clawcode-skills-browse / -install / -remove have the full
+  // catalog surface without a per-call re-resolve.
+  const resolvedMarketplaceSources = resolveMarketplaceSources(config);
+  const ledgerPath = DEFAULT_SKILLS_LEDGER_PATH;
 
   // 5b. Build routing table and rate limiter
   const routingTable = buildRoutingTable(resolvedAgents);
@@ -1389,6 +1671,34 @@ export async function startDaemon(
         },
         params as unknown as IpcImageToolCallParams,
       );
+    }
+    // Phase 88 Plan 02 MKT-01..07 — marketplace IPC is intercepted BEFORE
+    // routeMethod (same closure pattern as browser/search/image-tool-call)
+    // so the existing routeMethod signature stays stable. The three
+    // handlers close over the daemon-local marketplace deps
+    // (skillsPath + resolvedMarketplaceSources + ledgerPath + log).
+    if (
+      method === "marketplace-list" ||
+      method === "marketplace-install" ||
+      method === "marketplace-remove"
+    ) {
+      const deps = {
+        configs: resolvedAgents as ResolvedAgentConfig[],
+        configPath,
+        marketplaceSources: resolvedMarketplaceSources,
+        localSkillsPath: skillsPath,
+        skillsTargetDir: skillsPath,
+        ledgerPath,
+        log,
+        params,
+      };
+      if (method === "marketplace-list") {
+        return handleMarketplaceListIpc(deps);
+      }
+      if (method === "marketplace-install") {
+        return handleMarketplaceInstallIpc(deps);
+      }
+      return handleMarketplaceRemoveIpc(deps);
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };

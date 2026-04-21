@@ -59,6 +59,10 @@ describe("IPC_METHODS", () => {
       "set-model",
       // Phase 87 CMD-02 — live SDK permission-mode swap via Query.setPermissionMode.
       "set-permission-mode",
+      // Phase 88 Plan 02 MKT-01..07 — marketplace list/install/remove
+      "marketplace-list",
+      "marketplace-install",
+      "marketplace-remove",
       // Cost tracking (Phase 40)
       "costs",
       // Latency (Phase 50)

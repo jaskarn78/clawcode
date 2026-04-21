@@ -59,6 +59,13 @@ export const IPC_METHODS = [
   "set-model",
   // Phase 87 CMD-02 — live SDK permission-mode swap via Query.setPermissionMode.
   "set-permission-mode",
+  // Phase 88 MKT-01..07 — marketplace list / install / remove routed through
+  // the pure-exported-handler blueprint (Phase 86 Plan 02). Returns typed
+  // outcomes consumed by the Discord /clawcode-skills-browse + /clawcode-skills
+  // inline handlers.
+  "marketplace-list",
+  "marketplace-install",
+  "marketplace-remove",
   // Cost tracking (Phase 40)
   "costs",
   // Latency (Phase 50)
