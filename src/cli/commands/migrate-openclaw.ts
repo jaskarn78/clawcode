@@ -29,7 +29,7 @@
 import type { Command } from "commander";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { cliLog, cliError, green, yellow, red, dim } from "../output.js";
 import { translateAgentMemories } from "../../migration/memory-translator.js";
 import { MemoryStore } from "../../memory/store.js";
@@ -753,6 +753,19 @@ export async function runApplyAction(
             copyPlan.mode === "skip-copy-shared"
               ? copyPlan.target
               : copyPlan.target;
+          // 82.5: pass OpenClaw per-agent sqlite path so entity/fact
+          // memories stored only in sqlite (not workspace markdown) are
+          // also re-embedded. sqlite lives at
+          // <dirname(openclawJson)>/memory/<agentId>.sqlite
+          // per OpenClaw's layout.
+          const openclawMemoryDir = join(
+            dirname(paths.openclawJson),
+            "memory",
+          );
+          const openclawSqlitePath = getMemorySqlitePath(
+            agentPlan.sourceId,
+            openclawMemoryDir,
+          );
           const result = await migrateOpenclawHandlers.translateAgentMemories({
             agentId: agentPlan.sourceId,
             targetWorkspace: translateWorkspace,
@@ -760,10 +773,24 @@ export async function runApplyAction(
             store,
             embedder,
             sourceHash: report.planHash,
+            openclawSqlitePath,
           });
           for (const row of result.ledgerRows) {
             await appendRow(paths.ledgerPath, row);
           }
+          // 82.7: terminal "migrated" status row — cutover's ledger guard
+          // checks latestStatusByAgent for this state. Without it, cutover
+          // refuses even after successful apply.
+          await appendRow(paths.ledgerPath, {
+            ts: new Date().toISOString(),
+            action: "apply",
+            agent: agentPlan.sourceId,
+            status: "migrated",
+            source_hash: report.planHash,
+            step: "apply:complete",
+            outcome: "allow",
+            notes: `markdown+sqlite memories: upserted=${result.upserted} skipped=${result.skipped}`,
+          });
           cliLog(
             green(
               `\u2713 ${agentPlan.sourceId}: upserted ${result.upserted}, skipped ${result.skipped}`,

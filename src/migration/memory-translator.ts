@@ -232,6 +232,16 @@ export type TranslateAgentMemoriesArgs = {
   readonly sourceHash: string;
   /** DI for test determinism (defaults to ISO 'now'). */
   readonly ts?: () => string;
+  /**
+   * 82.5: Optional absolute path to OpenClaw's per-agent sqlite
+   * (`~/.openclaw/memory/<agentId>.sqlite`). When provided AND the file
+   * exists, every row in the `chunks` table with source='memory' is also
+   * embedded and inserted. Uses a distinct origin_id namespace so it
+   * coexists with workspace-markdown-sourced memories via origin_id
+   * UNIQUE. The STATE.md "disk is truth" decision was wrong for agents
+   * that stored structured entity/fact memory exclusively in sqlite.
+   */
+  readonly openclawSqlitePath?: string;
 };
 
 /** Return value of translateAgentMemories. */
@@ -435,6 +445,70 @@ export async function translateAgentMemories(
       file_hashes: { [mem.relpath]: sha256Hex(mem.content) },
       notes: isSkip ? "already-imported" : "new",
     });
+  }
+
+  // 82.5: ALSO import from OpenClaw per-agent sqlite if provided. Distinct
+  // origin_id namespace (openclaw-sqlite:<agent>:<hash>) so coexists with
+  // markdown memories. Same embedder, same store, serial iteration.
+  if (args.openclawSqlitePath) {
+    const { readSourceChunks, computeSqliteOriginId } = await import(
+      "./source-chunks-reader.js"
+    );
+    const chunks = readSourceChunks(args.openclawSqlitePath);
+    for (const chunk of chunks) {
+      const embedding = await args.embedder.embed(chunk.text);
+      const originId = computeSqliteOriginId(args.agentId, chunk.id);
+      // 82.6: derive content-aware tags from the chunk text. OpenClaw
+      // memory entries follow a structured pattern:
+      //   # Entity: <Name>
+      //   **ID:** <slug>
+      //   **Type:** <tool|concept|stock|person|company|...>
+      //   ## Facts ... ## Relationships ...
+      // Extract Name/ID/Type as searchable tags in addition to the
+      // procedural ones.
+      const baseTags: string[] = ["openclaw-sqlite"];
+      const entityMatch = chunk.text.match(/^#\s*Entity:\s*(.+?)$/m);
+      const idMatch = chunk.text.match(/\*\*ID:\*\*\s*([a-z0-9_\-]+)/i);
+      const typeMatch = chunk.text.match(/\*\*Type:\*\*\s*([a-z][a-z0-9_\-]*)/i);
+      if (typeMatch) baseTags.push(typeMatch[1].toLowerCase());
+      if (idMatch) baseTags.push(idMatch[1].toLowerCase());
+      if (entityMatch) {
+        // Slugified entity name — lowercase, space→hyphen, strip non-[a-z0-9-]
+        const slug = entityMatch[1]
+          .toLowerCase()
+          .replace(/\s+/g, "-")
+          .replace(/[^a-z0-9-]/g, "")
+          .slice(0, 60);
+        if (slug) baseTags.push(slug);
+      }
+      const entry = args.store.insert(
+        {
+          content: chunk.text,
+          source: "manual",
+          importance: 0.5,
+          tags: baseTags,
+          origin_id: originId,
+        },
+        embedding,
+      );
+      const isSkip = entry.embedding === null;
+      if (isSkip) {
+        skipped++;
+      } else {
+        upserted++;
+      }
+      ledgerRows.push({
+        ts: ts(),
+        action: "apply",
+        agent: args.agentId,
+        status: "pending",
+        source_hash: args.sourceHash,
+        step: "memory-translate:sqlite-chunk",
+        outcome: "allow",
+        file_hashes: { [`sqlite:${chunk.id}`]: chunk.hash },
+        notes: isSkip ? "already-imported" : "new",
+      });
+    }
   }
 
   return Object.freeze({
