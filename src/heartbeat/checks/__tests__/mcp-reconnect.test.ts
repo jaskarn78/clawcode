@@ -225,8 +225,11 @@ describe("mcp-reconnect heartbeat check", () => {
   });
 
   it("Test 2b — still failed on next tick → status critical, failureCount increments, status=failed", async () => {
+    // lastSuccessAt within the 5min backoff window so counter grows
+    // instead of resetting.
+    const recent = Date.now() - 30_000;
     const prior = new Map<string, McpServerState>([
-      ["a", freezeState({ name: "a", status: "degraded", lastSuccessAt: 1000, lastFailureAt: 2000, lastError: { message: "connection refused" }, failureCount: 1 })],
+      ["a", freezeState({ name: "a", status: "degraded", lastSuccessAt: recent, lastFailureAt: recent + 1000, lastError: { message: "connection refused" }, failureCount: 1 })],
     ]);
     mockedProbe.mockResolvedValue(
       Object.freeze({
@@ -284,12 +287,11 @@ describe("mcp-reconnect heartbeat check", () => {
     expect(sa.lastSuccessAt).toBe(5000);
   });
 
-  it("Test 4 — bounded failureCount: 3 consecutive failures cap, window reset recycles to 1", async () => {
-    // Simulate tick 1, 2, 3, 4 — all failures; tick 4 still increments (no
-    // upper bound, just backoff window reset). We verify the counter
-    // monotonically grows within a window.
+  it("Test 4 — bounded failureCount: within backoff window, count increments monotonically", async () => {
+    // lastSuccessAt within the 5min backoff window so counter grows.
+    const recent = Date.now() - 30_000;
     const prior = new Map<string, McpServerState>([
-      ["a", freezeState({ name: "a", status: "degraded", lastSuccessAt: 1000, lastFailureAt: 2000, lastError: { message: "e" }, failureCount: 2 })],
+      ["a", freezeState({ name: "a", status: "degraded", lastSuccessAt: recent, lastFailureAt: recent + 1000, lastError: { message: "e" }, failureCount: 2 })],
     ]);
     mockedProbe.mockResolvedValue(
       Object.freeze({
@@ -308,9 +310,33 @@ describe("mcp-reconnect heartbeat check", () => {
     });
     await mcpReconnectCheck.execute(ctx);
     const sa = setCalls[0]!.get("a")!;
-    // Prior count was 2; not within "window reset" (lastSuccessAt=1000,
-    // now = live); so merged count becomes 3.
+    // Prior count was 2; lastSuccessAt is recent (within 5min window)
+    // so merged count grows to 3.
     expect(sa.failureCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("Test 4b — backoff window expiry: old lastSuccessAt → failureCount recycles to 1", async () => {
+    // lastSuccessAt far in the past (> 5min) so counter resets.
+    const old = Date.now() - 10 * 60_000;
+    const prior = new Map<string, McpServerState>([
+      ["a", freezeState({ name: "a", status: "failed", lastSuccessAt: old, lastFailureAt: Date.now() - 1000, lastError: { message: "e" }, failureCount: 7 })],
+    ]);
+    mockedProbe.mockResolvedValue(
+      Object.freeze({
+        ready: false,
+        stateByName: new Map([
+          ["a", freezeState({ name: "a", status: "failed", lastSuccessAt: null, lastFailureAt: Date.now(), lastError: { message: "e" }, failureCount: 1 })],
+        ]),
+        errors: Object.freeze(["mcp: a: e"]),
+        optionalErrors: Object.freeze([]),
+      }),
+    );
+    const { ctx, setCalls } = makeStub({
+      agentConfig: agentConfigWithMcps(["a"]),
+      priorState: prior,
+    });
+    await mcpReconnectCheck.execute(ctx);
+    expect(setCalls[0]!.get("a")!.failureCount).toBe(1);
   });
 
   it("Test 5 — optional server failure is classified (still ready OK, optional surfaces)", async () => {

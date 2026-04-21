@@ -32,6 +32,7 @@ import type {
 } from "./session-adapter.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
+import type { McpServerState } from "../mcp/readiness.js";
 import { AsyncPushQueue, SerialTurnQueue } from "./persistent-session-queue.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 import { mapEffortToTokens } from "./effort-mapping.js";
@@ -105,6 +106,12 @@ export function createPersistentSessionHandle(
   // reference across turns — guarded by `closed` + explicit clears in the
   // try/finally + catch path of iterateUntilResult.
   let currentInterruptFn: (() => void) | null = null;
+
+  // Phase 85 Plan 01 TOOL-01 — per-handle MCP state mirror (owned by
+  // SessionManager; handle is a thin read surface for TurnDispatcher-scope
+  // consumers in Plans 02 + 03). Updated at warm-path gate + on every
+  // mcp-reconnect heartbeat tick.
+  let currentMcpState: ReadonlyMap<string, McpServerState> = new Map();
 
   function notifyError(err: Error): void {
     generatorDead = true;
@@ -651,6 +658,27 @@ export function createPersistentSessionHandle(
      */
     hasActiveTurn(): boolean {
       return !closed && turnQueue.hasInFlight();
+    },
+
+    /**
+     * Phase 85 Plan 01 TOOL-01 — read the per-handle MCP state mirror.
+     *
+     * Always returns the latest map set via `setMcpState`. Returns the
+     * default empty map before the first warm-path population.
+     */
+    getMcpState(): ReadonlyMap<string, McpServerState> {
+      return currentMcpState;
+    },
+    /**
+     * Phase 85 Plan 01 TOOL-01 — update the per-handle MCP state mirror.
+     *
+     * Called by SessionManager (at warm-path gate) and by the
+     * `mcp-reconnect` heartbeat check (every tick). Always stores a
+     * defensive copy so external mutations of the passed-in map don't
+     * leak into the handle's state.
+     */
+    setMcpState(state: ReadonlyMap<string, McpServerState>): void {
+      currentMcpState = new Map(state);
     },
   };
 

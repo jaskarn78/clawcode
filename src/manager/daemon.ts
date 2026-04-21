@@ -2490,6 +2490,25 @@ async function routeMethod(
       return { servers: entries };
     }
 
+    case "list-mcp-status": {
+      // Phase 85 Plan 01 TOOL-01 — per-agent MCP state snapshot.
+      // Returns the live state map maintained by the warm-path gate +
+      // `mcp-reconnect` heartbeat check. No probe spawn; this is a pure
+      // read of the in-memory map.
+      const agentName = validateStringParam(params, "agent");
+      const state = manager.getMcpStateForAgent(agentName);
+      const servers = [...state.values()].map((s) => ({
+        name: s.name,
+        status: s.status,
+        lastSuccessAt: s.lastSuccessAt,
+        lastFailureAt: s.lastFailureAt,
+        failureCount: s.failureCount,
+        optional: s.optional,
+        lastError: s.lastError?.message ?? null,
+      }));
+      return { agent: agentName, servers };
+    }
+
     case "ask-advisor": {
       const agentName = validateStringParam(params, "agent");
       const question = validateStringParam(params, "question");

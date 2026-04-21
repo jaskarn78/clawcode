@@ -24,6 +24,11 @@ export const IPC_METHODS = [
   "episode-list",
   "delivery-queue-status",
   "mcp-servers",
+  // Phase 85 Plan 01 TOOL-01 — per-agent MCP state snapshot from the
+  // SessionManager state map (fed by the warm-path readiness probe +
+  // the `mcp-reconnect` heartbeat). Read by Plan 03's `/clawcode-tools`
+  // slash command and by operators verifying live tool health.
+  "list-mcp-status",
   // Messaging
   "send-message",
   "send-to-agent",

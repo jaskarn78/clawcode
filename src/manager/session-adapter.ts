@@ -3,6 +3,7 @@ import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./s
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
+import type { McpServerState } from "../mcp/readiness.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
@@ -104,6 +105,17 @@ export type SessionHandle = {
    * OR handle closed). Backed by the depth-1 SerialTurnQueue.inFlight slot.
    */
   hasActiveTurn: () => boolean;
+  /**
+   * Phase 85 Plan 01 TOOL-01 — per-handle MCP server state accessor.
+   *
+   * Mirrors `SessionManager.getMcpStateForAgent(name)` so TurnDispatcher-
+   * scope consumers (Plan 02 prompt-builder, Plan 03 slash commands)
+   * can read live MCP health without reaching into the SessionManager's
+   * private maps. The state map is owned by SessionManager; the handle
+   * is a thin mirror updated at warm-path gate + per heartbeat tick.
+   */
+  getMcpState: () => ReadonlyMap<string, McpServerState>;
+  setMcpState: (state: ReadonlyMap<string, McpServerState>) => void;
 };
 
 /**
@@ -255,6 +267,21 @@ export class MockSessionHandle implements SessionHandle {
    */
   hasActiveTurn(): boolean {
     return this.activeTurn;
+  }
+
+  /**
+   * Phase 85 Plan 01 TOOL-01 — test-mock MCP state accessor.
+   *
+   * In-memory map, no SDK interaction. Tests can drive setMcpState to
+   * exercise downstream consumers that read getMcpState (prompt-
+   * builder + slash commands in Plans 02/03).
+   */
+  private mcpState: ReadonlyMap<string, McpServerState> = new Map();
+  getMcpState(): ReadonlyMap<string, McpServerState> {
+    return this.mcpState;
+  }
+  setMcpState(state: ReadonlyMap<string, McpServerState>): void {
+    this.mcpState = new Map(state);
   }
 
   /**
@@ -639,6 +666,11 @@ function wrapSdkQuery(
   const errorHandlers: Array<(error: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
   let closed = false;
+  // Phase 85 Plan 01 TOOL-01 — legacy handle mirrors same MCP-state
+  // contract as createPersistentSessionHandle for SessionHandle interface
+  // parity. wrapSdkQuery is test-only (createTracedSessionHandle) so this
+  // is effectively dormant in production paths.
+  let legacyMcpState: ReadonlyMap<string, McpServerState> = new Map();
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
@@ -1127,6 +1159,20 @@ function wrapSdkQuery(
 
     hasActiveTurn(): boolean {
       return false;
+    },
+
+    /**
+     * Phase 85 Plan 01 TOOL-01 — legacy per-turn-query handle carries the
+     * same mirror contract as the persistent handle so SessionHandle stays
+     * a single interface. Simple closure-scoped map, not observed in
+     * production paths (wrapSdkQuery is test-only via
+     * `createTracedSessionHandle`).
+     */
+    getMcpState(): ReadonlyMap<string, McpServerState> {
+      return legacyMcpState;
+    },
+    setMcpState(state: ReadonlyMap<string, McpServerState>): void {
+      legacyMcpState = new Map(state);
     },
   };
 }

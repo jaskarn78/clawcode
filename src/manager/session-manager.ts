@@ -562,6 +562,15 @@ export class SessionManager {
       "warm-path ready — agent started",
     );
 
+    // Phase 85 Plan 01 TOOL-01 — mirror MCP state onto the handle so
+    // TurnDispatcher-scope consumers (Plan 02 prompt-builder) can read
+    // live tool health without reaching into SessionManager's private
+    // maps. Mirror is ALSO kept in sync by the mcp-reconnect heartbeat
+    // check every tick (see src/heartbeat/checks/mcp-reconnect.ts).
+    if (mcpReadiness.current) {
+      handle.setMcpState(mcpReadiness.current.stateByName);
+    }
+
     // Gap 3 (memory-persistence-gaps): start mid-session flush timer AFTER
     // warm-path success. Before the gate is green there is no active
     // conversation to flush, and starting the timer earlier would waste a

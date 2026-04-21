@@ -251,4 +251,61 @@ describe("warm-path MCP readiness gate (Phase 85 TOOL-01)", () => {
     await manager.stopAgent("agent-d");
     expect(manager.getMcpStateForAgent("agent-d").size).toBe(0);
   });
+
+  // Task 2 Test 6 — `list-mcp-status` IPC source-level wiring. We grep
+  // daemon.ts for the case handler + required fields. The pure accessor
+  // that the handler calls (SessionManager.getMcpStateForAgent) is
+  // exercised end-to-end via the other tests in this file.
+  it("Test 6 — daemon.ts has a list-mcp-status IPC case that returns the canonical shape", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(
+      new URL("../daemon.ts", import.meta.url),
+      "utf-8",
+    );
+    expect(src).toMatch(/case\s+"list-mcp-status":/);
+    expect(src).toMatch(/getMcpStateForAgent/);
+    // Shape fields the /clawcode-tools slash command will read in Plan 03.
+    for (const field of [
+      "status",
+      "lastSuccessAt",
+      "lastFailureAt",
+      "failureCount",
+      "optional",
+      "lastError",
+    ]) {
+      expect(src).toMatch(new RegExp(`\\b${field}\\b`));
+    }
+    // And the IPC method is registered in the protocol.
+    const { IPC_METHODS } = await import("../../ipc/protocol.js");
+    expect(IPC_METHODS).toContain("list-mcp-status");
+  });
+
+  // Task 2 Test 5 — handle.getMcpState mirrors SessionManager.getMcpStateForAgent.
+  it("session handle mirrors the MCP state map after warm-path gate", async () => {
+    mockedHealth.mockResolvedValue({
+      name: "srv",
+      healthy: true,
+      latencyMs: 5,
+    });
+    const config = makeConfig("agent-e", tmpDir, [
+      {
+        name: "srv",
+        command: "x",
+        args: [],
+        env: {},
+        optional: false,
+      } as ResolvedAgentConfig["mcpServers"][number],
+    ]);
+    await manager.startAgent("agent-e", config);
+
+    const smState = manager.getMcpStateForAgent("agent-e");
+    // Access the handle via the adapter's test-only sessions map.
+    const handle = adapter.sessions.get(
+      [...adapter.sessions.keys()].find((k) => k.includes("agent-e"))!,
+    );
+    expect(handle).toBeDefined();
+    const handleState = handle!.getMcpState();
+    expect(handleState.size).toBe(smState.size);
+    expect(handleState.get("srv")!.status).toBe("ready");
+  });
 });
