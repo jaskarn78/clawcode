@@ -56,13 +56,13 @@ Replace the current `/clawcode-model` LLM-prompt routing with direct IPC dispatc
 Register SDK-exposed commands as per-agent Discord slash commands. Dispatch split: control-plane via `Query.setX()` methods; prompt-channel via SDK prompt input. Hardcoded command lists are forbidden — the SDK `system/init.slash_commands` manifest is the source of truth.
 
 - [ ] **CMD-00**: Before implementation, a 30-minute SDK spike validates mid-session `Query.setModel()` / `Query.setPermissionMode()` / `Query.setMaxThinkingTokens()` concurrency safety against the single captured `driverIter` handle; spike output committed to `.planning/research/` as `CMD-SDK-SPIKE.md`
-- [ ] **CMD-01**: On agent session start, ClawCode reads `system/init.slash_commands` from the SDK and registers each as a per-agent Discord slash command with `clawcode-` prefix (e.g., `/clawcode-compact`, `/clawcode-context`) — hardcoded command lists are rejected in code review via static-grep regression
+- [x] **CMD-01**: On agent session start, ClawCode reads `system/init.slash_commands` from the SDK and registers each as a per-agent Discord slash command with `clawcode-` prefix (e.g., `/clawcode-compact`, `/clawcode-context`) — hardcoded command lists are rejected in code review via static-grep regression
 - [ ] **CMD-02**: Control-plane commands (`/model`, `/permissions`, `/effort`) dispatch through corresponding SDK `Query.setX()` methods (not prompt input)
 - [ ] **CMD-03**: Prompt-channel commands (everything else SDK-reported) dispatch as prompt strings through the existing `TurnDispatcher` per SDK docs
-- [ ] **CMD-04**: Existing duplicate commands (`clawcode-compact`, `clawcode-usage`, `clawcode-model`, `clawcode-effort`) are unified onto the native SDK dispatch path — the current LLM-prompt routing is removed
-- [ ] **CMD-05**: Per-agent SECURITY.md ACLs gate command registration — destructive or admin-only commands (`/init`, `/security-review`, `/batch`) are not registered on agents whose ACL forbids them
+- [x] **CMD-04**: Existing duplicate commands (`clawcode-compact`, `clawcode-usage`, `clawcode-model`, `clawcode-effort`) are unified onto the native SDK dispatch path — the current LLM-prompt routing is removed
+- [x] **CMD-05**: Per-agent SECURITY.md ACLs gate command registration — destructive or admin-only commands (`/init`, `/security-review`, `/batch`) are not registered on agents whose ACL forbids them
 - [ ] **CMD-06**: Native command output (assistant / tool / system messages per SDK docs) streams to Discord via the v1.7 `ProgressiveMessageEditor` — no new streaming primitive
-- [ ] **CMD-07**: Discord 100-command-per-guild cap is respected — existing per-guild name-dedupe in `slash-commands.ts` continues to deduplicate across the 15-agent fleet
+- [x] **CMD-07**: Discord 100-command-per-guild cap is respected — existing per-guild name-dedupe in `slash-commands.ts` continues to deduplicate across the 15-agent fleet
 
 ### MCP Tool Awareness & Reliability (TOOL-*)
 

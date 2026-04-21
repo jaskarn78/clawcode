@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Ready to plan
-stopped_at: Completed 86-03-PLAN.md — Phase 86 complete. /clawcode-model LLM-prompt routing retired; StringSelectMenuBuilder picker + ButtonBuilder confirmation wired end-to-end. PROJECT.md tech debt line 150 closed. All 3 Phase 86 plans shipped.
-last_updated: "2026-04-21T21:36:05.663Z"
+stopped_at: Completed 87-01-PLAN.md — SDK-driven slash-command registration + static-grep regression pin + ACL gate + 90-cap pre-flight. CMD-01/04/05/07 landed.
+last_updated: "2026-04-21T22:12:54.579Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 15
+  completed_plans: 13
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 87
-Plan: Not started
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -111,6 +111,10 @@ Recent decisions affecting current work:
 - [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — Extended IpcError with optional data field + ipc/client.ts propagation. Plan 02 wired the server side (ManagerError.data + ipc/server.ts forwarding) but IpcError constructor dropped .data at the client boundary. Without this Rule 3 blocking fix the 'model-not-allowed' typed-error branch never fires in production.
 - [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — MODEL-05 cache-invalidation confirmation uses native ButtonBuilder (Danger + Secondary) with agent+nonce namespaced customIds. Prefix-based filter (model-confirm:{agent}:) for collision safety across parallel picker invocations. 'Active conversation' signal via sessionManager.getModelForAgent !== undefined — zero-cost, biased toward showing confirmation.
 - [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — Inline handler short-circuit pattern + shared dispatch helper (dispatchModelChange with editMode flag). Arg-path and select-menu path funnel through the same IPC call + ModelNotAllowedError rendering. Blueprint for Phase 87 setPermissionMode + Phase 88 skills browser.
+- [Phase 87-native-cc-slash-commands]: Plan 01 — Query.initializationResult chosen over supportedCommands: one round-trip covers Plan 02/03 needs (agents+models+commands); narrower supportedCommands kept available on the SdkQuery type for callers that only want the command list post-init.
+- [Phase 87-native-cc-slash-commands]: Plan 01 — Classifier safe-default is prompt-channel for unknown SDK commands (CMD-00 spike basis); clear/export/mcp hard-coded to skip-set (mcp covered by Phase 85 /clawcode-tools, Pitfall 12).
+- [Phase 87-native-cc-slash-commands]: Plan 01 — clawcode- namespace enforced by construction in buildNativeCommandDefs (Pitfall 10). Static-grep regression pin (readdirSync walk of src/) rejects any hardcoded native-command array literal in CI.
+- [Phase 87-native-cc-slash-commands]: Plan 01 — SlashCommandDef.nativeBehavior discriminator (optional field) is the single routing signal for Plans 02/03 — no name-matching or secondary lookup table required. Also added aclDeniedByAgent DI hook for hermetic unit tests; production derives from <memoryPath>/SECURITY.md.
 
 ### v2.1 closing decisions (for reference)
 
@@ -182,9 +186,10 @@ Recent decisions affecting current work:
 | Phase 86 P01 | 31min | 2 tasks | 14 files |
 | Phase 86-dual-discord-model-picker-core P02 | 12min 6s | 2 tasks | 9 files |
 | Phase 86-dual-discord-model-picker-core P03 | 9 min 39 s | 2 tasks | 7 files |
+| Phase 87-native-cc-slash-commands P01 | 19min 24s | 2 tasks | 18 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 86-03-PLAN.md — Phase 86 complete. /clawcode-model LLM-prompt routing retired; StringSelectMenuBuilder picker + ButtonBuilder confirmation wired end-to-end. PROJECT.md tech debt line 150 closed. All 3 Phase 86 plans shipped.
+Stopped at: Completed 87-01-PLAN.md — SDK-driven slash-command registration + static-grep regression pin + ACL gate + 90-cap pre-flight. CMD-01/04/05/07 landed.
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
