@@ -140,6 +140,10 @@ function createFakeQuery(
     // byte-identical" tests don't crash the first time a downstream test
     // exercises the setModel wire.
     setModel: vi.fn(() => Promise.resolve(undefined)),
+    // Phase 87 CMD-02 — setPermissionMode() invokes this on the Query handle.
+    // Extends the Phase 83/86 Rule-3 fix-ahead pattern so the surface-check
+    // test doesn't crash downstream callers that exercise the new wire.
+    setPermissionMode: vi.fn(() => Promise.resolve(undefined)),
   } as unknown as SdkQuery;
 
   return {
@@ -247,6 +251,9 @@ describe("createPersistentSessionHandle", () => {
     // Phase 86 MODEL-03 — mid-session model mutation primitives.
     expect(typeof handle.setModel).toBe("function");
     expect(typeof handle.getModel).toBe("function");
+    // Phase 87 CMD-02 — mid-session permission-mode mutation primitives.
+    expect(typeof handle.setPermissionMode).toBe("function");
+    expect(typeof handle.getPermissionMode).toBe("function");
     // quick-task 260419-nic — mid-turn interrupt primitives.
     expect(typeof handle.interrupt).toBe("function");
     expect(typeof handle.hasActiveTurn).toBe("function");

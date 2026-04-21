@@ -1,5 +1,5 @@
 import type { AgentSessionConfig } from "./types.js";
-import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage, SlashCommand } from "./sdk-types.js";
+import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage, SlashCommand, PermissionMode } from "./sdk-types.js";
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
@@ -99,6 +99,21 @@ export type SessionHandle = {
    * default captured from baseOptions.model. Undefined when neither is set.
    */
   getModel: () => string | undefined;
+  /**
+   * Phase 87 CMD-02 — mid-session permission-mode mutation (spy-test pinned).
+   * Accepts one of the 6 PermissionMode values. Validation happens upstream
+   * in `SessionManager.setPermissionModeForAgent` before this handle method
+   * fires.
+   */
+  setPermissionMode: (mode: PermissionMode) => void;
+  /**
+   * Phase 87 CMD-02 — current permission mode, surfaced by
+   * /clawcode-permissions and future status reporters. Returns the value
+   * most recently passed to setPermissionMode, or the session-start default
+   * captured from baseOptions.permissionMode (or "default" when neither is
+   * set).
+   */
+  getPermissionMode: () => PermissionMode;
   /**
    * Phase 73 extension (quick task 260419-nic) — mid-turn abort primitive.
    *
@@ -285,6 +300,18 @@ export class MockSessionHandle implements SessionHandle {
   }
   getModel(): string | undefined {
     return this._model;
+  }
+
+  // Phase 87 CMD-02 — in-memory mock of the real handle's
+  // setPermissionMode/getPermissionMode contract. Default "default" so
+  // getPermissionMode never returns undefined. Tests spy directly to verify
+  // SessionManager dispatch.
+  private _permissionMode: PermissionMode = "default";
+  setPermissionMode(mode: PermissionMode): void {
+    this._permissionMode = mode;
+  }
+  getPermissionMode(): PermissionMode {
+    return this._permissionMode;
   }
 
   /**
@@ -1212,6 +1239,22 @@ function wrapSdkQuery(
 
     getModel(): string | undefined {
       return undefined;
+    },
+
+    /**
+     * Phase 87 CMD-02 — legacy wrapSdkQuery predates the mid-turn
+     * permission-mode primitive. The per-turn-query shape has no persistent
+     * Query reference to setPermissionMode cleanly across turns. This legacy
+     * factory is test-only (createTracedSessionHandle) — production routes
+     * through createPersistentSessionHandle where the real wire lives. We
+     * mirror the setModel/getModel pattern: no-op setter, "default" getter.
+     */
+    setPermissionMode(_mode: PermissionMode): void {
+      /* no-op — legacy per-turn-query handle lacks mid-session permission swap */
+    },
+
+    getPermissionMode(): PermissionMode {
+      return "default";
     },
 
     /**

@@ -22,7 +22,7 @@
  *     SessionHandle type.
  */
 
-import type { SdkModule, SdkQuery, SdkQueryOptions, SdkStreamMessage, SdkUserMessage, SlashCommand } from "./sdk-types.js";
+import type { SdkModule, SdkQuery, SdkQueryOptions, SdkStreamMessage, SdkUserMessage, SlashCommand, PermissionMode } from "./sdk-types.js";
 import type {
   SessionHandle,
   SendOptions,
@@ -100,6 +100,13 @@ export function createPersistentSessionHandle(
   // handle.setModel; read by handle.getModel and surfaced downstream via
   // SessionManager.getModelForAgent (Plan 02 /clawcode-status).
   let currentModel: string | undefined = baseOptions.model;
+  // Phase 87 CMD-02 — per-handle runtime permission-mode mirror.
+  // Initialized from baseOptions.permissionMode (passed by session-adapter.ts;
+  // default "default" when unset). Updated by handle.setPermissionMode; read
+  // by handle.getPermissionMode and surfaced via SessionManager for the
+  // /clawcode-permissions slash command.
+  let currentPermissionMode: PermissionMode =
+    (baseOptions.permissionMode as PermissionMode | undefined) ?? "default";
   const errorHandlers: Array<(err: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
   let closed = false;
@@ -655,6 +662,25 @@ export function createPersistentSessionHandle(
 
     getModel(): string | undefined {
       return currentModel;
+    },
+
+    setPermissionMode(mode: PermissionMode): void {
+      currentPermissionMode = mode;
+      // Phase 87 CMD-02 — SDK canary pattern (Phase 83/86 blueprint applied).
+      // q.setPermissionMode is async on the SDK (sdk.d.ts:1704) but we DO
+      // NOT await — setPermissionMode must stay synchronous because the
+      // IPC / slash call path cannot yield. Rejections are logged-and-
+      // swallowed so a transient SDK failure never crashes a healthy turn.
+      // Regression pinned by spy test in
+      // persistent-session-handle-permission.test.ts (P1-P5).
+      void q.setPermissionMode(mode).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[permission] setPermissionMode(${mode}) failed: ${msg}`);
+      });
+    },
+
+    getPermissionMode(): PermissionMode {
+      return currentPermissionMode;
     },
 
     /**

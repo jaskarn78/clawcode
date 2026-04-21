@@ -38,6 +38,9 @@ function makeHandle(sessionId = "sess-" + Math.random().toString(36).slice(2)): 
     // Phase 86 MODEL-03 — required by SessionHandle surface.
     setModel: vi.fn(),
     getModel: vi.fn().mockReturnValue(undefined) as unknown as SessionHandle["getModel"],
+    // Phase 87 CMD-02 — required by SessionHandle surface.
+    setPermissionMode: vi.fn(),
+    getPermissionMode: vi.fn().mockReturnValue("default") as unknown as SessionHandle["getPermissionMode"],
     interrupt: vi.fn(),
     hasActiveTurn: vi.fn().mockReturnValue(false) as unknown as SessionHandle["hasActiveTurn"],
     // Phase 85 TOOL-01 — required by SessionHandle surface.

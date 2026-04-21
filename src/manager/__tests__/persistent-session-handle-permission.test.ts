@@ -119,7 +119,7 @@ describe("persistent-session-handle setPermissionMode — SDK wire regression pi
     expect(warnSpy).toHaveBeenCalled();
     // Verify the warning message prefix matches the wire spec.
     const warnCalls = warnSpy.mock.calls
-      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .map((c: readonly unknown[]) => (typeof c[0] === "string" ? c[0] : ""))
       .join("\n");
     expect(warnCalls).toMatch(/\[permission\] setPermissionMode/);
     await handle.close();

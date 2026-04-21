@@ -45,6 +45,20 @@ export type SlashCommand = {
 };
 
 /**
+ * Phase 87 CMD-02 — SDK PermissionMode union.
+ * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 sdk.d.ts:1512.
+ * Exported for consumption by SessionHandle, SessionManager, daemon IPC,
+ * and Discord slash-command dispatch — single source of truth.
+ */
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan"
+  | "dontAsk"
+  | "auto";
+
+/**
  * Options passed to sdk.query().
  * Subset of SDK's Options -- only fields we actually use.
  */
@@ -198,6 +212,14 @@ export type SdkQuery = AsyncGenerator<SdkStreamMessage, void> & {
    * persistent-session-handle.ts:setModel.
    */
   setModel(model?: string): Promise<void>;
+  /**
+   * Phase 87 CMD-02 — SDK mid-session permission-mode swap.
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 Query.setPermissionMode
+   * (sdk.d.ts:1704). Control-plane control request, safe by the same design
+   * as setModel/setMaxThinkingTokens (CMD-00 spike confirmation). Consumed
+   * by persistent-session-handle.ts:setPermissionMode.
+   */
+  setPermissionMode(mode: PermissionMode): Promise<void>;
   /**
    * Phase 87 CMD-01 — enumerate SDK-reported slash commands at init time.
    * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 Query.initializationResult

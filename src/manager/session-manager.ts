@@ -44,6 +44,7 @@ import {
 } from "./effort-state-store.js";
 import { resolveModelId } from "./model-resolver.js";
 import { ModelNotAllowedError } from "./model-errors.js";
+import type { PermissionMode } from "./sdk-types.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -712,6 +713,51 @@ export class SessionManager {
   getModelForAgent(name: string): string | undefined {
     const handle = this.requireSession(name);
     return handle.getModel();
+  }
+
+  /**
+   * Phase 87 CMD-02 — set the permission mode for a running agent via
+   * SDK Query.setPermissionMode. Validates the mode is one of the 6
+   * supported values before dispatch. Runtime-only — does NOT modify
+   * clawcode.yaml (unlike setModelForAgent's Plan 02 path; permissions are
+   * intentionally ephemeral and reset on restart).
+   *
+   * Unlike setModelForAgent, there is NO per-agent allowlist: every agent
+   * can set every PermissionMode by design. The only validation is the
+   * STATIC 6-value union.
+   *
+   * @throws SessionError if the agent is not running
+   * @throws Error if mode is not a valid PermissionMode
+   */
+  setPermissionModeForAgent(name: string, mode: string): void {
+    const handle = this.requireSession(name);
+    const validModes: readonly PermissionMode[] = [
+      "default",
+      "acceptEdits",
+      "bypassPermissions",
+      "plan",
+      "dontAsk",
+      "auto",
+    ];
+    if (!validModes.includes(mode as PermissionMode)) {
+      throw new Error(
+        `Invalid permission mode '${mode}'. Valid: ${validModes.join(", ")}`,
+      );
+    }
+    handle.setPermissionMode(mode as PermissionMode);
+    this.log.info({ agent: name, permissionMode: mode }, "permission mode updated");
+  }
+
+  /**
+   * Phase 87 CMD-02 — current live permission mode for a running agent.
+   * Returns the value most recently passed to setPermissionModeForAgent, or
+   * the session-start default ("default" when unset).
+   *
+   * @throws SessionError if the agent is not running
+   */
+  getPermissionModeForAgent(name: string): PermissionMode {
+    const handle = this.requireSession(name);
+    return handle.getPermissionMode();
   }
 
   /** @throws SessionError if the agent is not running */
