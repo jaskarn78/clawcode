@@ -25,8 +25,14 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import chokidar from "chokidar";
 import { parse as parseYaml } from "yaml";
-import { writeClawcodeYaml, writerFs, removeAgentFromConfig } from "../yaml-writer.js";
+import {
+  writeClawcodeYaml,
+  writerFs,
+  removeAgentFromConfig,
+  updateAgentModel,
+} from "../yaml-writer.js";
 import { SECRET_REFUSE_MESSAGE } from "../guards.js";
+import { configSchema } from "../../config/schema.js";
 import type { MappedAgentNode, MapAgentWarning } from "../config-mapper.js";
 
 const FIXTURE_PATH =
@@ -600,5 +606,215 @@ agents:
       /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
     );
     expect(tmpUnlink).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 86 Plan 02 Task 1 — updateAgentModel tests (U1-U8).
+// Pins the atomic, comment-preserving, idempotent single-field rewrite for
+// agents[*].model used by the daemon IPC set-model handler after the live
+// SDK swap succeeds.
+// ---------------------------------------------------------------------------
+
+describe("updateAgentModel — Phase 86 Plan 02 (Tests U1-U8)", () => {
+  async function setupModelFixture(
+    yaml: string,
+  ): Promise<{ destPath: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-update-model-"));
+    const destPath = join(dir, "clawcode.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(destPath, yaml, "utf8");
+    return { destPath };
+  }
+
+  const THREE_AGENTS_YAML = `# fleet comment at top
+version: 1
+defaults:
+  model: sonnet
+  basePath: ~/.clawcode/agents
+agents:
+  # clawdy header comment
+  - name: clawdy  # personal
+    workspace: ~/.clawcode/agents/clawdy
+    model: haiku
+    channels:
+      - "111"
+    mcpServers: []
+  - name: alpha
+    workspace: ~/.clawcode/agents/alpha
+    model: sonnet
+    channels:
+      - "222"
+    mcpServers: []
+  - name: beta
+    workspace: ~/.clawcode/agents/beta
+    model: opus
+    channels:
+      - "333"
+    mcpServers: []
+`;
+
+  it("U1: updates clawdy's model from haiku to sonnet; other agents unchanged", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    const result = await updateAgentModel({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      newModel: "sonnet",
+    });
+    expect(result.outcome).toBe("updated");
+    if (result.outcome !== "updated") return;
+    expect(result.destPath).toBe(destPath);
+    expect(result.targetSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{ name: string; model: string }>;
+    };
+    const byName = new Map(parsed.agents.map((a) => [a.name, a.model]));
+    expect(byName.get("clawdy")).toBe("sonnet");
+    expect(byName.get("alpha")).toBe("sonnet");
+    expect(byName.get("beta")).toBe("opus");
+  });
+
+  it("U2: idempotent — same model returns no-op; file bytes unchanged", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+    const beforeHash = createHash("sha256")
+      .update(beforeBytes, "utf8")
+      .digest("hex");
+
+    const result = await updateAgentModel({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      newModel: "haiku",
+    });
+    expect(result.outcome).toBe("no-op");
+    if (result.outcome === "no-op") {
+      expect(result.reason).toMatch(/already/);
+    }
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    const afterHash = createHash("sha256")
+      .update(afterBytes, "utf8")
+      .digest("hex");
+    expect(afterHash).toBe(beforeHash);
+    expect(afterBytes).toBe(beforeBytes);
+  });
+
+  it("U3: preserves top-of-file and inline comments across the rewrite", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    await updateAgentModel({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      newModel: "sonnet",
+    });
+
+    const after = readFileSync(destPath, "utf8");
+    // Top-of-file comment preserved
+    expect(after).toContain("# fleet comment at top");
+    // Header comment on clawdy preserved
+    expect(after).toContain("# clawdy header comment");
+    // Inline "# personal" comment on clawdy's name line preserved
+    expect(after).toMatch(/name:\s*clawdy\s*#\s*personal/);
+  });
+
+  it("U4: agent not found — returns not-found; file bytes unchanged", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+    const beforeHash = createHash("sha256")
+      .update(beforeBytes, "utf8")
+      .digest("hex");
+
+    const result = await updateAgentModel({
+      existingConfigPath: destPath,
+      agentName: "does-not-exist",
+      newModel: "sonnet",
+    });
+    expect(result.outcome).toBe("not-found");
+    if (result.outcome === "not-found") {
+      expect(result.reason).toMatch(/does-not-exist/);
+    }
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    const afterHash = createHash("sha256")
+      .update(afterBytes, "utf8")
+      .digest("hex");
+    expect(afterHash).toBe(beforeHash);
+  });
+
+  it("U5: file missing — returns file-not-found", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-update-noexist-"));
+    const missing = join(dir, "does-not-exist.yaml");
+    const result = await updateAgentModel({
+      existingConfigPath: missing,
+      agentName: "clawdy",
+      newModel: "sonnet",
+    });
+    expect(result.outcome).toBe("file-not-found");
+    if (result.outcome === "file-not-found") {
+      expect(result.reason).toMatch(/not found/i);
+    }
+  });
+
+  it("U6: atomic rename failure — unlinks tmp and re-throws", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    const unlinkCalls: string[] = [];
+    writerFs.rename = (async () => {
+      throw new Error("EACCES: simulated rename failure");
+    }) as typeof writerFs.rename;
+    writerFs.unlink = (async (...args: unknown[]) => {
+      unlinkCalls.push(String(args[0]));
+      return ORIG_FS.unlink(
+        args[0] as Parameters<typeof ORIG_FS.unlink>[0],
+      );
+    }) as typeof writerFs.unlink;
+
+    await expect(
+      updateAgentModel({
+        existingConfigPath: destPath,
+        agentName: "clawdy",
+        newModel: "sonnet",
+      }),
+    ).rejects.toThrow(/EACCES/);
+
+    const tmpUnlink = unlinkCalls.find((p) =>
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
+    );
+    expect(tmpUnlink).toBeDefined();
+  });
+
+  it("U7: round-trip — re-parse after update validates against configSchema", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    const result = await updateAgentModel({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      newModel: "sonnet",
+    });
+    expect(result.outcome).toBe("updated");
+
+    const after = readFileSync(destPath, "utf8");
+    // Round-trip: parseYaml → configSchema.safeParse MUST succeed
+    const parsed = parseYaml(after) as unknown;
+    const schemaResult = configSchema.safeParse(parsed);
+    expect(schemaResult.success).toBe(true);
+  });
+
+  it("U8: invalid model alias — returns refused with step invalid-model", async () => {
+    const { destPath } = await setupModelFixture(THREE_AGENTS_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+
+    const result = await updateAgentModel({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      newModel: "gpt-4",
+    });
+    expect(result.outcome).toBe("refused");
+    if (result.outcome === "refused") {
+      expect(result.step).toBe("invalid-model");
+      expect(result.reason).toMatch(/Invalid model/);
+    }
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
   });
 });
