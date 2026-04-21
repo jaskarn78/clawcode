@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Ready to plan
-stopped_at: Completed 87-02-PLAN.md
-last_updated: "2026-04-21T22:30:17.955Z"
+stopped_at: Completed 88-01-PLAN.md
+last_updated: "2026-04-21T22:58:06.885Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 17
+  completed_plans: 16
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 88
-Plan: Not started
+Plan: 2 of 2 (88-01 complete)
 
 ## Performance Metrics
 
@@ -122,6 +122,11 @@ Recent decisions affecting current work:
 - [Phase 87]: Canary blueprint trio locked: Phase 83 + 86 + 87-02 share byte-identical synchronous setter + fire-and-forget + .catch wire shape with 5-test spy harness
 - [Phase 87]: Permission mode is ephemeral/runtime-only (no YAML persistence) — matches /clawcode-effort precedent, diverges from /clawcode-model's atomic YAML write
 - [Phase 87]: No per-agent permission allowlist; PermissionMode validation is the static 6-value union only (unlike setModel's per-agent allowedModels)
+- [Phase 88-skills-marketplace]: Plan 88-01 — Three pure-function handoff contracts for Plan 02: loadMarketplaceCatalog (read-only unioned catalog), installSingleSkill (8-outcome discriminated-union installer), updateAgentSkills (atomic YAML writer mirroring Phase 86 MODEL-04). No daemon coupling required.
+- [Phase 88-skills-marketplace]: Plan 88-01 — loadMarketplaceCatalog is HASH-FREE (no source hash computed at browse time); hash derivation deferred to installSingleSkill step 4 for idempotency gate. Keeps /clawcode-skills-browse responsive; one hash per install, not N hashes per browse.
+- [Phase 88-skills-marketplace]: Plan 88-01 — fs-guard deliberately NOT installed in installSingleSkill (daemon-context writes only to skillsTargetDir + clawcodeYamlPath, neither under ~/.openclaw/). CLI-scoped guard would cascade into unrelated in-flight daemon tasks.
+- [Phase 88-skills-marketplace]: Plan 88-01 — SkillInstallOutcome discriminated union with 8 distinct kinds (installed/installed-persist-failed/already-installed/blocked-secret-scan/rejected-scope/rejected-deprecated/not-in-catalog/copy-failed) enforces zero-silent-skip invariant (MKT-05) at the type system level. Plan 02's Discord renderer is an exhaustive switch.
+- [Phase 88-skills-marketplace]: Plan 88-01 — computeSkillHash promoted to exported computeSkillContentHash (non-breaking rename+export); ledger writes on scope/secret-scan/copy-fail refusals (not on not-in-catalog or rejected-deprecated pre-gate refusals); non-rollback on YAML persist failure (mirrors Phase 86 Plan 02 MODEL-04).
 
 ### v2.1 closing decisions (for reference)
 
@@ -196,9 +201,10 @@ Recent decisions affecting current work:
 | Phase 87-native-cc-slash-commands P01 | 19min 24s | 2 tasks | 18 files |
 | Phase 87 P03 | 6min 12s | 1 tasks | 4 files |
 | Phase 87 P02 | 11min | 2 tasks | 12 files |
+| Phase 88-skills-marketplace P01 | 11min 27s | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 87-02-PLAN.md
+Stopped at: Completed 88-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
