@@ -166,6 +166,14 @@ export type SdkQuery = AsyncGenerator<SdkStreamMessage, void> & {
   streamInput(stream: AsyncIterable<SdkUserMessage>): Promise<void>;
   mcpServerStatus(): Promise<unknown[]>;
   setMcpServers(servers: Record<string, unknown>): Promise<unknown>;
+  /**
+   * Phase 83 EFFORT-01 — SDK mid-session thinking-token control.
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 Query.setMaxThinkingTokens
+   * (sdk.d.ts:1728). Pass `null` to reset to model default, `0` to disable
+   * thinking outright, or a positive integer for an explicit budget.
+   * Consumed by persistent-session-handle.ts:setEffort.
+   */
+  setMaxThinkingTokens(maxThinkingTokens: number | null): Promise<void>;
 };
 
 /**

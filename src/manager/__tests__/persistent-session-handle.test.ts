@@ -133,6 +133,8 @@ function createFakeQuery(
     streamInput: vi.fn(() => Promise.resolve()),
     mcpServerStatus: vi.fn(() => Promise.resolve([])),
     setMcpServers: vi.fn(() => Promise.resolve(undefined)),
+    // Phase 83 EFFORT-01 — setEffort() invokes this on the Query handle.
+    setMaxThinkingTokens: vi.fn(() => Promise.resolve(undefined)),
   } as unknown as SdkQuery;
 
   return {

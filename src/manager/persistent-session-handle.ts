@@ -31,8 +31,10 @@ import type {
   SkillTrackingConfig,
 } from "./session-adapter.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
+import type { EffortLevel } from "../config/schema.js";
 import { AsyncPushQueue, SerialTurnQueue } from "./persistent-session-queue.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
+import { mapEffortToTokens } from "./effort-mapping.js";
 
 /** Deadline (ms) the abort path waits after calling q.interrupt() before
  *  throwing AbortError. Pitfall 3 guard — SDK may not emit `result` on abort. */
@@ -87,8 +89,10 @@ export function createPersistentSessionHandle(
   const driverIter = (q as unknown as AsyncIterable<SdkStreamMessage>)[Symbol.asyncIterator]();
 
   let sessionId = initialSessionId;
-  let currentEffort: "low" | "medium" | "high" | "max" =
-    (baseOptions.effort ?? "low") as "low" | "medium" | "high" | "max";
+  // Phase 83 EFFORT-04 — widened from v2.1 set ("low"|"medium"|"high"|"max")
+  // to the full v2.2 EffortLevel union (adds "xhigh", "auto", "off").
+  let currentEffort: EffortLevel =
+    (baseOptions.effort ?? "low") as EffortLevel;
   const errorHandlers: Array<(err: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
   let closed = false;
@@ -596,12 +600,23 @@ export function createPersistentSessionHandle(
       endHandlers.push(handler);
     },
 
-    setEffort(level: "low" | "medium" | "high" | "max"): void {
+    setEffort(level: EffortLevel): void {
       currentEffort = level;
-      // Future: q.setMaxThinkingTokens() wiring — out of scope per 73-RESEARCH §"Don't hand-roll".
+      // Phase 83 EFFORT-01 — close the P0 silent no-op (PITFALLS §Pitfall 1).
+      // mapEffortToTokens returns 0 for "off", null for "auto", or an
+      // explicit integer budget for the leveled modes. setMaxThinkingTokens
+      // is async on the SDK (sdk.d.ts:1728) but we intentionally do NOT
+      // await — setEffort must stay synchronous because the slash-command
+      // / IPC call path cannot yield. Rejections are logged-and-swallowed
+      // so a transient SDK failure never crashes a healthy turn.
+      const budget = mapEffortToTokens(level);
+      void q.setMaxThinkingTokens(budget).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[effort] setMaxThinkingTokens(${String(budget)}) failed: ${msg}`);
+      });
     },
 
-    getEffort(): "low" | "medium" | "high" | "max" {
+    getEffort(): EffortLevel {
       return currentEffort;
     },
 

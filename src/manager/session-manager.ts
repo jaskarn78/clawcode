@@ -5,6 +5,7 @@ import type { BackoffConfig } from "./types.js";
 import { DEFAULT_BACKOFF_CONFIG } from "./types.js";
 import { readRegistry, writeRegistry, updateEntry, createEntry } from "./registry.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+import type { EffortLevel } from "../config/schema.js";
 import type { Logger } from "pino";
 import type { SkillsCatalog } from "../skills/types.js";
 import type { MemoryStore } from "../memory/store.js";
@@ -523,15 +524,18 @@ export class SessionManager {
     // NOTE: SessionManager does NOT call turn.end() — caller owns Turn lifecycle (50-02b).
   }
 
-  /** Set the reasoning effort level for a running agent. Takes effect on next turn. */
-  setEffortForAgent(name: string, level: "low" | "medium" | "high" | "max"): void {
+  /**
+   * Set the reasoning effort level for a running agent. Takes effect on next turn.
+   * Phase 83 EFFORT-04 — accepts the full v2.2 EffortLevel set.
+   */
+  setEffortForAgent(name: string, level: EffortLevel): void {
     const handle = this.requireSession(name);
     handle.setEffort(level);
     this.log.info({ agent: name, effort: level }, "effort level updated");
   }
 
   /** Get the current reasoning effort level for a running agent. */
-  getEffortForAgent(name: string): "low" | "medium" | "high" | "max" {
+  getEffortForAgent(name: string): EffortLevel {
     const handle = this.requireSession(name);
     return handle.getEffort();
   }

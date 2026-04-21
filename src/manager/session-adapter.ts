@@ -2,6 +2,7 @@ import type { AgentSessionConfig } from "./types.js";
 import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./sdk-types.js";
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
+import type { EffortLevel } from "../config/schema.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
@@ -81,8 +82,9 @@ export type SessionHandle = {
   close: () => Promise<void>;
   onError: (handler: (error: Error) => void) => void;
   onEnd: (handler: () => void) => void;
-  setEffort: (level: "low" | "medium" | "high" | "max") => void;
-  getEffort: () => "low" | "medium" | "high" | "max";
+  // Phase 83 EFFORT-04 — widened to full v2.2 EffortLevel set.
+  setEffort: (level: EffortLevel) => void;
+  getEffort: () => EffortLevel;
   /**
    * Phase 73 extension (quick task 260419-nic) — mid-turn abort primitive.
    *
@@ -142,7 +144,8 @@ export class MockSessionHandle implements SessionHandle {
   private errorHandler: ((error: Error) => void) | null = null;
   private endHandler: (() => void) | null = null;
   private closed = false;
-  private effort: "low" | "medium" | "high" | "max" = "low";
+  // Phase 83 EFFORT-04 — widened to full v2.2 EffortLevel set.
+  private effort: EffortLevel = "low";
   /**
    * Quick task 260419-nic — track whether a send is "in-flight".
    *
@@ -228,11 +231,11 @@ export class MockSessionHandle implements SessionHandle {
     this.endHandler = handler;
   }
 
-  setEffort(level: "low" | "medium" | "high" | "max"): void {
+  setEffort(level: EffortLevel): void {
     this.effort = level;
   }
 
-  getEffort(): "low" | "medium" | "high" | "max" {
+  getEffort(): EffortLevel {
     return this.effort;
   }
 
@@ -578,6 +581,35 @@ function extractUsage(
 }
 
 /**
+ * Phase 83 EFFORT-04 — narrow a v2.2 EffortLevel down to the subset the SDK's
+ * session-start `effort` option accepts (sdk.d.ts:435 — "low"|"medium"|"high"|"max").
+ *
+ * The full v2.2 set (adds "xhigh", "auto", "off") is only expressible via
+ * runtime `q.setMaxThinkingTokens` (sdk.d.ts:1728). When the legacy
+ * wrapSdkQuery path needs to project back into the SDK's start-option type:
+ *   - "xhigh" → "high"      (closest-supported session-start level)
+ *   - "auto"  → undefined   (omit; SDK uses model default)
+ *   - "off"   → undefined   (omit; runtime zeroing handled by setMaxThinkingTokens)
+ *   - others  → pass-through
+ */
+function narrowEffortForSdkOption(
+  level: EffortLevel,
+): "low" | "medium" | "high" | "max" | undefined {
+  switch (level) {
+    case "low":
+    case "medium":
+    case "high":
+    case "max":
+      return level;
+    case "xhigh":
+      return "high";
+    case "auto":
+    case "off":
+      return undefined;
+  }
+}
+
+/**
  * Wrap the SDK query() API into a SessionHandle — **legacy per-turn-query**.
  *
  * @deprecated Phase 73 Plan 01 — production `SdkSessionAdapter.createSession`
@@ -601,7 +633,8 @@ function wrapSdkQuery(
   skillTracking?: SkillTrackingConfig,
 ): SessionHandle {
   let sessionId = initialSessionId;
-  let currentEffort = baseOptions.effort ?? "low";
+  // Phase 83 EFFORT-04 — widened to v2.2 EffortLevel set.
+  let currentEffort: EffortLevel = (baseOptions.effort ?? "low") as EffortLevel;
   const mutableSuffix = baseOptions.mutableSuffix;
   const errorHandlers: Array<(error: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
@@ -611,11 +644,20 @@ function wrapSdkQuery(
    * Build options for a per-turn query, adding resume for session continuity.
    * Uses the current (possibly runtime-updated) effort level. Strips
    * adapter-only fields (mutableSuffix) before forwarding to sdk.query.
+   *
+   * Phase 83 EFFORT-04 — the SDK's session-start `effort` option only
+   * accepts the v2.1 level set (low|medium|high|max). For the v2.2-extended
+   * levels ("xhigh"|"auto"|"off") we narrow for the start-option field here;
+   * runtime control happens via q.setMaxThinkingTokens on the persistent
+   * handle (which is the production path). The legacy wrapSdkQuery spawns
+   * a per-turn query and has no persistent handle to set tokens on, so
+   * narrowing is the conservative choice for this test-only path.
    */
   function turnOptions(signal?: AbortSignal): SdkQueryOptions {
+    const sdkEffort = narrowEffortForSdkOption(currentEffort);
     const opts: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       ...baseOptions,
-      effort: currentEffort,
+      ...(sdkEffort !== undefined ? { effort: sdkEffort } : {}),
       resume: sessionId,
     };
     if (signal) {
@@ -1063,11 +1105,11 @@ function wrapSdkQuery(
       endHandlers.push(handler);
     },
 
-    setEffort(level: "low" | "medium" | "high" | "max"): void {
+    setEffort(level: EffortLevel): void {
       currentEffort = level;
     },
 
-    getEffort(): "low" | "medium" | "high" | "max" {
+    getEffort(): EffortLevel {
       return currentEffort;
     },
 

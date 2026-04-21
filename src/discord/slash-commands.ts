@@ -15,6 +15,7 @@ import {
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
 import { sendIpcRequest } from "../ipc/client.js";
@@ -260,10 +261,11 @@ export class SlashCommandHandler {
       }
     }
 
-    // Handle /effort directly — no need to route through the agent
+    // Handle /effort directly — no need to route through the agent.
+    // Phase 83 EFFORT-04 — validates against the full v2.2 level set.
     if (commandName === "clawcode-effort") {
       const level = options.get("level");
-      const validLevels = ["low", "medium", "high", "max"];
+      const validLevels = ["low", "medium", "high", "xhigh", "max", "auto", "off"];
       if (typeof level !== "string" || !validLevels.includes(level)) {
         try {
           await interaction.editReply(`Invalid effort level. Use: ${validLevels.join(", ")}`);
@@ -273,7 +275,7 @@ export class SlashCommandHandler {
       try {
         this.sessionManager.setEffortForAgent(
           agentName,
-          level as "low" | "medium" | "high" | "max",
+          level as EffortLevel,
         );
         await interaction.editReply(`Effort set to **${level}** for ${agentName}`);
       } catch (error) {

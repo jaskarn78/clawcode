@@ -83,6 +83,7 @@ import type { EscalationConfig } from "./escalation.js";
 import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
 import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema } from "../config/schema.js";
+import type { EffortLevel } from "../config/schema.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import { runConsolidation } from "../memory/consolidation.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
@@ -1800,11 +1801,12 @@ async function routeMethod(
     case "set-effort": {
       const name = validateStringParam(params, "name");
       const level = validateStringParam(params, "level");
-      const validLevels = ["low", "medium", "high", "max"];
+      // Phase 83 EFFORT-04 — accepts the full v2.2 level set.
+      const validLevels = ["low", "medium", "high", "xhigh", "max", "auto", "off"];
       if (!validLevels.includes(level)) {
         throw new ManagerError(`Invalid effort level '${level}'. Valid: ${validLevels.join(", ")}`);
       }
-      manager.setEffortForAgent(name, level as "low" | "medium" | "high" | "max");
+      manager.setEffortForAgent(name, level as EffortLevel);
       return { ok: true, agent: name, effort: level };
     }
 
