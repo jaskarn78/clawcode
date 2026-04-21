@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 82-01-PLAN.md
-last_updated: "2026-04-21T01:02:12.043Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 82-02-PLAN.md
+last_updated: "2026-04-21T01:29:23.201Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 14
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 39
-  completed_plans: 38
+  completed_plans: 39
 ---
 
 # Project State
@@ -133,6 +133,9 @@ Recent decisions affecting current work:
 - [Phase 82-pilot-cutover-completion]: removeBindingsForAgent bypasses zod schema to preserve operator-curated passthrough fields (env, auth, channels.discord.token)
 - [Phase 82-pilot-cutover-completion]: fs-guard allowlist uses exact-equality on resolve()'d paths — sibling .bak files still refuse
 - [Phase 82-pilot-cutover-completion]: source_integrity_sha hashes sorted ledger witness rows (not a live tree walk) — the ledger IS the audit trail
+- [Phase 82]: Pilot-highlight line suppressed on plan --agent <name> (single-agent filter has no signal value)
+- [Phase 82]: Dispatch-holder default-with-fallback pattern: impl = holder.x ?? moduleRef for test-safety
+- [Phase 82]: runCompleteAction bundled into Task 1 GREEN commit for dispatch-holder coherence (Phase 80/81 all-fields-init pattern)
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -214,9 +217,10 @@ Recent decisions affecting current work:
 | Phase 81-verify-rollback-resume-fork P02 | 17min | 2 tasks | 2 files |
 | Phase 81-verify-rollback-resume-fork P03 | 21min | 2 tasks | 3 files |
 | Phase 82-pilot-cutover-completion P01 | 25min | 2 tasks | 10 files |
+| Phase 82 P02 | 22min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 82-01-PLAN.md
+Stopped at: Completed 82-02-PLAN.md
 Resume file: None

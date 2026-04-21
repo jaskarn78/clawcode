@@ -123,7 +123,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 - [x] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only. (completed 2026-04-20)
 - [x] **Phase 80: Memory Translation + Re-embedding** — Read workspace markdown (disk as truth, not sqlite chunks), insert through `MemoryStore.insert()` with `origin_id UNIQUE` for idempotency, re-embed via MiniLM singleton (384-dim); `.learnings/*.md` land as first-class memories tagged `"learning"`. (completed 2026-04-20)
 - [x] **Phase 81: Verify + Rollback + Resume + Fork** — `verify`, idempotent re-run via ledger, per-agent `rollback`, and proof that every migrated agent (Sonnet/Haiku/MiniMax/Gemini) retains fork-to-Opus escalation with unbudgeted cost-ledger rows. (completed 2026-04-21)
-- [ ] **Phase 82: Pilot + Cutover + Completion** — Migrate low-risk pilot (`personal` or `local-clawdy`) first, run dual-bot guardrails during observation, per-agent `cutover` unbinds OpenClaw, and `complete` writes the v2.1-migration-report.md summarizing fleet outcomes.
+- [x] **Phase 82: Pilot + Cutover + Completion** — Migrate low-risk pilot (`personal` or `local-clawdy`) first, run dual-bot guardrails during observation, per-agent `cutover` unbinds OpenClaw, and `complete` writes the v2.1-migration-report.md summarizing fleet outcomes. (completed 2026-04-21)
 
 ## Phase Details
 
@@ -266,7 +266,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
   4. User runs `clawcode migrate openclaw complete` and observes that `openclaw.json:bindings` contains zero channel IDs that also appear in `clawcode.yaml:agents[*].channels:` — cutover invariant holds fleet-wide (no coexistence duplicates remain).
 **Plans**: 2 plans
 - [x] 82-01-PLAN.md — pilot-selector + cutover + report-writer pure modules + fs-guard allowlist extension + removeBindingsForAgent helper (OPS-01, OPS-02, OPS-04)
-- [ ] 82-02-PLAN.md — CLI wiring: pilot-highlight line in runPlanAction + cutover subcommand + complete subcommand + four integration tests proving SC-1..SC-4 (OPS-01, OPS-02, OPS-04)
+- [x] 82-02-PLAN.md — CLI wiring: pilot-highlight line in runPlanAction + cutover subcommand + complete subcommand + four integration tests proving SC-1..SC-4 (OPS-01, OPS-02, OPS-04)
 
 ## Progress
 
@@ -298,7 +298,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 79. Workspace Migration | 3/3 | Complete    | 2026-04-20 |
 | 80. Memory Translation + Re-embedding | 2/3 | Complete    | 2026-04-20 |
 | 81. Verify + Rollback + Resume + Fork | 3/3 | Complete    | 2026-04-21 |
-| 82. Pilot + Cutover + Completion | 1/2 | In Progress|  |
+| 82. Pilot + Cutover + Completion | 2/2 | Complete   | 2026-04-21 |
 
 ---
 
