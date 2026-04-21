@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to execute
-stopped_at: Completed 81-02-PLAN.md
-last_updated: "2026-04-20T23:56:12.333Z"
-last_activity: 2026-04-20
+status: Phase complete — ready for verification
+stopped_at: Completed 81-03-PLAN.md
+last_updated: "2026-04-21T00:21:26.267Z"
+last_activity: 2026-04-21
 progress:
   total_phases: 14
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 37
-  completed_plans: 36
+  completed_plans: 37
 ---
 
 # Project State
@@ -126,6 +126,10 @@ Recent decisions affecting current work:
 - [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 02]: Resume safety is a DB-level invariant (origin_id UNIQUE), not a CLI-level skip — runApplyAction re-processes migrated agents idempotently; MIGR-03 witness test inserts same origin_id twice and asserts GROUP BY HAVING COUNT>1 returns zero rows
 - [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 02]: Late-bind action handlers into migrateOpenclawHandlers (placeholder async () => 0 at init, real fn assigned post-definition) — preserves Phase 76 file layout (handlers below holder) without reshuffling, while keeping the Phase 78 dispatch-holder test DI pattern intact
 - [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 02]: Verify iterates ledger statuses ∈ {migrated, verified, rolled-back} — rolled-back agents re-verifiable (rollback→re-apply→verify is a valid forensic flow); pending agents (never applied) silently skipped
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: PRIMARY_MODELS parameterization uses resolved enum values (haiku/sonnet) for ResolvedAgentConfig fixtures — source-family labels (MiniMax, Gemini) preserved via describe/it strings for acceptance-criteria grep resolution; UsageEvent.model (typed string) records full model ids directly.
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: EscalationMonitor-over-SessionManager seam choice (Option B) — <20 LOC fixture vs SessionManager's Discord+chokidar+Agent-SDK deps; EscalationMonitor.escalate is the ONLY production caller of forkSession with model override, so pinning at this seam covers the full FORK-01 contract.
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: Static-grep regression for no-budget-ceiling — readFileSync('src/usage/tracker.ts') + expect().not.toMatch(/BudgetExceededError|canEscalate/) pins invariant that UsageTracker.record has no budget-gate integration; catches drift if a future refactor adds budget checks into tracker.ts.
+- [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: Phase 74 alternate-contract pin — v1.5 persistent-fork rows NEVER carry 'openclaw:<slug>' agent shape (that's Phase 74 transient-routing); two-sided assertion expect(agent).toBe('<parent>-fork-<id>') + .not.toBe(parent) pins both positive (literal) and negative (never collapses) fork-name invariant.
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -205,9 +209,10 @@ Recent decisions affecting current work:
 | Phase 80-memory-translation-re-embedding P03 | 62 min | 2 tasks | 7 files |
 | Phase 81-verify-rollback-resume-fork P01 | 9min | 2 tasks | 1 files |
 | Phase 81-verify-rollback-resume-fork P02 | 17min | 2 tasks | 2 files |
+| Phase 81-verify-rollback-resume-fork P03 | 21min | 2 tasks | 3 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-20
-Stopped at: Completed 81-02-PLAN.md
+Last activity: 2026-04-21
+Stopped at: Completed 81-03-PLAN.md
 Resume file: None

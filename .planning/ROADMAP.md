@@ -122,7 +122,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 - [x] **Phase 78: Config Mapping + YAML Writer** — Map `openclaw.json` agents to `clawcode.yaml` entries with `soulFile:`/`identityFile:` file pointers, MCP server references, and atomic temp+rename YAML writes preserving comments and key ordering. (completed 2026-04-20)
 - [x] **Phase 79: Workspace Migration** — Copy per-agent workspace contents (SOUL/IDENTITY/USER/TOOLS/CLAUDE/MEMORY/memory/.learnings/archive) via `fs.cp` with symlink filter and hash-witness verification; finmentum family resolves to one shared basePath; `.git` preserved verbatim; openclaw-sessions archived read-only. (completed 2026-04-20)
 - [x] **Phase 80: Memory Translation + Re-embedding** — Read workspace markdown (disk as truth, not sqlite chunks), insert through `MemoryStore.insert()` with `origin_id UNIQUE` for idempotency, re-embed via MiniLM singleton (384-dim); `.learnings/*.md` land as first-class memories tagged `"learning"`. (completed 2026-04-20)
-- [ ] **Phase 81: Verify + Rollback + Resume + Fork** — `verify`, idempotent re-run via ledger, per-agent `rollback`, and proof that every migrated agent (Sonnet/Haiku/MiniMax/Gemini) retains fork-to-Opus escalation with unbudgeted cost-ledger rows.
+- [x] **Phase 81: Verify + Rollback + Resume + Fork** — `verify`, idempotent re-run via ledger, per-agent `rollback`, and proof that every migrated agent (Sonnet/Haiku/MiniMax/Gemini) retains fork-to-Opus escalation with unbudgeted cost-ledger rows. (completed 2026-04-21)
 - [ ] **Phase 82: Pilot + Cutover + Completion** — Migrate low-risk pilot (`personal` or `local-clawdy`) first, run dual-bot guardrails during observation, per-agent `cutover` unbinds OpenClaw, and `complete` writes the v2.1-migration-report.md summarizing fleet outcomes.
 
 ## Phase Details
@@ -253,7 +253,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 **Plans**: 3 plans
 - [x] 81-01-PLAN.md — verifier.ts (4 checks) + rollbacker.ts (atomic removal + source hash-witness) + removeAgentFromConfig YAML extension (MIGR-04, MIGR-05)
 - [x] 81-02-PLAN.md — verify + rollback CLI subcommands + resume-idempotency integration test + end-to-end verify/rollback/reapply cycle tests (MIGR-03, MIGR-04, MIGR-05)
-- [ ] 81-03-PLAN.md — fork-to-Opus regression across 4 primary models (Haiku/Sonnet/MiniMax/Gemini) + fork cost-visibility regression proving FORK-02 no-budget-ceiling (FORK-01, FORK-02)
+- [x] 81-03-PLAN.md — fork-to-Opus regression across 4 primary models (Haiku/Sonnet/MiniMax/Gemini) + fork cost-visibility regression proving FORK-02 no-budget-ceiling (FORK-01, FORK-02)
 
 ### Phase 82: Pilot + Cutover + Completion
 **Goal**: User (as operator) can migrate one low-risk pilot agent (`personal` or `local-clawdy`) first, verify end-to-end behavior, then execute per-agent `cutover` to unbind the OpenClaw bot from each migrated agent's Discord channel (dual-run guardrails during the observation window), then run `complete` to write a final migration report to `.planning/milestones/v2.1-migration-report.md` summarizing per-agent outcomes.
@@ -295,7 +295,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 78. Config Mapping + YAML Writer | 3/3 | Complete    | 2026-04-20 |
 | 79. Workspace Migration | 3/3 | Complete    | 2026-04-20 |
 | 80. Memory Translation + Re-embedding | 2/3 | Complete    | 2026-04-20 |
-| 81. Verify + Rollback + Resume + Fork | 2/3 | In Progress|  |
+| 81. Verify + Rollback + Resume + Fork | 3/3 | Complete   | 2026-04-21 |
 | 82. Pilot + Cutover + Completion | 0/? | Not started | - |
 
 ---

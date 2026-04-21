@@ -74,8 +74,8 @@ OpenClaw workspace markdown → ClawCode `memories.db` with re-embedding.
 
 Verify every migrated agent retains v1.5 fork-based Opus escalation.
 
-- [ ] **FORK-01**: User (as migrated agent) can invoke the existing fork-to-Opus escalation path (`forkSession` with Opus model override) regardless of the agent's primary model (Sonnet, Haiku, MiniMax, or Gemini) — no per-agent config change required.
-- [ ] **FORK-02**: User (as operator) can confirm via `clawcode costs --agent <name>` that fork-to-Opus turns appear in the cost ledger for each migrated agent, with no budget ceiling enforced (unlimited per user decision).
+- [x] **FORK-01**: User (as migrated agent) can invoke the existing fork-to-Opus escalation path (`forkSession` with Opus model override) regardless of the agent's primary model (Sonnet, Haiku, MiniMax, or Gemini) — no per-agent config change required.
+- [x] **FORK-02**: User (as operator) can confirm via `clawcode costs --agent <name>` that fork-to-Opus turns appear in the cost ledger for each migrated agent, with no budget ceiling enforced (unlimited per user decision).
 
 ### Operational Cutover (OPS-*)
 
@@ -146,8 +146,8 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | MIGR-03 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | MIGR-04 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | MIGR-05 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
-| FORK-01 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
-| FORK-02 | Phase 81: Verify + Rollback + Resume + Fork | Pending |
+| FORK-01 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
+| FORK-02 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | OPS-01 | Phase 82: Pilot + Cutover + Completion | Pending |
 | OPS-02 | Phase 82: Pilot + Cutover + Completion | Pending |
 | OPS-04 | Phase 82: Pilot + Cutover + Completion | Pending |

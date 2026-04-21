@@ -37,3 +37,17 @@ Reproduced via `npx tsc --noEmit` without Phase 81 changes:
 Zero tsc errors in Phase 81 files (verifier.ts, rollbacker.ts,
 yaml-writer.ts, __tests__/verifier.test.ts, __tests__/rollbacker.test.ts,
 __tests__/yaml-writer.test.ts).
+
+## Plan 03 audit (2026-04-21)
+
+Re-verified the pre-existing failures set against the full suite post-Plan-03:
+
+- Both Plan 03 test files (fork-migrated-agent.test.ts, fork-cost-visibility.test.ts)
+  pass 43/43 in isolation. Zero tsc errors in either file.
+- Full suite: 3654 passed / 11 failed — same failure files as above plus 2
+  adjacent Phase 80/81 CLI integration tests (`src/cli/__tests__/migrate-openclaw.test.ts`
+  Test 1 for translateAgentMemories wiring; `src/cli/commands/__tests__/migrate-openclaw.test.ts`
+  MIGR-03 integration). Neither references fork.ts / tracker.ts / costs.ts / the
+  two new Plan 03 files — pre-existing drift from Phase 80/81 Plan 02 work.
+  Out of scope for Plan 03 per SCOPE BOUNDARY rule (regression-only plan).
+
