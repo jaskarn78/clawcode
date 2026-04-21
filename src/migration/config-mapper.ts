@@ -42,11 +42,16 @@ export type MapAgentResult = {
 };
 
 /**
- * Hardcoded — ALWAYS auto-injected into every migrated agent's mcpServers
- * array (per 78-CONTEXT D-mcp). Order is stable for byte-deterministic
- * plan hashing.
+ * EMPTY per 82.2 gap closure — `clawcode` (memory_lookup, spawn_subagent_thread,
+ * send_message, browser/search/image MCPs) and `1password` are DAEMON-INJECTED
+ * at runtime, not user-declared in clawcode.yaml. Writing them into an agent's
+ * mcpServers list (as string refs) breaks `loadConfig` because those names
+ * don't exist in the top-level `mcpServers:` map. The daemon attaches these
+ * tools to every agent regardless of YAML content.
+ *
+ * Order is stable for byte-deterministic plan hashing.
  */
-const AUTO_INJECT_MCP: readonly string[] = Object.freeze(["clawcode", "1password"]);
+const AUTO_INJECT_MCP: readonly string[] = Object.freeze([]);
 
 export function mapAgent(args: {
   readonly source: OpenclawSourceEntry;

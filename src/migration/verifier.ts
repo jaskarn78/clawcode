@@ -65,12 +65,20 @@ export type VerifyCheckResult = Readonly<{
 }>;
 
 /**
- * The six files every migrated agent workspace must expose. Literal array —
- * load-bearing grep contract per 81-CONTEXT decision (a).
+ * Files every migrated agent workspace may expose. SOUL.md + IDENTITY.md are
+ * REQUIRED — they define agent identity and missing them is a hard failure.
+ * The other four are OPTIONAL — real-world OpenClaw workspaces (e.g.
+ * card-generator) don't always have MEMORY.md or CLAUDE.md, and verify
+ * shouldn't fail agents that never had those files at source. Literal array —
+ * load-bearing grep contract per 81-CONTEXT decision (a), split by requirement
+ * per 82.2 gap closure.
  */
 export const REQUIRED_WORKSPACE_FILES = Object.freeze([
   "SOUL.md",
   "IDENTITY.md",
+] as const);
+
+export const OPTIONAL_WORKSPACE_FILES = Object.freeze([
   "MEMORY.md",
   "CLAUDE.md",
   "USER.md",
@@ -166,17 +174,26 @@ function checkWorkspaceFiles(
     else path = join(resolved.workspace, f);
     if (!existsSync(path)) missing.push(f);
   }
+  // Optional files — count but never fail on them. Reported in the detail
+  // when absent so operators know what's missing without it being a blocker.
+  const missingOptional: string[] = [];
+  for (const f of OPTIONAL_WORKSPACE_FILES) {
+    if (!existsSync(join(resolved.workspace, f))) missingOptional.push(f);
+  }
   if (missing.length === 0) {
+    const optionalNote = missingOptional.length > 0
+      ? ` (optional absent: ${missingOptional.join(", ")})`
+      : "";
     return Object.freeze({
       check: "workspace-files-present" as const,
       status: "pass" as const,
-      detail: `all ${REQUIRED_WORKSPACE_FILES.length} files present`,
+      detail: `${REQUIRED_WORKSPACE_FILES.length} required files present${optionalNote}`,
     });
   }
   return Object.freeze({
     check: "workspace-files-present" as const,
     status: "fail" as const,
-    detail: `missing: ${missing.join(", ")}`,
+    detail: `missing required: ${missing.join(", ")}`,
   });
 }
 
