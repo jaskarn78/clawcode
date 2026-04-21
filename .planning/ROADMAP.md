@@ -284,7 +284,7 @@ Plans:
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
 | 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
-| 87. Native CC Slash Commands | 3/3 | Complete   | 2026-04-21 |
+| 87. Native CC Slash Commands | 3/3 | Complete    | 2026-04-21 |
 | 88. Skills Marketplace | 0/? | Not started | - |
 
 ## v2.2 Dependency Graph
