@@ -7,7 +7,10 @@
  * override precedence, discord channel passthrough, and purity.
  */
 import { describe, it, expect } from "vitest";
-import type { OpenclawSourceEntry } from "../openclaw-config-reader.js";
+import {
+  FINMENTUM_FAMILY_IDS,
+  type OpenclawSourceEntry,
+} from "../openclaw-config-reader.js";
 import { mapAgent, type MapAgentWarning } from "../config-mapper.js";
 import { DEFAULT_MODEL_MAP } from "../model-map.js";
 import type { PlanWarning } from "../diff-builder.js";
@@ -31,7 +34,7 @@ function makeSource(overrides: Partial<OpenclawSourceEntry> = {}): OpenclawSourc
 }
 
 describe("mapAgent — finmentum vs dedicated paths", () => {
-  it("finmentum agent gets shared basePath + distinct memoryPath + SOUL/IDENTITY under memoryPath", () => {
+  it("finmentum agent gets shared basePath + distinct memoryPath + SOUL/IDENTITY under basePath (shared with finmentum primary) per 82.1-D-fix", () => {
     const source = makeSource({
       id: "fin-acquisition",
       workspace: "/home/jj/.openclaw/workspace-fin-acquisition",
@@ -48,10 +51,30 @@ describe("mapAgent — finmentum vs dedicated paths", () => {
     });
     expect(node.workspace).toBe("/root/finmentum");
     expect(node.memoryPath).toBe("/root/finmentum/memory/fin-acquisition");
-    expect(node.soulFile).toBe("/root/finmentum/memory/fin-acquisition/SOUL.md");
-    expect(node.identityFile).toBe("/root/finmentum/memory/fin-acquisition/IDENTITY.md");
+    // 82.1 gap closure: soulFile/identityFile live at SHARED basePath root,
+    // not the per-agent memoryPath subdir. workspace-copier writes SOUL.md
+    // and IDENTITY.md to <root>/finmentum/ (shared across family members);
+    // the YAML pointer must agree or `verify` reports the files as missing.
+    expect(node.soulFile).toBe("/root/finmentum/SOUL.md");
+    expect(node.identityFile).toBe("/root/finmentum/IDENTITY.md");
     expect(node.model).toBe("sonnet");
     expect(node.name).toBe("fin-acquisition");
+  });
+
+  it("all 5 finmentum-family agents emit soulFile/identityFile at shared basePath (82.1 gap closure)", () => {
+    for (const id of FINMENTUM_FAMILY_IDS) {
+      const source = makeSource({ id, isFinmentumFamily: true });
+      const { node } = mapAgent({
+        source,
+        targetBasePath: "/root/finmentum",
+        targetMemoryPath: `/root/finmentum/memory/${id}`,
+        modelMap: DEFAULT_MODEL_MAP,
+        existingTopLevelMcp: new Set(),
+        perAgentMcpNames: [],
+      });
+      expect(node.soulFile).toBe("/root/finmentum/SOUL.md");
+      expect(node.identityFile).toBe("/root/finmentum/IDENTITY.md");
+    }
   });
 
   it("dedicated agent omits memoryPath (schema fallback inherits workspace)", () => {
@@ -66,6 +89,9 @@ describe("mapAgent — finmentum vs dedicated paths", () => {
     });
     expect(node.workspace).toBe("/root/personal");
     expect(node.memoryPath).toBeUndefined();
+    // Regression pin: dedicated-workspace agents keep soulFile at
+    // <targetBasePath>/SOUL.md — callers set targetMemoryPath === targetBasePath
+    // for dedicated agents, so 82.1 fix leaves this path unchanged.
     expect(node.soulFile).toBe("/root/personal/SOUL.md");
     expect(node.identityFile).toBe("/root/personal/IDENTITY.md");
   });
