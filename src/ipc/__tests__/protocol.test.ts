@@ -55,6 +55,8 @@ describe("IPC_METHODS", () => {
       // Model tiering (Phase 39)
       "ask-advisor",
       "set-model",
+      // Phase 87 CMD-02 — live SDK permission-mode swap via Query.setPermissionMode.
+      "set-permission-mode",
       // Cost tracking (Phase 40)
       "costs",
       // Latency (Phase 50)
