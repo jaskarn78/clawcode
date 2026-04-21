@@ -9,8 +9,26 @@ export const modelSchema = z.enum(["sonnet", "opus", "haiku"]);
 /**
  * Valid reasoning effort levels for the Claude API.
  * Controls how much thinking the model does per response.
+ *
+ * Phase 83 EFFORT-04 — extended from the v2.1 set (`low|medium|high|max`) to
+ * the v2.2 set by adding:
+ *   - `xhigh` → between `high` and `max` (mirrors OpenClaw's xhigh input)
+ *   - `auto`  → reset to model default via q.setMaxThinkingTokens(null)
+ *   - `off`   → explicit disable via q.setMaxThinkingTokens(0)
+ *
+ * Extension is additive: v2.1 migrated YAMLs (all 15 agents carry
+ * `effort: low`) parse unchanged.
  */
-export const effortSchema = z.enum(["low", "medium", "high", "max"]);
+export const effortSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "auto",
+  "off",
+]);
+export type EffortLevel = z.infer<typeof effortSchema>;
 
 /**
  * Canonical latency segment names — mirrored from src/performance/types.ts

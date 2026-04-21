@@ -48,6 +48,12 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "agents.*.schedules",
   "agents.*.heartbeat",
   "defaults.heartbeat",
+  // Phase 83 EFFORT-01 — runtime override via handle.setEffort → next turn.
+  // No socket/db/workspace resource touched; buildOptions re-reads
+  // currentEffort per turn, so YAML edits are picked up on restart AND a
+  // live /clawcode-effort call invokes q.setMaxThinkingTokens immediately.
+  "agents.*.effort",
+  "defaults.effort",
 ]);
 
 /**

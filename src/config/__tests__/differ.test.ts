@@ -257,6 +257,39 @@ describe("diffConfigs", () => {
     expect(pathChange).toBeDefined();
     expect(pathChange!.reloadable).toBe(false);
   });
+
+  // Phase 83 EFFORT-01 — effort is reloadable because setEffort() invokes
+  // q.setMaxThinkingTokens on the live handle; no restart required.
+  it("detects agents.*.effort change as reloadable", () => {
+    const oldConfig = makeConfig();
+    const newConfig = makeConfig({
+      agents: [
+        { ...oldConfig.agents[0], effort: "high" as const },
+      ],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const effortChange = result.changes.find((c) =>
+      c.fieldPath === "agents.researcher.effort",
+    );
+    expect(effortChange).toBeDefined();
+    expect(effortChange!.oldValue).toBe("low");
+    expect(effortChange!.newValue).toBe("high");
+    expect(effortChange!.reloadable).toBe(true);
+    expect(result.hasReloadableChanges).toBe(true);
+  });
+
+  it("detects defaults.effort change as reloadable", () => {
+    const oldConfig = makeConfig();
+    const newConfig = makeConfig({
+      defaults: { ...oldConfig.defaults, effort: "medium" as const },
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const effortChange = result.changes.find((c) =>
+      c.fieldPath === "defaults.effort",
+    );
+    expect(effortChange).toBeDefined();
+    expect(effortChange!.reloadable).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
