@@ -12,8 +12,8 @@ describe("slash-types", () => {
     // DEFAULT_SLASH_COMMANDS. They are re-provided at registration time by the
     // SDK discovery loop via native-cc-commands.buildNativeCommandDefs so the
     // native-dispatch path is the ONLY path for /compact and /cost going forward.
-    it("contains exactly 6 commands with clawcode- prefix (Phase 87 CMD-04 removed compact + usage)", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(6);
+    it("contains exactly 8 commands with clawcode- prefix (Phase 88 added skills-browse + skills)", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(8);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
@@ -22,6 +22,8 @@ describe("slash-types", () => {
         "clawcode-health",
         "clawcode-model",
         "clawcode-effort",
+        "clawcode-skills-browse",
+        "clawcode-skills",
       ]);
     });
 
@@ -47,16 +49,20 @@ describe("slash-types", () => {
       // claudeCommand field is intentionally empty (the inline handler short-
       // circuits before formatCommandMessage is reached). All other commands
       // still carry a non-empty LLM-prompt template.
+      // Phase 88 MKT-01 / MKT-07 — clawcode-skills-browse and clawcode-skills
+      // are ALSO inline-handled (StringSelectMenuBuilder + IPC dispatch).
+      const inlineHandlers = new Set([
+        "clawcode-model",
+        "clawcode-skills-browse",
+        "clawcode-skills",
+      ]);
       for (const cmd of DEFAULT_SLASH_COMMANDS) {
         expect(cmd.name).toBeTruthy();
         expect(typeof cmd.name).toBe("string");
         expect(cmd.description).toBeTruthy();
         expect(typeof cmd.description).toBe("string");
         expect(typeof cmd.claudeCommand).toBe("string");
-        if (cmd.name === "clawcode-model") {
-          // Regression pin — Phase 86 removed the old "Set my model to {model}"
-          // LLM-prompt routing in favour of the inline handler at
-          // slash-commands.ts:handleModelCommand.
+        if (inlineHandlers.has(cmd.name)) {
           expect(cmd.claudeCommand).toBe("");
         } else {
           expect(cmd.claudeCommand).toBeTruthy();
@@ -79,12 +85,26 @@ describe("slash-types", () => {
     it("commands without options have an empty options array", () => {
       // Phase 87 CMD-04 — after removing compact + usage, the no-options set
       // shrinks from 5 to 3 (status, schedule, health).
+      // Phase 88 MKT-01 / MKT-07 / UI-01 — clawcode-skills-browse and
+      // clawcode-skills are picker-driven (zero free-text args); they join
+      // the no-options set.
       const withOptions = new Set(["clawcode-memory", "clawcode-model", "clawcode-effort"]);
       const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
-      expect(noOptionCmds.length).toBe(3);
+      expect(noOptionCmds.length).toBe(5);
       for (const cmd of noOptionCmds) {
         expect(cmd.options).toEqual([]);
       }
+    });
+
+    it("(Phase 88 UI-01) clawcode-skills-browse and clawcode-skills have empty claudeCommand and zero options", () => {
+      const browse = DEFAULT_SLASH_COMMANDS.find((c) => c.name === "clawcode-skills-browse");
+      const skills = DEFAULT_SLASH_COMMANDS.find((c) => c.name === "clawcode-skills");
+      expect(browse).toBeDefined();
+      expect(skills).toBeDefined();
+      expect(browse!.claudeCommand).toBe("");
+      expect(skills!.claudeCommand).toBe("");
+      expect(browse!.options).toHaveLength(0);
+      expect(skills!.options).toHaveLength(0);
     });
 
     it("the model command has one OPTIONAL option named model of type STRING (3)", () => {
