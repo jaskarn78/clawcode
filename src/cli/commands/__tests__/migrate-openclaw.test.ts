@@ -1738,3 +1738,100 @@ describe("Phase 81 Plan 02 — integration: resume + verify + rollback end-to-en
     }
   });
 });
+
+// ---------------------------------------------------------------------
+// Phase 82 Plan 02 — pilot-highlight + cutover + complete regression pins
+// ---------------------------------------------------------------------
+//
+// Additive describe blocks per 82-02 plan: pin behaviors that must hold
+// alongside Wave 2's CLI surface without touching existing describe bodies.
+
+describe("Phase 82 Plan 02 — pilot-highlight regression", () => {
+  it("runPlanAction does NOT emit pilot line when inventory is empty", async () => {
+    // Build an empty-inventory fixture (agents.list=[] + bindings=[]).
+    // Driver: the pilot line must be guarded by report.agents.length >= 1.
+    const tmp = mkdtempSync(join(tmpdir(), "p82-pilot-empty-"));
+    const emptyJson = join(tmp, "openclaw.json");
+    const ledgerP = join(tmp, "ledger.jsonl");
+    writeFileSync(
+      emptyJson,
+      JSON.stringify(
+        {
+          meta: { lastTouchedVersion: "x" },
+          agents: { list: [] },
+          bindings: [],
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+
+    const stdoutCapture: string[] = [];
+    const writeStdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        stdoutCapture.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stdout.write);
+    const writeStderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    const originalEnv = { ...process.env };
+    process.env.CLAWCODE_OPENCLAW_JSON = emptyJson;
+    process.env.CLAWCODE_OPENCLAW_MEMORY_DIR = join(tmp, "mem");
+    process.env.CLAWCODE_AGENTS_ROOT = join(tmp, "cc-agents");
+    process.env.CLAWCODE_LEDGER_PATH = ledgerP;
+    process.env.NO_COLOR = "1";
+    try {
+      const { runPlanAction } = await import("../migrate-openclaw.js");
+      await runPlanAction({});
+      const out = stdoutCapture.join("");
+      expect(out).not.toContain("✨ Recommended pilot:");
+    } finally {
+      writeStdoutSpy.mockRestore();
+      writeStderrSpy.mockRestore();
+      rmSync(tmp, { recursive: true, force: true });
+      process.env = originalEnv;
+    }
+  });
+});
+
+describe("Phase 82 Plan 02 — cutover subcommand registration", () => {
+  it("registerMigrateOpenclawCommand registers 'cutover' with a required <agent> argument", async () => {
+    const { registerMigrateOpenclawCommand } = await import(
+      "../migrate-openclaw.js"
+    );
+    const { Command } = await import("commander");
+    const program = new Command();
+    registerMigrateOpenclawCommand(program);
+    const migrate = program.commands.find((c) => c.name() === "migrate")!;
+    const openclaw = migrate.commands.find((c) => c.name() === "openclaw")!;
+    const cutover = openclaw.commands.find((c) => c.name() === "cutover");
+    expect(cutover).toBeDefined();
+    const regArgs = (cutover as unknown as {
+      registeredArguments?: Array<{ required: boolean }>;
+    }).registeredArguments;
+    expect(regArgs).toBeDefined();
+    expect(regArgs!.length).toBeGreaterThanOrEqual(1);
+    expect(regArgs![0]!.required).toBe(true);
+  });
+});
+
+describe("Phase 82 Plan 02 — complete subcommand registration", () => {
+  it("registerMigrateOpenclawCommand registers 'complete' with a --force option", async () => {
+    const { registerMigrateOpenclawCommand } = await import(
+      "../migrate-openclaw.js"
+    );
+    const { Command } = await import("commander");
+    const program = new Command();
+    registerMigrateOpenclawCommand(program);
+    const migrate = program.commands.find((c) => c.name() === "migrate")!;
+    const openclaw = migrate.commands.find((c) => c.name() === "openclaw")!;
+    const complete = openclaw.commands.find((c) => c.name() === "complete");
+    expect(complete).toBeDefined();
+    const forceOpt = (complete as unknown as {
+      options?: Array<{ long?: string; short?: string }>;
+    }).options?.find((o) => o.long === "--force");
+    expect(forceOpt).toBeDefined();
+  });
+});
