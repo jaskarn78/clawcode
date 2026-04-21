@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Executing
-stopped_at: Completed 85-02-PLAN.md — mcp-prompt-block renderer + stable-prefix placement (TOOL-02/05/07)
-last_updated: "2026-04-21T20:20:24.919Z"
+stopped_at: Completed 85-03-PLAN.md — /clawcode-tools Discord slash + clawcode mcp-status CLI shipped (TOOL-06 / UI-01); Phase 85 complete
+last_updated: "2026-04-21T20:21:53.289Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-21)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 85 — MCP Tool Awareness & Reliability (Plans 01-02 complete; 03 wave-parallel)
+**Current focus:** Phase 85 — MCP Tool Awareness & Reliability (all 3 plans complete; phase shipped)
 
 ## Current Position
 
-Phase: 85
-Plan: 03 (next — wave-2 parallel with 02)
+Phase: 85 (complete)
+Plan: — (awaiting next phase decomposition)
 
 ## Performance Metrics
 
@@ -96,6 +96,9 @@ Recent decisions affecting current work:
 - [Phase 85]: Plan 85-02 — Pitfall 12 (MCP config leak) closed by narrowing renderer's accepted shape to Pick<McpServerSchemaConfig, name> & optional?. Eight regression pins prevent command/args/env from re-entering the prompt surface.
 - [Phase 85]: Plan 85-02 — Tools column hard-coded to U+2014 em dash in v2.2 (not tool names). Future q.mcpServerStatus() wire-up can populate without changing table shape — prompt-hash compatible migration.
 - [Phase 85]: Plan 85-02 — mcpStateProvider is OPTIONAL on SessionConfigDeps; absent → empty Map → status 'unknown'. Preauth framing still lands and closes phantom-error class even before first heartbeat tick.
+- [Phase 85]: Plan 85-03 — /clawcode-tools is CONTROL_COMMANDS (daemon-routed, zero LLM cost) with inline dispatch branch BEFORE generic handleControlCommand so the reply renders as EmbedBuilder (UI-01) instead of the text blob the generic dispatcher emits.
+- [Phase 85]: Plan 85-03 — CLI command name collision: plan called for 'clawcode tools' but src/cli/commands/tools.ts is already Phase 55's tool-call latency command. Shipped as 'clawcode mcp-status' instead (parallels existing mcp-servers); Discord slash stays /clawcode-tools as planned (independent name space).
+- [Phase 85]: Plan 85-03 — Pitfall 9 closure: pre-flight count assertion CONTROL_COMMANDS.length + DEFAULT_SLASH_COMMANDS.length <= 90 pins the Discord 100-per-guild cap. Current count post-Plan-03: 16/100. Pitfall 12 closure: neither UI surface exposes command/args/env — MCP env secrets can't leak through observability.
 
 ### v2.1 closing decisions (for reference)
 
@@ -163,9 +166,10 @@ Recent decisions affecting current work:
 | Phase 84 P03 | 6min 23s | 1 tasks | 4 files |
 | Phase 85 P01 | 30min 24s | 2 tasks (TDD) | 15 files |
 | Phase 85 P02 | 13min 24s | 2 tasks | 6 files |
+| Phase 85 P03 | 20min 0s | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 85-02-PLAN.md — mcp-prompt-block renderer + stable-prefix placement (TOOL-02/05/07)
+Stopped at: Completed 85-03-PLAN.md — /clawcode-tools Discord slash + clawcode mcp-status CLI shipped (TOOL-06 / UI-01); Phase 85 complete
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

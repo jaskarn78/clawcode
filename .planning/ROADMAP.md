@@ -128,7 +128,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 - [x] **Phase 83: Extended-Thinking Effort Mapping** — Close the P0 silent no-op at persistent-session-handle.ts:599; wire `/clawcode-effort` through to SDK `Query.setMaxThinkingTokens()`; SDK canary for Phases 86/87. (completed 2026-04-21)
 - [x] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns. (completed 2026-04-21)
-- [ ] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface.
+- [x] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface. (completed 2026-04-21)
 - [ ] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87.
 - [ ] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first.
 - [x] **Phase 88: Skills Marketplace** — `/clawcode-skills-browse` Discord picker that runs the Phase 84 migration utility against a single skill; atomic post-install `skills:` list update + hot-reload. (completed 2026-04-21)
@@ -207,7 +207,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 **Plans**: 3 plans
 - [x] 85-01-PLAN.md — Readiness gate (JSON-RPC initialize on startup, mandatory vs optional classification) + heartbeat reconnect + verbatim JSON-RPC error pass-through (TOOL-01, TOOL-03, TOOL-04)
 - [x] 85-02-PLAN.md — System prompt assembly: pre-authenticated framing + live tool-status table + verbatim-error rule in v1.7 stable cached prefix (TOOL-02, TOOL-05, TOOL-07)
-- [ ] 85-03-PLAN.md — /clawcode-tools Discord slash (EmbedBuilder, UI-01) + clawcode tools CLI parity (TOOL-06 + UI-01)
+- [x] 85-03-PLAN.md — /clawcode-tools Discord slash (EmbedBuilder, UI-01) + clawcode tools CLI parity (TOOL-06 + UI-01)
 
 ### Phase 86: Dual Discord Model Picker (Core)
 **Goal**: Users can change a running agent's model from Discord via a direct IPC dispatch (no LLM-prompt round-trip), restricted to the per-agent `allowedModels` allowlist, persisted atomically to `clawcode.yaml`, with cache-invalidation UX that mirrors native `/model`.
@@ -274,7 +274,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 |-------|----------------|--------|-----------|
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
-| 85. MCP Tool Awareness & Reliability | 2/3 | In Progress|  |
+| 85. MCP Tool Awareness & Reliability | 3/3 | Complete   | 2026-04-21 |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
 | 87. Native CC Slash Commands | 0/? | Not started | - |
 | 88. Skills Marketplace | 0/? | Not started | - |
