@@ -54,6 +54,14 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // live /clawcode-effort call invokes q.setMaxThinkingTokens immediately.
   "agents.*.effort",
   "defaults.effort",
+  // Phase 86 MODEL-01 — allowlist is read lazily by the Discord picker
+  // on every invocation (no cached state in a session handle). A YAML
+  // edit takes effect on the NEXT /clawcode-model interaction without
+  // restart. Runtime model SWITCHES remain non-reloadable (agents.*.model
+  // still requires session restart per types.ts:63) — the allowlist
+  // governs what's PICKABLE, not what's active.
+  "agents.*.allowedModels",
+  "defaults.allowedModels",
 ]);
 
 /**

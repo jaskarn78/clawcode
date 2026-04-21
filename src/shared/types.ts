@@ -17,6 +17,16 @@ export type ResolvedAgentConfig = {
   readonly channels: readonly string[];
   readonly model: "sonnet" | "opus" | "haiku";
   readonly effort: "low" | "medium" | "high" | "max";
+  /**
+   * Phase 86 MODEL-01 — per-agent allowlist for the /clawcode-model
+   * Discord picker and the SessionManager.setModelForAgent guard.
+   *
+   * ALWAYS populated after resolution (loader.ts fills from
+   * defaults.allowedModels when the agent omits the field). Downstream
+   * consumers (Plan 02 daemon IPC, Plan 03 slash command) read this
+   * unconditionally. Default is the full modelSchema enum.
+   */
+  readonly allowedModels: readonly ("haiku" | "sonnet" | "opus")[];
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;

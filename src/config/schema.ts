@@ -686,6 +686,13 @@ export const agentSchema = z.object({
   memoryPath: z.string().min(1).optional(),
   channels: z.array(z.string()).default([]),
   model: modelSchema.optional(),
+  // Phase 86 MODEL-01 — per-agent allowlist for /clawcode-model picker.
+  // Additive + optional: v2.1 migrated configs (15 agents) parse
+  // unchanged; the loader's resolver fills defaults.allowedModels when
+  // this is omitted. Each entry must be a valid modelSchema alias —
+  // unknown aliases are rejected at parse time. Max 25 enforced
+  // downstream (Discord StringSelectMenuBuilder cap in Plan 03).
+  allowedModels: z.array(modelSchema).optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -743,6 +750,13 @@ export const agentSchema = z.object({
 export const defaultsSchema = z.object({
   model: modelSchema.default("haiku"),
   effort: effortSchema.default("low"),
+  // Phase 86 MODEL-01 — fleet-wide allowlist default. When an agent
+  // omits `allowedModels`, the resolver substitutes this array. The
+  // default ["haiku","sonnet","opus"] matches modelSchema's full set
+  // so existing agents see no behavior change.
+  allowedModels: z
+    .array(modelSchema)
+    .default(() => ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[]),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -905,6 +919,10 @@ export const configSchema = z.object({
   defaults: defaultsSchema.default(() => ({
     model: "haiku" as const,
     effort: "low" as const,
+    // Phase 86 MODEL-01 — fleet-wide allowlist default matches the full
+    // modelSchema enum so configs that omit `defaults` see identical
+    // behavior to v2.1 (all three model aliases pickable).
+    allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",

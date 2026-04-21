@@ -1186,6 +1186,111 @@ describe("Phase 74 Plan 02 — securityConfigSchema.denyScopeAll", () => {
 // Phase 75 Plan 01 — SHARED-01: agentSchema.memoryPath + configSchema conflict
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase 86 Plan 01 — MODEL-01: agentSchema.allowedModels + defaultsSchema.allowedModels
+// + v2.1 config back-compat + resolved agent exposure.
+// ---------------------------------------------------------------------------
+
+describe("agentSchema - allowedModels (Phase 86 MODEL-01)", () => {
+  it("accepts allowedModels with valid model aliases (haiku, sonnet, opus)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      allowedModels: ["haiku", "sonnet"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowedModels).toEqual(["haiku", "sonnet"]);
+    }
+  });
+
+  it("accepts agent without allowedModels (optional field — loader fills defaults)", () => {
+    const result = agentSchema.safeParse({ name: "fin-acquisition" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowedModels).toBeUndefined();
+    }
+  });
+
+  it("rejects allowedModels containing an unknown alias (e.g. gpt-4)", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      allowedModels: ["gpt-4"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts allowedModels with all three aliases", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      allowedModels: ["haiku", "sonnet", "opus"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowedModels).toEqual(["haiku", "sonnet", "opus"]);
+    }
+  });
+});
+
+describe("defaultsSchema - allowedModels (Phase 86 MODEL-01)", () => {
+  it("defaults allowedModels to the full set (haiku, sonnet, opus) when omitted", () => {
+    const result = defaultsSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowedModels).toEqual(["haiku", "sonnet", "opus"]);
+    }
+  });
+
+  it("accepts an explicit defaults.allowedModels override", () => {
+    const result = defaultsSchema.safeParse({ allowedModels: ["haiku"] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowedModels).toEqual(["haiku"]);
+    }
+  });
+});
+
+describe("configSchema - allowedModels backward compatibility (Phase 86 MODEL-01)", () => {
+  it("v2.1-style config (15 agents without allowedModels) parses unchanged; defaults populated", () => {
+    // Simulate a migrated v2.1 fleet: 15 agents, none declaring allowedModels.
+    const agents = Array.from({ length: 15 }, (_, i) => ({
+      name: `agent-${i}`,
+      channels: [`${1000000000000000 + i}`],
+      model: "sonnet" as const,
+      effort: "low" as const,
+    }));
+    const result = configSchema.safeParse({ version: 1, agents });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Defaults.allowedModels is populated to the full set.
+      expect(result.data.defaults.allowedModels).toEqual([
+        "haiku",
+        "sonnet",
+        "opus",
+      ]);
+      // Every agent's allowedModels is undefined on the raw parse — loader
+      // resolves against defaults downstream.
+      for (const agent of result.data.agents) {
+        expect(agent.allowedModels).toBeUndefined();
+      }
+    }
+  });
+
+  it("configSchema populates defaults.allowedModels when defaults block is absent entirely", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "solo" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.defaults.allowedModels).toEqual([
+        "haiku",
+        "sonnet",
+        "opus",
+      ]);
+    }
+  });
+});
+
 describe("agentSchema - memoryPath", () => {
   it("parses an agent with memoryPath set to a ~/... path unchanged (expansion deferred to loader)", () => {
     const result = agentSchema.safeParse({

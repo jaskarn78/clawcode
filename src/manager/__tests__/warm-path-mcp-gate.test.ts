@@ -76,6 +76,7 @@ function makeConfig(
     channels: ["#general"],
     model: "sonnet",
     effort: "low",
+    allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
     skills: [],
     soul: undefined,
     identity: undefined,

@@ -23,6 +23,7 @@ describe("buildForkConfig", () => {
     channels: ["123456"],
     model: "sonnet",
     effort: "low",
+    allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
     skills: ["search"],
     soul: "You are a researcher.",
     identity: "Research agent",

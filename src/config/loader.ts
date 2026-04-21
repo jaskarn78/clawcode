@@ -185,6 +185,11 @@ export function resolveAgentConfig(
     channels: agent.channels,
     model: agent.model ?? defaults.model,
     effort: agent.effort ?? defaults.effort,
+    // Phase 86 MODEL-01 — resolve per-agent allowlist against fleet-wide default.
+    // `defaults.allowedModels` is always populated (z default factory), so
+    // consumers always see a concrete array — no downstream optional-chain
+    // needed. Discord picker + SessionManager allowlist guard read this.
+    allowedModels: agent.allowedModels ?? defaults.allowedModels,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

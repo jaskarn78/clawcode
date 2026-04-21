@@ -17,6 +17,8 @@ describe("resolveAgentConfig", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
+    allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     skills: ["default-skill"],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -470,6 +472,8 @@ describe("resolveAgentConfig - mcpServers", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
+    allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -1092,6 +1096,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
+    allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",

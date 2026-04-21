@@ -8,6 +8,10 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     defaults: {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 86 MODEL-01 — defaults carry the full allowlist so back-compat
+      // tests that build a base Config don't produce a spurious diff on
+      // the defaults.allowedModels field.
+      allowedModels: ["haiku", "sonnet", "opus"],
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",
@@ -289,6 +293,65 @@ describe("diffConfigs", () => {
     );
     expect(effortChange).toBeDefined();
     expect(effortChange!.reloadable).toBe(true);
+  });
+
+  // Phase 86 MODEL-01 — allowedModels is reloadable because the Discord
+  // picker re-reads on every invocation; no session restart needed.
+  // Runtime model SWITCHES stay non-reloadable (see agents.*.model below).
+  it("detects agents.*.allowedModels change as reloadable", () => {
+    const baseAgent = makeConfig().agents[0];
+    const oldConfig = makeConfig({
+      agents: [{ ...baseAgent, allowedModels: ["haiku"] } as typeof baseAgent],
+    });
+    const newConfig = makeConfig({
+      agents: [
+        {
+          ...baseAgent,
+          allowedModels: ["haiku", "sonnet"],
+        } as typeof baseAgent,
+      ],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath.includes("allowedModels"),
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+    expect(result.hasReloadableChanges).toBe(true);
+  });
+
+  it("detects defaults.allowedModels change as reloadable", () => {
+    const oldConfig = makeConfig();
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        allowedModels: ["haiku"],
+      } as typeof oldConfig.defaults,
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath === "defaults.allowedModels",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+  });
+
+  it("keeps agents.*.model classified as non-reloadable (no regression from allowedModels)", () => {
+    // Regression pin: adding allowedModels must NOT reclassify `model` as
+    // reloadable — runtime model switches use SessionHandle.setModel, not
+    // the hot-reload path.
+    const oldConfig = makeConfig();
+    const newConfig = makeConfig({
+      agents: [
+        { ...oldConfig.agents[0], model: "opus" as const },
+      ],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const modelChange = result.changes.find((c) =>
+      c.fieldPath === "agents.researcher.model",
+    );
+    expect(modelChange).toBeDefined();
+    expect(modelChange!.reloadable).toBe(false);
   });
 });
 
