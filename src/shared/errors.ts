@@ -138,14 +138,22 @@ export class SessionError extends Error {
 /**
  * Thrown when IPC communication fails.
  * Includes a JSON-RPC error code.
+ *
+ * Phase 86 Plan 03 — optional `data` field carries the structured payload
+ * from the JSON-RPC error envelope (e.g. ModelNotAllowedError's
+ * `{kind, agent, attempted, allowed}`). Client-side consumers check
+ * `err.data?.kind` to render domain-specific UI (the allowed-model list
+ * on the /clawcode-model slash command) without a second round-trip.
  */
 export class IpcError extends Error {
   readonly code: number;
+  readonly data?: unknown;
 
-  constructor(message: string, code: number) {
+  constructor(message: string, code: number, data?: unknown) {
     super(message);
     this.name = "IpcError";
     this.code = code;
+    if (data !== undefined) this.data = data;
   }
 }
 

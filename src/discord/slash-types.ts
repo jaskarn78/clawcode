@@ -133,14 +133,19 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     name: "clawcode-model",
-    description: "Set the default model for an agent",
-    claudeCommand: "Set my model to {model}",
+    description: "Change the agent's model (opens a picker when no model is specified)",
+    // Phase 86 MODEL-02 / MODEL-03 — LLM-prompt routing REMOVED. The inline
+    // handler in slash-commands.ts owns both the no-arg (picker) and arg
+    // (IPC dispatch) paths. claudeCommand is intentionally empty so any
+    // accidental fallback to formatCommandMessage emits a no-op string that
+    // the inline short-circuit prevents from ever being sent.
+    claudeCommand: "",
     options: [
       {
         name: "model",
         type: 3,
-        description: "Model to use (haiku, sonnet, opus)",
-        required: true,
+        description: "Model alias (optional — omit to open picker)",
+        required: false,
       },
     ],
   },

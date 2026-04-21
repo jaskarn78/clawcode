@@ -23,14 +23,26 @@ describe("slash-types", () => {
       ]);
     });
 
-    it("each default command has name, description, claudeCommand fields (all non-empty strings)", () => {
+    it("each default command has name, description fields (non-empty strings); claudeCommand is a string (may be empty for inline handlers)", () => {
+      // Phase 86 MODEL-02 / MODEL-03 — clawcode-model was converted to an
+      // inline handler that routes through IPC set-model directly. Its
+      // claudeCommand field is intentionally empty (the inline handler short-
+      // circuits before formatCommandMessage is reached). All other commands
+      // still carry a non-empty LLM-prompt template.
       for (const cmd of DEFAULT_SLASH_COMMANDS) {
         expect(cmd.name).toBeTruthy();
         expect(typeof cmd.name).toBe("string");
         expect(cmd.description).toBeTruthy();
         expect(typeof cmd.description).toBe("string");
-        expect(cmd.claudeCommand).toBeTruthy();
         expect(typeof cmd.claudeCommand).toBe("string");
+        if (cmd.name === "clawcode-model") {
+          // Regression pin — Phase 86 removed the old "Set my model to {model}"
+          // LLM-prompt routing in favour of the inline handler at
+          // slash-commands.ts:handleModelCommand.
+          expect(cmd.claudeCommand).toBe("");
+        } else {
+          expect(cmd.claudeCommand).toBeTruthy();
+        }
       }
     });
 
@@ -55,7 +67,11 @@ describe("slash-types", () => {
       }
     });
 
-    it("the model command has one required option named model of type STRING (3)", () => {
+    it("the model command has one OPTIONAL option named model of type STRING (3)", () => {
+      // Phase 86 MODEL-02 — `/clawcode-model` (no arg) opens the native
+      // StringSelectMenuBuilder picker; `/clawcode-model <alias>` dispatches
+      // directly via IPC. The option must therefore be OPTIONAL (required: false)
+      // so Discord lets users invoke the command with no argument.
       const modelCmd = DEFAULT_SLASH_COMMANDS.find((cmd) => cmd.name === "clawcode-model");
       expect(modelCmd).toBeDefined();
       expect(modelCmd!.options).toHaveLength(1);
@@ -63,7 +79,7 @@ describe("slash-types", () => {
       const modelOpt = modelCmd!.options[0];
       expect(modelOpt.name).toBe("model");
       expect(modelOpt.type).toBe(3);
-      expect(modelOpt.required).toBe(true);
+      expect(modelOpt.required).toBe(false);
       expect(modelOpt.description).toBeTruthy();
     });
 

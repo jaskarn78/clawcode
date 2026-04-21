@@ -6,12 +6,17 @@
  */
 
 import {
+  ActionRowBuilder,
   Client,
+  ComponentType,
   EmbedBuilder,
   REST,
   Routes,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   type ChatInputCommandInteraction,
   type Interaction,
+  type StringSelectMenuInteraction,
 } from "discord.js";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
@@ -35,6 +40,22 @@ import type { SkillsCatalog } from "../skills/types.js";
  * Maximum Discord message length (API limit).
  */
 const DISCORD_MAX_LENGTH = 2000;
+
+/**
+ * Phase 86 MODEL-02 — TTL for the /clawcode-model select-menu collector.
+ * The menu auto-dismisses after this many ms with no selection and the
+ * handler replies "timed out". 30 seconds matches the Discord ephemeral
+ * reply TTL comfortably.
+ */
+const MODEL_PICKER_TTL_MS = 30_000;
+
+/**
+ * Phase 86 MODEL-02 — Discord StringSelectMenuBuilder hard cap. The picker
+ * truncates the allowedModels list to the first 25 entries and appends an
+ * overflow note to the content string. Discord rejects menus with more
+ * than 25 options at registration time.
+ */
+const DISCORD_SELECT_CAP = 25;
 
 // ---------------------------------------------------------------------------
 // Phase 85 Plan 03 TOOL-06 / UI-01 — /clawcode-tools inline handler helpers.
@@ -300,6 +321,17 @@ export class SlashCommandHandler {
     // text-formatting branch in handleControlCommand.
     if (commandName === "clawcode-tools") {
       await this.handleToolsCommand(interaction);
+      return;
+    }
+
+    // Phase 86 MODEL-02 / MODEL-03 — /clawcode-model inline handler.
+    // Routes ENTIRELY through IPC set-model (Plan 02). The old LLM-prompt
+    // routing (slash-types.ts claudeCommand "Set my model to {model}")
+    // has been REMOVED — this handler is the only dispatch path. Carved
+    // out BEFORE the generic CONTROL_COMMANDS and agent-lookup branches
+    // so the picker and IPC dispatch can't be short-circuited downstream.
+    if (commandName === "clawcode-model") {
+      await this.handleModelCommand(interaction);
       return;
     }
 
@@ -634,6 +666,232 @@ export class SlashCommandHandler {
         { command: "clawcode-tools", error: (error as Error).message },
         "failed to send tools embed",
       );
+    }
+  }
+
+  /**
+   * Phase 86 MODEL-02 / MODEL-03 / MODEL-06 — /clawcode-model inline handler.
+   *
+   * Two paths share the same IPC dispatch:
+   *   - No-arg: render a StringSelectMenuBuilder from the bound agent's
+   *     resolved allowedModels; await the selection (30s TTL); dispatch via
+   *     IPC. The menu is pure UI — selection funnels back through
+   *     dispatchModelChange so arg-path and picker-path share error handling.
+   *   - Arg: validate the agent binding and dispatch immediately via IPC.
+   *
+   * UI-01 compliance: the picker is a native discord.js StringSelectMenuBuilder
+   * (not a free-text argument). Discord enforces a 25-entry cap on the menu;
+   * when the allowedModels list exceeds that, the picker truncates and appends
+   * a "+N more" note to the content string.
+   *
+   * Error rendering: when the IPC error envelope carries
+   * `data.kind === "model-not-allowed"` (the ModelNotAllowedError payload
+   * from Plan 01 surfaced via Plan 02's ManagerError {code:-32602, data}
+   * wire), the reply renders the allowed list from `data.allowed`.
+   */
+  private async handleModelCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const agentName = getAgentForChannel(
+      this.routingTable,
+      interaction.channelId,
+    );
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content: "This channel is not bound to an agent.",
+          ephemeral: true,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const agentConfig = this.resolvedAgents.find((a) => a.name === agentName);
+    const allowed = [...(agentConfig?.allowedModels ?? [])];
+
+    const modelArg = interaction.options.get("model")?.value;
+    const model =
+      typeof modelArg === "string" && modelArg.length > 0 ? modelArg : undefined;
+
+    // Arg path — direct IPC dispatch.
+    if (model !== undefined) {
+      await this.dispatchModelChange(interaction, agentName, model, false);
+      return;
+    }
+
+    // No-arg path — render the select-menu picker.
+    if (allowed.length === 0) {
+      try {
+        await interaction.reply({
+          content: `No models available for ${agentName} (allowedModels is empty).`,
+          ephemeral: true,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const capped = allowed.slice(0, DISCORD_SELECT_CAP);
+    const overflow = allowed.length - capped.length;
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const customId = `model-picker:${agentName}:${nonce}`;
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder("Choose a model")
+      .addOptions(
+        capped.map((m) =>
+          new StringSelectMenuOptionBuilder().setLabel(m).setValue(m),
+        ),
+      );
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      menu,
+    );
+
+    const overflowNote =
+      overflow > 0
+        ? `\n(Showing first ${DISCORD_SELECT_CAP} of ${allowed.length}.)`
+        : "";
+    try {
+      await interaction.reply({
+        content: `Pick a model for **${agentName}**.${overflowNote}`,
+        components: [row],
+        ephemeral: true,
+      });
+    } catch (err) {
+      this.log.error(
+        { agent: agentName, error: (err as Error).message },
+        "failed to render model picker",
+      );
+      return;
+    }
+
+    // Wait for the select-menu interaction (30s TTL).
+    let followUp: StringSelectMenuInteraction;
+    try {
+      const channel = interaction.channel;
+      if (!channel) {
+        throw new Error("interaction has no channel — cannot collect");
+      }
+      followUp = (await channel.awaitMessageComponent({
+        componentType: ComponentType.StringSelect,
+        filter: (i: { user: { id: string }; customId: string }) =>
+          i.user.id === interaction.user.id && i.customId === customId,
+        time: MODEL_PICKER_TTL_MS,
+      })) as StringSelectMenuInteraction;
+    } catch {
+      try {
+        await interaction.editReply({
+          content: "Model picker timed out (no selection in 30s).",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const chosen = followUp.values[0];
+    if (!chosen) {
+      try {
+        await followUp.update({
+          content: "No selection captured.",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Acknowledge the select-menu interaction so Discord doesn't mark it as
+    // "interaction failed"; dispatchModelChange will emit the final status
+    // via editReply on the original slash-command interaction.
+    try {
+      await followUp.update({
+        content: `Switching ${agentName} to **${chosen}**...`,
+        components: [],
+      });
+    } catch {
+      /* expired */
+    }
+
+    await this.dispatchModelChange(interaction, agentName, chosen, true);
+  }
+
+  /**
+   * Phase 86 MODEL-03 / MODEL-06 — shared IPC dispatch for both the direct
+   * arg-path and the select-menu path.
+   *
+   * `editMode=true` means the slash-command interaction has already been
+   * replied-to (via `interaction.reply` during the picker render) — the
+   * final status must use `editReply`. `editMode=false` is the direct
+   * arg-path: defer first, then editReply with the outcome.
+   *
+   * Renders the typed ModelNotAllowedError payload from the IPC envelope
+   * by reading `err.data.allowed` (Plan 02 propagates this through
+   * IpcError.data, which Plan 03 extended client.ts to pass through).
+   */
+  private async dispatchModelChange(
+    interaction: ChatInputCommandInteraction,
+    agentName: string,
+    model: string,
+    editMode: boolean,
+  ): Promise<void> {
+    if (!editMode) {
+      try {
+        await interaction.deferReply({ ephemeral: true });
+      } catch {
+        /* already replied/deferred */
+      }
+    }
+
+    try {
+      const res = (await sendIpcRequest(SOCKET_PATH, "set-model", {
+        agent: agentName,
+        model,
+      })) as {
+        readonly agent: string;
+        readonly old_model: string;
+        readonly new_model: string;
+        readonly persisted: boolean;
+        readonly persist_error: string | null;
+        readonly note: string;
+      };
+      const persistSuffix = res.persisted
+        ? ""
+        : `\n(Note: live swap OK, but YAML persistence failed: ${res.persist_error ?? "unknown"})`;
+      const message = `Model set to **${res.new_model}** for ${agentName} (was ${res.old_model}).${persistSuffix}`;
+      try {
+        await interaction.editReply(message);
+      } catch {
+        /* expired */
+      }
+    } catch (err) {
+      // Plan 02 IPC envelope: ModelNotAllowedError carries
+      // `data.kind === "model-not-allowed"` and `data.allowed: string[]`.
+      // Render the allowed list ephemerally.
+      const maybe = err as { message?: string; data?: unknown };
+      const data = maybe.data as
+        | { kind?: string; allowed?: readonly string[] }
+        | undefined;
+      let reply: string;
+      if (
+        data?.kind === "model-not-allowed" &&
+        Array.isArray(data.allowed)
+      ) {
+        reply = `'${model}' is not allowed for ${agentName}. Allowed: ${data.allowed.join(", ")}`;
+      } else {
+        reply = `Failed to set model: ${maybe.message ?? String(err)}`;
+      }
+      try {
+        await interaction.editReply(reply);
+      } catch {
+        /* expired */
+      }
     }
   }
 

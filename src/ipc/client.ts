@@ -83,7 +83,17 @@ function processResponse(
     const response = result.data;
 
     if (response.error) {
-      reject(new IpcError(response.error.message, response.error.code));
+      // Phase 86 Plan 03 — preserve the JSON-RPC error envelope's `data`
+      // field on the IpcError so domain-specific consumers (e.g.
+      // /clawcode-model's ModelNotAllowedError renderer) can read
+      // `err.data.kind` without a second round-trip.
+      reject(
+        new IpcError(
+          response.error.message,
+          response.error.code,
+          response.error.data,
+        ),
+      );
       return;
     }
 

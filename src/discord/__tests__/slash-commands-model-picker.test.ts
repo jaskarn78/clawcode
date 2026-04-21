@@ -208,7 +208,11 @@ describe("Phase 86 MODEL-02 / MODEL-03 / MODEL-06 — /clawcode-model inline han
 
       expect(harness.reply).toHaveBeenCalledTimes(1);
       const callArg = harness.reply.mock.calls[0]![0] as {
-        components?: ReadonlyArray<{ components: ReadonlyArray<{ data: { options: ReadonlyArray<{ value: string }> } }> }>;
+        components?: ReadonlyArray<{
+          components: ReadonlyArray<{
+            options: ReadonlyArray<{ data: { value: string } }>;
+          }>;
+        }>;
         ephemeral?: boolean;
       };
       expect(callArg.ephemeral).toBe(true);
@@ -217,7 +221,7 @@ describe("Phase 86 MODEL-02 / MODEL-03 / MODEL-06 — /clawcode-model inline han
       const row = callArg.components![0]!;
       expect(row.components).toHaveLength(1);
       const menu = row.components[0]!;
-      const values = menu.data.options.map((o) => o.value);
+      const values = menu.options.map((o) => o.data.value);
       expect(values).toEqual(["haiku", "sonnet"]);
     });
 
@@ -240,10 +244,12 @@ describe("Phase 86 MODEL-02 / MODEL-03 / MODEL-06 — /clawcode-model inline han
       expect(harness.reply).toHaveBeenCalledTimes(1);
       const callArg = harness.reply.mock.calls[0]![0] as {
         content: string;
-        components: ReadonlyArray<{ components: ReadonlyArray<{ data: { options: ReadonlyArray<unknown> } }> }>;
+        components: ReadonlyArray<{
+          components: ReadonlyArray<{ options: ReadonlyArray<unknown> }>;
+        }>;
       };
       const menu = callArg.components[0]!.components[0]!;
-      expect(menu.data.options).toHaveLength(25);
+      expect(menu.options).toHaveLength(25);
       expect(callArg.content).toMatch(/25 of 27|Showing first 25/i);
     });
 
