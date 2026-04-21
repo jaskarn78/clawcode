@@ -21,7 +21,7 @@ import {
   mkdir,
 } from "node:fs/promises";
 const realReadFile = readFile;
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { copySkillDirectory, copierSkillsFs } from "../skills-copier.js";
@@ -139,26 +139,26 @@ describe("skills-copier", () => {
     copierSkillsFs.readFile = origReadFile;
   });
 
-  it("(f) verbatimSymlinks: a symlink in source is copied as a symlink, not followed", async () => {
-    // Build a synthetic source with a self-symlink (target = ancestor dir).
+  it("(f) verbatimSymlinks: an ordinary file-to-file symlink is preserved as a symlink in target", async () => {
+    // Build a synthetic source with a plain file-to-file symlink. Self-
+    // referential symlinks (loopback -> .) are filtered by defaultSkillsFilter
+    // to prevent recursion — so we use a non-recursive link here.
     const synthSource = join(tmp, "_synth_src");
     await mkdir(synthSource, { recursive: true });
     await writeFile(join(synthSource, "SKILL.md"), "# synth\n\nbody");
-    // Lateral self-symlink: `loopback -> .` would recurse infinitely if followed
-    await symlink(".", join(synthSource, "loopback"));
+    await writeFile(join(synthSource, "real.md"), "# real\n");
+    // `alias.md -> real.md` — verbatimSymlinks should preserve this as a
+    // symlink in the target tree (NOT resolve + duplicate the content).
+    await symlink("real.md", join(synthSource, "alias.md"));
 
     const synthTarget = join(tmp, "_synth_tgt");
     const result = await copySkillDirectory(synthSource, synthTarget);
     expect(result.pass).toBe(true);
-    // After copy, the target should contain SKILL.md and a `loopback` entry
-    // which is a symlink (NOT a resolved directory full of copies).
-    const loopStat = statSync(join(synthTarget, "loopback"), {
+
+    const aliasStat = lstatSync(join(synthTarget, "alias.md"), {
       throwIfNoEntry: false,
     });
-    // If verbatimSymlinks preserved it, lstatSync would say isSymbolicLink.
-    // If it followed, statSync would show a directory.
-    // We don't fail if the symlink couldn't be followed at all; the key
-    // assertion is the copy didn't hang/recurse.
-    expect(loopStat).toBeDefined();
+    expect(aliasStat).toBeDefined();
+    expect(aliasStat!.isSymbolicLink()).toBe(true);
   });
 });
