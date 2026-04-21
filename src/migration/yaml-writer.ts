@@ -515,3 +515,188 @@ export async function updateAgentModel(
     targetSha256,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 88 Plan 01 Task 2 — updateAgentSkills.
+//
+// Atomic append/remove of a skill name on `agents[*].skills`. Mirrors the
+// `updateAgentModel` structural template verbatim (parseDocument → find-
+// by-name → YAMLSeq mutate → toString({lineWidth:0}) → tmp+rename →
+// sha256 witness). The Phase 88 `installSingleSkill` consumer calls this
+// AFTER the copier succeeds so the skill appears in the agent's
+// `skills:` list on the next daemon boot. Non-rollback policy matches
+// the Phase 86 MODEL-04 contract: copy is the irreversible downstream
+// effect; YAML persist failure surfaces as persist_error to the caller.
+//
+// Contract (outcome matrix):
+//   "updated"        — skill appended/removed; file rewritten
+//   "no-op"          — idempotent (add on present, remove on absent)
+//   "not-found"      — clawcode.yaml valid but agent missing from seq
+//   "file-not-found" — clawcode.yaml does not exist
+//   throws           — rename failure (tmp unlinked), structural YAML corruption
+//
+// DO NOT:
+//   - Validate skillName against any catalog here — the caller (install-
+//     single-skill.ts) owns catalog resolution. Writer treats skillName
+//     as an opaque string (keeps cross-module coupling narrow).
+//   - Re-run the secret scan — rewriting ONE string node (not inserting
+//     operator-input YAML), same rationale as updateAgentModel.
+// ---------------------------------------------------------------------------
+
+export type UpdateAgentSkillsArgs = Readonly<{
+  existingConfigPath: string;
+  agentName: string;
+  skillName: string;
+  op: "add" | "remove";
+  /** DI for test determinism — defaults to process.pid. */
+  pid?: number;
+}>;
+
+export type UpdateAgentSkillsResult =
+  | {
+      readonly outcome: "updated";
+      readonly destPath: string;
+      readonly targetSha256: string;
+    }
+  | { readonly outcome: "no-op"; readonly reason: string }
+  | { readonly outcome: "not-found"; readonly reason: string }
+  | { readonly outcome: "file-not-found"; readonly reason: string };
+
+export async function updateAgentSkills(
+  args: UpdateAgentSkillsArgs,
+): Promise<UpdateAgentSkillsResult> {
+  const pid = args.pid ?? process.pid;
+
+  // --- Gate: file presence ------------------------------------------
+  if (!existsSync(args.existingConfigPath)) {
+    return {
+      outcome: "file-not-found",
+      reason: `clawcode.yaml not found at ${args.existingConfigPath}`,
+    };
+  }
+
+  // --- Read + parse (Document AST preserves comments + order) ------
+  const existingText = await writerFs.readFile(
+    args.existingConfigPath,
+    "utf8",
+  );
+  const doc = parseDocument(existingText, { prettyErrors: true });
+  const contents = doc.contents;
+  if (!(contents instanceof YAMLMap)) {
+    throw new Error(
+      `clawcode.yaml top-level is not a map: ${args.existingConfigPath}`,
+    );
+  }
+  const rootMap = contents as unknown as YAMLMap<unknown, unknown>;
+  const agentsSeq = rootMap.get("agents") as unknown;
+  if (!(agentsSeq instanceof YAMLSeq)) {
+    return {
+      outcome: "not-found",
+      reason: `no agents seq in clawcode.yaml`,
+    };
+  }
+  const items = (agentsSeq as YAMLSeq).items as unknown as Array<unknown>;
+  const idx = items.findIndex((it) => {
+    if (it === null || typeof it !== "object") return false;
+    const maybeMap = it as { get?: (k: string) => unknown };
+    if (typeof maybeMap.get !== "function") return false;
+    const name = maybeMap.get("name");
+    return name === args.agentName;
+  });
+  if (idx < 0) {
+    return {
+      outcome: "not-found",
+      reason: `agent '${args.agentName}' not in agents seq`,
+    };
+  }
+
+  const agentMap = items[idx] as {
+    get?: (k: string) => unknown;
+    set?: (k: string, v: unknown) => void;
+  };
+  if (
+    typeof agentMap.get !== "function" ||
+    typeof agentMap.set !== "function"
+  ) {
+    throw new Error(
+      `agent '${args.agentName}' entry is not a map at agents[${idx}]`,
+    );
+  }
+
+  // --- Locate or initialize the agent's skills: seq ----------------
+  let skillsSeq = agentMap.get("skills");
+  if (!(skillsSeq instanceof YAMLSeq)) {
+    // Either missing or a scalar (unusual — would fail configSchema, but
+    // defensive). Initialize to an empty seq so the mutation below works.
+    skillsSeq = new YAMLSeq();
+    agentMap.set("skills", skillsSeq);
+  }
+  const seq = skillsSeq as YAMLSeq;
+
+  // Snapshot the current skill names (extract scalar values from seq items).
+  const seqItems = seq.items as unknown as Array<unknown>;
+  const currentSkills = seqItems.map((node) => {
+    // node may be a Scalar (has .value) or a bare string (older yaml stream shape).
+    if (node !== null && typeof node === "object") {
+      const maybe = node as { value?: unknown };
+      if ("value" in maybe) return String(maybe.value);
+    }
+    return String(node);
+  });
+
+  // --- Idempotency gate ---------------------------------------------
+  const alreadyPresent = currentSkills.includes(args.skillName);
+  if (args.op === "add" && alreadyPresent) {
+    return {
+      outcome: "no-op",
+      reason: `agent '${args.agentName}' skill '${args.skillName}' already present`,
+    };
+  }
+  if (args.op === "remove" && !alreadyPresent) {
+    return {
+      outcome: "no-op",
+      reason: `agent '${args.agentName}' skill '${args.skillName}' not in list`,
+    };
+  }
+
+  // --- Mutate -------------------------------------------------------
+  if (args.op === "add") {
+    seq.add(args.skillName);
+  } else {
+    // remove: find and splice. Matches on the scalar value.
+    const removeIdx = currentSkills.indexOf(args.skillName);
+    if (removeIdx >= 0) {
+      seqItems.splice(removeIdx, 1);
+    }
+  }
+
+  // --- Serialize with no line-wrap ---------------------------------
+  const newText = doc.toString({ lineWidth: 0 });
+
+  // --- Atomic temp+rename ------------------------------------------
+  const destDir = dirname(args.existingConfigPath);
+  const tmpPath = join(
+    destDir,
+    `.clawcode.yaml.${pid}.${Date.now()}.tmp`,
+  );
+  await writerFs.writeFile(tmpPath, newText, "utf8");
+  try {
+    await writerFs.rename(tmpPath, args.existingConfigPath);
+  } catch (err) {
+    try {
+      await writerFs.unlink(tmpPath);
+    } catch {
+      // best-effort — tmp may already be gone
+    }
+    throw err;
+  }
+
+  const targetSha256 = createHash("sha256")
+    .update(newText, "utf8")
+    .digest("hex");
+  return {
+    outcome: "updated",
+    destPath: args.existingConfigPath,
+    targetSha256,
+  };
+}

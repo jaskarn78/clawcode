@@ -73,8 +73,16 @@ export type DiscoveredSkill = {
  * (sort order is alphabetical). Used for idempotency: if a subsequent
  * --dry-run finds the same hash already `migrated` in the ledger, the skill
  * is bucketed as `skipped (idempotent)`.
+ *
+ * Phase 88 Plan 01 Task 2 — promoted to an exported function
+ * (`computeSkillContentHash`) so the Phase 88 marketplace installer can
+ * compute a skill's current source hash for the ledger idempotency gate
+ * without re-walking the whole discovery tree. Old `computeSkillHash` is
+ * preserved as a local alias for the readability of in-module callers.
  */
-async function computeSkillHash(skillDir: string): Promise<string> {
+export async function computeSkillContentHash(
+  skillDir: string,
+): Promise<string> {
   const master = createHash("sha256");
   // Collect every file's (relpath, content) pair, sort by relpath, feed to
   // master hasher. Symlinks are dereferenced by readFile; broken symlinks
@@ -164,7 +172,7 @@ export async function discoverOpenclawSkills(
     const skillPath = join(sourceRoot, ent.name);
     const classification: SkillClassification =
       SKILL_CLASSIFICATIONS.get(ent.name) ?? "unknown";
-    const sourceHash = await computeSkillHash(skillPath);
+    const sourceHash = await computeSkillContentHash(skillPath);
     discovered.push({
       name: ent.name,
       path: skillPath,

@@ -175,9 +175,19 @@ describe("installSingleSkill — Phase 88 Plan 01 (I1-I10)", () => {
     expect(call.skillName).toBe("frontend-design");
     expect(call.op).toBe("add");
 
-    // Clawcode.yaml has the skill appended
+    // Clawcode.yaml has the skill appended — accept either block-style
+    // (`- frontend-design`) or flow-style (`[ frontend-design ]`) since
+    // yaml preserves the input flow/block shape of the skills sequence.
     const yamlAfter = await readFile(clawcodeYamlPath, "utf8");
-    expect(yamlAfter).toMatch(/- frontend-design/);
+    expect(yamlAfter).toMatch(/frontend-design/);
+    // Also verify via parsed shape (schema-level) that the skill landed
+    // on the right agent.
+    const { parse: parseYaml } = await import("yaml");
+    const parsed = parseYaml(yamlAfter) as {
+      agents: Array<{ name: string; skills: string[] }>;
+    };
+    const clawdySkills = parsed.agents.find((a) => a.name === "clawdy")?.skills;
+    expect(clawdySkills).toContain("frontend-design");
 
     // Ledger has an "apply" row with status="migrated"
     const rows = await readSkillRows(ledgerPath);
