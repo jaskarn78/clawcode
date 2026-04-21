@@ -172,7 +172,10 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
   4. An agent restart re-applies the persisted effort level from either `clawcode.yaml` `agents[*].effort` / `defaults.effort` or the runtime state file — no regression to default
   5. A v1.5 fork-to-Opus call initiated at `effort=max` on the parent launches the Opus advisor at the agent default, not `max` (cost-spike prevention verified via fork config test)
   6. `/clawcode-status` shows the current effort level for every agent, and a SKILL.md `effort:` frontmatter override takes effect for turns invoking that skill then reverts at turn boundary
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 83-01-PLAN.md — Schema extension (7 effort levels) + P0 SDK wire (Query.setMaxThinkingTokens spy test)
+- [ ] 83-02-PLAN.md — Runtime effort persistence across restart + fork quarantine
+- [ ] 83-03-PLAN.md — UI-01 StringChoices picker + effort in /clawcode-status + per-skill effort frontmatter
 **UI hint**: yes
 
 ### Phase 84: Skills Library Migration
@@ -263,7 +266,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 83. Extended-Thinking Effort Mapping | 0/? | Not started | - |
+| 83. Extended-Thinking Effort Mapping | 0/3 | Not started | - |
 | 84. Skills Library Migration | 0/? | Not started | - |
 | 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
