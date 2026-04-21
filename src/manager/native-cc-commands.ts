@@ -163,3 +163,33 @@ export function mergeAndDedupe(
   for (const cmd of native) byName.set(cmd.name, cmd); // native wins
   return [...byName.values()];
 }
+
+/**
+ * Phase 87 Plan 03 CMD-03 — canonical prompt-string builder for prompt-channel
+ * native-CC dispatch.
+ *
+ * The SDK's Options docstring confirms slash commands are processed when
+ * sent as prompt input (sdk.d.ts). The string format MUST be the bare
+ * `/<name>` — NOT the clawcode-<name> Discord prefix (the SDK has no
+ * knowledge of the clawcode namespace; it parses the literal /<name>
+ * against its own slash-command dispatcher and emits
+ * SDKLocalCommandOutputMessage when the name is a known local command).
+ *
+ * Invariants:
+ *   - Strips a leading `clawcode-` prefix idempotently — both
+ *     "clawcode-compact" and "compact" yield "/compact".
+ *   - Trims leading/trailing whitespace in args (Discord form padding).
+ *   - Empty / whitespace-only / missing args → no trailing space
+ *     (produces "/compact", never "/compact ").
+ *   - Present args → single space separator, passed through VERBATIM
+ *     (no escaping, no quoting — the SDK parses as-is; over-escaping
+ *     silently breaks arg passthrough).
+ */
+export function buildNativePromptString(
+  commandName: string,
+  args: string | undefined,
+): string {
+  const bare = commandName.replace(/^clawcode-/, "");
+  const trimmed = (args ?? "").trim();
+  return trimmed.length > 0 ? `/${bare} ${trimmed}` : `/${bare}`;
+}

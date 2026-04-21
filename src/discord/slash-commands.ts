@@ -29,9 +29,11 @@ import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
 // Phase 87 CMD-01 — SDK-driven native command registration.
+// Phase 87 CMD-03 — buildNativePromptString for prompt-channel dispatch.
 import {
   buildNativeCommandDefs,
   mergeAndDedupe,
+  buildNativePromptString,
 } from "../manager/native-cc-commands.js";
 import { resolveDeniedCommands } from "../security/acl-parser.js";
 import { sendIpcRequest } from "../ipc/client.js";
@@ -477,6 +479,25 @@ export class SlashCommandHandler {
     const controlCmd = CONTROL_COMMANDS.find((c) => c.name === commandName);
     if (controlCmd) {
       await this.handleControlCommand(interaction, controlCmd);
+      return;
+    }
+
+    // Phase 87 CMD-03 — prompt-channel native-CC dispatch carve-out.
+    //
+    // Looks up the command definition in the resolved (per-guild-merged) set
+    // that Plan 01's register() built. If nativeBehavior === "prompt-channel",
+    // route through TurnDispatcher.dispatchStream with the canonical
+    // `/<name> <args>` string. Output streams via ProgressiveMessageEditor.
+    //
+    // Ordering rationale: lives AFTER the clawcode-model / clawcode-tools /
+    // CONTROL_COMMANDS carve-outs (so those dedicated inline handlers always
+    // win for their respective names, even if a stray prompt-channel entry
+    // with a colliding name somehow reaches this ladder) but BEFORE the
+    // legacy agent-routed branch (so formatCommandMessage + claudeCommand
+    // template path does NOT execute for native-CC prompt-channel entries).
+    const nativeDef = this.findNativePromptChannelCommand(commandName);
+    if (nativeDef) {
+      await this.dispatchNativePromptCommand(interaction, nativeDef);
       return;
     }
 
@@ -1282,6 +1303,169 @@ export class SlashCommandHandler {
         { command: cmd.name, agent: agentName, error: msg },
         "control command failed",
       );
+      try {
+        await interaction.editReply(`Command failed: ${msg}`);
+      } catch {
+        /* expired */
+      }
+    }
+  }
+
+  /**
+   * Phase 87 CMD-03 — lookup a registered native-CC command by name and
+   * return it iff it has nativeBehavior === "prompt-channel".
+   *
+   * Implementation reads from the same resolved set register() iterates at
+   * startup: walks every resolvedAgents entry, resolves the agent's commands
+   * via resolveAgentCommands (which merges DEFAULT_SLASH_COMMANDS with the
+   * agent's own slashCommands — the register loop additionally folds in
+   * buildNativeCommandDefs output, but by the time we get here the agent's
+   * slashCommands carry the nativeBehavior-tagged entries Plan 01's register
+   * loop stamped onto them in production).
+   *
+   * Prompt-channel entries are agent-agnostic by definition (the dispatch
+   * target is the channel's bound agent, not the agent that first reported
+   * the command) — so returning the FIRST match across all agents is
+   * deliberate and safe.
+   */
+  private findNativePromptChannelCommand(
+    name: string,
+  ): SlashCommandDef | null {
+    for (const agent of this.resolvedAgents) {
+      for (const cmd of resolveAgentCommands(agent.slashCommands)) {
+        if (cmd.name === name && cmd.nativeBehavior === "prompt-channel") {
+          return cmd;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Phase 87 CMD-03 / CMD-06 — dispatch a prompt-channel native-CC command.
+   *
+   * Mirrors the agent-routed streaming flow in handleInteraction (lines
+   * 600-700 of this file) but substitutes the canonical `/<name> <args>`
+   * prompt (buildNativePromptString) for the agent's claudeCommand template
+   * and routes through TurnDispatcher.dispatchStream so origin propagates
+   * (critical for trace stitching — see turn-origin.ts).
+   *
+   * Flow:
+   *   1. Resolve agent by channel; reject if unbound (ephemeral "not bound").
+   *   2. deferReply + "Thinking..." feedback.
+   *   3. Build prompt string via buildNativePromptString.
+   *   4. Stream via TurnDispatcher.dispatchStream with ProgressiveMessageEditor
+   *      (v1.7 streaming primitive — reused verbatim, ZERO new primitive).
+   *   5. On SDK error, dispose editor and surface the VERBATIM error text
+   *      in the ephemeral reply (Phase 85 TOOL-04 pattern).
+   *   6. Truncate oversized responses at DISCORD_MAX_LENGTH.
+   *   7. Empty response → "(No response from agent)".
+   *
+   * When turnDispatcher is not wired (test scenarios / legacy boot), fall
+   * back with an ephemeral error message — this path is unreachable in
+   * production (daemon.ts always constructs a TurnDispatcher).
+   */
+  private async dispatchNativePromptCommand(
+    interaction: ChatInputCommandInteraction,
+    cmd: SlashCommandDef,
+  ): Promise<void> {
+    const agentName = getAgentForChannel(
+      this.routingTable,
+      interaction.channelId,
+    );
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content: "This channel is not bound to an agent.",
+          ephemeral: true,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply();
+    } catch (error) {
+      this.log.error(
+        { command: cmd.name, error: (error as Error).message },
+        "failed to defer prompt-channel reply",
+      );
+      return;
+    }
+
+    // Extract optional args value (Discord STRING option) and build the
+    // canonical prompt. Non-string / missing values → no args.
+    const argsRaw = interaction.options.get("args")?.value;
+    const args = typeof argsRaw === "string" ? argsRaw : undefined;
+    const prompt = buildNativePromptString(cmd.name, args);
+
+    this.log.info(
+      {
+        agent: agentName,
+        command: cmd.name,
+        channelId: interaction.channelId,
+        prompt,
+      },
+      "prompt-channel native-CC dispatch",
+    );
+
+    try {
+      await interaction.editReply("Thinking...");
+    } catch {
+      /* non-fatal */
+    }
+
+    const editor = new ProgressiveMessageEditor({
+      editFn: async (content: string) => {
+        const truncated =
+          content.length > DISCORD_MAX_LENGTH
+            ? content.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+            : content;
+        await interaction.editReply(truncated);
+      },
+      editIntervalMs: 1500,
+    });
+
+    try {
+      if (!this.turnDispatcher) {
+        throw new Error(
+          "Turn dispatcher not wired — cannot dispatch native-CC prompt command",
+        );
+      }
+      const origin = makeRootOrigin("discord", interaction.channelId);
+      const response = await this.turnDispatcher.dispatchStream(
+        origin,
+        agentName,
+        prompt,
+        (accumulated) => editor.update(accumulated),
+      );
+      await editor.flush();
+      const text = response.trim();
+      if (text.length === 0) {
+        await interaction.editReply("(No response from agent)");
+        return;
+      }
+      const truncated =
+        text.length > DISCORD_MAX_LENGTH
+          ? text.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+          : text;
+      await interaction.editReply(truncated);
+    } catch (err) {
+      editor.dispose();
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.error(
+        {
+          agent: agentName,
+          command: cmd.name,
+          prompt,
+          error: msg,
+        },
+        "native-CC prompt command failed",
+      );
+      // CMD-03 truth #4 / Phase 85 TOOL-04 — surface the VERBATIM error
+      // text in the ephemeral reply (no rewording, no wrapping).
       try {
         await interaction.editReply(`Command failed: ${msg}`);
       } catch {
