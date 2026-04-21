@@ -68,10 +68,10 @@ Register SDK-exposed commands as per-agent Discord slash commands. Dispatch spli
 
 Fix the phantom-error class where agents claim "1Password isn't logged in" / "MCP not configured" / "key expired" when everything is actually valid and reachable. Root cause is a combination of weak MCP health-state visibility in the system prompt and no proactive readiness gate — agents parrot generic failure language instead of attempting the tool.
 
-- [ ] **TOOL-01**: On agent startup, daemon performs JSON-RPC `initialize` handshake against every configured MCP server and refuses to mark the agent `ready` until all mandatory servers respond successfully — agent never starts with a half-broken MCP fleet (extends v1.6 warm-path readiness gate)
+- [x] **TOOL-01**: On agent startup, daemon performs JSON-RPC `initialize` handshake against every configured MCP server and refuses to mark the agent `ready` until all mandatory servers respond successfully — agent never starts with a half-broken MCP fleet (extends v1.6 warm-path readiness gate)
 - [ ] **TOOL-02**: System prompt includes an explicit "MCP tools are pre-authenticated" statement plus a live tool-status table listing each configured MCP with its current readiness and the canonical tool names it exposes
-- [ ] **TOOL-03**: Recurring MCP health-check heartbeat (existing v1.3 infrastructure) auto-reconnects any MCP server whose JSON-RPC `initialize` fails; reconnect outcome is visible in `/clawcode-status`
-- [ ] **TOOL-04**: When an MCP tool call fails, the agent receives the actual JSON-RPC error (code + message) in its tool-result, not a generic "tool unavailable" — agent reports the real error instead of guessing
+- [x] **TOOL-03**: Recurring MCP health-check heartbeat (existing v1.3 infrastructure) auto-reconnects any MCP server whose JSON-RPC `initialize` fails; reconnect outcome is visible in `/clawcode-status`
+- [x] **TOOL-04**: When an MCP tool call fails, the agent receives the actual JSON-RPC error (code + message) in its tool-result, not a generic "tool unavailable" — agent reports the real error instead of guessing
 - [ ] **TOOL-05**: System prompt explicitly instructs the agent: "If an MCP tool reports an error, include the actual error message verbatim; do not assume the tool is misconfigured unless the error explicitly states misconfiguration" — pinned in prompt-builder with a regression test
 - [ ] **TOOL-06**: `/clawcode-tools` slash command lists the agent's MCP servers with live status (ready / degraded / failed), last-successful-call timestamp, and recent failure count — surfaces the phantom-error contradiction if one occurs
 - [ ] **TOOL-07**: MCP server list + tool descriptions are placed in the v1.7 stable prompt prefix (cached), so they can't be evicted during compaction
@@ -154,10 +154,10 @@ Every v2.2 requirement maps to exactly one owning phase below. UI-01 is cross-cu
 | CMD-05 | Phase 87 | TBD |
 | CMD-06 | Phase 87 | TBD |
 | CMD-07 | Phase 87 | TBD |
-| TOOL-01 | Phase 85 | TBD |
+| TOOL-01 | Phase 85 | 85-01-PLAN |
 | TOOL-02 | Phase 85 | TBD |
-| TOOL-03 | Phase 85 | TBD |
-| TOOL-04 | Phase 85 | TBD |
+| TOOL-03 | Phase 85 | 85-01-PLAN |
+| TOOL-04 | Phase 85 | 85-01-PLAN |
 | TOOL-05 | Phase 85 | TBD |
 | TOOL-06 | Phase 85 | TBD |
 | TOOL-07 | Phase 85 | TBD |

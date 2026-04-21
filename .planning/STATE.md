@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Ready to plan
-stopped_at: Completed 84-03-PLAN.md — Phase 84 complete (SKILL-01..08 closed)
-last_updated: "2026-04-21T19:17:00.734Z"
+status: Executing
+stopped_at: Completed 85-01-PLAN.md — MCP readiness gate + mcp-reconnect heartbeat landed (TOOL-01/03/04)
+last_updated: "2026-04-21T19:59:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 9
+  completed_plans: 7
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-21)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 83 — Extended-Thinking Effort Mapping
+**Current focus:** Phase 85 — MCP Tool Awareness & Reliability (Plan 01 complete; 02-03 pending)
 
 ## Current Position
 
 Phase: 85
-Plan: Not started
+Plan: 02 (next)
 
 ## Performance Metrics
 
@@ -84,6 +84,13 @@ Recent decisions affecting current work:
 - [Phase 84]: Plan 84-03 — Source-tree-readonly invariant sampled BEFORE discovery (not just before copy) so external-actor drift is caught alongside fs-guard's own-write protection. Three-state: verified/mtime-changed/unchecked with explicit unchecked fallback on lstat failure.
 - [Phase 84]: Plan 84-03 — Verify-action rows excluded from per-skill verdict derivation in deriveLatestStatus; their status field encodes linker outcome not migration outcome. Prevents finmentum-crm appearing as 'migrated' when a verify row would override its refused apply row.
 - [Phase 84]: Plan 84-03 — Report overwritten on EVERY apply (not just first apply). Atomic temp+rename (mkdir recursive + writeFile .tmp + rename + best-effort tmp cleanup on failure) matches Phase 82 report-writer.ts discipline.
+- [Phase 85]: Plan 85-01 — `mcpServerSchema.optional` is additive with default `false` (mandatory). v2.1 migrated configs parse unchanged; all 5 auto-injected servers (clawcode/1password/browser/search/image) explicitly declared `optional:false` in loader.ts so the infra stack stays mandatory by construction.
+- [Phase 85]: Plan 85-01 — `performMcpReadinessHandshake` is a PURE module (no logger, no state) so warm-path gate + mcp-reconnect heartbeat share one regression lane. TOOL-04 verbatim-pass-through of JSON-RPC error messages pinned by `mcp: <name>: <raw transport error>` character-for-character assertion in readiness.test.ts.
+- [Phase 85]: Plan 85-01 — CheckStatus uses project-standard `healthy|warning|critical` vocabulary (NOT plan's draft `ok|warn|critical`) — integrates with existing context-fill/auto-linker/thread-idle checks without a schema fork.
+- [Phase 85]: Plan 85-01 — Heartbeat `mcp-reconnect` is NOT a reconnect driver. SDK owns MCP subprocess lifecycle and transparently reconnects; this check classifies + persists state (ready→degraded→failed→reconnecting→ready) and fuels /clawcode-tools + prompt-builder consumers.
+- [Phase 85]: Plan 85-01 — `failureCount` bounded with 5-min backoff-reset window (grows monotonically within window, recycles to 1 after). Gives operators a "recently-flapping" signal via /clawcode-tools without an unbounded counter.
+- [Phase 85]: Plan 85-01 — SessionHandle gets getMcpState/setMcpState mirror (sync'd at warm-path + every heartbeat tick) so TurnDispatcher-scope consumers (Plan 02 prompt-builder, Plan 03 slash commands) avoid reaching into SessionManager's private maps.
+- [Phase 85]: Plan 85-01 — New IPC `list-mcp-status` returns shape `{agent, servers: [{name, status, lastSuccessAt, lastFailureAt, failureCount, optional, lastError:string}]}` — canonical feed for Plan 03's /clawcode-tools slash command.
 
 ### v2.1 closing decisions (for reference)
 
@@ -149,9 +156,10 @@ Recent decisions affecting current work:
 | Phase 84 P01 | ~25min | 2 tasks (TDD) | 8 files |
 | Phase 84 P02 | 17min 0s | 2 tasks | 14 files |
 | Phase 84 P03 | 6min 23s | 1 tasks | 4 files |
+| Phase 85 P01 | 30min 24s | 2 tasks (TDD) | 15 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 84-03-PLAN.md — Phase 84 complete (SKILL-01..08 closed)
-Resume: Execute 84-02-PLAN.md (skills transformer + per-agent linker + idempotent apply) — Plan 02 can now consume the verified-safe P1 subset (4 skills) without re-implementing classification or secret-scan
+Stopped at: Completed 85-01-PLAN.md — MCP readiness gate + mcp-reconnect heartbeat landed (TOOL-01/03/04)
+Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
