@@ -31,10 +31,10 @@ Port the 5 P1 must-have skills from `~/.openclaw/skills/` into ClawCode's skill 
 
 Wire `reasoning_effort` → `MAX_THINKING_TOKENS` all the way through the SDK, fixing the P0 latent bug at `persistent-session-handle.ts:599-602` where `setEffort()` stores the level but never calls `q.setMaxThinkingTokens()`.
 
-- [ ] **EFFORT-01**: `/clawcode-effort <level>` dispatches through to `Query.setMaxThinkingTokens()` on the active SDK session (fixes the P0 silent no-op; regression pinned via query-options spy test)
-- [ ] **EFFORT-02**: Agent config supports `defaults.effort` and per-agent `agents[*].effort` in `clawcode.yaml` (both optional, additive — v2.1 migrated configs parse unchanged)
+- [x] **EFFORT-01**: `/clawcode-effort <level>` dispatches through to `Query.setMaxThinkingTokens()` on the active SDK session (fixes the P0 silent no-op; regression pinned via query-options spy test)
+- [x] **EFFORT-02**: Agent config supports `defaults.effort` and per-agent `agents[*].effort` in `clawcode.yaml` (both optional, additive — v2.1 migrated configs parse unchanged)
 - [ ] **EFFORT-03**: Effort level persists across agent restart via a runtime state file (new `~/.clawcode/manager/effort-state.json` or reuse of existing session-state)
-- [ ] **EFFORT-04**: Effort supports levels `low`, `medium`, `high`, `max`, `auto`, `off` — where `off` forces `MAX_THINKING_TOKENS=0` (explicit disable, mirroring OpenClaw's env-var semantics) and `auto` resets to model default
+- [x] **EFFORT-04**: Effort supports levels `low`, `medium`, `high`, `max`, `auto`, `off` — where `off` forces `MAX_THINKING_TOKENS=0` (explicit disable, mirroring OpenClaw's env-var semantics) and `auto` resets to model default
 - [ ] **EFFORT-05**: SKILL.md frontmatter `effort:` field (native Claude Code format) overrides the agent default for turns that invoke the skill, then reverts at turn boundary
 - [ ] **EFFORT-06**: Session fork via `buildForkConfig` resets effort to the agent default — fork inheritance does not carry effort into Opus advisor calls (prevents cost spike)
 - [ ] **EFFORT-07**: `/clawcode-status` output includes current effort level for every agent
