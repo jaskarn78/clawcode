@@ -119,16 +119,64 @@ Items intentionally pushed to a later milestone:
 
 ## Traceability
 
-(To be populated by gsd-roadmapper after phase mapping.)
+Every v2.2 requirement maps to exactly one owning phase below. UI-01 is cross-cutting and is validated as a shared success criterion across every UI-bearing phase (83, 86, 87, 88).
 
 | REQ-ID | Phase | Plan |
 |--------|-------|------|
-| UI-01 | TBD (cross-cutting) | TBD |
-| SKILL-01..08 | TBD | TBD |
-| EFFORT-01..07 | TBD | TBD |
-| MODEL-01..07 | TBD | TBD |
-| CMD-00..07 | TBD | TBD |
-| TOOL-01..07 | TBD | TBD |
-| MKT-01..07 | TBD | TBD |
+| UI-01 | 83, 86, 87, 88 (cross-cutting — validated per-phase) | TBD |
+| SKILL-01 | Phase 84 | TBD |
+| SKILL-02 | Phase 84 | TBD |
+| SKILL-03 | Phase 84 | TBD |
+| SKILL-04 | Phase 84 | TBD |
+| SKILL-05 | Phase 84 | TBD |
+| SKILL-06 | Phase 84 | TBD |
+| SKILL-07 | Phase 84 | TBD |
+| SKILL-08 | Phase 84 | TBD |
+| EFFORT-01 | Phase 83 | TBD |
+| EFFORT-02 | Phase 83 | TBD |
+| EFFORT-03 | Phase 83 | TBD |
+| EFFORT-04 | Phase 83 | TBD |
+| EFFORT-05 | Phase 83 | TBD |
+| EFFORT-06 | Phase 83 | TBD |
+| EFFORT-07 | Phase 83 | TBD |
+| MODEL-01 | Phase 86 | TBD |
+| MODEL-02 | Phase 86 | TBD |
+| MODEL-03 | Phase 86 | TBD |
+| MODEL-04 | Phase 86 | TBD |
+| MODEL-05 | Phase 86 | TBD |
+| MODEL-06 | Phase 86 | TBD |
+| MODEL-07 | Phase 86 | TBD |
+| CMD-00 | Phase 87 | TBD |
+| CMD-01 | Phase 87 | TBD |
+| CMD-02 | Phase 87 | TBD |
+| CMD-03 | Phase 87 | TBD |
+| CMD-04 | Phase 87 | TBD |
+| CMD-05 | Phase 87 | TBD |
+| CMD-06 | Phase 87 | TBD |
+| CMD-07 | Phase 87 | TBD |
+| TOOL-01 | Phase 85 | TBD |
+| TOOL-02 | Phase 85 | TBD |
+| TOOL-03 | Phase 85 | TBD |
+| TOOL-04 | Phase 85 | TBD |
+| TOOL-05 | Phase 85 | TBD |
+| TOOL-06 | Phase 85 | TBD |
+| TOOL-07 | Phase 85 | TBD |
+| MKT-01 | Phase 88 | TBD |
+| MKT-02 | Phase 88 | TBD |
+| MKT-03 | Phase 88 | TBD |
+| MKT-04 | Phase 88 | TBD |
+| MKT-05 | Phase 88 | TBD |
+| MKT-06 | Phase 88 | TBD |
+| MKT-07 | Phase 88 | TBD |
+
+**Coverage:** 45/45 requirements mapped (1 UI cross-cutting + 8 SKILL + 7 EFFORT + 7 MODEL + 8 CMD + 7 TOOL + 7 MKT). Zero orphans. UI-01 is the only requirement with multi-phase scope (by design — cross-cutting acceptance).
+
+**Phase summary:**
+- Phase 83 — 7 owned (EFFORT-01..07) + UI-01 co-validation
+- Phase 84 — 8 owned (SKILL-01..08)
+- Phase 85 — 7 owned (TOOL-01..07)
+- Phase 86 — 7 owned (MODEL-01..07) + UI-01 co-validation
+- Phase 87 — 8 owned (CMD-00..07) + UI-01 co-validation
+- Phase 88 — 7 owned (MKT-01..07) + UI-01 co-validation
 
 **Total requirements:** 45 (1 UI + 8 SKILL + 7 EFFORT + 7 MODEL + 8 CMD + 7 TOOL + 7 MKT)
