@@ -52,6 +52,7 @@
 import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { assertReadOnlySource } from "./guards.js";
 
 type FsPathLike = string | Buffer | URL | number;
@@ -100,9 +101,43 @@ let installed = false;
 let originals: Originals | undefined;
 
 /**
+ * Phase 82 OPS-02 — additive allowlist state. Resolved-path exact-match set
+ * of paths that bypass the ReadOnlySource check. Empty by default; populated
+ * ONLY via installFsGuard({ allowlist: [...] }). Cleared on uninstall.
+ *
+ * Load-bearing invariants:
+ *   - Exact-equality match on resolved paths (NOT startsWith). This means
+ *     `~/.openclaw/openclaw.json` in the allowlist does NOT open up
+ *     `~/.openclaw/openclaw.json.bak` or any other sibling — the allowlist
+ *     is one-path-at-a-time. Phase 82 cutover uses exactly one path.
+ *   - `path.resolve()` applied once at install time so subsequent
+ *     write attempts can use the same normalizer and match reliably even
+ *     when callers pass relative / denormalized path strings.
+ *   - `installed` flag still gates double-install — a second installFsGuard
+ *     call is a no-op, including any second-call allowlist argument. This
+ *     mirrors the existing Phase 77 contract. Uninstall + re-install is the
+ *     only way to change allowlist membership.
+ */
+let allowedPaths: Set<string> = new Set();
+
+/**
+ * Check whether `str` (a raw path from fs write call) resolves to an
+ * allow-listed path. Uses exact-equality on `path.resolve()` output — NOT
+ * prefix match. The allowlist is one-path-granularity per Phase 82.
+ */
+function isAllowlisted(str: string): boolean {
+  if (allowedPaths.size === 0) return false;
+  return allowedPaths.has(resolve(str));
+}
+
+/**
  * Wrap an fs write function so that the first argument (which may be a
  * string, Buffer, URL, or numeric fd) is extracted and passed through
  * `assertReadOnlySource` BEFORE the original implementation runs.
+ *
+ * Phase 82 extension: if the resolved path is in `allowedPaths`, the
+ * read-only check is SKIPPED and the write proceeds normally. Every other
+ * path under `~/.openclaw/` still refuses exactly as before.
  */
 function wrapAsync(orig: AsyncWrite): AsyncWrite {
   return (p: FsPathLike, ...rest: unknown[]): Promise<unknown> => {
@@ -111,7 +146,7 @@ function wrapAsync(orig: AsyncWrite): AsyncWrite {
     // matches the contract of node:fs/promises.
     try {
       const str = extractPath(p);
-      if (str !== undefined) assertReadOnlySource(str);
+      if (str !== undefined && !isAllowlisted(str)) assertReadOnlySource(str);
     } catch (err) {
       return Promise.reject(err);
     }
@@ -122,7 +157,7 @@ function wrapAsync(orig: AsyncWrite): AsyncWrite {
 function wrapSync(orig: SyncWrite): SyncWrite {
   return (p: FsPathLike, ...rest: unknown[]): unknown => {
     const str = extractPath(p);
-    if (str !== undefined) assertReadOnlySource(str);
+    if (str !== undefined && !isAllowlisted(str)) assertReadOnlySource(str);
     return orig(p, ...rest);
   };
 }
@@ -137,8 +172,22 @@ function wrapSync(orig: SyncWrite): SyncWrite {
  *
  * See the ESM scope caveat in the file header for which import styles
  * are covered.
+ *
+ * Phase 82 extension: `opts.allowlist` enumerates absolute (or resolvable)
+ * paths that bypass the ~/.openclaw/ refuse. Each entry is normalized via
+ * `path.resolve()` once at install time; at write time the candidate path
+ * is resolved identically and compared for exact equality. Sibling paths
+ * (e.g., `<file>.bak`) do NOT share the allowlist exemption.
+ *
+ * Second-install idempotency still applies — a second installFsGuard(opts)
+ * call is a no-op, INCLUDING any opts.allowlist. To change allowlist
+ * membership, uninstallFsGuard() then installFsGuard({ allowlist: [...] })
+ * again. This matches the existing Phase 77 contract: the first install
+ * wins.
  */
-export function installFsGuard(): void {
+export function installFsGuard(opts?: {
+  readonly allowlist?: readonly string[];
+}): void {
   if (installed) return;
   originals = {
     writeFile: fspCjs.writeFile as AsyncWrite,
@@ -148,6 +197,11 @@ export function installFsGuard(): void {
     appendFileSync: fsCjs.appendFileSync as SyncWrite,
     mkdirSync: fsCjs.mkdirSync as SyncWrite,
   };
+
+  // Resolve allowlist entries ONCE at install time. Subsequent write
+  // attempts use the same path.resolve() normalizer to compare.
+  const entries = opts?.allowlist ?? [];
+  allowedPaths = new Set(entries.map((p) => resolve(p)));
 
   // Direct assignment works on CJS module objects (writable + configurable).
   fspCjs.writeFile = wrapAsync(originals.writeFile);
@@ -164,6 +218,10 @@ export function installFsGuard(): void {
  * Restore the original fs write functions. Safe to call even when no
  * install has run (no-op). Always call from a `finally` block so a thrown
  * guard never leaves the interceptor lingering for the next CLI command.
+ *
+ * Also clears the Phase 82 allowlist state — a subsequent installFsGuard()
+ * with no args sees an empty Set, preserving the Phase 77 default-refuse
+ * behavior for all paths under ~/.openclaw/.
  */
 export function uninstallFsGuard(): void {
   if (!installed || !originals) return;
@@ -175,4 +233,5 @@ export function uninstallFsGuard(): void {
   fsCjs.mkdirSync = originals.mkdirSync;
   originals = undefined;
   installed = false;
+  allowedPaths = new Set();
 }

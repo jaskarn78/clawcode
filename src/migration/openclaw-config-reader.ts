@@ -17,7 +17,9 @@
  * than the single `readFile` against the source path.
  */
 import { z } from "zod/v4";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, rename, unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 
 /**
  * Shape of a single agent entry in `agents.list[]` from openclaw.json.
@@ -221,4 +223,154 @@ export async function readOpenclawInventory(
     bindings: bindingsParse.data,
     sourcePath,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 82 OPS-02 — removeBindingsForAgent (write helper).
+//
+// The ONLY write-side export in this otherwise read-only module. Deliberately
+// exported separately so only cutover.ts imports it; the read-side surface
+// (readOpenclawInventory, isFinmentumFamily) is used pervasively and must
+// remain pure.
+//
+// Why bypass the zod schema:
+//   `openclaw.json` contains operator-curated fields the schema does NOT
+//   model (env, auth, channels.discord.token, accountId on bindings, etc.).
+//   Parsing through the schema would strip those fields — an operator would
+//   lose credentials on the next migrate command. We therefore work with the
+//   generic JSON parse tree and modify ONLY `bindings`, preserving every
+//   other field byte-for-byte.
+//
+// Atomic write pattern:
+//   Mirrors yaml-writer.ts — write tmp path in same directory (same
+//   filesystem → atomic rename), then fs.rename. On rename failure, unlink
+//   the tmp path (best-effort) and re-throw.
+//
+// Idempotency:
+//   If zero bindings match `agentId`, NO write occurs. `before === after`
+//   hash, removed=0. This is load-bearing for cutover's idempotent re-run
+//   path (second cutover after success must be a no-op).
+//
+// DO NOT:
+//   - Parse through openclawSourceAgentSchema / openclawBindingSchema — we
+//     need the operator-curated passthrough fields.
+//   - Sort or reorder bindings — operator file order is load-bearing UX.
+//   - Use writeFile on the dest directly — chokidar race + half-written state.
+//   - Rename across filesystems — atomicity lost. Tmp MUST be in same dir.
+// ---------------------------------------------------------------------------
+
+/**
+ * Return shape from removeBindingsForAgent. `removed` is the number of
+ * binding entries deleted. `beforeSha256`/`afterSha256` are hex-encoded
+ * sha256 digests of the file BYTES before and after the operation — these
+ * are ledger witnesses, not hashes of the parsed object (byte equality is
+ * the stronger contract).
+ */
+export type RemoveBindingsForAgentResult = Readonly<{
+  removed: number;
+  beforeSha256: string;
+  afterSha256: string;
+}>;
+
+/**
+ * Remove every `bindings[]` entry whose `agentId === agentId` from
+ * `sourcePath`. Preserves all other top-level fields (meta, env, auth,
+ * channels.discord.token, agents.list, ...) byte-for-byte when serialized.
+ *
+ * Atomic temp+rename. Returns { removed, beforeSha256, afterSha256 }. On
+ * `removed === 0`, zero writes occur and `beforeSha256 === afterSha256`.
+ *
+ * Throws with `openclaw.json` + `sourcePath` context on:
+ *   - read errors (ENOENT / permission)
+ *   - JSON parse errors
+ *   - root is not an object
+ *   - missing `bindings` field
+ */
+export async function removeBindingsForAgent(
+  sourcePath: string,
+  agentId: string,
+): Promise<RemoveBindingsForAgentResult> {
+  let beforeBuf: Buffer;
+  try {
+    beforeBuf = await readFile(sourcePath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to read openclaw.json at ${sourcePath}: ${msg}`,
+    );
+  }
+  const beforeSha256 = createHash("sha256").update(beforeBuf).digest("hex");
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(beforeBuf.toString("utf8"));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid JSON in openclaw.json at ${sourcePath}: ${msg}`);
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `Invalid openclaw.json at ${sourcePath}: expected object at root`,
+    );
+  }
+  const obj = raw as Record<string, unknown>;
+  if (!("bindings" in obj) || !Array.isArray(obj.bindings)) {
+    throw new Error(
+      `Invalid openclaw.json at ${sourcePath}: missing or non-array bindings`,
+    );
+  }
+
+  const originalBindings = obj.bindings as Array<Record<string, unknown>>;
+  const kept: Array<Record<string, unknown>> = [];
+  let removed = 0;
+  for (const b of originalBindings) {
+    if (b && typeof b === "object" && b.agentId === agentId) {
+      removed += 1;
+      continue;
+    }
+    kept.push(b);
+  }
+
+  if (removed === 0) {
+    // Idempotent no-op — zero writes, zero byte changes.
+    return Object.freeze({
+      removed: 0,
+      beforeSha256,
+      afterSha256: beforeSha256,
+    });
+  }
+
+  // Build the new object. Keep every top-level key, replace bindings.
+  const newObj: Record<string, unknown> = { ...obj, bindings: kept };
+  // Operator convention: 2-space indent + trailing newline (matches the
+  // on-box openclaw.json format).
+  const newText = JSON.stringify(newObj, null, 2) + "\n";
+  const afterSha256 = createHash("sha256")
+    .update(newText, "utf8")
+    .digest("hex");
+
+  // Atomic temp+rename in SAME directory — rename is atomic on same filesystem.
+  const destDir = dirname(sourcePath);
+  const tmpPath = join(
+    destDir,
+    `.openclaw.json.${process.pid}.${Date.now()}.tmp`,
+  );
+  await writeFile(tmpPath, newText, "utf8");
+  try {
+    await rename(tmpPath, sourcePath);
+  } catch (err) {
+    try {
+      await unlink(tmpPath);
+    } catch {
+      // best-effort cleanup; already gone or never created
+    }
+    throw err;
+  }
+
+  return Object.freeze({
+    removed,
+    beforeSha256,
+    afterSha256,
+  });
 }
