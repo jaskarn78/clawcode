@@ -101,6 +101,17 @@ describe("createWorkspace", () => {
     expect(content).toBe(DEFAULT_SOUL);
   });
 
+  // Gap 4 (memory-persistence-gaps): the DEFAULT_SOUL template must include
+  // the Memory Lookup convention so agents know the default scope auto-widens
+  // to conversation history. Locking this down as a regression guard so a
+  // future SOUL.md rewrite cannot silently drop the section.
+  it("DEFAULT_SOUL documents the implicit memory_lookup scope fallback", () => {
+    expect(DEFAULT_SOUL).toContain("Memory Lookup");
+    expect(DEFAULT_SOUL).toContain("memory_lookup");
+    expect(DEFAULT_SOUL).toMatch(/scope/);
+    expect(DEFAULT_SOUL).toMatch(/fallback|widens|automatically/i);
+  });
+
   it("writes SOUL.md with config-provided inline content when agent.soul is set", async () => {
     const tmp = await makeTempDir();
     const wsPath = join(tmp, "my-agent");

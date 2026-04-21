@@ -115,6 +115,11 @@ export async function invokeMemoryLookup(
   params: MemoryLookupParams,
   deps: MemoryLookupDeps,
 ): Promise<MemoryLookupResponse> {
+  // Gap 4 (memory-persistence-gaps): track whether the caller explicitly
+  // asked for the legacy 'memories' scope. The implicit-default fallback
+  // fires ONLY when scope was omitted — an explicit 'memories' request keeps
+  // the legacy response shape and no retry, preserving pre-v1.9 semantics.
+  const scopeIsExplicit = params.scope !== undefined;
   const scope = params.scope ?? "memories";
   const page =
     typeof params.page === "number" && params.page >= 0
@@ -136,20 +141,30 @@ export async function invokeMemoryLookup(
     const queryEmbedding = await embedder.embed(params.query);
     const graphSearch = new GraphSearch(memoryStore);
     const results = graphSearch.search(queryEmbedding, limit);
-    return {
-      results: results.map((r) => ({
-        id: r.id,
-        content: r.content,
-        relevance_score: r.combinedScore,
-        tags: r.tags,
-        created_at: r.createdAt,
-        source: r.source,
-        linked_from: r.linkedFrom,
-      })),
-    };
+
+    // Gap 4: when the caller did NOT explicitly request scope='memories'
+    // AND the default-scope search returned nothing, retry once with
+    // scope='all' so agents that never touched the scope knob still pick
+    // up conversation history (session summaries + raw turns). Legacy
+    // callers that explicitly set scope='memories' (scopeIsExplicit)
+    // always get the legacy shape, empty or not.
+    if (results.length > 0 || scopeIsExplicit) {
+      return {
+        results: results.map((r) => ({
+          id: r.id,
+          content: r.content,
+          relevance_score: r.combinedScore,
+          tags: r.tags,
+          created_at: r.createdAt,
+          source: r.source,
+          linked_from: r.linkedFrom,
+        })),
+      };
+    }
+    // Fall through to the new-path branch below with scope='all'.
   }
 
-  // New path — scope='conversations' | 'all' OR page > 0.
+  // New path — scope='conversations' | 'all' OR page > 0 OR Gap 4 fallback.
   // Requires both MemoryStore AND ConversationStore.
   const conversationStore = deps.conversationStore;
   if (!conversationStore) {
@@ -159,11 +174,17 @@ export async function invokeMemoryLookup(
     );
   }
 
+  // Gap 4: when we reached here via the fallback branch (implicit-default,
+  // empty legacy result, page=0), widen the scope to 'all'. Otherwise honor
+  // the original scope from params.
+  const effectiveScope =
+    scope === "memories" && page === 0 && !scopeIsExplicit ? "all" : scope;
+
   const offset = page * limit;
   const scopedPage = await searchByScope(
     { memoryStore, conversationStore, embedder },
     {
-      scope,
+      scope: effectiveScope,
       query: params.query,
       limit,
       offset,

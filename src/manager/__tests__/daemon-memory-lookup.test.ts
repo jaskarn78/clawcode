@@ -678,4 +678,150 @@ describe("end-to-end — searchByScope via IPC handler", () => {
       expect(first).not.toHaveProperty("session_id");
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // Gap 4 (memory-persistence-gaps) — implicit-default fallback to scope='all'
+  //
+  // When the caller does NOT explicitly set scope (i.e. params.scope is
+  // undefined) AND the legacy default-scope search returns zero results, the
+  // handler retries once with scope='all'. Explicit scope='memories' never
+  // triggers the fallback — callers that ask for the legacy path get the
+  // legacy response shape regardless of result count.
+  // ---------------------------------------------------------------------------
+  describe("implicit-default fallback to scope='all' (Gap 4)", () => {
+    it("falls back to scope='all' when implicit default returns empty AND conversation data matches", async () => {
+      // NO memory row is inserted, so the legacy GraphSearch path returns
+      // zero rows. But a conversation turn DOES match the query.
+      const sessionA = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: sessionA.id,
+        role: "user",
+        content: "we should schedule the quarterly deployment review",
+        isTrustedChannel: true,
+      });
+
+      const result = (await invokeMemoryLookup(
+        { agent: "agent-a", query: "quarterly deployment review" },
+        {
+          memoryStore: memStore,
+          conversationStore: convStore,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<Record<string, unknown>>;
+        hasMore?: boolean;
+        nextOffset?: number | null;
+      };
+
+      // Fallback fired — response shape is the paginated envelope.
+      expect(result.hasMore).toBeDefined();
+      expect(result.results.length).toBeGreaterThan(0);
+      // At least one result must be a conversation-turn origin (i.e. came
+      // from the broader scope='all' search, not the legacy path).
+      const origins = result.results.map((r) => r.origin);
+      expect(origins).toContain("conversation-turn");
+    });
+
+    it("does NOT fall back when implicit default returns non-empty (preserves legacy shape)", async () => {
+      // Insert a knowledge memory that DOES match — default scope path hits it.
+      const embedding = await fakeEmbedder.embed("deployment strategy");
+      memStore.insert(
+        {
+          content: "Use blue-green for deployment strategy",
+          source: "manual",
+          tags: ["knowledge"],
+          skipDedup: true,
+        },
+        embedding,
+      );
+
+      const result = (await invokeMemoryLookup(
+        { agent: "agent-a", query: "deployment strategy" },
+        {
+          memoryStore: memStore,
+          conversationStore: convStore,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<Record<string, unknown>>;
+        hasMore?: boolean;
+      };
+
+      // Legacy response shape — no hasMore field.
+      expect(result.hasMore).toBeUndefined();
+      expect(result.results.length).toBeGreaterThan(0);
+      const first = result.results[0]!;
+      // Legacy path shape preserved.
+      expect(first).toHaveProperty("linked_from");
+      expect(first).not.toHaveProperty("origin");
+    });
+
+    it("does NOT fall back when explicit scope='memories' returns empty (legacy shape preserved)", async () => {
+      // No memory inserted; conversation turn DOES match.
+      const sessionA = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: sessionA.id,
+        role: "user",
+        content: "deployment rollback discussion",
+        isTrustedChannel: true,
+      });
+
+      const result = (await invokeMemoryLookup(
+        // NOTE: explicit scope='memories' — caller opted in to legacy path.
+        { agent: "agent-a", query: "deployment rollback", scope: "memories" },
+        {
+          memoryStore: memStore,
+          conversationStore: convStore,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<Record<string, unknown>>;
+        hasMore?: boolean;
+      };
+
+      // Legacy shape; empty results — fallback MUST NOT fire.
+      expect(result.hasMore).toBeUndefined();
+      expect(result.results).toHaveLength(0);
+    });
+
+    it("fallback does not fire when page > 0 (pagination through scoped envelope only)", async () => {
+      // No matches anywhere. With default scope + page=1, we're already on
+      // the new-path envelope (non-legacy). The fallback is a legacy-path
+      // concept; pagination requests stay on whichever scope was requested.
+      const result = (await invokeMemoryLookup(
+        { agent: "agent-a", query: "nothing-matches-anywhere", page: 1 },
+        {
+          memoryStore: memStore,
+          conversationStore: convStore,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<Record<string, unknown>>;
+        hasMore?: boolean;
+      };
+      // Even though empty, no fallback — page > 0 preserved.
+      expect(result.hasMore).toBeDefined();
+      expect(result.results).toHaveLength(0);
+    });
+
+    it("falls back when implicit-default returns empty AND scope='all' also returns empty (paginated envelope with zero results)", async () => {
+      // No data at all — fallback fires, scope='all' also empty.
+      const result = (await invokeMemoryLookup(
+        { agent: "agent-a", query: "no-such-content-anywhere" },
+        {
+          memoryStore: memStore,
+          conversationStore: convStore,
+          embedder: fakeEmbedder,
+        },
+      )) as unknown as {
+        results: Array<Record<string, unknown>>;
+        hasMore?: boolean;
+      };
+
+      // Shape flipped to paginated envelope because fallback ran — but
+      // still empty, which is the correct signal to the caller.
+      expect(result.hasMore).toBeDefined();
+      expect(result.results).toHaveLength(0);
+    });
+  });
 });
