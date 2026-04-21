@@ -31,9 +31,12 @@ async function makeLocalSkill(
 ): Promise<string> {
   const dir = join(root, name);
   await mkdir(dir, { recursive: true });
+  // scanner.ts extracts the first non-empty body paragraph (post-
+  // frontmatter) as the SkillEntry.description. Put the description text
+  // directly — no leading heading — so the scanner returns it verbatim.
   await writeFile(
     join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\n${description}\n`,
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n${description}\n`,
     "utf8",
   );
   return dir;

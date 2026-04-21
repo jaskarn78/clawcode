@@ -760,6 +760,22 @@ export const defaultsSchema = z.object({
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
+  // Phase 88 MKT-02 — optional list of legacy skill source roots (typically
+  // ~/.openclaw/skills) unioned with the local skillsPath into the /clawcode-
+  // skills-browse marketplace catalog. Each entry names a filesystem path
+  // (expanded via expandHome at resolution time) and an optional human-
+  // readable label shown in the Discord picker.
+  // Additive + optional: v2.1/v2.2 migrated configs parse unchanged when
+  // omitted; Plan 02 resolver emits a concrete [] for downstream catalog
+  // loaders. `path.min(1)` rejects empty strings at parse time.
+  marketplaceSources: z
+    .array(
+      z.object({
+        path: z.string().min(1),
+        label: z.string().optional(),
+      }),
+    )
+    .optional(),
   memory: memorySchema.default(() => ({
     compactionThreshold: 0.75,
     searchTopK: 10,
@@ -1046,3 +1062,14 @@ export type AgentConfig = z.infer<typeof agentSchema>;
 
 /** Top-level defaults section. */
 export type DefaultsConfig = z.infer<typeof defaultsSchema>;
+
+/**
+ * Phase 88 MKT-02 — one raw marketplace source entry as it appears in
+ * clawcode.yaml `defaults.marketplaceSources`. `path` is the yaml-native
+ * string (possibly `~/...`); expansion happens in loader.ts via
+ * `resolveMarketplaceSources`. `label` is the optional human-readable
+ * caption shown in the Discord picker.
+ */
+export type MarketplaceSourceConfig = NonNullable<
+  DefaultsConfig["marketplaceSources"]
+>[number];

@@ -1,0 +1,200 @@
+/**
+ * Phase 88 Plan 01 MKT-02 — read-only marketplace catalog.
+ *
+ * Unions ClawCode local skills (scanned from `localSkillsPath` via
+ * Phase 83+ `scanSkillsDirectory`) with every configured legacy source
+ * (scanned via Phase 84 `discoverOpenclawSkills`) into a single
+ * deduplicated, alphabetically-sorted `MarketplaceEntry[]` ready for
+ * Plan 02's Discord `/clawcode-skills-browse` picker.
+ *
+ * Contract:
+ *   - Local entries win on name collision (Plan 02 must never show two
+ *     rows with the same skill name; ambiguity breaks the install flow).
+ *   - Only legacy skills classified `p1` OR `p2` are advertised;
+ *     `deprecate` is NEVER shown (hard gate — deprecated skills must
+ *     not be reachable from the install UI).
+ *   - `unknown` classification is also skipped (pre-curated P1/P2 list
+ *     is the only v2.2 marketplace source; unknown skills need operator
+ *     review before they surface).
+ *   - Non-existent source paths degrade gracefully: log.warn + continue.
+ *     `discoverOpenclawSkills` already handles this (returns []); we
+ *     wrap any remaining read errors in a try/catch so a hostile
+ *     filesystem can never throw past the loader.
+ *   - Output is sorted alphabetically by name (deterministic Discord
+ *     menu ordering across reloads; stable `customId` seeds).
+ *
+ * Scope:
+ *   - Read-only. Does NOT invoke secret-scan, copier, or ledger.
+ *     Install-time gates live in `install-single-skill.ts` (Task 2).
+ *   - Does NOT compute source hashes. Hash computation is deferred to
+ *     install time where it feeds the idempotency gate (cheaper: one
+ *     hash per install, not per browse).
+ */
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { Logger } from "pino";
+import {
+  discoverOpenclawSkills,
+  type SkillClassification,
+} from "../migration/skills-discovery.js";
+import { SCOPE_TAGS } from "../migration/skills-scope-tags.js";
+import { scanSkillsDirectory } from "../skills/scanner.js";
+
+/**
+ * One advertised skill in the browser-facing catalog.
+ *
+ * `source` discriminates local vs legacy: Discord menu renders the label
+ * prefix, and the install handler uses the same field to route scope-tag
+ * classification + skillDir provenance.
+ */
+export type MarketplaceEntry = Readonly<{
+  name: string;
+  description: string;
+  category: "finmentum" | "personal" | "fleet";
+  source: "local" | Readonly<{ path: string; label?: string }>;
+  /** Absolute path to the skill's source directory (used by install-time copier). */
+  skillDir: string;
+  /** Only set for legacy-source entries — local ones are curated. */
+  classification?: SkillClassification;
+}>;
+
+export type LoadMarketplaceCatalogOpts = Readonly<{
+  /** Absolute, already-expandHome'd path to the ClawCode local skills dir. */
+  localSkillsPath: string;
+  /** Absolute-path, already-resolved legacy source entries. May be empty. */
+  sources: readonly { path: string; label?: string }[];
+  log?: Logger;
+}>;
+
+const DESCRIPTION_CAP = 100; // Discord StringSelectMenuOption description cap
+const DESCRIPTION_FALLBACK = "(no description available)";
+
+/**
+ * Truncate a description to the StringSelectMenuOption 100-char cap used
+ * by Phase 86 Plan 03's picker. Single-line (collapses internal
+ * whitespace). Preserves short descriptions verbatim.
+ */
+function truncateDescription(raw: string): string {
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= DESCRIPTION_CAP) return collapsed;
+  // Reserve 3 chars for the ellipsis so the total stays at DESCRIPTION_CAP.
+  return `${collapsed.slice(0, DESCRIPTION_CAP - 3)}...`;
+}
+
+/**
+ * Extract the first non-heading, non-frontmatter line of a SKILL.md body
+ * as a description. Returns DESCRIPTION_FALLBACK on read failure or when
+ * the file has no usable body text. Used for legacy sources where the
+ * Phase 84 discovery layer does not parse frontmatter (it hashes + filters
+ * only).
+ */
+async function readLegacyDescription(skillDir: string): Promise<string> {
+  const skillMd = join(skillDir, "SKILL.md");
+  let content: string;
+  try {
+    content = await readFile(skillMd, "utf8");
+  } catch {
+    return DESCRIPTION_FALLBACK;
+  }
+  // Strip frontmatter if present (matches Phase 84 transformer regex).
+  const withoutFrontmatter = content.replace(/^---\n(?:[\s\S]*?\n)?---\n*/, "");
+  const lines = withoutFrontmatter.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    // Skip markdown headings — the body's first paragraph is more useful.
+    // An all-hash line like "# frontend-design" is redundant with `name`.
+    if (/^#+\s/.test(trimmed)) continue;
+    return trimmed;
+  }
+  return DESCRIPTION_FALLBACK;
+}
+
+/**
+ * Load the unioned marketplace catalog for a given local skills dir and
+ * set of legacy sources.
+ *
+ * Algorithm:
+ *   1. Scan the local skills dir via `scanSkillsDirectory` (Phase 83+).
+ *      Each local `SkillEntry` becomes a `MarketplaceEntry` with
+ *      source:"local" and category derived from `SCOPE_TAGS` (default fleet).
+ *   2. For each legacy source, call `discoverOpenclawSkills` (Phase 84).
+ *      Keep only entries whose classification is "p1" or "p2".
+ *      Skip entries whose name is already in the dedup Map — local wins.
+ *   3. Sort alphabetically by name and freeze the array for downstream
+ *      consumers.
+ */
+export async function loadMarketplaceCatalog(
+  opts: LoadMarketplaceCatalogOpts,
+): Promise<readonly MarketplaceEntry[]> {
+  const byName = new Map<string, MarketplaceEntry>();
+
+  // --- Step 1: local skills -----------------------------------------
+  let localCatalog: Awaited<ReturnType<typeof scanSkillsDirectory>>;
+  try {
+    localCatalog = await scanSkillsDirectory(opts.localSkillsPath, opts.log);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    opts.log?.warn(
+      { localSkillsPath: opts.localSkillsPath, err: msg },
+      "loadMarketplaceCatalog: failed to scan local skills; continuing with legacy sources only",
+    );
+    localCatalog = new Map();
+  }
+
+  for (const [name, entry] of localCatalog) {
+    const category = SCOPE_TAGS.get(name) ?? "fleet";
+    byName.set(name, {
+      name,
+      description: truncateDescription(entry.description || DESCRIPTION_FALLBACK),
+      category,
+      source: "local",
+      skillDir: entry.path,
+    });
+  }
+
+  // --- Step 2: legacy sources (union; local wins on collision) ------
+  for (const source of opts.sources) {
+    let discovered: Awaited<ReturnType<typeof discoverOpenclawSkills>>;
+    try {
+      discovered = await discoverOpenclawSkills(source.path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      opts.log?.warn(
+        { source: source.path, err: msg },
+        "loadMarketplaceCatalog: failed to read source; continuing",
+      );
+      continue;
+    }
+
+    for (const skill of discovered) {
+      // Filter: only p1/p2 surface to the marketplace.
+      if (skill.classification !== "p1" && skill.classification !== "p2") {
+        continue;
+      }
+      // Local wins — skip if name collision.
+      if (byName.has(skill.name)) continue;
+
+      const description = await readLegacyDescription(skill.path);
+      const category = SCOPE_TAGS.get(skill.name) ?? "fleet";
+      const sourceDescriptor =
+        source.label !== undefined
+          ? Object.freeze({ path: source.path, label: source.label })
+          : Object.freeze({ path: source.path });
+      byName.set(skill.name, {
+        name: skill.name,
+        description: truncateDescription(description),
+        category,
+        source: sourceDescriptor,
+        skillDir: skill.path,
+        classification: skill.classification,
+      });
+    }
+  }
+
+  // --- Step 3: deterministic sort -----------------------------------
+  const entries = [...byName.values()].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  return Object.freeze(entries);
+}

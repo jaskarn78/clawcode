@@ -231,6 +231,20 @@ export type ResolvedAgentConfig = {
 };
 
 /**
+ * Phase 88 MKT-02 — resolved marketplace source entry (post-expandHome).
+ *
+ * Mirrors the raw `MarketplaceSourceConfig` shape but every `path` is an
+ * absolute filesystem path ready to hand to `loadMarketplaceCatalog`.
+ * `label` passes through unchanged.
+ */
+export type ResolvedMarketplaceSource = Readonly<{
+  path: string;
+  label?: string;
+}>;
+
+export type ResolvedMarketplaceSources = readonly ResolvedMarketplaceSource[];
+
+/**
  * Result of creating or verifying a workspace directory.
  */
 export type WorkspaceResult = {

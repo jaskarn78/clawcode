@@ -5,7 +5,10 @@ import { configSchema } from "./schema.js";
 import { expandHome } from "./defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../shared/errors.js";
 import type { Config, AgentConfig, DefaultsConfig, McpServerSchemaConfig } from "./schema.js";
-import type { ResolvedAgentConfig } from "../shared/types.js";
+import type {
+  ResolvedAgentConfig,
+  ResolvedMarketplaceSources,
+} from "../shared/types.js";
 
 /**
  * Load and validate a clawcode.yaml config file.
@@ -249,6 +252,29 @@ export async function resolveContent(value: string): Promise<string> {
 export function resolveAllAgents(config: Config): ResolvedAgentConfig[] {
   const sharedMcpServers = config.mcpServers ?? {};
   return config.agents.map((agent) => resolveAgentConfig(agent, config.defaults, sharedMcpServers));
+}
+
+/**
+ * Phase 88 MKT-02 — expand `defaults.marketplaceSources` into absolute
+ * filesystem paths. Pure helper: caller controls when to invoke (typically
+ * once per daemon boot, or lazily in the Plan 02 /clawcode-skills-browse
+ * handler). Missing / undefined field yields `[]`; explicit `[]` yields
+ * `[]`. `~/...` entries are expanded via the existing `expandHome` pattern
+ * used for basePath/skillsPath. Keeps `ResolvedAgentConfig` shape unchanged
+ * (no per-agent cardinality bloat for a fleet-wide list).
+ */
+export function resolveMarketplaceSources(
+  config: Config,
+): ResolvedMarketplaceSources {
+  const raw = config.defaults.marketplaceSources;
+  if (!raw || raw.length === 0) return [];
+  return raw.map((src) =>
+    Object.freeze(
+      src.label !== undefined
+        ? { path: expandHome(src.path), label: src.label }
+        : { path: expandHome(src.path) },
+    ),
+  );
 }
 
 /**
