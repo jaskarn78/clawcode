@@ -84,6 +84,19 @@ import {
   SourceCorruptionError,
   type RollbackResult,
 } from "../../migration/rollbacker.js";
+// Phase 82 Plan 02 — pilot-highlight + cutover + complete wiring.
+// pilot-selector exports are PURE (no I/O); cutover + report-writer are
+// late-bound through the migrateOpenclawHandlers dispatch holder so tests
+// can swap implementations without rebinding ESM frozen bindings.
+import {
+  pickPilot,
+  formatPilotLine,
+} from "../../migration/pilot-selector.js";
+import { cutoverAgent as cutoverAgentModule } from "../../migration/cutover.js";
+import {
+  buildMigrationReport as buildMigrationReportModule,
+  writeMigrationReport as writeMigrationReportModule,
+} from "../../migration/report-writer.js";
 
 /**
  * Phase 77-03 literal: was printed to stderr on the all-guards-pass path of
@@ -313,6 +326,32 @@ export async function runPlanAction(opts: {
     const available = inventory.agents.map((a) => a.id).join(", ");
     cliError(`Unknown OpenClaw agent: '${unknownFilter.agent}'. Available: ${available}`);
     return 1;
+  }
+
+  // Phase 82 OPS-01 — pilot-highlight. Append a single line AFTER the main
+  // plan output so the operator reads the recommendation last. Only emit
+  // when:
+  //   - the operator did NOT filter to a single agent (`--agent` sets
+  //     opts.agent to a defined string — skip pilot in that branch because
+  //     the operator has already committed to one agent), AND
+  //   - the plan has at least one agent (empty inventory → nothing to pick).
+  //
+  // mcpCounts is derived from the openclaw source entry's tools.mcp shape
+  // via the existing extractPerAgentMcpNames helper. Defensive: if the
+  // source lookup returns undefined (shouldn't happen given buildPlan
+  // derives agents FROM the inventory), treat mcpCount as 0.
+  if (opts.agent === undefined && report.agents.length >= 1) {
+    const mcpCounts = new Map<string, number>(
+      report.agents.map((a) => {
+        const src = inventory.agents.find((s) => s.id === a.sourceId);
+        const count = src ? extractPerAgentMcpNames(src).length : 0;
+        return [a.sourceId, count] as const;
+      }),
+    );
+    const pilot = pickPilot(report.agents, mcpCounts);
+    if (pilot) {
+      cliLog(formatPilotLine(pilot.winner, pilot.reason));
+    }
   }
 
   // Ledger bootstrap: append one row per planned agent.
@@ -987,6 +1026,121 @@ export async function runRollbackAction(opts: {
   }
 }
 
+// --- Phase 82 Plan 02 — cutover + complete action handlers ----------
+
+/**
+ * `clawcode migrate openclaw cutover <agent>` action handler.
+ *
+ * The ONLY CLI path that writes to `~/.openclaw/openclaw.json`. Wraps the
+ * Phase 82 Plan 01 `cutoverAgent` orchestrator — three-guard safety check
+ * (ledger status, clawcode.yaml entry, bindings present) then an fs-guard-
+ * allowlisted atomic temp+rename against openclaw.json.
+ *
+ * Three CutoverOutcome variants map to exit codes:
+ *   - "cut-over" → 0, stdout "✓ cut over <agent>: removed N binding(s)" +
+ *     observeHint ("Now wait 15 minutes ...")
+ *   - "already-cut-over" → 0 (idempotent no-op per D-05), stdout dim
+ *     "<agent>: already cut over"
+ *   - "refused" → 1, stderr "✗ cutover refused for <agent>: <reason>"
+ *
+ * The call goes through `migrateOpenclawHandlers.cutoverAgent` so tests
+ * can swap a mock into the dispatch holder without rebinding ESM frozen
+ * bindings (same pattern as Phase 80/81).
+ */
+export async function runCutoverAction(opts: {
+  agent: string;
+}): Promise<number> {
+  const paths = resolvePaths();
+  const impl = migrateOpenclawHandlers.cutoverAgent ?? cutoverAgentModule;
+  const result = await impl({
+    agentName: opts.agent,
+    openclawJsonPath: paths.openclawJson,
+    clawcodeConfigPath: paths.clawcodeConfigPath,
+    ledgerPath: paths.ledgerPath,
+  });
+  switch (result.outcome) {
+    case "cut-over":
+      cliLog(
+        green(
+          `✓ cut over ${opts.agent}: removed ${result.removedCount} binding(s)`,
+        ),
+      );
+      if (result.observeHint) cliLog(dim(result.observeHint));
+      return 0;
+    case "already-cut-over":
+      cliLog(
+        dim(
+          `${opts.agent}: already cut over (0 bindings to remove) — no-op`,
+        ),
+      );
+      return 0;
+    case "refused":
+      cliError(
+        red(
+          `✗ cutover refused for ${opts.agent}: ${result.refuseReason ?? "(no reason)"}`,
+        ),
+      );
+      return 1;
+  }
+}
+
+/**
+ * `clawcode migrate openclaw complete` action handler.
+ *
+ * Terminal subcommand — writes `.planning/milestones/v2.1-migration-report.md`
+ * with per-agent H3 sections + cross-agent invariants (zeroChannelOverlap,
+ * sourceTreeByteIdentical, zeroDuplicateOriginIds). Wraps Phase 82 Plan 01
+ * `buildMigrationReport` + `writeMigrationReport`.
+ *
+ * BuildReportResult variants map to exit codes:
+ *   - "refused-pending" → 1, stderr = buildResult.message (literal per D-07)
+ *   - "refused-invariants" → 1, stderr = message + failing invariants list
+ *   - "refused-secret" → 1, stderr = offenderPath-aware refusal
+ *   - "built" → writeMigrationReport → 0, stdout "Migration complete. Report: <path>"
+ *
+ * --force flag bypasses the refused-pending gate (forwarded as
+ * forceOnPending). No other override — REPORT_PATH_LITERAL is locked per D-06.
+ */
+export async function runCompleteAction(opts: {
+  force?: boolean;
+}): Promise<number> {
+  const paths = resolvePaths();
+  const buildImpl =
+    migrateOpenclawHandlers.buildMigrationReport ?? buildMigrationReportModule;
+  const writeImpl =
+    migrateOpenclawHandlers.writeMigrationReport ?? writeMigrationReportModule;
+  const buildResult = await buildImpl({
+    ledgerPath: paths.ledgerPath,
+    openclawJsonPath: paths.openclawJson,
+    clawcodeConfigPath: paths.clawcodeConfigPath,
+    openclawRoot: paths.openclawRoot,
+    openclawMemoryDir: paths.openclawMemoryDir,
+    forceOnPending: opts.force === true,
+  });
+
+  switch (buildResult.outcome) {
+    case "refused-pending":
+      cliError(red(buildResult.message));
+      return 1;
+    case "refused-invariants":
+      cliError(red(buildResult.message));
+      cliError(red(`failing invariants: ${buildResult.failing.join(", ")}`));
+      return 1;
+    case "refused-secret":
+      cliError(
+        red(
+          `✗ complete refused: secret-shaped value detected at ${buildResult.offenderPath} — remove secrets from ledger notes / warnings before re-running`,
+        ),
+      );
+      return 1;
+    case "built": {
+      const writeResult = await writeImpl(buildResult);
+      cliLog(green(`Migration complete. Report: ${writeResult.destPath}`));
+      return 0;
+    }
+  }
+}
+
 // --- Commander wiring (nested: `migrate openclaw <sub>`) -------------
 
 /**
@@ -1021,6 +1175,16 @@ export const migrateOpenclawHandlers: {
   // below because the fns are declared later in the file.
   runVerifyAction: (opts: { agent?: string }) => Promise<number>;
   runRollbackAction: (opts: { agent: string }) => Promise<number>;
+  // Phase 82 Plan 02 — cutoverAgent + buildMigrationReport + writeMigrationReport
+  // are swappable per-test so the CLI integration suites can exercise the
+  // full action-handler path without touching real openclaw.json / the
+  // milestone report path. The three module-level fns are attached at
+  // initialization time; late-bind for the action handlers happens below.
+  cutoverAgent: typeof cutoverAgentModule;
+  buildMigrationReport: typeof buildMigrationReportModule;
+  writeMigrationReport: typeof writeMigrationReportModule;
+  runCutoverAction: (opts: { agent: string }) => Promise<number>;
+  runCompleteAction: (opts: { force?: boolean }) => Promise<number>;
 } = {
   runPlanAction,
   runApplyAction,
@@ -1032,6 +1196,13 @@ export const migrateOpenclawHandlers: {
   // invoked in production (late-bind fires at module load).
   runVerifyAction: async () => 0,
   runRollbackAction: async () => 0,
+  // Phase 82 Plan 02 — cutover + report-writer module references + action
+  // handler placeholders (late-bound below to the real fns).
+  cutoverAgent: cutoverAgentModule,
+  buildMigrationReport: buildMigrationReportModule,
+  writeMigrationReport: writeMigrationReportModule,
+  runCutoverAction: async () => 0,
+  runCompleteAction: async () => 0,
 };
 
 // Late-bind Phase 81 Plan 02 actions into the dispatch holder. The holder
@@ -1042,6 +1213,9 @@ export const migrateOpenclawHandlers: {
 // holder, and tests can swap the fields freely without namespace rebind.
 migrateOpenclawHandlers.runVerifyAction = runVerifyAction;
 migrateOpenclawHandlers.runRollbackAction = runRollbackAction;
+// Phase 82 Plan 02 — late-bind the two new action handlers to the holder.
+migrateOpenclawHandlers.runCutoverAction = runCutoverAction;
+migrateOpenclawHandlers.runCompleteAction = runCompleteAction;
 
 export function registerMigrateOpenclawCommand(program: Command): void {
   const migrate = program.command("migrate").description("Migration commands");
@@ -1159,6 +1333,54 @@ export function registerMigrateOpenclawCommand(program: Command): void {
     .action(async (agent: string) => {
       try {
         const code = await migrateOpenclawHandlers.runRollbackAction({ agent });
+        if (code !== 0) process.exit(code);
+      } catch (err) {
+        cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  // Phase 82 Plan 02 — cutover <agent>
+  // The ONLY subcommand that writes to ~/.openclaw/ (via fs-guard allowlist
+  // carve-out for openclaw.json). Three-guard orchestrator in Wave 1 enforces
+  // ledger status + clawcode.yaml entry + bindings-present before any write.
+  openclaw
+    .command("cutover")
+    .argument(
+      "<agent>",
+      "Agent to cut over (removes its bindings from ~/.openclaw/openclaw.json)",
+    )
+    .description(
+      "Per-agent cutover — removes OpenClaw Discord bindings for <agent> (ONLY phase that writes ~/.openclaw/)",
+    )
+    .action(async (agent: string) => {
+      try {
+        const code = await migrateOpenclawHandlers.runCutoverAction({ agent });
+        if (code !== 0) process.exit(code);
+      } catch (err) {
+        cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  // Phase 82 Plan 02 — complete
+  // Terminal subcommand — writes .planning/milestones/v2.1-migration-report.md
+  // with per-agent H3 sections + three cross-agent invariants. --force
+  // bypasses the refused-pending gate.
+  openclaw
+    .command("complete")
+    .option(
+      "--force",
+      "Acknowledge that some agents are still pending and proceed anyway",
+    )
+    .description(
+      "Write .planning/milestones/v2.1-migration-report.md — final migration artifact with per-agent outcomes and cross-agent invariants",
+    )
+    .action(async (opts: { force?: boolean }) => {
+      try {
+        const code = await migrateOpenclawHandlers.runCompleteAction({
+          force: opts.force === true,
+        });
         if (code !== 0) process.exit(code);
       } catch (err) {
         cliError(`Error: ${err instanceof Error ? err.message : String(err)}`);
