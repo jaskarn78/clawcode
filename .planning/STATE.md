@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
-status: Ready to plan
-stopped_at: Completed 81-03-PLAN.md
-last_updated: "2026-04-21T00:25:34.716Z"
+status: Ready to execute
+stopped_at: Completed 82-01-PLAN.md
+last_updated: "2026-04-21T01:02:12.043Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 14
   completed_phases: 13
-  total_plans: 37
-  completed_plans: 37
+  total_plans: 39
+  completed_plans: 38
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 81 — verify-rollback-resume-fork
+**Current focus:** Phase 82 — pilot-cutover-completion
 
 ## Current Position
 
-Phase: 82
-Plan: Not started
+Phase: 82 (pilot-cutover-completion) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -130,6 +130,9 @@ Recent decisions affecting current work:
 - [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: EscalationMonitor-over-SessionManager seam choice (Option B) — <20 LOC fixture vs SessionManager's Discord+chokidar+Agent-SDK deps; EscalationMonitor.escalate is the ONLY production caller of forkSession with model override, so pinning at this seam covers the full FORK-01 contract.
 - [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: Static-grep regression for no-budget-ceiling — readFileSync('src/usage/tracker.ts') + expect().not.toMatch(/BudgetExceededError|canEscalate/) pins invariant that UsageTracker.record has no budget-gate integration; catches drift if a future refactor adds budget checks into tracker.ts.
 - [Phase 81-verify-rollback-resume-fork]: [Phase 81 Plan 03]: Phase 74 alternate-contract pin — v1.5 persistent-fork rows NEVER carry 'openclaw:<slug>' agent shape (that's Phase 74 transient-routing); two-sided assertion expect(agent).toBe('<parent>-fork-<id>') + .not.toBe(parent) pins both positive (literal) and negative (never collapses) fork-name invariant.
+- [Phase 82-pilot-cutover-completion]: removeBindingsForAgent bypasses zod schema to preserve operator-curated passthrough fields (env, auth, channels.discord.token)
+- [Phase 82-pilot-cutover-completion]: fs-guard allowlist uses exact-equality on resolve()'d paths — sibling .bak files still refuse
+- [Phase 82-pilot-cutover-completion]: source_integrity_sha hashes sorted ledger witness rows (not a live tree walk) — the ledger IS the audit trail
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -210,9 +213,10 @@ Recent decisions affecting current work:
 | Phase 81-verify-rollback-resume-fork P01 | 9min | 2 tasks | 1 files |
 | Phase 81-verify-rollback-resume-fork P02 | 17min | 2 tasks | 2 files |
 | Phase 81-verify-rollback-resume-fork P03 | 21min | 2 tasks | 3 files |
+| Phase 82-pilot-cutover-completion P01 | 25min | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 81-03-PLAN.md
+Stopped at: Completed 82-01-PLAN.md
 Resume file: None

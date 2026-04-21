@@ -81,10 +81,10 @@ Verify every migrated agent retains v1.5 fork-based Opus escalation.
 
 Pilot → per-agent cutover → dual-run guardrails.
 
-- [ ] **OPS-01**: User (as operator) can migrate a single low-risk pilot agent (`personal` or `local-clawdy`) first and verify end-to-end behavior before migrating the remaining 14 — pilot selection surfaces in plan output.
-- [ ] **OPS-02**: User (as operator) can run OpenClaw and ClawCode side-by-side during pilot with dual bots present in each migrated agent's Discord channel, with a clear cutover command (`clawcode migrate openclaw cutover <agent>`) that removes the OpenClaw bot's channel access per-agent after user verification.
+- [x] **OPS-01**: User (as operator) can migrate a single low-risk pilot agent (`personal` or `local-clawdy`) first and verify end-to-end behavior before migrating the remaining 14 — pilot selection surfaces in plan output.
+- [x] **OPS-02**: User (as operator) can run OpenClaw and ClawCode side-by-side during pilot with dual bots present in each migrated agent's Discord channel, with a clear cutover command (`clawcode migrate openclaw cutover <agent>`) that removes the OpenClaw bot's channel access per-agent after user verification.
 - [x] **OPS-03**: User (as operator) can trust that the migrator refuses to proceed if both bots would otherwise reply to the same message (same channel ID bound to both an OpenClaw agent AND a ClawCode agent with overlapping activation rules) — hard fail with channel collision report.
-- [ ] **OPS-04**: User (as operator) can execute a final `clawcode migrate openclaw complete` step that writes a migration report to `.planning/milestones/v2.1-migration-report.md` summarizing per-agent outcomes, memory-count deltas, Discord cutover timestamps, and any pending rollbacks.
+- [x] **OPS-04**: User (as operator) can execute a final `clawcode migrate openclaw complete` step that writes a migration report to `.planning/milestones/v2.1-migration-report.md` summarizing per-agent outcomes, memory-count deltas, Discord cutover timestamps, and any pending rollbacks.
 
 ---
 
@@ -148,8 +148,8 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | MIGR-05 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | FORK-01 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | FORK-02 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
-| OPS-01 | Phase 82: Pilot + Cutover + Completion | Pending |
-| OPS-02 | Phase 82: Pilot + Cutover + Completion | Pending |
-| OPS-04 | Phase 82: Pilot + Cutover + Completion | Pending |
+| OPS-01 | Phase 82: Pilot + Cutover + Completion | Complete |
+| OPS-02 | Phase 82: Pilot + Cutover + Completion | Complete |
+| OPS-04 | Phase 82: Pilot + Cutover + Completion | Complete |
 
 **Coverage:** 31/31 requirements mapped — zero orphans, zero duplicates.
