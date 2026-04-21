@@ -135,6 +135,11 @@ function createFakeQuery(
     setMcpServers: vi.fn(() => Promise.resolve(undefined)),
     // Phase 83 EFFORT-01 — setEffort() invokes this on the Query handle.
     setMaxThinkingTokens: vi.fn(() => Promise.resolve(undefined)),
+    // Phase 86 MODEL-03 — setModel() invokes this on the Query handle.
+    // Mirrors the Phase 83 Rule-3 fix-ahead pattern so existing "surface
+    // byte-identical" tests don't crash the first time a downstream test
+    // exercises the setModel wire.
+    setModel: vi.fn(() => Promise.resolve(undefined)),
   } as unknown as SdkQuery;
 
   return {
@@ -239,6 +244,9 @@ describe("createPersistentSessionHandle", () => {
     expect(typeof handle.onEnd).toBe("function");
     expect(typeof handle.setEffort).toBe("function");
     expect(typeof handle.getEffort).toBe("function");
+    // Phase 86 MODEL-03 — mid-session model mutation primitives.
+    expect(typeof handle.setModel).toBe("function");
+    expect(typeof handle.getModel).toBe("function");
     // quick-task 260419-nic — mid-turn interrupt primitives.
     expect(typeof handle.interrupt).toBe("function");
     expect(typeof handle.hasActiveTurn).toBe("function");

@@ -87,6 +87,19 @@ export type SessionHandle = {
   setEffort: (level: EffortLevel) => void;
   getEffort: () => EffortLevel;
   /**
+   * Phase 86 MODEL-03 — mid-session model mutation (spy-test pinned).
+   * Accepts the resolved SDK model id (e.g. "claude-sonnet-4-5"), not the
+   * alias. Allowlist validation happens upstream in
+   * `SessionManager.setModelForAgent` before this handle method fires.
+   */
+  setModel: (modelId: string) => void;
+  /**
+   * Phase 86 MODEL-07 — current model alias/id surfaced in /clawcode-status.
+   * Returns the value most recently passed to setModel, or the session-start
+   * default captured from baseOptions.model. Undefined when neither is set.
+   */
+  getModel: () => string | undefined;
+  /**
    * Phase 73 extension (quick task 260419-nic) — mid-turn abort primitive.
    *
    * When a turn is in-flight, fires the SDK Query.interrupt() and the
@@ -249,6 +262,17 @@ export class MockSessionHandle implements SessionHandle {
 
   getEffort(): EffortLevel {
     return this.effort;
+  }
+
+  // Phase 86 MODEL-03 — in-memory mock of the real handle's setModel/getModel
+  // contract. Tests can spy on this method directly to verify SessionManager
+  // dispatch; no SDK interaction.
+  private _model: string | undefined;
+  setModel(modelId: string): void {
+    this._model = modelId;
+  }
+  getModel(): string | undefined {
+    return this._model;
   }
 
   /**
@@ -1143,6 +1167,22 @@ function wrapSdkQuery(
 
     getEffort(): EffortLevel {
       return currentEffort;
+    },
+
+    /**
+     * Phase 86 MODEL-03 — legacy wrapSdkQuery predates the mid-turn model
+     * primitive. The per-turn-query shape has no persistent Query reference
+     * to setModel() cleanly, so we mirror the interrupt/hasActiveTurn pattern:
+     * no-op for setModel, undefined for getModel. This legacy factory is
+     * test-only (createTracedSessionHandle) — production routes through
+     * createPersistentSessionHandle where the real wire lives.
+     */
+    setModel(_modelId: string): void {
+      /* no-op — legacy per-turn-query handle lacks mid-session model swap */
+    },
+
+    getModel(): string | undefined {
+      return undefined;
     },
 
     /**

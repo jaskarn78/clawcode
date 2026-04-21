@@ -94,6 +94,12 @@ export function createPersistentSessionHandle(
   // to the full v2.2 EffortLevel union (adds "xhigh", "auto", "off").
   let currentEffort: EffortLevel =
     (baseOptions.effort ?? "low") as EffortLevel;
+  // Phase 86 MODEL-03 — per-handle runtime model mirror.
+  // Initialized from baseOptions.model (which is the resolved SDK model id
+  // passed by session-adapter.ts, NOT the config alias). Updated by
+  // handle.setModel; read by handle.getModel and surfaced downstream via
+  // SessionManager.getModelForAgent (Plan 02 /clawcode-status).
+  let currentModel: string | undefined = baseOptions.model;
   const errorHandlers: Array<(err: Error) => void> = [];
   const endHandlers: Array<() => void> = [];
   let closed = false;
@@ -625,6 +631,24 @@ export function createPersistentSessionHandle(
 
     getEffort(): EffortLevel {
       return currentEffort;
+    },
+
+    setModel(modelId: string): void {
+      currentModel = modelId;
+      // Phase 86 MODEL-03 — SDK canary pattern (Phase 83 blueprint).
+      // q.setModel is async on the SDK (sdk.d.ts:1711) but we DO NOT await —
+      // setModel must stay synchronous because the IPC / slash call path
+      // cannot yield. Rejections are logged-and-swallowed so a transient
+      // SDK failure never crashes a healthy turn. Regression pinned by
+      // spy test in persistent-session-handle-model.test.ts.
+      void q.setModel(modelId).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[model] setModel(${modelId}) failed: ${msg}`);
+      });
+    },
+
+    getModel(): string | undefined {
+      return currentModel;
     },
 
     /**

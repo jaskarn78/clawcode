@@ -42,6 +42,8 @@ import {
   writeEffortState,
   DEFAULT_EFFORT_STATE_PATH,
 } from "./effort-state-store.js";
+import { resolveModelId } from "./model-resolver.js";
+import { ModelNotAllowedError } from "./model-errors.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -661,6 +663,55 @@ export class SessionManager {
   getEffortForAgent(name: string): EffortLevel {
     const handle = this.requireSession(name);
     return handle.getEffort();
+  }
+
+  /**
+   * Phase 86 MODEL-03 / MODEL-06 — set the active model for a running agent
+   * via SDK Query.setModel. Validates `alias` against the agent's resolved
+   * `allowedModels` BEFORE dispatching to the handle. Throws
+   * ModelNotAllowedError (typed) on violation so the caller (IPC / slash
+   * command) can render an ephemeral error with the allowed list.
+   *
+   * Plan 02 adds atomic YAML persistence AFTER this call returns; the
+   * persistence path is owned by the daemon IPC handler to keep
+   * SessionManager single-responsibility.
+   *
+   * `alias` is a config alias (e.g. "sonnet"); this method resolves it
+   * to a full SDK model id via resolveModelId (same helper used by
+   * session-adapter.ts). Runtime-only: does NOT modify clawcode.yaml.
+   *
+   * @throws SessionError if the agent is not running
+   * @throws ModelNotAllowedError if alias is not in the agent's allowedModels
+   */
+  setModelForAgent(name: string, alias: "haiku" | "sonnet" | "opus"): void {
+    const handle = this.requireSession(name);
+    const config = this.configs.get(name);
+    // Defensive — configs is always populated for running agents (set in
+    // startAgent), but an allowlist violation must fail loud if somehow
+    // reached without a config entry.
+    const allowed = (config?.allowedModels ?? [
+      "haiku",
+      "sonnet",
+      "opus",
+    ]) as readonly string[];
+    if (!allowed.includes(alias)) {
+      throw new ModelNotAllowedError(name, alias, allowed);
+    }
+    const modelId = resolveModelId(alias);
+    handle.setModel(modelId);
+    this.log.info({ agent: name, model: alias, modelId }, "model updated");
+  }
+
+  /**
+   * Phase 86 MODEL-07 — current live model alias/id for /clawcode-status.
+   * Returns the most recent id dispatched to the handle, or undefined when
+   * the session started without a model and setModel was never called.
+   *
+   * @throws SessionError if the agent is not running
+   */
+  getModelForAgent(name: string): string | undefined {
+    const handle = this.requireSession(name);
+    return handle.getModel();
   }
 
   /** @throws SessionError if the agent is not running */

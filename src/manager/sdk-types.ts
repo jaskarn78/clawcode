@@ -174,6 +174,14 @@ export type SdkQuery = AsyncGenerator<SdkStreamMessage, void> & {
    * Consumed by persistent-session-handle.ts:setEffort.
    */
   setMaxThinkingTokens(maxThinkingTokens: number | null): Promise<void>;
+  /**
+   * Phase 86 MODEL-03 — SDK mid-session model swap.
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 Query.setModel
+   * (sdk.d.ts:1711). Passing undefined resets to the session default;
+   * a string must be a valid Claude model id. Consumed by
+   * persistent-session-handle.ts:setModel.
+   */
+  setModel(model?: string): Promise<void>;
 };
 
 /**

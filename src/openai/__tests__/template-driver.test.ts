@@ -111,8 +111,14 @@ function makeMockHandle(opts?: {
     onEnd: vi.fn(),
     setEffort: vi.fn(),
     getEffort: vi.fn().mockReturnValue("low") as unknown as SessionHandle["getEffort"],
+    // Phase 86 MODEL-03 — required by SessionHandle surface.
+    setModel: vi.fn(),
+    getModel: vi.fn().mockReturnValue(undefined) as unknown as SessionHandle["getModel"],
     interrupt: vi.fn(),
     hasActiveTurn: vi.fn().mockReturnValue(false) as unknown as SessionHandle["hasActiveTurn"],
+    // Phase 85 TOOL-01 — required by SessionHandle surface.
+    getMcpState: vi.fn().mockReturnValue(new Map()) as unknown as SessionHandle["getMcpState"],
+    setMcpState: vi.fn(),
     sendAndStreamMock,
   };
   return h;
