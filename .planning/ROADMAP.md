@@ -131,7 +131,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 - [ ] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface.
 - [ ] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87.
 - [ ] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first.
-- [ ] **Phase 88: Skills Marketplace** — `/clawcode-skills-browse` Discord picker that runs the Phase 84 migration utility against a single skill; atomic post-install `skills:` list update + hot-reload.
+- [x] **Phase 88: Skills Marketplace** — `/clawcode-skills-browse` Discord picker that runs the Phase 84 migration utility against a single skill; atomic post-install `skills:` list update + hot-reload. (completed 2026-04-21)
 
 ## Phase Details
 
@@ -270,7 +270,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
-| 84. Skills Library Migration | 3/3 | Complete   | 2026-04-21 |
+| 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
 | 87. Native CC Slash Commands | 0/? | Not started | - |

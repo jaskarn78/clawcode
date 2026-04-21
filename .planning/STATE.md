@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: In progress
+status: Ready to plan
 stopped_at: Completed 84-03-PLAN.md — Phase 84 complete (SKILL-01..08 closed)
-last_updated: "2026-04-21T19:15:45.677Z"
+last_updated: "2026-04-21T19:17:00.734Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 
 ## Current Position
 
-Phase: 84 COMPLETE (SKILL-01..08 closed)
-Plan: 03 complete — next phase candidate is 85 (MCP Tool Awareness) which is fully independent
+Phase: 85
+Plan: Not started
 
 ## Performance Metrics
 
