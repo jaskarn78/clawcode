@@ -1,0 +1,289 @@
+/**
+ * Phase 86 Plan 02 Task 2 — daemon IPC set-model handler tests (D1-D5).
+ *
+ * Drives the exported `handleSetModelIpc` pure function that the daemon's
+ * `case "set-model":` delegates to. Mocks:
+ *   - `SessionManager.setModelForAgent` via dependency injection
+ *   - `updateAgentModel` via `vi.mock("../../migration/yaml-writer.js", ...)`
+ *
+ * Pins:
+ *   D1: success — live swap first, YAML persist second, happy payload
+ *   D2: allowlist rejection — ModelNotAllowedError surfaces as typed IPC error
+ *   D3: persistence round-trip — post-success bytes reflect new model
+ *   D4: persistence failure after live swap — no rollback, error recorded
+ *   D5: agent not found — fast-fail, SessionManager NOT called
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
+
+// Hoisted mock handle for updateAgentModel — vi.mock is hoisted so we must
+// reach it via a factory that captures a mutable ref.
+const updateAgentModelMock = vi.fn();
+
+vi.mock("../../migration/yaml-writer.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../migration/yaml-writer.js")
+  >("../../migration/yaml-writer.js");
+  return {
+    ...actual,
+    updateAgentModel: (...args: unknown[]) => updateAgentModelMock(...args),
+  };
+});
+
+import {
+  handleSetModelIpc,
+  type SetModelIpcDeps,
+} from "../daemon.js";
+import { ManagerError } from "../../shared/errors.js";
+import { ModelNotAllowedError } from "../model-errors.js";
+import type { ResolvedAgentConfig } from "../../shared/types.js";
+
+function makeAgent(
+  name: string,
+  model: "haiku" | "sonnet" | "opus",
+  allowedModels: ReadonlyArray<"haiku" | "sonnet" | "opus"> = [
+    "haiku",
+    "sonnet",
+    "opus",
+  ],
+): ResolvedAgentConfig {
+  return {
+    name,
+    workspace: `/tmp/${name}`,
+    memoryPath: `/tmp/${name}`,
+    channels: ["chan-1"],
+    model,
+    effort: "low",
+    skills: [],
+    slashCommands: [],
+    allowedModels,
+    soul: undefined,
+    identity: undefined,
+  } as unknown as ResolvedAgentConfig;
+}
+
+async function setupYamlFixture(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "cc-daemon-set-model-"));
+  const configPath = join(dir, "clawcode.yaml");
+  const yaml = `version: 1
+defaults:
+  model: sonnet
+  basePath: ~/.clawcode/agents
+agents:
+  - name: clawdy
+    workspace: ~/.clawcode/agents/clawdy
+    model: haiku
+    channels:
+      - "111"
+    mcpServers: []
+`;
+  await writeFile(configPath, yaml, "utf8");
+  return configPath;
+}
+
+type ManagerStub = SetModelIpcDeps["manager"];
+
+function makeManagerStub(
+  setModelForAgent: (name: string, alias: "haiku" | "sonnet" | "opus") => void,
+): ManagerStub {
+  const setAllAgentConfigs = vi.fn();
+  return {
+    setModelForAgent: vi.fn(setModelForAgent),
+    setAllAgentConfigs,
+  } as unknown as ManagerStub;
+}
+
+beforeEach(() => {
+  updateAgentModelMock.mockReset();
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("handleSetModelIpc — Phase 86 Plan 02 (D1-D5)", () => {
+  it("D1: success — calls setModelForAgent BEFORE updateAgentModel and returns persisted payload", async () => {
+    const configPath = await setupYamlFixture();
+    updateAgentModelMock.mockResolvedValueOnce({
+      outcome: "updated",
+      destPath: configPath,
+      targetSha256: "a".repeat(64),
+    });
+
+    const configs: ResolvedAgentConfig[] = [makeAgent("clawdy", "haiku")];
+    const callOrder: string[] = [];
+    const manager = makeManagerStub((name, alias) => {
+      callOrder.push(`setModel:${name}:${alias}`);
+    });
+    updateAgentModelMock.mockImplementationOnce((...args: unknown[]) => {
+      callOrder.push("updateAgentModel");
+      return Promise.resolve({
+        outcome: "updated",
+        destPath: configPath,
+        targetSha256: "a".repeat(64),
+      });
+    });
+
+    const result = await handleSetModelIpc({
+      manager,
+      configs,
+      configPath,
+      params: { agent: "clawdy", model: "sonnet" },
+    });
+
+    expect(manager.setModelForAgent).toHaveBeenCalledTimes(1);
+    expect(manager.setModelForAgent).toHaveBeenCalledWith("clawdy", "sonnet");
+    expect(updateAgentModelMock).toHaveBeenCalledTimes(1);
+    expect(updateAgentModelMock).toHaveBeenCalledWith({
+      existingConfigPath: configPath,
+      agentName: "clawdy",
+      newModel: "sonnet",
+    });
+    // Order invariant: live swap BEFORE YAML persist
+    expect(callOrder[0]).toMatch(/^setModel:/);
+    expect(callOrder[1]).toBe("updateAgentModel");
+
+    expect(result).toMatchObject({
+      agent: "clawdy",
+      old_model: "haiku",
+      new_model: "sonnet",
+      persisted: true,
+      note: expect.stringMatching(/Live swap \+ clawcode\.yaml updated/),
+    });
+    // In-memory config updated too
+    expect(manager.setAllAgentConfigs).toHaveBeenCalledTimes(1);
+    expect(configs[0]!.model).toBe("sonnet");
+  });
+
+  it("D2: allowlist rejection — ModelNotAllowedError maps to typed IPC error; updateAgentModel NOT called", async () => {
+    const configPath = await setupYamlFixture();
+    const configs: ResolvedAgentConfig[] = [
+      makeAgent("clawdy", "haiku", ["haiku", "sonnet"]),
+    ];
+    const manager = makeManagerStub(() => {
+      throw new ModelNotAllowedError("clawdy", "opus", ["haiku", "sonnet"]);
+    });
+
+    let caught: unknown;
+    try {
+      await handleSetModelIpc({
+        manager,
+        configs,
+        configPath,
+        params: { agent: "clawdy", model: "opus" },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ManagerError);
+    const me = caught as ManagerError & { code?: number; data?: unknown };
+    expect(me.code).toBe(-32602);
+    expect(me.data).toMatchObject({
+      kind: "model-not-allowed",
+      agent: "clawdy",
+      attempted: "opus",
+      allowed: ["haiku", "sonnet"],
+    });
+    expect(me.message).toMatch(/not in the allowed list/i);
+    // YAML persist must NOT fire when live swap refuses
+    expect(updateAgentModelMock).not.toHaveBeenCalled();
+    // In-memory config must NOT be mutated
+    expect(configs[0]!.model).toBe("haiku");
+  });
+
+  it("D3: persistence round-trip — re-reading the YAML shows the new model", async () => {
+    // This test uses the REAL updateAgentModel (not mocked) to exercise the
+    // round-trip path end-to-end. We use the actual implementation by
+    // delegating from the mock to the real function.
+    updateAgentModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const real = await vi.importActual<
+        typeof import("../../migration/yaml-writer.js")
+      >("../../migration/yaml-writer.js");
+      return real.updateAgentModel(
+        args[0] as Parameters<typeof real.updateAgentModel>[0],
+      );
+    });
+
+    const configPath = await setupYamlFixture();
+    const configs: ResolvedAgentConfig[] = [makeAgent("clawdy", "haiku")];
+    const manager = makeManagerStub(() => {
+      /* pass */
+    });
+
+    const result = await handleSetModelIpc({
+      manager,
+      configs,
+      configPath,
+      params: { agent: "clawdy", model: "sonnet" },
+    });
+
+    expect(result).toMatchObject({ persisted: true });
+
+    // Simulate restart by re-reading the bytes on disk
+    const after = await readFile(configPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{ name: string; model: string }>;
+    };
+    expect(parsed.agents[0]).toMatchObject({ name: "clawdy", model: "sonnet" });
+  });
+
+  it("D4: persistence failure after live swap — no rollback; error surfaced in response", async () => {
+    const configPath = await setupYamlFixture();
+    updateAgentModelMock.mockRejectedValueOnce(
+      new Error("EACCES: simulated rename failure"),
+    );
+
+    const configs: ResolvedAgentConfig[] = [makeAgent("clawdy", "haiku")];
+    let liveSwapCalled = 0;
+    const manager = makeManagerStub(() => {
+      liveSwapCalled++;
+    });
+
+    const result = await handleSetModelIpc({
+      manager,
+      configs,
+      configPath,
+      params: { agent: "clawdy", model: "sonnet" },
+    });
+
+    // Live swap still fired once (irreversible — documented non-rollback)
+    expect(liveSwapCalled).toBe(1);
+    expect(updateAgentModelMock).toHaveBeenCalledTimes(1);
+    // Response reflects partial state — persisted: false, error surfaced
+    expect(result).toMatchObject({
+      agent: "clawdy",
+      old_model: "haiku",
+      new_model: "sonnet",
+      persisted: false,
+    });
+    const note = (result as { note: string }).note;
+    expect(note).toMatch(/Live swap OK; persistence failed/);
+    expect((result as { persist_error: string | null }).persist_error).toMatch(
+      /EACCES/,
+    );
+  });
+
+  it("D5: agent not found — throws ManagerError fast; SessionManager NOT called", async () => {
+    const configPath = await setupYamlFixture();
+    const configs: ResolvedAgentConfig[] = [makeAgent("clawdy", "haiku")];
+    const manager = makeManagerStub(() => {
+      /* should never be reached */
+    });
+
+    await expect(
+      handleSetModelIpc({
+        manager,
+        configs,
+        configPath,
+        params: { agent: "ghost", model: "sonnet" },
+      }),
+    ).rejects.toThrow(/Agent 'ghost' not found/);
+
+    expect(manager.setModelForAgent).not.toHaveBeenCalled();
+    expect(updateAgentModelMock).not.toHaveBeenCalled();
+  });
+});
