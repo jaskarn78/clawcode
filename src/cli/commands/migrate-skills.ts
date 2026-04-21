@@ -41,6 +41,7 @@ import type { Command } from "commander";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import {
   installFsGuard,
   uninstallFsGuard,
@@ -72,9 +73,17 @@ import {
   readLearningsDir,
   dedupeLearnings,
 } from "../../migration/skills-learnings-dedup.js";
+import { writeSkillsMigrationReport } from "../../migration/skills-report-writer.js";
 import { scanSkillsDirectory } from "../../skills/scanner.js";
 import { loadConfig, resolveAllAgents } from "../../config/loader.js";
 import { MemoryStore } from "../../memory/store.js";
+
+/**
+ * Default report path. Mirrors `.planning/milestones/v2.1-migration-report.md`
+ * (Phase 82) — operator familiarity matters more than a custom path.
+ */
+export const DEFAULT_SKILLS_REPORT_PATH =
+  ".planning/milestones/v2.2-skills-migration-report.md";
 
 /**
  * Options for `runMigrateSkillsAction`. Exported for unit-test invocation
@@ -109,6 +118,13 @@ export type MigrateSkillsOptions = {
    * Tests supply an ephemeral tmpdir path.
    */
   readonly memoryDbPath?: string;
+  /**
+   * Plan 03 — override the migration-report output path. Defaults to
+   * `.planning/milestones/v2.2-skills-migration-report.md`. Dry-run
+   * never writes a report (informational only). Tests override this to
+   * a tmpdir location.
+   */
+  readonly reportPath?: string;
 };
 
 type Bucket =
@@ -199,6 +215,18 @@ export async function runMigrateSkillsAction(
   const skillsTargetDir = opts.skillsTargetDir
     ? expandHome(opts.skillsTargetDir)
     : join(homedir(), ".clawcode", "skills");
+  const reportPath = opts.reportPath
+    ? expandHome(opts.reportPath)
+    : DEFAULT_SKILLS_REPORT_PATH;
+
+  // Plan 03 — capture the source-tree mtime BEFORE any read/classify work
+  // begins so the invariant check at the end has a meaningful baseline. The
+  // discovery layer doesn't modify the source (everything is read-only)
+  // but fs-guard only throws on write — sampling BEFORE discovery catches
+  // any hypothetical mtime drift caused by other actors during the run.
+  const sourceMtimeBefore = await lstat(sourceDir)
+    .then((st) => st.mtimeMs)
+    .catch(() => null);
 
   // Wrap the entire action body in the fs-guard so any write attempt under
   // ~/.openclaw/ throws ReadOnlySourceError. uninstall in finally so a
@@ -389,8 +417,11 @@ export async function runMigrateSkillsAction(
     }
 
     // Plan 02 — per-agent linker verification (apply mode only, when
-    // clawcodeYamlPath is supplied).
+    // clawcodeYamlPath is supplied). `allVerifications` captures the full
+    // result set for Plan 03's report writer; `verificationFailures` is
+    // the exit-code subset (missing-from-catalog / scope-refused).
     const verificationFailures: LinkVerification[] = [];
+    let allVerifications: readonly LinkVerification[] = [];
     if (
       !opts.dryRun &&
       opts.clawcodeYamlPath &&
@@ -406,6 +437,7 @@ export async function runMigrateSkillsAction(
           migratedSkillNames,
           force: opts.forceScope === true,
         });
+        allVerifications = verifications;
         cliLog(headerFor("linker verification" as Bucket));
         if (verifications.length === 0) {
           cliLog(dim("(none)"));
@@ -441,6 +473,36 @@ export async function runMigrateSkillsAction(
       } catch (err) {
         cliError(
           `  linker verification failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // Plan 03 — write the operator report. Dry-run is informational only
+    // and MUST NOT write the report (test 20). Sample source mtime AFTER
+    // everything else is done so the invariant reflects the end state.
+    if (!opts.dryRun) {
+      const sourceMtimeAfter = await lstat(sourceDir)
+        .then((st) => st.mtimeMs)
+        .catch(() => null);
+      const sourceTreeReadonly =
+        sourceMtimeBefore === null || sourceMtimeAfter === null
+          ? "unchecked"
+          : sourceMtimeBefore === sourceMtimeAfter
+            ? "verified"
+            : "mtime-changed";
+      try {
+        const written = await writeSkillsMigrationReport({
+          reportPath,
+          ledgerPath: opts.ledgerPath,
+          discovered: skills,
+          verifications: allVerifications,
+          sourceTreeReadonly,
+          generatedAt: new Date().toISOString(),
+        });
+        cliLog(green(`Report written: ${written}`));
+      } catch (err) {
+        cliError(
+          `  report write failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -579,6 +641,11 @@ export function registerMigrateSkillsCommand(
       "--memory-db <path>",
       "MemoryStore DB path for self-improving-agent .learnings import",
     )
+    .option(
+      "--report-path <path>",
+      "Output path for the v2.2 skills migration report",
+      DEFAULT_SKILLS_REPORT_PATH,
+    )
     .action(
       async (opts: {
         sourceDir: string;
@@ -589,6 +656,7 @@ export function registerMigrateSkillsCommand(
         clawcodeYaml?: string;
         forceScope?: boolean;
         memoryDb?: string;
+        reportPath?: string;
       }) => {
         try {
           const ledgerPath =
@@ -602,6 +670,7 @@ export function registerMigrateSkillsCommand(
             clawcodeYamlPath: opts.clawcodeYaml,
             forceScope: opts.forceScope,
             memoryDbPath: opts.memoryDb,
+            reportPath: opts.reportPath,
           });
           if (code !== 0) process.exit(code);
         } catch (err) {
