@@ -73,6 +73,19 @@ export type SlashCommandDef = {
   readonly options: readonly SlashCommandOption[];
   readonly control?: boolean;
   readonly ipcMethod?: string;
+  /**
+   * Phase 87 CMD-01 — dispatch discriminator for native Claude Code commands.
+   *
+   *   - "control-plane"   → dispatch via SDK Query.setX() (model/permissions/
+   *                          effort); zero LLM turn cost
+   *   - "prompt-channel"  → send as user text through TurnDispatcher
+   *                          (compact / context / cost / help / hooks / ...)
+   *
+   * Absent on the CONTROL_COMMANDS (daemon-routed IPC) and on the remaining
+   * DEFAULT_SLASH_COMMANDS (static LLM-prompt commands). Plans 02/03 route
+   * entirely on the presence of this field — no name-matching required.
+   */
+  readonly nativeBehavior?: "control-plane" | "prompt-channel";
 };
 
 /**

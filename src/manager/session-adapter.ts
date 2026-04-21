@@ -1,5 +1,5 @@
 import type { AgentSessionConfig } from "./types.js";
-import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage } from "./sdk-types.js";
+import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage, SlashCommand } from "./sdk-types.js";
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
@@ -129,6 +129,18 @@ export type SessionHandle = {
    */
   getMcpState: () => ReadonlyMap<string, McpServerState>;
   setMcpState: (state: ReadonlyMap<string, McpServerState>) => void;
+  /**
+   * Phase 87 CMD-01 — enumerate SDK-reported slash commands for this session.
+   *
+   * First call invokes the SDK's Query.initializationResult() once and caches
+   * the resulting `commands` array; subsequent calls return the cache. The
+   * SlashCommandHandler.register() loop reads this per-agent and merges the
+   * results with CONTROL_COMMANDS + DEFAULT_SLASH_COMMANDS.
+   *
+   * SDK-reject paths leave the cache null so the next call retries — useful
+   * when the SDK init handshake races the first caller.
+   */
+  getSupportedCommands: () => Promise<readonly SlashCommand[]>;
 };
 
 /**
@@ -306,6 +318,23 @@ export class MockSessionHandle implements SessionHandle {
   }
   setMcpState(state: ReadonlyMap<string, McpServerState>): void {
     this.mcpState = new Map(state);
+  }
+
+  /**
+   * Phase 87 CMD-01 — test-mock SDK slash-command enumeration.
+   *
+   * Default: empty array (no native commands). Tests can override via
+   * __testSetSupportedCommands to drive SlashCommandHandler.register()
+   * merge paths without standing up a real SDK query.
+   */
+  private supportedCommandsValue: readonly SlashCommand[] = [];
+  async getSupportedCommands(): Promise<readonly SlashCommand[]> {
+    return this.supportedCommandsValue;
+  }
+
+  /** Test-only hook — seed supported commands for register() tests. */
+  __testSetSupportedCommands(cmds: readonly SlashCommand[]): void {
+    this.supportedCommandsValue = cmds;
   }
 
   /**
@@ -1213,6 +1242,17 @@ function wrapSdkQuery(
     },
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       legacyMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 87 CMD-01 — legacy wrapSdkQuery predates the persistent-handle
+     * SDK primitive. Per-turn-query shape has no durable Query reference
+     * to call initializationResult on, so this legacy factory returns an
+     * empty SlashCommand list. Production routes through
+     * createPersistentSessionHandle where the real wire lives.
+     */
+    async getSupportedCommands(): Promise<readonly SlashCommand[]> {
+      return [];
     },
   };
 }

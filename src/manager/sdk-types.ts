@@ -29,6 +29,22 @@ export type SdkUserMessage = {
 };
 
 /**
+ * Phase 87 CMD-01 — local projection of the SDK's `SlashCommand` type
+ * (sdk.d.ts:4239-4252). Returned by Query.initializationResult().commands
+ * and Query.supportedCommands(). Used by native-cc-commands.ts to build
+ * Discord SlashCommandDef[] entries for each agent.
+ *
+ * `name` is the bare command (without leading slash); `description` is the
+ * human-readable summary; `argumentHint` is a template (e.g. "<file>") for
+ * any arguments the command accepts.
+ */
+export type SlashCommand = {
+  readonly name: string;
+  readonly description: string;
+  readonly argumentHint: string;
+};
+
+/**
  * Options passed to sdk.query().
  * Subset of SDK's Options -- only fields we actually use.
  */
@@ -182,6 +198,26 @@ export type SdkQuery = AsyncGenerator<SdkStreamMessage, void> & {
    * persistent-session-handle.ts:setModel.
    */
   setModel(model?: string): Promise<void>;
+  /**
+   * Phase 87 CMD-01 — enumerate SDK-reported slash commands at init time.
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 Query.initializationResult
+   * (sdk.d.ts:1748). Returns the full SDKControlInitializeResponse which
+   * includes commands + agents + models + skills — preferred over
+   * supportedCommands() because one round-trip covers Plan 02/03 needs.
+   * Consumed by persistent-session-handle.ts:getSupportedCommands (cached).
+   */
+  initializationResult(): Promise<{
+    readonly commands: readonly SlashCommand[];
+    readonly agents?: readonly unknown[];
+    readonly models?: readonly unknown[];
+  }>;
+  /**
+   * Phase 87 CMD-01 — narrower enumeration post-init (no agents/models).
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.97 Query.supportedCommands
+   * (sdk.d.ts:1754). Available for callers that only need the commands list
+   * after initialization has completed.
+   */
+  supportedCommands(): Promise<readonly SlashCommand[]>;
 };
 
 /**

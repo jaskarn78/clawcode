@@ -22,7 +22,7 @@
  *     SessionHandle type.
  */
 
-import type { SdkModule, SdkQuery, SdkQueryOptions, SdkStreamMessage, SdkUserMessage } from "./sdk-types.js";
+import type { SdkModule, SdkQuery, SdkQueryOptions, SdkStreamMessage, SdkUserMessage, SlashCommand } from "./sdk-types.js";
 import type {
   SessionHandle,
   SendOptions,
@@ -118,6 +118,12 @@ export function createPersistentSessionHandle(
   // consumers in Plans 02 + 03). Updated at warm-path gate + on every
   // mcp-reconnect heartbeat tick.
   let currentMcpState: ReadonlyMap<string, McpServerState> = new Map();
+
+  // Phase 87 CMD-01 — cache of SDK-reported slash commands. Populated once via
+  // q.initializationResult() on first call; subsequent calls hit the cache.
+  // Kept null on failure so the next call retries — the SDK may not be ready
+  // at the moment of first query (e.g. early in the warm-path).
+  let supportedCommandsCache: readonly SlashCommand[] | null = null;
 
   function notifyError(err: Error): void {
     generatorDead = true;
@@ -703,6 +709,25 @@ export function createPersistentSessionHandle(
      */
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       currentMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 87 CMD-01 — enumerate the SDK-reported slash commands for this
+     * agent session. First call invokes q.initializationResult() and caches
+     * the resulting `commands` array; subsequent calls hit the cache.
+     *
+     * On SDK failure, the cache stays null so the NEXT call retries. This is
+     * important because the SDK may not have completed its init handshake at
+     * the exact moment of first query (e.g. warm-path ran too eagerly).
+     *
+     * Returned shape is the local SlashCommand projection — no-op if the
+     * agent has zero native commands (empty array is valid + cached).
+     */
+    async getSupportedCommands(): Promise<readonly SlashCommand[]> {
+      if (supportedCommandsCache !== null) return supportedCommandsCache;
+      const result = await q.initializationResult();
+      supportedCommandsCache = result.commands;
+      return supportedCommandsCache;
     },
   };
 
