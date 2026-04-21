@@ -82,21 +82,18 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Resume auto-injection — `assembleConversationBrief` helper + dedicated `conversation_context` mutable-suffix section (default 3 recent summaries, 4h gap threshold, 2000-token budget) threaded through `SessionManager.configDeps()` into `buildSessionConfig`; agents auto-receive a structured context brief of prior sessions on restart, with gap-skip short-circuit for brief restarts (SESS-02/03) — v1.9
 - Conversation search + deep retrieval — FTS5 virtual table on raw turns + `ConversationStore.searchTurns` with BM25 ranking and escape-safe queries; `searchByScope` pure DI orchestrator merging semantic (session-summary MemoryEntries) + full-text (raw turn) results with decay weighting (tunable half-life), session-summary-prefers-raw-turn dedup, and offset pagination at 10/page hard cap; `memory_lookup` MCP tool extended with backward-compatible `scope` + `page` parameters; `isTrustedChannel` provenance correctly threaded from DiscordBridge → CaptureInput → ConversationStore so default FTS5 trust filter returns real results in production (CONV-01/SEC-01/RETR-01/02/03) — v1.9
 
+- Shared-workspace runtime support — optional `memoryPath` agent field enables multiple agents (finmentum family) to share one basePath while keeping isolated `memories.db`/inbox/heartbeat/session-state; Zod conflict guard + hot-reload classification — v2.1
+- Migration CLI read-side — `clawcode migrate openclaw list` + `plan` with deterministic per-agent diff, zero-write enforcement, JSONL ledger for fleet status — v2.1
+- Pre-flight guards — 4 safety invariants (daemon running, secret-shape detection, Discord channel collision, source-tree read-only) refuse `apply` before any write; runtime fs-guard + scanSecrets utility reusable downstream — v2.1
+- Config mapping + atomic YAML writer — `soulFile`/`identityFile` file-pointer fields, model-id mapping with `--model-map` override, MCP auto-injection (clawcode + 1password), Document-AST comment preservation with atomic temp+rename — v2.1
+- Workspace migration — `fs.cp` with verbatim symlinks + filter (skip venvs) + hash-witness; finmentum 5-agent shared-basePath routing; `.git` preserved; OpenClaw sessions archived read-only under `<workspace>/archive/openclaw-sessions/` with zero ConversationStore replay — v2.1
+- Memory translation + re-embedding — workspace markdown (disk-as-truth) parsed by H2, inserted via `MemoryStore.insert()` with `origin_id UNIQUE` idempotency, fresh 384-dim MiniLM embeddings, `.learnings/*.md` tagged `"learning"` — v2.1
+- Verify + rollback + resume + fork regression — `verify` with 4 pass/fail checks, per-agent atomic `rollback` with source-tree invariant, idempotent resume via ledger, v1.5 fork-to-Opus regression across Haiku/Sonnet/MiniMax/Gemini primaries with cost visibility — v2.1
+- Pilot + cutover + completion — recommended-pilot highlighting in `plan` output, per-agent `cutover` removes OpenClaw Discord bindings via fs-guard allowlist, `complete` generates `.planning/milestones/v2.1-migration-report.md` with cross-agent invariant assertions — v2.1
+
 ### Active
 
-## Current Milestone: v2.1 OpenClaw Agent Migration
-
-**Goal:** Port all 15 active OpenClaw agents to dedicated ClawCode agents with their memories, workspaces, identities/souls, and tool access preserved — every ported agent gains native fork-to-Opus subagent spawning.
-
-**Target features:**
-- Agent config mapping — convert `openclaw.json` per-agent entries (id, model, skills, channels, MCP servers) into `clawcode.yaml` agent definitions with SOUL + IDENTITY embedded from workspace files
-- Workspace migration — copy `~/.openclaw/workspace-<name>/` contents (SOUL.md, IDENTITY.md, USER.md, TOOLS.md, CLAUDE.md, archive/, .learnings/) into ClawCode per-agent workspaces; finmentum family (fin-acquisition, fin-research, fin-playground, fin-tax, finmentum-content-creator) shares ONE workspace while keeping 5 distinct agent identities
-- Memory translation — one-shot migrator reads OpenClaw's file-RAG sqlite (`~/.openclaw/memory/<agent>.sqlite` + workspace `MEMORY.md` + `memory/*.md`) and writes into ClawCode's `memories.db` schema with fresh local embeddings
-- Subagent fork-to-Opus — every migrated agent inherits the v1.5 fork-based escalation path so any Sonnet/Haiku agent can spawn a dedicated Opus subagent
-- MCP + Discord wiring — per-agent mcpServers list (from openclaw.json) + Discord channel binding preserved; auth/credentials flow through existing clawcode config
-- Migration tooling — `clawcode migrate openclaw` CLI that enumerates source agents, shows per-agent diff, and executes migration in dry-run + apply modes
-
-**Previous milestone (v2.0) accomplishments:** OpenAI-compatible HTTP endpoint, browser automation MCP, web search MCP, image generation MCP, OpenClaw-backend seamless routing (Phase 74).
+(None — v2.1 shipped; awaiting next milestone definition via /gsd:new-milestone)
 
 ### Out of Scope
 
@@ -115,9 +112,9 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ## Current State
 
-**Latest shipped milestone:** v1.9 Persistent Conversation Memory (shipped 2026-04-18)
+**Latest shipped milestone:** v2.1 OpenClaw Agent Migration (shipped 2026-04-21)
 
-v1.0-v1.9 delivered 68 phases across 10 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, proactive agents with cross-agent handoffs, and persistent conversation memory with auto-injection.
+v1.0-v2.1 delivered 83 phases across 12 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, proactive agents with cross-agent handoffs, persistent conversation memory with auto-injection, OpenAI-compatible endpoint + browser/search/image MCPs, and one-shot OpenClaw-to-ClawCode migration toolchain (15-agent fleet port with zero source modification, deterministic dry-run, atomic per-agent apply/verify/rollback, fork-to-Opus preserved).
 
 ## Context
 
@@ -188,4 +185,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-20 — v2.1 OpenClaw Agent Migration started*
+*Last updated: 2026-04-21 — v2.1 OpenClaw Agent Migration shipped*
