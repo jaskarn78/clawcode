@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Executing
-stopped_at: Completed 85-01-PLAN.md — MCP readiness gate + mcp-reconnect heartbeat landed (TOOL-01/03/04)
-last_updated: "2026-04-21T19:59:00.000Z"
+stopped_at: Completed 85-02-PLAN.md — mcp-prompt-block renderer + stable-prefix placement (TOOL-02/05/07)
+last_updated: "2026-04-21T20:20:24.919Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 2
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-21)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 85 — MCP Tool Awareness & Reliability (Plan 01 complete; 02-03 pending)
+**Current focus:** Phase 85 — MCP Tool Awareness & Reliability (Plans 01-02 complete; 03 wave-parallel)
 
 ## Current Position
 
 Phase: 85
-Plan: 02 (next)
+Plan: 03 (next — wave-2 parallel with 02)
 
 ## Performance Metrics
 
@@ -91,6 +91,11 @@ Recent decisions affecting current work:
 - [Phase 85]: Plan 85-01 — `failureCount` bounded with 5-min backoff-reset window (grows monotonically within window, recycles to 1 after). Gives operators a "recently-flapping" signal via /clawcode-tools without an unbounded counter.
 - [Phase 85]: Plan 85-01 — SessionHandle gets getMcpState/setMcpState mirror (sync'd at warm-path + every heartbeat tick) so TurnDispatcher-scope consumers (Plan 02 prompt-builder, Plan 03 slash commands) avoid reaching into SessionManager's private maps.
 - [Phase 85]: Plan 85-01 — New IPC `list-mcp-status` returns shape `{agent, servers: [{name, status, lastSuccessAt, lastFailureAt, failureCount, optional, lastError:string}]}` — canonical feed for Plan 03's /clawcode-tools slash command.
+- [Phase 85]: Plan 85-02 — Preauth statement + verbatim-error rule land in STABLE PREFIX via sources.toolDefinitions (v1.7 two-block assembler). Eviction-proof through compaction per TOOL-07.
+- [Phase 85]: Plan 85-02 — MCP_VERBATIM_ERROR_RULE stored as SINGLE-LINE string literal so the plan's static-grep pin finds one hit (multi-line concat would pass runtime tests but fail the source-grep verification).
+- [Phase 85]: Plan 85-02 — Pitfall 12 (MCP config leak) closed by narrowing renderer's accepted shape to Pick<McpServerSchemaConfig, name> & optional?. Eight regression pins prevent command/args/env from re-entering the prompt surface.
+- [Phase 85]: Plan 85-02 — Tools column hard-coded to U+2014 em dash in v2.2 (not tool names). Future q.mcpServerStatus() wire-up can populate without changing table shape — prompt-hash compatible migration.
+- [Phase 85]: Plan 85-02 — mcpStateProvider is OPTIONAL on SessionConfigDeps; absent → empty Map → status 'unknown'. Preauth framing still lands and closes phantom-error class even before first heartbeat tick.
 
 ### v2.1 closing decisions (for reference)
 
@@ -157,9 +162,10 @@ Recent decisions affecting current work:
 | Phase 84 P02 | 17min 0s | 2 tasks | 14 files |
 | Phase 84 P03 | 6min 23s | 1 tasks | 4 files |
 | Phase 85 P01 | 30min 24s | 2 tasks (TDD) | 15 files |
+| Phase 85 P02 | 13min 24s | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 85-01-PLAN.md — MCP readiness gate + mcp-reconnect heartbeat landed (TOOL-01/03/04)
+Stopped at: Completed 85-02-PLAN.md — mcp-prompt-block renderer + stable-prefix placement (TOOL-02/05/07)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
