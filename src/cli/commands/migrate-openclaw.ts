@@ -415,7 +415,11 @@ export async function runPlanAction(opts: {
 export type WorkspaceCopyPlan =
   | { readonly mode: "full"; readonly source: string; readonly target: string }
   | { readonly mode: "uploads-only"; readonly source: string; readonly target: string }
-  | { readonly mode: "skip-empty-source"; readonly reason: string };
+  | { readonly mode: "skip-empty-source"; readonly reason: string }
+  // 82.4: shared-basePath sibling — skip WORKSPACE COPY (already populated
+  // by prior sibling) but STILL run memory translation against the shared
+  // target. Each sibling gets its own memoryPath with independent memory.
+  | { readonly mode: "skip-copy-shared"; readonly target: string; readonly reason: string };
 
 export function resolveWorkspaceCopyPlan(
   sourceWorkspace: string,
@@ -437,7 +441,8 @@ export function resolveWorkspaceCopyPlan(
     // workspace (e.g. `tmp -> /tmp` in workspace-finmentum).
     if (existsSync(join(targetBasePath, "SOUL.md"))) {
       return {
-        mode: "skip-empty-source",
+        mode: "skip-copy-shared",
+        target: targetBasePath,
         reason: `target basePath already populated by sibling agent (shared workspace): ${targetBasePath}`,
       };
     }
@@ -640,7 +645,7 @@ export async function runApplyAction(
       ),
     }));
     const modeRank = (m: WorkspaceCopyPlan["mode"]): number =>
-      m === "full" ? 0 : m === "uploads-only" ? 1 : 2;
+      m === "full" ? 0 : m === "uploads-only" ? 1 : m === "skip-copy-shared" ? 2 : 3;
     const sortedCopyPlans = [...copyPlansByAgent].sort((a, b) => {
       const rankDiff = modeRank(a.copyPlan.mode) - modeRank(b.copyPlan.mode);
       if (rankDiff !== 0) return rankDiff;
@@ -661,6 +666,21 @@ export async function runApplyAction(
           status: "pending",
           source_hash: report.planHash,
           step: "workspace-copy:skip",
+          outcome: "allow",
+          notes: copyPlan.reason,
+        });
+      } else if (copyPlan.mode === "skip-copy-shared") {
+        // 82.4: shared-basePath sibling — target already populated by a
+        // prior sibling. Skip the workspace copy but continue to memory
+        // translation below (each sibling writes its own memories.db into
+        // its distinct per-agent memoryPath).
+        await appendRow(paths.ledgerPath, {
+          ts: new Date().toISOString(),
+          action: "apply",
+          agent: agentPlan.sourceId,
+          status: "pending",
+          source_hash: report.planHash,
+          step: "workspace-copy:skip-shared",
           outcome: "allow",
           notes: copyPlan.reason,
         });
@@ -726,9 +746,16 @@ export async function runApplyAction(
         const store = new MemoryStore(dbPath);
         try {
           const embedder = getMigrationEmbedder();
+          // 82.4: skip-copy-shared uses the shared target (already
+          // populated by prior sibling) as the workspace source for
+          // translation. Other modes use copyPlan.target (just-copied).
+          const translateWorkspace =
+            copyPlan.mode === "skip-copy-shared"
+              ? copyPlan.target
+              : copyPlan.target;
           const result = await migrateOpenclawHandlers.translateAgentMemories({
             agentId: agentPlan.sourceId,
-            targetWorkspace: copyPlan.target,
+            targetWorkspace: translateWorkspace,
             memoryPath: agentPlan.targetMemoryPath,
             store,
             embedder,
