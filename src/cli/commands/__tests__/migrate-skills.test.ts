@@ -545,6 +545,84 @@ describe("migrate-skills CLI", () => {
     // Transformer did NOT add a version: field — only name+description.
     expect(tuyaEntry!.version).toBeNull();
   });
+
+  // ------------------------------------------------------------------
+  // Plan 03 report-writer tests (18-20)
+  // ------------------------------------------------------------------
+
+  it("test 18 (plan-03): end-to-end apply writes report with expected frontmatter counters", async () => {
+    const skillsTarget = join(tmp, "clawcode-skills-report");
+    const reportPath = join(tmp, "v2.2-skills-migration-report.md");
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      reportPath,
+    });
+    expect(existsSync(reportPath)).toBe(true);
+    const { readFile: rf } = await import("node:fs/promises");
+    const body = await rf(reportPath, "utf8");
+    // Frontmatter header + canonical counters (4 P1 migrated, 1 refused)
+    expect(body.startsWith("---\n")).toBe(true);
+    expect(body).toContain("# v2.2 OpenClaw Skills Migration Report");
+    expect(body).toMatch(/^skills_migrated: 4$/m);
+    expect(body).toMatch(/^skills_refused_secret_scan: 1$/m);
+    expect(body).toMatch(/^skills_deprecated: 3$/m);
+    expect(body).toMatch(/^skills_skipped_p2: 4$/m);
+    // All 12 discovered skills under Per-Skill Outcomes
+    expect(body).toContain("### finmentum-crm");
+    expect(body).toContain("### frontend-design");
+    expect(body).toContain("### tuya-ac");
+    expect(body).toContain("### power-apps-builder");
+  });
+
+  it("test 19 (plan-03): re-running apply overwrites the report (atomic — no stale .tmp leftover)", async () => {
+    const skillsTarget = join(tmp, "clawcode-skills-reapply");
+    const reportPath = join(tmp, "v2.2-skills-migration-report.md");
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      reportPath,
+    });
+    const { readFile: rf } = await import("node:fs/promises");
+    const first = await rf(reportPath, "utf8");
+
+    // Second apply — report gets rewritten with new timestamp.
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      reportPath,
+    });
+    const second = await rf(reportPath, "utf8");
+    expect(second.startsWith("---\n")).toBe(true);
+    expect(second).toContain("# v2.2 OpenClaw Skills Migration Report");
+    // Both runs include the full skill set
+    expect(first).toContain("### tuya-ac");
+    expect(second).toContain("### tuya-ac");
+    // No stray .tmp files in the target dir
+    const { readdirSync } = await import("node:fs");
+    const leftover = readdirSync(tmp).filter((n) => n.endsWith(".tmp"));
+    expect(leftover).toEqual([]);
+  });
+
+  it("test 20 (plan-03): --dry-run does NOT write a report", async () => {
+    const skillsTarget = join(tmp, "clawcode-skills-dryrun-report");
+    const reportPath = join(tmp, "v2.2-skills-migration-report-dryrun.md");
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: true,
+      skillsTargetDir: skillsTarget,
+      reportPath,
+    });
+    // Dry-run is informational — no report written.
+    expect(existsSync(reportPath)).toBe(false);
+  });
 });
 
 // Suppress unused-import lint (we only reference these for type compat).
