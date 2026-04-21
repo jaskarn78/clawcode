@@ -7,6 +7,7 @@
 
 import {
   Client,
+  EmbedBuilder,
   REST,
   Routes,
   type ChatInputCommandInteraction,
@@ -34,6 +35,72 @@ import type { SkillsCatalog } from "../skills/types.js";
  * Maximum Discord message length (API limit).
  */
 const DISCORD_MAX_LENGTH = 2000;
+
+// ---------------------------------------------------------------------------
+// Phase 85 Plan 03 TOOL-06 / UI-01 — /clawcode-tools inline handler helpers.
+//
+// Hoisted to module scope (not class members) so unit tests can exercise the
+// pure bits in isolation, and so the handler reads as a straight-line flow
+// without reaching through `this` for simple lookups.
+// ---------------------------------------------------------------------------
+
+/** Server status → emoji mapping used as the field-name prefix. */
+const STATUS_EMOJI: Record<string, string> = {
+  ready: "\u{1F7E2}",         // green circle
+  degraded: "\u{1F7E1}",      // yellow circle
+  failed: "\u{1F534}",        // red circle
+  reconnecting: "\u{1F7E0}",  // orange circle
+  unknown: "\u{26AA}",        // white (neutral) circle
+};
+
+/**
+ * Shape of a single server entry returned by the `list-mcp-status` IPC
+ * method (Plan 01 daemon.ts case). Duplicated here instead of imported so
+ * slash-commands stays decoupled from the manager module graph.
+ */
+type ToolsIpcServer = {
+  readonly name: string;
+  readonly status: "ready" | "degraded" | "failed" | "reconnecting" | "unknown";
+  readonly lastSuccessAt: number | null;
+  readonly lastFailureAt: number | null;
+  readonly failureCount: number;
+  readonly optional: boolean;
+  readonly lastError: string | null;
+};
+
+type ToolsIpcResponse = {
+  readonly agent: string;
+  readonly servers: ReadonlyArray<ToolsIpcServer>;
+};
+
+/**
+ * Embed colour driven by the worst-state server in the set.
+ * Exported for test convenience / future reuse by the dashboard.
+ */
+export function resolveEmbedColor(
+  servers: ReadonlyArray<{ readonly status: string }>,
+): number {
+  if (servers.some((s) => s.status === "failed")) return 0xea4335;       // red
+  if (servers.some((s) => s.status === "degraded")) return 0xfbbc05;     // yellow
+  if (servers.some((s) => s.status === "reconnecting")) return 0xfb8c00; // orange
+  return 0x34a853;                                                        // green
+}
+
+/**
+ * Short relative-time formatter for embed fields: "3s", "12m", "4h", "2d".
+ * Keeps the embed compact — a full ISO timestamp is overkill for an
+ * operator glance.
+ */
+export function formatRelativeTime(deltaMs: number): string {
+  const s = Math.floor(Math.max(0, deltaMs) / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return `${d}d`;
+}
 
 /**
  * Configuration for the SlashCommandHandler.
@@ -224,6 +291,17 @@ export class SlashCommandHandler {
   ): Promise<void> {
     const channelId = interaction.channelId;
     const commandName = interaction.commandName;
+
+    // Phase 85 Plan 03 TOOL-06 / UI-01 — dedicated inline handler for
+    // /clawcode-tools. Routes through the same IPC as a control command but
+    // renders the reply as a Discord EmbedBuilder (native structured element,
+    // not free-text blob). Carved out BEFORE the generic control-command
+    // dispatch so the EmbedBuilder path can't be short-circuited by the
+    // text-formatting branch in handleControlCommand.
+    if (commandName === "clawcode-tools") {
+      await this.handleToolsCommand(interaction);
+      return;
+    }
 
     // Check if this is a control command (daemon-direct, no agent needed)
     const controlCmd = CONTROL_COMMANDS.find((c) => c.name === commandName);
@@ -445,6 +523,111 @@ export class SlashCommandHandler {
           );
         }
       }
+    }
+  }
+
+  /**
+   * Phase 85 Plan 03 TOOL-06 / UI-01 — handle /clawcode-tools.
+   *
+   * Reads per-agent MCP readiness via the `list-mcp-status` IPC (daemon-routed,
+   * zero LLM turn cost) and replies with a native Discord EmbedBuilder.
+   *
+   * Agent resolution:
+   *   1. Explicit `agent` option takes precedence.
+   *   2. Otherwise infer from the channel-agent routing table.
+   *   3. Neither → ephemeral error, no IPC call spent.
+   *
+   * Reply is always ephemeral (operator-only view). Empty-servers case
+   * returns a plain string — an empty embed would be visually noisy.
+   */
+  private async handleToolsCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const explicitAgent = interaction.options.get("agent")?.value;
+    const agentName =
+      typeof explicitAgent === "string" && explicitAgent.length > 0
+        ? explicitAgent
+        : getAgentForChannel(this.routingTable, interaction.channelId);
+
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content:
+            "This channel is not bound to an agent and no agent was provided.",
+          ephemeral: true,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-tools", error: (error as Error).message },
+        "failed to defer tools reply",
+      );
+      return;
+    }
+
+    let response: ToolsIpcResponse;
+    try {
+      response = (await sendIpcRequest(SOCKET_PATH, "list-mcp-status", {
+        agent: agentName,
+      })) as ToolsIpcResponse;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(`Failed to read MCP state: ${msg}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    if (response.servers.length === 0) {
+      try {
+        await interaction.editReply(`No MCP servers configured for ${agentName}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`MCP Tools · ${agentName}`)
+      .setColor(resolveEmbedColor(response.servers));
+
+    const now = Date.now();
+    for (const s of response.servers) {
+      const emoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
+      // Only annotate optional servers that aren't ready — a ready optional
+      // doesn't need the annotation (operator cares about "what's down, and
+      // does it matter?").
+      const optSuffix = s.optional && s.status !== "ready" ? " (optional)" : "";
+      const lastSuccess = s.lastSuccessAt
+        ? `${formatRelativeTime(now - s.lastSuccessAt)} ago`
+        : "never";
+      // TOOL-04 end-to-end — pass the lastError string VERBATIM into the
+      // embed field. No rewording, no wrapping. Plan 01's readiness module
+      // captures the raw transport error; we just render it.
+      const errLine = s.lastError ? `\nerror: ${s.lastError}` : "";
+      embed.addFields({
+        name: `${emoji} ${s.name}${optSuffix}`,
+        value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}${errLine}`,
+        inline: false,
+      });
+    }
+
+    try {
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-tools", error: (error as Error).message },
+        "failed to send tools embed",
+      );
     }
   }
 

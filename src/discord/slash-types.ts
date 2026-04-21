@@ -244,4 +244,24 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       { name: "agent", type: 3, description: "Agent name (default: channel's agent)", required: false },
     ],
   },
+  // Phase 85 Plan 03 TOOL-06 / UI-01 — daemon-routed MCP readiness view.
+  // Reads the per-agent state map populated by Plan 01's warm-path gate +
+  // mcp-reconnect heartbeat (ipcMethod "list-mcp-status"). The inline handler
+  // in slash-commands.ts renders the reply as a native Discord EmbedBuilder
+  // (UI-01 compliance — NOT free-text). Zero LLM turn cost per invocation.
+  {
+    name: "clawcode-tools",
+    description: "Show MCP tool readiness for the bound agent",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "list-mcp-status",
+    options: [
+      {
+        name: "agent",
+        type: 3,
+        description: "Agent name (defaults to the channel's bound agent)",
+        required: false,
+      },
+    ],
+  },
 ] as const;
