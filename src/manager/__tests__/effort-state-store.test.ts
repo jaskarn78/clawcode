@@ -55,11 +55,16 @@ const TEST_BACKOFF: BackoffConfig = {
   stableAfterMs: 500,
 };
 
-function makeConfig(name: string, effort: "low" | "medium" | "high" | "max" = "low"): ResolvedAgentConfig {
+function makeConfig(
+  name: string,
+  effort: "low" | "medium" | "high" | "max" = "low",
+  workspaceDir?: string,
+): ResolvedAgentConfig {
+  const ws = workspaceDir ?? "/tmp/test-workspace";
   return {
     name,
-    workspace: "/tmp/test-workspace",
-    memoryPath: "/tmp/test-workspace",
+    workspace: ws,
+    memoryPath: ws,
     channels: [],
     model: "sonnet",
     effort,
@@ -188,6 +193,9 @@ describe("effort-state-store — atomic JSON round-trip (EFFORT-03)", () => {
 });
 
 describe("SessionManager ↔ effort-state-store integration (EFFORT-03)", () => {
+  // Longer timeout — integration tests do real memory-store init + warm-path
+  // gate + stopAll cleanup. 15s accommodates concurrent vitest pressure.
+  const INTEGRATION_TIMEOUT_MS = 15_000;
   let tmpDir: string;
   let registryPath: string;
   let effortStatePath: string;
@@ -212,43 +220,59 @@ describe("SessionManager ↔ effort-state-store integration (EFFORT-03)", () => 
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("setEffortForAgent writes to effort-state.json", async () => {
-    const cfg = makeConfig("clawdy");
-    await manager.startAgent("clawdy", cfg);
-    manager.setEffortForAgent("clawdy", "max");
-    // Fire-and-forget persistence — poll the file for up to ~500ms because
-    // writeEffortState does mkdir → writeFile(tmp) → rename which can take a
-    // couple event-loop turns.
-    let persisted: string | null = null;
-    for (let i = 0; i < 50; i++) {
-      await new Promise((r) => setTimeout(r, 10));
-      persisted = await readEffortState(effortStatePath, "clawdy");
-      if (persisted) break;
-    }
-    expect(persisted).toBe("max");
-  });
+  it(
+    "setEffortForAgent writes to effort-state.json",
+    async () => {
+      const cfg = makeConfig("clawdy", "low", tmpDir);
+      await manager.startAgent("clawdy", cfg);
+      manager.setEffortForAgent("clawdy", "max");
+      // Fire-and-forget persistence — poll the file for up to ~500ms because
+      // writeEffortState does mkdir → writeFile(tmp) → rename which can take a
+      // couple event-loop turns.
+      let persisted: string | null = null;
+      for (let i = 0; i < 50; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+        persisted = await readEffortState(effortStatePath, "clawdy");
+        if (persisted) break;
+      }
+      expect(persisted).toBe("max");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-  it("startAgent re-applies persisted effort on boot (persistence beats config default)", async () => {
-    // Seed the state file with a different level than the config default.
-    await writeEffortState(effortStatePath, "clawdy", "max");
-    const cfg = makeConfig("clawdy", "low");
-    await manager.startAgent("clawdy", cfg);
-    // After start, getEffortForAgent should report the persisted level,
-    // not the "low" config default.
-    expect(manager.getEffortForAgent("clawdy")).toBe("max");
-  });
+  it(
+    "startAgent re-applies persisted effort on boot (persistence beats config default)",
+    async () => {
+      // Seed the state file with a different level than the config default.
+      await writeEffortState(effortStatePath, "clawdy", "max");
+      const cfg = makeConfig("clawdy", "low", tmpDir);
+      await manager.startAgent("clawdy", cfg);
+      // After start, getEffortForAgent should report the persisted level,
+      // not the "low" config default.
+      expect(manager.getEffortForAgent("clawdy")).toBe("max");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-  it("startAgent does not crash when effort-state.json is corrupt", async () => {
-    await writeFile(effortStatePath, "{corrupt", "utf8");
-    const cfg = makeConfig("clawdy", "low");
-    await expect(manager.startAgent("clawdy", cfg)).resolves.not.toThrow();
-    // Fallback: config default survives the corrupt file.
-    expect(manager.getEffortForAgent("clawdy")).toBe("low");
-  });
+  it(
+    "startAgent does not crash when effort-state.json is corrupt",
+    async () => {
+      await writeFile(effortStatePath, "{corrupt", "utf8");
+      const cfg = makeConfig("clawdy", "low", tmpDir);
+      await expect(manager.startAgent("clawdy", cfg)).resolves.not.toThrow();
+      // Fallback: config default survives the corrupt file.
+      expect(manager.getEffortForAgent("clawdy")).toBe("low");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-  it("startAgent does not re-apply when no persisted state exists", async () => {
-    const cfg = makeConfig("clawdy", "low");
-    await manager.startAgent("clawdy", cfg);
-    expect(manager.getEffortForAgent("clawdy")).toBe("low");
-  });
+  it(
+    "startAgent does not re-apply when no persisted state exists",
+    async () => {
+      const cfg = makeConfig("clawdy", "low", tmpDir);
+      await manager.startAgent("clawdy", cfg);
+      expect(manager.getEffortForAgent("clawdy")).toBe("low");
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 });

@@ -59,11 +59,13 @@ const TEST_BACKOFF: BackoffConfig = {
 function makeConfig(
   name: string,
   effort: "low" | "medium" | "high" | "max" = "low",
+  workspaceDir?: string,
 ): ResolvedAgentConfig {
+  const ws = workspaceDir ?? "/tmp/test-workspace";
   return {
     name,
-    workspace: "/tmp/test-workspace",
-    memoryPath: "/tmp/test-workspace",
+    workspace: ws,
+    memoryPath: ws,
     channels: [],
     model: "sonnet",
     effort,
@@ -95,6 +97,9 @@ function makeConfig(
 }
 
 describe("fork effort quarantine (Phase 83 EFFORT-06)", () => {
+  // Longer timeout — integration tests do real SQLite init per fork +
+  // warm-path + stopAll. 15s keeps the suite green under parallel vitest.
+  const INTEGRATION_TIMEOUT_MS = 15_000;
   let tmpDir: string;
   let registryPath: string;
   let effortStatePath: string;
@@ -119,18 +124,24 @@ describe("fork effort quarantine (Phase 83 EFFORT-06)", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("fork handle launches with parent CONFIG effort, not parent runtime override", async () => {
+  it(
+    "fork handle launches with parent CONFIG effort, not parent runtime override",
+    async () => {
+    // Unique agent name per test — memory init writes to tmpDir/memory/memories.db
+    // but registry/conversation state lives in per-test tmpDir so collisions
+    // stay isolated. nanoid suffix keeps the name unique across parallel runs.
+    const parent = `p-q1-${nanoid(4)}`;
     // 1. Parent config default: effort=low
-    const parentCfg = makeConfig("parent", "low");
-    await manager.startAgent("parent", parentCfg);
-    expect(manager.getEffortForAgent("parent")).toBe("low");
+    const parentCfg = makeConfig(parent, "low", tmpDir);
+    await manager.startAgent(parent, parentCfg);
+    expect(manager.getEffortForAgent(parent)).toBe("low");
 
     // 2. Operator bumps parent to max at runtime.
-    manager.setEffortForAgent("parent", "max");
-    expect(manager.getEffortForAgent("parent")).toBe("max");
+    manager.setEffortForAgent(parent, "max");
+    expect(manager.getEffortForAgent(parent)).toBe("max");
 
     // 3. Fork (simulates v1.5 escalation path).
-    const fork = await manager.forkSession("parent");
+    const fork = await manager.forkSession(parent);
 
     // 4. Quarantine invariant: fork sees the CONFIG default ("low"), not
     //    the parent's runtime override ("max"). MockSessionHandle starts
@@ -147,9 +158,13 @@ describe("fork effort quarantine (Phase 83 EFFORT-06)", () => {
     );
     expect(forkHandle).toBeDefined();
     expect(forkHandle!.getEffort()).toBe("low");
-  });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-  it("fork config preserves parent config effort field (buildForkConfig branch)", async () => {
+  it(
+    "fork config preserves parent config effort field (buildForkConfig branch)",
+    async () => {
     // Edge case: an agent that's genuinely configured at `effort: max` as
     // its CONFIG default. buildForkConfig MUST carry that config.effort
     // through to the fork's ResolvedAgentConfig so a fork-to-Opus that
@@ -160,34 +175,42 @@ describe("fork effort quarantine (Phase 83 EFFORT-06)", () => {
     // private effort field is not wired through from config, but the
     // ResolvedAgentConfig we pass into startAgent carries the field
     // verbatim — which is all the quarantine test needs).
-    const parentCfg = makeConfig("parent-max", "max");
-    await manager.startAgent("parent-max", parentCfg);
+    const parent = `p-q2-${nanoid(4)}`;
+    const parentCfg = makeConfig(parent, "max", tmpDir);
+    await manager.startAgent(parent, parentCfg);
 
-    const fork = await manager.forkSession("parent-max");
+    const fork = await manager.forkSession(parent);
 
     // The fork's resolved config (stored in SessionManager.configs) must
     // mirror the parent's CONFIG effort, not any runtime state.
     const forkConfig = manager.getAgentConfig(fork.forkName);
     expect(forkConfig).toBeDefined();
     expect(forkConfig!.effort).toBe("max");
-  });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
-  it("fork name does NOT appear in parent's effort-state.json (no persistence bleed)", async () => {
+  it(
+    "fork name does NOT appear in parent's effort-state.json (no persistence bleed)",
+    async () => {
     // EFFORT-03 + EFFORT-06 interaction: forks are ephemeral. Even though
     // the parent's override IS persisted, the fork's name must not exist
     // in the persistence file — fresh forks have zero persistence by
     // construction (startAgent(forkName) finds nothing to re-apply).
-    const parentCfg = makeConfig("parent", "low");
-    await manager.startAgent("parent", parentCfg);
-    manager.setEffortForAgent("parent", "max");
+    const parent = `p-q3-${nanoid(4)}`;
+    const parentCfg = makeConfig(parent, "low", tmpDir);
+    await manager.startAgent(parent, parentCfg);
+    manager.setEffortForAgent(parent, "max");
 
     // Wait for fire-and-forget persistence.
     await new Promise((r) => setTimeout(r, 50));
 
-    const fork = await manager.forkSession("parent");
+    const fork = await manager.forkSession(parent);
 
     // Parent's persisted level is "max"; fork's persisted level is null.
-    expect(await readEffortState(effortStatePath, "parent")).toBe("max");
+    expect(await readEffortState(effortStatePath, parent)).toBe("max");
     expect(await readEffortState(effortStatePath, fork.forkName)).toBeNull();
-  });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 });
