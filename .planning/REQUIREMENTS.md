@@ -80,13 +80,13 @@ Fix the phantom-error class where agents claim "1Password isn't logged in" / "MC
 
 Mimic OpenClaw's skill marketplace pattern — a browsable catalog in Discord that auto-installs selected skills. Scope intentionally minimal for v2.2: browse → pick → install, no rating/publishing flow.
 
-- [ ] **MKT-01**: `/clawcode-skills-browse` opens a Discord string-select menu (or autocomplete for large lists) showing available skills from a registered skills source with name, short description, and category
+- [x] **MKT-01**: `/clawcode-skills-browse` opens a Discord string-select menu (or autocomplete for large lists) showing available skills from a registered skills source with name, short description, and category
 - [x] **MKT-02**: Skills source resolves from a configurable list in `clawcode.yaml` — initially ClawCode's local skills catalog (`workspace-coding/skills/`) unified with OpenClaw's legacy skills directory (`~/.openclaw/skills/`), format matches the research SKILL.md inventory
 - [x] **MKT-03**: User selects a skill → daemon runs the Phase 84 migration utility (SKILL-01 pipeline) against that single skill, with secret-scan, frontmatter normalization, and idempotency all enforced
 - [x] **MKT-04**: Post-install, the daemon updates the bound agent's `skills:` list in `clawcode.yaml` using the v2.1 atomic writer and triggers hot-reload (skill is linked into the agent's catalog via the v1.4 global-install path)
-- [ ] **MKT-05**: `/clawcode-skills-browse` rejects skills that would fail Phase 84 gates (secret scan, deprecation list, scope-tag mismatch) with an ephemeral explanation — does not silently skip
-- [ ] **MKT-06**: Install operation emits a single summary Discord message to the invoking channel: skill name, install path, post-install catalog entry — no multi-message spam
-- [ ] **MKT-07**: `/clawcode-skills` (no `-browse`) lists the currently installed skills for the bound agent with remove option (ephemeral select menu)
+- [x] **MKT-05**: `/clawcode-skills-browse` rejects skills that would fail Phase 84 gates (secret scan, deprecation list, scope-tag mismatch) with an ephemeral explanation — does not silently skip
+- [x] **MKT-06**: Install operation emits a single summary Discord message to the invoking channel: skill name, install path, post-install catalog entry — no multi-message spam
+- [x] **MKT-07**: `/clawcode-skills` (no `-browse`) lists the currently installed skills for the bound agent with remove option (ephemeral select menu)
 
 ## Future Requirements (Deferred from v2.2)
 

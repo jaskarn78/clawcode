@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Ready to plan
-stopped_at: Completed 88-01-PLAN.md
-last_updated: "2026-04-21T22:58:06.885Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 88-02-PLAN.md
+last_updated: "2026-04-21T23:30:01.222Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -127,6 +127,10 @@ Recent decisions affecting current work:
 - [Phase 88-skills-marketplace]: Plan 88-01 — fs-guard deliberately NOT installed in installSingleSkill (daemon-context writes only to skillsTargetDir + clawcodeYamlPath, neither under ~/.openclaw/). CLI-scoped guard would cascade into unrelated in-flight daemon tasks.
 - [Phase 88-skills-marketplace]: Plan 88-01 — SkillInstallOutcome discriminated union with 8 distinct kinds (installed/installed-persist-failed/already-installed/blocked-secret-scan/rejected-scope/rejected-deprecated/not-in-catalog/copy-failed) enforces zero-silent-skip invariant (MKT-05) at the type system level. Plan 02's Discord renderer is an exhaustive switch.
 - [Phase 88-skills-marketplace]: Plan 88-01 — computeSkillHash promoted to exported computeSkillContentHash (non-breaking rename+export); ledger writes on scope/secret-scan/copy-fail refusals (not on not-in-catalog or rejected-deprecated pre-gate refusals); non-rollback on YAML persist failure (mirrors Phase 86 Plan 02 MODEL-04).
+- [Phase 88-skills-marketplace]: Plan 88-02 — Inline slash-handler short-circuit BEFORE CONTROL_COMMANDS now has 5 canonical applications across 4 phases (85/86/87/88). /clawcode-skills-browse + /clawcode-skills round out the pattern.
+- [Phase 88-skills-marketplace]: Plan 88-02 — Exhaustive-switch outcome rendering (renderInstallOutcome) is a new canonical pattern for IPC handlers returning discriminated unions; TypeScript enforces MKT-05 zero-silent-skip at compile time for all 8 SkillInstallOutcome kinds.
+- [Phase 88-skills-marketplace]: Plan 88-02 — Post-install hot-relink runs on {installed, installed-persist-failed, already-installed} only; remove does NOT rewire (stale symlink harmless, scanner re-reads at next boot).
+- [Phase 88-skills-marketplace]: Plan 88-02 — Closure-based IPC intercept BEFORE routeMethod (same pattern as browser/search/image-tool-call). Keeps the 24-arg routeMethod signature stable; marketplace handlers close over daemon-local resolvedMarketplaceSources + skillsPath + ledgerPath + log.
 
 ### v2.1 closing decisions (for reference)
 
@@ -202,9 +206,10 @@ Recent decisions affecting current work:
 | Phase 87 P03 | 6min 12s | 1 tasks | 4 files |
 | Phase 87 P02 | 11min | 2 tasks | 12 files |
 | Phase 88-skills-marketplace P01 | 11min 27s | 2 tasks | 10 files |
+| Phase 88-skills-marketplace P02 | 26min 47s | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 88-01-PLAN.md
+Stopped at: Completed 88-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

@@ -253,10 +253,10 @@ Plans:
   3. Post-install the daemon updates the bound agent's `skills:` list in `clawcode.yaml` using the v2.1 atomic writer, triggers hot-reload, and the skill is linked into the agent's catalog via the v1.4 global-install path
   4. Install emits exactly one summary Discord message (skill name, install path, post-install catalog entry) — no multi-message spam
   5. `/clawcode-skills` (no `-browse`) lists the currently installed skills for the bound agent and offers an ephemeral select-menu remove option
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 **Plans**:
 - [x] 88-01-PLAN.md — Marketplace catalog + single-skill install pipeline + updateAgentSkills YAML writer (MKT-02, MKT-03, MKT-04)
-- [ ] 88-02-PLAN.md — IPC handlers + /clawcode-skills-browse + /clawcode-skills Discord slash commands + post-install hot-relink (MKT-01, MKT-05, MKT-06, MKT-07, UI-01)
+- [x] 88-02-PLAN.md — IPC handlers + /clawcode-skills-browse + /clawcode-skills Discord slash commands + post-install hot-relink (MKT-01, MKT-05, MKT-06, MKT-07, UI-01)
 **UI hint**: yes
 
 ## Progress
@@ -288,7 +288,7 @@ Plans:
 | 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
 | 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
 | 87. Native CC Slash Commands | 3/3 | Complete    | 2026-04-21 |
-| 88. Skills Marketplace | 1/2 | In Progress|  |
+| 88. Skills Marketplace | 2/2 | Complete   | 2026-04-21 |
 
 ## v2.2 Dependency Graph
 
