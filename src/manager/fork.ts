@@ -57,5 +57,16 @@ export function buildForkConfig(
     model: options?.modelOverride ?? parentConfig.model,
     schedules: [], // Forked sessions don't inherit scheduled tasks
     slashCommands: [], // No slash commands for forks
+    // Phase 83 Plan 02 EFFORT-06 — fork quarantine.
+    //
+    // buildForkConfig takes the PARENT'S ResolvedAgentConfig, not the
+    // parent's live SessionHandle. The parent's runtime override
+    // (setEffort called via /clawcode-effort) is NOT visible here by
+    // design — ResolvedAgentConfig carries only the config default.
+    // The explicit assignment below pins this invariant: any refactor
+    // that accidentally threads runtime state into fork config will
+    // need to delete this line, at which point fork-effort-quarantine.test.ts
+    // fires RED. PITFALLS.md §Pitfall 3 (fork inheritance cost spike).
+    effort: parentConfig.effort,
   };
 }
