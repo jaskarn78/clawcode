@@ -97,4 +97,35 @@ describe("buildForkConfig", () => {
     expect(parentConfig.name).toBe(originalName);
     expect(parentConfig.channels).toEqual(["123456"]);
   });
+
+  // Phase 83 Plan 02 EFFORT-06 — fork quarantine regression pins.
+  //
+  // buildForkConfig reads from `ResolvedAgentConfig.effort`, which is the
+  // CONFIG-level default — NOT the parent's live handle.getEffort(). These
+  // tests pin that buildForkConfig's output carries the config default,
+  // which is the quarantine invariant: a refactor that threads runtime
+  // state into fork config would flip `fork.effort` to a different value
+  // and fail these tests.
+  it("resets effort to parent config default, not to a runtime override (EFFORT-06)", () => {
+    const parent = { ...parentConfig, effort: "low" as const };
+    const fork = buildForkConfig(parent, "parent-fork-abc123");
+    expect(fork.effort).toBe("low");
+  });
+
+  it("preserves parent config effort when modelOverride is passed (EFFORT-06)", () => {
+    const parent = { ...parentConfig, effort: "medium" as const };
+    const fork = buildForkConfig(parent, "parent-fork-xyz", { modelOverride: "opus" });
+    expect(fork.effort).toBe("medium");
+    expect(fork.model).toBe("opus");
+  });
+
+  it("mirrors parent config effort through systemPromptOverride path (EFFORT-06)", () => {
+    // Ensure the custom-soul path doesn't accidentally drop the effort field.
+    const parent = { ...parentConfig, effort: "max" as const };
+    const fork = buildForkConfig(parent, "parent-fork-qqq", {
+      systemPromptOverride: "Opus advisor prompt.",
+    });
+    expect(fork.effort).toBe("max");
+    expect(fork.soul).toContain("Opus advisor prompt.");
+  });
 });
