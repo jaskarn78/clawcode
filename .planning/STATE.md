@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Ready to plan
-stopped_at: Completed 87-01-PLAN.md — SDK-driven slash-command registration + static-grep regression pin + ACL gate + 90-cap pre-flight. CMD-01/04/05/07 landed.
-last_updated: "2026-04-21T22:12:54.579Z"
+status: Ready to execute
+stopped_at: Completed 87-03-PLAN.md — prompt-channel native-CC dispatch via TurnDispatcher + ProgressiveMessageEditor; zero new streaming primitive; Phase 85 TOOL-04 verbatim-error pattern applied at slash-command layer. CMD-03/CMD-06 landed.
+last_updated: "2026-04-21T22:23:01.495Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 4
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 87
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -115,6 +115,10 @@ Recent decisions affecting current work:
 - [Phase 87-native-cc-slash-commands]: Plan 01 — Classifier safe-default is prompt-channel for unknown SDK commands (CMD-00 spike basis); clear/export/mcp hard-coded to skip-set (mcp covered by Phase 85 /clawcode-tools, Pitfall 12).
 - [Phase 87-native-cc-slash-commands]: Plan 01 — clawcode- namespace enforced by construction in buildNativeCommandDefs (Pitfall 10). Static-grep regression pin (readdirSync walk of src/) rejects any hardcoded native-command array literal in CI.
 - [Phase 87-native-cc-slash-commands]: Plan 01 — SlashCommandDef.nativeBehavior discriminator (optional field) is the single routing signal for Plans 02/03 — no name-matching or secondary lookup table required. Also added aclDeniedByAgent DI hook for hermetic unit tests; production derives from <memoryPath>/SECURITY.md.
+- [Phase 87-native-cc-slash-commands]: Plan 03 — buildNativePromptString strips clawcode- prefix idempotently (both 'clawcode-compact' and 'compact' yield '/compact'); args pass VERBATIM (no escape/quote — over-escaping breaks SDK arg passthrough); empty/whitespace args → no trailing space
+- [Phase 87-native-cc-slash-commands]: Plan 03 — Dispatch-fork carve-out ordering in handleInteraction: clawcode-tools → clawcode-model → CONTROL_COMMANDS → prompt-channel → legacy agent-routed. Dedicated inline handlers always win over stray colliding prompt-channel entries (pinned by P4 test).
+- [Phase 87-native-cc-slash-commands]: Plan 03 — Phase 85 TOOL-04 verbatim-error pattern applied at slash-command layer: editReply surfaces the ACTUAL SDK error text (err.message), not a generic blob. Solves phantom-error UX class for native-CC commands (pinned by P5 test).
+- [Phase 87-native-cc-slash-commands]: Plan 03 — Zero new streaming primitive. ProgressiveMessageEditor reused verbatim from v1.7; dispatchNativePromptCommand substitutes TurnDispatcher.dispatchStream + buildNativePromptString for sessionManager.streamFromAgent + formatCommandMessage in the agent-routed flow. Origin = makeRootOrigin('discord', channelId) for trace stitching.
 
 ### v2.1 closing decisions (for reference)
 
@@ -187,9 +191,10 @@ Recent decisions affecting current work:
 | Phase 86-dual-discord-model-picker-core P02 | 12min 6s | 2 tasks | 9 files |
 | Phase 86-dual-discord-model-picker-core P03 | 9 min 39 s | 2 tasks | 7 files |
 | Phase 87-native-cc-slash-commands P01 | 19min 24s | 2 tasks | 18 files |
+| Phase 87 P03 | 6min 12s | 1 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 87-01-PLAN.md — SDK-driven slash-command registration + static-grep regression pin + ACL gate + 90-cap pre-flight. CMD-01/04/05/07 landed.
+Stopped at: Completed 87-03-PLAN.md — prompt-channel native-CC dispatch via TurnDispatcher + ProgressiveMessageEditor; zero new streaming primitive; Phase 85 TOOL-04 verbatim-error pattern applied at slash-command layer. CMD-03/CMD-06 landed.
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

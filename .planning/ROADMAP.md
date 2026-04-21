@@ -240,7 +240,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 Plans:
 - [x] 87-01-PLAN.md — SDK command discovery + per-agent Discord registration (clawcode-* prefix) + ACL gate + static-grep regression pin + unify clawcode-compact/clawcode-usage duplicates
 - [ ] 87-02-PLAN.md — Control-plane dispatch: setPermissionMode SDK wire (Phase 83/86 canary blueprint) + new set-permission-mode IPC + /clawcode-permissions inline handler
-- [ ] 87-03-PLAN.md — Prompt-channel dispatch via TurnDispatcher + output streaming via v1.7 ProgressiveMessageEditor (verbatim error surfacing per Phase 85 TOOL-04 pattern)
+- [x] 87-03-PLAN.md — Prompt-channel dispatch via TurnDispatcher + output streaming via v1.7 ProgressiveMessageEditor (verbatim error surfacing per Phase 85 TOOL-04 pattern)
 **UI hint**: yes
 
 ### Phase 88: Skills Marketplace
@@ -284,7 +284,7 @@ Plans:
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
 | 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
-| 87. Native CC Slash Commands | 1/3 | In Progress|  |
+| 87. Native CC Slash Commands | 2/3 | In Progress|  |
 | 88. Skills Marketplace | 0/? | Not started | - |
 
 ## v2.2 Dependency Graph
