@@ -36,6 +36,7 @@ import { parseDocument, YAMLSeq, YAMLMap } from "yaml";
 import type { MappedAgentNode, MapAgentWarning } from "./config-mapper.js";
 import { scanSecrets } from "./guards.js";
 import type { PlanReport, AgentPlan } from "./diff-builder.js";
+import { modelSchema } from "../config/schema.js";
 
 /**
  * Mutable fs-dispatch holder — the ESM-safe pattern used by
@@ -339,6 +340,177 @@ export async function removeAgentFromConfig(
     .digest("hex");
   return {
     outcome: "removed",
+    destPath: args.existingConfigPath,
+    targetSha256,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 86 Plan 02 MODEL-04 — updateAgentModel.
+//
+// Rewrites ONE agent's `model:` scalar in-place using the same
+// parseDocument → mutate → atomic temp+rename pipeline as
+// writeClawcodeYaml / removeAgentFromConfig. The daemon IPC set-model
+// handler calls this AFTER the live SDK swap succeeds so the change
+// survives a daemon restart.
+//
+// Contract:
+//   outcome: "updated"        — agent found, model changed, file rewritten
+//   outcome: "no-op"          — agent found, model already equals newModel, zero writes
+//   outcome: "not-found"      — clawcode.yaml valid but agent missing from agents: seq
+//   outcome: "file-not-found" — clawcode.yaml does not exist
+//   outcome: "refused"        — newModel not in modelSchema enum (defense-in-depth)
+//   throws                    — rename failure (tmp unlinked), structural YAML corruption
+//
+// DO NOT:
+//   - Re-run the Phase 78 secret scan — we're rewriting ONE scalar, not
+//     inserting new operator-input-ish fields. Secret scan scope stays
+//     on net-new agent inserts per yaml-writer.ts policy.
+//   - Re-run the unmappable-model gate — newModel is always a valid
+//     modelSchema alias by this point (daemon validates; self-guard below
+//     via modelSchema.safeParse as defense-in-depth).
+//   - Trigger a chokidar reload side-effect — `agents.*.model` is
+//     NON_RELOADABLE (types.ts); the live swap is owned by Plan 01's
+//     SessionHandle.setModel, persistence is for the next boot only.
+// ---------------------------------------------------------------------------
+
+export type UpdateAgentModelArgs = Readonly<{
+  existingConfigPath: string;
+  agentName: string;
+  /** Validated against modelSchema inside; string at boundary for caller ergonomics. */
+  newModel: string;
+  /** DI for test determinism — defaults to process.pid. */
+  pid?: number;
+}>;
+
+export type UpdateAgentModelResult =
+  | {
+      readonly outcome: "updated";
+      readonly destPath: string;
+      readonly targetSha256: string;
+    }
+  | { readonly outcome: "no-op"; readonly reason: string }
+  | { readonly outcome: "not-found"; readonly reason: string }
+  | { readonly outcome: "file-not-found"; readonly reason: string }
+  | {
+      readonly outcome: "refused";
+      readonly reason: string;
+      readonly step: "invalid-model";
+    };
+
+export async function updateAgentModel(
+  args: UpdateAgentModelArgs,
+): Promise<UpdateAgentModelResult> {
+  const pid = args.pid ?? process.pid;
+
+  // --- Gate: defense-in-depth modelSchema validation ----------------
+  // Daemon validates modelParam before calling into here, but a future
+  // caller could slip through with an invalid alias. Self-guard keeps
+  // the contract honest and the error path typed.
+  const parsed = modelSchema.safeParse(args.newModel);
+  if (!parsed.success) {
+    return {
+      outcome: "refused",
+      reason: `Invalid model '${args.newModel}'. Must be one of: haiku, sonnet, opus`,
+      step: "invalid-model",
+    };
+  }
+  const validatedModel = parsed.data;
+
+  // --- Gate: file presence ------------------------------------------
+  if (!existsSync(args.existingConfigPath)) {
+    return {
+      outcome: "file-not-found",
+      reason: `clawcode.yaml not found at ${args.existingConfigPath}`,
+    };
+  }
+
+  // --- Read + parse (Document AST preserves comments + order) ------
+  const existingText = await writerFs.readFile(
+    args.existingConfigPath,
+    "utf8",
+  );
+  const doc = parseDocument(existingText, { prettyErrors: true });
+  const contents = doc.contents;
+  if (!(contents instanceof YAMLMap)) {
+    throw new Error(
+      `clawcode.yaml top-level is not a map: ${args.existingConfigPath}`,
+    );
+  }
+  const rootMap = contents as unknown as YAMLMap<unknown, unknown>;
+  const agentsSeq = rootMap.get("agents") as unknown;
+  if (!(agentsSeq instanceof YAMLSeq)) {
+    return {
+      outcome: "not-found",
+      reason: `no agents seq in clawcode.yaml`,
+    };
+  }
+  const items = (agentsSeq as YAMLSeq).items as unknown as Array<unknown>;
+  const idx = items.findIndex((it) => {
+    if (it === null || typeof it !== "object") return false;
+    const maybeMap = it as { get?: (k: string) => unknown };
+    if (typeof maybeMap.get !== "function") return false;
+    const name = maybeMap.get("name");
+    return name === args.agentName;
+  });
+  if (idx < 0) {
+    return {
+      outcome: "not-found",
+      reason: `agent '${args.agentName}' not in agents seq`,
+    };
+  }
+
+  const agentMap = items[idx] as {
+    get?: (k: string) => unknown;
+    set?: (k: string, v: unknown) => void;
+  };
+  if (
+    typeof agentMap.get !== "function" ||
+    typeof agentMap.set !== "function"
+  ) {
+    throw new Error(
+      `agent '${args.agentName}' entry is not a map at agents[${idx}]`,
+    );
+  }
+
+  // --- Idempotency: no-op when already at target model --------------
+  const currentModel = agentMap.get("model");
+  if (currentModel === validatedModel) {
+    return {
+      outcome: "no-op",
+      reason: `agent '${args.agentName}' model already ${validatedModel}`,
+    };
+  }
+
+  // --- Mutate ONE scalar (preserves all sibling fields + comments) --
+  agentMap.set("model", validatedModel);
+
+  // --- Serialize with no line-wrap ---------------------------------
+  const newText = doc.toString({ lineWidth: 0 });
+
+  // --- Atomic temp+rename — identical pattern to writeClawcodeYaml -
+  const destDir = dirname(args.existingConfigPath);
+  const tmpPath = join(
+    destDir,
+    `.clawcode.yaml.${pid}.${Date.now()}.tmp`,
+  );
+  await writerFs.writeFile(tmpPath, newText, "utf8");
+  try {
+    await writerFs.rename(tmpPath, args.existingConfigPath);
+  } catch (err) {
+    try {
+      await writerFs.unlink(tmpPath);
+    } catch {
+      // best-effort — tmp may already be gone
+    }
+    throw err;
+  }
+
+  const targetSha256 = createHash("sha256")
+    .update(newText, "utf8")
+    .digest("hex");
+  return {
+    outcome: "updated",
     destPath: args.existingConfigPath,
     targetSha256,
   };
