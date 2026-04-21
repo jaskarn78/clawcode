@@ -30,6 +30,7 @@ import {
   writerFs,
   removeAgentFromConfig,
   updateAgentModel,
+  updateAgentSkills,
 } from "../yaml-writer.js";
 import { SECRET_REFUSE_MESSAGE } from "../guards.js";
 import { configSchema } from "../../config/schema.js";
@@ -814,6 +815,215 @@ agents:
       expect(result.reason).toMatch(/Invalid model/);
     }
 
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 88 Plan 01 Task 2 — updateAgentSkills tests (U1-U8).
+// Mirrors the updateAgentModel contract. Atomic append/remove of a single
+// skill name onto agents[*].skills, comment-preserving, idempotent.
+// ---------------------------------------------------------------------------
+
+describe("updateAgentSkills — Phase 88 Plan 01 (Tests U1-U8)", () => {
+  async function setupSkillsFixture(
+    yaml: string,
+  ): Promise<{ destPath: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-update-skills-"));
+    const destPath = join(dir, "clawcode.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(destPath, yaml, "utf8");
+    return { destPath };
+  }
+
+  const EMPTY_SKILLS_YAML = `# fleet comment at top
+version: 1
+defaults:
+  model: sonnet
+agents:
+  # clawdy header comment
+  - name: clawdy  # personal
+    workspace: ~/.clawcode/agents/clawdy
+    model: haiku
+    channels:
+      - "111"
+    skills: []
+    mcpServers: []
+  - name: alpha
+    workspace: ~/.clawcode/agents/alpha
+    model: sonnet
+    channels:
+      - "222"
+    skills:
+      - frontend-design
+    mcpServers: []
+`;
+
+  it("U1: add happy path — appends 'frontend-design' to clawdy; 64-char hex hash", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+    const result = await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      skillName: "frontend-design",
+      op: "add",
+    });
+    expect(result.outcome).toBe("updated");
+    if (result.outcome !== "updated") return;
+    expect(result.destPath).toBe(destPath);
+    expect(result.targetSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{ name: string; skills: string[] }>;
+    };
+    const byName = new Map(parsed.agents.map((a) => [a.name, a.skills]));
+    expect(byName.get("clawdy")).toEqual(["frontend-design"]);
+    // Alpha's skills unchanged
+    expect(byName.get("alpha")).toEqual(["frontend-design"]);
+  });
+
+  it("U2: idempotent add — already present returns no-op; bytes unchanged", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+
+    const result = await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      skillName: "frontend-design",
+      op: "add",
+    });
+    expect(result.outcome).toBe("no-op");
+    if (result.outcome === "no-op") {
+      expect(result.reason).toMatch(/already/i);
+    }
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+
+  it("U3: preserves top-of-file, header, and inline comments", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+    await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      skillName: "frontend-design",
+      op: "add",
+    });
+
+    const after = readFileSync(destPath, "utf8");
+    expect(after).toContain("# fleet comment at top");
+    expect(after).toContain("# clawdy header comment");
+    expect(after).toMatch(/name:\s*clawdy\s*#\s*personal/);
+  });
+
+  it("U4: agent not found — returns not-found; bytes unchanged", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+
+    const result = await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "ghost",
+      skillName: "frontend-design",
+      op: "add",
+    });
+    expect(result.outcome).toBe("not-found");
+    if (result.outcome === "not-found") {
+      expect(result.reason).toMatch(/ghost/);
+    }
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+
+  it("U5: file missing — returns file-not-found", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-update-skills-missing-"));
+    const missing = join(dir, "nope.yaml");
+    const result = await updateAgentSkills({
+      existingConfigPath: missing,
+      agentName: "clawdy",
+      skillName: "frontend-design",
+      op: "add",
+    });
+    expect(result.outcome).toBe("file-not-found");
+    if (result.outcome === "file-not-found") {
+      expect(result.reason).toMatch(/not found/i);
+    }
+  });
+
+  it("U6: rename failure — unlinks tmp and re-throws EACCES", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+    const unlinkCalls: string[] = [];
+    writerFs.rename = (async () => {
+      throw new Error("EACCES: simulated rename failure");
+    }) as typeof writerFs.rename;
+    writerFs.unlink = (async (...args: unknown[]) => {
+      unlinkCalls.push(String(args[0]));
+      return ORIG_FS.unlink(
+        args[0] as Parameters<typeof ORIG_FS.unlink>[0],
+      );
+    }) as typeof writerFs.unlink;
+
+    await expect(
+      updateAgentSkills({
+        existingConfigPath: destPath,
+        agentName: "clawdy",
+        skillName: "frontend-design",
+        op: "add",
+      }),
+    ).rejects.toThrow(/EACCES/);
+
+    const tmpUnlink = unlinkCalls.find((p) =>
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
+    );
+    expect(tmpUnlink).toBeDefined();
+  });
+
+  it("U7: round-trip — configSchema.safeParse succeeds after update", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+    await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      skillName: "frontend-design",
+      op: "add",
+    });
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as unknown;
+    const schemaResult = configSchema.safeParse(parsed);
+    expect(schemaResult.success).toBe(true);
+  });
+
+  it("U8: remove op — removes skill; idempotent on empty", async () => {
+    const { destPath } = await setupSkillsFixture(EMPTY_SKILLS_YAML);
+
+    // First: remove frontend-design from alpha → skills becomes []
+    const r1 = await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      skillName: "frontend-design",
+      op: "remove",
+    });
+    expect(r1.outcome).toBe("updated");
+
+    const after1 = readFileSync(destPath, "utf8");
+    const parsed1 = parseYaml(after1) as {
+      agents: Array<{ name: string; skills: string[] }>;
+    };
+    const alpha1 = parsed1.agents.find((a) => a.name === "alpha")!;
+    expect(alpha1.skills).toEqual([]);
+
+    // Second: remove again → no-op (skill not present)
+    const beforeBytes = readFileSync(destPath, "utf8");
+    const r2 = await updateAgentSkills({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      skillName: "frontend-design",
+      op: "remove",
+    });
+    expect(r2.outcome).toBe("no-op");
+    if (r2.outcome === "no-op") {
+      expect(r2.reason).toMatch(/not in list/i);
+    }
     const afterBytes = readFileSync(destPath, "utf8");
     expect(afterBytes).toBe(beforeBytes);
   });
