@@ -430,6 +430,17 @@ export function resolveWorkspaceCopyPlan(
   }
   const hasSoul = existsSync(join(sourceWorkspace, "SOUL.md"));
   if (hasSoul) {
+    // 82.3 gap closure: if target already has SOUL.md, the shared-basePath
+    // was already populated by a prior sibling agent in the finmentum
+    // family. Skip the full copy — re-running fs.cp against an already-
+    // populated target breaks on absolute-symlinks pointing outside the
+    // workspace (e.g. `tmp -> /tmp` in workspace-finmentum).
+    if (existsSync(join(targetBasePath, "SOUL.md"))) {
+      return {
+        mode: "skip-empty-source",
+        reason: `target basePath already populated by sibling agent (shared workspace): ${targetBasePath}`,
+      };
+    }
     return {
       mode: "full",
       source: sourceWorkspace,
