@@ -661,6 +661,87 @@ describe("migrate-openclaw CLI — apply subcommand", () => {
     }
   });
 
+  // --- Test I (82.1 gap closure): finmentum soulFile/identityFile YAML -
+  // --- pointer matches workspace-copier on-disk location ---------------
+  //
+  // Pre-82.1, config-mapper wrote soulFile = <root>/finmentum/memory/<id>
+  // /SOUL.md, but workspace-copier places SOUL.md at <root>/finmentum/
+  // SOUL.md (shared across finmentum family). Verify subcommand's
+  // `workspace-files-present` check reported SOUL.md missing.
+  //
+  // After 82.1 fix, the YAML pointer matches on-disk. This test seeds
+  // the workspace-copier's expected layout, writes a YAML matching the
+  // POST-fix config-mapper output, and asserts `verify` reports
+  // workspace-files-present passing (no "missing: SOUL.md").
+  it("I: 82.1 — finmentum agent verify passes workspace-files-present after soulFile path fix", async () => {
+    const { mkdirSync, writeFileSync } = require("node:fs");
+
+    // Simulate workspace-copier's on-disk layout: the 6 required files
+    // (SOUL.md, IDENTITY.md, MEMORY.md, CLAUDE.md, USER.md, TOOLS.md)
+    // live at the SHARED basePath (<root>/finmentum/), not per-agent.
+    const basePath = join(clawcodeRoot, "finmentum");
+    mkdirSync(basePath, { recursive: true });
+    for (const f of ["SOUL.md", "IDENTITY.md", "MEMORY.md", "CLAUDE.md", "USER.md", "TOOLS.md"]) {
+      writeFileSync(join(basePath, f), `# ${f}\n`);
+    }
+    // Per-agent memory dir — memory-count check will look for memories.db
+    // here; its outcome is not part of this test's contract (we only pin
+    // workspace-files-present). Create the dir so fs readdir doesn't
+    // explode, but leave memories.db absent (memory-count will report
+    // its own fail independently).
+    mkdirSync(join(basePath, "memory", "finmentum-content-creator", "memory"), { recursive: true });
+
+    // Hand-craft a clawcode.yaml matching what post-82.1 config-mapper
+    // emits for finmentum-content-creator: soulFile/identityFile at
+    // basePath, memoryPath distinct under basePath/memory/<id>.
+    writeFileSync(configPath, [
+      "version: 1",
+      "defaults:",
+      "  model: sonnet",
+      "agents:",
+      "  - name: finmentum-content-creator",
+      `    workspace: ${basePath}`,
+      `    memoryPath: ${join(basePath, "memory", "finmentum-content-creator")}`,
+      `    soulFile: ${join(basePath, "SOUL.md")}`,
+      `    identityFile: ${join(basePath, "IDENTITY.md")}`,
+      "    model: sonnet",
+      "    channels: []",
+      "",
+    ].join("\n"));
+
+    // Env wiring — offline mode skips Discord check; point openclawRoot
+    // at a nonexistent path so memory-count's source-discovery step
+    // short-circuits to sourceCount=0 (its pass/fail is not asserted).
+    process.env.CLAWCODE_VERIFY_OFFLINE = "true";
+    process.env.CLAWCODE_OPENCLAW_ROOT = join(tmp, "openclaw-nonexistent");
+
+    // Seed a prior apply row so runVerifyAction (when given --agent) has
+    // context; and to exercise the same path that would occur after a
+    // real apply landed this agent.
+    const { appendRow } = await import("../../../migration/ledger.js");
+    await appendRow(ledgerPath, {
+      ts: new Date().toISOString(),
+      action: "apply",
+      agent: "finmentum-content-creator",
+      status: "migrated",
+      source_hash: "h1",
+    });
+
+    const { runVerifyAction } = await import("../migrate-openclaw.js");
+    const code = await runVerifyAction({ agent: "finmentum-content-creator" });
+    const out = stdoutCapture.join("");
+
+    // The 82.1 contract: workspace-files-present MUST NOT complain about
+    // missing SOUL.md or IDENTITY.md — that's the whole point of the fix.
+    expect(out).not.toContain("missing: SOUL.md");
+    expect(out).not.toContain("missing: IDENTITY.md");
+    // workspace-files-present should pass (all 6 files are on-disk).
+    expect(out).toMatch(/workspace-files-present[\s\S]*?(?:pass|✅|all \d+ files present)/i);
+    // Exit code may be 1 because memory-count fails (no memories.db) — we
+    // don't pin exit code, only the workspace-files-present outcome.
+    void code;
+  });
+
   // --- Test H: static-grep regression (MIGR-07 literal-string) --------
   it("H: no literal ~/.openclaw/ in write-context calls across src/migration/", () => {
     const dir = "src/migration";
