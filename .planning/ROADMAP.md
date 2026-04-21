@@ -124,6 +124,7 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 - [x] **Phase 80: Memory Translation + Re-embedding** — Read workspace markdown (disk as truth, not sqlite chunks), insert through `MemoryStore.insert()` with `origin_id UNIQUE` for idempotency, re-embed via MiniLM singleton (384-dim); `.learnings/*.md` land as first-class memories tagged `"learning"`. (completed 2026-04-20)
 - [x] **Phase 81: Verify + Rollback + Resume + Fork** — `verify`, idempotent re-run via ledger, per-agent `rollback`, and proof that every migrated agent (Sonnet/Haiku/MiniMax/Gemini) retains fork-to-Opus escalation with unbudgeted cost-ledger rows. (completed 2026-04-21)
 - [x] **Phase 82: Pilot + Cutover + Completion** — Migrate low-risk pilot (`personal` or `local-clawdy`) first, run dual-bot guardrails during observation, per-agent `cutover` unbinds OpenClaw, and `complete` writes the v2.1-migration-report.md summarizing fleet outcomes. (completed 2026-04-21)
+- [x] **Phase 82.1: Finmentum SoulFile Path Fix (Gap Closure)** — Align `config-mapper.ts`'s `soulFile`/`identityFile` YAML pointer with `workspace-copier`'s on-disk location for finmentum-family agents (shared basePath, not per-agent memoryPath). Closes the one cross-phase wiring gap from v2.1 milestone audit; CONF-01/WORK-02/MIGR-04 now fully satisfied. (completed 2026-04-21)
 
 ## Phase Details
 
@@ -268,6 +269,17 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 - [x] 82-01-PLAN.md — pilot-selector + cutover + report-writer pure modules + fs-guard allowlist extension + removeBindingsForAgent helper (OPS-01, OPS-02, OPS-04)
 - [x] 82-02-PLAN.md — CLI wiring: pilot-highlight line in runPlanAction + cutover subcommand + complete subcommand + four integration tests proving SC-1..SC-4 (OPS-01, OPS-02, OPS-04)
 
+### Phase 82.1: Finmentum SoulFile Path Fix (Gap Closure)
+**Goal**: Close the one cross-phase wiring gap identified by `v2.1-MILESTONE-AUDIT.md` — `config-mapper.ts` was emitting `soulFile = join(targetMemoryPath, 'SOUL.md')` for every agent, but for the 5 finmentum-family agents `workspace-copier` writes SOUL.md to `<root>/finmentum/` (shared basePath). YAML pointer and on-disk location diverged; `clawcode migrate openclaw verify` failed for these 5 agents with 'SOUL.md: missing'. Runtime was unaffected (session-config's 3-branch lazy-read fallback), but `verify` didn't know about the fallback.
+**Depends on**: Phase 78 (config-mapper), Phase 79 (workspace-copier), Phase 81 (verifier) — all shipped.
+**Requirements**: CONF-01, WORK-02, MIGR-04 (previously `partial` per audit; now fully satisfied)
+**Success Criteria** (what must be TRUE):
+  1. For every finmentum-family agent, `mapAgent(...).node.soulFile` equals `join(targetBasePath, 'SOUL.md')` and `identityFile` equals `join(targetBasePath, 'IDENTITY.md')` — YAML pointer matches workspace-copier's on-disk location.
+  2. Dedicated-workspace agents' `soulFile`/`identityFile` paths are unchanged (regression-pinned).
+  3. Integration test: `runVerifyAction({ agent: 'finmentum-content-creator' })` with post-fix YAML + seeded basePath layout → `workspace-files-present` check passes (no 'missing: SOUL.md'/'missing: IDENTITY.md' in stdout).
+**Plans**: 1 plan
+- [x] 82.1-01-PLAN.md — one-conditional production fix in config-mapper.ts + unit test flip + parametrized 5-ID test + integration Test I (CONF-01, WORK-02, MIGR-04)
+
 ## Progress
 
 **Status:** v2.1 OpenClaw Agent Migration started 2026-04-20. 8 phases (75-82), 31 requirements mapped 1:1, zero orphans.
@@ -299,7 +311,8 @@ Phases 69-74 delivered: OpenAI-compatible endpoint, browser automation MCP, web 
 | 80. Memory Translation + Re-embedding | 2/3 | Complete    | 2026-04-20 |
 | 81. Verify + Rollback + Resume + Fork | 3/3 | Complete    | 2026-04-21 |
 | 82. Pilot + Cutover + Completion | 2/2 | Complete    | 2026-04-21 |
+| 82.1. Finmentum SoulFile Path Fix (gap closure) | 1/1 | Complete    | 2026-04-21 |
 
 ---
 
-*Active milestone: v2.1 OpenClaw Agent Migration. 8 phases planned (75-82), 31 requirements across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS categories. Zero new npm deps.*
+*Milestone v2.1 OpenClaw Agent Migration: 8 phases (75-82) + 1 gap-closure phase (82.1). 31 requirements across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS categories — all satisfied. Zero new npm deps.*

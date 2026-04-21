@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenClaw Agent Migration
 status: Milestone complete
-stopped_at: Completed 82-02-PLAN.md
-last_updated: "2026-04-21T01:39:53.861Z"
+stopped_at: Completed 82.1-01-PLAN.md (v2.1 milestone gap closure)
+last_updated: "2026-04-21T02:19:07.440Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 14
@@ -136,6 +136,7 @@ Recent decisions affecting current work:
 - [Phase 82]: Pilot-highlight line suppressed on plan --agent <name> (single-agent filter has no signal value)
 - [Phase 82]: Dispatch-holder default-with-fallback pattern: impl = holder.x ?? moduleRef for test-safety
 - [Phase 82]: runCompleteAction bundled into Task 1 GREEN commit for dispatch-holder coherence (Phase 80/81 all-fields-init pattern)
+- [Phase 82.1]: Fixed finmentum soulFile/identityFile YAML pointer via isFinmentum branch in config-mapper — closes v2.1 audit gap for CONF-01/WORK-02/MIGR-04; dedicated-agent behavior unchanged (regression-pinned)
 
 ### Phase 74 / v2.0 closing decisions (for reference)
 
@@ -218,9 +219,10 @@ Recent decisions affecting current work:
 | Phase 81-verify-rollback-resume-fork P03 | 21min | 2 tasks | 3 files |
 | Phase 82-pilot-cutover-completion P01 | 25min | 2 tasks | 10 files |
 | Phase 82 P02 | 22min | 2 tasks | 5 files |
+| Phase 82.1 P01 | 15min | 2 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 82-02-PLAN.md
+Stopped at: Completed 82.1-01-PLAN.md (v2.1 milestone gap closure)
 Resume file: None

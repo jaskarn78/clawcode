@@ -129,12 +129,12 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | MIGR-06 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
 | MIGR-07 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
 | OPS-03 | Phase 77: Pre-flight Guards + Safety Rails | Complete |
-| CONF-01 | Phase 78: Config Mapping + YAML Writer | Complete |
+| CONF-01 | Phase 78: Config Mapping + YAML Writer (gap closed by Phase 82.1) | Complete |
 | CONF-02 | Phase 78: Config Mapping + YAML Writer | Complete |
 | CONF-03 | Phase 78: Config Mapping + YAML Writer | Complete |
 | CONF-04 | Phase 78: Config Mapping + YAML Writer | Complete |
 | WORK-01 | Phase 79: Workspace Migration | Complete |
-| WORK-02 | Phase 79: Workspace Migration | Complete |
+| WORK-02 | Phase 79: Workspace Migration (gap closed by Phase 82.1) | Complete |
 | WORK-03 | Phase 79: Workspace Migration | Complete |
 | WORK-04 | Phase 79: Workspace Migration | Complete |
 | WORK-05 | Phase 79: Workspace Migration | Complete |
@@ -144,7 +144,7 @@ Populated by roadmapper — maps each REQ-ID to the phase that delivers it.
 | MEM-04 | Phase 80: Memory Translation + Re-embedding | Complete |
 | MEM-05 | Phase 80: Memory Translation + Re-embedding | Complete |
 | MIGR-03 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
-| MIGR-04 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
+| MIGR-04 | Phase 81: Verify + Rollback + Resume + Fork (gap closed by Phase 82.1) | Complete |
 | MIGR-05 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | FORK-01 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
 | FORK-02 | Phase 81: Verify + Rollback + Resume + Fork | Complete |
