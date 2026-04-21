@@ -1,0 +1,202 @@
+{
+  "slug": "calable-reel",
+  "title": "CalABLE Accounts: The Tax-Free Savings Most People With Disabilities Miss",
+  "status": "completed",
+  "created_at": "2026-03-25",
+  "updated_at": "2026-03-27T10:30:00Z",
+
+  "script": "If you or someone you love has a disability, there's a savings account that lets you invest tax-free, keep your government benefits, and grow real wealth. Most people have never heard of it.\n\nIt's called a CalABLE account. Qualifying diagnoses include ADHD, PTSD, anxiety, depression, and autism, among many others. You can contribute up to nineteen thousand dollars a year. The money grows federal and state tax-free in most cases. And balances up to one hundred thousand dollars don't count against your S-S-I or Medi-Cal. So you keep your benefits while building real wealth.\n\nStarting January first, twenty twenty-six, eligibility expands to anyone whose disability began before age forty-six. Millions of people just became eligible.\n\nI'm Rami Hindiyeh, financial advisor and founder of Finmentum. If someone in your family qualifies, DM me. This account takes thirty minutes to set up and could protect their financial future.",
+  "script_raw": "If you or someone you love has a disability, there's a savings account that lets you invest tax-free, keep your government benefits, and grow real wealth. Most people have never heard of it.\n\nIt's called a CalABLE account. Qualifying diagnoses include ADHD, PTSD, anxiety, depression, and autism, among many others. You can contribute up to $19,000 a year. The money grows federal and state tax-free in most cases. And balances up to $100,000 don't count against your SSI or Medi-Cal. So you keep your benefits while building real wealth.\n\nStarting January 1st, 2026, eligibility expands to anyone whose disability began before age 46. Millions of people just became eligible.\n\nI'm Ramy Hindiyeh, financial advisor and founder of Finmentum. If someone in your family qualifies, DM me. This account takes 30 minutes to set up and could protect their financial future.",
+  "hook_text": "Most People With Disabilities Miss This",
+  "word_count": 168,
+  "estimated_duration_s": 48.6,
+
+  "heygen": {
+    "template_id": "83dfa706c8144b4b9033d0d154ad6ebd",
+    "video_id": "452719a3a6754b639680427a982afc3d",
+    "rendered_at": "2026-03-26T15:42:44Z",
+    "test": false,
+    "brand_voice_id": "ba58de0a05e9424c853ecbb2ce1032ee",
+    "caption_url": "https://resource2.heygen.ai/heygen/subtitles/452719a3a6754b639680427a982afc3d.ass",
+    "video_url": "https://files2.heygen.ai/aws_pacific/avatar_tmp/92cee469720d4907b57f3e321d97bea9/452719a3a6754b639680427a982afc3d.mp4",
+    "video_url_expiry": "2026-03-27T15:42:44Z",
+    "duration_s": 48.67
+  },
+
+  "avatar": {
+    "avatar_id": "d46fa7f3801f413d943120285050d6ed",
+    "avatar_name": "Finmentum Ramy Main - Prod",
+    "type": "talking_photo",
+    "use_avatar_iv_model": true
+  },
+
+  "voice": {
+    "voice_id": null,
+    "brand_voice_id": "ba58de0a05e9424c853ecbb2ce1032ee",
+    "speed": 1.0
+  },
+
+  "intro": {
+    "file": "/assets/calable-reel/intro.mov",
+    "hook_title": "Most People With Disabilities Miss This",
+    "person_name": "Ramy Hindiyeh, Ph.D., MBA",
+    "person_title": "Principal Investment Advisor at Finmentum",
+    "duration_frames": 100,
+    "fps": 25,
+    "duration_s": 4.0,
+    "exit_by": 4,
+    "render_props": {
+      "compositionId": "IntroBanner",
+      "hookTitle": "Most People With Disabilities Miss This",
+      "personName": "Ramy Hindiyeh, Ph.D., MBA",
+      "personTitle": "Principal Investment Advisor at Finmentum",
+      "brandColor": "#A1FCCD",
+      "textColor": "#FFFFFF",
+      "durationInFrames": 100,
+      "fps": 25
+    }
+  },
+
+  "outro": {
+    "file": "/assets/calable-reel/outro-final.mov",
+    "cta_line1": "You may qualify right now",
+    "cta_line2": "quiz.finmentum.com",
+    "person_name": "Ramy Hindiyeh, Ph.D., MBA",
+    "person_title": "Principal Investment Advisor at Finmentum",
+    "duration_frames": 125,
+    "fps": 25,
+    "duration_s": 5.0,
+    "offset_from_end": 5,
+    "render_props": {
+      "compositionId": "OutroCard",
+      "ctaLine1": "You may qualify right now",
+      "ctaLine2": "quiz.finmentum.com",
+      "personName": "Ramy Hindiyeh, Ph.D., MBA",
+      "personTitle": "Principal Investment Advisor at Finmentum",
+      "brandColor": "#A1FCCD",
+      "textColor": "#FFFFFF",
+      "durationInFrames": 125,
+      "fps": 25
+    }
+  },
+
+  "cards": [
+    {
+      "name": "diag-card",
+      "file": "/assets/calable-reel/diag-card.mov",
+      "composition_id": "FloatingCard",
+      "card_type": "list",
+      "duration_frames": 200,
+      "fps": 25,
+      "duration_s": 8.0,
+      "card_y": 1100,
+      "trigger_phrase": "Qualifying diagnoses include",
+      "trigger_time_s": 8.5,
+      "fade": true,
+      "render_props": {
+        "cardType": "list",
+        "cardY": 1100,
+        "durationInFrames": 200,
+        "listTitle": "Qualifying Diagnoses",
+        "listItems": [
+          {"rank": 1, "label": "ADHD", "value": ""},
+          {"rank": 2, "label": "PTSD", "value": ""},
+          {"rank": 3, "label": "Anxiety", "value": ""},
+          {"rank": 4, "label": "Depression", "value": ""},
+          {"rank": 5, "label": "Autism", "value": ""}
+        ],
+        "listSubtext": "Among many others",
+        "brandColor": "#A1FCCD",
+        "textColor": "#FFFFFF"
+      },
+      "md5": "a8b3c4d5e6f7890123456789abcdef01"
+    },
+    {
+      "name": "checklist-card",
+      "file": "/assets/calable-reel/checklist-card.mov",
+      "composition_id": "FloatingCard",
+      "card_type": "qualifier",
+      "duration_frames": 200,
+      "fps": 25,
+      "duration_s": 8.0,
+      "card_y": 1100,
+      "trigger_phrase": "up to nineteen thousand dollars",
+      "trigger_time_s": 14.2,
+      "fade": true,
+      "render_props": {
+        "cardType": "qualifier",
+        "cardY": 1100,
+        "durationInFrames": 200,
+        "qualifierTitle": "CalABLE Account Rules",
+        "qualifierItems": [
+          {"text": "Up to $19,000/year contributions", "checked": true},
+          {"text": "Federal + state tax-free growth", "checked": true},
+          {"text": "First $100K exempt from SSI", "checked": true},
+          {"text": "Keep Medi-Cal benefits", "checked": true}
+        ],
+        "brandColor": "#A1FCCD",
+        "textColor": "#FFFFFF"
+      },
+      "md5": "b9c4d5e6f7801234567890abcdef0123"
+    },
+    {
+      "name": "summary-card",
+      "file": "/assets/calable-reel/summary-card.mov",
+      "composition_id": "FloatingCard",
+      "card_type": "benefits",
+      "duration_frames": 200,
+      "fps": 25,
+      "duration_s": 8.0,
+      "card_y": 1100,
+      "trigger_phrase": "keep your benefits while building",
+      "trigger_time_s": 22.8,
+      "fade": true,
+      "render_props": {
+        "cardType": "benefits",
+        "cardY": 1100,
+        "durationInFrames": 200,
+        "benefitsTitle": "CalABLE Benefits",
+        "benefitsRows": [
+          {"label": "Tax-Free", "value": "Grows without federal/state tax"},
+          {"label": "SSI Safe", "value": "First $100K doesn't count"},
+          {"label": "Medi-Cal", "value": "Keep your healthcare coverage"}
+        ],
+        "brandColor": "#A1FCCD",
+        "textColor": "#FFFFFF"
+      },
+      "md5": "c0d5e6f78012345678901abcdef01234"
+    }
+  ],
+
+  "music": {
+    "track_name": "Inspiring Corporate",
+    "artist": "AudioCoffee",
+    "jamendo_track_id": "1856742",
+    "jamendo_download_url": "https://mp3d.jamendo.com/download/track/1856742/mp32",
+    "jamendo_share_url": "https://www.jamendo.com/track/1856742",
+    "license": "CC-BY 3.0",
+    "file": "/assets/calable-reel/music.mp3",
+    "volume": 0.04,
+    "fade_out_s": 2.0
+  },
+
+  "post_processing": {
+    "last_run_at": "2026-03-27T09:15:00Z",
+    "slug_used": "calable-reel",
+    "overlay_order": ["intro", "diag-card", "checklist-card", "summary-card", "outro"],
+    "colorkey_threshold": "0.01:0.0"
+  },
+
+  "output": {
+    "nextcloud_incomplete": "Finmentum reels/Incomplete/calable-reel.mp4",
+    "nextcloud_completed": "Finmentum reels/Completed/calable-reel-FINAL.mp4",
+    "filename": "calable-reel-FINAL.mp4",
+    "share_url": "https://storage.jjagpal.me/s/Qx8mT3pRw2nL5Mv",
+    "discord_preview_message_id": "1234567890123456789"
+  },
+
+  "db": {
+    "published_videos_id": null,
+    "pushed_at": null
+  }
+}

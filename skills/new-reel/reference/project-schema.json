@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectJSON",
+  "description": "Finmentum project JSON schema -- matches Pydantic ProjectJSON model in pipeline/models/project_schema.py",
+  "type": "object",
+  "properties": {
+    "project_name": {
+      "type": "string",
+      "description": "URL-friendly slug for the project (e.g., 'compound-interest-explained')"
+    },
+    "avatar_id": {
+      "type": "string",
+      "description": "HeyGen avatar ID from $FINMENTUM_AVATAR_ID"
+    },
+    "voice_id": {
+      "type": "string",
+      "description": "HeyGen voice ID from $FINMENTUM_VOICE_ID"
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "Scene number (1-based)"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["avatar", "broll"],
+            "description": "avatar = direct-to-camera, broll = avatar over background video"
+          },
+          "script": {
+            "type": "string",
+            "description": "Voice-over script text for this scene"
+          },
+          "avatar_position": {
+            "type": "string",
+            "enum": [
+              "full_screen",
+              "half_screen_split",
+              "bottom_left_pip",
+              "bottom_right_pip",
+              "top_left_pip",
+              "top_right_pip"
+            ],
+            "description": "Avatar placement position on the 1080x1920 canvas"
+          },
+          "background": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["color", "image", "video"]
+              },
+              "value": {
+                "type": "string",
+                "description": "Hex color value (for type=color)"
+              },
+              "url": {
+                "type": "string",
+                "description": "Asset URL (for type=image or type=video)"
+              }
+            },
+            "required": ["type"],
+            "additionalProperties": false
+          },
+          "render_style": {
+            "type": "string",
+            "enum": ["option_a", "option_b"],
+            "description": "option_a = Remotion animation, option_b = Pexels stock footage"
+          },
+          "pexels_query": {
+            "type": "string",
+            "description": "Search keywords for Pexels stock footage (Option B scenes)"
+          },
+          "pexels_video_id": {
+            "type": "integer",
+            "description": "Pexels video ID if a specific video was selected"
+          }
+        },
+        "required": ["number", "type", "script", "avatar_position"],
+        "additionalProperties": false
+      }
+    },
+    "intro": {
+      "type": "object",
+      "properties": {
+        "hook_title": {
+          "type": "string",
+          "description": "Text for the intro overlay card"
+        }
+      },
+      "required": ["hook_title"],
+      "additionalProperties": false
+    },
+    "outro": {
+      "type": "object",
+      "properties": {
+        "cta_text": {
+          "type": "string",
+          "description": "Call-to-action text for the outro overlay card"
+        }
+      },
+      "required": ["cta_text"],
+      "additionalProperties": false
+    },
+    "music_path": {
+      "type": "string",
+      "description": "Path to background music file"
+    },
+    "music_volume": {
+      "type": "number",
+      "default": 0.04,
+      "description": "Background music volume (0.0 to 1.0, default 0.04)"
+    }
+  },
+  "required": ["project_name", "avatar_id", "voice_id", "scenes"],
+  "additionalProperties": false
+}

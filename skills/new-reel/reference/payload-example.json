@@ -1,0 +1,91 @@
+{
+  "_comment": [
+    "Complete HeyGen v2 payload example showing all scene types.",
+    "Default avatar: d46fa7f3801f413d943120285050d6ed (Finmentum Ramy Main - Prod, talking_photo) — use for ALL reels. Avatar name 'The Minimalist Wrist' is deprecated (bracelet artifact).",
+    "avatar_id and voice_id come from $FINMENTUM_AVATAR_ID and $FINMENTUM_VOICE_ID env vars.",
+    "matting: true ONLY for corner PIP positions (bottom_left_pip, bottom_right_pip, top_left_pip, top_right_pip).",
+    "Video backgrounds MUST use video_asset_id (NOT url) to avoid pillarboxing bug.",
+    "play_style: 'fit_to_scene' for ALL positions (Jas's explicit preference).",
+    "use_avatar_iv_model: true in ALL character objects — enables Avatar IV motion engine (better gestures, expressions, lip sync).",
+    "Instagram Reels: use bottom_left_pip (NOT bottom_right_pip) — right side has Instagram engagement UI.",
+    "All 'Ramy' in input_text must be replaced with 'Rami' before payload construction."
+  ],
+  "title": "compound-interest-explained",
+  "dimension": {"width": 1080, "height": 1920},
+  "video_inputs": [
+    {
+      "character": {
+        "type": "avatar",
+        "avatar_id": "d46fa7f3801f413d943120285050d6ed",
+        "scale": 1.0,
+        "offset": {"x": 0.0, "y": 0.0},
+        "avatar_style": "normal",
+        "use_avatar_iv_model": true
+      },
+      "voice": {
+        "type": "text",
+        "voice_id": "VOICE_ID_HERE",
+        "input_text": "Hook scene script -- full screen avatar, no matting."
+      },
+      "background": {"type": "color", "value": "#FFFFFF"}
+    },
+    {
+      "character": {
+        "type": "avatar",
+        "avatar_id": "d46fa7f3801f413d943120285050d6ed",
+        "scale": 0.6,
+        "offset": {"x": -0.22, "y": 0.24},
+        "avatar_style": "normal",
+        "matting": true,
+        "use_avatar_iv_model": true
+      },
+      "voice": {
+        "type": "text",
+        "voice_id": "VOICE_ID_HERE",
+        "input_text": "Data scene with Remotion animation b-roll -- bottom LEFT PIP (not right -- Instagram UI), matting enabled."
+      },
+      "background": {
+        "type": "video",
+        "video_asset_id": "UPLOADED_ASSET_ID_HERE",
+        "play_style": "fit_to_scene"
+      }
+    },
+    {
+      "character": {
+        "type": "avatar",
+        "avatar_id": "d46fa7f3801f413d943120285050d6ed",
+        "scale": 0.6,
+        "offset": {"x": -0.22, "y": 0.24},
+        "avatar_style": "normal",
+        "matting": true,
+        "use_avatar_iv_model": true
+      },
+      "voice": {
+        "type": "text",
+        "voice_id": "VOICE_ID_HERE",
+        "input_text": "Pexels stock footage scene -- bottom LEFT PIP, matting enabled."
+      },
+      "background": {
+        "type": "video",
+        "video_asset_id": "UPLOADED_PEXELS_ASSET_ID",
+        "play_style": "fit_to_scene"
+      }
+    },
+    {
+      "character": {
+        "type": "avatar",
+        "avatar_id": "d46fa7f3801f413d943120285050d6ed",
+        "scale": 1.0,
+        "offset": {"x": 0.0, "y": 0.0},
+        "avatar_style": "normal",
+        "use_avatar_iv_model": true
+      },
+      "voice": {
+        "type": "text",
+        "voice_id": "VOICE_ID_HERE",
+        "input_text": "CTA scene -- full screen, no matting, no b-roll."
+      },
+      "background": {"type": "color", "value": "#FFFFFF"}
+    }
+  ]
+}
