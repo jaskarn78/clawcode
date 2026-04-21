@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Ready to execute
-stopped_at: Completed 87-03-PLAN.md — prompt-channel native-CC dispatch via TurnDispatcher + ProgressiveMessageEditor; zero new streaming primitive; Phase 85 TOOL-04 verbatim-error pattern applied at slash-command layer. CMD-03/CMD-06 landed.
-last_updated: "2026-04-21T22:23:01.495Z"
+stopped_at: Completed 87-02-PLAN.md
+last_updated: "2026-04-21T22:29:21.757Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -119,6 +119,9 @@ Recent decisions affecting current work:
 - [Phase 87-native-cc-slash-commands]: Plan 03 — Dispatch-fork carve-out ordering in handleInteraction: clawcode-tools → clawcode-model → CONTROL_COMMANDS → prompt-channel → legacy agent-routed. Dedicated inline handlers always win over stray colliding prompt-channel entries (pinned by P4 test).
 - [Phase 87-native-cc-slash-commands]: Plan 03 — Phase 85 TOOL-04 verbatim-error pattern applied at slash-command layer: editReply surfaces the ACTUAL SDK error text (err.message), not a generic blob. Solves phantom-error UX class for native-CC commands (pinned by P5 test).
 - [Phase 87-native-cc-slash-commands]: Plan 03 — Zero new streaming primitive. ProgressiveMessageEditor reused verbatim from v1.7; dispatchNativePromptCommand substitutes TurnDispatcher.dispatchStream + buildNativePromptString for sessionManager.streamFromAgent + formatCommandMessage in the agent-routed flow. Origin = makeRootOrigin('discord', channelId) for trace stitching.
+- [Phase 87]: Canary blueprint trio locked: Phase 83 + 86 + 87-02 share byte-identical synchronous setter + fire-and-forget + .catch wire shape with 5-test spy harness
+- [Phase 87]: Permission mode is ephemeral/runtime-only (no YAML persistence) — matches /clawcode-effort precedent, diverges from /clawcode-model's atomic YAML write
+- [Phase 87]: No per-agent permission allowlist; PermissionMode validation is the static 6-value union only (unlike setModel's per-agent allowedModels)
 
 ### v2.1 closing decisions (for reference)
 
@@ -192,9 +195,10 @@ Recent decisions affecting current work:
 | Phase 86-dual-discord-model-picker-core P03 | 9 min 39 s | 2 tasks | 7 files |
 | Phase 87-native-cc-slash-commands P01 | 19min 24s | 2 tasks | 18 files |
 | Phase 87 P03 | 6min 12s | 1 tasks | 4 files |
+| Phase 87 P02 | 11min | 2 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 87-03-PLAN.md — prompt-channel native-CC dispatch via TurnDispatcher + ProgressiveMessageEditor; zero new streaming primitive; Phase 85 TOOL-04 verbatim-error pattern applied at slash-command layer. CMD-03/CMD-06 landed.
+Stopped at: Completed 87-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

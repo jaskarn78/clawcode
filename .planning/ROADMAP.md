@@ -130,7 +130,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 - [x] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns. (completed 2026-04-21)
 - [x] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface. (completed 2026-04-21)
 - [x] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87. (completed 2026-04-21)
-- [ ] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first.
+- [x] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first. (completed 2026-04-21)
 - [x] **Phase 88: Skills Marketplace** — `/clawcode-skills-browse` Discord picker that runs the Phase 84 migration utility against a single skill; atomic post-install `skills:` list update + hot-reload. (completed 2026-04-21)
 
 ## Phase Details
@@ -239,7 +239,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 Plans:
 - [x] 87-01-PLAN.md — SDK command discovery + per-agent Discord registration (clawcode-* prefix) + ACL gate + static-grep regression pin + unify clawcode-compact/clawcode-usage duplicates
-- [ ] 87-02-PLAN.md — Control-plane dispatch: setPermissionMode SDK wire (Phase 83/86 canary blueprint) + new set-permission-mode IPC + /clawcode-permissions inline handler
+- [x] 87-02-PLAN.md — Control-plane dispatch: setPermissionMode SDK wire (Phase 83/86 canary blueprint) + new set-permission-mode IPC + /clawcode-permissions inline handler
 - [x] 87-03-PLAN.md — Prompt-channel dispatch via TurnDispatcher + output streaming via v1.7 ProgressiveMessageEditor (verbatim error surfacing per Phase 85 TOOL-04 pattern)
 **UI hint**: yes
 
@@ -284,7 +284,7 @@ Plans:
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
 | 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
-| 87. Native CC Slash Commands | 2/3 | In Progress|  |
+| 87. Native CC Slash Commands | 3/3 | Complete   | 2026-04-21 |
 | 88. Skills Marketplace | 0/? | Not started | - |
 
 ## v2.2 Dependency Graph
