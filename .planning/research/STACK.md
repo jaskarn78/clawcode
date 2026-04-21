@@ -1,294 +1,361 @@
-# Stack Research: OpenClaw → ClawCode Migration Tooling
+# Stack Research — v2.2 OpenClaw Parity & Polish
 
-**Domain:** One-shot data migration tooling inside an existing TypeScript/Node CLI codebase
-**Researched:** 2026-04-20
-**Confidence:** HIGH
-**Milestone:** v2.1 OpenClaw Agent Migration
-
-## TL;DR — Stack Delta
-
-**ZERO new runtime dependencies required.** The migration CLI ships entirely on ClawCode's existing stack. The only candidate library with a real benefit (pretty structured diff output for the dry-run UI) is `jsondiffpatch`, and even that is replaceable with a hand-rolled diff since the objects being compared are small and structured. Default recommendation: ship with current deps.
-
-**One forced-hand finding:** re-embedding is **mandatory, not optional**. See `## Reality Check: Embeddings` below. This is the single biggest cost driver for the milestone and must be surfaced to the roadmapper.
+**Domain:** Subsequent-milestone stack delta for an existing TypeScript multi-agent daemon built on Claude Agent SDK + discord.js + better-sqlite3.
+**Researched:** 2026-04-21
+**Confidence:** HIGH (every key claim verified against installed `sdk.d.ts` on disk and/or `npm view`)
 
 ---
 
-## Reality Check: Embeddings (read before anything else)
+## TL;DR — Zero New Runtime Dependencies
 
-Direct inspection of the 15 source DBs at `~/.openclaw/memory/*.sqlite`:
+All four v2.2 features ship with **zero new `dependencies`** and **one optional `devDependencies` entry** (`gray-matter`, only if the skills migration utility is retained as a standalone script rather than one-shot code).
 
-| Source agent | Chunks | Embedding model | Dims | Storage format |
-|---|---|---|---|---|
-| fin-acquisition | 597 | gemini-embedding-001 | **3072** | JSON text (~66KB/row) |
-| finmentum-content-creator | 224 | gemini-embedding-001 | 3072 | JSON text |
-| finmentum | 65 | gemini-embedding-001 | 3072 | JSON text |
-| general | 878 | gemini-embedding-001 | 3072 | JSON text |
-| personal | 47 | **embeddinggemma-300m (local GGUF)** | **768** | JSON text |
-| projects | 519 | gemini-embedding-001 | 3072 | JSON text |
-| research | 287 | gemini-embedding-001 | 3072 | JSON text |
-| fin-research, fin-playground, fin-tax, shopping, work, kimi, local-clawdy, 0 | **0** | — | — | empty |
+| Feature | New dep? | Rationale |
+|---------|----------|-----------|
+| 1. Skills library migration | **None required** | Existing `src/skills/scanner.ts` already parses the same YAML-frontmatter format OpenClaw uses. One-shot migration can be a Node-native `readFile` + regex tool inside `src/cli/`. |
+| 2. Extended-thinking effort mapping | **None** | `@anthropic-ai/claude-agent-sdk@0.2.97` already on-box exposes `thinking: ThinkingConfig` + `query.setMaxThinkingTokens()`. Existing `handle.setEffort()` stub (src/manager/persistent-session-handle.ts:599-602) documents the missing wiring. |
+| 3. Dual Discord model picker | **None** | `discord.js@14.26.2` already includes `StringSelectMenuBuilder`, autocomplete interactions, `ApplicationCommandOptionType`. Existing OpenClaw picker pref file (`~/.openclaw/discord/model-picker-preferences.json`) is plain JSON — `fs.readFile` + `JSON.parse` suffices. |
+| 4. Native CC slash commands in Discord | **None** | SDK `Query.supportedCommands()` returns `SlashCommand[]`; slash commands dispatched as normal user-prompt strings (e.g., `"/compact"`) through the existing `query.input` stream. `Query.setModel`, `setPermissionMode`, `setMaxThinkingTokens`, `endSession` cover the control-plane commands directly. |
 
-**Totals:** ~2,617 populated chunks across 7 agents. 8 agents have empty memory DBs (nothing to translate).
-
-**ClawCode target:** `vec_memories USING vec0(embedding float[384] distance_metric=cosine)` — locked at 384 dims by every consumer (`session-memory.ts`, `graph-search.ts`, `tier-manager.ts`).
-
-**Implication — there is no "reuse embeddings directly" path:**
-- Dimensional mismatch (3072 vs 384, and 768 vs 384) is not solvable by re-slicing or projecting without quality loss.
-- Provider mismatch (Gemini cloud vs local MiniLM) means vectors aren't in the same semantic space — cosine similarity between them is meaningless.
-- The `personal` agent's embeddinggemma is also not ClawCode's MiniLM, so even same-family local vectors don't carry over.
-
-**Re-embedding cost estimate (HIGH confidence):**
-- 2,617 chunks × ~50ms/embedding (observed singleton perf in `src/memory/embedding.ts`) = **~131 seconds total** if serial, ~20–30s with warmup amortized across agents.
-- Zero API cost (local ONNX).
-- Model is already resident (warm-path optimization in v1.7).
-
-This reframes the memory-translator phase from "blob copy" to "text → re-embed → insert." Still trivial in wall time, but the roadmapper should NOT scope it as "just translate schemas."
+> The quality gate ("zero new deps preferred") is met for the core feature set. The one candidate new dep (`gray-matter@4.0.3`, dev-only) is **explicitly not required** — our in-tree `extractVersion` / `extractDescription` regex in `src/skills/scanner.ts:10-43` already handles every SKILL.md shape found in `~/.openclaw/skills/`.
 
 ---
 
-## Recommended Stack (Delta)
+## Existing Stack (Inventory — do NOT re-add)
 
-### Additions: NONE
+Verified against `/home/jjagpal/.openclaw/workspace-coding/package.json`:
 
-The migration CLI is a greenfield `src/cli/commands/migrate-openclaw.ts` subcommand + supporting module under `src/migration/`. Every dependency it needs is already locked in `package.json`.
-
-### Existing Dependencies — How Each Is Reused
-
-| Existing dep | Version | Role in migration tool | Why no substitute is needed |
-|---|---|---|---|
-| `better-sqlite3` | ^12.8.0 | Read source `chunks` table, write target `memories` + `vec_memories` | Sync API + `ATTACH DATABASE` verified working end-to-end against real OpenClaw DB (see Verified Spike below). No driver swap can improve this. |
-| `sqlite-vec` | ^0.1.9 | `.load(db)` on the destination handle before inserting float32 vectors into `vec_memories` | Already how `MemoryStore` works. The source DB's vectors are plain TEXT columns, not `vec0` virtual tables, so no extension is needed to *read* source — just to *write* target. |
-| `@huggingface/transformers` | ^4.0.1 | Re-embed every source chunk's `text` column into 384-dim MiniLM before insert | Mandatory: 3072-dim Gemini vectors can't feed a 384-dim `vec0` table. Singleton embedder is already cached (`src/memory/embedding.ts`), ~50ms/row warm. |
-| `commander` | ^14.0.3 | `clawcode migrate openclaw [--dry-run] [--agent <id>] [--apply]` subcommand | CLI is already wired (`src/cli/index.ts`); just register a new command module. |
-| `yaml` | ^2.8.3 | Read existing `clawcode.yaml`, merge new agent entries back, preserve comments where possible | Already in use via `src/config/loader.ts`. The `yaml` package (eemeli/yaml) has `Document` AST for comment-preserving edits — `js-yaml` does NOT. Don't swap. |
-| `zod` | ^4.3.6 | Validate parsed `openclaw.json` entries before mapping, validate emitted `clawcode.yaml` block round-trips | Already the project's validator of choice. |
-| `nanoid` | ^5.1.7 | Generate ClawCode-shaped memory IDs if source IDs collide or aren't in the `memories.id` TEXT format | Already project-wide. Source chunks use SHA256 hash IDs; these are fine to reuse as-is, but nanoid is available if we need fresh IDs for derived summary memories. |
-| `pino` | ^9 | Structured migration log → `~/.clawcode/migration/<timestamp>.jsonl` for audit trail | Already the project logger. |
-| `date-fns` | ^4.1.0 | Translate OpenClaw `mtime` (unix seconds) → ClawCode `created_at` / `accessed_at` (ISO strings, per `memories` schema) | Already in deps; `formatISO(fromUnixTime(mtime))` is one line. |
-| `chokidar` | ^5.0.0 | NOT needed for migration, but confirms no file-watching dep gap | — |
-| Node 22 built-in `fs.promises.cp` | — | Workspace directory copy with `{ recursive: true, verbatimSymlinks: true, preserveTimestamps: true, filter }` | Verified via docs: preserves symlinks without dereferencing, preserves mtimes, takes a per-entry filter function (skip `node_modules`, `.git`, virtualenv `lib64` symlinks, etc.). See "Why not fs-extra" below. |
-
-### Supporting Modules (code, not deps)
-
-New files under `src/migration/`, all using only the table above:
-
-| Module | Purpose |
-|---|---|
-| `openclaw-config-reader.ts` | Parse `~/.openclaw/openclaw.json` via `JSON.parse` + zod schema |
-| `source-memory-reader.ts` | Open source `.sqlite` read-only, stream `chunks` rows with prepared statements |
-| `config-mapper.ts` | OpenClaw agent entry → ClawCode YAML node (identity/soul pulled from workspace files) |
-| `workspace-copier.ts` | `fs.promises.cp` with filter — covered in detail below |
-| `memory-translator.ts` | `ATTACH` source → read chunks → re-embed → insert into target `memories` + `vec_memories` |
-| `diff-planner.ts` | Build per-agent plan object: `{ configChanges, filesToCopy, chunksToTranslate, collisions, warnings }` |
-| `dry-run-renderer.ts` | Structured console output of the plan (table per agent, summary totals) |
+| Package | Installed | Notes |
+|---------|-----------|-------|
+| `@anthropic-ai/claude-agent-sdk` | `^0.2.97` (npm latest `0.2.116` as of 2026-04-21) | Pre-1.0 — minor-version breakage risk flagged below |
+| `discord.js` | `^14.26.2` (npm latest `14.26.3`) | Covers select menus + autocomplete natively |
+| `better-sqlite3` | `^12.8.0` | n/a for v2.2 |
+| `sqlite-vec` | `^0.1.9` | n/a for v2.2 |
+| `@huggingface/transformers` | `^4.0.1` | n/a for v2.2 |
+| `zod` | `^4.3.6` | Re-used for slash-command schema validation |
+| `yaml` | `^2.8.3` | **Already present** — covers clawcode.yaml allowed-model parsing |
+| `croner` | `^10.0.1` | n/a for v2.2 |
+| `execa` | — *(NOT in package.json)* | Contradicts `CLAUDE.md` — execa is NOT an actual dep; use `node:child_process` if process spawning is ever needed |
+| `pino` | `^9` | Structured logging for new slash-command paths |
 
 ---
 
-## Answers to the Specific Questions
+## Feature-by-Feature Stack Delta
 
-### 1. Can we reuse OpenClaw's embeddings directly?
+### 1. Skills Library Migration (`~/.openclaw/skills/` → ClawCode)
 
-**NO.** Dimensional and provider mismatch (3072-dim Gemini / 768-dim embeddinggemma vs ClawCode's 384-dim MiniLM). Re-embedding is mandatory. Cost is ~131 seconds wall time for the full 2,617-chunk corpus, zero API spend — acceptable. No library addition changes this.
+**Decision:** **Zero new deps.** Migration is a one-shot TypeScript script under `src/cli/` or `src/skills/` that reuses the existing scanner.
 
-### 2. Any schema-diff / dry-run utility?
-
-**Not needed as a library.** Dry-run output for this scale (15 agents × a handful of config fields × some file paths) is better rendered by hand-rolled table/list printing. Reasons:
-
-- The diff isn't between two free-form JSON blobs; it's between a structured `OpenclawAgentEntry` and the derived `ClawcodeAgentSpec`. The "diff" is really a **plan preview**, not a structural diff.
-- Rendering the preview as a markdown-ish table in the terminal gives ops a readable audit — `jsondiffpatch` output (HTML or colored JSON) is less readable for this shape.
-- `diff@9.0.0` or `jsondiffpatch@0.7.3` would be optional if we later want unified-diff output for the YAML merge preview. Leave as a v2.1.x follow-up, not a v2.1 blocker.
-
-**Recommendation:** ship without. If reviewers specifically ask for unified YAML diff output, add `diff@^9` (tiny, no deps, MIT) — but prove the need first.
-
-### 3. Better than `fs.cp` for workspace copy?
-
-**NO — Node 22's built-in `fs.promises.cp` is strictly sufficient.** Verified options:
-
-```ts
-await fs.cp(src, dest, {
-  recursive: true,
-  verbatimSymlinks: true,     // preserves symlinks verbatim, no dereference
-  preserveTimestamps: true,
-  errorOnExist: true,
-  force: false,
-  filter: (src) => !src.includes("/node_modules/") &&
-                   !src.includes("/.git/") &&
-                   !src.endsWith("/instagram-env/lib64"), // venv symlink pitfall
-});
+**What's on disk in `~/.openclaw/skills/`:**
+```
+cognitive-memory/      SKILL.md + UPGRADE.md + _meta.json + assets/ + references/ + scripts/
+finmentum-crm/         SKILL.md only
+frontend-design/       SKILL.md (+ LICENSE.txt referenced in frontmatter)
+new-reel/              SKILL.md + references/ + scripts/
+openclaw-config/       (nested structure)
+power-apps-builder/    SKILL.md + references/
+remotion/              SKILL.md + references/ + scripts/
+self-improving-agent/  SKILL.md + .git/ + .learnings/ + assets/ + hooks/ + references/ + scripts/
+tuya-ac/               SKILL.md + scripts/
+workspace-janitor/     SKILL.md + scripts/
 ```
 
-Why not `fs-extra@11.3.4`? It was the standard choice in Node 14–18 when `fs.cp` didn't exist or lacked symlink/timestamp options. In Node 22, `fs.cp` is feature-parity for our needs (`copy`, `copySync`, symlink preservation, filter). Adding it is 500KB + a transitive `graceful-fs` for zero benefit.
+**Format gap analysis** — three SKILL.md shapes observed:
 
-Why not `cpy@11.x`? It's glob-first and streams — overkill. We know exactly which directory to copy per agent.
+| Shape | Example | Handled by existing scanner? |
+|-------|---------|------------------------------|
+| Standard YAML frontmatter (`name` + `description`) | `finmentum-crm`, `power-apps-builder`, `new-reel`, `frontend-design` | ✅ Yes |
+| Frontmatter with extra fields (`metadata:`, `license:`) | `self-improving-agent`, `frontend-design` | ✅ Yes — scanner extracts `version` only, ignores extras (non-lossy) |
+| No frontmatter, plain-markdown H1 + description | `workspace-janitor`, `tuya-ac` | ⚠ Partial — scanner's `extractDescription` grabs first paragraph from `# workspace-janitor\n\nOrganizes loose files…` which is **the H1 itself**, not the tagline. Fix: extend `extractDescription` to skip leading `#` headings. |
 
-**Scale check:** `.learnings/` dirs are 16–24KB each (verified via `du -sh`). Whole workspaces are a few hundred MB max. `fs.cp` handles this in seconds; streaming isn't needed.
+**Recommended stack additions:** **None.** Extend `src/skills/scanner.ts:extractDescription` (10-line change) to skip leading H1/H2 lines. The scanner already handles every other case.
 
-**Symlink pitfall to document:** `workspace-general/finmentum/instagram-env/lib64` is a Python venv self-reference symlink. The `filter` function must skip these or the copy will succeed but ClawCode's chokidar watcher may choke on recursive symlink traversal later. This is a PITFALL.md entry, not a library choice.
+**Do NOT add:**
+- ❌ `gray-matter` (4.0.3) — 20KB of dep for what 8 lines of regex already does. The scanner's `^---\n([\s\S]*?)\n---` pattern is equivalent for our fixed-shape frontmatter.
+- ❌ `yaml-front-matter` — unmaintained (last release 2018).
+- ❌ `js-yaml` (4.1.1) — we already have `yaml@2.8.3`; don't add a second YAML parser. Frontmatter fields used (`name`, `description`, `version`, `metadata`, `license`) are all simple scalars where regex wins.
 
-### 4. Does better-sqlite3 + sqlite-vec support the source schema?
+**Migration utility shape (pseudocode, to live in `src/cli/migrate-skills.ts`):**
+```typescript
+import { scanSkillsDirectory } from "../skills/scanner.js";
+import { installWorkspaceSkills } from "../skills/installer.js";
 
-**YES — verified by live spike.** Source DBs use plain TEXT columns for embeddings (JSON arrays), no `vec0` virtual tables, no extensions required to read them. The destination needs `sqlite-vec` loaded to write `vec_memories`, which is already how `MemoryStore` works.
-
-Live verification run on `fin-acquisition.sqlite` (597 chunks):
-
-```js
-const db = new Database(":memory:");
-sqliteVec.load(db);                                      // load ext on destination-shaped handle
-db.exec("ATTACH DATABASE '…/fin-acquisition.sqlite' AS src");
-db.prepare("SELECT COUNT(*) FROM src.chunks").get();     // → { n: 597 } ✅
-db.prepare("SELECT id, path, length(embedding), model FROM src.chunks LIMIT 1").get();
-// → { id: "fea2ef…", path: "memory/graph/entities/alpha_vantage.md",
-//     "length(embedding)": 66268, model: "gemini-embedding-001" } ✅
+// 1. Scan ~/.openclaw/skills/ with existing scanner
+// 2. Filter out: .retired suffix, `test` skill, `openclaw-config` (stale)
+// 3. For each candidate, cp -r (preserving scripts/, references/, assets/) into
+//    <clawcode>/skills/<name>/  then run installWorkspaceSkills.
+// 4. Write migration report to .planning/milestones/v2.2-skills-migration.md.
 ```
 
-So: read source via ATTACH, ignore source `embedding` TEXT column (can't reuse — see Q1), re-embed `text` with the existing `getEmbedder()` singleton, insert into destination `memories` + `vec_memories` in one transaction per agent.
+Use `node:fs/promises` `cp({recursive: true})` (stable since Node 16.7) for tree copy — no `fs-extra` needed.
 
-### 5. Is there an ATTACH DATABASE single-transaction pattern?
-
-**YES — and it's the recommended shape.** Because:
-
-- `better-sqlite3` supports `db.exec("ATTACH DATABASE '…/source.sqlite' AS src")` — verified.
-- Since source and target live on the same filesystem, ATTACH is O(open fd) with zero copy.
-- Wrapping the per-agent translation in `db.transaction(() => { ... })()` gives atomicity: either the full agent migration commits or nothing does.
-- Don't attempt a single mega-transaction across all 15 agents — keep transactions per-agent so one agent's failure doesn't block the rest, and so dry-run vs apply has clean per-agent boundaries.
-- `PRAGMA foreign_keys = ON` isn't needed here; destination `vec_memories` is a virtual table and has no FK relationship to `memories` at the schema level — application code must delete from both (already handled in `MemoryStore.delete`).
-
-**Pseudocode shape (for planner):**
-```ts
-const target = new Database(targetPath);
-sqliteVec.load(target);
-target.exec(`ATTACH DATABASE '${sourcePath}' AS src`);
-
-const migrate = target.transaction((agentId: string) => {
-  const rows = target.prepare(`
-    SELECT c.id, c.path, c.text, c.start_line, c.end_line, c.updated_at,
-           f.mtime, f.source AS file_source
-    FROM src.chunks c JOIN src.files f ON c.path = f.path
-  `).all();
-  for (const r of rows) {
-    const vec = embedder.embedSync(r.text);  // 384-dim Float32Array
-    insertMemory.run(mapMemory(r));
-    insertVec.run(r.id, Buffer.from(vec.buffer));
-  }
-});
-migrate(agentId);
-target.exec("DETACH DATABASE src");
-```
+**Assets to migrate alongside SKILL.md:** `scripts/`, `references/`, `assets/`, `hooks/`, `.learnings/`. Skip `.git/` (self-improving-agent has a nested repo — would confuse clawcode's git boundary) and `_meta.json` (OpenClaw-specific, ignored by CC skill loader).
 
 ---
 
-## Installation
+### 2. Extended-Thinking Effort Mapping (`reasoning_effort` → thinking tokens)
 
-```bash
-# NONE. All required packages are already in package.json.
-# Migration CLI is additive TypeScript code under src/migration/ + src/cli/commands/migrate-openclaw.ts.
+**Decision:** **Zero new deps.** The Claude Agent SDK on-box already exposes the full API surface. The existing `handle.setEffort()` stub (src/manager/persistent-session-handle.ts:599-602) literally leaves a `// Future: q.setMaxThinkingTokens() wiring` TODO comment — that's the gap to close.
+
+**Verified SDK surface (`sdk.d.ts` @ 0.2.97):**
+
+| API | Signature | Use |
+|-----|-----------|-----|
+| `query.setMaxThinkingTokens(n ⎮ null)` | `(max: number ⎮ null) => Promise<void>` | **Runtime control** — matches openclaw-claude-bridge's `env.MAX_THINKING_TOKENS` behavior. |
+| `thinking: ThinkingConfig` (Options) | `{type:'adaptive'} ⎮ {type:'enabled', budgetTokens: N} ⎮ {type:'disabled'}` | **Session-start** option. `adaptive` is Opus 4.6+. |
+| `effort: EffortLevel` (Options) | `'low' ⎮ 'medium' ⎮ 'high' ⎮ 'max'` | Session-start option. `'max'` is Opus 4.6 only per SDK docstring (sdk.d.ts:1178). |
+| `ModelInfo.supportsEffort: boolean` | — | Gate `effort` option by model capability. |
+| `ModelInfo.supportedEffortLevels` | `('low'⎮'medium'⎮'high'⎮'max')[]` | Model-specific allowed levels. |
+
+**Port of `openclaw-claude-bridge/src/claude.js` `mapEffort` (lines 47-58):**
+
+```typescript
+// OC input:    'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+// CC effort:   'low' | 'medium' | 'high' | 'max'
+const EFFORT_MAP: Record<string, EffortLevel> = {
+  minimal: 'low',
+  low:     'medium',
+  medium:  'high',
+  high:    'max',
+  xhigh:   'max',
+};
+
+// Additionally, OC behavior (claude.js:116-118): when no reasoning_effort set,
+// env.MAX_THINKING_TOKENS = '0' (thinking OFF). Translate to SDK:
+//   thinking: { type: 'disabled' }   at session start,  OR
+//   q.setMaxThinkingTokens(0)        at runtime.
 ```
+
+**Preferred wiring plan (no new deps):**
+
+1. **Session start** — In `src/manager/session-config.ts` (or wherever `buildSessionConfig` resolves options), map the agent-config `effort` field → SDK `effort:` and `thinking:`.
+2. **Runtime override** — Rewire `createPersistentSessionHandle.setEffort` (persistent-session-handle.ts:599) to call the captured `query.setMaxThinkingTokens(effortToTokens(level))`. The Query reference is already held by the handle (it's what powers `.interrupt()`).
+3. **Bonus** — Expose `effort` in agent config Zod schema (it's not in `clawcode.yaml` today; the ephemeral `handle.setEffort` is the only surface). Make it optional; default `'medium'`.
+
+**Token budgets** (matches SDK `ThinkingEnabled.budgetTokens` semantics; numbers picked to mirror OC's behavior where `xhigh` was "max"):
+
+```typescript
+const EFFORT_TO_TOKENS: Record<EffortLevel, number> = {
+  low:    1024,   // fast, minimal
+  medium: 4096,   // default in OC bridge ("medium" → "high")
+  high:   16384,
+  max:    32768,  // Opus-4.6-only; falls back gracefully on non-Opus
+};
+```
+
+**Version pin guidance:** Bump `@anthropic-ai/claude-agent-sdk` from `^0.2.97` → `^0.2.116` (current latest) **only if** v2.2 features require post-`0.2.97` fixes. The `thinking`, `effort`, and `setMaxThinkingTokens` APIs all exist at `0.2.97` — no bump needed for this feature. Do not move to a caret that crosses a minor (SDK is pre-1.0, treat `0.3.x` as a breaking upgrade).
+
+**Do NOT add:**
+- ❌ Any wrapper library (`@anthropic-ai/sdk` with raw thinking blocks) — the Agent SDK is the single orchestration layer, per existing Key Decisions in PROJECT.md.
+- ❌ Environment-variable shim (`process.env.MAX_THINKING_TOKENS`) — that's an OC-bridge pattern for when you're spawning `claude` as a subprocess. We're in-process via SDK; set the knob directly.
+
+---
+
+### 3. Dual Discord Model Picker
+
+**Decision:** **Zero new deps.** Both halves use primitives already in `discord.js@14.26.2` and Node-native fs.
+
+**Part A: Keep OpenClaw's picker alive, source models from bound agent**
+
+OpenClaw's picker reads `~/.openclaw/discord/model-picker-preferences.json` — verified shape:
+```json
+{ "version": 1, "entries": { "discord:default:guild:<guild>:user:<user>": { "recent": [...], "updatedAt": "..." } } }
+```
+
+**Integration:** No code change *inside* the existing OC picker (it lives in OpenClaw, not this repo). The parity work is read-side — produce the **model list** the picker consumes from `clawcode.yaml`. The agent's channel → agent name → allowed-models resolution already exists in `src/discord/router.ts` (`getAgentForChannel`). Add a thin resolver `getAllowedModelsForAgent(agentName)` that reads `agent.allowedModels` (new optional field in agent config; defaults to `[agent.model]`).
+
+**Data flow:** OC picker → reads clawcode-exported file (e.g., `~/.clawcode/picker/<channelId>.json`) → user picks → writes back to `model-picker-preferences.json` → clawcode daemon's chokidar watcher picks up the change → `SessionManager.setModel(agentName, pickedModel)` via SDK `query.setModel()` (sdk.d.ts:1711).
+
+**Part B: Native `/clawcode-model` (already exists — needs upgrade)**
+
+The command is already registered in `src/discord/slash-types.ts:102-114` but currently routes through `claudeCommand: "Set my model to {model}"`, i.e., asks the agent to change its own model via natural language. That's the "indirect claudeCommand routing" tech debt called out in PROJECT.md ("Known tech debt").
+
+**Upgrade plan:**
+1. Add `control: true` + `ipcMethod: 'set-model'` on the existing `clawcode-model` entry (parallels how `clawcode-effort` already bypasses agent routing at slash-commands.ts:263-284).
+2. Add a daemon IPC handler that calls `sessionHandle.query.setModel(model)` directly.
+3. For UX sugar, convert the `model` option to **autocomplete**-driven using `discord.js` native autocomplete (`ApplicationCommandOptionType.String` + `autocomplete: true`). Handler resolves per-channel → agent → `allowedModels`.
+
+**Verified discord.js primitives in use on-box:**
+- `StringSelectMenuBuilder` (typings/index.d.ts:874) — for an inline picker if we ever want an ephemeral button-triggered UI.
+- `ApplicationCommandOptionType` (typings/index.d.ts:105) — already used via the numeric type `3` in slash-types.ts.
+- Autocomplete interactions — `interaction.isAutocomplete()` + `interaction.respond([{name, value}])` — first-class in 14.x.
+
+**Cost of add:** ~80 LOC split across `src/discord/slash-commands.ts` (new `handleAutocomplete` branch), `src/manager/session-manager.ts` (new `setModelForAgent`), IPC wiring in `src/manager/daemon.ts`. No deps.
+
+**Config schema addition (Zod, in `src/shared/types.ts`):**
+```typescript
+allowedModels: z.array(z.string()).optional()  // defaults to [model]
+```
+
+**Do NOT add:**
+- ❌ `@discordjs/builders` as a separate dep — it's re-exported from `discord.js@14` already.
+- ❌ Any slash-command decorator library (e.g., `discordx`, `@sapphire/framework`) — our command registry is a 200-line file and works fine.
+
+---
+
+### 4. Native Claude Code Slash Commands in Discord
+
+**Decision:** **Zero new deps.** This is the most complex of the four but the SDK already exposes everything needed.
+
+**Critical answer to the downstream-consumer question:**
+
+> **Does `@anthropic-ai/claude-agent-sdk`'s `query()` method accept slash commands inline? Is there an API for executing them programmatically?**
+
+**Answer: YES — two mechanisms, use both.**
+
+1. **For content-style commands** (e.g., `/compact`, `/clear`, `/init`, `/review`, `/security-review`, `/todos`, `/memory`, `/agents`, `/mcp`, `/cost`) — **dispatch the raw string through the normal user-message input channel**. Confirmed by the SDK type `SDKLocalCommandOutputMessage` (sdk.d.ts:2475): *"Output from a local slash command (e.g. /voice, /cost). Displayed as assistant-style text in the transcript."* The SDK processes commands client-side and emits a `local_command_output` SDKMessage. The Options docstring at sdk.d.ts:69 even confirms this: *"Auto-submitted as the first user turn when this agent is the main thread agent. **Slash commands are processed.** Prepended to any user-provided prompt."* So sending `"/compact"` through `handle.send("/compact")` triggers the SDK's built-in compact handler.
+
+2. **For control-plane commands** (e.g., `/model`, `/permissions`, native thinking/effort) — **use dedicated Query control methods** — they're faster, don't consume a turn, and return structured results:
+
+| CC slash command | SDK method | Notes |
+|------------------|------------|-------|
+| `/model <name>` | `query.setModel(name?)` (sdk.d.ts:1711) | Runtime model switch |
+| `/permissions <mode>` | `query.setPermissionMode(mode)` (sdk.d.ts:1704) | `'acceptEdits' ⎮ 'plan' ⎮ 'bypassPermissions' ⎮ 'default'` |
+| (effort/thinking) | `query.setMaxThinkingTokens(n)` (sdk.d.ts:1728) | Already covered in Feature 2 |
+| **discover available** | `query.supportedCommands(): Promise<SlashCommand[]>` (sdk.d.ts:1754) | **This is the key primitive for auto-registration.** |
+| **enumerate models** | `query.supportedModels(): Promise<ModelInfo[]>` | Drives autocomplete for `/model` |
+| **enumerate agents** | `query.supportedAgents(): Promise<AgentInfo[]>` | For `/agents` UX |
+
+**SDK `SlashCommand` type (verified at sdk.d.ts:4239-4252):**
+```typescript
+export declare type SlashCommand = {
+  name: string;         // skill/command name (no leading slash)
+  description: string;
+  argumentHint: string; // e.g., "<file>"
+};
+```
+
+**Discord guild slash command limit:** 100 per application per guild (confirmed current Discord API limit; has been stable since 2021). ClawCode's existing inventory is **~13 commands** (slash-types.ts: 8 default + 5 control + recent `interrupt`/`steer` additions). Native CC commands from `claude` CLI ≈ 20-25 (the set listed in the question plus `/bug`, `/doctor`, `/ide`, `/logout`, `/pr-comments`, `/status`, `/vim`, plus plugin-registered ones). Worst case after v2.2: **~40 commands per guild**, well under 100.
+
+**Command-inventory strategy:**
+
+There's a naming collision risk: `/clawcode-memory` (clawcode) vs `/memory` (CC). Resolve at registration time by **prefixing** CC-native ones with `cc-` (e.g., `/cc-compact`, `/cc-clear`, `/cc-model`) — keeps clawcode's `/clawcode-*` namespace for daemon-direct operations and CC's for session-direct operations. Alternative: drop the `clawcode-` prefix on daemon commands and namespace CC ones with `cc-`. Call the shot during phase design; either way, no library needed — it's just the string concatenated at registration.
+
+**Registration flow:**
+```
+Daemon boot → for each agent:
+  await handle.query.supportedCommands()   // SDK call per session
+  merge with clawcode-native + control commands
+  dedup + prefix CC-native → register via discord.js REST.put
+```
+
+**Dispatch flow:**
+```
+Discord /cc-compact → SlashCommandHandler.handleInteraction
+  → router.getAgentForChannel → agentName
+  → sessionManager.streamFromAgent(agentName, "/compact", onChunk)
+  → ProgressiveMessageEditor streams the SDKLocalCommandOutputMessage back
+```
+
+**For `/model`, `/permissions`, `/cost`** — skip the agent turn; dispatch via `handle.query.setModel(...)` / `setPermissionMode(...)` / read from the existing `UsageTracker`. Mirrors `clawcode-effort`'s direct path at slash-commands.ts:263-284.
+
+**Do NOT add:**
+- ❌ A subprocess shim that spawns `claude --print "/compact"` — we're in-process via the Agent SDK. The OC bridge pattern (claude.js spawn-based) does not apply.
+- ❌ `@discordjs/rest` — already transitively present under `discord.js`.
+- ❌ Any "slash-command parser" library — native string matching + Discord's own option system covers everything.
+
+---
+
+## Version Compatibility Matrix
+
+| Package A | Package B | Verified? | Notes |
+|-----------|-----------|-----------|-------|
+| `@anthropic-ai/claude-agent-sdk@0.2.97` | Node 22 LTS | ✅ sdk.d.ts declares `engines.node >=18` | Stay on ^0.2.97 unless SDK bump needed — pre-1.0 minor-version breakage risk |
+| `@anthropic-ai/claude-agent-sdk@0.2.97` | `discord.js@14.26.2` | ✅ Orthogonal runtimes | SDK is ESM-only; discord.js supports both — project is `"type": "module"`, no conflict |
+| `discord.js@14.26.2` | Node 22 LTS | ✅ Official support matrix | v15 still pre-release; stay on 14 |
+| `yaml@2.8.3` | existing skills scanner | ✅ Already used | Regex path is zero-dep and handles every observed SKILL.md shape; only reach for `yaml.parse` if we adopt multi-line `description:` blocks |
+| `zod@4.3.6` | new `allowedModels` field | ✅ | `z.array(z.string()).optional()` — trivial |
 
 ---
 
 ## Alternatives Considered
 
-| Recommended | Alternative | When to Use Alternative | Verdict |
-|---|---|---|---|
-| `fs.promises.cp` (Node 22 built-in) | `fs-extra@11.3.4` | If targeting Node ≤18 where `fs.cp` lacked symlink options | **Reject** — Node 22 is locked. |
-| `fs.promises.cp` | `cpy@11.3.4` | Glob-based, streaming copy for millions of files | **Reject** — our scale is MB, not GB. |
-| `yaml@2.x` (eemeli) already in deps | `js-yaml@4.1.1` | If another part of ClawCode required it | **Reject** — `yaml` is already wired and preserves comments; `js-yaml` doesn't. No reason to fork YAML libs. |
-| hand-rolled plan renderer | `jsondiffpatch@0.7.3` | If ops asks for colored/HTML structural diff | **Defer** — add only if reviewers demand it. |
-| hand-rolled plan renderer | `diff@9.0.0` | If we want unified-diff output of the YAML merge | **Defer** — same reason. |
-| per-agent transaction | SQLite online backup API (`sqlite3_backup_init`) | If we wanted bit-exact mirroring of source DB into target | **Reject** — schemas differ, can't use backup API; ATTACH + SELECT is the correct pattern. |
-| local re-embedding (existing singleton) | Gemini API re-embedding | If we wanted to preserve the original 3072-dim vectors in a separate sidecar table | **Reject** — ClawCode has no 3072-dim consumer. Pointless fidelity. |
-| stream chunks one at a time | load all chunks in memory per agent | — | **Use the loaded approach.** Max agent has 878 chunks at ~1KB text each ≈ 1MB. Fits easily. |
-| `commander@14` (existing) | `yargs@18`, `citty`, `clipanion` | If we wanted subcommand autocompletion or nicer help formatting | **Reject** — CLI is already built on `commander`. |
-| `pino@9` (existing) | `winston` | If other log consumers expected winston | **Reject** — project standard. |
-| Node 22 `fs.cp` `filter` option | `globby@14` / `picomatch@4` to enumerate first | If the filter logic was complex enough to need glob patterns | **Reject** — three substring excludes is enough for our case. If it grows, revisit. |
+| Recommended | Alternative | When to Use Alternative |
+|-------------|-------------|-------------------------|
+| Regex frontmatter parser (existing `src/skills/scanner.ts`) | `gray-matter@4.0.3` | Only if a future SKILL.md needs nested YAML fields (arrays, objects in `description`). Not the case today. |
+| SDK `query.setMaxThinkingTokens(n)` | Subprocess `env.MAX_THINKING_TOKENS` (OC bridge pattern) | Only if we abandon the SDK and go back to raw CLI spawn — contradicts existing Key Decisions. |
+| `handle.send("/compact")` for content commands | Direct SDK internal hook | No reason; SDK already processes slash commands in the prompt path (`SDKLocalCommandOutputMessage`). |
+| `discord.js` native autocomplete for `/cc-model` | Ephemeral `StringSelectMenuBuilder` button UI | Use the select menu if we want a click-to-choose UX outside the `/cc-model` command path (e.g., a `/cc-switch-model` flyout). Autocomplete is simpler and works inline. |
+| Per-guild command registration (existing pattern) | Global commands | Global commands cache for up to 1 hour — slow for fleet restarts during dev. Keep per-guild. |
 
 ---
 
 ## What NOT to Use
 
 | Avoid | Why | Use Instead |
-|---|---|---|
-| `fs-extra` | Node 22's built-in `fs.cp` has every option we need (symlinks, timestamps, filter). Adding fs-extra re-introduces a redundant `graceful-fs` dependency. | `fs.promises.cp` |
-| `sqlite3` (node-sqlite3, async) | Async callback API clashes with ClawCode's sync `better-sqlite3` patterns. Would need a second driver for no reason. | `better-sqlite3` (already loaded) |
-| SQLite online backup API | Designed for whole-DB bit-mirror, not schema translation. Source and target schemas differ. | `ATTACH DATABASE` + transaction |
-| Re-embedding via Gemini API | Paid, network-dependent, and ClawCode has no 3072-dim consumer. Migration tool would need API keys that 15 agents don't share. | Local MiniLM via `@huggingface/transformers` singleton |
-| Preserving OpenClaw chunk IDs as-is into `memories.id` | Source IDs are SHA256 hex (64 chars) — technically fine, but collide across agents if we ever merge memory stores later. | Namespaced ID: `openclaw-migrate:<agent>:<sha>` |
-| Trying to replay `~/.openclaw/agents/<name>/sessions/*.jsonl` | Hundreds of files per agent, undocumented format drift, high risk. Explicitly OUT OF SCOPE per milestone. | Skip entirely; rely on workspace MEMORY.md + chunks |
-| Writing a new YAML serializer | `yaml@2.8.3` (eemeli) already preserves comments via its Document AST | Use `YAML.parseDocument` / `.toString()` from existing `yaml` dep |
-| `libsql` / Turso client | Overkill — they're for distributed SQLite. Not needed for a local one-shot migration. | `better-sqlite3` |
-| `prisma-migrate` or any ORM migration tool | ORM migrations target schema evolution, not data translation. Different problem. | Hand-written translator |
-| `chokidar` watching during migration | The migrator is one-shot, not a daemon. Adding watching expands the surface area. | Run migrator, then restart daemon |
+|-------|-----|-------------|
+| `gray-matter` | 20KB transitive-dep tax for 8 lines of existing regex | `src/skills/scanner.ts` as-is (extend H1-skip for workspace-janitor-style files) |
+| `js-yaml` | Would be a second YAML parser alongside `yaml@2.8.3` | `yaml@2.8.3` if multi-line YAML is ever needed |
+| `chokidar@4` duplicate install | Already declared at `^5.0.0` in package.json | Existing chokidar for model-picker-preferences.json watching |
+| Spawning `claude --print "/compact"` as subprocess | Re-introduces the OC-bridge architecture we replaced; loses streaming, session lineage | `handle.send("/compact")` through the existing SDK `Query` |
+| Global slash-command registration | 1-hour propagation, noisy for 15-agent fleet across multiple guilds | Per-guild bulk `PUT` via REST (already the pattern in slash-commands.ts:162) |
+| New env-var `MAX_THINKING_TOKENS` shim | OC pattern tailored to CLI subprocess; irrelevant in-process | `query.setMaxThinkingTokens(n)` + `thinking: ThinkingConfig` |
+| Adding `@anthropic-ai/sdk` for raw thinking blocks | Duplicates the Agent SDK's responsibility; fights the Key Decision "Claude Agent SDK IS the orchestration layer" | Agent SDK only |
+| `execa@9` | Not actually installed (CLAUDE.md is misleading here) and not needed for v2.2 | `node:child_process` if ever needed |
 
 ---
 
-## Integration Risks
+## Integration Map (Existing `src/` Tree)
 
-### ESM / Node 22 compatibility — NONE NEW
-All proposed usage is of already-loaded deps. No ESM/CJS interop concerns beyond what the project already handles.
-
-### `better-sqlite3` sync model — OK
-ATTACH + SELECT + INSERT is all synchronous. The only async boundary is the embedder (`@huggingface/transformers` returns a Promise). Pattern: batch-read chunks synchronously, await embeddings, then open a `db.transaction()` to bulk-insert. Don't hold a transaction open across an `await` — well-known footgun.
-
-### Read-only source safety
-Open source DBs in read-only mode: `new Database(sourcePath, { readonly: true, fileMustExist: true })` — or open the destination and `ATTACH` source read-only via `?mode=ro`. **Recommended:** always ATTACH read-only so an OpenClaw daemon (if still running) and the migrator can't race. Verified syntax: `ATTACH DATABASE 'file:/.../fin-acquisition.sqlite?mode=ro' AS src` requires opening main DB with URI support (`new Database(target, { fileMustExist: false })` + `PRAGMA journal_mode=WAL`).
-
-### OpenClaw daemon must be stopped during migration
-Even read-only ATTACH, if OpenClaw has WAL pending writes, can produce inconsistent reads. **PITFALL:** migration runbook must `systemctl stop openclaw` (or equivalent) before `clawcode migrate openclaw --apply`. Add a pre-flight check that scans for OpenClaw process PIDs and refuses to proceed if found.
-
-### Embedding singleton warmup amortization
-First embed call is ~500ms (model load); subsequent calls ~50ms. For 2,617 chunks, amortized cost is dominated by per-chunk time. Do NOT spin up a fresh embedder per agent — load once, reuse across all 7 populated agents. The existing `getEmbedder()` singleton in `src/memory/embedding.ts` already handles this.
-
-### `vec_memories` float32 encoding
-ClawCode's `MemoryStore.insert` writes `Buffer.from(new Float32Array(embedding).buffer)` into `vec_memories.embedding`. The migrator MUST use the same byte encoding — there is no JSON-to-vec path. Reusing `MemoryStore.insert(input, embedding)` directly (instead of re-implementing INSERT statements) is strongly preferred — it keeps the serialization contract in one place.
-
-**Recommended:** migrator uses the existing `MemoryStore` public API rather than raw SQL. Not a new dep, just a code-organization note for planner.
+| v2.2 Feature | Existing Modules Touched | New Files |
+|--------------|--------------------------|-----------|
+| 1. Skills migration | `src/skills/scanner.ts` (extend `extractDescription`), `src/skills/installer.ts` (already copies SKILL.md — extend to copy ancillary dirs) | `src/cli/migrate-skills.ts` (one-shot), `src/skills/migrate.ts` (logic, testable) |
+| 2. Effort mapping | `src/manager/persistent-session-handle.ts:599-606` (wire `q.setMaxThinkingTokens`), `src/manager/session-adapter.ts:231-237` (mirror), `src/manager/session-config.ts` (thread `effort` from config into SDK `Options.effort` + `thinking:`), `src/shared/types.ts` (add `effort` + `thinkingBudget` to agent Zod schema) | `src/manager/effort-mapping.ts` (tiny — `EFFORT_MAP` + `EFFORT_TO_TOKENS` + two pure helpers, unit-testable) |
+| 3. Dual model picker | `src/discord/slash-types.ts` (promote `clawcode-model` to control, add autocomplete), `src/discord/slash-commands.ts` (new `handleAutocomplete` branch), `src/manager/session-manager.ts` (new `setModelForAgent` → `handle.query.setModel`), `src/manager/daemon.ts` (IPC handler), `src/shared/types.ts` (`allowedModels`) | `src/discord/picker-bridge.ts` (chokidar-watched OC prefs file + emit IPC `setModelForAgent`) |
+| 4. Native CC slash commands | `src/discord/slash-types.ts` + `src/discord/slash-commands.ts` (auto-register from `query.supportedCommands()`), `src/manager/session-manager.ts` (new `getSupportedCommands(agent)` passthrough), `src/manager/persistent-session-handle.ts` (expose `query.supportedCommands/Models/Agents` via handle) | `src/discord/cc-commands.ts` (pure registry builder — take `SlashCommand[]` from SDK + prefix with `cc-` + convert to `SlashCommandDef`) |
 
 ---
 
-## Version Compatibility
+## Key Risks + Mitigations
 
-| Package A | Compatible With | Notes |
-|---|---|---|
-| `better-sqlite3@12.8.0` | `sqlite-vec@0.1.9` loaded on ATTACH-capable handle | Verified via live spike against real OpenClaw DB |
-| `better-sqlite3@12.8.0` | `ATTACH DATABASE` on readonly URIs | Standard SQLite feature; no version-specific issue |
-| `@huggingface/transformers@4.0.1` | Same singleton, cross-agent reuse | Warm: ~50ms/chunk verified in v1.7 latency benchmarks |
-| `yaml@2.8.3` (eemeli) | `Document` AST round-trip for YAML edits that preserve comments | Required to avoid nuking existing `clawcode.yaml` comments |
-| Node `fs.promises.cp` | `verbatimSymlinks: true` + `preserveTimestamps: true` + `filter` | Node ≥20; confirmed in Node 22 docs |
-| `commander@14.0.3` | Nested subcommands (`migrate openclaw`) | Already used in `src/cli/index.ts` |
-| `zod@4.3.6` | Schema for OpenClaw agent entry | Already project standard |
+1. **Claude Agent SDK pre-1.0 churn.** Versions `0.2.97` → `0.2.116` in the last milestone alone. The runtime-control surface used here (`setModel`, `setPermissionMode`, `setMaxThinkingTokens`, `supportedCommands`) is core and unlikely to break, but `ThinkingConfig.ThinkingAdaptive` is new (Opus 4.6+) and could shift. **Mitigation:** Pin exact version in package.json (`0.2.97` not `^0.2.97`) and run `npm view @anthropic-ai/claude-agent-sdk` in CI weekly.
+
+2. **Discord 100-command-per-guild cap.** After v2.2 we're at ~40/guild. Safe for now; headroom for ~60 more (plugin/skill-generated CC commands count). **Mitigation:** emit a daemon startup warning at 80+ and fail registration at 100.
+
+3. **SKILL.md format drift.** `self-improving-agent` has `metadata:` and `frontend-design` has `license:` — neither breaks the scanner today but any agent could write multi-line YAML descriptions tomorrow. **Mitigation:** keep a skill-format CI test using the current OC skill corpus as golden fixtures.
+
+4. **OC picker preferences file race.** OC writes, ClawCode reads. On concurrent write during multi-agent model changes, chokidar could fire on a half-written file. **Mitigation:** guard `JSON.parse` + retry once after 50ms on parse failure (OC writes are atomic temp+rename, so the window is microseconds).
+
+---
+
+## Installation (no changes expected)
+
+```bash
+# No install commands needed for the v2.2 feature set.
+# If the skills-migration script is retained long-term as a dev tool, consider:
+# npm install -D gray-matter@4.0.3   # OPTIONAL, see "Alternatives Considered"
+```
 
 ---
 
 ## Sources
 
-- **Live inspection** — `sqlite3 ~/.openclaw/memory/*.sqlite ".schema"` + `SELECT * FROM meta` across 15 DBs (2026-04-20). Ground truth for embedding model, dims, format. HIGH confidence.
-- **Live spike** — Node script loading `sqlite-vec` into `better-sqlite3`, ATTACHing real OpenClaw source DB, reading 597 chunks. Confirms read path end-to-end. HIGH confidence.
-- **ClawCode source** — `src/memory/store.ts` (insert pattern, vec0 schema), `src/config/loader.ts` (`yaml` package usage), `src/cli/index.ts` (`commander` wiring), `src/memory/embedding.ts` (embedder singleton). HIGH confidence.
-- [Node 22 `fs.promises.cp` docs](https://nodejs.org/docs/latest-v22.x/api/fs.html#fspromisescpsrc-dest-options) — verified `verbatimSymlinks`, `preserveTimestamps`, `filter` options exist and behave as expected. HIGH confidence.
-- [sqlite-vec JS docs](https://alexgarcia.xyz/sqlite-vec/js.html) — ATTACH + extension loading pattern. MEDIUM confidence (docs are slim; live spike upgraded to HIGH).
-- [better-sqlite3 API](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md) — sync txn, ATTACH, prepared statements. HIGH confidence.
-- `npm view` registry (2026-04-20) — version numbers verified current.
-- `package.json` of this workspace — authoritative for what's already locked in.
+- `@anthropic-ai/claude-agent-sdk@0.2.97` — `/home/jjagpal/.openclaw/workspace-coding/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` (on-disk source of truth; HIGH confidence)
+  - `SlashCommand` type at line 4239
+  - `Query.supportedCommands()` at line 1754
+  - `Query.setModel()` at line 1711
+  - `Query.setPermissionMode()` at line 1704
+  - `Query.setMaxThinkingTokens()` at line 1728
+  - `ThinkingConfig`/`ThinkingAdaptive`/`ThinkingEnabled`/`ThinkingDisabled` at lines 4411-4427
+  - `EffortLevel` at line 435
+  - `SDKLocalCommandOutputMessage` at line 2475
+  - Options.systemPrompt docstring "Slash commands are processed" at line 69
+- `discord.js@14.26.2` — `/home/jjagpal/.openclaw/workspace-coding/node_modules/discord.js/typings/index.d.ts` (HIGH confidence; `StringSelectMenuBuilder`, `ApplicationCommandOptionType`)
+- npm registry versions verified 2026-04-21:
+  - `@anthropic-ai/claude-agent-sdk@0.2.116` (latest)
+  - `discord.js@14.26.3` (latest 14.x; pre-release 15.x not recommended)
+  - `gray-matter@4.0.3` (latest; last publish ~2023)
+  - `js-yaml@4.1.1` (latest)
+- Existing codebase evidence:
+  - `src/manager/persistent-session-handle.ts:599-602` — the "Future: q.setMaxThinkingTokens() wiring" TODO comment
+  - `src/discord/slash-commands.ts:263-284` — the `clawcode-effort` direct-path template for `/cc-*` commands
+  - `src/skills/scanner.ts:10-43` — frontmatter regex already in place
+  - `/home/jjagpal/openclaw-claude-bridge/src/claude.js:47-58, 108-118` — `mapEffort` + `MAX_THINKING_TOKENS` env-var logic to port
+  - `/home/jjagpal/.openclaw/discord/model-picker-preferences.json` — shape verified
+  - `/home/jjagpal/.openclaw/skills/*/SKILL.md` — format inventory verified
 
 ---
 
-## Roadmap Implications (hand-off to planner)
-
-1. **No dep-add phase is needed.** Migration tool phases (config-mapper, workspace-copier, memory-translator, dry-run UI) all ship as pure TypeScript against the existing stack.
-
-2. **Memory-translator phase must budget re-embedding wall time** (~2–3 minutes for full corpus including warmup). This is CPU/memory time on the daemon host, not API cost. Phase should include a progress bar output (hand-rolled or add `cli-progress@3.12.0` if reviewers want polish — but not a blocker).
-
-3. **Workspace-copier phase needs a symlink-skip filter,** documented in PITFALLS. The `venv/lib64` self-symlink is a real trap.
-
-4. **Dry-run UI phase** should render plan tables in plain text. If anyone asks for colored JSON diff, evaluate `jsondiffpatch` then — not before.
-
-5. **Pre-flight check phase** (or included in config-mapper): detect running OpenClaw daemon, refuse apply if found, print the systemctl command to stop it.
-
-6. **Migration is forward-only:** re-running `migrate --apply` against already-migrated agents should be idempotent (UPSERT on `memories.id`, skip if vec already present) — this is implementation detail, not stack detail, but flag it to planner.
-
-7. **8 of 15 source agents have empty memory DBs** — the migrator should cleanly no-op on these rather than error. Log "no memory to migrate" and proceed to workspace + config.
-
----
-
-*Stack research for: OpenClaw → ClawCode migration tooling (v2.1)*
-*Researched: 2026-04-20*
+*Stack research for: ClawCode v2.2 OpenClaw Parity & Polish*
+*Researched: 2026-04-21*
+*Reviewed against on-disk SDK types and installed package.json — HIGH confidence for every recommendation*

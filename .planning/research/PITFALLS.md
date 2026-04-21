@@ -1,585 +1,719 @@
-# Pitfalls Research
+# Pitfalls Research — v2.2 OpenClaw Parity & Polish
 
-**Domain:** Multi-agent orchestration data migration (OpenClaw → ClawCode, 15 live agents, live coexistence)
-**Researched:** 2026-04-20
-**Confidence:** HIGH (source schemas + source code verified directly on-box; OpenClaw is running live under systemd)
+**Domain:** Adding four parity features to a shipped, production multi-agent orchestration system (15 agents, active Discord bindings, freshly-completed v2.1 migration).
+**Researched:** 2026-04-21
+**Confidence:** HIGH (all code paths verified in the live repo; SDK 0.2.97 API surface confirmed against `node_modules/.../sdk.d.ts`; SKILL.md drift confirmed by diffing real files in `~/.openclaw/skills/` vs `~/.clawcode/skills/`).
 
----
-
-## Context verified on-box (2026-04-20)
-
-These are facts, not assumptions. Every pitfall below is tied to one of these observations.
-
-| Fact | Source |
-|---|---|
-| OpenClaw memory uses **gemini-embedding-001, 3072-dim** vectors | `SELECT value FROM meta WHERE key='memory_index_meta_v1'` on `general.sqlite` returns `{"provider":"gemini","model":"gemini-embedding-001","vectorDims":3072}`. Every chunk row's `model` column is `gemini-embedding-001`. |
-| ClawCode memory uses **all-MiniLM-L6-v2, 384-dim** vectors | `vec_memories` is `vec0(memory_id TEXT PRIMARY KEY, embedding float[384] distance_metric=cosine)` in `.clawcode/agents/test-agent/memory/memories.db` |
-| OpenClaw schema is **file-RAG** (chunks point at file paths) | `chunks(path, start_line, end_line, hash, model, text, embedding)` + FTS5 on `text` |
-| ClawCode schema is **memory-object** (no file pointer) | `memories(id, content, source CHECK IN (conversation/manual/system/consolidation/episode), importance, tier, tags JSON)` |
-| Memory volumes are large enough to matter | general.sqlite=128MB (~thousands of chunks), fin-acquisition.sqlite=97MB, projects.sqlite=71MB, finmentum-content-creator=47MB, research=48MB |
-| Live OpenClaw daemon is running | `openclaw-gateway.service` active, pid 755761, ~1.3GB RSS |
-| OpenClaw Discord bot token is **plaintext in openclaw.json** | `channels.discord.token = "MTQ3MDE2MjYzMDY4NDcwNDg4MQ.GLLa1Z..."` (literal secret, not a reference) |
-| ClawCode Discord token is a **1Password ref** | `clawcode.yaml: discord.botToken = op://clawdbot/Clawdbot Discord Token/credential` |
-| **Different Discord bot tokens** = different bot identities | OpenClaw token prefix `MTQ3MDE2MjYzMDY4NDcwNDg4MQ` (bot ID 1470162630684704881) is not `op://clawdbot/Clawdbot Discord Token` |
-| All 5 finmentum agents share one workspace | `fin-acquisition, fin-research, fin-playground, fin-tax` all have `workspace: /home/jjagpal/.openclaw/workspace-finmentum`; `finmentum-content-creator` has its own |
-| Workspaces are git repos with uncommitted work | workspace-general has 30+ untracked paths including `.omc/`, `MEMORY.md`, `config/`, `data/`; `.git` is 416KB |
-| ClawCode has NO shared-workspace support today | `loader.ts:153` — `workspace: agent.workspace ?? join(expandHome(defaults.basePath), agent.name)`; schema assumes 1:1 agent↔workspace |
-| `agents.*.workspace` is NON-RELOADABLE | `config/types.ts:56-61` — adding 15 agents hot-reloads (agents.* is not in NON_RELOADABLE) **but** changing an existing agent's workspace does require restart |
-| ClawCode memory store has **no UNIQUE on content/hash** | `memories` PK is `id` only; re-running a migrator with regenerated IDs creates duplicate rows |
-| Agent provisioner **does** reject duplicate names | `agent-provisioner.ts:120` throws `agent '${name}' already exists` — but this only fires on the `provision_agent` IPC path, not on config hot-reload |
-| Webhook provisioner is idempotent-ish | `webhook-provisioner.ts:74` reuses existing bot-owned webhooks per channel |
-| ClawCode embeds **identity + soul inline in YAML** | `test-agent` in clawcode.yaml has `soul: \|` and `identity: \|` block scalars — OpenClaw keeps them as `SOUL.md` / `IDENTITY.md` files |
-| Old JSONL replay files exist but are sparse | workspace-general has `.omc/state/agent-replay-*.jsonl` (only 2, not 413) — the "413 files" must be in a different scope (probably the gateway's queue or per-session logs) |
+Each pitfall is specific to adding these features to THIS codebase. Generic "SDK usage" advice omitted. Where possible, warning signs are given as grep-able code patterns and prevention strategies include concrete code-level guards.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Embedding dimension mismatch silently corrupts `vec_memories`
+### Pitfall 1: `setEffort()` stores the level but never wires it to the SDK's `setMaxThinkingTokens()` — the config is a lie
 
 **What goes wrong:**
-You write a migrator that reads `chunks.embedding` from OpenClaw's sqlite and inserts it into ClawCode's `vec_memories`. The insert succeeds because sqlite-vec only enforces the column dimension at query time for some code paths, or you "helpfully" truncate to 384 and think it worked. Every subsequent KNN search returns garbage: either zero results (because sqlite-vec rejects mismatched vectors per-row once it tries to read them) or semantically meaningless nearest neighbors (because 384 truncated dims of a 3072-dim Gemini vector is noise). The agent can't find anything in its own memory on day one.
+`src/manager/persistent-session-handle.ts:599-602` currently does:
+```ts
+setEffort(level): void {
+  currentEffort = level;
+  // Future: q.setMaxThinkingTokens() wiring — out of scope per 73-RESEARCH §"Don't hand-roll".
+}
+```
+`setEffort` mutates a local variable that nothing else reads. `q.setMaxThinkingTokens(...)` is never called. `/clawcode-effort high` logs success, but the SDK query keeps using the default thinking budget. Every existing effort test passes because the tests only assert the stored value, not the behavior.
 
 **Why it happens:**
-OpenClaw uses `gemini-embedding-001` (3072 dims) and stores embeddings as TEXT (JSON-serialized floats). ClawCode uses `all-MiniLM-L6-v2` (384 dims) and stores in sqlite-vec's `float[384]`. These are **different vector spaces** — cosine similarity between them is not just scale-shifted, it's geometrically meaningless. You cannot slice, pad, or normalize your way across. The only correct path is **re-embed from source text** using ClawCode's local model. Developers skip this because "we already have embeddings, just copy them over" feels faster.
+Phase 73 deliberately deferred wiring (`"out of scope per 73-RESEARCH"`). The comment is right there. But a well-meaning v2.2 dev reads the slash-command handler, sees `setEffortForAgent` already routed, runs `/clawcode-effort max`, sees the happy-path reply, and concludes "already done."
 
 **How to avoid:**
-- **Migrator contract:** read `chunks.text` (not `chunks.embedding`) from OpenClaw, pass through ClawCode's `EmbeddingService.embed()` (singleton, per v1.7 warm-path), write into ClawCode schema. Throw loudly if any source chunk has `model != 'gemini-embedding-001'` so you notice schema drift.
-- **Hard assertion:** after write, run `SELECT vec_length(embedding) FROM vec_memories LIMIT 1` and assert `== 384`. Fail the phase if not.
-- **Parity test:** migrate one agent (personal is small — 5MB), then run 10 known-good semantic queries ("where are my strava tokens", "heygen avatar id") and assert top-1 hit is the same file that OpenClaw returned for the same query. No parity → do not proceed to the next agent.
-- **Do not preserve Gemini dimensions in ClawCode** — it would require a whole second vec0 table, a second embedder at query time, and splits the agent's memory across two index spaces. Not in scope.
+Phase 2 kick-off task: wire `q.setMaxThinkingTokens(tokenBudgetForEffort(level))` inside `setEffort`, where `tokenBudgetForEffort` is a pure function mapping `low|medium|high|max` → a token number (e.g., `low=0, medium=4000, high=16000, max=32000`). Back it with an integration test that asserts a turn executed after `setEffort("high")` carries `thinking.budgetTokens >= 16000` — spy the iterator, not the handle state. Also use the SDK's newer `thinking` option (`sdk.d.ts:1170`) where applicable, and note `setMaxThinkingTokens` is marked `@deprecated` (`sdk.d.ts:1713-1721`) — prefer passing `thinking: { type: 'enabled', budgetTokens: N }` on the per-turn query options if the 0.2.97 API supports mid-session override.
 
 **Warning signs:**
-- `memory_lookup` returns wildly different top-K for the migrated agent vs. what OpenClaw returned for the same query
-- `vec_length()` check fails (dimension != 384)
-- First-run heartbeat for a migrated agent logs "no relevant memories found" on queries that clearly have matches in `MEMORY.md`
+- `grep -n "q.setMaxThinkingTokens\|thinking:" src/manager/persistent-session-handle.ts` returns no hits after the phase is "done"
+- Effort CLI reports success, but Anthropic dashboard shows identical `cache_creation_input_tokens` and response latency across effort levels
+- No test file asserts thinking tokens actually change the outgoing query
 
-**Severity:** **CRITICAL / data-loss-equivalent.** The rows exist but are unfindable — "data loss with extra steps." Every agent's semantic continuity is broken.
-
-**Phase to address:** Dedicated memory-translation phase — must land before any agent is cut over. Do not merge with workspace copy phase.
+**Phase to address:** Phase 2 (Extended-thinking mapping) — MUST land with integration test spying on query options.
 
 ---
 
-### Pitfall 2: Re-running the migrator produces duplicate memories
+### Pitfall 2: `max` effort on Haiku silently falls back, breaking user expectations
 
 **What goes wrong:**
-You run `clawcode migrate openclaw --agent general --apply`. It works. You notice a bug, fix it, re-run. Now `memories.db` has **two rows for every memory**: different `id` (nanoid at write time), same `content`. Importance scoring, relevance decay, and dedup-on-save all fire on both copies. Agent starts returning the same memory twice in `memory_lookup`, or worse, tier-manager oscillates between them.
+`sdk.d.ts:1178` explicitly states `'max' — Maximum effort (Opus 4.6 only)`. The SDK also exposes `supportsEffort` and `availableEffortLevels` per model (`sdk.d.ts:892-896`). Of the 15 agents, the default model is `haiku` (per `defaultsSchema.model.default("haiku")`). `/clawcode-effort max` on a Haiku-bound agent is either silently downgraded by the SDK or throws — the UX tells the user "Effort set to **max**" either way.
 
 **Why it happens:**
-ClawCode's `memories` schema has `PRIMARY KEY(id)` only. There is **no UNIQUE on content**, no `origin_id` column, and the existing `dedup.ts` is a similarity-threshold dedup tuned for runtime writes (near-duplicates) not exact-match re-runs. The migrator generating a fresh nanoid per run means the dedup function never sees a match at id-level, and content-similarity dedup fires at 0.95+ cosine, which is probabilistic. Re-runs accidentally double-insert.
+The effort slash command in `slash-commands.ts:264-284` validates against a hardcoded `["low", "medium", "high", "max"]` list with no cross-check against the agent's bound model. The resolved model is known at that moment (agent config is already loaded), but the handler doesn't consult it.
 
 **How to avoid:**
-- Add an `origin_id TEXT UNIQUE` column (or index) to `memories` specifically for migration-sourced rows: `origin_id = "openclaw:{agent}:{chunks.id}"`. On re-insert, `INSERT OR IGNORE` / `ON CONFLICT(origin_id) DO UPDATE SET updated_at=?`. Native migrations already use `source` enum — add `origin_id` alongside.
-- Migrator must be **explicitly idempotent** — `--apply` should log "upserted X / skipped Y (already imported)" per agent, and a second run should show `upserted 0`.
-- `--force-reimport` flag for when you actually want to blow it away — deletes all rows where `origin_id LIKE 'openclaw:%'` first.
+Before calling `setEffortForAgent`, read `agentConfig.model` (or effective resolved model) and reject `max` on non-Opus. Even better, call the SDK's model capability API at boot and cache `agent → Set<EffortLevel>`, then validate from that. Emit a user-visible error: `"max effort is only supported on Opus. Current model: haiku. Use /clawcode-model opus first, or pick high."`
 
 **Warning signs:**
-- Migrated memory count after re-run > memory count after first run
-- `SELECT content, COUNT(*) FROM memories GROUP BY content HAVING COUNT(*) > 1` returns rows
-- `memory_lookup` returns the same chunk twice in its top-K
+- `slash-commands.ts:266` `validLevels = ["low", "medium", "high", "max"]` is a hardcoded literal
+- No lookup of `resolvedAgents.find(a => a.name === agentName).model` before accepting level
+- SDK error logs containing `"effort level not supported"` after the command appears to succeed
 
-**Severity:** **HIGH / rollback pain.** Not data loss, but requires a dedup-and-repair pass across every migrated agent, and tier-manager state gets corrupt along the way.
-
-**Phase to address:** Memory-translation phase — design the schema column + INSERT OR IGNORE before writing a single row. Cheap to add now, expensive to retrofit.
+**Phase to address:** Phase 2 (Extended-thinking mapping) — guard in the slash handler before the IPC dispatch.
 
 ---
 
-### Pitfall 3: Live OpenClaw daemon keeps writing while you copy its state
+### Pitfall 3: Fork-escalated Opus sessions inherit the agent's effort setting — effort state survives fork, cost explodes
 
 **What goes wrong:**
-You start copying `~/.openclaw/workspace-general/` to the new ClawCode agent dir. Meanwhile `openclaw-gateway.service` (verified running on this box, PID 755761, 1.3GB RSS) is still receiving Discord messages, the general agent is still writing `memory/2026-04-20-*.md`, its sqlite indexer fires and `chunks.sqlite` gets WAL-checkpointed mid-copy. You end up with a partially-copied workspace: some files from before a write, some from after, and a sqlite file whose `-wal` sidecar you didn't copy. Opening it in ClawCode either shows stale data or fails integrity checks.
+Session forking (`session-manager.ts:546-559` via `buildForkConfig`) creates an ephemeral escalated session. If `currentEffort = "high"` on the parent when the fork triggers, the fork inherits it. Now an Opus advisor runs with `thinking.budgetTokens=16000+` on every sub-turn — the v1.5 cost-optimization phase's whole point was that advisor escalations are short-lived and auditable. A 10-turn advisor thread at `high` effort costs 10x what the researchers modeled.
 
 **Why it happens:**
-SQLite in WAL mode has three files (`.sqlite`, `.sqlite-wal`, `.sqlite-shm`). A naive `fs.cp` or `cp -r` copies the main file but you might miss the WAL, capture it half-flushed, or capture the -shm which then confuses the reader. Markdown files have the opposite problem — they're independently consistent but the full workspace is a moving target.
+`buildForkConfig` copies the parent's resolved config; `effort` is a first-class field on `AgentConfig` (`schema.ts:668`). No code path resets effort on fork.
 
 **How to avoid:**
-- **Stop the source agent before copying.** Either (a) `openclaw-gateway stop <agent>` for that specific agent via its CLI, or (b) accept a short full-daemon pause: `systemctl --user stop openclaw-gateway`, copy, start.
-- **Copy sqlite via `VACUUM INTO` or the backup API**, not `fs.cp`. `sqlite3 source.sqlite ".backup target.sqlite"` produces a consistent snapshot even with a live writer. Or use better-sqlite3's `db.backup()` for the same guarantee from Node.
-- **Per-agent migration, not whole-fleet.** Migrate `personal` (smallest, 5MB, low-activity) first — only needs to pause `personal`. Migrate `general` (128MB, highest activity) last, during a planned maintenance window.
-- **Checksum verification.** Hash the source workspace before copy + after migration; if ClawCode agent's raw markdown hashes don't match the source, abort and rollback that agent.
+In `buildForkConfig` or `forkSession`, force `effort = "low"` on the forked config regardless of parent state. If the user explicitly wants deep-thinking escalations, they can `/clawcode-effort` the fork post-creation. Add a test that creates a parent handle at `effort=max`, forks, and asserts the fork's `getEffort()` returns `"low"`.
 
 **Warning signs:**
-- `SQLITE_CORRUPT` or "database disk image is malformed" when ClawCode opens the migrated db
-- Migrated agent's MEMORY.md missing entries from "last hour"
-- Agent restarts but complains about missing files
+- `grep -n "effort" src/manager/fork.ts` returns no defensive reset
+- Cost tracking shows forked sessions (names ending in `-fork-{nanoid}`) with token budgets >4x the parent model expectation
+- Opus advisor turn count spikes after v2.2 ship
 
-**Severity:** **CRITICAL / data loss** if sqlite corrupts. **MEDIUM / data staleness** for markdown races.
-
-**Phase to address:** Migration tooling phase (`clawcode migrate openclaw`) — the CLI must orchestrate source-daemon pause + backup-API copy, not leave it to the operator.
+**Phase to address:** Phase 2 (Extended-thinking mapping) — same phase that wires effort, must also quarantine it from fork.
 
 ---
 
-### Pitfall 4: Shared workspace + per-agent memory DB creates 5-way write contention for finmentum
+### Pitfall 4: Extending `effortSchema` / adding new reasoning fields breaks v2.1-migrated YAMLs
 
 **What goes wrong:**
-All 5 finmentum agents (`fin-acquisition`, `fin-research`, `fin-playground`, `fin-tax`, `finmentum-content-creator`) point at `/home/jjagpal/.openclaw/workspace-finmentum`. After migration they'll all write to the same workspace directory. Without a plan, they all try to write `MEMORY.md`, `inbox/`, `.learnings/` — five processes racing on the same files, no file locks, no agent namespacing. ClawCode's `memories.db` is per-agent (correct), but the markdown-side of the workspace is unowned.
+`schema.ts:13` defines `effortSchema = z.enum(["low", "medium", "high", "max"])` and `agentSchema.effort` defaults to `"low"`. The 15 migrated agents already wrote `effort: low` into their clawcode.yaml during v2.1 apply (`effortSchema.default("low")` baked it in). If v2.2 adds a new field like `reasoning_effort` or `thinkingBudget` at the agent level WITHOUT preserving `effort`, the v2.1 ledger + rollback invariants break (`verify` compares shipped config against apply-time snapshot).
+
+Worse: if v2.2 renames `effort` → `reasoning_effort` to align with OpenClaw's field name (Ramy-style naming drift), the Zod parse fails loud on boot of all 15 agents post-restart. Fail-loud is good in a greenfield, catastrophic on a production fleet.
 
 **Why it happens:**
-Confirmed: ClawCode's `loader.ts:153` resolves `workspace = agent.workspace ?? basePath/agent.name`. That `??` means two agents can legally declare the same `workspace:` field — no validation rejects it. But every subsystem downstream (memory-md writer, inbox watcher, auto-linker, heartbeat) assumes **one agent owns a workspace**. Chokidar watchers from 5 agents on the same dir multiply events by 5. Inbox race is unavoidable.
+Schema evolution temptation — "OpenClaw calls it `reasoning_effort`, let's unify." The migration CLI already mapped OpenClaw's `reasoning_effort` → ClawCode's `effort` in v2.1, so changing the ClawCode field name now un-does that mapping.
 
 **How to avoid:**
-- **Design the shared-workspace contract before migration.** Three legitimate patterns:
-  1. **Per-agent subdirectories inside the shared workspace:** `workspace-finmentum/agents/fin-acquisition/MEMORY.md`, etc. Shared state goes at workspace root. ClawCode's memory-md writer takes an `agentSubdir` param. Simplest.
-  2. **Workspace as shared read-only, memory per-agent elsewhere:** cwd for the process is the shared workspace (so Read/Write tools can access `finmentum/compliance/...`) but MEMORY.md / inbox / .learnings live in `basePath/<agentName>/`. Cleanest separation, but breaks the "memory next to workspace" pattern.
-  3. **Explicit `workspaceGroup`** in clawcode.yaml: agents with the same group share cwd but each has its own memory/inbox/heartbeat subroot. Requires schema change.
-- Pick one, implement it, land it as a prerequisite phase **before** migrating any finmentum agent. The `test-agent` existing today does not exercise this — it's untested territory.
-- **Chokidar deduplication:** if 5 agents watch the same path, only register one watcher and fan out events internally. Otherwise chokidar fires 5× on every file change.
-- **Inbox ownership:** each finmentum agent needs its own inbox subdir. Cross-agent messaging's "write to other agent's inbox" pattern must write to `workspace-finmentum/agents/<target>/inbox/`, not `workspace-finmentum/inbox/`.
+1. KEEP `effort` as the canonical field name. Do not rename.
+2. If you need to add a second dimension (e.g., explicit `thinkingBudget: number` override), add it as a NEW optional field next to `effort`. Make it optional with no default.
+3. Add a Zod `superRefine` rule: `if thinkingBudget set, effort must be compatible`. Fail at config-load, not at runtime.
+4. Run `clawcode migrate openclaw verify` across the full fleet as part of Phase 2 acceptance gate — the v2.1 verifier already checks config-shape invariants per agent.
 
 **Warning signs:**
-- MEMORY.md gets corrupted / interleaved writes (you'll see half-sentences from two agents spliced together)
-- Heartbeat events fire 5× per workspace change
-- Two agents "find" each other's memory entries in `memory_lookup` (only if we wrongly shared the DB — don't)
-- Git status inside `workspace-finmentum` becomes unusable — 5 agents all modify tracked files
+- PR diff touches `effortSchema` or renames `effort` field
+- Zod `.strict()` mode added to `agentSchema` without a migration (Zod 4 defaults to strip-unknown, which is forgiving; strict flips the contract)
+- `.planning/milestones/v2.1-migration-report.md` invariants no longer pass after v2.2 changes
 
-**Severity:** **HIGH / observable bugs + data corruption** at the markdown layer. Per-agent DBs stay safe (SQLite isolation is preserved by separate files), but the workspace-level state is a mess.
-
-**Phase to address:** Must be its own phase ahead of migration. Call it "Shared-workspace support" or similar. Don't conflate with "migration tooling" — this is a runtime feature addition.
+**Phase to address:** Phase 2 (Extended-thinking mapping). Cross-reference v2.1 migration invariants in the phase's success criteria.
 
 ---
 
-### Pitfall 5: Discord bot token divergence — migrated agents come up on the wrong bot
+### Pitfall 5: `/clawcode-model` write-back to clawcode.yaml triggers hot-reload mid-turn, session restarts, active stream dies
 
 **What goes wrong:**
-OpenClaw's `openclaw.json` has `channels.discord.token` hardcoded as `MTQ3MDE2MjYzMDY4NDcwNDg4MQ.GLLa1Z...` (literal Discord bot token, bot ID 1470162630684704881). ClawCode's `clawcode.yaml` resolves `discord.botToken` from `op://clawdbot/Clawdbot Discord Token/credential` — **this is a different bot**. If we migrate agents with their Discord channel IDs but don't change bots, the ClawCode daemon will connect as the Clawdbot bot and try to respond in channels the OpenClaw bot owns. Two bots in one channel = duplicate replies to every message. Or the channel doesn't have Clawdbot added and the messages go nowhere.
+`agents.*.model` is explicitly classified as NON-reloadable (`src/config/types.ts:58`: `"agents.*.model"`). The comment on `agents.*.memoryPath` spells out the pattern: changing these fields requires `systemctl stop && apply && systemctl start`.
+
+If `/clawcode-model opus` writes the new value into clawcode.yaml (like OpenClaw's picker does), the chokidar-driven config-reloader will detect a `agents.<name>.model` change, classify it as non-reloadable, and — depending on reloader policy — either log-and-ignore, or trigger a session restart. In the middle of a user's in-flight turn. The streaming reply dies, the user sees an error, the in-flight `Turn` is orphaned.
 
 **Why it happens:**
-Channel IDs are global Discord resources (independent of bot), but **who's listening** is per-bot. The operator has been running OpenClaw's bot as the authority in all 15+ Discord channels. Mid-migration, if both bots are in the same channel, both respond. If we swap bots channel-by-channel we need to ensure Clawdbot is invited with correct permissions before we cut over.
+OpenClaw's picker wrote to OpenClaw's config directly (stateless bridge, no persistent sessions to worry about). Porting that pattern naively to ClawCode bypasses the session-lifecycle invariants.
 
 **How to avoid:**
-- **Document the bot identity model up front.** Decide: do migrated agents keep the OpenClaw bot identity (same webhook avatars users recognize) or move to Clawdbot? If the latter, we need a channel-access migration (invite Clawdbot to every channel, grant `MANAGE_WEBHOOKS` so `webhook-provisioner` can auto-create identities).
-- **Per-agent cutover gate:** before a migrated agent goes live, validate `Clawdbot` is a member of every channel in its `channels:` list with required permissions. ClawCode has `webhook-provisioner.ts` — extend it with a precheck.
-- **During dual-run (Pitfall 10):** either stop the OpenClaw bot from posting in channels owned by migrated agents (kill those bindings in openclaw.json), or keep the bots on separate channels entirely until cutover is complete.
+1. For `/clawcode-model`, DO NOT write to clawcode.yaml as the primary action. Instead:
+   - Call a new `sessionManager.setModelForAgent(name, model)` method (mirroring `setEffortForAgent`). Takes effect on next turn only — no YAML mutation, no restart.
+   - If the user wants the change to PERSIST across daemon restarts, offer a follow-up `/clawcode-model-persist` that writes YAML + warns `"requires agent restart to take effect; will apply on next /clawcode-restart"`.
+2. If you MUST write YAML (product decision), write it in a way the config-reloader skips — e.g., use a separate `~/.clawcode/runtime-overrides/{agent}.yaml` file that the loader merges in-memory but the hot-reload watcher ignores.
+3. Explicit test: emit a fake chokidar event with an `agents.*.model` change during an active turn; assert the turn completes and the session is NOT restarted until idle.
 
 **Warning signs:**
-- Users report getting two replies to every Discord message
-- ClawCode daemon logs `Missing permissions` or `Channel not found` for channels that exist
-- Webhook provisioning fails with "cannot create webhook — channel member not found"
+- PR touches clawcode.yaml writer in the model-picker code path
+- No new `session-manager.ts:setModelForAgent` method
+- `grep -n "writeFileSync\|yaml.stringify" src/discord/` returns hits in the new picker code
+- `.planning/debug/` acquires a new entry about "session restart during /model"
 
-**Severity:** **HIGH / observable UX bug.** Users will notice duplicate replies immediately.
-
-**Phase to address:** Phase covering "MCP + Discord wiring" must include a pre-flight Discord-access check per migrated agent. Probably add a `clawcode migrate openclaw --check-discord` subcommand.
+**Phase to address:** Phase 3 (Dual model picker). Must be decided BEFORE any write-back logic lands.
 
 ---
 
-### Pitfall 6: Plaintext secrets in `openclaw.json` get re-introduced into `clawcode.yaml`
+### Pitfall 6: OpenClaw picker and ClawCode picker both write clawcode.yaml — lost updates, corrupted YAML
 
 **What goes wrong:**
-A naïve migrator reads `openclaw.json`, finds `env.OPENAI_API_KEY: sk-proj-...` or `channels.discord.token: MTQ3...` (plaintext), and writes these directly into `clawcode.yaml` under `mcpServers.openai.env.OPENAI_API_KEY: sk-proj-...`. The user's ClawCode config, which had been clean 1Password references (`op://clawdbot/...`), now has plaintext secrets. Worse: if `clawcode.yaml` is committed to this git repo (it's in `workspace-coding/` which is a git repo), those secrets land in history. If any of those keys had been rotated since OpenClaw captured them, we just re-exposed the **old** rotated key — an attacker who had that key can exploit it again.
+The v2.2 goal says "keep OpenClaw's existing picker alive but make it read from the bound agent's clawcode.yaml allowed-model list." If "keep alive" means the OpenClaw picker also *writes* to clawcode.yaml, you have two processes with no shared lock editing the same file. YAML doesn't merge — last-writer-wins. Worse, `yaml` v2.8.3 (package.json) uses document-AST preservation; a partial write from one picker while the other has a stale AST cached produces a broken file.
+
+The v2.1 migration already uses the atomic-temp+rename pattern (`.planning/PROJECT.md:88`: "atomic YAML writer — … Document-AST comment preservation with atomic temp+rename"). But atomic rename guards against crash-mid-write, not concurrent writers.
 
 **Why it happens:**
-OpenClaw stores Discord token as a raw string. It also has env overrides per-agent for MCP servers. A "copy over what's there" migrator treats these values as opaque strings and happily writes them to the target. The fact that ClawCode uses `op://...` references is a convention, not an enforced invariant in schema.
+The two pickers are in different runtimes (OpenClaw bridge = Node.js child of the bridge daemon; ClawCode = ClawCode daemon). No shared mutex, no fcntl lock, no sqlite-coordinated transaction.
 
 **How to avoid:**
-- **Migrator whitelist, not blacklist.** The migrator should only copy per-agent **references** (e.g., channel IDs, MCP server names from a known list) — never raw values for any field matching `/key|token|secret|password/i`.
-- **Refuse to write secrets:** if the migrator sees a field that looks like a secret (regex, or a known list of sensitive keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BRAVE_API_KEY`, `HA_TOKEN`, `FAL_API_KEY`, `HEYGEN_API_KEY`, `FINMENTUM_DB_PASSWORD`, `STRAVA_*`, `FINNHUB_API_KEY`, the Discord token), it must **fail with instructions** to set up the matching `op://` reference. Never silently inline.
-- **Reuse the existing `mcpServers:` section in `clawcode.yaml`.** Don't synthesize per-agent MCP env blocks — just map agent → list of mcpServer names that already exist at the file level. The existing file already has clean 1Password refs for every server an agent will need.
-- **Secret scan pre-commit:** add a gitleaks/trufflehog check in CI (or at least a git pre-commit hook) on `clawcode.yaml` specifically. Block commits that contain raw bot-token-shaped strings (`M[A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}`) or `sk-*` / `sk-ant-*` / `sk-proj-*` prefixes.
-- **Rotate credentials mid-migration** as a standard practice — the OpenClaw token dates back months, this is a good moment to rotate all shared secrets.
+1. Make the OpenClaw picker READ-ONLY against clawcode.yaml. Source of truth for the allowed-model list is clawcode.yaml; source of truth for the *selected* model is a runtime state in the ClawCode daemon (not the file).
+2. OpenClaw picker should call a ClawCode IPC endpoint (`sendIpcRequest(SOCKET_PATH, "set-model", {agent, model})`) which ClawCode owns. All writes serialized inside the daemon.
+3. Use `flock(2)` on clawcode.yaml if two processes MUST write — but this is an escape hatch, not a design.
+4. Document the ownership rule in `CLAUDE.md`: "clawcode.yaml is owned by the ClawCode daemon. External processes must use IPC."
 
 **Warning signs:**
-- `grep -P 'M[A-Za-z0-9]{23}\\.[A-Za-z0-9_-]{6}\\.' clawcode.yaml` returns a match
-- `grep -E 'sk-(ant-|proj-)?[A-Za-z0-9]{20}' clawcode.yaml` returns a match
-- Any agent `mcpServers[].env.*` value that doesn't start with `op://` or `${...}`
+- Both bridge and daemon import `yaml` and have writer code paths
+- `flock` / advisory-lock helpers appear (signals the author realized the race but didn't redesign)
+- `.planning/debug/` logs like "clawcode.yaml parse error on boot, last written by openclaw-bridge"
 
-**Severity:** **CRITICAL / security.** Rotated secrets re-exposed, plaintext in a git-tracked file, public bot token if this repo ever becomes public.
-
-**Phase to address:** Config-mapping phase. Must have a "secret redaction" step that's enforced by the migrator itself, not just by operator discipline.
+**Phase to address:** Phase 3 (Dual model picker). Decide ownership before implementation.
 
 ---
 
-### Pitfall 7: `fs.cp` on a workspace that's a git repo clones the `.git` but not hooks, submodules, or uncommitted state correctly
+### Pitfall 7: Stale allowed-model list — picker offers Opus after budget exhausted, agent can't actually use it
 
 **What goes wrong:**
-11 of the 20 OpenClaw workspaces are git repos (verified: `workspace-general`, `workspace-finmentum`, `workspace-finmentum-content-creator`, etc.). `workspace-general` has 30+ untracked files including `MEMORY.md`, `config/`, `data/` — the core of the agent's state. If you `fs.cp --recursive` or `cp -r` and include `.git`, you copy a valid git repo with stale refs but lose any git-only metadata (hooks are regular files and do copy; submodules don't; `git worktree` references break). If you *exclude* `.git`, you also lose `.gitignore` (wait — that's a regular file, that copies) but lose the ability for the migrated agent to see "here's what I've committed vs not" which users rely on.
-
-A nastier version: `workspace-general/.git` has a commit message referencing absolute paths (`/home/jjagpal/.openclaw/workspace-general/...`). When you copy to `/home/jjagpal/.clawcode/agents/general/`, any hook or config using absolute paths breaks silently. And `node_modules/.bin/` on these workspaces has ~17 broken symlinks after copy if the relative link targets don't exist in the new location.
+v1.5 introduced `escalationBudget` (daily/weekly Opus/Sonnet caps per agent — `schema.ts:679-688`). The picker reads the agent's allowed-model list (static from YAML) and offers `[haiku, sonnet, opus]`. User picks `opus`. The budget tracker rejects the next turn with `"weekly opus budget exhausted"`. User sees the rejection, thinks ClawCode is broken.
 
 **Why it happens:**
-Node's `fs.cp` with `{ recursive: true }` follows symlinks by default (breaking them), doesn't preserve git-specific semantics, and treats `.git` like any other directory. `node_modules` directories (present in `workspace-general/remotion-banner-dev/node_modules`) have a forest of symlinks that are either relative or absolute — both break on a move.
+The "allowed list" in YAML is a capability declaration, not a runtime-availability check. Budget state lives in the ClawCode daemon; the picker doesn't consult it.
 
 **How to avoid:**
-- **Don't use `fs.cp`. Use `rsync -a --delete` with explicit preserve flags:** `rsync -a --links --hard-links --exclude='node_modules' --exclude='.omc/state' workspace-general/ ~/.clawcode/agents/general/`. `rsync -a` preserves symlinks-as-symlinks, owner, timestamps.
-- **Exclude `node_modules` entirely.** Agents can `npm install` on first run. Migrating a 400MB node_modules is wasteful and broken.
-- **Exclude `.omc/state/*.jsonl` and other OpenClaw-specific runtime state** — these are session-replay files, useless in ClawCode, and Pitfall 8 covers the format question.
-- **Preserve `.git` but run `git fsck` after copy.** If fsck fails, the git repo is corrupt — re-clone fresh if possible or document the loss.
-- **Rewrite absolute paths post-copy.** Scan copied markdown files for `/home/jjagpal/.openclaw/workspace-<name>/` and rewrite to the new path. Otherwise SOUL.md, MEMORY.md references point at the old location.
+Picker rendering must ask the daemon for *effective available models right now*, not the static YAML list. Add an IPC method `get-available-models` that returns the allowed list minus models whose budget is exhausted or whose provider is health-checked down (if applicable). Annotate the picker UI: `"opus (exhausted — resets Monday)"` — disable the entry but show why.
+
+Verification: manually exhaust Opus budget (set daily=1, burn it), then run picker; Opus row should appear greyed with reason text.
 
 **Warning signs:**
-- Broken symlink count in migrated workspace (`find . -xtype l | wc -l`) > 0
-- `git -C <new-path> status` errors with "not a git repository" or "gitdir not found"
-- MEMORY.md contains absolute paths to the OpenClaw location after migration
-- Disk usage of migrated workspace >> source (hint: you copied node_modules)
+- Picker code reads `config.agent.allowedModels` or similar static list with no IPC call
+- No handling of `BudgetExhaustedError` in the picker UI
+- Support log: "user keeps trying opus, getting errors"
 
-**Severity:** **MEDIUM / observable bugs + wasted disk.** Not data loss, but agents hit confusing errors on day one.
-
-**Phase to address:** Workspace-migration phase — the copy step needs an explicit exclude-list spec, not "just copy everything."
+**Phase to address:** Phase 3 (Dual model picker) — acceptance criteria must include budget-aware rendering.
 
 ---
 
-### Pitfall 8: Attempting to replay OpenClaw JSONL session logs into ClawCode's ConversationStore
+### Pitfall 8: SDK dispatch gap — sending `/clear` as a text prompt does NOT execute it; LLM just acknowledges
 
 **What goes wrong:**
-The milestone description mentions "413 files in general alone" of JSONL archives. If we try to feed them to ClawCode's v1.9 `ConversationStore` / `SessionManager.captureInput()`, they'll be in the wrong format. OpenClaw's gateway-based architecture serialized entire gateway envelopes (`messageEnvelope`, peer kinds, channel routes). ClawCode's `ConversationStore.turns` table expects `{sessionId, turnId, role, text, provenance, sourceTurnIds}`. Fields don't line up. A naive replay either silently drops most of the data (bad — breaks conversation memory), or corrupts the store (worse — breaks future sessions).
+This is THE biggest technical risk for Phase 4. The existing slash-command handler formats commands as text prompts (`formatCommandMessage` at `slash-commands.ts:619-641`) and sends them via `sessionManager.streamFromAgent`. For CONTENT commands (`/clawcode-memory → "Search your memory for: foo"`), this works because the agent interprets the prompt and uses tools.
+
+But native CC commands like `/clear`, `/compact`, `/memory`, `/agents`, `/permissions` are **CLI/session-level control commands**, NOT prompts the LLM acts on. The `claude` CLI handles them before the LLM sees them. Inside the Agent SDK's `query()` iterator, there is no equivalent entry point — sending the literal string `"/clear"` causes the LLM to output `"I've cleared the context"` as text while the actual session context is untouched. Silent correctness failure, no error anywhere.
 
 **Why it happens:**
-Two different architectures wrote their session data at different semantic levels. OpenClaw: gateway-routing log. ClawCode: per-turn conversation record with provenance. No shared format.
+Claude Code CLI users interact with these commands via an interactive TUI that intercepts the slash. The Agent SDK's programmatic surface is a different beast — `query()` + message events. Not every CLI slash command has an SDK equivalent. The `sdk.d.ts` 1.7K-line surface exposes `interrupt`, `setMaxThinkingTokens`, session `forkSession`, `resume` — but not a generic "execute slash command" dispatch.
 
 **How to avoid:**
-- **Don't replay session logs. Import as static memory-summaries instead.** Run each agent's JSONL through a summarizer once (Haiku, batch), produce a single `source='consolidation'` MemoryEntry per session tagged `["legacy-session", "session:{openclaw-session-id}"]`, write to `memories.db`. This is how the ClawCode v1.5 cold-archive pattern already works.
-- **Alternatively, do nothing.** Most of the "413 files" are probably low-value routing traces. Preserve the raw JSONL in `workspace/archive/openclaw-sessions/` as a cold artifact — agents can grep it via the search MCP if they need it — but don't parse them into structured memory.
-- **Hard rule: no direct INSERT into `turns` from migration.** The FTS5 index, provenance, trust-channel flags, and injection-detection metadata all depend on capture going through `captureInput()`. Never bypass.
+**Before building ANY native CC slash routing, audit each command for SDK reachability.** For each:
+
+| CC command | SDK equivalent | Action |
+|---|---|---|
+| `/clear` | No direct. Need to end session + start fresh w/ new `session_id` | Implement via `sessionManager.resetAgent(name)` |
+| `/compact` | No direct. Already routed via `clawcode-compact` prompt | Keep existing text-prompt pattern (LLM can trigger memory_compact internally) |
+| `/model` | No direct. Use `setModelForAgent` per Pitfall 5 | IPC to daemon |
+| `/memory` | No direct. Already routed via `clawcode-memory` | Keep existing pattern |
+| `/agents` | Lists subagent defs. Read `agents` option from session | Daemon IPC returning static list |
+| `/mcp` | MCP server status. Query SDK's MCP server registry | Daemon IPC (SECURITY: see Pitfall 12) |
+| `/cost` | Return session usage. Read from `ConversationStore`/`UsageTracker` | Daemon IPC |
+| `/todos` | Agent's TodoWrite state. Not persisted by SDK | Skip for v2.2 OR intercept TodoWrite tool calls |
+| `/permissions` | Tool permission state. Read from session options | Daemon IPC, read-only |
+| `/init` | Creates CLAUDE.md. Pure filesystem op | Agent-routed prompt OR daemon file write |
+| `/review`, `/security-review` | Prompt-style. Route via text | Text-prompt pattern, fine |
+
+Rule: if the command has no SDK control-plane equivalent, it MUST be implemented on the ClawCode side (daemon logic + IPC), not sent as a prompt. Add a `nativeBehavior: "sdk-controlled" | "prompt-routed" | "daemon-owned"` discriminator in the command definition so authors cannot accidentally text-route a control command.
 
 **Warning signs:**
-- Post-migration agent can't recall conversations from "yesterday" via `memory_lookup` even though JSONL files are present
-- ConversationStore integrity check fails (FTS5 mismatch with raw rows, missing provenance columns)
-- `SELECT COUNT(*) FROM turns WHERE provenance IS NULL` after migration > 0
+- PR adds `DEFAULT_SLASH_COMMANDS` entries with `claudeCommand: "/clear"` or similar literal-CLI strings
+- No corresponding `SessionManager` method for the new command's semantics
+- Manual QA: run `/clear`, then ask agent "do you remember what we talked about?" — agent remembers. The command lied.
 
-**Severity:** **MEDIUM / silent data loss** if we try to replay — the cost of a botched attempt is high because recovering the raw source is possible but expensive. **LOW** if we explicitly skip replay and just archive the raw files.
-
-**Phase to address:** Explicit decision point in the roadmap: "session history migration — archive-only, no replay." Mark it and move on. Don't leave this ambiguous — ambiguity invites a junior engineer to "helpfully" try to replay.
+**Phase to address:** Phase 4 (Native CC slash commands). Must start with the audit table, not with code.
 
 ---
 
-### Pitfall 9: Hot-reload fires mid-migration and spawns half-configured agents
+### Pitfall 9: Registering native CC commands per-agent explodes past Discord's 100-command-per-guild limit
 
 **What goes wrong:**
-The ClawCode daemon is running with a ConfigWatcher on `clawcode.yaml` (confirmed in `config/watcher.ts` — chokidar-based, 500ms debounce). You edit the YAML to add the 15 migrated agents. The watcher fires after your first save — even though you haven't finished setting up all 15 workspace directories yet. The daemon tries to spawn agents whose `workspace:` path doesn't exist, or whose `memories.db` is still being populated by the migrator. Claude Code processes fail to start, the daemon logs 15 errors, and the in-flight migration now has to deal with "agent already exists (in a broken state)".
+Discord allows max 100 global application commands per application, and max 100 guild commands per guild. ClawCode currently uses guild-scoped commands (`slash-commands.ts:126-174`: `Routes.applicationGuildCommands`). The current registration loop also DEDUPES by command name (`seenNames` set, line 129-139) — so "per-agent" already means "one command, dispatched-by-channel."
+
+If v2.2 naively registers 20 native CC commands × 15 agents = 300 distinct registrations, the `rest.put` call fails with Discord 400 after the 100th command. Even worse: if you add model-namespaced variants (`/clawdy-clear`, `/finmentum-clear`, etc.) to make each agent identifiable, you hit the limit immediately.
 
 **Why it happens:**
-Chokidar doesn't know the config is mid-edit. Your editor's save-on-blur, your `yq` script, or `clawcode migrate --apply` (writing yaml) all look identical to the watcher. 500ms debounce is fine for interactive edits, useless for a scripted bulk change.
+Thinking "one command per agent for isolation" before reading the existing registration code. The existing pattern (dedupe by name, dispatch-by-channel) already solves this — native CC commands just need to follow it.
 
 **How to avoid:**
-- **Migrator writes to a side file, then atomically renames.** `clawcode.yaml.migrate-tmp` → `fsync` → `rename()` to `clawcode.yaml`. This is one event, not many. Critical: rename on the same filesystem, which is always true here.
-- **Stage the workspace first, config last.** Order: (1) create `~/.clawcode/agents/<name>/` dir, (2) populate memories.db, (3) copy workspace contents, (4) write the YAML entry. When chokidar fires, the agent is already ready.
-- **Pause mode via IPC.** Add a `clawcode ipc pause-config-watcher` / `resume-config-watcher` handshake. Migrator pauses, does all its work, writes the YAML, resumes. Worst-case fallback: `systemctl stop clawcode-daemon && migrate && systemctl start`.
-- **Dry-run mode in the watcher.** Before applying a diff, if diff adds >5 agents at once, pause and log "bulk config change detected — applying in batches of 5". Makes partial failure recoverable.
+1. Register each native CC command ONCE per guild, not per agent. Dispatch is by `interaction.channelId → getAgentForChannel(routingTable)` — same pattern as existing `clawcode-*` commands (`slash-commands.ts:211`).
+2. Budget sanity check before register: `assert allCommands.length <= 90` (reserve 10 slots for future). Log at startup with count.
+3. If you truly need per-agent variants (e.g., admin vs user), use Discord's `default_member_permissions` on the command def, not separate commands.
+4. Hard rate-limit awareness: `rest.put` for bulk overwrite on a single guild is one API call; no per-command registration churn needed. But registering across guilds has global rate limits — space guilds over time if you expand beyond one server.
 
 **Warning signs:**
-- Daemon log shows `agent spawn failed: workspace does not exist` for migrated agents
-- Partial agent appears in `clawcode fleet` (registered but not spawning)
-- Hot-reload audit trail (`config/audit-trail.json`) shows 15 separate diff events within 30 seconds instead of 1 bulk event
+- `grep -n "for.*agent.*rest.put\|\.put(.*applicationCommand" src/discord/` shows per-agent registration
+- Count of `CONTROL_COMMANDS` + `DEFAULT_SLASH_COMMANDS` + native additions exceeds 80
+- Discord API log shows `"error": { "code": 30034 }` (max application commands reached)
 
-**Severity:** **MEDIUM / rollback pain.** Recoverable (stop-daemon, fix state, start), but "I broke prod while migrating to it" is a bad look and the timing can produce weird half-states.
-
-**Phase to address:** Migration tooling phase — the CLI must handle the watcher coordination, not leave it to the operator's shell discipline.
+**Phase to address:** Phase 4 (Native CC slash commands) — follow the existing dedupe pattern, add a pre-flight count assert.
 
 ---
 
-### Pitfall 10: Coexistence during rollout — both OpenClaw and ClawCode listen to the same Discord channel
+### Pitfall 10: Namespace collision — `/model` native vs `/clawcode-model` dual picker vs OpenClaw picker
 
 **What goes wrong:**
-Verified: OpenClaw gateway is running live (`systemctl --user: openclaw-gateway.service active`). During a 15-agent staged migration, you'll have days or weeks where both systems are up. If you forget to unbind an agent from OpenClaw before binding it in ClawCode, both systems receive the same Discord message, both route to their respective agent, both reply. User gets duplicate responses. Worse: both agents try to update memory for the "same" event — but each is a separate memory stream, so state diverges.
+Three things want to own `/model`:
+1. The v2.2 dual-picker plan wants a native `/clawcode-model` slash command (Phase 3).
+2. The v2.2 native-CC plan wants to expose CC's `/model` command (Phase 4).
+3. Bare `/model` is in `DEFAULT_SLASH_COMMANDS` already (`slash-types.ts:102-114`, name `"clawcode-model"`) — wait, it's namespaced. Good. But the user reads CC docs, types `/model opus`, Discord autocompletes to nothing, confused.
+
+If Phase 4 registers a bare `/model` (to mirror CC's native surface), and Phase 3 has `/clawcode-model`, you have two slash commands doing similar-but-different things. Users get:
+- `/model opus` → (Phase 4 native-CC handler, may or may not persist depending on Pitfall 5)
+- `/clawcode-model opus` → (Phase 3 dual-picker handler, persists to clawcode.yaml via IPC)
 
 **Why it happens:**
-Cutover is not atomic. The sane rollout is "migrate agent N, unbind from OpenClaw, bind in ClawCode". But the Discord channel doesn't know about either bot's config — both bots are still members, both still receive gateway events for the channel. The only way they stop responding is **they choose not to**, driven by their respective config.
+"Let's give Discord users the exact CC CLI experience" pulls toward bare-name commands. "Let's not conflict with other Discord bots in the same server" pulls toward `clawcode-*` namespace. The two pull apart.
 
 **How to avoid:**
-- **Cutover protocol per agent:**
-  1. Migrate memories + workspace to ClawCode (agent exists in ClawCode, not yet bound).
-  2. Validate memory parity (Pitfall 1) + smoke test.
-  3. **Remove** the agent's entry from `openclaw.json` `bindings` (or disable the binding). This makes OpenClaw stop replying in that channel.
-  4. Only then add the agent to `clawcode.yaml` `channels:`.
-  5. Observe in channel for 15 minutes — confirm Clawdbot responds, OpenClaw bot does not.
-- **Per-channel lockfile.** Optional safety: ClawCode refuses to bind to a channel ID if `openclaw.json` bindings also lists it. Read openclaw.json at migrate-time, cross-check. Hard-fail with "disable the OpenClaw binding for channel X first".
-- **Separate test channels.** Before any production channel cutover, migrate `test-agent` equivalent to a dedicated test channel where OpenClaw is not bound. Validate end-to-end there.
-- **Kill switch.** Keep the OpenClaw daemon stoppable on 30-seconds notice: `systemctl stop openclaw-gateway`. If cutover goes wrong, buy yourself time.
+1. Pick ONE convention: ALL ClawCode slash commands are `clawcode-*` namespaced. No bare `/model`, `/clear`, `/memory`. Rationale: Discord guilds often have many bots; bare-name collisions with community bots are common and produce confusing dispatch errors.
+2. Document the namespace rule in CLAUDE.md and add a lint rule / zod validator: `slashCommandEntrySchema.name.regex(/^clawcode-/)`.
+3. For Phase 3: ONE `/clawcode-model` that handles both "show picker" (no arg) and "set model" (with arg). Deprecate the OpenClaw picker in-place (still functional, UI hint says "see /clawcode-model in ClawCode channels").
 
 **Warning signs:**
-- Users see double replies
-- Discord audit log shows both bot users posting within the same second
-- OpenClaw's `bindings` and ClawCode's `channels:` share any channel ID
+- New `DEFAULT_SLASH_COMMANDS` entries without the `clawcode-` prefix
+- Two command entries with overlapping `claudeCommand` handlers
+- Discord user reports: "I typed /model, I'm not sure which one just ran"
 
-**Severity:** **HIGH / user-visible bug.** Cheap to fix (unbind one side), expensive if it runs for hours.
-
-**Phase to address:** Cutover phase (one of the last) — must have an explicit per-agent checklist. Also needed in the migration CLI as a `--check-coexistence` precheck.
+**Phase to address:** Phase 3 AND Phase 4. Decide the namespace convention up-front (first task of Phase 3).
 
 ---
 
-### Pitfall 11: Partial migration with no rollback story
+### Pitfall 11: `/clear` wipes ConversationStore, orphans in-flight summarization, deletes memories users rely on
 
 **What goes wrong:**
-You migrate 8 of 15 agents over 3 days. On agent 9, you discover the memory translator has a subtle bug (dropped all memories with unicode emojis in their `content` field). Now: 8 agents are live on ClawCode with correct-ish data, their OpenClaw counterparts have been unbound from Discord, and fixing the bug means re-running the migrator which per Pitfall 2 will double-insert. The "rollback" options are: (a) re-enable OpenClaw bindings for agents 1-8 (their OpenClaw memory is 3 days stale — users will notice the regression), (b) leave them on ClawCode and accept the buggy import for anyone affected, (c) write a third tool to patch just the bug.
+Naive `/clear` = "reset context" as CC users know it. In ClawCode, the session context is built from:
+1. Hot-tier memories (SQLite, per agent)
+2. ConversationStore (recent turns, FTS5)
+3. Session-summary memory entries (v1.9 resume auto-injection)
+4. Context-assembly pipeline output
+
+"Clear" is ambiguous. Does `/clear`:
+- End the current SDK session only (next turn starts with fresh session_id, but all memory remains)?
+- Also wipe hot-tier memories?
+- Also delete ConversationStore rows?
+- Also delete session-summary MemoryEntries (tagged `"session-summary"`)?
+
+If `/clear` deletes too much, a user who ran it to "start fresh on this topic" loses weeks of memory. If it deletes too little, the LLM still has context injected from hot-tier and the user sees the "reset" didn't work.
+
+Also: `session-summary` compression (v1.9 SESS-01/04) may be running WHEN `/clear` fires. Deleting session rows mid-summarization writes an incomplete summary referencing deleted turn IDs. Referential integrity breaks.
 
 **Why it happens:**
-Linear forward-only migration assumes each step succeeds. 15-agent fleet with varying memory sizes (5MB to 128MB) and complexities (shared-workspace finmentum) will have partial failures.
+Overloading a single command that means different things in different runtimes.
 
 **How to avoid:**
-- **Snapshot-before-apply.** `clawcode migrate openclaw --apply --snapshot` takes `.clawcode/backups/pre-migrate-<timestamp>/` with full copies of the agent's ClawCode state. Roll back = `clawcode migrate rollback --snapshot <id>`.
-- **Keep OpenClaw state pristine.** The migrator only **reads** from OpenClaw; it never deletes or modifies source files. Rollback to OpenClaw is always "re-enable the binding" — zero data-side work. Verify this in code review.
-- **Per-agent success gate.** An agent is "migrated" only when: memory parity tests pass + 24 hours of clean runtime in ClawCode + no user complaints. If any of those fail, roll back *that agent* without touching others.
-- **Two-way lockstep in early migrations.** For the first 2-3 agents, keep OpenClaw and ClawCode both live on separate test channels. Compare behavior. Only start unbinding from OpenClaw once parity is proven across a few agents.
+1. Be explicit in naming: `/clawcode-session-reset` (ends SDK session only, memory intact) vs `/clawcode-memory-purge` (destructive, requires confirmation + admin role).
+2. Never expose bare `/clear` without documenting exactly what it does. Put the doc in the slash command `description` field (Discord shows it in autocomplete).
+3. On any destructive path: check for in-flight summarization (`sessionSummarizer.isRunning(agentName)`) and either wait or abort the destructive op with a clear error.
+4. Default to the LEAST destructive interpretation. The memory system has auto-consolidation + decay; letting those take care of "clearing" is usually the right answer.
 
 **Warning signs:**
-- Migration CLI can produce new state but has no `rollback` subcommand
-- Operator can't answer "if this agent needs to go back to OpenClaw in an hour, what do I do?"
-- The migrator ever writes to `~/.openclaw/`
+- A command named `/clear` or `/clearAll` exists with no qualifier
+- Destructive handler lacks a `requireConfirmation` option parameter
+- `grep -n "DELETE FROM\|memoryStore.purge\|conversationStore.delete" src/discord/` returns hits — DB writes should not live in the Discord layer
 
-**Severity:** **CRITICAL** if it happens during cutover — blast radius is entire fleet. **LOW** if prevention is in place from phase 1.
-
-**Phase to address:** Migration tooling phase — rollback is a feature, not an afterthought. Spec it before writing the forward migration.
+**Phase to address:** Phase 4 (Native CC slash commands) + coordination with memory system owner.
 
 ---
 
-### Pitfall 12: MEMORY.md on disk vs. OpenClaw's sqlite chunks diverge — which is the truth?
+### Pitfall 12: `/mcp` exposes env vars, command paths, OR 1Password references in Discord
 
 **What goes wrong:**
-OpenClaw's indexer re-reads workspace markdown files periodically to rebuild chunks. If the indexer hasn't run recently (daemon was restarted, indexer failed, file was edited mid-flight), `chunks.text` contains an older version of `MEMORY.md` than what's on disk. You migrate from sqlite → ClawCode: agent "loses" edits made in the last N hours/days. Or you migrate from disk → ClawCode but miss chunks that only exist in sqlite (the user deleted a memory markdown file, OpenClaw sqlite still has it, disk doesn't).
+`mcpServerSchema` has `env: Record<string, string>` (`schema.ts:175`) and `command: string` (line 174). CC's native `/mcp` lists servers with their configs. If the ClawCode equivalent dumps `mcpServerSchema` contents to Discord:
+- `command: "/usr/local/bin/mcp-mysql"` leaks binary paths
+- `env: { MYSQL_PASSWORD: "op://vault/item/password" }` leaks 1Password references (not the password itself, but attackers learn the vault layout)
+- `env: { MYSQL_PASSWORD: "actualsecret" }` — if ANY agent has literal secrets (not op:// refs), they leak directly
 
-Evidence: `general.sqlite` has 878 chunks from `memory/*.md` paths but those markdown files may or may not all exist still on disk.
+The v2.1 migration's pre-flight already has secret-shape detection (`src/util/scanSecrets.ts` per PROJECT.md:87). But secret-shape scanning catches `sk-*`-style patterns, not custom DB passwords.
 
 **Why it happens:**
-File-RAG systems have two caches: the filesystem and the vector index. They're eventually consistent, not strongly consistent. Any migrator must pick one as truth, and the wrong pick loses data.
+Trivial to implement `/mcp` as "dump the server list to chat." CC CLI does this safely because the terminal is single-user. Discord is multi-user.
 
 **How to avoid:**
-- **Disk is truth for markdown content.** Read `memory/*.md` fresh from disk; rebuild chunks and embeddings from the current disk content. Sqlite is treated as a hint for what files used to exist.
-- **Sqlite is truth for "did this exist."** For every path in `sqlite chunks`, check if the file still exists on disk. If not → the user deleted it, respect that, don't resurrect. If yes → re-embed from current disk content.
-- **Force-index before migration.** Either (a) run `openclaw index --rebuild <agent>` and then immediately migrate (narrow the drift window), or (b) just re-embed from disk and accept sqlite's value-add is "zero" for this task.
-- **Log the drift.** After migration, log `files in sqlite but not on disk: [...]`, `files on disk not in sqlite: [...]`. Operator reviews. High counts = indexer problem, flag it.
+1. `/clawcode-mcp` lists server NAMES only. No `command`, no `args`, no `env` in the Discord output.
+2. For debugging, add a separate `clawcode mcp show <server>` CLI that runs with the operator's terminal privileges, not Discord.
+3. If the Discord output MUST include command/args, apply `scanSecrets` + redact any `env` value that looks sensitive; always redact `env` values ending in `_TOKEN`, `_PASSWORD`, `_KEY`, `_SECRET`.
+4. Role-gate `/clawcode-mcp` behind Discord `default_member_permissions` (admin only), same as `/clawcode-agent-create`.
 
 **Warning signs:**
-- Post-migration diff: number of memory entries differs significantly (>10%) from source sqlite chunk count
-- Agent's "what did we talk about yesterday" query returns nothing — but MEMORY.md on disk has yesterday's entry
-- `MEMORY.md` mtime is newer than the sqlite's `chunks.updated_at` for the same path
+- `/mcp` handler returns any value from `config.mcpServers.*.env`
+- No `scanSecrets` call on the Discord-bound MCP response
+- PR adds a full config dump to a slash command reply
 
-**Severity:** **MEDIUM / silent data loss or resurrection.** Both directions are bad; loss is worse.
-
-**Phase to address:** Memory-translation phase — the spec must state "disk is source of truth; sqlite is consulted only to confirm deletions." Code review enforces.
+**Phase to address:** Phase 4 (Native CC slash commands) — pair with security-reviewer agent for the audit.
 
 ---
 
-### Pitfall 13: Fork-to-Opus budget explosion across 15 newly-migrated agents
+### Pitfall 13: Finmentum-specific skills pollute non-finmentum agents via `defaults.skills`
 
 **What goes wrong:**
-v1.5 gave every ClawCode agent the ability to fork into an Opus subagent. Today, that's exercised by `test-agent` only — ambient budget is fine. Migrate 15 agents, every one inherits fork capability, every one has full conversational autonomy over when to escalate. A single viral thread in a Discord channel where the agent decides "this needs deeper thinking" across 15 agents in parallel can burn the Anthropic monthly budget in hours. Opus is ~5× the cost of Sonnet; 15 agents × uncoordinated fork decisions = no spending ceiling.
+`~/.openclaw/skills/` contains domain-specific skills: `finmentum-crm` (tied to Finmentum MySQL DB at `100.117.234.17:3306`), `tuya-ac` (home automation for one house), `power-apps-builder` (specific to Ramy's Power Apps workflow). These SHOULD NOT be linked into Clawdy, the admin agent, or any agent outside the finmentum family.
+
+If the v2.2 migration is sloppy — e.g., `clawcode migrate skills --all` copies everything into `~/.clawcode/skills/`, then assigns them via `defaults.skills: [all-discovered-skills]` — every agent boots with MySQL connection strings and Tuya API keys visible in its system prompt. Skill scanner (`src/skills/scanner.ts`) pulls the first paragraph (`extractDescription`) into the catalog; `finmentum-crm`'s first paragraph reveals the DB host, port, username, and password (confirmed by the `head -30` output above: the credentials are literally in the skill description).
 
 **Why it happens:**
-Fork-escalation was designed when there was one agent. The budget advisor tool (`advisor-budget.ts` exists) and budget system (`usage/budget.ts`) operate per-agent. No **global** daily fleet budget enforced.
+Convenience — "let's migrate everything and let agents opt in." But `defaults.skills` cascades to every agent.
 
 **How to avoid:**
-- **Per-agent fork budget, enforced at call-time, not advisory.** Before fork, agent consults its remaining budget for the day. Exceed → fork is refused, agent continues on sonnet/haiku. Not a suggestion — a hard gate in `manager/fork.ts`.
-- **Global fleet ceiling.** Aggregate per-agent budgets sum ≤ fleet ceiling. If 5 agents have already used 80% of their budget in the first 6 hours of the day, the 6th agent gets a reduced budget. `usage/budget.ts` can expose this.
-- **Conservative defaults for migrated agents.** They arrive with stale personalities and ill-calibrated "I should escalate" instincts from pre-fork-era OpenClaw. Start each migrated agent at a low fork budget ($1/day), revise upward after 2 weeks of observed behavior.
-- **Alerting, not silent blocking.** When an agent's fork is refused, it should still get a Discord notification to the operator channel so you know. Sudden silence on a capability is worse than an alert.
-- **Kill-switch:** daemon-level toggle `clawcode.yaml: defaults.forkEnabled: false`. If budget explodes, flip and restart. Shouldn't need to — but should exist.
+1. Migrate skills into `~/.clawcode/skills/` (global pool) but do NOT auto-assign them in `defaults.skills`. Each agent gets an explicit per-agent assignment.
+2. Audit skill descriptions for embedded secrets BEFORE migration. Run `scanSecrets` against every `SKILL.md` frontmatter + first paragraph. For any skill with embedded creds:
+   - Move creds to MCP server env (op:// refs)
+   - Strip the example from SKILL.md
+3. Tag skills as `scope: fleet | agent-family-finmentum | single-agent` in frontmatter. Linker rejects cross-scope assignments.
+4. Verification: after migration, boot a non-finmentum agent, inspect its resolved system prompt, assert no finmentum strings appear.
 
 **Warning signs:**
-- Anthropic billing dashboard shows sudden spike within 24h of multi-agent cutover
-- `clawcode costs` shows >30% of daily spend in forked Opus sessions
-- Any agent has fork count > 20/day
+- `grep -r "100.117.234.17\|MYSQL_PASSWORD\|op://" ~/.clawcode/skills/` returns hits
+- Clawdy or admin agents have `finmentum-crm` in their linked skills
+- Any agent prints DB creds in `clawcode-status` output
 
-**Severity:** **HIGH / financial.** Non-recoverable dollars, unlike most other pitfalls. Real-world ceiling if you're running on prepaid credits.
-
-**Phase to address:** Not strictly migration, but must be **landed before final cutover**. Probably deserves its own small pre-migration phase: "Fleet-scale fork budgeting."
+**Phase to address:** Phase 1 (Skills migration) — secret audit is a gating step, not a follow-up.
 
 ---
 
-### Pitfall 14: Identity inlined in YAML makes the soul/identity file-based editing workflow break
+### Pitfall 14: SKILL.md frontmatter format drift breaks both OpenClaw and ClawCode scanners
 
 **What goes wrong:**
-`clawcode.yaml` currently embeds `soul: |` and `identity: |` as block scalars (verified on test-agent). OpenClaw agents keep these as `SOUL.md` / `IDENTITY.md` files in their workspace. Users (including me) are used to **editing the markdown file** and the agent picks it up on next session. After migration, if we inline into YAML, (a) editing SOUL.md in the workspace no longer affects the agent (it was a workspace file, now it's a YAML string), (b) the YAML file becomes multi-thousand-line (15 agents × multi-paragraph souls), (c) a SOUL.md commit to the workspace git repo no longer triggers any reload because the daemon watches YAML, not workspace files.
+Verified drift between the two formats:
+
+**OpenClaw (`~/.openclaw/skills/cognitive-memory/SKILL.md`):**
+```yaml
+---
+name: cognitive-memory
+description: Intelligent multi-store memory system...
+---
+```
+
+**ClawCode (`~/.clawcode/skills/subagent-thread/SKILL.md`):**
+```yaml
+---
+version: 1.0
+---
+```
+
+ClawCode's `scanSkillsDirectory` (`src/skills/scanner.ts`) extracts ONLY `version` from frontmatter (line 10-18) and pulls description from the first paragraph of body (line 25-43). OpenClaw's format has `name` + `description` in frontmatter, no `version`, and body starts with `# Title` (which extractDescription picks up as single-line description — wrong).
+
+If you migrate OpenClaw skills as-is into ClawCode:
+- `extractVersion` returns `null` for every skill (no `version` field)
+- `extractDescription` returns `"# Cognitive Memory System"` (just the H1 title) instead of the actual description
+- The catalog entry is near-useless for discoverability
+- Claude Code's own loader may refuse skills missing `version` (depends on CC CLI version)
 
 **Why it happens:**
-Two valid design patterns collided: "identity in config for discoverability" vs. "identity in workspace for editability and git-tracking." When you migrate from the latter to the former, you break the workflow the user has habituated to.
+Two independent skill formats evolved in parallel. Neither scanner validates the other's contract.
 
 **How to avoid:**
-- **Keep SOUL.md / IDENTITY.md as files. Reference from YAML.** `clawcode.yaml: agents.general.soulFile: "~/.clawcode/agents/general/SOUL.md"`. Daemon reads the file at session start + watches it with chokidar for hot-update. File semantics preserved; config stays small.
-- **If inlining is required (schema change too costly):** the migrator writes SOUL.md from the YAML to the workspace on first run — at least the file exists for reading. But the daemon still needs to watch the YAML for authoritative changes. Document clearly: "edit via YAML, not MD."
-- **This is a design choice to surface in the config-mapping phase.** Don't let it default to "inline everything" just because test-agent does.
+1. Migration CLI (Phase 1) must REWRITE frontmatter during copy:
+   - Preserve OpenClaw's `name` + `description`
+   - Add `version: "1.0.0"` if absent
+   - Normalize to ClawCode's format: BOTH `description` in frontmatter AND first paragraph of body (belt-and-suspenders for future scanner changes)
+2. Add a schema for SKILL.md frontmatter (zod): `{ name: string, description: string, version: string, scope?: 'fleet'|'family-*'|'agent-*' }`.
+3. Upgrade `scanner.ts` to parse `description` from frontmatter with fallback to first paragraph (belt-and-suspenders).
+4. Verification post-migration: boot the daemon, run `clawcode skills list`, assert every migrated skill has a non-empty description AND a version.
 
 **Warning signs:**
-- clawcode.yaml grows to thousands of lines post-migration
-- User edits workspace/SOUL.md, restarts agent, sees no change in behavior
-- Post-migration, no one knows whether to edit the YAML or the MD
+- `scanner.ts` returns catalog entries with `description === ""` or `description.startsWith("#")`
+- CC CLI logs: `"skipping skill foo: missing required frontmatter field"`
+- Grep for `/^---\n[^-]/` in migrated skills shows inconsistent frontmatter shapes
 
-**Severity:** **LOW / UX regression + config bloat.** Cosmetic-adjacent but affects the daily editing workflow meaningfully.
-
-**Phase to address:** Config-mapping phase — explicit decision: inline vs. file-reference, documented in that phase's plan.
+**Phase to address:** Phase 1 (Skills migration) — format converter is a required sub-phase.
 
 ---
 
-### Pitfall 15: Migrator assumes all 15 agents have equivalent workspace structure
+### Pitfall 15: Symlink collision — OpenClaw `openclaw-config` skill clobbers ClawCode equivalent
 
 **What goes wrong:**
-The 15 OpenClaw agents evolved organically. Some workspaces have `SOUL.md + IDENTITY.md + MEMORY.md + TOOLS.md + USER.md + AGENTS.md + archive/` (workspace-general). Others just have `SOUL.md + IDENTITY.md` (workspace-kimi, workspace-local-clawdy — no subagents key, no heartbeat). `workspace-fin-acquisition` contains only `uploads/` — the SOUL/IDENTITY/MEMORY are in the shared `workspace-finmentum` parent. `workspace-finmentum` has 20+ subdirectories of financial data (clients, financials, compliance).
+`~/.openclaw/skills/openclaw-config/` contains OpenClaw-specific config scaffolding. If migration copies into `~/.clawcode/skills/openclaw-config/` and the linker (`src/skills/linker.ts`) blindly creates symlinks from agent workspaces, any agent with `skills: [openclaw-config]` in its YAML (e.g., from v2.1-migrated configs that still reference the old skill name) gets a broken skill that refers to OpenClaw runtime state — sqlite paths, env vars — that don't exist in ClawCode.
 
-A migrator that assumes `workspace/MEMORY.md` exists crashes on kimi. A migrator that assumes `SOUL.md` is in `workspace-<agentId>/` fails for finmentum agents whose SOUL is in the shared parent. A migrator that assumes "copy all markdown files" sucks in `workspace-finmentum/clients/*.md` which aren't agent memory.
+Linker behavior (confirmed line 44-63): if a non-symlink file/dir exists at the link path, it SKIPS with a warning. But if an existing symlink points to the wrong target, it UNLINKS and recreates (line 51-53). So a second migration run can silently replace a correct ClawCode-native skill with the OpenClaw import.
 
 **Why it happens:**
-Organic growth over years. Conventions drifted. `openclaw.json` per-agent `agentDir` field exists (confirmed in the dump) precisely because workspace and agent-memory-root can be different — but the migrator has to respect that field, not assume 1:1.
+Skill name collisions between the two catalogs. Same name, different content, different expected runtime.
 
 **How to avoid:**
-- **Use `openclaw.json` `agentDir` field as source of truth** for where SOUL/IDENTITY/MEMORY live per agent, not an assumption based on agent id.
-- **Explicit file manifest per agent:** the migrator's first action is "list what this agent actually has" (SOUL yes/no, IDENTITY yes/no, MEMORY yes/no, archive yes/no), log it, then migrate accordingly. No assumptions.
-- **Dry-run shows per-agent manifest.** Operator reviews: "general has MEMORY.md ✓, kimi has no MEMORY.md (ok — will create empty), fin-acquisition has no SOUL.md (finding via parent workspace)."
-- **Don't copy non-memory markdown.** Workspace may contain project files (financials, compliance docs). These belong in the workspace, not in ClawCode memory. Distinguish: `memory/*.md` files → memory; `./*.md` top-level Five Sacred Files (SOUL/IDENTITY/MEMORY/USER/TOOLS) → memory; other markdown → workspace files (leave in workspace, don't embed).
+1. Migration should rename on collision, not overwrite: if `~/.clawcode/skills/{name}` exists AND content differs, migrate as `{name}-openclaw-imported` and log the rename.
+2. Add a skill-registry audit step post-migration: for each skill, check its SKILL.md for references to OpenClaw-specific paths (`~/.openclaw/`, `~/.clawdbot/`, OpenClaw-specific env vars like `OPENCLAW_*`). Any skill that passes the audit is safe; failures require manual port.
+3. Make the linker idempotent per Pitfall 16 (rerunning migration MUST NOT change state if nothing has changed).
 
 **Warning signs:**
-- Migrator crashes on a specific agent (FileNotFound)
-- Migrated agent memory includes project-data markdown (financial reports as memories)
-- `kimi` or `local-clawdy` migrate as "empty agent" because migrator couldn't find the files
+- Two skills with the same name across `~/.openclaw/skills/` and `~/.clawcode/skills/`
+- A migration run reports "created symlink" for a skill on re-run (should report "skip, already correct")
+- Skill body references `~/.clawdbot/clawdbot.json` or similar OpenClaw-era paths
 
-**Severity:** **MEDIUM / migration fails or produces polluted memory.** Recoverable but forces re-runs.
+**Phase to address:** Phase 1 (Skills migration) — collision resolution before linker wiring.
 
-**Phase to address:** Migration tooling phase — agent manifest discovery must be step 1, before any copy.
+---
+
+### Pitfall 16: Non-idempotent skill migration duplicates or corrupts on re-run
+
+**What goes wrong:**
+Migration CLI users run `clawcode migrate skills` twice "just to be sure." If not idempotent:
+- Directories appended-to (second copy nested inside first)
+- SKILL.md frontmatter double-rewritten (version bumped, description prefixed, etc.)
+- Linker symlinks create-unlink-create cycles that race against ongoing daemon reads
+
+v2.1's memory migration used `origin_id UNIQUE` idempotency (PROJECT.md:90). Skills need the same pattern.
+
+**Why it happens:**
+Skills feel "simple" (just files). Idempotency thinking slips.
+
+**How to avoid:**
+1. Content-hash guard: before copying a skill, hash source SKILL.md (and all files in skill dir). If destination hash matches, skip silently.
+2. Frontmatter rewrite is idempotent by construction: normalize to a canonical shape (sorted keys, fixed quote style). Re-running the rewrite on already-normalized frontmatter is a no-op.
+3. Linker already is idempotent for the common case (line 48-51: "Already correct, skip"). Don't regress this in Phase 1 changes.
+4. Test: run the full migration command twice in a fresh container; diff the filesystem snapshots; expected diff = empty.
+
+**Warning signs:**
+- Skill directories nested inside themselves (`power-apps-builder/power-apps-builder/`)
+- SKILL.md frontmatter with multiple `---` blocks
+- Second migration run reports `"copied N skills"` when zero were newly migrated
+
+**Phase to address:** Phase 1 (Skills migration) — idempotency is a gate-criterion, not a nice-to-have.
+
+---
+
+### Pitfall 17: Skills referencing native CC slash commands (feature 4) break if command dispatch semantics change
+
+**What goes wrong:**
+Cross-feature. Migrated skills may contain instructions like `"Run /memory search foo"` or `"Use /compact when context fills."` If Phase 4 decides that `/memory` (bare) doesn't exist but `/clawcode-memory` does (per Pitfall 10), and skills aren't updated, the agent tries to execute commands that don't exist. Depending on dispatch semantics (see Pitfall 8), the command is either rejected with a clear error, or silently treated as text and the LLM invents a plausible response.
+
+**Why it happens:**
+Skills written against OpenClaw or against the CC CLI carry hard-coded command names. No schema enforces a dependency on specific commands.
+
+**How to avoid:**
+1. During Phase 1 migration, grep every SKILL.md for slash patterns (`\s/[a-z]+`). Flag them. For each, decide: rewrite to the `clawcode-*` namespace, or add an equivalent command under the chosen namespace.
+2. Publish a canonical command reference in the ClawCode docs and reference it from SKILL.md files (link, not copy).
+3. In Phase 4, maintain a deprecated-aliases table (`"/memory" → "/clawcode-memory"`) that the interaction handler transparently routes. Log a deprecation warning to the agent so it self-corrects its outputs.
+
+**Warning signs:**
+- `grep -rn "\s/[a-z][a-z-]*" ~/.clawcode/skills/` returns hits after migration
+- Agent output in Discord: "I'll use /memory search..." followed by silence or confabulated result
+
+**Phase to address:** Phase 1 (Skills migration) discovery, Phase 4 (Native CC slash) alias routing.
+
+---
+
+### Pitfall 18: `self-improving-agent` skill re-writes its own workspace files — unsafe in a shared basePath
+
+**What goes wrong:**
+`~/.openclaw/skills/self-improving-agent/` edits agent files in-place. v2.1 introduced shared-basePath support for the finmentum family (`schema.ts:649` `memoryPath`) — multiple agents point at ONE workspace for SOUL.md but separate memoryPaths for isolation. A self-modifying skill writing to `<workspace>/SOUL.md` now affects every agent sharing that basePath. Two agents running the skill concurrently race each other's writes.
+
+**Why it happens:**
+The skill was designed before shared-basePath existed. Phase 75 invariants (PROJECT.md:85) were not a constraint at skill authoring time.
+
+**How to avoid:**
+1. Audit self-modifying skills for write paths. Any skill that writes to `workspace/*` must be scope-flagged (per Pitfall 13): `scope: single-agent` or `scope: family-owner-only`.
+2. Linker refuses to install a `scope: single-agent` skill on an agent that shares its basePath with siblings (the config has `memoryPath` set AND another agent has the same `workspace`).
+3. Phase 2-complete test: run self-improving-agent on a shared-basePath agent; assert it refuses with a clear error, not a silent race.
+
+**Warning signs:**
+- Grep `writeFile.*SOUL\|writeFile.*IDENTITY` in skill bodies or scripts
+- Finmentum agent siblings see each other's SOUL edits
+- Concurrent file-modification-time stamps on shared workspace files
+
+**Phase to address:** Phase 1 (Skills migration) — scope-flag enforcement.
+
+---
+
+## Cross-Feature Pitfalls
+
+### Cross-Pitfall A: Extending clawcode.yaml schema (feature 2) invalidates v2.1-migrated configs
+
+**What goes wrong:**
+Feature 2 (effort mapping) may want to add fields like `thinkingBudget`, `reasoning_effort` aliases, or per-effort cost overrides. The 15 v2.1-migrated agents have fixed YAMLs; a schema change that isn't additive-with-defaults breaks them on load.
+
+**How to avoid:**
+- All new agent-level fields in Phase 2: `z.TYPE().optional()` with no default OR `.default(SAFE_VALUE)` matching current behavior. Never introduce a required new field.
+- Re-run `clawcode migrate openclaw verify` as Phase 2 final step.
+
+**Warning signs:**
+- Zod `.strict()` appears on `agentSchema`
+- New fields without `.optional()` or defaults
+- v2.1 verify breaks post-phase
+
+**Phase to address:** Phase 2.
+
+---
+
+### Cross-Pitfall B: Namespace shared between Phase 3 model picker and Phase 4 native CC commands
+
+**What goes wrong:**
+Described in Pitfall 10. If Phase 3 ships `/clawcode-model` with one set of semantics, then Phase 4 adds `/model` (bare) with different semantics, users are confused and the dual picker's value proposition breaks.
+
+**How to avoid:**
+Decide namespace convention BEFORE Phase 3 kickoff. Convention: all ClawCode Discord commands MUST be prefixed `clawcode-`. Native-CC parity commands are `/clawcode-clear`, `/clawcode-memory`, etc. Phase 4 does not add bare commands.
+
+**Warning signs:**
+Any new `DEFAULT_SLASH_COMMANDS` entry lacking `clawcode-` prefix.
+
+**Phase to address:** Phase 3 (namespace decision), Phase 4 (implementation follows convention).
+
+---
+
+### Cross-Pitfall C: Skills (feature 1) reference commands whose dispatch (feature 4) is not yet implemented
+
+Described in Pitfall 17. Sequencing matters:
+- Phase 1 produces the skill corpus + flags slash-command references.
+- Phase 4 owns the alias/routing table that makes those references work.
+- If Phase 1 ships and Phase 4 is delayed, migrated skills emit dead commands in agent outputs.
+
+**How to avoid:**
+Phase 1 acceptance criterion: "zero unresolved slash references in migrated skills." If Phase 4's command set isn't finalized, Phase 1 must rewrite skill text (via sed-style script in the migration CLI) to use `clawcode-status`-style defaults that already exist.
+
+**Phase to address:** Phase 1 acceptance criteria + Phase 4 sequencing.
+
+---
+
+### Cross-Pitfall D: Hot-reload classification for new fields
+
+Any new top-level or agent-level field added in v2.2 (effort-related, model-allowed-list, slash-command entries) must be explicitly classified in `RELOADABLE_FIELDS` / `NON_RELOADABLE_FIELDS` (`src/config/types.ts:45-67`). Forgetting the classification means the differ defaults to non-reloadable (line 148), which is safe-but-surprising: a cosmetic change requires daemon restart.
+
+**How to avoid:**
+- Every PR that touches `schema.ts` must also touch `types.ts` RELOADABLE/NON_RELOADABLE sets.
+- Add a unit test: enumerate every `agents.*.<field>` in the schema, assert each appears in one of the two sets.
+
+**Phase to address:** All phases adding schema fields (Phase 2, potentially Phase 3, potentially Phase 4).
 
 ---
 
 ## Technical Debt Patterns
 
-Shortcuts that seem reasonable but create long-term problems.
-
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|---|---|---|---|
-| "Just copy the whole workspace with `cp -r`, fix later" | Fastest path to an MVP migration | Broken symlinks, bloated node_modules, path absolute-path corruption | **Never.** Always use rsync with explicit excludes from day one. |
-| "Inline all souls in YAML, it's simpler" | Single-file config diff review | 3k+ line YAML, breaks file-watching workflow, users confused where to edit | **Never for production** — reference SOUL.md files. Inline OK for `test-agent` as we have today. |
-| "Keep copying gemini embeddings, we can re-embed later" | Migrator finishes in seconds, not hours | `vec_memories` is unusable; nothing works until re-embed completes | **Never.** Re-embed or don't migrate. |
-| "Skip the idempotency / `origin_id` — we'll just not re-run it" | Simpler migrator code | Operator inevitably re-runs; duplicate memory rows are hard to dedupe post-hoc | **Never.** Idempotency is a 1-line schema addition + `INSERT OR IGNORE`. |
-| "Use `fs.cp` for sqlite — it's just a file" | No need to learn backup API | Corrupted DB on a live daemon; lost last N minutes of memory | **Only when the source daemon is fully stopped.** Never on a live writer. |
-| "Migrate all 15 agents in one shot over a weekend" | Shorter coexistence window | Any bug stops the whole fleet; rollback blast radius is everyone | **Never.** Staged per-agent with 24h soak between each. |
-| "Skip the Discord coexistence check — the operator will remember" | One less CLI subcommand | First duplicate-reply incident in prod destroys user trust | **Never.** CLI must enforce. |
-| "No rollback — forward-only, we'll fix bugs forward" | Simpler CLI, less code | 8 of 15 done + bug discovered = either ship broken or dual-maintain two tools | **Never for a 15-agent migration.** Rollback is cheap to build now. |
+|----------|-------------------|----------------|-----------------|
+| Text-prompt native CC commands instead of control-plane dispatch | Ships fast; LLM "responds" plausibly | Silent correctness failures (Pitfall 8); command guarantees lie | Never for `/clear`, `/model`, `/compact`, `/mcp`. Acceptable ONLY for prompt-like ones (`/review`, `/security-review`). |
+| Writing clawcode.yaml from the OpenClaw picker | Preserves v2.1 UX without ClawCode IPC work | Lost updates (Pitfall 6); partial YAML corruption; config-reload races (Pitfall 5) | Never. Use IPC. |
+| Skipping idempotency checks in skills migration | Smaller migration CLI diff | Silent corruption on re-run; hard-to-reproduce bugs | Never. Idempotency is the migration contract. |
+| Migrating finmentum skills to all agents | "Just get everything over" | Secret leaks (Pitfall 13); SOUL drift; cross-family confusion | Never. Explicit per-agent assignment only. |
+| Bare `/model`, `/memory`, `/clear` instead of `clawcode-*` prefixed | Perfect CC CLI parity | Collision with community Discord bots; Pitfall 10 | Only if ClawCode deployments are guaranteed to never share a guild with other bots — essentially never. |
+| Defaulting thinking tokens `high` across all agents | Simple mental model | Cost blowout (Pitfall 3); no guard against Haiku unsupported (Pitfall 2) | Only for Opus-bound admin agents with explicit budget monitoring. |
+| Linker eager-rewriting existing symlinks | Always-correct state | Races with live daemon reads; can silently replace native ClawCode skills with OpenClaw imports (Pitfall 15) | Default (current behavior is fine); add content-hash guard if skill re-migrations become common. |
+
+---
 
 ## Integration Gotchas
 
-Common mistakes when connecting to external services.
-
 | Integration | Common Mistake | Correct Approach |
-|---|---|---|
-| Discord bot identity | Assuming channel ID is enough; forgetting bot-must-be-member | Pre-flight check: `discord.js client.channels.fetch(id)` succeeds + has `MANAGE_WEBHOOKS` |
-| Discord webhooks | Creating a new webhook per agent, ignoring existing ones | ClawCode's `webhook-provisioner` already reuses bot-owned webhooks — use it, don't write a parallel |
-| 1Password CLI (`op://` refs) | Assuming refs resolve at YAML parse time | ClawCode resolves at session spawn — make sure `op` CLI is available in the daemon's PATH (see project memory about EnvironmentFile PATH gotcha on systemd) |
-| sqlite-vec extension | Forgetting to call `loadExtension()` before using `vec_memories` | Already handled in ClawCode's memory init — but verify in any migration script that opens `memories.db` directly |
-| MCP servers with `op://` env vars | Migrating agent expects MCP server env that's not in `clawcode.yaml:mcpServers` | Migrator validates: every `mcpServers` ref in an agent config has a matching top-level `mcpServers.<name>` definition |
-| Git repos in workspaces | `git clone` accidentally pointing at a moved workspace | Run `git fsck` + `git remote -v` post-migration; fix absolute remote URLs if any |
-| Chokidar on a shared workspace | Registering 5 watchers on same path (finmentum) → 5× event amplification | Shared-workspace plan must include single-watcher/fan-out |
-| Anthropic API | Per-agent rate limit assumed unlimited at fleet scale | Enforce global fleet ceiling before cutover (Pitfall 13) |
+|-------------|----------------|------------------|
+| Claude Agent SDK 0.2.97 | Calling `q.setMaxThinkingTokens()` expecting v4-style behavior | Read `sdk.d.ts:1713` — deprecated in favor of per-query `thinking` option. On Opus 4.6, `setMaxThinkingTokens(0)` = off, positive = adaptive. |
+| Discord Application Commands API | Registering per-agent variants (300 commands) | Register once per guild, dispatch-by-channel (existing pattern at `slash-commands.ts:126-174`). Hard cap: 100/guild, 100 global. |
+| chokidar config watcher | Assuming `agents.*.model` edits are reloadable | It's explicitly non-reloadable (`types.ts:58`). Write-back triggers full session restart. |
+| `yaml` v2.8.3 Document AST | Concurrent writers from two processes | Atomic temp+rename does NOT prevent concurrent writers — only crash-mid-write. Use IPC for serialized writes. |
+| MCP server env vars (1Password refs) | Dumping `mcpServerSchema.env` to Discord | Redact all env values in Discord output; expose only via local CLI. |
+| Skill linker symlinks | Assuming file-based skills are non-racy | Daemon reads SKILL.md at boot + heartbeat; mid-migration linker changes can return partial reads. Quiesce or snapshot before linker writes. |
+| Session fork (`forkSession`) | Expecting effort/thinking state to be fresh | Forks inherit parent state including `currentEffort`. Reset in `buildForkConfig`. |
+
+---
 
 ## Performance Traps
 
-Patterns that work at small scale but fail as usage grows.
-
 | Trap | Symptoms | Prevention | When It Breaks |
-|---|---|---|---|
-| Re-embedding everything serially during migration | 12+ hour migration window, user impatient, operator interrupts → corrupt state | Batch: embed N=32 chunks per call, parallelize across agents, progress bar with ETA | fin-acquisition has ~5000 chunks; serial 50ms embed = 4+ minutes just for that one agent |
-| All 15 agents cold-starting simultaneously at daemon restart | Disk I/O saturates, embedding model loads 15× (if warm-path isn't shared) | Stagger agent start by 2-3s each; ensure the embedding singleton from v1.7 warm-path is actually shared not per-agent | 15 agents × 23MB model load × parallel = IO storm + RAM pressure |
-| Single-writer finmentum workspace with 5 agents | MEMORY.md write contention, heartbeat storm | Per-agent subdirectory (Pitfall 4 option 1) | As soon as 2+ finmentum agents are active in same hour |
-| FTS5 rebuild after bulk memory insert | First query after migration takes 30s+ | `INSERT INTO memories_fts` batched inside a single transaction; run `INSERT INTO memories_fts(memories_fts) VALUES('optimize')` at end | ~10k memories migrated total across fleet |
-| Chokidar events from 15 agent workspaces (not finmentum) | Events/sec spike, debounces start rejecting | Fine at current scale (15 × ~10 files watched each = ~150) — monitor daemon event loop lag | >50 agents, or per-directory instead of per-file watching |
+|------|----------|------------|----------------|
+| Per-agent slash command registration | Discord 400 `code: 30034` | Dedupe by name, dispatch-by-channel | At 5 agents × 20 commands = 100 |
+| Effort `max` on every turn | 5-10× token cost, latency spike | Guard by model capability; budget per-agent | At first admin-heavy day |
+| Thinking tokens breaking prompt cache | `cache_read_input_tokens` stays 0 turn-over-turn | Verify cache hit rate post-effort-wire; thinking-token inclusion may invalidate cached prefix if v1.7 caching puts them in the cached block | Detected only by monitoring, not by test |
+| Skill scanner on every heartbeat with 200+ skills | CPU spike; file I/O churn | Cache `scanSkillsDirectory` output; invalidate only on chokidar SKILL.md change | At ~50 skills with 60s heartbeat |
+| Loading full ConversationStore for `/clawcode-cost` | Slow response, DB contention | Query aggregated view, not raw rows | After a few weeks of per-agent conversation history |
+
+---
 
 ## Security Mistakes
 
-Domain-specific security issues beyond general web security.
-
 | Mistake | Risk | Prevention |
-|---|---|---|
-| Copying Discord bot token plaintext from openclaw.json to clawcode.yaml | Token leaks in git history; rotated tokens re-exposed | Migrator refuses to write any raw secret; enforces `op://` references (Pitfall 6) |
-| Leaving `openclaw.json.backup-*` files in a workspace that gets committed | Old plaintext secrets in git history | Add to `.gitignore`; audit git log pre-commit |
-| Migrating agent credentials for rotated keys | Attacker with the old key can still use them after "rotation" felt complete | Rotate secrets on migration day as a standard step |
-| Migrated agent MCP env vars point at HTTP endpoints with secrets in URLs (HA_URL, BROWSERLESS_URL) | Internal services that were behind tailscale (`100.x.y.z` addresses) — verify new daemon has tailscale access | Check migrated agent's `mcpServers.*.env` URL schemes resolve from the daemon's network namespace |
-| Prompt injection via migrated session summaries | Pitfall 8 alternative: summarizing 413 JSONL files through Haiku means feeding attacker-controlled text into LLM | Run summaries with v1.9's SEC-02 instruction-pattern detection; sanitize before storing as MemoryEntry |
-| Workspace markdown containing `op://` references that the migrator tries to "resolve" | Secret materialization in markdown files | Migrator does NOT resolve `op://` refs during copy — only the daemon does at runtime |
-| Multi-tenant shared workspace (finmentum) — one agent reads another's sensitive data | `fin-tax` reads `fin-acquisition`'s compliance docs — actually desired here since they're the same org, but in theory a risk | Document the threat model explicitly: "finmentum family = single-trust-boundary" |
+|---------|------|------------|
+| `/mcp` dumps env including 1Password vault refs | Attackers map vault structure; correlate to exfiltration | Redact all env; expose server names only |
+| Finmentum-CRM skill description contains literal DB creds (confirmed in source file) | Any agent with the skill linked leaks MySQL creds in system prompt | Strip creds from SKILL.md; move to MCP env with op:// refs before migration |
+| `/clawcode-model` settable by any Discord user | Budget exhaustion attack: user escalates every agent to Opus, burns weekly budget in one session | `default_member_permissions` on model-changing commands, or ACL via existing `security.allowlist` |
+| `/clawcode-agent-create` reachable in unprivileged channels | Account takeover via malicious agent creation | Already requires name+soul; add admin-only role gate if not present |
+| `/clear` with no audit trail | Destructive op untraceable | Emit config-audit JSONL entry (`config/audit.ts` pattern from v1.2) for every destructive slash command |
+| Symlink traversal in skills migration | Symlink in source skill pointing outside the skills tree exfiltrates files on copy | `fs.cp` with `dereference: false` + explicit path-boundary check |
+
+---
 
 ## UX Pitfalls
 
-Common user experience mistakes in this domain.
-
 | Pitfall | User Impact | Better Approach |
-|---|---|---|
-| Cutover in the middle of the user's workday | User's agent goes silent for 10 minutes, reappears with stale context | Migrate during low-activity windows per agent (check last-24h message count in openclaw gateway logs) |
-| Agent "forgets" recent conversations post-migration | User re-explains context, trust erodes | Pitfall 12 handling (disk-as-truth) + clearly communicate "migrated on YYYY-MM-DD — memories older than this are intact, anything since is fresh" |
-| Same bot name/avatar but different behavior | User doesn't know they're talking to the new system | Keep the webhook display name identical pre/post migration (name=identity.name, avatar=whatever was set); announce migration in the channel |
-| Double replies during coexistence | User annoyance, confusion about which is "real" | Pitfall 10 cutover protocol |
-| Opus-fork silently disabled | Agent suddenly "dumber" for complex questions; user doesn't know why | Fork refusal posts a visible notice in the Discord channel, not just daemon logs |
-| Shared workspace means `@fin-research` responds about tax topics it doesn't own | finmentum agents confused about their scope | Each finmentum agent needs a clear SOUL/IDENTITY scope even though they share files |
-| Config-audit-trail notifications to a Discord channel during migration | Channel floods with 50 reload events | Suppress audit trail during explicit migration window (dedicated `--migration-mode` flag on migrate CLI) |
+|---------|-------------|-----------------|
+| `/clawcode-effort max` replies "Effort set to max" when model doesn't support it | User thinks agent is thinking deeply; it isn't | Validate against model capability; reply with downgrade notice |
+| Picker shows exhausted-budget models as available | User picks Opus, first turn errors | Annotate unavailable models with reason in the picker UI |
+| `/clawcode-clear` wipes memory users rely on | Weeks of context gone, no undo | Confirmation flow + named qualifier (`-session` vs `-memory`) |
+| Two pickers (OpenClaw + ClawCode) with similar names, different behaviors | User learns the wrong one, reports "bug" | Deprecate OpenClaw picker visibly; UI hint `"use /clawcode-model"` in OpenClaw picker output |
+| Native CC commands register with CC-CLI descriptions ("clears the context") | Users expect CC CLI semantics; ClawCode semantics differ | Rewrite descriptions to clarify ClawCode behavior; link to docs |
+
+---
 
 ## "Looks Done But Isn't" Checklist
 
-Things that appear complete but are missing critical pieces.
+- [ ] **Effort slash command:** setEffort actually calls `q.setMaxThinkingTokens` (or passes `thinking` on the query) — verify by spying on query options, not handle state
+- [ ] **Effort slash command:** rejected `max` on Haiku-bound agents with a useful error
+- [ ] **Effort slash command:** forks reset to `low` regardless of parent effort
+- [ ] **Dual model picker:** neither picker writes clawcode.yaml directly; all mutations go through daemon IPC
+- [ ] **Dual model picker:** available-models list accounts for budget state, not just YAML allowlist
+- [ ] **Native CC commands:** every command has an explicit `nativeBehavior` tag (`sdk-controlled | prompt-routed | daemon-owned`)
+- [ ] **Native CC commands:** slash command count at daemon boot verified `<= 90`
+- [ ] **Native CC commands:** no bare `/model`, `/clear`, `/memory` — all prefixed `clawcode-`
+- [ ] **Native CC commands:** `/mcp` output redacts all env values and sensitive fields
+- [ ] **Skills migration:** re-running migration CLI twice produces identical filesystem state (idempotency verified by hash)
+- [ ] **Skills migration:** `grep -r "op://\|_PASSWORD\|_TOKEN\|_KEY" ~/.clawcode/skills/` returns zero hits
+- [ ] **Skills migration:** finmentum-* skills only linked into finmentum-family agents (no cross-contamination)
+- [ ] **Skills migration:** scanner extracts useful descriptions for all migrated skills (none defaulted to `""` or `"# Title"`)
+- [ ] **Skills migration:** every SKILL.md passes a zod frontmatter schema check
+- [ ] **Schema evolution:** `clawcode migrate openclaw verify` passes on all 15 agents after v2.2 ship
+- [ ] **Schema evolution:** every new field in `schema.ts` has a matching entry in `RELOADABLE_FIELDS` or `NON_RELOADABLE_FIELDS`
+- [ ] **Cross-feature:** audit every migrated SKILL.md for slash references; each reference resolves to a registered command post-Phase 4
 
-- [ ] **Memory migrated:** Often missing parity verification — verify 5 known-good semantic queries return same top-1 chunk per agent
-- [ ] **Memory migrated:** Often missing `vec_length()==384` assertion — verify `SELECT vec_length(embedding) FROM vec_memories` everywhere
-- [ ] **Workspace copied:** Often missing absolute-path rewrite — verify `grep -r '/home/jjagpal/.openclaw/' <new-workspace>` is empty
-- [ ] **Workspace copied:** Often missing broken-symlink scan — verify `find <new-workspace> -xtype l | wc -l` is 0
-- [ ] **Agent spawns:** Often missing Discord permission check — verify bot is member + has MANAGE_WEBHOOKS for every channel
-- [ ] **Agent spawns:** Often missing first-heartbeat success — verify heartbeat runs within 2× intervalSeconds with no errors
-- [ ] **Memory search works:** Often missing embedding model consistency check — verify `memories.db` queries actually return results on common terms the agent knew
-- [ ] **Config loaded:** Often missing secret-shape audit — verify `grep -E 'sk-|M[A-Za-z0-9]{23}\\.' clawcode.yaml` is empty
-- [ ] **Shared workspace agents:** Often missing per-agent namespace — verify each finmentum agent writes to its own subdir (MEMORY.md is per-agent, not shared)
-- [ ] **Session summaries migrated:** Often missing — decide explicitly "archive-only" (Pitfall 8), don't leave ambiguous
-- [ ] **Rollback tested:** Often missing — rollback one agent end-to-end before migrating all 15
-- [ ] **Budget guard active:** Often missing — verify fork budget enforcement with an integration test that triggers fork over-budget and confirms refusal
-- [ ] **OpenClaw unbinding:** Often missing — verify `openclaw.json:bindings` does not contain any channel ID also in `clawcode.yaml:agents[*].channels` post-cutover
-- [ ] **Identity files surface:** Often missing — verify the user can still edit SOUL.md the way they used to (or explicit doc that it moved to YAML)
-- [ ] **Agent has correct MCP servers:** Often missing — verify migrated agent's `mcpServers:` list covers everything it had in OpenClaw (finnhub, google-workspace, etc. as appropriate per agent)
+---
 
 ## Recovery Strategies
 
-When pitfalls occur despite prevention, how to recover.
-
 | Pitfall | Recovery Cost | Recovery Steps |
-|---|---|---|
-| Wrong-dimension embeddings written to vec_memories | **MEDIUM** | `DELETE FROM vec_memories WHERE memory_id IN (SELECT id FROM memories WHERE origin_id LIKE 'openclaw:%')`, re-run migrator's embed step only |
-| Duplicate memories from re-run | **LOW** if origin_id column exists: `DELETE FROM memories WHERE id NOT IN (SELECT MIN(id) FROM memories GROUP BY origin_id)`. **HIGH** without it: requires content-hash dedup pass |
-| Corrupted sqlite from live-copy | **HIGH** (need to re-run migration for that agent after stopping source daemon) | Stop OpenClaw for that agent, rerun migrator using sqlite backup API, verify integrity |
-| Secrets committed to clawcode.yaml | **HIGH** (rotate all exposed secrets; git history filter) | Rotate Anthropic/OpenAI/Brave/HA/etc. keys; `git filter-repo` or `bfg-repo-cleaner`; force-push; audit who pulled |
-| Broken symlinks / node_modules in migrated workspace | **LOW** | `find -xtype l -delete`, re-run `npm install` where needed |
-| Double replies from both OpenClaw and ClawCode bots | **LOW** | Remove binding from one side (probably OpenClaw), no state-side fix needed |
-| 8-of-15 migrated, agent-9 bug | **MEDIUM** (thanks to snapshot-before-apply) | `clawcode migrate rollback --snapshot <id>` for agent 9; leave 1-8 as-is; fix bug; resume |
-| Shared-workspace finmentum corruption | **HIGH** (5 agents' MEMORY.md interleaved is hard to untangle) | Restore MEMORY.md per-agent from the pre-migration snapshot of `workspace-finmentum`; add per-agent subdir; re-migrate |
-| Fork budget blown mid-day | **NON-RECOVERABLE** (money spent) | Hard-kill fork capability fleet-wide; issue post-mortem; lower budgets; enforce ceiling in code going forward |
-| Partial hot-reload leaves half-spawned agents | **LOW** | `clawcode fleet stop-all; fleet start-all` (full daemon restart) |
-| Migration tool wrote to ~/.openclaw/ by mistake | **HIGH** | Restore from OpenClaw's `.openclaw/backups/` directory (present on-box); audit code review process failed |
+|---------|---------------|----------------|
+| Effort never wired (Pitfall 1) | LOW | Land the wiring + integration test in a hotfix; no data loss |
+| Cost blowout from unguarded `max` (Pitfall 3) | MEDIUM | Retroactive budget cap enforcement; audit the week's costs; refund via `/clawcode-usage` correction |
+| Schema break on v2.1 configs (Pitfall 4, Cross-A) | HIGH | Roll back v2.2; re-run v2.1 verify; re-apply v2.2 with fixed schema |
+| Lost YAML updates from dual writer (Pitfall 6) | MEDIUM | Restore from JSONL audit trail (v1.2 config audit); re-apply missing writes manually |
+| Finmentum creds leaked to all agents (Pitfall 13) | HIGH | Rotate DB creds; purge affected agent memories (`memory_purge` per-agent); re-migrate with secret scanner |
+| `/clear` wiped memories (Pitfall 11) | HIGH-to-UNRECOVERABLE | If cold-archive still intact, re-warm; otherwise, memories gone. Prevent recurrence with confirmation + named commands |
+| Discord 100-command limit hit (Pitfall 9) | LOW | Remove duplicates; bulk-overwrite with slimmed list |
+| SDK dispatch gap (Pitfall 8) | MEDIUM | Identify affected commands; replace text-prompt routing with daemon-owned implementations |
+
+---
 
 ## Pitfall-to-Phase Mapping
 
-How roadmap phases should address these pitfalls.
-
 | Pitfall | Prevention Phase | Verification |
-|---|---|---|
-| 1. Embedding dimension mismatch | **Memory-translation phase** (dedicated, must land first) | 5 known-good queries per agent; `vec_length()==384` |
-| 2. Re-run duplicates | **Memory-translation phase** | Re-run migrator, confirm `upserted=0` on second run |
-| 3. Live-daemon copy corruption | **Migration tooling phase** (CLI) | Migrate with source daemon live, verify integrity; then stop daemon, re-verify |
-| 4. Shared-workspace finmentum | **Shared-workspace support phase** (prerequisite — new feature, not migration) | 2 agents writing to shared workspace don't interleave; chokidar events fire once |
-| 5. Discord bot identity divergence | **MCP + Discord wiring phase** | Pre-flight check in CLI; dry-run reports missing bot-in-channel |
-| 6. Plaintext secrets leaked | **Config-mapping phase** | grep pre-commit hook; CI secret-scan on clawcode.yaml |
-| 7. fs.cp on git repo workspaces | **Workspace-migration phase** | `git fsck` post-copy; broken-symlink scan == 0 |
-| 8. JSONL replay | **Explicit decision in session-history phase** (archive-only) | Document the decision; confirm ConversationStore has no migration-origin rows |
-| 9. Hot-reload mid-edit | **Migration tooling phase** | Migrator uses atomic rename; daemon log shows 1 reload event not 15 |
-| 10. Coexistence double-replies | **Cutover phase** + migration CLI precheck | Per-agent 15-min observation post-cutover; openclaw.json bindings diff |
-| 11. Partial failure, no rollback | **Migration tooling phase** (snapshot + rollback subcommands are phase-1 features) | Test rollback end-to-end before first real migration |
-| 12. Disk vs sqlite drift | **Memory-translation phase** | Log drift, operator reviews; disk-as-truth encoded in spec |
-| 13. Fork budget explosion | **Fleet-scale budget phase** (pre-migration prerequisite) | Integration test: agent triggers over-budget fork, gets refusal |
-| 14. Identity inline vs. file | **Config-mapping phase** (design decision) | Documented choice; user can edit the way they expect |
-| 15. Workspace structure variance | **Migration tooling phase** | Per-agent manifest printed in dry-run; operator reviews before apply |
+|---------|------------------|--------------|
+| 1: setEffort never wired | Phase 2 | Integration test spies on outgoing query's `thinking` option |
+| 2: `max` on Haiku | Phase 2 | Unit test: `/clawcode-effort max` on haiku agent returns error |
+| 3: Fork inherits effort | Phase 2 | Unit test: fork from parent with effort=max, assert fork.getEffort()==='low' |
+| 4: Schema break on v2.1 configs | Phase 2 | Post-phase `clawcode migrate openclaw verify` passes on all 15 |
+| 5: `/clawcode-model` hot-reload race | Phase 3 | Test: fire chokidar event mid-turn; assert turn completes, no restart |
+| 6: Dual-writer YAML corruption | Phase 3 | Design decision: IPC-only write path; code review gate |
+| 7: Stale allowed-model list | Phase 3 | Test: exhaust budget; picker shows Opus with "(exhausted)" annotation |
+| 8: SDK dispatch gap | Phase 4 | Audit table exists; every native-CC command has `nativeBehavior` tag |
+| 9: Discord 100-command limit | Phase 4 | Boot-time assert `allCommands.length <= 90`; CI check |
+| 10: Namespace collision | Phase 3 (decision), Phase 4 (enforcement) | Lint rule: all command names match `^clawcode-` |
+| 11: `/clear` destructive | Phase 4 | Destructive commands require confirmation + audit log entry |
+| 12: `/mcp` leaks config | Phase 4 | Security-reviewer agent audits `/clawcode-mcp` output before ship |
+| 13: Finmentum creds in skills | Phase 1 | `scanSecrets` on all SKILL.md; zero hits post-migration |
+| 14: SKILL.md format drift | Phase 1 | Zod schema enforced at migration; scanner reads description from frontmatter |
+| 15: Symlink collision | Phase 1 | Migration renames on collision; zero overwrites of ClawCode-native skills |
+| 16: Non-idempotent migration | Phase 1 | Re-run produces empty diff; hash-based skip in place |
+| 17: Dead slash refs in skills | Phase 1 (detection), Phase 4 (alias) | Grep audit post-migration; every slash ref resolves |
+| 18: Self-modifying skills in shared basePath | Phase 1 | Scope flag on skills; linker refuses cross-scope assignments |
+| Cross-A: Schema extensions break v2.1 | Phase 2 | All new fields optional or defaulted; v2.1 verify passes |
+| Cross-B: Phase 3/4 namespace collision | Phase 3 kickoff | Namespace convention documented and enforced |
+| Cross-C: Skills reference unshipped commands | Phase 1 | Phase 1 rewrites references OR Phase 4 ships alias table |
+| Cross-D: New fields unclassified for hot-reload | Every phase touching schema | Unit test enumerates schema fields, asserts each classified |
 
-## Suggested Phase Ordering (implied from above)
-
-1. **Fleet-scale fork budgeting** (prerequisite, small; mitigates Pitfall 13)
-2. **Shared-workspace support** (prerequisite, medium; mitigates Pitfall 4)
-3. **Migration tooling / CLI skeleton** (dry-run + snapshot + rollback, no execution yet; mitigates 3/9/11/15)
-4. **Config mapping + secret guard** (CLI writes YAML safely; mitigates 5/6/14)
-5. **Workspace migration** (rsync + path rewrite + symlink audit; mitigates 7)
-6. **Memory translation** (re-embed from disk, idempotent via origin_id; mitigates 1/2/12)
-7. **Session history archive-only decision** (ratify, document; mitigates 8)
-8. **Pilot migration** (personal or local-clawdy — smallest, lowest-risk)
-9. **Finmentum family migration** (tests shared workspace under real load)
-10. **Cutover + OpenClaw coexistence retirement** (mitigates 10)
+---
 
 ## Sources
 
-- OpenClaw sqlite schema: direct `.schema` + `SELECT meta` inspection on `~/.openclaw/memory/general.sqlite`, `fin-acquisition.sqlite`, `finmentum-content-creator.sqlite` (2026-04-20)
-- ClawCode sqlite schema: direct `.schema` inspection on `~/.clawcode/agents/test-agent/memory/memories.db` (2026-04-20)
-- ClawCode source code: `/home/jjagpal/.openclaw/workspace-coding/src/` — `config/watcher.ts`, `config/types.ts`, `config/loader.ts`, `memory/store.ts`, `manager/agent-provisioner.ts`, `discord/webhook-provisioner.ts`, `usage/budget.ts`, `manager/fork.ts`
-- Live system state: `systemctl --user list-units`, `ps auxf`, `pgrep` (confirmed `openclaw-gateway.service` active, PID 755761)
-- OpenClaw config: `/home/jjagpal/.openclaw/openclaw.json` (2882 lines; parsed for agent list, bindings, channels)
-- Disk layout: `ls`, `find`, `du -sh` across `~/.openclaw/memory/`, `~/.openclaw/workspace-*/`, `~/.clawcode/agents/`
-- Project memory: `~/.claude/projects/-home-jjagpal--openclaw-workspace-coding/memory/MEMORY.md` for EnvironmentFile PATH gotcha and fork-escalation Phase 39 context
-- ClawCode PROJECT.md: `.planning/PROJECT.md` for v1.5/v1.7/v1.9 feature context (fork escalation, warm-path embedding singleton, ConversationStore schema)
+- `/home/jjagpal/.openclaw/workspace-coding/src/config/schema.ts` — lines 7-84 (effort schema, model schema); 640-701 (agent schema with effort field); 940-983 (superRefine enforcement)
+- `/home/jjagpal/.openclaw/workspace-coding/src/config/types.ts` — lines 45-79 (RELOADABLE/NON_RELOADABLE classification)
+- `/home/jjagpal/.openclaw/workspace-coding/src/config/differ.ts` — field-level diff + pattern matching
+- `/home/jjagpal/.openclaw/workspace-coding/src/discord/slash-commands.ts` — lines 126-174 (dedupe by name, per-guild register); 264-284 (effort handler); 357-478 (control-command IPC dispatch)
+- `/home/jjagpal/.openclaw/workspace-coding/src/discord/slash-types.ts` — full file (DEFAULT_SLASH_COMMANDS + CONTROL_COMMANDS)
+- `/home/jjagpal/.openclaw/workspace-coding/src/skills/scanner.ts` — lines 10-43 (frontmatter + description extraction)
+- `/home/jjagpal/.openclaw/workspace-coding/src/skills/linker.ts` — lines 43-63 (symlink idempotency logic)
+- `/home/jjagpal/.openclaw/workspace-coding/src/manager/session-manager.ts` — lines 526-537 (setEffortForAgent/getEffortForAgent); 546-559 (forkSession)
+- `/home/jjagpal/.openclaw/workspace-coding/src/manager/persistent-session-handle.ts` — lines 85-96 (currentEffort init); 599-606 (setEffort TODO comment)
+- `/home/jjagpal/openclaw-claude-bridge/src/claude.js` — lines 41-58 (mapEffort), 116-121 (MAX_THINKING_TOKENS=0 disable logic)
+- `/home/jjagpal/.openclaw/workspace-coding/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` — lines 85-91 (agent effort), 428-433 (effort level doc), 892-904 (model capability lookup), 1159-1190 (thinking + effort options), 1713-1721 (setMaxThinkingTokens deprecation)
+- `/home/jjagpal/.openclaw/workspace-coding/package.json` — SDK pinned at ^0.2.97
+- `~/.openclaw/skills/cognitive-memory/SKILL.md`, `finmentum-crm/SKILL.md`, `power-apps-builder/SKILL.md` — frontmatter format samples (verified by direct read)
+- `~/.clawcode/skills/subagent-thread/SKILL.md` — ClawCode frontmatter format sample
+- `.planning/PROJECT.md` — v2.1 migration invariants (lines 85-92); v2.2 goal statement (lines 96-105)
 
 ---
-*Pitfalls research for: OpenClaw → ClawCode multi-agent data migration (v2.1)*
-*Researched: 2026-04-20*
-*Confidence: HIGH — findings verified against live source code, running daemon, and on-disk state rather than documentation inference*
+*Pitfalls research for: v2.2 OpenClaw Parity & Polish*
+*Researched: 2026-04-21*
