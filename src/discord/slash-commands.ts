@@ -195,6 +195,109 @@ export type SlashCommandHandlerConfig = {
   >;
 };
 
+// ---------------------------------------------------------------------------
+// Phase 88 Plan 02 MKT-05 / MKT-06 / UI-01 — marketplace install outcome
+// renderer. One string per outcome kind; exhaustive switch means a future
+// outcome variant trips a TS error before it reaches production silently.
+// Wire-shape matches src/marketplace/install-single-skill.ts:SkillInstallOutcome
+// but declared locally so slash-commands.ts doesn't pull in the
+// installSingleSkill implementation (keeps the module tree narrow + tests
+// hermetic).
+// ---------------------------------------------------------------------------
+
+type SkillInstallOutcomeWire =
+  | {
+      readonly kind: "installed";
+      readonly skill: string;
+      readonly targetPath: string;
+      readonly targetHash: string;
+    }
+  | {
+      readonly kind: "installed-persist-failed";
+      readonly skill: string;
+      readonly targetPath: string;
+      readonly targetHash: string;
+      readonly persist_error: string;
+    }
+  | {
+      readonly kind: "already-installed";
+      readonly skill: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "blocked-secret-scan";
+      readonly skill: string;
+      readonly offender: string;
+    }
+  | {
+      readonly kind: "rejected-scope";
+      readonly skill: string;
+      readonly agent: string;
+      readonly skillScope: "finmentum" | "personal" | "fleet";
+      readonly agentScope: "finmentum" | "personal" | "fleet";
+    }
+  | {
+      readonly kind: "rejected-deprecated";
+      readonly skill: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "not-in-catalog";
+      readonly skill: string;
+    }
+  | {
+      readonly kind: "copy-failed";
+      readonly skill: string;
+      readonly reason: string;
+    };
+
+function renderInstallOutcome(
+  outcome: SkillInstallOutcomeWire,
+  agent: string,
+  rewired: boolean,
+): string {
+  const hotReload = rewired ? "symlinks refreshed" : "pending";
+  switch (outcome.kind) {
+    case "installed":
+      return (
+        `Installed **${outcome.skill}** on ${agent}.\n` +
+        `Path: ${outcome.targetPath}\n` +
+        `Hot-reload: ${hotReload}`
+      );
+    case "installed-persist-failed":
+      return (
+        `Installed **${outcome.skill}** on ${agent} (note: clawcode.yaml persist failed: ${outcome.persist_error}).\n` +
+        `Path: ${outcome.targetPath}\n` +
+        `Hot-reload: ${hotReload}`
+      );
+    case "already-installed":
+      return `**${outcome.skill}** is already installed on ${agent} (${outcome.reason}).`;
+    case "blocked-secret-scan":
+      return (
+        `**${outcome.skill}** blocked — secret-scan refused: \`${outcome.offender}\`.\n` +
+        `(scrub the credential in the source SKILL.md and retry)`
+      );
+    case "rejected-scope": {
+      const hint =
+        outcome.skillScope === "finmentum"
+          ? "assign to a fin-* agent"
+          : outcome.skillScope === "personal"
+            ? "assign to clawdy or jas"
+            : `assign to a ${outcome.skillScope} agent`;
+      return (
+        `**${outcome.skill}** is ${outcome.skillScope}-scoped; **${agent}** is a ${outcome.agentScope} agent.\n` +
+        `Use CLI \`--force-scope\` or ${hint}.`
+      );
+    }
+    case "rejected-deprecated":
+      return `**${outcome.skill}** is deprecated: ${outcome.reason}.`;
+    case "not-in-catalog":
+      return `**${outcome.skill}** not found in marketplace catalog.`;
+    case "copy-failed":
+      return `**${outcome.skill}** copy failed: ${outcome.reason}.`;
+  }
+}
+
 /**
  * Handles Discord slash command registration and interaction dispatch.
  *
@@ -482,6 +585,23 @@ export class SlashCommandHandler {
     // branch downstream. Mirrors the /clawcode-model carve-out above.
     if (commandName === "clawcode-permissions") {
       await this.handlePermissionsCommand(interaction);
+      return;
+    }
+
+    // Phase 88 MKT-01 / UI-01 — /clawcode-skills-browse inline handler.
+    // Opens a StringSelectMenuBuilder with available marketplace skills and
+    // dispatches IPC marketplace-install on selection. Third application of
+    // the inline-handler-short-circuit-before-CONTROL_COMMANDS pattern
+    // established by /clawcode-tools (Phase 85) and /clawcode-model
+    // (Phase 86).
+    if (commandName === "clawcode-skills-browse") {
+      await this.handleSkillsBrowseCommand(interaction);
+      return;
+    }
+    // Phase 88 MKT-07 / UI-01 — /clawcode-skills inline handler.
+    // Lists installed skills + renders a native remove picker.
+    if (commandName === "clawcode-skills") {
+      await this.handleSkillsCommand(interaction);
       return;
     }
 
@@ -1266,6 +1386,375 @@ export class SlashCommandHandler {
       const msg = err instanceof Error ? err.message : String(err);
       try {
         await interaction.editReply(`Failed to set permission mode: ${msg}`);
+      } catch {
+        /* expired */
+      }
+    }
+  }
+
+  /**
+   * Phase 88 MKT-01 / MKT-05 / MKT-06 / UI-01 — /clawcode-skills-browse
+   * inline handler.
+   *
+   * Flow:
+   *   1. Defer ephemerally.
+   *   2. Fetch available skills via IPC marketplace-list.
+   *   3. Render a StringSelectMenuBuilder (truncate at 25, append overflow).
+   *   4. Await selection (30s TTL).
+   *   5. Dispatch IPC marketplace-install with the selection.
+   *   6. Render a SINGLE ephemeral outcome-specific summary (MKT-06).
+   *
+   * The outcome renderer is an exhaustive switch over all 8 SkillInstallOutcome
+   * kinds so every refusal has a distinct user-facing explanation (MKT-05).
+   */
+  private async handleSkillsBrowseCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const agentName = getAgentForChannel(
+      this.routingTable,
+      interaction.channelId,
+    );
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content: "This channel is not bound to an agent.",
+          ephemeral: true,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch {
+      return;
+    }
+
+    // Fetch available skills
+    type MarketplaceEntryWire = {
+      readonly name: string;
+      readonly description: string;
+      readonly category: "finmentum" | "personal" | "fleet";
+      readonly source: "local" | { readonly path: string; readonly label?: string };
+      readonly skillDir: string;
+    };
+    let listResp: {
+      agent: string;
+      installed: readonly string[];
+      available: readonly MarketplaceEntryWire[];
+    };
+    try {
+      listResp = (await sendIpcRequest(SOCKET_PATH, "marketplace-list", {
+        agent: agentName,
+      })) as typeof listResp;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(`Failed to load marketplace: ${msg}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    if (listResp.available.length === 0) {
+      try {
+        await interaction.editReply(
+          `All marketplace skills are already installed for **${agentName}**.`,
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const capped = listResp.available.slice(0, DISCORD_SELECT_CAP);
+    const overflow = listResp.available.length - capped.length;
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const customId = `skills-picker:${agentName}:${nonce}`;
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder("Choose a skill to install")
+      .addOptions(
+        capped.map((s) => {
+          const label = `${s.name} · ${s.category}`.slice(0, 100);
+          const desc = (s.description || "(no description)").slice(0, 100);
+          return new StringSelectMenuOptionBuilder()
+            .setLabel(label)
+            .setValue(s.name)
+            .setDescription(desc);
+        }),
+      );
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      menu,
+    );
+
+    const overflowNote =
+      overflow > 0
+        ? `\n(Showing first ${DISCORD_SELECT_CAP} of ${listResp.available.length}.)`
+        : "";
+
+    try {
+      await interaction.editReply({
+        content: `Pick a skill to install on **${agentName}**.${overflowNote}`,
+        components: [row],
+      });
+    } catch {
+      return;
+    }
+
+    // Await selection (30s TTL — same as /clawcode-model picker)
+    let followUp: StringSelectMenuInteraction;
+    try {
+      const channel = interaction.channel;
+      if (!channel) {
+        throw new Error("interaction has no channel — cannot collect");
+      }
+      followUp = (await channel.awaitMessageComponent({
+        componentType: ComponentType.StringSelect,
+        filter: (i: { user: { id: string }; customId: string }) =>
+          i.user.id === interaction.user.id && i.customId === customId,
+        time: MODEL_PICKER_TTL_MS,
+      })) as StringSelectMenuInteraction;
+    } catch {
+      try {
+        await interaction.editReply({
+          content: "Picker timed out (no selection in 30s).",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const chosen = followUp.values[0];
+    if (!chosen) {
+      try {
+        await followUp.update({
+          content: "No selection captured.",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await followUp.update({
+        content: `Installing **${chosen}** on ${agentName}...`,
+        components: [],
+      });
+    } catch {
+      /* expired */
+    }
+
+    // Dispatch install
+    try {
+      const resp = (await sendIpcRequest(SOCKET_PATH, "marketplace-install", {
+        agent: agentName,
+        skill: chosen,
+      })) as {
+        outcome: SkillInstallOutcomeWire;
+        rewired: boolean;
+      };
+      const msg = renderInstallOutcome(resp.outcome, agentName, resp.rewired);
+      try {
+        await interaction.editReply({ content: msg, components: [] });
+      } catch {
+        /* expired */
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply({
+          content: `Install failed: ${msg}`,
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+    }
+  }
+
+  /**
+   * Phase 88 MKT-07 / UI-01 — /clawcode-skills inline handler.
+   *
+   * Lists the bound agent's installed skills and renders a native
+   * StringSelectMenuBuilder remove picker. Selection dispatches IPC
+   * marketplace-remove and renders a single ephemeral outcome message.
+   */
+  private async handleSkillsCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const agentName = getAgentForChannel(
+      this.routingTable,
+      interaction.channelId,
+    );
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content: "This channel is not bound to an agent.",
+          ephemeral: true,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch {
+      return;
+    }
+
+    let listResp: { agent: string; installed: readonly string[] };
+    try {
+      listResp = (await sendIpcRequest(SOCKET_PATH, "marketplace-list", {
+        agent: agentName,
+      })) as typeof listResp;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(`Failed to load installed skills: ${msg}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    if (listResp.installed.length === 0) {
+      try {
+        await interaction.editReply(
+          `No skills installed for **${agentName}**. Use \`/clawcode-skills-browse\` to install one.`,
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const capped = listResp.installed.slice(0, DISCORD_SELECT_CAP);
+    const overflow = listResp.installed.length - capped.length;
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const customId = `skills-remove:${agentName}:${nonce}`;
+
+    const bulletList = listResp.installed.map((n) => `• ${n}`).join("\n");
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder("Choose a skill to remove")
+      .addOptions(
+        capped.map((name) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(name.slice(0, 100))
+            .setValue(name)
+            .setDescription(`Remove from ${agentName}`.slice(0, 100)),
+        ),
+      );
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      menu,
+    );
+
+    const overflowNote =
+      overflow > 0
+        ? `\n(Showing first ${DISCORD_SELECT_CAP} of ${listResp.installed.length}.)`
+        : "";
+
+    try {
+      await interaction.editReply({
+        content: `Installed skills for **${agentName}**:\n${bulletList}${overflowNote}\n\nSelect one to remove:`,
+        components: [row],
+      });
+    } catch {
+      return;
+    }
+
+    let followUp: StringSelectMenuInteraction;
+    try {
+      const channel = interaction.channel;
+      if (!channel) {
+        throw new Error("interaction has no channel — cannot collect");
+      }
+      followUp = (await channel.awaitMessageComponent({
+        componentType: ComponentType.StringSelect,
+        filter: (i: { user: { id: string }; customId: string }) =>
+          i.user.id === interaction.user.id && i.customId === customId,
+        time: MODEL_PICKER_TTL_MS,
+      })) as StringSelectMenuInteraction;
+    } catch {
+      try {
+        await interaction.editReply({
+          content: "Picker timed out (no selection in 30s).",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const chosen = followUp.values[0];
+    if (!chosen) {
+      try {
+        await followUp.update({
+          content: "No selection captured.",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await followUp.update({
+        content: `Removing **${chosen}** from ${agentName}...`,
+        components: [],
+      });
+    } catch {
+      /* expired */
+    }
+
+    try {
+      const resp = (await sendIpcRequest(SOCKET_PATH, "marketplace-remove", {
+        agent: agentName,
+        skill: chosen,
+      })) as {
+        agent: string;
+        skill: string;
+        removed: boolean;
+        persisted: boolean;
+        persist_error: string | null;
+        reason?: string;
+      };
+
+      let msg: string;
+      if (!resp.removed) {
+        msg = `${resp.skill} not removed from ${agentName}${resp.reason ? ` (${resp.reason})` : ""}`;
+      } else if (resp.persisted) {
+        msg = `Removed **${resp.skill}** from ${agentName}.`;
+      } else {
+        msg =
+          `Removed **${resp.skill}** from ${agentName} (note: clawcode.yaml write failed: ${resp.persist_error ?? "unknown"}).`;
+      }
+      try {
+        await interaction.editReply({ content: msg, components: [] });
+      } catch {
+        /* expired */
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply({
+          content: `Remove failed: ${msg}`,
+          components: [],
+        });
       } catch {
         /* expired */
       }

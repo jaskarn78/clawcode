@@ -442,7 +442,7 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
   // T7 — CONTROL_COMMANDS shape + count invariants
   // -------------------------------------------------------------------------
 
-  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 14 (Phase 87 CMD-04)", () => {
+  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 16 (Phase 88 added skills-browse + skills)", () => {
     const interrupt = CONTROL_COMMANDS.find((c) => c.name === "clawcode-interrupt");
     const steer = CONTROL_COMMANDS.find((c) => c.name === "clawcode-steer");
     expect(interrupt).toBeDefined();
@@ -471,11 +471,12 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
     expect(agentOpt).toBeDefined();
     expect(agentOpt!.required).toBe(false);
 
-    // Combined count = 14 (6 default + 8 control).
-    // Phase 87 CMD-04 removed clawcode-compact + clawcode-usage from defaults;
-    // they are re-provided at register time by the SDK discovery loop as
-    // native-dispatch entries.
-    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(14);
+    // Combined count = 16 (8 default + 8 control).
+    // Phase 87 CMD-04 removed clawcode-compact + clawcode-usage from defaults
+    // (re-provided by SDK discovery as native-dispatch entries). Phase 88
+    // MKT-01 / MKT-07 added clawcode-skills-browse + clawcode-skills to
+    // DEFAULT_SLASH_COMMANDS (both are inline-handled, zero free-text args).
+    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(16);
 
     // Sanity — makeRootOrigin still accepts 'discord' (used by handleSteerSlash).
     const origin = makeRootOrigin("discord", "chan-xyz");

@@ -172,6 +172,25 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
       },
     ],
   },
+  {
+    name: "clawcode-skills-browse",
+    description: "Browse the skills marketplace and install one to this agent",
+    // Phase 88 MKT-01 / UI-01 — inline handler in slash-commands.ts owns the
+    // entire flow (StringSelectMenuBuilder + IPC marketplace-list/install).
+    // claudeCommand empty (no LLM-prompt routing) — mirrors Phase 86
+    // /clawcode-model. options=[] per UI-01 (zero free-text args).
+    claudeCommand: "",
+    options: [],
+  },
+  {
+    name: "clawcode-skills",
+    description: "List installed skills for this agent (with remove option)",
+    // Phase 88 MKT-07 / UI-01 — inline handler renders the installed list +
+    // native StringSelectMenuBuilder remove picker, dispatches
+    // IPC marketplace-remove on selection.
+    claudeCommand: "",
+    options: [],
+  },
 ] as const;
 
 /**
