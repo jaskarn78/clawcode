@@ -165,6 +165,14 @@ function isWhitelisted(s: string): boolean {
   if (/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(s)) {
     return true;
   }
+  // Docker / package reference shapes — `name:tag` where both sides are
+  // simple identifiers / version strings (no uppercase mixed with digits
+  // in a random fashion that would look credential-like).
+  // Examples: `python:3.11-slim`, `ubuntu:latest`, `node:22-alpine`,
+  // `package@1.2.3-beta`. Real tokens rarely match this strict shape.
+  if (/^[a-z][a-z0-9_-]*[:@][a-z0-9][a-z0-9._-]*$/.test(s)) {
+    return true;
+  }
   // Quote characters embedded in a token (script shell quoting artifacts)
   // — strip-and-retry tokens containing `"` or `'` were tokenized by Pass 1
   // of tokenize() already. The bare-token form with leftover quotes is noise.
@@ -181,11 +189,18 @@ function hasSecretPrefix(
 }
 
 function isHighEntropySecret(s: string): boolean {
-  return (
-    s.length >= HIGH_ENTROPY_MIN_LEN_SKILLS &&
-    characterClasses(s) >= HIGH_ENTROPY_MIN_CLASSES &&
-    computeShannonEntropy(s) >= HIGH_ENTROPY_MIN_BITS_SKILLS
-  );
+  if (s.length < HIGH_ENTROPY_MIN_LEN_SKILLS) return false;
+  if (characterClasses(s) < HIGH_ENTROPY_MIN_CLASSES) return false;
+  if (computeShannonEntropy(s) < HIGH_ENTROPY_MIN_BITS_SKILLS) return false;
+  // Short opaque blobs (12..29 chars) that contain word-boundary characters
+  // (`-`, `_`, or space) are almost always hyphenated identifiers or
+  // multi-word compounds, not secrets. Credentials at this length are
+  // typically continuous runs of alnum + symbol with NO word boundaries
+  // — e.g., a 19-char @-delimited password with no `-` or `_` separators.
+  // The v2.1 threshold (len>=30) didn't need this refinement because
+  // word-boundary compounds rarely hit 30 chars.
+  if (s.length < HIGH_ENTROPY_MIN_LEN && /[-_\s]/.test(s)) return false;
+  return true;
 }
 
 // Unused-in-body v2.1 constants kept for doc-sync reference with guards.ts.
@@ -233,8 +248,12 @@ function* tokenize(line: string): Generator<string> {
   while ((m = bareRe.exec(line)) !== null) {
     const raw = m[0];
     // Strip leading/trailing punctuation that would otherwise prevent
-    // classifier regexes from matching.
-    const stripped = raw.replace(/^[()"',;:]+|[()"',;:]+$/g, "");
+    // classifier regexes from matching. Includes markdown emphasis (`*`),
+    // code fencing (`` ` ``), brackets, and assorted punctuation.
+    const stripped = raw.replace(
+      /^[()"'`,;:*\[\]{}]+|[()"'`,;:*\[\]{}]+$/g,
+      "",
+    );
     if (stripped.length === 0) continue;
     // If the token contains `=`, treat it as an assignment (bash / python /
     // yaml `key=value`): only classify the rhs. The compound `KEY="$(cat ...`
@@ -322,9 +341,12 @@ export async function scanSkillSecrets(
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
       if (line.length === 0) continue;
+      const hasCredContext = hasCredentialContext(line);
       for (const token of tokenize(line)) {
         const prefixHit = hasSecretPrefix(token);
         if (prefixHit !== null) {
+          // sk-/MT- prefixed tokens always refuse regardless of context —
+          // these prefixes are unambiguous credential markers.
           return {
             pass: false,
             offender: {
@@ -336,22 +358,48 @@ export async function scanSkillSecrets(
           };
         }
         if (isWhitelisted(token)) continue;
-        if (isHighEntropySecret(token)) {
-          return {
-            pass: false,
-            offender: {
-              file,
-              line: i + 1,
-              preview: makePreview(line, token),
-              reason: "high-entropy",
-            },
-          };
-        }
+        if (!isHighEntropySecret(token)) continue;
+        // High-entropy-alone is not sufficient to refuse — the same shape
+        // matches legitimate webhook IDs, avatar IDs, UUIDs, and git SHAs
+        // which frequently appear in skill documentation. Require a
+        // credential-shaped label in the surrounding line before refusing.
+        if (!hasCredContext) continue;
+        return {
+          pass: false,
+          offender: {
+            file,
+            line: i + 1,
+            preview: makePreview(line, token),
+            reason: "high-entropy",
+          },
+        };
       }
     }
   }
 
   return { pass: true };
+}
+
+/**
+ * Detect whether a line contains a credential-shaped label. Skill
+ * documentation routinely contains high-entropy ID strings (avatar IDs,
+ * webhook IDs, UUIDs) that are NOT secrets — distinguishing them from
+ * real credentials requires looking at the surrounding label text.
+ *
+ * We refuse ONLY when a high-entropy token appears on a line that also
+ * mentions credential-shaped labels: `password`, `passwd`, `pwd`, `secret`,
+ * `token`, `api_key`, `apikey`, `bearer`, `auth`, `credential`, `private_key`.
+ * Public ID labels (`id`, `avatar_id`, `webhook`, `endpoint`, `workflow`)
+ * are NOT in this list — they pass.
+ *
+ * Case-insensitive. Word-boundary matching so `bolting` doesn't trigger on
+ * `bolt` but `secret_key` does trigger on `secret`.
+ */
+const CREDENTIAL_LABEL_RE =
+  /\b(passw(?:or)?d|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|bearer|auth(?:oriza(?:tion)?)?|credential|client[_-]?secret|refresh[_-]?token|session[_-]?token)\b/i;
+
+function hasCredentialContext(line: string): boolean {
+  return CREDENTIAL_LABEL_RE.test(line);
 }
 
 /**

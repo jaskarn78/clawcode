@@ -97,6 +97,9 @@ import {
   buildMigrationReport as buildMigrationReportModule,
   writeMigrationReport as writeMigrationReportModule,
 } from "../../migration/report-writer.js";
+// Phase 84 Plan 01 — nested `migrate openclaw skills` subcommand tree.
+// Wires into the same `openclaw` parent below; no new top-level CLI path.
+import { registerMigrateSkillsCommand } from "./migrate-skills.js";
 
 /**
  * Phase 77-03 literal: was printed to stderr on the all-guards-pass path of
@@ -1452,4 +1455,10 @@ export function registerMigrateOpenclawCommand(program: Command): void {
         process.exit(1);
       }
     });
+
+  // Phase 84 Plan 01 — attach `skills` subcommand sibling to `list` / `plan` /
+  // `apply` / `verify` / `rollback` / `cutover` / `complete`. The skills
+  // subcommand is scaffolded here (discovery + secret-scan + idempotency);
+  // Plan 02 adds the actual per-skill transformer + copy on top.
+  registerMigrateSkillsCommand(openclaw);
 }

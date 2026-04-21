@@ -23,15 +23,34 @@ import {
   writeFileSync,
   mkdirSync,
 } from "node:fs";
-import { writeFile as fspWriteFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { runMigrateSkillsAction } from "../migrate-skills.js";
 import { appendSkillRow } from "../../../migration/skills-ledger.js";
 import { ReadOnlySourceError } from "../../../migration/guards.js";
 import { uninstallFsGuard } from "../../../migration/fs-guard.js";
 
+// See fs-guard.test.ts for the CJS caveat: the runtime patch only affects
+// the CJS fs module object, not ESM named bindings. Access fs via
+// createRequire so we see the patched writeFile.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fsp: any = createRequire(import.meta.url)("node:fs/promises");
+
 const OPENCLAW_SKILLS = join(homedir(), ".openclaw", "skills");
+
+/**
+ * Extract the body of a named section — everything between `header` and the
+ * NEXT section header (or end of output). Skips over the `===` at the end
+ * of the header line itself (the header has triple-equals on BOTH sides).
+ */
+function extractSection(out: string, header: string): string {
+  const start = out.indexOf(header);
+  if (start < 0) return "";
+  const afterHeader = start + header.length;
+  const next = out.indexOf("===", afterHeader);
+  return next < 0 ? out.slice(afterHeader) : out.slice(afterHeader, next);
+}
 
 describe("migrate-skills CLI", () => {
   let tmp: string;
@@ -106,12 +125,7 @@ describe("migrate-skills CLI", () => {
     expect(out).toContain("cognitive-memory");
     expect(out).toContain("openclaw-config");
     expect(out).toContain("finmentum-content-creator.retired");
-    // Each must appear AFTER the deprecated header.
-    const deprecatedStart = out.indexOf("=== skipped (deprecated) ===");
-    expect(deprecatedStart).toBeGreaterThanOrEqual(0);
-    // Next section after deprecated
-    const nextSectionStart = out.indexOf("===", deprecatedStart + 1);
-    const deprecatedBlock = out.slice(deprecatedStart, nextSectionStart);
+    const deprecatedBlock = extractSection(out, "=== skipped (deprecated) ===");
     expect(deprecatedBlock).toContain("cognitive-memory");
     expect(deprecatedBlock).toContain("openclaw-config");
     expect(deprecatedBlock).toContain("finmentum-content-creator.retired");
@@ -124,10 +138,7 @@ describe("migrate-skills CLI", () => {
       dryRun: true,
     });
     const out = stdoutCapture.join("");
-    const migStart = out.indexOf("=== migrated ===");
-    expect(migStart).toBeGreaterThanOrEqual(0);
-    const next = out.indexOf("===", migStart + 1);
-    const migBlock = out.slice(migStart, next);
+    const migBlock = extractSection(out, "=== migrated ===");
     // 4 P1 skills that pass secret scan: frontend-design, new-reel,
     // self-improving-agent, tuya-ac (finmentum-crm refused above)
     expect(migBlock).toContain("frontend-design");
@@ -174,14 +185,10 @@ describe("migrate-skills CLI", () => {
     });
     expect(secondCode).toBe(0);
     const out = stdoutCapture.join("");
-    const idemStart = out.indexOf("=== skipped (idempotent) ===");
-    expect(idemStart).toBeGreaterThanOrEqual(0);
-    const next = out.indexOf("===", idemStart + 1);
-    const idemBlock = next === -1 ? out.slice(idemStart) : out.slice(idemStart, next);
+    const idemBlock = extractSection(out, "=== skipped (idempotent) ===");
     expect(idemBlock).toContain("frontend-design");
     // frontend-design must not also appear in the migrated/would-migrate section
-    const migStart = out.indexOf("=== migrated ===");
-    const migBlock = out.slice(migStart, out.indexOf("===", migStart + 1));
+    const migBlock = extractSection(out, "=== migrated ===");
     expect(migBlock).not.toContain("frontend-design");
   });
 
@@ -204,39 +211,25 @@ describe("migrate-skills CLI", () => {
     });
     expect(code).toBe(0);
     const out = stdoutCapture.join("");
-    const migStart = out.indexOf("=== migrated ===");
-    const next = out.indexOf("===", migStart + 1);
-    const migBlock = out.slice(migStart, next);
+    const migBlock = extractSection(out, "=== migrated ===");
     expect(migBlock).toContain("frontend-design");
     // frontend-design must NOT appear in 'skipped (idempotent)' this time
-    const idemStart = out.indexOf("=== skipped (idempotent) ===");
-    const idemBlock =
-      idemStart < 0
-        ? ""
-        : out.slice(
-            idemStart,
-            out.indexOf("===", idemStart + 1) < 0
-              ? out.length
-              : out.indexOf("===", idemStart + 1),
-          );
+    const idemBlock = extractSection(out, "=== skipped (idempotent) ===");
     expect(idemBlock).not.toContain("frontend-design");
   });
 
   it("test 6: fs-guard refuses writes under ~/.openclaw/ during the action body", async () => {
     // Install fs-guard manually (normally installed by the action) and try
-    // to write under ~/.openclaw/. Should throw ReadOnlySourceError.
-    //
-    // We can't easily race a write INSIDE the action (no injection seam).
-    // Instead, we install the guard ourselves and verify the behavior — the
-    // action body wraps try{installFsGuard; ...}finally{uninstallFsGuard}, so
-    // equivalent protection applies.
+    // to write under ~/.openclaw/. Should throw ReadOnlySourceError. The
+    // action body wraps try{installFsGuard; ...}finally{uninstallFsGuard},
+    // so equivalent protection applies during a real CLI run.
     const { installFsGuard, uninstallFsGuard: uninstall } = await import(
       "../../../migration/fs-guard.js"
     );
     installFsGuard();
     let caught: Error | undefined;
     try {
-      await fspWriteFile(
+      await fsp.writeFile(
         join(homedir(), ".openclaw", "skills", "poisoned.md"),
         "should refuse",
       );
@@ -248,7 +241,7 @@ describe("migrate-skills CLI", () => {
     expect(caught).toBeInstanceOf(ReadOnlySourceError);
     // After uninstall, writes elsewhere still work.
     const okPath = join(tmp, "ok.md");
-    await fspWriteFile(okPath, "ok");
+    await fsp.writeFile(okPath, "ok");
     expect(existsSync(okPath)).toBe(true);
   });
 
