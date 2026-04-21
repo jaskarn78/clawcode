@@ -127,7 +127,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 ### v2.2 OpenClaw Parity & Polish (Phases 83-88) - ACTIVE
 
 - [x] **Phase 83: Extended-Thinking Effort Mapping** — Close the P0 silent no-op at persistent-session-handle.ts:599; wire `/clawcode-effort` through to SDK `Query.setMaxThinkingTokens()`; SDK canary for Phases 86/87. (completed 2026-04-21)
-- [ ] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns.
+- [x] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns. (completed 2026-04-21)
 - [ ] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface.
 - [ ] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87.
 - [ ] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first.
@@ -192,7 +192,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 **Plans**: 3 plans
 - [x] 84-01-PLAN.md — CLI scaffold + secret-scan gate + JSONL ledger + fs-guard (SKILL-01, SKILL-02, SKILL-05, SKILL-07)
 - [x] 84-02-PLAN.md — Transformer (tuya-ac frontmatter) + copy + per-agent linker verification + scope tags + .learnings dedup (SKILL-03, SKILL-04, SKILL-08)
-- [ ] 84-03-PLAN.md — Migration report generator at .planning/milestones/v2.2-skills-migration-report.md (SKILL-06)
+- [x] 84-03-PLAN.md — Migration report generator at .planning/milestones/v2.2-skills-migration-report.md (SKILL-06)
 
 ### Phase 85: MCP Tool Awareness & Reliability
 **Goal**: Eliminate the phantom-error class where agents claim "1Password isn't logged in" / "MCP not configured" / "key expired" while every MCP server is actually healthy; agents only report an MCP error when the server returned one.
@@ -270,7 +270,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
-| 84. Skills Library Migration | 2/3 | In Progress|  |
+| 84. Skills Library Migration | 3/3 | Complete   | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
 | 87. Native CC Slash Commands | 0/? | Not started | - |

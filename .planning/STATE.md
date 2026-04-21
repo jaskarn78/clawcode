@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: In progress
-stopped_at: Completed 84-02-PLAN.md
-last_updated: "2026-04-21T19:05:45.804Z"
+stopped_at: Completed 84-03-PLAN.md — Phase 84 complete (SKILL-01..08 closed)
+last_updated: "2026-04-21T19:15:45.677Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 
 ## Current Position
 
-Phase: 84
-Plan: 02 complete; 03 next (migration report writer + final verification)
+Phase: 84 COMPLETE (SKILL-01..08 closed)
+Plan: 03 complete — next phase candidate is 85 (MCP Tool Awareness) which is fully independent
 
 ## Performance Metrics
 
@@ -80,6 +80,10 @@ Recent decisions affecting current work:
 - [Phase 84]: Plan 84-02 — SCOPE_TAGS map v2.2-LOCKED with 5 P1 entries; unknown skills default to fleet (max-permissive). Agent families: fin- prefix → finmentum; clawdy/jas → personal; everything else → fleet. --force-scope bypasses gates.
 - [Phase 84]: Plan 84-02 — Learnings import source=manual (MemoryStore CHECK constraint); tags=[learning,migrated-from-openclaw]; origin_id=openclaw-learning-<sha256-of-trimmed-content-prefix-16>. Two-layer idempotency: tag+content dedup + MemoryStore UNIQUE(origin_id) partial index (Phase 80 MEM-02).
 - [Phase 84]: Plan 84-02 — CLI exit 1 on ANY of: secret-scan refusal, copy-failed bucket, missing-from-catalog verification. Scope-refused alone does NOT flip exit 1 — operator decision via --force-scope.
+- [Phase 84]: Plan 84-03 — Report writer source_integrity_sha = sha256(sorted unique ledger source_hash values joined by \n); excludes 'verify-only' synthetic hashes from Plan 02 verify rows.
+- [Phase 84]: Plan 84-03 — Source-tree-readonly invariant sampled BEFORE discovery (not just before copy) so external-actor drift is caught alongside fs-guard's own-write protection. Three-state: verified/mtime-changed/unchecked with explicit unchecked fallback on lstat failure.
+- [Phase 84]: Plan 84-03 — Verify-action rows excluded from per-skill verdict derivation in deriveLatestStatus; their status field encodes linker outcome not migration outcome. Prevents finmentum-crm appearing as 'migrated' when a verify row would override its refused apply row.
+- [Phase 84]: Plan 84-03 — Report overwritten on EVERY apply (not just first apply). Atomic temp+rename (mkdir recursive + writeFile .tmp + rename + best-effort tmp cleanup on failure) matches Phase 82 report-writer.ts discipline.
 
 ### v2.1 closing decisions (for reference)
 
@@ -144,9 +148,10 @@ Recent decisions affecting current work:
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
 | Phase 84 P01 | ~25min | 2 tasks (TDD) | 8 files |
 | Phase 84 P02 | 17min 0s | 2 tasks | 14 files |
+| Phase 84 P03 | 6min 23s | 1 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 84-02-PLAN.md
+Stopped at: Completed 84-03-PLAN.md — Phase 84 complete (SKILL-01..08 closed)
 Resume: Execute 84-02-PLAN.md (skills transformer + per-agent linker + idempotent apply) — Plan 02 can now consume the verified-safe P1 subset (4 skills) without re-implementing classification or secret-scan
