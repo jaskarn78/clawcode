@@ -222,7 +222,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 **Plans**: 3 plans
 - [x] 86-01-PLAN.md — Schema allowedModels + SessionHandle.setModel SDK wire (spy-test canary per Phase 83 blueprint) + ModelNotAllowedError (MODEL-01, MODEL-03, MODEL-06)
 - [x] 86-02-PLAN.md — Atomic YAML persistence (updateAgentModel) + /clawcode-status live model line (MODEL-04, MODEL-07)
-- [ ] 86-03-PLAN.md — Discord StringSelectMenuBuilder picker + cache-invalidation button confirmation (MODEL-02, MODEL-05 + UI-01 co-validation)
+- [x] 86-03-PLAN.md — Discord StringSelectMenuBuilder picker + cache-invalidation button confirmation (MODEL-02, MODEL-05 + UI-01 co-validation)
 **UI hint**: yes
 
 ### Phase 87: Native CC Slash Commands

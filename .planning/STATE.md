@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Ready to execute
-stopped_at: Completed 86-02-PLAN.md — IPC set-model persists atomically via updateAgentModel; /clawcode-status shows live-handle model; handleSetModelIpc pure-helper blueprint ready for Phase 87. Plan 03 unblocked.
-last_updated: "2026-04-21T21:19:16.129Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 86-03-PLAN.md — Phase 86 complete. /clawcode-model LLM-prompt routing retired; StringSelectMenuBuilder picker + ButtonBuilder confirmation wired end-to-end. PROJECT.md tech debt line 150 closed. All 3 Phase 86 plans shipped.
+last_updated: "2026-04-21T21:34:56.334Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -107,6 +107,10 @@ Recent decisions affecting current work:
 - [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — Extracted handleSetModelIpc as pure exported helper from daemon.ts (DI'd). First application of pure-IPC-handler blueprint; Phase 87 setPermissionMode follows the same shape
 - [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — Extended ManagerError with optional {code, data}; IPC server.ts propagates. Typed ModelNotAllowedError surfaces as ManagerError w/ code=-32602 + data.allowed for Plan 03 ephemeral Discord error render (no second round-trip)
 - [Phase 86-dual-discord-model-picker-core]: Plan 86-02 — updateAgentModel uses parseDocument AST + atomic temp+rename (Phase 78/81 reuse). 5 typed outcomes (updated/no-op/not-found/file-not-found/refused). Comment preservation + round-trip re-parse pinned
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — /clawcode-model converted from LLM-prompt routing to native StringSelectMenuBuilder picker + direct IPC dispatch. PROJECT.md tech debt line 150 closed (zero 'Set my model to' live routings in src/).
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — Extended IpcError with optional data field + ipc/client.ts propagation. Plan 02 wired the server side (ManagerError.data + ipc/server.ts forwarding) but IpcError constructor dropped .data at the client boundary. Without this Rule 3 blocking fix the 'model-not-allowed' typed-error branch never fires in production.
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — MODEL-05 cache-invalidation confirmation uses native ButtonBuilder (Danger + Secondary) with agent+nonce namespaced customIds. Prefix-based filter (model-confirm:{agent}:) for collision safety across parallel picker invocations. 'Active conversation' signal via sessionManager.getModelForAgent !== undefined — zero-cost, biased toward showing confirmation.
+- [Phase 86-dual-discord-model-picker-core]: Plan 86-03 — Inline handler short-circuit pattern + shared dispatch helper (dispatchModelChange with editMode flag). Arg-path and select-menu path funnel through the same IPC call + ModelNotAllowedError rendering. Blueprint for Phase 87 setPermissionMode + Phase 88 skills browser.
 
 ### v2.1 closing decisions (for reference)
 
@@ -177,9 +181,10 @@ Recent decisions affecting current work:
 | Phase 85 P03 | 20min 0s | 2 tasks | 5 files |
 | Phase 86 P01 | 31min | 2 tasks | 14 files |
 | Phase 86-dual-discord-model-picker-core P02 | 12min 6s | 2 tasks | 9 files |
+| Phase 86-dual-discord-model-picker-core P03 | 9 min 39 s | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 86-02-PLAN.md — IPC set-model persists atomically via updateAgentModel; /clawcode-status shows live-handle model; handleSetModelIpc pure-helper blueprint ready for Phase 87. Plan 03 unblocked.
+Stopped at: Completed 86-03-PLAN.md — Phase 86 complete. /clawcode-model LLM-prompt routing retired; StringSelectMenuBuilder picker + ButtonBuilder confirmation wired end-to-end. PROJECT.md tech debt line 150 closed. All 3 Phase 86 plans shipped.
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
