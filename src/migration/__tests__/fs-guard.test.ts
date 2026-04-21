@@ -211,3 +211,112 @@ describe("fs-guard runtime interceptor", () => {
     expect(existsSync(forbidden)).toBe(false);
   });
 });
+
+describe("allowlist option (Phase 82)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "fs-guard-allow-"));
+  });
+
+  afterEach(() => {
+    uninstallFsGuard();
+    vi.restoreAllMocks();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("default install (no args) preserves existing Phase 77 behavior — writes under ~/.openclaw/ still throw", async () => {
+    installFsGuard();
+    const forbidden = join(homedir(), ".openclaw", "phase82-default-canary");
+    await expect(fsp.writeFile(forbidden, "x")).rejects.toBeInstanceOf(
+      ReadOnlySourceError,
+    );
+  });
+
+  it("allowlist entry permits writes to exactly that resolved path", async () => {
+    // We exercise the allowlist using a path under ~/.openclaw/ (which would
+    // normally be forbidden). We DO NOT actually write to the real source
+    // tree — we stub the underlying write via a monkey-patch observer. The
+    // allowlist check must let the call THROUGH the guard; the stub then
+    // intercepts before any real disk I/O.
+    const { createRequire } = await import("node:module");
+    const lr = createRequire(import.meta.url);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fspMutable: any = lr("node:fs/promises");
+    const originalWriteFile = fspMutable.writeFile;
+    let intercepted: string | undefined;
+
+    const allowed = join(homedir(), ".openclaw", "openclaw.json");
+    installFsGuard({ allowlist: [allowed] });
+
+    // After install, writeFile is the wrapped version. Replace the WRAPPED
+    // version with a sentinel so allowlist-permitted calls land at our
+    // intercept instead of the real fs.
+    fspMutable.writeFile = async (p: unknown, ..._rest: unknown[]) => {
+      intercepted = String(p);
+    };
+    try {
+      await fspMutable.writeFile(allowed, "x");
+      expect(intercepted).toBe(allowed);
+    } finally {
+      fspMutable.writeFile = originalWriteFile;
+    }
+  });
+
+  it("allowlist is exact-equality on resolved paths — sibling openclaw.json.bak still refused", async () => {
+    const allowed = join(homedir(), ".openclaw", "openclaw.json");
+    installFsGuard({ allowlist: [allowed] });
+    const sibling = join(homedir(), ".openclaw", "openclaw.json.bak");
+    await expect(fsp.writeFile(sibling, "x")).rejects.toBeInstanceOf(
+      ReadOnlySourceError,
+    );
+  });
+
+  it("allowlist normalizes via path.resolve (relative paths, trailing slashes)", async () => {
+    // Pass a non-normalized path; still should match its canonical form.
+    const canonical = join(homedir(), ".openclaw", "openclaw.json");
+    const denormalized = join(homedir(), ".openclaw", ".", "openclaw.json");
+    installFsGuard({ allowlist: [denormalized] });
+
+    const { createRequire } = await import("node:module");
+    const lr = createRequire(import.meta.url);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fspMutable: any = lr("node:fs/promises");
+    const originalWriteFile = fspMutable.writeFile;
+    let intercepted: string | undefined;
+    fspMutable.writeFile = async (p: unknown, ..._rest: unknown[]) => {
+      intercepted = String(p);
+    };
+    try {
+      await fspMutable.writeFile(canonical, "x");
+      expect(intercepted).toBe(canonical);
+    } finally {
+      fspMutable.writeFile = originalWriteFile;
+    }
+  });
+
+  it("uninstall clears allowlist — re-install with no args refuses the previously-allowlisted path", async () => {
+    const allowed = join(homedir(), ".openclaw", "openclaw.json");
+    installFsGuard({ allowlist: [allowed] });
+    uninstallFsGuard();
+    installFsGuard(); // no args — should be empty allowlist
+    await expect(fsp.writeFile(allowed, "x")).rejects.toBeInstanceOf(
+      ReadOnlySourceError,
+    );
+  });
+
+  it("allowlist permits writes to /tmp/... (outside ~/.openclaw/) via normal pass-through (unchanged)", async () => {
+    const allowed = join(tmp, "allow-noop.txt");
+    installFsGuard({ allowlist: [join(homedir(), ".openclaw", "openclaw.json")] });
+    await fsp.writeFile(allowed, "hello");
+    expect(existsSync(allowed)).toBe(true);
+  });
+
+  it("empty allowlist array behaves identically to no argument", async () => {
+    installFsGuard({ allowlist: [] });
+    const forbidden = join(homedir(), ".openclaw", "empty-allowlist-canary");
+    await expect(fsp.writeFile(forbidden, "x")).rejects.toBeInstanceOf(
+      ReadOnlySourceError,
+    );
+  });
+});

@@ -1,11 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import {
   openclawSourceAgentSchema,
   readOpenclawInventory,
   isFinmentumFamily,
   FINMENTUM_FAMILY_IDS,
+  removeBindingsForAgent,
 } from "../openclaw-config-reader.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -133,5 +137,190 @@ describe("isFinmentumFamily", () => {
     for (const id of ["general", "work", "card-planner", "card-generator", ""]) {
       expect(isFinmentumFamily(id)).toBe(false);
     }
+  });
+});
+
+describe("removeBindingsForAgent (Phase 82)", () => {
+  /**
+   * Fixture shape: includes bindings for target agent + 2 other agents, plus
+   * non-bindings top-level sections that MUST survive byte-for-byte (env,
+   * channels.discord.token, auth).
+   */
+  function makeFixtureJson(): object {
+    return {
+      meta: { lastTouchedVersion: "2026.4.15", lastTouchedAt: "2026-04-19T16:06:03.379Z" },
+      env: { SOMETHING: "abc", OTHER: "xyz" },
+      auth: { kind: "bearer", tokenRef: "op://vault/token" },
+      channels: {
+        discord: {
+          token: "op://Personal/discord-bot/token",
+          intents: ["MESSAGE_CONTENT", "GUILDS"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            name: "Alpha",
+            workspace: "/home/u/.openclaw/workspace-alpha",
+            agentDir: "/home/u/.openclaw/agents/alpha/agent",
+            model: { primary: "anthropic-api/claude-sonnet-4-6", fallbacks: [] },
+            identity: {},
+          },
+          {
+            id: "beta",
+            name: "Beta",
+            workspace: "/home/u/.openclaw/workspace-beta",
+            agentDir: "/home/u/.openclaw/agents/beta/agent",
+            model: { primary: "anthropic-api/claude-sonnet-4-6", fallbacks: [] },
+            identity: {},
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "channel", id: "1111" } },
+        },
+        {
+          agentId: "beta",
+          match: { channel: "discord", peer: { kind: "channel", id: "2222" } },
+        },
+        {
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "channel", id: "3333" } },
+        },
+      ],
+    };
+  }
+
+  async function setupFixture(
+    agentToRemove: string,
+    customJson?: object,
+  ): Promise<{ dir: string; path: string; beforeBytes: Buffer }> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-remove-bindings-"));
+    const path = join(dir, "openclaw.json");
+    const body = JSON.stringify(customJson ?? makeFixtureJson(), null, 2) + "\n";
+    await writeFile(path, body, "utf8");
+    const beforeBytes = await readFile(path);
+    // silence TS unused-var on agentToRemove (returned for caller's use)
+    void agentToRemove;
+    return { dir, path, beforeBytes };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("removes every binding whose agentId matches the target (2 alpha → 0 alpha)", async () => {
+    const { path } = await setupFixture("alpha");
+    const result = await removeBindingsForAgent(path, "alpha");
+    expect(result.removed).toBe(2);
+    const reparsed = JSON.parse(await readFile(path, "utf8")) as {
+      bindings: Array<{ agentId: string }>;
+    };
+    expect(reparsed.bindings).toHaveLength(1);
+    expect(reparsed.bindings[0]!.agentId).toBe("beta");
+  });
+
+  it("preserves every non-bindings top-level field byte-for-byte (deep-equal)", async () => {
+    const { path } = await setupFixture("alpha");
+    const before = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await removeBindingsForAgent(path, "alpha");
+    const after = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+
+    // Every non-bindings key must be identical
+    for (const key of Object.keys(before)) {
+      if (key === "bindings") continue;
+      expect(after[key]).toEqual(before[key]);
+    }
+    // bindings[] has one surviving entry (beta)
+    expect((after.bindings as unknown[]).length).toBe(1);
+  });
+
+  it("preserves non-matching bindings in source order", async () => {
+    const custom = {
+      bindings: [
+        { agentId: "x", match: { channel: "d", peer: { kind: "channel", id: "100" } } },
+        { agentId: "alpha", match: { channel: "d", peer: { kind: "channel", id: "200" } } },
+        { agentId: "y", match: { channel: "d", peer: { kind: "channel", id: "300" } } },
+        { agentId: "z", match: { channel: "d", peer: { kind: "channel", id: "400" } } },
+      ],
+    };
+    const { path } = await setupFixture("alpha", custom);
+    await removeBindingsForAgent(path, "alpha");
+    const after = JSON.parse(await readFile(path, "utf8")) as {
+      bindings: Array<{ agentId: string; match: { peer: { id: string } } }>;
+    };
+    expect(after.bindings.map((b) => b.agentId)).toEqual(["x", "y", "z"]);
+    expect(after.bindings.map((b) => b.match.peer.id)).toEqual(["100", "300", "400"]);
+  });
+
+  it("removed=0 when agent has no bindings → zero writes occur (idempotent no-op)", async () => {
+    const { path, beforeBytes } = await setupFixture("ghost-agent");
+    const result = await removeBindingsForAgent(path, "ghost-agent");
+    expect(result.removed).toBe(0);
+    expect(result.beforeSha256).toBe(result.afterSha256);
+    // Bytes unchanged
+    const afterBytes = await readFile(path);
+    expect(afterBytes.equals(beforeBytes)).toBe(true);
+  });
+
+  it("beforeSha256 != afterSha256 when removed > 0", async () => {
+    const { path } = await setupFixture("alpha");
+    const result = await removeBindingsForAgent(path, "alpha");
+    expect(result.removed).toBe(2);
+    expect(result.beforeSha256).not.toBe(result.afterSha256);
+    // Hashes are hex strings
+    expect(result.beforeSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.afterSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("beforeSha256 hashes file BYTES (not parsed object)", async () => {
+    const { path } = await setupFixture("alpha");
+    const originalBytes = await readFile(path);
+    const expected = createHash("sha256").update(originalBytes).digest("hex");
+    const result = await removeBindingsForAgent(path, "alpha");
+    expect(result.beforeSha256).toBe(expected);
+  });
+
+  it("serializes with 2-space indent + trailing newline (operator convention)", async () => {
+    const { path } = await setupFixture("alpha");
+    await removeBindingsForAgent(path, "alpha");
+    const text = await readFile(path, "utf8");
+    // Trailing newline preserved
+    expect(text.endsWith("\n")).toBe(true);
+    // 2-space indent: second line of the top-level object starts with 2 spaces
+    const lines = text.split("\n");
+    // First line is "{"
+    expect(lines[0]).toBe("{");
+    // Next non-closing line should start with exactly 2 spaces
+    const secondLine = lines[1] ?? "";
+    expect(secondLine.startsWith("  ")).toBe(true);
+    expect(secondLine.startsWith("   ")).toBe(false); // not 3
+  });
+
+  it("throws a clear error when openclaw.json is missing 'bindings' field", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-remove-bindings-err-"));
+    const path = join(dir, "openclaw.json");
+    await writeFile(path, JSON.stringify({ agents: { list: [] } }, null, 2) + "\n", "utf8");
+    let caught: Error | undefined;
+    try {
+      await removeBindingsForAgent(path, "alpha");
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/openclaw\.json/i);
+    expect(caught!.message).toMatch(/bindings/i);
+  });
+
+  it("throws when openclaw.json root is not an object", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-remove-bindings-root-"));
+    const path = join(dir, "openclaw.json");
+    await writeFile(path, JSON.stringify([1, 2, 3]), "utf8");
+    await expect(removeBindingsForAgent(path, "alpha")).rejects.toThrow(
+      /openclaw\.json/i,
+    );
   });
 });
