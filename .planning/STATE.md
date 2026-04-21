@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: In progress
-stopped_at: Completed 84-01-PLAN.md (skills discovery + secret-scan gate shipped)
-last_updated: "2026-04-21T18:40:30.000Z"
+stopped_at: Completed 84-02-PLAN.md
+last_updated: "2026-04-21T19:05:45.804Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 84
-Plan: 01 complete; 02 next (skills transformer + per-agent linker + idempotent apply)
+Plan: 02 complete; 03 next (migration report writer + final verification)
 
 ## Performance Metrics
 
@@ -74,6 +74,12 @@ Recent decisions affecting current work:
 - [Phase 84]: Plan 84-01 — Tighter thresholds than v2.1 PlanReport guard (len>=12 + bits>=3.8 for skills vs len>=30 + bits>=4.0 for PlanReport). Required to catch short hand-typed passwords like finmentum-crm's 19-char MySQL credential (entropy 3.93).
 - [Phase 84]: Plan 84-01 — Word-boundary exemption: sub-30-char tokens containing `-`/`_`/space are NOT secrets (compound identifiers). Real credentials at that length are opaque runs with no word boundaries.
 - [Phase 84]: Plan 84-01 — finmentum-crm secret-scan HARD GATE working: refused at SKILL.md:20 with reason=high-entropy. MySQL credentials must move to MCP env / op:// refs before plan 02 can migrate this skill.
+- [Phase 84]: Plan 84-02 — Transformer adds frontmatter to tuya-ac ONLY; other P1 skills (frontend-design, new-reel, self-improving-agent) preserved byte-for-byte. hasFrontmatter regex permits empty-body frontmatter (---\n---\n) via optional middle group.
+- [Phase 84]: Plan 84-02 — Copier filter drops .git/ + SKILL.md.{backup,pre,pre-fix,pre-restore}-* editor snapshots. Hash witness SELECTIVELY skips SKILL.md when transformSkillMd actually changed the content (expected rewrite).
+- [Phase 84]: Plan 84-02 — Linker verifier is READ-ONLY (does not call linkAgentSkills). Replicates catalog.has(name) resolution check so dry-run validation cannot poison real symlinks on failure. Emits per-(agent,skill) status: linked / missing-from-catalog / scope-refused / not-assigned.
+- [Phase 84]: Plan 84-02 — SCOPE_TAGS map v2.2-LOCKED with 5 P1 entries; unknown skills default to fleet (max-permissive). Agent families: fin- prefix → finmentum; clawdy/jas → personal; everything else → fleet. --force-scope bypasses gates.
+- [Phase 84]: Plan 84-02 — Learnings import source=manual (MemoryStore CHECK constraint); tags=[learning,migrated-from-openclaw]; origin_id=openclaw-learning-<sha256-of-trimmed-content-prefix-16>. Two-layer idempotency: tag+content dedup + MemoryStore UNIQUE(origin_id) partial index (Phase 80 MEM-02).
+- [Phase 84]: Plan 84-02 — CLI exit 1 on ANY of: secret-scan refusal, copy-failed bucket, missing-from-catalog verification. Scope-refused alone does NOT flip exit 1 — operator decision via --force-scope.
 
 ### v2.1 closing decisions (for reference)
 
@@ -137,9 +143,10 @@ Recent decisions affecting current work:
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
 | Phase 84 P01 | ~25min | 2 tasks (TDD) | 8 files |
+| Phase 84 P02 | 17min 0s | 2 tasks | 14 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 84-01-PLAN.md (skills discovery + secret-scan gate shipped)
+Stopped at: Completed 84-02-PLAN.md
 Resume: Execute 84-02-PLAN.md (skills transformer + per-agent linker + idempotent apply) — Plan 02 can now consume the verified-safe P1 subset (4 skills) without re-implementing classification or secret-scan

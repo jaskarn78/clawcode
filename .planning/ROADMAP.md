@@ -191,7 +191,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
   6. Finmentum-scoped skills (`finmentum-crm`, `new-reel`) are linked only to Finmentum agents by default; `~/.openclaw/skills/` mtime is unchanged (source-tree read-only invariant verified post-run)
 **Plans**: 3 plans
 - [x] 84-01-PLAN.md — CLI scaffold + secret-scan gate + JSONL ledger + fs-guard (SKILL-01, SKILL-02, SKILL-05, SKILL-07)
-- [ ] 84-02-PLAN.md — Transformer (tuya-ac frontmatter) + copy + per-agent linker verification + scope tags + .learnings dedup (SKILL-03, SKILL-04, SKILL-08)
+- [x] 84-02-PLAN.md — Transformer (tuya-ac frontmatter) + copy + per-agent linker verification + scope tags + .learnings dedup (SKILL-03, SKILL-04, SKILL-08)
 - [ ] 84-03-PLAN.md — Migration report generator at .planning/milestones/v2.2-skills-migration-report.md (SKILL-06)
 
 ### Phase 85: MCP Tool Awareness & Reliability
@@ -270,7 +270,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
-| 84. Skills Library Migration | 1/3 | In Progress|  |
+| 84. Skills Library Migration | 2/3 | In Progress|  |
 | 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |
 | 87. Native CC Slash Commands | 0/? | Not started | - |
