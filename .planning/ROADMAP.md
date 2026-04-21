@@ -175,7 +175,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 **Plans**: 3 plans
 - [x] 83-01-PLAN.md — Schema extension (7 effort levels) + P0 SDK wire (Query.setMaxThinkingTokens spy test)
 - [ ] 83-02-PLAN.md — Runtime effort persistence across restart + fork quarantine
-- [ ] 83-03-PLAN.md — UI-01 StringChoices picker + effort in /clawcode-status + per-skill effort frontmatter
+- [x] 83-03-PLAN.md — UI-01 StringChoices picker + effort in /clawcode-status + per-skill effort frontmatter
 **UI hint**: yes
 
 ### Phase 84: Skills Library Migration
@@ -266,7 +266,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 83. Extended-Thinking Effort Mapping | 1/3 | In Progress|  |
+| 83. Extended-Thinking Effort Mapping | 2/3 | In Progress|  |
 | 84. Skills Library Migration | 0/? | Not started | - |
 | 85. MCP Tool Awareness & Reliability | 0/? | Not started | - |
 | 86. Dual Discord Model Picker (Core) | 0/? | Not started | - |

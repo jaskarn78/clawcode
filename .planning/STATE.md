@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Ready to execute
-stopped_at: Completed 83-01-PLAN.md (P0 silent no-op fixed, SDK canary spy test pinned)
-last_updated: "2026-04-21T17:34:13.652Z"
+stopped_at: Completed 83-03-PLAN.md (UI-01 choices + EFFORT-07 status line + EFFORT-05 per-skill frontmatter override)
+last_updated: "2026-04-21T17:56:44.266Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -64,6 +64,9 @@ Recent decisions affecting current work:
 - [Phase 83]: Plan 83-01 — SDK session-start 'effort' option stays narrow (low|medium|high|max); extended levels (xhigh|auto|off) route exclusively through runtime q.setMaxThinkingTokens. Legacy wrapSdkQuery gets narrowEffortForSdkOption helper for type compliance.
 - [Phase 83]: Plan 83-01 — Effort classified reloadable (agents.*.effort, defaults.effort) because live handle.setEffort takes effect next turn — no socket/db/workspace restart.
 - [Phase 83]: Plan 83-01 SDK canary result — q.setMaxThinkingTokens concurrency SAFE against single captured driverIter handle. Spy-test shape unblocks Phase 86 (setModel) and Phase 87 (setPermissionMode) to follow the same regression-pin blueprint.
+- [Phase 83]: Plan 83-03 — UI-01 StringChoices 7-entry dropdown for /clawcode-effort replaces free-text (schema extended with optional choices capped at 25 per Discord).
+- [Phase 83]: Plan 83-03 — /clawcode-status is a daemon-side short-circuit returning authoritative 🎚️ Effort line from sessionManager.getEffortForAgent (no LLM turn consumed, trades rich self-report for reliability).
+- [Phase 83]: Plan 83-03 — SKILL.md effort: frontmatter → SkillEntry.effort → TurnDispatcher.dispatch skillEffort option with try/finally revert at turn boundary; slash-command path wraps streamFromAgent with same apply+revert contract.
 
 ### v2.1 closing decisions (for reference)
 
@@ -124,9 +127,10 @@ Recent decisions affecting current work:
 | 260419-p51 | Multi-agent bearer keys (scope=all) + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs | 2026-04-19 | edecd6e | [260419-p51-multi-agent-bearer-keys-fork-escalation-](./quick/260419-p51-multi-agent-bearer-keys-fork-escalation-/) |
 | 260419-q2z | Registry atomic write + recovery + `clawcode registry repair` CLI + always-summarize short sessions + graceful shutdown drain (FIX A+B+C) | 2026-04-19 | fa34ef3 | [260419-q2z-registry-atomic-write-graceful-shutdown-](./quick/260419-q2z-registry-atomic-write-graceful-shutdown-/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
+| Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 83-01-PLAN.md (P0 silent no-op fixed, SDK canary spy test pinned)
+Stopped at: Completed 83-03-PLAN.md (UI-01 choices + EFFORT-07 status line + EFFORT-05 per-skill frontmatter override)
 Resume: Run `/gsd:plan-phase 83` to decompose Extended-Thinking Effort Mapping into plans
