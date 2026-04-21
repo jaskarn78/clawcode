@@ -235,7 +235,12 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
   3. Control-plane commands (`/model`, `/permissions`, `/effort`) dispatch via the corresponding SDK `Query.setX()` method; prompt-channel commands stream through the existing `TurnDispatcher` with output surfaced via the v1.7 `ProgressiveMessageEditor`
   4. The four existing duplicates (`clawcode-compact`, `clawcode-usage`, `clawcode-model`, `clawcode-effort`) are unified onto the native SDK dispatch path — the old LLM-prompt routing is removed
   5. Per-agent SECURITY.md ACLs gate command registration: destructive or admin-only commands (`/init`, `/security-review`, `/batch`) are not registered on agents whose ACL forbids them; across the 15-agent fleet the Discord 100-command-per-guild cap is respected via per-guild name-dedupe
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 87-01-PLAN.md — SDK command discovery + per-agent Discord registration (clawcode-* prefix) + ACL gate + static-grep regression pin + unify clawcode-compact/clawcode-usage duplicates
+- [ ] 87-02-PLAN.md — Control-plane dispatch: setPermissionMode SDK wire (Phase 83/86 canary blueprint) + new set-permission-mode IPC + /clawcode-permissions inline handler
+- [ ] 87-03-PLAN.md — Prompt-channel dispatch via TurnDispatcher + output streaming via v1.7 ProgressiveMessageEditor (verbatim error surfacing per Phase 85 TOOL-04 pattern)
 **UI hint**: yes
 
 ### Phase 88: Skills Marketplace
