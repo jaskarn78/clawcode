@@ -129,7 +129,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 - [x] **Phase 83: Extended-Thinking Effort Mapping** — Close the P0 silent no-op at persistent-session-handle.ts:599; wire `/clawcode-effort` through to SDK `Query.setMaxThinkingTokens()`; SDK canary for Phases 86/87. (completed 2026-04-21)
 - [x] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns. (completed 2026-04-21)
 - [x] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface. (completed 2026-04-21)
-- [ ] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87.
+- [x] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87. (completed 2026-04-21)
 - [ ] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first.
 - [x] **Phase 88: Skills Marketplace** — `/clawcode-skills-browse` Discord picker that runs the Phase 84 migration utility against a single skill; atomic post-install `skills:` list update + hot-reload. (completed 2026-04-21)
 
@@ -278,7 +278,7 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 | 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
 | 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
 | 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
-| 86. Dual Discord Model Picker (Core) | 2/3 | In Progress|  |
+| 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
 | 87. Native CC Slash Commands | 0/? | Not started | - |
 | 88. Skills Marketplace | 0/? | Not started | - |
 
