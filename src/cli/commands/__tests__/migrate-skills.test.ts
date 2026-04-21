@@ -326,6 +326,223 @@ describe("migrate-skills CLI", () => {
     // Body between headers should be "(none)" for every section.
     expect((out.match(/\(none\)/g) ?? []).length).toBeGreaterThanOrEqual(4);
   });
+
+  // ------------------------------------------------------------------
+  // Plan 02 apply-path tests (12-17)
+  // ------------------------------------------------------------------
+
+  it("test 12 (plan-02): apply to tmpdir target migrates 4 P1 skills; tuya-ac gets name+description frontmatter", async () => {
+    const skillsTarget = join(tmp, "clawcode-skills");
+    const code = await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      // No config path → skip linker verification (tested separately).
+    });
+    // finmentum-crm refuses at secret-scan → exit 1
+    expect(code).toBe(1);
+    // 4 clean P1 skills copied
+    expect(existsSync(join(skillsTarget, "frontend-design", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(existsSync(join(skillsTarget, "new-reel", "SKILL.md"))).toBe(true);
+    expect(
+      existsSync(join(skillsTarget, "self-improving-agent", "SKILL.md")),
+    ).toBe(true);
+    expect(existsSync(join(skillsTarget, "tuya-ac", "SKILL.md"))).toBe(true);
+    // finmentum-crm NOT copied
+    expect(existsSync(join(skillsTarget, "finmentum-crm"))).toBe(false);
+    // tuya-ac frontmatter normalized
+    const { readFile: rf } = await import("node:fs/promises");
+    const tuyaSkill = await rf(
+      join(skillsTarget, "tuya-ac", "SKILL.md"),
+      "utf8",
+    );
+    expect(tuyaSkill.startsWith("---\nname: tuya-ac\ndescription: ")).toBe(
+      true,
+    );
+    // frontend-design frontmatter preserved byte-for-byte
+    const fdTarget = await rf(
+      join(skillsTarget, "frontend-design", "SKILL.md"),
+      "utf8",
+    );
+    const fdSource = await rf(
+      join(OPENCLAW_SKILLS, "frontend-design", "SKILL.md"),
+      "utf8",
+    );
+    expect(fdTarget).toBe(fdSource);
+  });
+
+  it("test 13 (plan-02): idempotent apply — second run moves 4 P1 skills to 'skipped (idempotent)'", async () => {
+    const skillsTarget = join(tmp, "clawcode-skills-idem");
+    const first = await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+    });
+    expect(first).toBe(1); // finmentum-crm refuses
+    stdoutCapture = [];
+    const second = await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+    });
+    expect(second).toBe(1); // finmentum-crm still refuses
+    const out = stdoutCapture.join("");
+    const idemIdx = out.indexOf("=== skipped (idempotent) ===");
+    expect(idemIdx).toBeGreaterThan(-1);
+    const idemBlock = out.slice(idemIdx, out.indexOf("===", idemIdx + 30));
+    expect(idemBlock).toContain("frontend-design");
+    expect(idemBlock).toContain("new-reel");
+    expect(idemBlock).toContain("self-improving-agent");
+    expect(idemBlock).toContain("tuya-ac");
+  });
+
+  it("test 14 (plan-02): apply with synthetic clawcode.yaml → linker verifications emit; tuya-ac scope-refused on fin-* agent without --force-scope", async () => {
+    // Build a synthetic clawcode.yaml assigning tuya-ac to fin-research
+    // (personal skill → fin agent — scope refused by default).
+    const yamlPath = join(tmp, "clawcode-synth.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      yamlPath,
+      [
+        "agents:",
+        "  - name: fin-research",
+        "    workspace: /tmp/fin-ws",
+        "    channels:",
+        "      - 'c-fin'",
+        "    model: sonnet",
+        "    skills:",
+        "      - tuya-ac",
+        "  - name: clawdy",
+        "    workspace: /tmp/clawdy-ws",
+        "    channels:",
+        "      - 'c-clawdy'",
+        "    model: sonnet",
+        "    skills:",
+        "      - tuya-ac",
+        "      - frontend-design",
+      ].join("\n"),
+    );
+
+    const skillsTarget = join(tmp, "clawcode-skills-scope");
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      clawcodeYamlPath: yamlPath,
+    });
+    const out = stdoutCapture.join("");
+    // A verification section must emit
+    expect(out).toContain("=== linker verification ===");
+    // fin-research must be scope-refused for tuya-ac
+    expect(out).toMatch(/fin-research.*tuya-ac.*scope-refused/);
+    // clawdy + tuya-ac must succeed (personal agent + personal skill)
+    expect(out).toMatch(/clawdy.*tuya-ac.*linked/);
+  });
+
+  it("test 15 (plan-02): --force-scope overrides scope refusal — tuya-ac linked on fin-research", async () => {
+    const yamlPath = join(tmp, "clawcode-force.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      yamlPath,
+      [
+        "agents:",
+        "  - name: fin-research",
+        "    workspace: /tmp/fin-ws",
+        "    channels: ['c-fin']",
+        "    model: sonnet",
+        "    skills:",
+        "      - tuya-ac",
+      ].join("\n"),
+    );
+    const skillsTarget = join(tmp, "clawcode-skills-force");
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      clawcodeYamlPath: yamlPath,
+      forceScope: true,
+    });
+    const out = stdoutCapture.join("");
+    expect(out).toContain("=== linker verification ===");
+    // With force, scope-refused becomes linked.
+    expect(out).toMatch(/fin-research.*tuya-ac.*linked/);
+    expect(out).not.toMatch(/fin-research.*tuya-ac.*scope-refused/);
+  });
+
+  it("test 16 (plan-02): self-improving-agent .learnings/ imported to MemoryStore; re-apply imports zero new entries", async () => {
+    // Use an in-memory MemoryStore via an external dbPath. Pass the
+    // memoryDbPath so the CLI action wires it to the dedup helper.
+    const dbPath = join(tmp, "agent-memory.db");
+    const skillsTarget = join(tmp, "clawcode-skills-learnings");
+    const { MemoryStore } = await import("../../../memory/store.js");
+    // Pre-open so test can probe it (the CLI will open its own handle
+    // against the same path). better-sqlite3 allows multiple read handles
+    // but not concurrent writers — CLI finishes before we probe.
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      memoryDbPath: dbPath,
+    });
+    // Probe — count learning-tagged entries with our migration origin prefix.
+    const store = new MemoryStore(dbPath);
+    const db = store.getDatabase();
+    const firstCount = (
+      db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM memories WHERE origin_id LIKE 'openclaw-learning-%'",
+        )
+        .get() as { n: number }
+    ).n;
+    expect(firstCount).toBeGreaterThan(0);
+
+    // Re-apply — should dedup all existing entries + origin_id skip path
+    stdoutCapture = [];
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+      memoryDbPath: dbPath,
+    });
+    const secondCount = (
+      db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM memories WHERE origin_id LIKE 'openclaw-learning-%'",
+        )
+        .get() as { n: number }
+    ).n;
+    // Idempotent — second run MUST NOT insert new learning entries.
+    expect(secondCount).toBe(firstCount);
+  });
+
+  it("test 17 (plan-02): tuya-ac post-apply — scanSkillsDirectory returns non-empty description, null version", async () => {
+    const skillsTarget = join(tmp, "clawcode-skills-scan");
+    await runMigrateSkillsAction({
+      sourceDir: OPENCLAW_SKILLS,
+      ledgerPath,
+      dryRun: false,
+      skillsTargetDir: skillsTarget,
+    });
+    const { scanSkillsDirectory } = await import(
+      "../../../skills/scanner.js"
+    );
+    const catalog = await scanSkillsDirectory(skillsTarget);
+    const tuyaEntry = catalog.get("tuya-ac");
+    expect(tuyaEntry).toBeDefined();
+    expect(tuyaEntry!.name).toBe("tuya-ac");
+    expect(tuyaEntry!.description.length).toBeGreaterThan(0);
+    // Transformer did NOT add a version: field — only name+description.
+    expect(tuyaEntry!.version).toBeNull();
+  });
 });
 
 // Suppress unused-import lint (we only reference these for type compat).
