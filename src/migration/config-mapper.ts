@@ -78,12 +78,18 @@ export function mapAgent(args: {
   const isFinmentum = args.source.isFinmentumFamily;
   const memoryPath = isFinmentum ? args.targetMemoryPath : undefined;
 
-  // soulFile / identityFile — ALWAYS under targetMemoryPath (for finmentum
-  // that's the per-agent subdir; for dedicated agents it equals
-  // targetBasePath). Absolute paths, no ~-expansion needed (caller's
-  // getTargetBasePath already resolved basePath absolutely).
-  const soulFile = join(args.targetMemoryPath, "SOUL.md");
-  const identityFile = join(args.targetMemoryPath, "IDENTITY.md");
+  // soulFile / identityFile — for shared-basePath agents (finmentum
+  // family) these live at the SHARED basePath root: workspace-copier
+  // places SOUL.md / IDENTITY.md at <root>/finmentum/ (shared across all
+  // 5 family members per 82.1 gap closure — YAML pointer must agree
+  // with on-disk location or `verify` reports the files as missing).
+  // Dedicated agents use targetMemoryPath, which callers set to
+  // targetBasePath anyway — behavior unchanged (regression-pinned in
+  // config-mapper.test.ts). Absolute paths, no ~-expansion needed
+  // (caller's getTargetBasePath already resolved basePath absolutely).
+  const soulBase = isFinmentum ? args.targetBasePath : args.targetMemoryPath;
+  const soulFile = join(soulBase, "SOUL.md");
+  const identityFile = join(soulBase, "IDENTITY.md");
 
   // mcpServers — auto-inject AUTO_INJECT_MCP first, then per-agent names.
   // Dedup while preserving insertion order. Unknown per-agent names emit
