@@ -33,6 +33,30 @@ vi.mock("../../mcp/health.js", () => ({
 import { checkMcpServerHealth } from "../../mcp/health.js";
 const mockedHealth = vi.mocked(checkMcpServerHealth);
 
+// Intercept runWarmPathCheck so the non-MCP steps (sqlite, embedder,
+// session, browser) don't try to reach real I/O. We delegate back to
+// the real implementation ONLY for the mcpProbe hook — that way the
+// gate's mandatory-vs-optional classification is exercised end-to-end
+// against the MCP probe while other warm-path concerns are stubbed.
+vi.mock("../warm-path-check.js", async () => {
+  const actual = await vi.importActual<typeof import("../warm-path-check.js")>(
+    "../warm-path-check.js",
+  );
+  return {
+    ...actual,
+    runWarmPathCheck: vi.fn(async (deps: Parameters<typeof actual.runWarmPathCheck>[0]) => {
+      const mcpResult = deps.mcpProbe ? await deps.mcpProbe() : { errors: [] as readonly string[] };
+      const errors = [...mcpResult.errors];
+      return Object.freeze({
+        ready: errors.length === 0,
+        durations_ms: Object.freeze({ sqlite: 1, embedder: 1, session: 1, browser: 0, mcp: 1 }),
+        total_ms: 4,
+        errors: Object.freeze(errors) as readonly string[],
+      });
+    }),
+  };
+});
+
 const TEST_BACKOFF: BackoffConfig = {
   baseMs: 100,
   maxMs: 1000,

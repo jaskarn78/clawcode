@@ -518,8 +518,10 @@ describe("resolveAgentConfig - mcpServers", () => {
   };
 
   const sharedMcpServers = {
-    finnhub: { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: { API_KEY: "xxx" } },
-    google: { name: "google", command: "npx", args: ["-y", "google-mcp"], env: {} },
+    // Phase 85 TOOL-01 — `optional: false` added to match the extended
+    // mcpServerSchema (default field; mandatory servers).
+    finnhub: { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: { API_KEY: "xxx" }, optional: false },
+    google: { name: "google", command: "npx", args: ["-y", "google-mcp"], env: {}, optional: false },
   };
 
   const baseAgent: AgentConfig = {
@@ -536,7 +538,7 @@ describe("resolveAgentConfig - mcpServers", () => {
   };
 
   it("resolves string references from shared definitions", () => {
-    const agent = { ...baseAgent, mcpServers: ["finnhub"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const agent = { ...baseAgent, mcpServers: ["finnhub"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     const finnhub = resolved.mcpServers.find(s => s.name === "finnhub");
     expect(finnhub).toBeDefined();
@@ -548,8 +550,8 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("passes inline MCP server objects through unchanged", () => {
-    const inline = { name: "custom", command: "my-server", args: ["--port", "3000"], env: { KEY: "val" } };
-    const agent = { ...baseAgent, mcpServers: [inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const inline = { name: "custom", command: "my-server", args: ["--port", "3000"], env: { KEY: "val" }, optional: false };
+    const agent = { ...baseAgent, mcpServers: [inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     const custom = resolved.mcpServers.find(s => s.name === "custom");
     expect(custom).toBeDefined();
@@ -557,8 +559,8 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("merges inline and refs, inline wins on name collision", () => {
-    const inline = { name: "finnhub", command: "custom-finnhub", args: [], env: {} };
-    const agent = { ...baseAgent, mcpServers: ["finnhub", inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const inline = { name: "finnhub", command: "custom-finnhub", args: [], env: {}, optional: false };
+    const agent = { ...baseAgent, mcpServers: ["finnhub", inline] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     // Later entry wins on name collision
     const finnhub = resolved.mcpServers.find(s => s.name === "finnhub");
@@ -567,7 +569,7 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("throws when string reference not found in shared definitions", () => {
-    const agent = { ...baseAgent, mcpServers: ["nonexistent"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const agent = { ...baseAgent, mcpServers: ["nonexistent"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }> };
     expect(() => resolveAgentConfig(agent, defaults, sharedMcpServers)).toThrow(
       /MCP server.*nonexistent.*not found/i,
     );
@@ -612,10 +614,10 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("preserves user-specified 'browser' mcpServer entry (no overwrite)", () => {
-    const customBrowser = { name: "browser", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" } };
+    const customBrowser = { name: "browser", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" }, optional: false };
     const agent = {
       ...baseAgent,
-      mcpServers: [customBrowser] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }>,
+      mcpServers: [customBrowser] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }>,
     };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     const browser = resolved.mcpServers.find((s) => s.name === "browser");
@@ -656,10 +658,10 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("preserves user-specified 'search' mcpServer entry (no overwrite)", () => {
-    const customSearch = { name: "search", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" } };
+    const customSearch = { name: "search", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" }, optional: false };
     const agent = {
       ...baseAgent,
-      mcpServers: [customSearch] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }>,
+      mcpServers: [customSearch] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }>,
     };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     const search = resolved.mcpServers.find((s) => s.name === "search");
@@ -670,7 +672,7 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("resolves multiple string references", () => {
-    const agent = { ...baseAgent, mcpServers: ["finnhub", "google"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }> };
+    const agent = { ...baseAgent, mcpServers: ["finnhub", "google"] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }> };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     expect(resolved.mcpServers.find(s => s.name === "finnhub")).toBeDefined();
     expect(resolved.mcpServers.find(s => s.name === "google")).toBeDefined();
@@ -709,10 +711,10 @@ describe("resolveAgentConfig - mcpServers", () => {
   });
 
   it("L4: preserves user-specified 'image' mcpServer entry (no overwrite)", () => {
-    const customImage = { name: "image", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" } };
+    const customImage = { name: "image", command: "mycustom", args: ["--flag"], env: { CUSTOM: "x" }, optional: false };
     const agent = {
       ...baseAgent,
-      mcpServers: [customImage] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string> }>,
+      mcpServers: [customImage] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }>,
     };
     const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
     const image = resolved.mcpServers.find((s) => s.name === "image");
@@ -1153,7 +1155,7 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
       admin: false,
       slashCommands: [],
       reactions: true,
-      mcpServers: [{ name: "my-server", command: "node", args: ["server.js"], env: { API_KEY: "${TEST_API_KEY}" } }],
+      mcpServers: [{ name: "my-server", command: "node", args: ["server.js"], env: { API_KEY: "${TEST_API_KEY}" }, optional: false }],
     };
 
     const resolved = resolveAgentConfig(agent, defaults);

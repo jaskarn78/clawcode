@@ -73,7 +73,7 @@ describe("buildSessionConfig - mcpServers", () => {
   it("includes mcpServers in session config when agent has MCP servers", async () => {
     const config = makeConfig({
       mcpServers: [
-        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: { API_KEY: "xxx" } },
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: { API_KEY: "xxx" }, optional: false },
       ],
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -91,8 +91,8 @@ describe("buildSessionConfig - mcpServers", () => {
   it("passes multiple MCP servers through to session config", async () => {
     const config = makeConfig({
       mcpServers: [
-        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
-        { name: "google", command: "npx", args: ["-y", "google-mcp"], env: { KEY: "val" } },
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {}, optional: false },
+        { name: "google", command: "npx", args: ["-y", "google-mcp"], env: { KEY: "val" }, optional: false },
       ],
     });
     const result = await buildSessionConfig(config, makeDeps());

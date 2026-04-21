@@ -133,6 +133,13 @@ export type ResolvedAgentConfig = {
     readonly command: string;
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;
+    /**
+     * Phase 85 TOOL-01 — when true, readiness-gate failure is
+     * warn-logged but does NOT block the agent transitioning to
+     * `status: running`. Default false = mandatory. Populated by
+     * config/loader.ts from mcpServerSchema.
+     */
+    readonly optional: boolean;
   }[];
   readonly acceptsTasks?: Readonly<Record<string, readonly string[]>>;  // Phase 59
   readonly escalationBudget?: {

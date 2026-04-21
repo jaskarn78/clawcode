@@ -103,6 +103,11 @@ export type AgentSessionConfig = {
     readonly command: string;
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;
+    /**
+     * Phase 85 TOOL-01 — mirrors ResolvedAgentConfig.mcpServers[].optional.
+     * Defaults to false (mandatory) at the config/loader layer.
+     */
+    readonly optional: boolean;
   }[];
 };
 

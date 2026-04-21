@@ -76,6 +76,8 @@ export function resolveAgentConfig(
       command: "clawcode",
       args: ["mcp"],
       env: {},
+      // Phase 85 TOOL-01 — clawcode MCP is mandatory (default false).
+      optional: false,
     });
   }
 
@@ -87,6 +89,8 @@ export function resolveAgentConfig(
       command: "npx",
       args: ["-y", "@1password/mcp-server@latest"],
       env: { OP_SERVICE_ACCOUNT_TOKEN: process.env.OP_SERVICE_ACCOUNT_TOKEN },
+      // Phase 85 TOOL-01 — 1Password MCP is mandatory when auto-injected.
+      optional: false,
     });
   }
 
@@ -104,6 +108,8 @@ export function resolveAgentConfig(
       command: "clawcode",
       args: ["browser-mcp"],
       env: { CLAWCODE_AGENT: agent.name },
+      // Phase 85 TOOL-01 — browser MCP is mandatory when auto-injected.
+      optional: false,
     });
   }
 
@@ -120,6 +126,8 @@ export function resolveAgentConfig(
       command: "clawcode",
       args: ["search-mcp"],
       env: { CLAWCODE_AGENT: agent.name },
+      // Phase 85 TOOL-01 — search MCP is mandatory when auto-injected.
+      optional: false,
     });
   }
 
@@ -136,6 +144,8 @@ export function resolveAgentConfig(
       command: "clawcode",
       args: ["image-mcp"],
       env: { CLAWCODE_AGENT: agent.name },
+      // Phase 85 TOOL-01 — image MCP is mandatory when auto-injected.
+      optional: false,
     });
   }
 
@@ -146,6 +156,12 @@ export function resolveAgentConfig(
     env: Object.fromEntries(
       Object.entries(s.env ?? {}).map(([k, v]) => [k, resolveEnvVars(v)])
     ),
+    // Phase 85 TOOL-01 — default to false for auto-injected servers
+    // (clawcode/1password/browser/search/image) and for any entry where
+    // the schema's default did not fire (e.g., string references to
+    // top-level shared definitions that used the old shape). Explicitly
+    // configured `optional: true` flows through unchanged.
+    optional: s.optional === true,
   }));
 
   const resolvedWorkspace =

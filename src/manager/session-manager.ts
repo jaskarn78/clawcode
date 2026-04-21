@@ -31,6 +31,11 @@ import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 import type { SkillTrackingConfig } from "./session-adapter.js";
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "./warm-path-check.js";
+import {
+  performMcpReadinessHandshake,
+  type McpReadinessReport,
+  type McpServerState,
+} from "../mcp/readiness.js";
 import { ConversationBriefCache } from "./conversation-brief-cache.js";
 import {
   readEffortState,
@@ -168,6 +173,22 @@ export class SessionManager {
    * evolution of a long session. Resets on agent stop.
    */
   private readonly flushSequenceByAgent: Map<string, number> = new Map();
+
+  /**
+   * Phase 85 Plan 01 TOOL-01 — per-agent MCP state map.
+   *
+   * Populated at `startAgent` by the MCP readiness probe; mutated by the
+   * `mcp-reconnect` heartbeat check as servers flap/recover. Drained on
+   * `stopAgent` so a restart starts clean.
+   *
+   * Read by `/clawcode-tools` (via IPC `list-mcp-status`) and by the
+   * two-block prompt-builder in Plan 02 to expose live tool health in
+   * the system prompt (TOOL-02/TOOL-05).
+   */
+  private readonly mcpStateByAgent: Map<
+    string,
+    Map<string, McpServerState>
+  > = new Map();
 
   /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
@@ -444,6 +465,12 @@ export class SessionManager {
     // error — daemon keeps running other agents. On success, a single atomic
     // registry write flips status -> 'running' AND records warm_path_ready +
     // warm_path_readiness_ms in the same transaction.
+    // Phase 85 Plan 01 TOOL-01 — mcpProbe closes over a ref so the report
+    // is reachable after runWarmPathCheck resolves (for subsequent handle
+    // + state-map population). Optional failures are warn-logged here and
+    // do NOT contribute to the gate-blocking errors array.
+    const mcpReadiness: { current: McpReadinessReport | null } = { current: null };
+    const mcpServers = config.mcpServers ?? [];
     const warmResult = await runWarmPathCheck({
       agent: name,
       sqliteWarm: (agentName) => this.memory.warmSqliteStores(agentName),
@@ -456,8 +483,34 @@ export class SessionManager {
           throw new Error("session handle not ready");
         }
       },
+      // Phase 85 Plan 01 TOOL-01 — JSON-RPC `initialize` handshake against
+      // every configured MCP server. Mandatory failures block the warm-
+      // path; optional failures are warn-logged and allowed through.
+      ...(mcpServers.length > 0
+        ? {
+            mcpProbe: async () => {
+              const rep = await performMcpReadinessHandshake(mcpServers);
+              mcpReadiness.current = rep;
+              if (rep.optionalErrors.length > 0) {
+                this.log.warn(
+                  { agent: name, optionalErrors: rep.optionalErrors },
+                  "mcp: optional servers failed handshake (non-blocking)",
+                );
+              }
+              return { errors: rep.errors };
+            },
+          }
+        : {}),
       timeoutMs: WARM_PATH_TIMEOUT_MS,
     });
+
+    // Persist the MCP state map regardless of gate outcome. On a mandatory
+    // failure we still want the state visible (e.g. for `list-mcp-status`
+    // + Plan 03's /clawcode-tools) even though the agent is marked failed.
+    // On success this gets re-persisted alongside the handle below.
+    if (mcpReadiness.current) {
+      this.setMcpStateForAgent(name, mcpReadiness.current.stateByName);
+    }
 
     registry = await readRegistry(this.registryPath);
 
@@ -677,6 +730,9 @@ export class SessionManager {
     // Phase 53 Plan 03 — clear per-agent skill-usage buffer so a restart
     // warms up cleanly (no stale mentions from prior session).
     this.skillUsageTracker.resetAgent(name);
+    // Phase 85 Plan 01 TOOL-01 — drop per-agent MCP state so a restart
+    // starts clean (no stale failed-server entries from a prior session).
+    this.mcpStateByAgent.delete(name);
 
     registry = await readRegistry(this.registryPath);
     // clawdy-v2-stability (2026-04-19): record stoppedAt so reconcileRegistry's
@@ -938,6 +994,34 @@ export class SessionManager {
   getContextFillProvider(agentName: string): CharacterCountFillProvider | undefined { return this.memory.contextFillProviders.get(agentName); }
   getEmbedder(): EmbeddingService { return this.memory.embedder; }
   getAgentConfig(agentName: string): ResolvedAgentConfig | undefined { return this.configs.get(agentName); }
+
+  /**
+   * Phase 85 Plan 01 TOOL-01 — read the per-agent MCP state map.
+   *
+   * Returns an empty `Map` for agents with no MCP servers or unknown
+   * agent names. Consumed by:
+   *   - `src/heartbeat/checks/mcp-reconnect.ts` (reconcile prior vs current)
+   *   - `src/manager/daemon.ts` IPC `list-mcp-status` handler
+   *   - Plan 02 prompt-builder (surface live tool health in system prompt)
+   */
+  getMcpStateForAgent(name: string): ReadonlyMap<string, McpServerState> {
+    return this.mcpStateByAgent.get(name) ?? new Map();
+  }
+
+  /**
+   * Phase 85 Plan 01 TOOL-01 — persist the per-agent MCP state map.
+   *
+   * Called at `startAgent` after the readiness probe runs and by the
+   * `mcp-reconnect` heartbeat check after every tick's probe. Always
+   * stores a DEFENSIVE COPY so external mutations of the passed-in map
+   * don't leak into the SessionManager's state.
+   */
+  setMcpStateForAgent(
+    name: string,
+    state: ReadonlyMap<string, McpServerState>,
+  ): void {
+    this.mcpStateByAgent.set(name, new Map(state));
+  }
   getSessionLogger(agentName: string): SessionLogger | undefined { return this.memory.sessionLoggers.get(agentName); }
   getTierManager(agentName: string): TierManager | undefined { return this.memory.tierManagers.get(agentName); }
   getUsageTracker(agentName: string): UsageTracker | undefined { return this.memory.usageTrackers.get(agentName); }

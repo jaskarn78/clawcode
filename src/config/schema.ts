@@ -204,6 +204,12 @@ export const mcpServerSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
   env: z.record(z.string(), z.string()).default({}),
+  // Phase 85 TOOL-01 — when true, this server's readiness handshake
+  // failure does NOT block the warm-path gate (agent still transitions
+  // to `status: running`). Default false = mandatory (existing behavior
+  // for every currently-configured MCP server; v2.1 migrated configs
+  // parse unchanged). See src/mcp/readiness.ts.
+  optional: z.boolean().default(false),
 });
 
 /** Inferred MCP server config type from schema. */

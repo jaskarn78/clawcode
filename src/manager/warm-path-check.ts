@@ -30,6 +30,11 @@ export type WarmPathDurations = {
    * Records 0 when no `browserProbe` dep is supplied.
    */
   readonly browser: number;
+  /**
+   * Phase 85 Plan 01 TOOL-01 — duration of the optional MCP readiness
+   * handshake. Records 0 when no `mcpProbe` dep is supplied.
+   */
+  readonly mcp: number;
 };
 
 export type WarmPathResult = {
@@ -58,6 +63,15 @@ export type WarmPathDeps = {
    * `durations_ms.browser === 0`.
    */
   readonly browserProbe?: () => Promise<void>;
+  /**
+   * Phase 85 Plan 01 TOOL-01 — optional MCP readiness handshake probe.
+   * Returns an `errors` array of pre-scoped (`mcp: <name>: <reason>`)
+   * strings that are pushed verbatim into the composite `errors[]`.
+   * Only mandatory-server failures should appear in this list — the
+   * caller partitions mandatory vs optional upstream. Absent probe
+   * means no-op + `durations_ms.mcp === 0`.
+   */
+  readonly mcpProbe?: () => Promise<{ readonly errors: readonly string[] }>;
   /** Override timeout for tests. Defaults to `WARM_PATH_TIMEOUT_MS`. */
   readonly timeoutMs?: number;
 };
@@ -80,6 +94,7 @@ export async function runWarmPathCheck(
   let embedderMs = 0;
   let sessionMs = 0;
   let browserMs = 0;
+  let mcpMs = 0;
 
   const work = (async () => {
     // Step 1 — SQLite + sqlite-vec warmup.
@@ -122,6 +137,24 @@ export async function runWarmPathCheck(
       errors.push(`browser: ${(e as Error).message}`);
     }
     browserMs = deps.browserProbe ? performance.now() - browserStart : 0;
+
+    // Step 5 — Phase 85 Plan 01 TOOL-01 MCP readiness handshake probe.
+    // Optional dep; SessionManager wires it when the agent has MCP
+    // servers configured. Returned error strings are already scoped
+    // (`mcp: <name>: <reason>`) so we push them verbatim into `errors`.
+    // Note: this probe never throws — it returns its errors explicitly.
+    // If somehow it does throw (defensive), capture the exception with
+    // the same `mcp:` prefix so operators still see an mcp-scoped line.
+    const mcpStart = performance.now();
+    try {
+      if (deps.mcpProbe) {
+        const { errors: mcpErrors } = await deps.mcpProbe();
+        for (const e of mcpErrors) errors.push(e);
+      }
+    } catch (e) {
+      errors.push(`mcp: ${(e as Error).message}`);
+    }
+    mcpMs = deps.mcpProbe ? performance.now() - mcpStart : 0;
   })();
 
   let timedOut = false;
@@ -149,6 +182,7 @@ export async function runWarmPathCheck(
       embedder: embedderMs,
       session: sessionMs,
       browser: browserMs,
+      mcp: mcpMs,
     }),
     total_ms,
     errors: Object.freeze([...errors]) as readonly string[],

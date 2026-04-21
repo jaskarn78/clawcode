@@ -139,7 +139,7 @@ describe("buildSessionConfig — MCP tools injection", () => {
   it("includes MCP tools in Available Tools section when agent has mcpServers configured", async () => {
     const config = makeConfig({
       mcpServers: [
-        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {}, optional: false },
       ],
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -150,8 +150,8 @@ describe("buildSessionConfig — MCP tools injection", () => {
   it("lists each server name and command in the MCP tools section", async () => {
     const config = makeConfig({
       mcpServers: [
-        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
-        { name: "google-workspace", command: "node", args: ["gw-server.js"], env: { API_KEY: "test" } },
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {}, optional: false },
+        { name: "google-workspace", command: "node", args: ["gw-server.js"], env: { API_KEY: "test" }, optional: false },
       ],
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -311,7 +311,7 @@ The full context of its creation spans multiple paragraphs of detail.
       channels: ["123456789"],
       skills: ["content-engine"],
       mcpServers: [
-        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {} },
+        { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {}, optional: false },
       ],
     });
 
