@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Ready to plan
-stopped_at: Completed 83-02-PLAN.md (effort persistence + fork quarantine shipped)
-last_updated: "2026-04-21T18:03:14.876Z"
+status: In progress
+stopped_at: Completed 84-01-PLAN.md (skills discovery + secret-scan gate shipped)
+last_updated: "2026-04-21T18:40:30.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
   completed_phases: 1
   total_plans: 3
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-21)
 ## Current Position
 
 Phase: 84
-Plan: Not started
+Plan: 01 complete; 02 next (skills transformer + per-agent linker + idempotent apply)
 
 ## Performance Metrics
 
@@ -69,6 +69,11 @@ Recent decisions affecting current work:
 - [Phase 83]: Plan 83-03 — SKILL.md effort: frontmatter → SkillEntry.effort → TurnDispatcher.dispatch skillEffort option with try/finally revert at turn boundary; slash-command path wraps streamFromAgent with same apply+revert contract.
 - [Phase 83]: Plan 83-02 — Runtime effort persistence via dedicated ~/.clawcode/manager/effort-state.json (NOT registry.json extension); atomic temp+rename write; graceful null fallback on corruption/missing/invalid; fire-and-forget persist at setEffortForAgent, re-apply in startAgent BEFORE warm-path gate.
 - [Phase 83]: Plan 83-02 — Fork effort quarantine (EFFORT-06) pinned by explicit 'effort: parentConfig.effort' line in buildForkConfig + 6 tests (3 unit + 3 SessionManager integration). Prevents v1.5 fork-to-Opus cost spike: runtime override on parent does NOT propagate into fork; fork launches at parent CONFIG default.
+- [Phase 84]: Plan 84-01 — Skills ledger is SEPARATE file (v2.2-skills-ledger.jsonl) from v2.1 agent ledger; keeps v2.1 byte-stable as regression pin. Mirrors v2.1 ledger.ts shape with trimmed action enum (plan/apply/verify) and extended status enum (adds skipped/refused).
+- [Phase 84]: Plan 84-01 — Credential-context gate: high-entropy alone does NOT refuse. Line must ALSO contain a credential-shaped label (password/secret/token/api_key/...). Solves false-positive problem for avatar/webhook/git-SHA IDs in skill documentation. 3-phase classifier otherwise mirrors Phase 77 guards.ts (sk-prefix → whitelist → high-entropy).
+- [Phase 84]: Plan 84-01 — Tighter thresholds than v2.1 PlanReport guard (len>=12 + bits>=3.8 for skills vs len>=30 + bits>=4.0 for PlanReport). Required to catch short hand-typed passwords like finmentum-crm's 19-char MySQL credential (entropy 3.93).
+- [Phase 84]: Plan 84-01 — Word-boundary exemption: sub-30-char tokens containing `-`/`_`/space are NOT secrets (compound identifiers). Real credentials at that length are opaque runs with no word boundaries.
+- [Phase 84]: Plan 84-01 — finmentum-crm secret-scan HARD GATE working: refused at SKILL.md:20 with reason=high-entropy. MySQL credentials must move to MCP env / op:// refs before plan 02 can migrate this skill.
 
 ### v2.1 closing decisions (for reference)
 
@@ -131,9 +136,10 @@ Recent decisions affecting current work:
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
+| Phase 84 P01 | ~25min | 2 tasks (TDD) | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 83-02-PLAN.md (effort persistence + fork quarantine shipped)
-Resume: Run `/gsd:plan-phase 83` to decompose Extended-Thinking Effort Mapping into plans
+Stopped at: Completed 84-01-PLAN.md (skills discovery + secret-scan gate shipped)
+Resume: Execute 84-02-PLAN.md (skills transformer + per-agent linker + idempotent apply) — Plan 02 can now consume the verified-safe P1 subset (4 skills) without re-implementing classification or secret-scan

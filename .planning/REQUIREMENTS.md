@@ -18,13 +18,13 @@ Close remaining parity gaps between OpenClaw and ClawCode so agents operate at f
 
 Port the 5 P1 must-have skills from `~/.openclaw/skills/` into ClawCode's skill system. See `.planning/research/FEATURES.md` for the complete skill inventory and per-skill verdicts.
 
-- [ ] **SKILL-01**: Operator can migrate 5 P1 OpenClaw skills (`finmentum-crm`, `new-reel`, `frontend-design`, `self-improving-agent`, `tuya-ac`) into ClawCode via a `clawcode migrate openclaw skills` CLI command
-- [ ] **SKILL-02**: Migration tool secret-scans every source SKILL.md and all bundled scripts before copy; refuses the copy and emits a refusal report on credential match (blocks `finmentum-crm` until MySQL creds are scrubbed from its description)
+- [x] **SKILL-01**: Operator can migrate 5 P1 OpenClaw skills (`finmentum-crm`, `new-reel`, `frontend-design`, `self-improving-agent`, `tuya-ac`) into ClawCode via a `clawcode migrate openclaw skills` CLI command
+- [x] **SKILL-02**: Migration tool secret-scans every source SKILL.md and all bundled scripts before copy; refuses the copy and emits a refusal report on credential match (blocks `finmentum-crm` until MySQL creds are scrubbed from its description)
 - [ ] **SKILL-03**: Migration normalizes YAML frontmatter for legacy skills (adds `name:` + `description:` to `tuya-ac`, preserves existing frontmatter for the other four)
 - [ ] **SKILL-04**: Each migrated skill passes per-agent linker verification — a post-migration check confirms every skill resolves in the catalog of every agent it was linked to
-- [ ] **SKILL-05**: Migration is idempotent — re-running against an already-migrated source produces zero new writes (ledger-driven, matches v2.1 MIGR-03 pattern)
+- [x] **SKILL-05**: Migration is idempotent — re-running against an already-migrated source produces zero new writes (ledger-driven, matches v2.1 MIGR-03 pattern)
 - [ ] **SKILL-06**: Migration emits an operator-facing report to `.planning/milestones/v2.2-skills-migration-report.md` listing per-skill outcome (migrated / skipped / failed-secret-scan / deprecated)
-- [ ] **SKILL-07**: Migration is non-destructive to source (`~/.openclaw/skills/` is never modified); enforced by fs-guard reused from v2.1
+- [x] **SKILL-07**: Migration is non-destructive to source (`~/.openclaw/skills/` is never modified); enforced by fs-guard reused from v2.1
 - [ ] **SKILL-08**: Scope-tag enforcement — Finmentum-specific skills (`finmentum-crm`, `new-reel`) are linked only to Finmentum agents by default; linking to other agents requires explicit opt-in
 
 ### Extended-Thinking Effort Mapping (EFFORT-*)
