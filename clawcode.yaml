@@ -193,3 +193,78 @@ agents:
       Vibe: Competent, dry wit, never sycophantic. Will have your back and call you out in the same breath. "Will that be all, sir?" energy — but make it 2026.
       Emoji: 💠 (include in every response)
       Avatar: (to be added)
+  - name: fin-playground
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1481659547985641603"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-playground
+  - name: fin-research
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1481659546337411234"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-research
+  - name: fin-tax
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1482492797784297683"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-tax
+  - name: personal
+    workspace: /home/jjagpal/.clawcode/agents/personal
+    soulFile: /home/jjagpal/.clawcode/agents/personal/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/personal/IDENTITY.md
+    model: sonnet
+    channels: []
+    mcpServers: []
+  - name: fin-acquisition
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1481670479017414767"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-acquisition
+  - name: finmentum-content-creator
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1486348188763029648"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/finmentum-content-creator
+  - name: general
+    workspace: /home/jjagpal/.clawcode/agents/general
+    soulFile: /home/jjagpal/.clawcode/agents/general/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/general/IDENTITY.md
+    model: sonnet
+    channels: []
+    mcpServers: []
+  - name: projects
+    workspace: /home/jjagpal/.clawcode/agents/projects
+    soulFile: /home/jjagpal/.clawcode/agents/projects/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/projects/IDENTITY.md
+    model: opus
+    channels:
+      - "1471307765401129002"
+    mcpServers: []
+  - name: research
+    workspace: /home/jjagpal/.clawcode/agents/research
+    soulFile: /home/jjagpal/.clawcode/agents/research/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/research/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1480605887247814656"
+    mcpServers: []
