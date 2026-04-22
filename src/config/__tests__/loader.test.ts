@@ -1167,4 +1167,211 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     const resolved = resolveAgentConfig(agent, defaults);
     expect(resolved.mcpServers[0].env.API_KEY).toBe("sk-test-999");
   });
+
+  it("passes op:// refs through unchanged when no opRefResolver is provided", () => {
+    // Regression guard: existing tooling / offline flows that don't
+    // inject a resolver MUST see op:// literals passed through (no silent
+    // blanking, no throw). The spawn layer is the only place that fails
+    // when resolution is missing, and the daemon is responsible for
+    // passing a real resolver to avoid that.
+    const agent: AgentConfig = {
+      name: "passthrough-agent",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [{
+        name: "finmentum-db",
+        command: "node",
+        args: ["mysql.js"],
+        env: { MYSQL_HOST: "op://clawdbot/MySQL DB - Unraid/host" },
+        optional: false,
+      }],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.mcpServers.find(s => s.name === "finmentum-db")!.env.MYSQL_HOST)
+      .toBe("op://clawdbot/MySQL DB - Unraid/host");
+  });
+
+  it("substitutes op:// refs via the injected resolver so MCP children receive resolved secrets", () => {
+    // This is the bug fix: without a resolver, a literal `op://...` string
+    // would reach the MCP child and crash it at first network call (e.g.
+    // `dns.lookup("op://...")` → ENOTFOUND). With the resolver, the daemon
+    // hands the child the real value.
+    const calls: string[] = [];
+    const fakeResolver = (ref: string): string => {
+      calls.push(ref);
+      // Deterministic "fake 1Password" lookup for testing.
+      const map: Record<string, string> = {
+        "op://clawdbot/MySQL DB - Unraid/host": "100.117.234.17",
+        "op://clawdbot/MySQL DB - Unraid/username": "jjagpal",
+        "op://clawdbot/Finmentum DB/password": "real-password",
+      };
+      if (!(ref in map)) {
+        throw new Error(`no fake mapping for ${ref}`);
+      }
+      return map[ref]!;
+    };
+
+    const agent: AgentConfig = {
+      name: "finmentum",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [{
+        name: "finmentum-db",
+        command: "node",
+        args: ["mysql.js"],
+        env: {
+          MYSQL_HOST: "op://clawdbot/MySQL DB - Unraid/host",
+          MYSQL_USER: "op://clawdbot/MySQL DB - Unraid/username",
+          MYSQL_PASSWORD: "op://clawdbot/Finmentum DB/password",
+          MYSQL_DATABASE: "finmentum",  // plain value — no resolution needed
+          MYSQL_PORT: "3306",             // plain value — no resolution needed
+        },
+        optional: false,
+      }],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults, {}, fakeResolver);
+    const server = resolved.mcpServers.find(s => s.name === "finmentum-db")!;
+
+    expect(server.env.MYSQL_HOST).toBe("100.117.234.17");
+    expect(server.env.MYSQL_USER).toBe("jjagpal");
+    expect(server.env.MYSQL_PASSWORD).toBe("real-password");
+    expect(server.env.MYSQL_DATABASE).toBe("finmentum");
+    expect(server.env.MYSQL_PORT).toBe("3306");
+    // Resolver was invoked exactly once per op:// value; plain values skipped.
+    expect(calls).toEqual([
+      "op://clawdbot/MySQL DB - Unraid/host",
+      "op://clawdbot/MySQL DB - Unraid/username",
+      "op://clawdbot/Finmentum DB/password",
+    ]);
+  });
+
+  it("applies ${VAR} interpolation BEFORE op:// resolution so indirect refs work", () => {
+    // Edge case: a value like `${SECRET_REF}` where SECRET_REF is itself
+    // an op:// URI. Interpolation must fire first so the resulting string
+    // lands in the resolver. Supports patterns where the vault/item path
+    // itself comes from an environment variable.
+    process.env.TEST_SECRET_REF = "op://vault/item/password";
+    const fakeResolver = (ref: string): string => {
+      if (ref === "op://vault/item/password") return "resolved-secret";
+      throw new Error(`unexpected ref ${ref}`);
+    };
+
+    try {
+      const agent: AgentConfig = {
+        name: "indirect-agent",
+        channels: [],
+        skills: [],
+        effort: "low",
+        heartbeat: true,
+        schedules: [],
+        admin: false,
+        slashCommands: [],
+        reactions: true,
+        mcpServers: [{
+          name: "indirect-server",
+          command: "node",
+          args: ["server.js"],
+          env: { SECRET: "${TEST_SECRET_REF}" },
+          optional: false,
+        }],
+      };
+
+      const resolved = resolveAgentConfig(agent, defaults, {}, fakeResolver);
+      expect(resolved.mcpServers.find(s => s.name === "indirect-server")!.env.SECRET)
+        .toBe("resolved-secret");
+    } finally {
+      delete process.env.TEST_SECRET_REF;
+    }
+  });
+
+  it("wraps resolver failures with server+var context so operators know which entry is broken", () => {
+    // A failing resolver (e.g. 1P CLI missing, item not found, service
+    // token invalid) should produce an error that names the offending
+    // server and env var. This replaces the previous silent-passthrough
+    // failure mode where the operator only saw ENOTFOUND from the MCP
+    // child, with no indication that the root cause was an unresolved
+    // op:// ref.
+    const failingResolver = (_ref: string): string => {
+      throw new Error("op: session expired");
+    };
+    const agent: AgentConfig = {
+      name: "broken-agent",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [{
+        name: "db-server",
+        command: "node",
+        args: ["db.js"],
+        env: { MYSQL_HOST: "op://vault/db/host" },
+        optional: false,
+      }],
+    };
+
+    expect(() => resolveAgentConfig(agent, defaults, {}, failingResolver)).toThrow(
+      /mcpServers\.db-server\.env\.MYSQL_HOST.*op:\/\/vault\/db\/host.*op: session expired/,
+    );
+  });
+
+  it("does NOT invoke the resolver for non-op:// values (avoids unnecessary CLI spawns)", () => {
+    // Performance guard: the default resolver shells out via execSync,
+    // so we must only call it for actual op:// refs. Plain values, empty
+    // strings, and un-expanded `${VAR}` placeholders (post-interpolation
+    // results) must never hit the resolver.
+    let callCount = 0;
+    const countingResolver = (_ref: string): string => {
+      callCount++;
+      return "should-not-be-called";
+    };
+    const agent: AgentConfig = {
+      name: "plain-agent",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [{
+        name: "plain-server",
+        command: "node",
+        args: ["server.js"],
+        env: {
+          PLAIN: "hardcoded",
+          EMPTY: "",
+          PORT: "3306",
+          PATH_LIKE: "/usr/bin/node",
+        },
+        optional: false,
+      }],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults, {}, countingResolver);
+    expect(callCount).toBe(0);
+    const server = resolved.mcpServers.find(s => s.name === "plain-server")!;
+    expect(server.env.PLAIN).toBe("hardcoded");
+    expect(server.env.EMPTY).toBe("");
+    expect(server.env.PORT).toBe("3306");
+    expect(server.env.PATH_LIKE).toBe("/usr/bin/node");
+  });
 });

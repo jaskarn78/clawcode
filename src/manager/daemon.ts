@@ -26,7 +26,7 @@ import {
   runStartupReconciliation,
   ORPHAN_THRESHOLD_MS,
 } from "../tasks/reconciler.js";
-import { loadConfig, resolveAllAgents } from "../config/loader.js";
+import { loadConfig, resolveAllAgents, defaultOpRefResolver } from "../config/loader.js";
 import { readRegistry, reconcileRegistry, writeRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
@@ -923,8 +923,13 @@ export async function startDaemon(
   // 4. Load config
   const config = await loadConfig(configPath);
 
-  // 5. Resolve all agents
-  const resolvedAgents = resolveAllAgents(config);
+  // 5. Resolve all agents — pass the real 1Password resolver so any
+  // `op://vault/item/field` references under mcpServers[].env get
+  // substituted with concrete secret values BEFORE the SDK spawns the
+  // MCP children. Without this, literal `op://...` strings reach the
+  // child process and crash it at first use (e.g. MySQL driver does
+  // `dns.lookup("op://...")` → ENOTFOUND).
+  const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver);
 
   // 5c. Validate only one admin agent (per D-14)
   const adminAgents = resolvedAgents.filter(a => a.admin);
@@ -1885,6 +1890,10 @@ export async function startDaemon(
       log.info({ subsystems: summary.subsystemsReloaded, agents: summary.agentsAffected }, "config hot-reloaded");
     },
     log,
+    // Hot-reload must resolve op:// refs too — otherwise adding a new
+    // mcpServers entry with `op://...` env on a running daemon would still
+    // crash the child. Matches the boot-time resolver above.
+    opRefResolver: defaultOpRefResolver,
   });
   await configWatcher.start();
   log.info({ configPath, auditTrail: auditTrailPath }, "config watcher started");

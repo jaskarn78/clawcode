@@ -9,7 +9,7 @@
 
 import { watch, type FSWatcher } from "chokidar";
 import type pino from "pino";
-import { loadConfig, resolveAllAgents } from "./loader.js";
+import { loadConfig, resolveAllAgents, type OpRefResolver } from "./loader.js";
 import { diffConfigs } from "./differ.js";
 import { AuditTrail } from "./audit-trail.js";
 import type { ConfigDiff } from "./types.js";
@@ -26,6 +26,13 @@ export type ConfigWatcherOptions = {
   readonly log: pino.Logger;
   /** Debounce interval in milliseconds. Defaults to 500. */
   readonly debounceMs?: number;
+  /**
+   * Optional 1Password `op://` resolver threaded into `resolveAllAgents`
+   * on reload. Daemon boot MUST pass `defaultOpRefResolver` so that any
+   * newly-added mcpServers env with `op://` refs get substituted before
+   * the reloaded agents reach the spawn layer. Tests omit it.
+   */
+  readonly opRefResolver?: OpRefResolver;
 };
 
 export class ConfigWatcher {
@@ -34,6 +41,7 @@ export class ConfigWatcher {
   private readonly log: pino.Logger;
   private readonly debounceMs: number;
   private readonly auditTrail: AuditTrail;
+  private readonly opRefResolver: OpRefResolver | undefined;
 
   private currentConfig: Config | undefined;
   private watcher: FSWatcher | undefined;
@@ -44,6 +52,7 @@ export class ConfigWatcher {
     this.onChange = opts.onChange;
     this.log = opts.log;
     this.debounceMs = opts.debounceMs ?? 500;
+    this.opRefResolver = opts.opRefResolver;
     this.auditTrail = new AuditTrail({
       filePath: opts.auditTrailPath,
       log: opts.log,
@@ -148,8 +157,10 @@ export class ConfigWatcher {
     const previousConfig = this.currentConfig;
     this.currentConfig = newConfig;
 
-    // Resolve agents and notify
-    const resolvedAgents = resolveAllAgents(newConfig);
+    // Resolve agents and notify — pass through the configured op:// resolver
+    // so hot-reloads that touch mcpServers env get their secrets resolved
+    // before the spawn layer sees them. Matches the boot path in daemon.ts.
+    const resolvedAgents = resolveAllAgents(newConfig, this.opRefResolver);
 
     try {
       await this.onChange(diff, resolvedAgents);

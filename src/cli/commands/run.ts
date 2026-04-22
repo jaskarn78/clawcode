@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { join } from "node:path";
 import { cliLog, cliError } from "../output.js";
-import { loadConfig, resolveAllAgents } from "../../config/loader.js";
+import { loadConfig, resolveAllAgents, defaultOpRefResolver } from "../../config/loader.js";
 import { SdkSessionAdapter } from "../../manager/session-adapter.js";
 import { SessionManager } from "../../manager/session-manager.js";
 import { DiscordBridge, loadBotToken } from "../../discord/bridge.js";
@@ -39,7 +39,11 @@ export function registerRunCommand(program: Command): void {
         process.exit(1);
       }
 
-      const resolvedAgents = resolveAllAgents(config);
+      // `clawcode run` spawns the real MCP children via SessionManager —
+      // must resolve op:// secret refs before the env reaches the SDK.
+      // Otherwise a config like `MYSQL_HOST: op://.../hostname` arrives at
+      // the child as a literal `op://...` string and fails at DNS lookup.
+      const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver);
       const agentConfig = resolvedAgents.find((a) => a.name === agentName);
 
       if (!agentConfig) {
