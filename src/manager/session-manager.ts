@@ -553,6 +553,7 @@ export class SessionManager {
       startedAt: Date.now(),
       warm_path_ready: true,
       warm_path_readiness_ms: warmResult.total_ms,
+      lastError: null,
     });
     await writeRegistry(this.registryPath, registry);
     this.log.info(
