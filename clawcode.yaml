@@ -14,6 +14,12 @@ defaults:
     contextFill:
       warningThreshold: 0.6
       criticalThreshold: 0.75
+  image:
+    enabled: true
+    backend: fal
+    fal:
+      apiKeyEnv: FAL_API_KEY
+      model: fal-ai/flux-pro
 
 mcpServers:
   finnhub:
@@ -31,10 +37,10 @@ mcpServers:
       - serve
       - mysql
     env:
-      MYSQL_HOST: op://clawdbot/MySQL DB - Unraid/host
+      MYSQL_HOST: op://clawdbot/MySQL DB - Unraid/hostname
       MYSQL_PORT: "3306"
       MYSQL_USER: op://clawdbot/MySQL DB - Unraid/username
-      MYSQL_PASSWORD: op://clawdbot/Finmentum DB/password
+      MYSQL_PASSWORD: op://clawdbot/MySQL DB - Unraid/password
       MYSQL_DATABASE: finmentum
 
   google-workspace:
@@ -134,10 +140,10 @@ mcpServers:
       - /home/jjagpal/.openclaw/workspace-general/mcp-servers/finmentum_content.py
     env:
       FINMENTUM_DB_PASSWORD: op://clawdbot/MySQL DB - Unraid/password
-      HEYGEN_API_KEY: op://clawdbot/HeyGen/api-key
-      PEXELS_API_KEY: op://clawdbot/Pexels/api-key
-      FINMENTUM_AVATAR_ID: op://clawdbot/HeyGen/avatar_id
-      FINMENTUM_VOICE_ID: op://clawdbot/HeyGen/voice_id
+      HEYGEN_API_KEY: op://clawdbot/HeyGen API Key/credential
+      PEXELS_API_KEY: op://clawdbot/Pexels API Credentials/credential
+      FINMENTUM_AVATAR_ID: op://clawdbot/Finmentum Config/avatar_id
+      FINMENTUM_VOICE_ID: op://clawdbot/Finmentum Config/voice_id
       JAMENDO_CLIENT_ID: op://clawdbot/Jamendo/client_id
 
 agents:
