@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
 status: Milestone complete
-stopped_at: Completed 88-02-PLAN.md
-last_updated: "2026-04-21T23:30:53.816Z"
+stopped_at: Phase 89 context gathered
+last_updated: "2026-04-22T23:46:04.132Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 12
@@ -165,6 +165,7 @@ Recent decisions affecting current work:
 - 2026-04-21: v2.2 milestone opened — OpenClaw Parity & Polish (skills migration, effort mapping, model picker core, native CC slash commands, MCP tool awareness, skills marketplace)
 - 2026-04-21: v2.2 research complete — STACK/FEATURES/ARCHITECTURE/PITFALLS/SUMMARY across `.planning/research/`
 - 2026-04-21: v2.2 roadmap created — 6 phases (83-88), 45 requirements mapped across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT; UI-01 cross-cutting across 4 UI phases; zero orphans
+- 2026-04-22: Phase 89 added — Agent restart greeting (active Discord send of prior-context summary on restart)
 
 ### Pending Todos
 
@@ -211,5 +212,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-21
-Stopped at: Completed 88-02-PLAN.md
+Stopped at: Phase 89 context gathered
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
