@@ -929,7 +929,18 @@ export async function startDaemon(
   // MCP children. Without this, literal `op://...` strings reach the
   // child process and crash it at first use (e.g. MySQL driver does
   // `dns.lookup("op://...")` → ENOTFOUND).
-  const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver);
+  //
+  // Graceful degradation: a bad op:// ref (missing item, wrong field)
+  // logs a loud error and disables just that one MCP for the affected
+  // agent. The daemon continues booting; other agents that don't
+  // reference the broken MCP are unaffected. Operators see exactly
+  // which agent + MCP + env var failed in the daemon log.
+  const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver, (info) => {
+    log.error(
+      { agent: info.agent, server: info.server, reason: info.message },
+      "MCP server disabled — env resolution failed",
+    );
+  });
 
   // 5c. Validate only one admin agent (per D-14)
   const adminAgents = resolvedAgents.filter(a => a.admin);

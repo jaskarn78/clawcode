@@ -160,7 +160,19 @@ export class ConfigWatcher {
     // Resolve agents and notify — pass through the configured op:// resolver
     // so hot-reloads that touch mcpServers env get their secrets resolved
     // before the spawn layer sees them. Matches the boot path in daemon.ts.
-    const resolvedAgents = resolveAllAgents(newConfig, this.opRefResolver);
+    // Graceful degradation: a bad op:// ref disables just that one MCP for
+    // the affected agent and logs the reason; the reload continues so other
+    // unrelated config changes still take effect.
+    const resolvedAgents = resolveAllAgents(
+      newConfig,
+      this.opRefResolver,
+      (info) => {
+        this.log.error(
+          { agent: info.agent, server: info.server, reason: info.message },
+          "MCP server disabled on reload — env resolution failed",
+        );
+      },
+    );
 
     try {
       await this.onChange(diff, resolvedAgents);

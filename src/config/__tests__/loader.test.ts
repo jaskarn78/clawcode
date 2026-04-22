@@ -1332,6 +1332,96 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     );
   });
 
+  it("graceful degradation: with an onMcpResolutionError handler, a failing MCP is skipped and other MCPs keep their resolved env", () => {
+    // One bad op:// ref should disable only the offending MCP, not break
+    // the agent entirely. Other MCPs (including ones referencing the same
+    // vault but a different item/field) continue through normal resolution.
+    const selectiveResolver = (ref: string): string => {
+      if (ref === "op://vault/missing/password") {
+        throw new Error('"missing" isn\'t an item in "vault"');
+      }
+      return `resolved:${ref}`;
+    };
+    const agent: AgentConfig = {
+      name: "mixed-agent",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [
+        {
+          name: "good-server",
+          command: "node",
+          args: ["good.js"],
+          env: { SECRET: "op://vault/good/token" },
+          optional: false,
+        },
+        {
+          name: "bad-server",
+          command: "node",
+          args: ["bad.js"],
+          env: { DB_PASS: "op://vault/missing/password" },
+          optional: false,
+        },
+      ],
+    };
+
+    const errors: Array<{ agent: string; server: string; message: string }> = [];
+    const resolved = resolveAgentConfig(
+      agent,
+      defaults,
+      {},
+      selectiveResolver,
+      (info) => errors.push({ ...info }),
+    );
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].agent).toBe("mixed-agent");
+    expect(errors[0].server).toBe("bad-server");
+    expect(errors[0].message).toMatch(/mcpServers\.bad-server\.env\.DB_PASS/);
+
+    const serverNames = resolved.mcpServers.map((s) => s.name);
+    expect(serverNames).toContain("good-server");
+    expect(serverNames).not.toContain("bad-server");
+    const good = resolved.mcpServers.find((s) => s.name === "good-server")!;
+    expect(good.env.SECRET).toBe("resolved:op://vault/good/token");
+  });
+
+  it("without an onMcpResolutionError handler, resolver failure still throws (pre-existing behavior preserved)", () => {
+    // Migration tooling + `clawcode list` want loud failure on any config
+    // drift — only callers that opt in via the handler get the graceful
+    // skip behavior.
+    const failingResolver = (_ref: string): string => {
+      throw new Error("op: item not found");
+    };
+    const agent: AgentConfig = {
+      name: "strict-agent",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [{
+        name: "db",
+        command: "node",
+        args: ["db.js"],
+        env: { PASS: "op://vault/item/pass" },
+        optional: false,
+      }],
+    };
+
+    expect(() => resolveAgentConfig(agent, defaults, {}, failingResolver)).toThrow(
+      /mcpServers\.db\.env\.PASS/,
+    );
+  });
+
   it("does NOT invoke the resolver for non-op:// values (avoids unnecessary CLI spawns)", () => {
     // Performance guard: the default resolver shells out via execSync,
     // so we must only call it for actual op:// refs. Plain values, empty

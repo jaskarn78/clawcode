@@ -87,6 +87,20 @@ export async function loadConfig(configPath: string): Promise<Config> {
  * @param defaults - Top-level defaults section
  * @returns Fully resolved agent config
  */
+/**
+ * Callback invoked when resolving an MCP server's env fails (typically an
+ * `op://` reference pointing at a missing 1Password item or field). When
+ * present, `resolveAgentConfig` skips the failing MCP server instead of
+ * throwing — one bad credential does not take out unrelated agents. When
+ * omitted, the pre-existing throw behavior is preserved (migration + CLI
+ * list tooling rely on strict failure to surface config errors loudly).
+ */
+export type McpResolutionErrorHandler = (info: {
+  readonly agent: string;
+  readonly server: string;
+  readonly message: string;
+}) => void;
+
 export function resolveAgentConfig(
   agent: AgentConfig,
   defaults: DefaultsConfig,
@@ -103,6 +117,15 @@ export function resolveAgentConfig(
    * calls `dns.lookup("op://...")` → ENOTFOUND).
    */
   opRefResolver?: OpRefResolver,
+  /**
+   * Optional handler invoked when an MCP server's env resolution fails.
+   * When provided, the failing MCP is excluded from `mcpServers` in the
+   * returned config (graceful degradation — one bad ref doesn't crash the
+   * daemon). When omitted, the resolution error propagates (pre-existing
+   * behavior used by migration tooling + `clawcode list` that want to
+   * surface any config drift loudly).
+   */
+  onMcpResolutionError?: McpResolutionErrorHandler,
 ): ResolvedAgentConfig {
   // Resolve heartbeat: if agent has heartbeat: false, disable but keep global config values
   const heartbeatConfig = agent.heartbeat === false
@@ -205,31 +228,47 @@ export function resolveAgentConfig(
     });
   }
 
-  const mcpServers = [...resolvedMcpMap.values()].map((s) => ({
-    name: s.name,
-    command: s.command,
-    args: [...s.args],
-    env: Object.fromEntries(
-      Object.entries(s.env ?? {}).map(([k, v]) => [
-        k,
-        // Two-stage env resolution: (1) `${VAR}` interpolation against
-        // process.env — supports things like `${OPENAI_API_KEY}` used for
-        // non-secret passthrough; (2) `op://vault/item/field` resolution
-        // via the injected 1Password resolver. The passthrough branch
-        // keeps existing tests + offline flows working without a live op
-        // CLI; daemon boot wires `defaultOpRefResolver` so real agents
-        // get real secrets instead of a literal op://... string crashing
-        // the MCP child at DNS-lookup time.
-        resolveMcpEnvValue(v, opRefResolver, { serverName: s.name, varName: k }),
-      ]),
-    ),
-    // Phase 85 TOOL-01 — default to false for auto-injected servers
-    // (clawcode/1password/browser/search/image) and for any entry where
-    // the schema's default did not fire (e.g., string references to
-    // top-level shared definitions that used the old shape). Explicitly
-    // configured `optional: true` flows through unchanged.
-    optional: s.optional === true,
-  }));
+  // Two-stage env resolution per MCP server:
+  //   (1) `${VAR}` interpolation against process.env — supports things like
+  //       `${OPENAI_API_KEY}` for non-secret passthrough;
+  //   (2) `op://vault/item/field` resolution via the injected 1Password
+  //       resolver. The passthrough branch keeps existing tests + offline
+  //       flows working without a live op CLI.
+  // Daemon boot wires `defaultOpRefResolver` so real agents get real
+  // secrets instead of a literal op://... string crashing the MCP child
+  // at DNS-lookup time.
+  //
+  // Graceful degradation: if a caller provides `onMcpResolutionError`,
+  // a single MCP's env failure (e.g. bad op:// ref) logs + excludes that
+  // MCP from this agent's list instead of throwing the entire config
+  // load. Agents that don't reference the failing MCP are unaffected.
+  const mcpServers: ResolvedAgentConfig["mcpServers"] = [];
+  for (const s of resolvedMcpMap.values()) {
+    try {
+      const env = Object.fromEntries(
+        Object.entries(s.env ?? {}).map(([k, v]) => [
+          k,
+          resolveMcpEnvValue(v, opRefResolver, { serverName: s.name, varName: k }),
+        ]),
+      );
+      mcpServers.push({
+        name: s.name,
+        command: s.command,
+        args: [...s.args],
+        env,
+        // Phase 85 TOOL-01 — default to false for auto-injected servers
+        // (clawcode/1password/browser/search/image) and for any entry where
+        // the schema's default did not fire (e.g., string references to
+        // top-level shared definitions that used the old shape). Explicitly
+        // configured `optional: true` flows through unchanged.
+        optional: s.optional === true,
+      });
+    } catch (err) {
+      if (!onMcpResolutionError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      onMcpResolutionError({ agent: agent.name, server: s.name, message });
+    }
+  }
 
   const resolvedWorkspace =
     agent.workspace ?? join(expandHome(defaults.basePath), agent.name);
@@ -321,10 +360,17 @@ export async function resolveContent(value: string): Promise<string> {
 export function resolveAllAgents(
   config: Config,
   opRefResolver?: OpRefResolver,
+  onMcpResolutionError?: McpResolutionErrorHandler,
 ): ResolvedAgentConfig[] {
   const sharedMcpServers = config.mcpServers ?? {};
   return config.agents.map((agent) =>
-    resolveAgentConfig(agent, config.defaults, sharedMcpServers, opRefResolver),
+    resolveAgentConfig(
+      agent,
+      config.defaults,
+      sharedMcpServers,
+      opRefResolver,
+      onMcpResolutionError,
+    ),
   );
 }
 

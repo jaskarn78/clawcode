@@ -43,7 +43,15 @@ export function registerRunCommand(program: Command): void {
       // must resolve op:// secret refs before the env reaches the SDK.
       // Otherwise a config like `MYSQL_HOST: op://.../hostname` arrives at
       // the child as a literal `op://...` string and fails at DNS lookup.
-      const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver);
+      // Graceful degradation: a broken op:// ref disables that MCP for the
+      // running agent and logs the reason, letting the agent still come up
+      // with its other tools rather than blocking startup entirely.
+      const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver, (info) => {
+        log.error(
+          { agent: info.agent, server: info.server, reason: info.message },
+          "MCP server disabled — env resolution failed",
+        );
+      });
       const agentConfig = resolvedAgents.find((a) => a.name === agentName);
 
       if (!agentConfig) {
