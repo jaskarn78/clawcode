@@ -90,7 +90,7 @@ export function resolveAgentConfig(
     resolvedMcpMap.set("1password", {
       name: "1password",
       command: "npx",
-      args: ["-y", "@1password/mcp-server@latest"],
+      args: ["-y", "@takescake/1password-mcp@latest"],
       env: { OP_SERVICE_ACCOUNT_TOKEN: process.env.OP_SERVICE_ACCOUNT_TOKEN },
       // Phase 85 TOOL-01 — 1Password MCP is mandatory when auto-injected.
       optional: false,
