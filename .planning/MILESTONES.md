@@ -1,5 +1,32 @@
 # Milestones: ClawCode
 
+## v2.2 OpenClaw Parity & Polish (Shipped: 2026-04-23)
+
+**Phases completed:** 7 phases, 19 plans, 32 tasks
+
+**Key accomplishments:**
+
+- SDK wire for mid-session thinking-token control (q.setMaxThinkingTokens) is now observable in production — /clawcode-effort has stopped lying, pinned by a spy test that fails loud if the no-op ever returns.
+- Runtime `/clawcode-effort` overrides now survive `clawcode restart` via atomic JSON persistence, and the v1.5 fork-to-Opus cost-spike regression is pinned by an explicit `effort: parentConfig.effort` line in `buildForkConfig` + 6 tests that fail loud if runtime state ever bleeds into fork config.
+- `/clawcode-effort` now renders a 7-item native Discord dropdown, `/clawcode-status` surfaces the live effort level, and SKILL.md `effort:` frontmatter transparently overrides an agent's effort for the duration of the turn — with bulletproof try/finally revert even when the SDK explodes.
+- Stood up the `clawcode migrate openclaw skills` CLI scaffold with three hard gates (fs-guard-enforced source read-only, per-skill secret scan that refuses finmentum-crm until its literal MySQL credentials are scrubbed, JSONL ledger that drives idempotency) — zero new npm deps.
+- 1. [Rule 1 — Bug] Empty-body frontmatter regex
+- Shipped the v2.2 skills migration report — `.planning/milestones/v2.2-skills-migration-report.md` generated atomically on every apply with per-skill verdict, per-agent linker verification table, and four cross-cutting invariants; deterministic for identical ledger state.
+- One-liner:
+- One-liner:
+- `/clawcode-tools` Discord slash command (EmbedBuilder, CONTROL_COMMANDS, daemon-routed) + `clawcode mcp-status` CLI subcommand — both consume Plan 01's list-mcp-status IPC to show per-agent MCP readiness (ready / degraded / failed / reconnecting / unknown) with verbatim lastError pass-through.
+- Schema + SDK plumbing for /clawcode-model: allowedModels allowlist, SessionHandle.setModel wired to q.setModel (Phase 83 canary blueprint), and typed ModelNotAllowedError at the IPC boundary.
+- IPC set-model routes through SessionManager.setModelForAgent (live swap) then updateAgentModel (atomic YAML persist); /clawcode-status reads model from the live handle. The 'Takes effect on next session' lie is retired.
+- Replaced LLM-prompt routing for `/clawcode-model` with a native StringSelectMenuBuilder picker (no-arg) + direct IPC dispatch (arg), closed PROJECT.md tech-debt line 150, and added a ButtonBuilder cache-invalidation confirmation for mid-conversation model swaps — UI-01 compliant end-to-end.
+- SDK-driven per-agent Discord slash-command registration via Query.initializationResult, `clawcode-<name>` namespace guard enforced by construction, SECURITY.md deny-list gating, 90-per-guild pre-flight cap, and a static-grep regression pin that makes hardcoded native-command lists impossible to re-introduce.
+- Third application of the Phase 83/86 SDK canary blueprint: mid-session `Query.setPermissionMode()` wired through SessionHandle → SessionManager → IPC → slash-command path, pinned by 5 spy tests that can't be fooled. `/clawcode-permissions <mode>` dispatches control-plane (not prompt routing), closes CMD-00 spike validation + CMD-02 satisfaction.
+- Prompt-channel native-CC commands (`/clawcode-compact`, `/clawcode-context`, `/clawcode-cost`, `/clawcode-help`, `/clawcode-hooks`, ...) now dispatch as canonical `/<name> <args>` prompt strings through TurnDispatcher.dispatchStream; output streams via the v1.7 ProgressiveMessageEditor (zero new streaming primitive); SDK errors surface verbatim (Phase 85 TOOL-04 pattern applied at the slash-command layer).
+- Shipped the three pure-function primitives Plan 02 needs to bolt on a Discord slash command: `loadMarketplaceCatalog` unions local skills with configured legacy sources into a deduped read-only catalog; `installSingleSkill` wraps the Phase 84 pipeline (scan → copy → YAML persist → ledger) against one skill with 8 typed refusal outcomes; `updateAgentSkills` mirrors Phase 86's atomic YAML writer contract for appending/removing skills. Zero new npm deps.
+- Wired Plan 01's pure marketplace primitives to Discord end-to-end: three IPC handlers (marketplace-list/install/remove) following the Phase 86 Plan 02 handler blueprint, two new Discord slash commands (/clawcode-skills-browse + /clawcode-skills) with native StringSelectMenuBuilder pickers, post-install hot-relink via linkAgentSkills, and an exhaustive 8-outcome renderer that closes MKT-01/MKT-05/MKT-06/MKT-07 + UI-01 at the Discord surface. Zero new npm deps.
+- Files:
+
+---
+
 ## v2.1 OpenClaw Agent Migration (Shipped: 2026-04-21)
 
 **Phases completed:** 15 phases, 40 plans, 86 tasks

@@ -14,7 +14,7 @@
 - :white_check_mark: **v1.9 Persistent Conversation Memory** - Phases 64-68 + 68.1 (shipped 2026-04-18)
 - :white_check_mark: **v2.0 Open Endpoint + Eyes & Hands** - Phases 69-74 (shipped 2026-04-20)
 - :white_check_mark: **v2.1 OpenClaw Agent Migration** - Phases 75-82 + 82.1 (shipped 2026-04-21)
-- :hammer: **v2.2 OpenClaw Parity & Polish** - Phases 83-88 (opened 2026-04-21)
+- :white_check_mark: **v2.2 OpenClaw Parity & Polish** - Phases 83-89 (shipped 2026-04-23)
 
 ## Phases
 
@@ -124,14 +124,14 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 
 </details>
 
-### v2.2 OpenClaw Parity & Polish (Phases 83-88) - ACTIVE
+<details>
+<summary>v2.2 OpenClaw Parity & Polish (Phases 83-89) - SHIPPED 2026-04-23</summary>
 
-- [x] **Phase 83: Extended-Thinking Effort Mapping** — Close the P0 silent no-op at persistent-session-handle.ts:599; wire `/clawcode-effort` through to SDK `Query.setMaxThinkingTokens()`; SDK canary for Phases 86/87. (completed 2026-04-21)
-- [x] **Phase 84: Skills Library Migration** — Port 5 P1 OpenClaw skills into ClawCode via `clawcode migrate openclaw skills`; secret-scan gated; reuses v2.1 atomic-writer + ledger patterns. (completed 2026-04-21)
-- [x] **Phase 85: MCP Tool Awareness & Reliability** — Fix phantom-error class ("1Password isn't logged in" when it is); readiness gate, health-check heartbeat reconnect, system-prompt tool-status surface. (completed 2026-04-21)
-- [x] **Phase 86: Dual Discord Model Picker (Core)** — Replace LLM-prompt routing with direct IPC dispatch; add `allowedModels` schema field; atomic YAML persistence; locks unified `clawcode-*` namespace before Phase 87. (completed 2026-04-21)
-- [x] **Phase 87: Native CC Slash Commands** — Register SDK-exposed commands as per-agent Discord slash commands; dispatch-split control-plane vs prompt-channel; unify duplicate clawcode-* commands; requires 30-min SDK spike (CMD-00) first. (completed 2026-04-21)
-- [x] **Phase 88: Skills Marketplace** — `/clawcode-skills-browse` Discord picker that runs the Phase 84 migration utility against a single skill; atomic post-install `skills:` list update + hot-reload. (completed 2026-04-21)
+See `.planning/milestones/v2.2-ROADMAP.md` for full details.
+
+Phases 83-89 delivered: Extended-thinking effort mapping (P0 silent no-op fix + SDK canary), skills library migration CLI (secret-scan gated), MCP tool awareness & reliability (phantom-error class eliminated), dual Discord model picker (direct IPC dispatch + allowedModels allowlist), native CC slash commands (SDK-reported commands as clawcode-* Discord slashes), skills marketplace (/clawcode-skills-browse install pipeline), and agent restart greeting (restartAgent-only Discord greeting with Haiku summarization + webhook identity + cool-down).
+
+</details>
 
 ## Phase Details
 
@@ -161,124 +161,10 @@ Phases 75-82 delivered: shared-workspace runtime support (memoryPath field), mig
 **Goal**: Caller-provided agent config on `/v1/chat/completions` — OpenClaw agents use ClawCode as a rendering backend without pre-registration.
 **Status**: Shipped 2026-04-20. See `.planning/phases/74-seamless-openclaw-backend-caller-provided-agent-config/`.
 
-### Phase 83: Extended-Thinking Effort Mapping
-**Goal**: Users can change a running agent's reasoning effort from Discord and have it actually take effect on the next SDK turn — including the "off" disable, the `auto` reset, per-skill overrides, and fork quarantine.
-**Depends on**: Nothing (first phase of v2.2; isolated surface)
-**Requirements**: EFFORT-01, EFFORT-02, EFFORT-03, EFFORT-04, EFFORT-05, EFFORT-06, EFFORT-07, UI-01 (effort picker UI)
-**Success Criteria** (what must be TRUE):
-  1. `/clawcode-effort <level>` observably changes SDK thinking-token behavior on the next turn (verified by a query-options spy test; not just the stored level)
-  2. `/clawcode-effort off` forces `MAX_THINKING_TOKENS=0` and thinking is fully disabled for that agent's next turn
-  3. `/clawcode-effort auto` resets to model default; the agent's next turn carries no runtime thinking cap
-  4. An agent restart re-applies the persisted effort level from either `clawcode.yaml` `agents[*].effort` / `defaults.effort` or the runtime state file — no regression to default
-  5. A v1.5 fork-to-Opus call initiated at `effort=max` on the parent launches the Opus advisor at the agent default, not `max` (cost-spike prevention verified via fork config test)
-  6. `/clawcode-status` shows the current effort level for every agent, and a SKILL.md `effort:` frontmatter override takes effect for turns invoking that skill then reverts at turn boundary
-**Plans**: 3 plans
-- [x] 83-01-PLAN.md — Schema extension (7 effort levels) + P0 SDK wire (Query.setMaxThinkingTokens spy test)
-- [x] 83-02-PLAN.md — Runtime effort persistence across restart + fork quarantine
-- [x] 83-03-PLAN.md — UI-01 StringChoices picker + effort in /clawcode-status + per-skill effort frontmatter
-**UI hint**: yes
-
-### Phase 84: Skills Library Migration
-**Goal**: Operator can port the 5 P1 OpenClaw skills (`finmentum-crm`, `new-reel`, `frontend-design`, `self-improving-agent`, `tuya-ac`) into ClawCode via a gated CLI that's safe to re-run and emits an auditable report.
-**Depends on**: Nothing (CLI-only; independent of effort/model/CMD work)
-**Requirements**: SKILL-01, SKILL-02, SKILL-03, SKILL-04, SKILL-05, SKILL-06, SKILL-07, SKILL-08
-**Success Criteria** (what must be TRUE):
-  1. `clawcode migrate openclaw skills apply` copies the 5 P1 skills into ClawCode's skill catalog and each resolves in the catalog of every agent it was linked to (per-agent linker verification passes)
-  2. `finmentum-crm` is blocked with a refusal report while its SKILL.md contains literal MySQL credentials; once the creds are moved to MCP env/op:// refs, the copy proceeds
-  3. `tuya-ac` SKILL.md has `name:` + `description:` frontmatter after migration (normalization applied); the other four skills' frontmatter is preserved untouched
-  4. Re-running `apply` against the already-migrated source produces zero filesystem writes (ledger-driven idempotency; hash-compared)
-  5. `.planning/milestones/v2.2-skills-migration-report.md` exists and lists per-skill outcome (migrated / skipped / failed-secret-scan / deprecated) plus per-agent link status
-  6. Finmentum-scoped skills (`finmentum-crm`, `new-reel`) are linked only to Finmentum agents by default; `~/.openclaw/skills/` mtime is unchanged (source-tree read-only invariant verified post-run)
-**Plans**: 3 plans
-- [x] 84-01-PLAN.md — CLI scaffold + secret-scan gate + JSONL ledger + fs-guard (SKILL-01, SKILL-02, SKILL-05, SKILL-07)
-- [x] 84-02-PLAN.md — Transformer (tuya-ac frontmatter) + copy + per-agent linker verification + scope tags + .learnings dedup (SKILL-03, SKILL-04, SKILL-08)
-- [x] 84-03-PLAN.md — Migration report generator at .planning/milestones/v2.2-skills-migration-report.md (SKILL-06)
-
-### Phase 85: MCP Tool Awareness & Reliability
-**Goal**: Eliminate the phantom-error class where agents claim "1Password isn't logged in" / "MCP not configured" / "key expired" while every MCP server is actually healthy; agents only report an MCP error when the server returned one.
-**Depends on**: Nothing (uses v1.3 MCP health-check infra + v1.7 two-block prompt assembly; no cross-feature dependency)
-**Requirements**: TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07
-**Success Criteria** (what must be TRUE):
-  1. An agent with a misconfigured mandatory MCP server never reaches `status: ready` — daemon refuses to flip the registry until every mandatory MCP passes JSON-RPC `initialize` (extends the v1.7 warm-path gate)
-  2. A running agent's system prompt shows a live MCP tool-status table (server name, readiness, exposed tool names) placed inside the v1.7 stable prefix so it survives compaction
-  3. When a real MCP tool call fails, the agent's tool-result contains the actual JSON-RPC error code + message verbatim (not a generic "tool unavailable"); pinned via a regression test
-  4. When an MCP server drops, the v1.3 health-check heartbeat auto-reconnects it and the reconnect outcome surfaces in `/clawcode-status` within one heartbeat cycle
-  5. `/clawcode-tools` lists every configured MCP server with live status (ready / degraded / failed), last-successful-call timestamp, and recent failure count — surfacing any phantom-error contradiction to the operator
-**Plans**: 3 plans
-- [x] 85-01-PLAN.md — Readiness gate (JSON-RPC initialize on startup, mandatory vs optional classification) + heartbeat reconnect + verbatim JSON-RPC error pass-through (TOOL-01, TOOL-03, TOOL-04)
-- [x] 85-02-PLAN.md — System prompt assembly: pre-authenticated framing + live tool-status table + verbatim-error rule in v1.7 stable cached prefix (TOOL-02, TOOL-05, TOOL-07)
-- [x] 85-03-PLAN.md — /clawcode-tools Discord slash (EmbedBuilder, UI-01) + clawcode tools CLI parity (TOOL-06 + UI-01)
-
-### Phase 86: Dual Discord Model Picker (Core)
-**Goal**: Users can change a running agent's model from Discord via a direct IPC dispatch (no LLM-prompt round-trip), restricted to the per-agent `allowedModels` allowlist, persisted atomically to `clawcode.yaml`, with cache-invalidation UX that mirrors native `/model`.
-**Depends on**: Phase 83 (SDK canary — mid-session `Query.setModel()` concurrency validated by the effort-mapping wiring)
-**Requirements**: MODEL-01, MODEL-02, MODEL-03, MODEL-04, MODEL-05, MODEL-06, MODEL-07, UI-01 (model picker UI)
-**Success Criteria** (what must be TRUE):
-  1. `/clawcode-model` with no argument opens a Discord `StringSelectMenuBuilder` menu showing the bound agent's `allowedModels` (max 25 per Discord UI cap); selection dispatches via IPC `SessionManager.setModelForAgent()` → `SessionHandle.setModel()` → SDK `Query.setModel()` — no LLM prompt path
-  2. `/clawcode-model <model-not-in-allowlist>` is rejected with an ephemeral error listing allowed values; the allowlist is read from `agents[*].allowedModels` (or `defaults.allowedModels` fallback)
-  3. A model change during an active conversation shows an ephemeral confirmation prompt warning about prompt-cache invalidation (mirrors native `/model` behavior); on confirm, the new model is written to `clawcode.yaml` via the v2.1 atomic temp+rename writer (comments preserved, secret-guard passes)
-  4. After daemon restart the persisted model is honored (`/clawcode-status` shows the new model for the agent); hot-reload classification for `agents.*.allowedModels` is explicit and does not trigger an unintended session restart
-  5. v2.1 migrated configs (15 agents) parse unchanged — `allowedModels` is additive and optional; `clawcode migrate openclaw verify` still passes after the schema extension
-**Plans**: 3 plans
-- [x] 86-01-PLAN.md — Schema allowedModels + SessionHandle.setModel SDK wire (spy-test canary per Phase 83 blueprint) + ModelNotAllowedError (MODEL-01, MODEL-03, MODEL-06)
-- [x] 86-02-PLAN.md — Atomic YAML persistence (updateAgentModel) + /clawcode-status live model line (MODEL-04, MODEL-07)
-- [x] 86-03-PLAN.md — Discord StringSelectMenuBuilder picker + cache-invalidation button confirmation (MODEL-02, MODEL-05 + UI-01 co-validation)
-**UI hint**: yes
-
-### Phase 87: Native CC Slash Commands
-**Goal**: Every SDK-reported slash command (per `system/init.slash_commands`) is registered as a per-agent Discord slash command with the `clawcode-` prefix, dispatched through the correct channel (control-plane SDK method vs prompt-channel TurnDispatcher), with existing duplicate clawcode-* commands unified onto the native path.
-**Depends on**: Phase 83 (effort-mapping SDK canary), Phase 86 (model picker — unifies `clawcode-model` + locks namespace)
-**Requirements**: CMD-00, CMD-01, CMD-02, CMD-03, CMD-04, CMD-05, CMD-06, CMD-07, UI-01 (slash command UI surface)
-**Success Criteria** (what must be TRUE):
-  1. A 30-minute SDK spike confirming mid-session `Query.setModel()` / `Query.setPermissionMode()` / `Query.setMaxThinkingTokens()` concurrency safety is committed to `.planning/research/CMD-SDK-SPIKE.md` before any implementation code lands
-  2. On agent session start, ClawCode reads `system/init.slash_commands` and registers each as a `clawcode-<name>` Discord slash command; a static-grep regression test rejects any hardcoded native-command list in code
-  3. Control-plane commands (`/model`, `/permissions`, `/effort`) dispatch via the corresponding SDK `Query.setX()` method; prompt-channel commands stream through the existing `TurnDispatcher` with output surfaced via the v1.7 `ProgressiveMessageEditor`
-  4. The four existing duplicates (`clawcode-compact`, `clawcode-usage`, `clawcode-model`, `clawcode-effort`) are unified onto the native SDK dispatch path — the old LLM-prompt routing is removed
-  5. Per-agent SECURITY.md ACLs gate command registration: destructive or admin-only commands (`/init`, `/security-review`, `/batch`) are not registered on agents whose ACL forbids them; across the 15-agent fleet the Discord 100-command-per-guild cap is respected via per-guild name-dedupe
-**Plans**: 3 plans
-
-Plans:
-- [x] 87-01-PLAN.md — SDK command discovery + per-agent Discord registration (clawcode-* prefix) + ACL gate + static-grep regression pin + unify clawcode-compact/clawcode-usage duplicates
-- [x] 87-02-PLAN.md — Control-plane dispatch: setPermissionMode SDK wire (Phase 83/86 canary blueprint) + new set-permission-mode IPC + /clawcode-permissions inline handler
-- [x] 87-03-PLAN.md — Prompt-channel dispatch via TurnDispatcher + output streaming via v1.7 ProgressiveMessageEditor (verbatim error surfacing per Phase 85 TOOL-04 pattern)
-**UI hint**: yes
-
-### Phase 88: Skills Marketplace
-**Goal**: Discord users can browse available skills via `/clawcode-skills-browse` and install one to the bound agent with a single select-menu interaction; install runs the Phase 84 migration pipeline (secret-scan + frontmatter + idempotency) against just the chosen skill.
-**Depends on**: Phase 84 (reuses the skills migration utility end-to-end), Phase 86 (atomic YAML writer already proven for `allowedModels` — same pattern used for `skills:` list updates)
-**Requirements**: MKT-01, MKT-02, MKT-03, MKT-04, MKT-05, MKT-06, MKT-07, UI-01 (skills browser + skills picker UI)
-**Success Criteria** (what must be TRUE):
-  1. `/clawcode-skills-browse` opens a Discord `StringSelectMenuBuilder` (or autocomplete on large catalogs) showing skill name + short description + category; skills source resolves from a configurable list in `clawcode.yaml` (initially ClawCode's local skills catalog unified with `~/.openclaw/skills/`)
-  2. Selecting a skill runs the Phase 84 migration utility against that one skill — secret-scan, frontmatter normalization, and hash-based idempotency all enforced; skills that would fail a Phase 84 gate (secret scan, deprecation list, scope-tag mismatch) are rejected with an ephemeral explanation and never silently skipped
-  3. Post-install the daemon updates the bound agent's `skills:` list in `clawcode.yaml` using the v2.1 atomic writer, triggers hot-reload, and the skill is linked into the agent's catalog via the v1.4 global-install path
-  4. Install emits exactly one summary Discord message (skill name, install path, post-install catalog entry) — no multi-message spam
-  5. `/clawcode-skills` (no `-browse`) lists the currently installed skills for the bound agent and offers an ephemeral select-menu remove option
-**Plans:** 2/2 plans complete
-**Plans**:
-- [x] 88-01-PLAN.md — Marketplace catalog + single-skill install pipeline + updateAgentSkills YAML writer (MKT-02, MKT-03, MKT-04)
-- [x] 88-02-PLAN.md — IPC handlers + /clawcode-skills-browse + /clawcode-skills Discord slash commands + post-install hot-relink (MKT-01, MKT-05, MKT-06, MKT-07, UI-01)
-**UI hint**: yes
-
-### Phase 89: Agent Restart Greeting
-**Goal**: When an agent is explicitly restarted via `SessionManager.restartAgent()`, the daemon proactively sends a Discord message to the agent's bound channel containing a Haiku-summarized recap of the prior session — so the human sees the agent come back online with a quick "here's where we left off" signal, distinct from silent boot-reconcile (`startAll()`) and first-ever start.
-**Depends on**: Phase 88 (v2.2 milestone close-out; reuses v1.6 webhook identity + v1.2 DiscordDeliveryQueue + v1.9 SessionSummarizer + Phase 83 fire-and-forget blueprint + Phase 86 atomic YAML writer pattern — no new npm deps)
-**Requirements**: GREET-01, GREET-02, GREET-03, GREET-04, GREET-05, GREET-06, GREET-07, GREET-08, GREET-09, GREET-10 (synthesized from CONTEXT.md decisions D-01..D-16; 1:1 mapping in 89-RESEARCH.md)
-**Success Criteria** (what must be TRUE):
-  1. A `SessionManager.restartAgent()` call emits exactly one Discord greeting to the bound channel via the v1.6 per-agent webhook identity + EmbedBuilder — `startAgent()` on initial start and `startAll()` on daemon boot remain silent by construction
-  2. Greeting embed body is a fresh Haiku summarization of the agent's prior session (not a reuse of `assembleConversationBrief`), target <500 characters, content surface = prior-session summary only (no model/effort/open-loops/last-active)
-  3. Forks (by `buildForkName` prefix) and subagent threads are skipped; empty-state (no prior session) is skipped silently; dormancy (agent idle >7 days per ConversationStore last-turn-timestamp) is skipped silently
-  4. Per-agent cool-down (default 5min, configurable via `defaults.greetCoolDownMs` / `agents.*.greetCoolDownMs`) suppresses greetings on crash-loops via an in-memory daemon-scoped last-greeting-at Map
-  5. Additive-optional schema fields `agents.*.greetOnRestart` + `defaults.greetOnRestart` (default `true`) follow Phase 83/86 precedent — v2.1 migrated fleet parses unchanged; flag is reloadable, takes effect on next restart without daemon bounce
-  6. Greeting delivery failure (channel deleted / webhook 401 / rate limit) logs via pino and restart completes normally — follows Phase 83/86/87 synchronous-caller + fire-and-forget + `.catch` log-and-swallow blueprint; restart success MUST NOT depend on Discord availability
-  7. Crash-recovery vs clean-restart use differentiated embed templates when classifiable (via `registry.restartCount` delta + `session-recovery.ts` signals); unclassifiable paths fall through to the clean template — no new tracking mechanism invented for this phase
-**Plans**: 2 plans
-- [x] 89-01-PLAN.md — Schema additions (greetOnRestart + greetCoolDownMs) + pure helper module src/manager/restart-greeting.ts (classifier + summarizer wiring + EmbedBuilder templates + skip-path predicates) + unit tests (GREET-02, GREET-03, GREET-04, GREET-05, GREET-06, GREET-07, GREET-10)
-- [x] 89-02-PLAN.md — SessionManager wiring at restartAgent chokepoint (fire-and-forget + log-and-swallow) + webhookManager DI (setWebhookManager mirror) + cool-down Map + stopAgent cleanup + integration tests (GREET-01, GREET-08, GREET-09)
-**UI hint**: yes (EmbedBuilder + webhook identity — UI-01 compliance)
 
 ## Progress
 
-**Status:** v2.1 OpenClaw Agent Migration shipped 2026-04-21. v2.2 OpenClaw Parity & Polish opened 2026-04-21 with 6 phases (83-88), 45 requirements across 7 categories. Zero new npm deps expected.
+**Status:** v2.2 OpenClaw Parity & Polish shipped 2026-04-23 — 7 phases (83-89), 55+ requirements across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT/GREET categories, zero new npm deps. Awaiting next milestone (`/gsd:new-milestone`).
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -294,50 +180,10 @@ Plans:
 | v1.9 | 64-68 + 68.1 | Complete | 2026-04-18 |
 | v2.0 | 69-74 | Complete | 2026-04-20 |
 | v2.1 | 75-82 + 82.1 | Complete | 2026-04-21 |
-| v2.2 | 83-89 | In progress | — |
-
-### v2.2 Phase Progress
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 83. Extended-Thinking Effort Mapping | 3/3 | Complete    | 2026-04-21 |
-| 84. Skills Library Migration | 3/3 | Complete    | 2026-04-21 |
-| 85. MCP Tool Awareness & Reliability | 3/3 | Complete    | 2026-04-21 |
-| 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
-| 87. Native CC Slash Commands | 3/3 | Complete    | 2026-04-21 |
-| 88. Skills Marketplace | 2/2 | Complete    | 2026-04-21 |
-| 89. Agent Restart Greeting | 2/2 | Complete    | 2026-04-23 |
-
-## v2.2 Dependency Graph
-
-```
-Phase 83 (Effort)  ──┬─→ Phase 86 (Model Picker Core)  ──┬─→ Phase 87 (Native CC)
-                     │                                    │
-                     └────────────────────────────────────┘
-
-Phase 84 (Skills)  ────────────────────────→ Phase 88 (Marketplace)
-
-Phase 85 (MCP Tools)  ── (independent; parallel-safe with 83/84/86)
-
-Phase 89 (Restart Greeting) ── (depends on v1.6 webhook + v1.9 ConversationStore + v2.2 canary blueprint; zero new deps)
-```
-
-- **83 first** — SDK canary + P0 fix; validates SDK mid-session mutation strategy for 86/87
-- **84, 85 parallel-safe with 83** — no shared surface; 84 is CLI-only, 85 is readiness-gate + prompt work
-- **86 after 83** — reuses the SDK mid-session-mutation pattern proven in 83; locks the unified `clawcode-*` namespace before 87
-- **87 after 83 + 86** — depends on both effort-unify and model-unify; highest risk, gated by CMD-00 spike
-- **88 after 84 + 86** — reuses Phase 84 migration pipeline for per-skill install; reuses Phase 86 atomic YAML writer for `skills:` list update
-- **89 after 88** — v2.2 milestone close-out; reuses v1.6 webhook identity + v1.9 ConversationStore + Phase 83 fire-and-forget canary + Phase 86 schema-additive precedent. Pure composition; zero new deps.
-
-## v2.2 Notes
-
-- **Zero new npm dependencies** — verified by `.planning/research/STACK.md`. `yaml@2.8.3`, `discord.js@14.26.2`, `@anthropic-ai/claude-agent-sdk@0.2.97`, `better-sqlite3@12.8.0` cover every v2.2 surface.
-- **SDK pin** — `@anthropic-ai/claude-agent-sdk` to exact `0.2.97` (not `^0.2.97`) per STACK.md pre-1.0 churn guidance.
-- **UI-01 cross-cutting** — the single UI-01 requirement (native discord.js selection elements, no free-text fallback when a structured element fits) is a shared success criterion for every phase that introduces Discord UI: 83 (effort picker), 86 (model picker), 87 (native slash commands + autocomplete), 88 (skills browser + installed-skills picker). UI-01 is NOT assigned to a single owning phase; it is validated as part of each UI-bearing phase's acceptance.
-- **Deferred** — `MODEL-F1` (dual-picker OpenClaw-side read of materialized allowlist) is explicitly pushed to a future milestone per the requirements doc; Phase 86 lays the `allowedModels` schema foundation that future work builds on.
+| v2.2 | 83-89 | Complete | 2026-04-23 |
 
 ---
 
 *Milestone v2.1 OpenClaw Agent Migration: 8 phases (75-82) + 1 gap-closure phase (82.1). 31 requirements across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS categories — all satisfied. Zero new npm deps.*
 
-*Milestone v2.2 OpenClaw Parity & Polish opened 2026-04-21: 7 phases (83-89), 45+ requirements across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT categories plus Phase 89 GREET-01..10 (synthesized from the 16 D-01..D-16 decisions in 89-CONTEXT.md). Zero new npm deps.*
+*Milestone v2.2 OpenClaw Parity & Polish shipped 2026-04-23: 7 phases (83-89), 55+ requirements across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT categories plus Phase 89 GREET-01..10 (synthesized from the 16 D-01..D-16 decisions in 89-CONTEXT.md). Zero new npm deps. See `.planning/milestones/v2.2-ROADMAP.md` for full details.*

@@ -90,18 +90,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Memory translation + re-embedding — workspace markdown (disk-as-truth) parsed by H2, inserted via `MemoryStore.insert()` with `origin_id UNIQUE` idempotency, fresh 384-dim MiniLM embeddings, `.learnings/*.md` tagged `"learning"` — v2.1
 - Verify + rollback + resume + fork regression — `verify` with 4 pass/fail checks, per-agent atomic `rollback` with source-tree invariant, idempotent resume via ledger, v1.5 fork-to-Opus regression across Haiku/Sonnet/MiniMax/Gemini primaries with cost visibility — v2.1
 - Pilot + cutover + completion — recommended-pilot highlighting in `plan` output, per-agent `cutover` removes OpenClaw Discord bindings via fs-guard allowlist, `complete` generates `.planning/milestones/v2.1-migration-report.md` with cross-agent invariant assertions — v2.1
+- Extended-thinking effort mapping — `/clawcode-effort <level>` observably controls SDK `Query.setMaxThinkingTokens()`; 7-level schema (off/low/medium/high/xhigh/max/auto); runtime persistence via `effort-state.json` surviving daemon restart; fork quarantine prevents cost-spike from parent runtime override bleeding into fork config; per-skill SKILL.md `effort:` frontmatter override with try/finally revert at turn boundary — v2.2
+- Skills library migration — `clawcode migrate openclaw skills {plan,apply,verify}` CLI with secret-scan hard gate (refuses finmentum-crm until MySQL credentials are scrubbed), JSONL ledger-driven idempotency, per-agent linker verification, scope-tag routing (finmentum/personal/fleet), `.learnings` dedup via origin_id, atomic migration report at `.planning/milestones/v2.2-skills-migration-report.md` — v2.2
+- MCP tool awareness & reliability — JSON-RPC `initialize` readiness gate (mandatory vs optional classification) prevents agents reaching `status: ready` with misconfigured MCP servers; verbatim JSON-RPC error pass-through (no more phantom "1Password isn't logged in" messages); live tool-status table in cached system prompt prefix; `/clawcode-tools` Discord slash + `clawcode mcp-status` CLI showing per-agent server status — v2.2
+- Dual Discord model picker (core) — `/clawcode-model` native `StringSelectMenuBuilder` picker (no-arg) + direct IPC dispatch (arg) replacing LLM-prompt routing; `allowedModels` per-agent allowlist schema; `ModelNotAllowedError` typed error propagated via `IpcError.data`; atomic YAML persistence via `updateAgentModel` (Document-AST, comment-preserving); cache-invalidation `ButtonBuilder` confirmation for mid-conversation swaps — v2.2
+- Native CC slash commands — SDK `Query.initializationResult` drives per-agent Discord slash registration with `clawcode-*` prefix; control-plane (setModel/setPermissionMode/setMaxThinkingTokens) vs prompt-channel (TurnDispatcher) dispatch-split; `clawcode-compact`/`clawcode-usage`/`clawcode-model`/`clawcode-effort` duplicates unified onto the native SDK path; static-grep regression pin rejects hardcoded native-command lists; 90-per-guild pre-flight cap — v2.2
+- Skills marketplace — `/clawcode-skills-browse` Discord picker running the Phase 84 migration pipeline against one skill at a time (same secret-scan + frontmatter + idempotency gates); `updateAgentSkills` atomic YAML writer mirroring `updateAgentModel`; `/clawcode-skills` installed-list + remove via select-menu; exhaustive 8-outcome discriminated-union renderer — v2.2
+- Agent restart greeting — `SessionManager.restartAgent()` fire-and-forget greeting at the line-938 chokepoint via v1.6 webhook identity + `EmbedBuilder`; fresh Haiku summarization <500 chars; pure helper `src/manager/restart-greeting.ts` encapsulating fork/thread/empty/dormant/cool-down skip predicates + crash-vs-clean classifier (`prevConsecutiveFailures > 0`); per-agent in-memory cool-down Map cleared on `stopAgent`; additive-optional `greetOnRestart` + `greetCoolDownMs` schema (reloadable); Phase 83/86 fire-and-forget + `.catch` log-and-swallow canary applied — restart always succeeds even when Discord rejects — v2.2
 
 ### Active
 
-## Current Milestone: v2.2 OpenClaw Parity & Polish
-
-**Goal:** Close remaining parity gaps between OpenClaw and ClawCode so agents operate at feature parity for day-to-day use after the v2.1 migration.
-
-**Target features:**
-- Skills library migration — audit and port applicable domain skills from `~/.openclaw/skills/` (cognitive-memory, finmentum-crm, power-apps-builder, remotion, tuya-ac, workspace-janitor, self-improving-agent, ...) into ClawCode's skill system with per-agent linker verification
-- Extended-thinking effort mapping — `reasoning_effort` level → `MAX_THINKING_TOKENS` control, mirroring OpenClaw's `--effort` flag (source: `openclaw-claude-bridge/src/claude.js`)
-- Dual Discord model picker — keep OpenClaw's existing picker alive but make it read from the bound agent's `clawcode.yaml` allowed-model list, AND build a native `/clawcode-model` Discord slash command; per-agent allowed-model list is the source of truth
-- Native Claude Code slash commands in Discord — register the full native CC command set (e.g., `/clear`, `/compact`, `/model`, `/memory`, `/agents`, `/mcp`, `/cost`, `/todos`, `/init`, `/permissions`, `/review`, `/security-review`, and whatever else the CC CLI exposes) as per-agent Discord slash commands that route to the bound agent's Claude Code session
+(No active requirements — v2.2 shipped 2026-04-23. Run `/gsd:new-milestone` to define next milestone's scope.)
 
 ### Out of Scope
 
@@ -120,9 +119,9 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ## Current State
 
-**Latest shipped milestone:** v2.1 OpenClaw Agent Migration (shipped 2026-04-21)
+**Latest shipped milestone:** v2.2 OpenClaw Parity & Polish (shipped 2026-04-23)
 
-v1.0-v2.1 delivered 83 phases across 12 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, proactive agents with cross-agent handoffs, persistent conversation memory with auto-injection, OpenAI-compatible endpoint + browser/search/image MCPs, and one-shot OpenClaw-to-ClawCode migration toolchain (15-agent fleet port with zero source modification, deterministic dry-run, atomic per-agent apply/verify/rollback, fork-to-Opus preserved).
+v1.0-v2.2 delivered 90 phases across 13 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, proactive agents with cross-agent handoffs, persistent conversation memory with auto-injection, OpenAI-compatible endpoint + browser/search/image MCPs, one-shot OpenClaw-to-ClawCode migration toolchain, and v2.2 parity polish (effort mapping, skills migration, MCP reliability, dual model picker, native CC slash commands, skills marketplace, restart greeting). Zero new npm dependencies added in v2.2 — entire milestone built on the existing stack.
 
 ## Context
 
@@ -147,7 +146,9 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 **Known tech debt:**
 - 12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)
 - cosineSimilarity duplicated in graph-search.ts and similarity.ts
-- /model slash command uses indirect claudeCommand routing through agent LLM
+- Phase 89 has 2 pending operator UAT items (live Discord greeting smoke test + dormancy skip smoke test) — tracked in `.planning/phases/89-.../89-HUMAN-UAT.md`; run `/gsd:verify-work 89` after operator validation
+- DeliveryQueue schema is text-only (v1.2) — Phase 89 greetings bypass it via direct `webhookManager.sendAsAgent`. Future phase could extend DeliveryQueue to carry structured embeds (documented in Plan 89-02 verification)
+- v2.2 phases have test strategy + UAT items inline in RESEARCH/SUMMARY/VERIFICATION artifacts rather than separate VALIDATION.md files — not blocking, but `/gsd:validate-phase N` can generate retroactive Nyquist matrices if needed
 
 ## Key Decisions
 
@@ -166,6 +167,12 @@ ClawCode is a ground-up reimplementation of OpenClaw's multi-agent capabilities 
 | Fork-based model escalation | Stateless harness swapping per managed agents pattern, ephemeral escalated sessions | Good — no permanent model drift |
 | Hybrid hot-tier + on-demand loading | Pure on-demand causes confabulation, hybrid keeps critical context in prompt | Good — balanced context efficiency |
 | Context assembly pipeline | Per-source token budgets prevent any single source from starving others | Good — deterministic, configurable |
+| SDK mid-session mutation canary blueprint (v2.2) | Phase 83 validated `q.setMaxThinkingTokens`/`setModel`/`setPermissionMode` concurrency against the single captured driverIter handle with synchronous caller + fire-and-forget + `.catch` log-and-swallow | ✓ Good — Phase 86 setModel, Phase 87 setPermissionMode, Phase 89 restart greeting all followed the pattern verbatim; 5-test spy harness shared across all four |
+| Additive-optional schema extension precedent (v2.2) | Phase 83 (`effort`), Phase 86 (`allowedModels`), Phase 89 (`greetOnRestart` + `greetCoolDownMs`) all extend config schema with `.optional()` at agent level + `.default(X)` at defaults level; loader resolver falls back; RELOADABLE_FIELDS explicit | ✓ Good — v2.1 migrated 15-agent fleet parses unchanged after all 5 additive fields stack |
+| Pure-function DI composition (v2.2) | Phase 85 `performMcpReadinessHandshake` + Phase 89 `sendRestartGreeting` are pure modules with all I/O DI'd through a Deps struct | ✓ Good — 100% unit-testable without SessionManager/WebhookManager/ConversationStore/Discord running |
+| Atomic YAML writer convention (v2.1 → v2.2) | Phase 86 `updateAgentModel` + Phase 88 `updateAgentSkills` share the parseDocument AST + temp+rename + secret-guard pattern | ✓ Good — comments preserved, secret-guard gate blocks accidental credential writes, two consumers proven |
+| DeliveryQueue bypass for greetings (v2.2) | v1.2 DeliveryQueue is text-only — Phase 89 greetings go direct via webhookManager.sendAsAgent | — Pending revisit — future phase could extend DeliveryQueue to carry embeds; documented in Plan 89-02 |
+| Restart greeting = active Discord (v2.2) | Distinct from v1.9 `assembleConversationBrief` which is a passive prompt injection. Greeting emits ONLY on explicit `SessionManager.restartAgent()`; startAgent/startAll/performRestart silent by construction (not by runtime flag) | ✓ Good — D-01 literal reading enforced by code structure, not a feature flag |
 
 ## Constraints
 
@@ -193,4 +200,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-21 — v2.2 OpenClaw Parity & Polish milestone opened*
+*Last updated: 2026-04-23 — v2.2 OpenClaw Parity & Polish shipped*

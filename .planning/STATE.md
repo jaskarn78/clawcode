@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Milestone complete
+status: v2.2 milestone complete
 stopped_at: Completed 89-01-PLAN.md (schema + restart-greeting.ts pure module)
-last_updated: "2026-04-23T23:03:57.022Z"
+last_updated: "2026-04-23T23:15:31.793Z"
 last_activity: 2026-04-23
 progress:
   total_phases: 13
@@ -17,15 +17,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-21)
+See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 89 — Agent Restart Greeting
+**Current focus:** v2.2 OpenClaw Parity & Polish shipped 2026-04-23. Planning next milestone (`/gsd:new-milestone`).
 
 ## Current Position
 
-Phase: 89
-Plan: Not started
+Phase: —
+Plan: —
 
 ## Performance Metrics
 
