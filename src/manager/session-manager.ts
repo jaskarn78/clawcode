@@ -45,6 +45,8 @@ import {
 import { resolveModelId } from "./model-resolver.js";
 import { ModelNotAllowedError } from "./model-errors.js";
 import type { PermissionMode } from "./sdk-types.js";
+import type { WebhookManager } from "../discord/webhook-manager.js";
+import { sendRestartGreeting, classifyRestart } from "./restart-greeting.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -194,6 +196,25 @@ export class SessionManager {
   > = new Map();
 
   /**
+   * Phase 89 GREET-08 / D-14 — per-agent last-greeting-at timestamp (ms epoch).
+   * Cool-down Map: if an entry exists and (now - entry) < agent.greetCoolDownMs,
+   * the greeting is suppressed inside sendRestartGreeting. Reset on daemon boot
+   * (in-memory only — matches CONTEXT.md §Claude's Discretion). Cleared
+   * per-agent on stopAgent so an operator stop + restart does NOT see the
+   * cool-down window (operator-initiated restart is a clean restart by intent).
+   */
+  private readonly greetCoolDownByAgent: Map<string, number> = new Map();
+
+  /**
+   * Phase 89 GREET-01 / D-08 — optional WebhookManager reference, wired in
+   * from daemon.ts via setWebhookManager() AFTER the daemon constructs the
+   * WebhookManager (which happens after SessionManager construction in boot
+   * order). When undefined, the greeting helper is simply not invoked —
+   * graceful degradation. Matches the setSkillsCatalog DI pattern at line 254.
+   */
+  private webhookManager: WebhookManager | undefined = undefined;
+
+  /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
    * `streamFromAgent` / `sendToAgent` to reject new work with
    * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
@@ -252,6 +273,26 @@ export class SessionManager {
   set _lastStabilityPromise(v: Promise<void> | null) { this.recovery._lastStabilityPromise = v; }
 
   setSkillsCatalog(catalog: SkillsCatalog): void { this.skillsCatalog = catalog; }
+
+  /**
+   * Phase 89 GREET-01 — inject the WebhookManager reference after both this
+   * SessionManager and the WebhookManager are constructed (daemon boot order
+   * has SessionManager first at ~line 1014, WebhookManager at ~1823/1834/1839).
+   * Called exactly once by the daemon. When left unset, restartAgent's
+   * greeting side-effect is a no-op (graceful degradation).
+   */
+  setWebhookManager(wm: WebhookManager): void {
+    this.webhookManager = wm;
+  }
+
+  /**
+   * @internal Phase 89 test-only — exposes the cool-down map for integration
+   * tests (stopAgent cleanup + GREET-10 cool-down semantics). Read-only view
+   * so production callers can't mutate the map through this getter.
+   */
+  get _greetCoolDownByAgent(): ReadonlyMap<string, number> {
+    return this.greetCoolDownByAgent;
+  }
 
   setAllAgentConfigs(configs: readonly ResolvedAgentConfig[]): void {
     this.allAgentConfigs = configs;
@@ -840,6 +881,10 @@ export class SessionManager {
     // Phase 85 Plan 01 TOOL-01 — drop per-agent MCP state so a restart
     // starts clean (no stale failed-server entries from a prior session).
     this.mcpStateByAgent.delete(name);
+    // Phase 89 D-14 — reset cool-down on agent stop so an operator-initiated
+    // stop + restart sequence bypasses the 5-min suppression (operator intent
+    // is NOT a crash loop).
+    this.greetCoolDownByAgent.delete(name);
 
     registry = await readRegistry(this.registryPath);
     // clawdy-v2-stability (2026-04-19): record stoppedAt so reconcileRegistry's
@@ -932,10 +977,45 @@ export class SessionManager {
   async restartAgent(name: string, config: ResolvedAgentConfig): Promise<void> {
     await this.stopAgent(name);
     let registry = await readRegistry(this.registryPath);
-    const entry = registry.entries.find((e) => e.name === name);
-    registry = updateEntry(registry, name, { restartCount: (entry?.restartCount ?? 0) + 1 });
+    const prevEntry = registry.entries.find((e) => e.name === name);
+    // Phase 89 GREET-03 — capture BEFORE the restartCount bump so the
+    // classifier sees the pre-restart failure state. classifyRestart
+    // treats >0 as crash-suspected, 0 as clean (Finding 3 in 89-RESEARCH).
+    const prevConsecutiveFailures = prevEntry?.consecutiveFailures ?? 0;
+    registry = updateEntry(registry, name, {
+      restartCount: (prevEntry?.restartCount ?? 0) + 1,
+    });
     await writeRegistry(this.registryPath, registry);
     await this.startAgent(name, config);
+
+    // Phase 89 GREET-01 / GREET-09 — fire-and-forget greeting.
+    // This MUST stay async: D-16 requires restart success to be independent
+    // of Discord availability. Rejections are logged and swallowed per the
+    // Phase 83 canary blueprint (see setEffortForAgent at line ~656).
+    const webhookManager = this.webhookManager;
+    const convStore = this.memory.conversationStores.get(name);
+    if (webhookManager && convStore) {
+      void sendRestartGreeting(
+        {
+          webhookManager,
+          conversationStore: convStore,
+          summarize: this.summarizeFn,
+          now: () => Date.now(),
+          log: this.log,
+          coolDownState: this.greetCoolDownByAgent,
+        },
+        {
+          agentName: name,
+          config,
+          restartKind: classifyRestart(prevConsecutiveFailures),
+        },
+      ).catch((err: unknown) => {
+        this.log.warn(
+          { agent: name, error: (err as Error).message },
+          "[greeting] sendRestartGreeting threw (non-fatal)",
+        );
+      });
+    }
   }
 
   async startAll(configs: readonly ResolvedAgentConfig[]): Promise<void> {

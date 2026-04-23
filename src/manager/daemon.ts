@@ -1840,6 +1840,13 @@ export async function startDaemon(
     log.info({ webhooks: manualWebhookIdentities.size }, "webhook manager initialized (manual only, no bridge)");
   }
 
+  // Phase 89 GREET-01 — wire webhook DI into SessionManager now that both
+  // are constructed (SessionManager at line ~1014, WebhookManager above in
+  // all three branches: Discord-up success path, Discord-start failure
+  // fallback, no-bot-token/no-bindings path). Before this call, restartAgent
+  // greetings are no-ops. Exactly one call, post-convergence.
+  manager.setWebhookManager(webhookManager);
+
   // 11b2. Create SubagentThreadSpawner for IPC-driven subagent thread creation
   const subagentThreadSpawner = discordBridge
     ? new SubagentThreadSpawner({
