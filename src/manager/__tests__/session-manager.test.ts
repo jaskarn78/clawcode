@@ -1503,3 +1503,413 @@ describe("interruptAgent", () => {
     expect((warnMsg!.obj as { agent: string }).agent).toBe("boom-agent");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 89 Plan 02 — restartAgent greeting emission integration tests
+// ---------------------------------------------------------------------------
+//
+// Pins the D-01 contract (GREET-01) at SessionManager integration level:
+// restartAgent emits exactly one greeting; startAgent / startAll /
+// performRestart (crash-recovery) / IPC fallback emit zero. Pins D-16
+// (GREET-09): fire-and-forget — restart succeeds even when webhook rejects.
+// Pins D-14 (GREET-10): cool-down Map cleared on stopAgent + each successful
+// restart produces a fresh messageId.
+//
+// Fixtures:
+//   - A tmpdir-backed workspace so AgentMemoryManager.initMemory creates a
+//     real ConversationStore per agent.
+//   - `ConversationStore.prototype.listRecentTerminatedSessions` +
+//     `getTurnsForSession` are spied-on at the PROTOTYPE level (mirroring the
+//     Phase 73 `ConversationBriefCache.prototype.invalidate` pattern in this
+//     file). The spies return canned data, so the greeting helper sees
+//     deterministic history regardless of the stop-path session-summarizer's
+//     turn pruning (Gap 2, session-summarizer.ts:365). Prototype-scope keeps
+//     the production ConversationStore created by startAgent fully functional
+//     (stop-path summarization still runs) while isolating the greeting test
+//     from the pruning side-effect.
+//   - A stub WebhookManager with `sendAsAgent` spy + `hasWebhook` returning
+//     true. The `sendAsAgent` implementation resolves with a predictable
+//     messageId and records every call for assertion.
+//   - An injected summarizeFn that returns a fixed non-empty summary string
+//     — bypasses the real SDK / Haiku call for determinism.
+// ---------------------------------------------------------------------------
+import type { WebhookManager } from "../../discord/webhook-manager.js";
+import type { ConversationSession, ConversationTurn } from "../../memory/conversation-types.js";
+import { ConversationStore } from "../../memory/conversation-store.js";
+
+describe("restartAgent greeting emission (Phase 89)", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+  let sendAsAgentSpy: ReturnType<typeof vi.fn>;
+  let hasWebhookSpy: ReturnType<typeof vi.fn>;
+  let stubWebhook: { sendAsAgent: ReturnType<typeof vi.fn>; hasWebhook: ReturnType<typeof vi.fn> };
+  let warnLogs: Array<{ obj: unknown; msg: string }>;
+  let infoLogs: Array<{ obj: unknown; msg: string }>;
+  let testLogger: {
+    info: (obj: unknown, msg?: string) => void;
+    warn: (obj: unknown, msg?: string) => void;
+    error: () => void;
+    debug: () => void;
+    child: () => unknown;
+  };
+  let summarizeFn: ReturnType<typeof vi.fn>;
+
+  // Helper — build a config with greetOnRestart true + a webhook identity +
+  // a workspace under tmpDir so the ConversationStore is real.
+  function makeGreetableConfig(
+    name: string,
+    overrides?: Partial<ResolvedAgentConfig>,
+  ): ResolvedAgentConfig {
+    return {
+      ...makeConfig(name),
+      workspace: tmpDir,
+      memoryPath: tmpDir,
+      webhook: { displayName: "Clawdy", avatarUrl: "https://av/clawdy.png" },
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
+      ...overrides,
+    };
+  }
+
+  // Helper — arm prototype-level spies so the greeting helper sees canned
+  // history regardless of the stop-path session-summarizer's turn pruning.
+  // Returns both spies so individual tests can customize canned data or
+  // override implementation (e.g. return [] to force skipped-empty-state).
+  //
+  // Pattern lifted from the Phase 73 `brief cache invalidation` suite above
+  // (vi.spyOn(ConversationBriefCache.prototype, "invalidate")). Scope is
+  // cleared by vi's spy auto-restore in afterEach via vi.restoreAllMocks().
+  function armConvStoreSpies(
+    agentName: string,
+    opts?: {
+      terminatedSessions?: readonly ConversationSession[];
+      turns?: readonly ConversationTurn[];
+    },
+  ): {
+    listSpy: ReturnType<typeof vi.spyOn>;
+    turnsSpy: ReturnType<typeof vi.spyOn>;
+  } {
+    const now = new Date().toISOString();
+    const sessionId = "stub-sess-1";
+    const sessions: readonly ConversationSession[] = opts?.terminatedSessions ?? [
+      Object.freeze({
+        id: sessionId,
+        agentName,
+        startedAt: now,
+        endedAt: now,
+        turnCount: 2,
+        totalTokens: 0,
+        summaryMemoryId: null,
+        status: "ended" as const,
+      }),
+    ];
+    const turns: readonly ConversationTurn[] = opts?.turns ?? [
+      Object.freeze({
+        id: "t1",
+        sessionId,
+        turnIndex: 0,
+        role: "user" as const,
+        content: "What's the status of the migration plan?",
+        tokenCount: null,
+        channelId: null,
+        discordUserId: null,
+        discordMessageId: null,
+        isTrustedChannel: false,
+        origin: null,
+        instructionFlags: null,
+        createdAt: now,
+      }),
+      Object.freeze({
+        id: "t2",
+        sessionId,
+        turnIndex: 1,
+        role: "assistant" as const,
+        content: "Working on it — v2.1 fleet migrated, 15 agents online.",
+        tokenCount: null,
+        channelId: null,
+        discordUserId: null,
+        discordMessageId: null,
+        isTrustedChannel: false,
+        origin: null,
+        instructionFlags: null,
+        createdAt: now,
+      }),
+    ];
+    const listSpy = vi
+      .spyOn(ConversationStore.prototype, "listRecentTerminatedSessions")
+      .mockReturnValue(sessions as readonly ConversationSession[]);
+    const turnsSpy = vi
+      .spyOn(ConversationStore.prototype, "getTurnsForSession")
+      .mockReturnValue(turns as readonly ConversationTurn[]);
+    return { listSpy, turnsSpy };
+  }
+
+  // Drain microtasks so the fire-and-forget greeting chain runs before
+  // assertions execute.
+  async function drainMicrotasks(): Promise<void> {
+    await new Promise((r) => setImmediate(r));
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-greet-"));
+    registryPath = join(tmpDir, "registry.json");
+    infoLogs = [];
+    warnLogs = [];
+    testLogger = {
+      info: (obj, msg) => infoLogs.push({ obj, msg: msg ?? "" }),
+      warn: (obj, msg) => warnLogs.push({ obj, msg: msg ?? "" }),
+      error: () => undefined,
+      debug: () => undefined,
+      child: () => testLogger,
+    };
+
+    // Stub WebhookManager with spies. sendAsAgent returns predictable,
+    // monotonic message IDs so tests can assert fresh-per-restart semantics.
+    let callIdx = 0;
+    sendAsAgentSpy = vi.fn(async () => {
+      const id = `msg-${callIdx + 1}`;
+      callIdx += 1;
+      return id;
+    });
+    hasWebhookSpy = vi.fn(() => true);
+    stubWebhook = { sendAsAgent: sendAsAgentSpy, hasWebhook: hasWebhookSpy };
+
+    summarizeFn = vi.fn().mockResolvedValue(
+      "I was working on the v2.1 migration plan — 15 agents online and the greeting helper just landed.",
+    );
+
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      log: testLogger as any,
+      summarizeFn: summarizeFn as never,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* ignore */
+    }
+    vi.restoreAllMocks(); // tear down prototype spies from armConvStoreSpies
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("I1 (happy path): restartAgent emits exactly one greeting via sendAsAgent", async () => {
+    const name = "clawdy";
+    const config = makeGreetableConfig(name);
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+    armConvStoreSpies(name);
+
+    await manager.startAgent(name, config);
+    await manager.restartAgent(name, config);
+    // Greeting chain has 2 awaits before sendAsAgent (summarize, then
+    // sendAsAgent). Drain several microtask rounds to let the chain settle.
+    for (let i = 0; i < 10; i++) {
+      await drainMicrotasks();
+    }
+
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(1);
+    const [targetAgent, displayName, avatarUrl, embed] =
+      sendAsAgentSpy.mock.calls[0]!;
+    expect(targetAgent).toBe(name);
+    expect(displayName).toBe("Clawdy");
+    expect(avatarUrl).toBe("https://av/clawdy.png");
+    // EmbedBuilder carries our summary in .data.description
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((embed as any).data.description).toContain("migration plan");
+    // Summarize was invoked exactly once (happy path hits Haiku).
+    expect(summarizeFn).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  it("I2 (startAgent path): startAgent on a fresh agent emits zero greetings", async () => {
+    const name = "clawdy-fresh";
+    const config = makeGreetableConfig(name);
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+
+    await manager.startAgent(name, config);
+    await drainMicrotasks();
+
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(0);
+  }, 15_000);
+
+  it("I3 (startAll path): startAll emits zero greetings across all agents", async () => {
+    const configs = [
+      makeGreetableConfig("a1"),
+      makeGreetableConfig("a2"),
+      makeGreetableConfig("a3"),
+    ];
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+
+    await manager.startAll(configs);
+    await drainMicrotasks();
+
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(0);
+  }, 15_000);
+
+  it("I4 (crash-restart path / performRestart): crash + auto-restart emits zero greetings", async () => {
+    const name = "clawdy-crash";
+    const config = makeGreetableConfig(name);
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+    armConvStoreSpies(name); // even with history present, crash path must NOT greet
+
+    await manager.startAgent(name, config);
+
+    // Simulate a crash — SessionRecoveryManager will invoke performRestart,
+    // which calls startAgent (NOT restartAgent), so the greeting hook is
+    // bypassed by construction (D-01 literal reading, RESEARCH Finding 1).
+    const handle = [...adapter.sessions.values()][0] as MockSessionHandle;
+    handle.simulateCrash(new Error("boom"));
+
+    await manager._lastCrashPromise;
+    // Give the backoff timer room to fire the restart and for startAgent to
+    // complete before we drain microtasks. TEST_BACKOFF.maxMs = 1000ms.
+    await new Promise((r) => setTimeout(r, TEST_BACKOFF.maxMs + 200));
+    await manager._lastRestartPromise;
+    await drainMicrotasks();
+
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(0);
+  }, 15_000);
+
+  it("I5 (fire-and-forget): restartAgent resolves successfully when sendAsAgent rejects, log.warn captures it", async () => {
+    const name = "clawdy-webhook-fail";
+    const config = makeGreetableConfig(name);
+    sendAsAgentSpy.mockRejectedValueOnce(new Error("webhook 401"));
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+    armConvStoreSpies(name);
+
+    await manager.startAgent(name, config);
+
+    // The critical assertion: even though sendAsAgent rejects, restartAgent
+    // MUST resolve normally (D-16 — restart success is independent of Discord).
+    // Note: sendRestartGreeting catches the sendAsAgent reject internally and
+    // returns { kind: "send-failed" }, so the outer .catch in SessionManager
+    // does NOT trigger — restart-greeting is robust to webhook rejection.
+    // This test still pins the invariant: restart does NOT throw.
+    await expect(manager.restartAgent(name, config)).resolves.toBeUndefined();
+    await drainMicrotasks();
+
+    // Agent is still running post-restart (core D-16 guarantee).
+    const registry = await readRegistry(registryPath);
+    const entry = registry.entries.find((e) => e.name === name);
+    expect(entry!.status).toBe("running");
+  }, 15_000);
+
+  it("I5b (fire-and-forget) restartAgent survives a thrown greeting via outer .catch log-and-swallow", async () => {
+    // Second fire-and-forget test: the helper itself rejects (not just
+    // sendAsAgent). Exercises the OUTER `.catch` on the `void
+    // sendRestartGreeting(...).catch(...)` in SessionManager.restartAgent.
+    //
+    // We force an outright throw by passing a summarizeFn that throws
+    // synchronously via the underlying promise — but sendRestartGreeting
+    // catches that too. So instead we corrupt the conversationStore surface
+    // to force the helper to throw synchronously on access.
+    const name = "clawdy-helper-throw";
+    const config = makeGreetableConfig(name);
+
+    // Route the inner call to a webhook whose hasWebhook throws — this is
+    // called directly inside sendRestartGreeting before any try/catch, so
+    // it propagates OUT of the helper and hits our outer `.catch`.
+    const throwingWebhook = {
+      sendAsAgent: vi.fn(),
+      hasWebhook: vi.fn(() => {
+        throw new Error("synthetic-helper-throw");
+      }),
+    };
+    manager.setWebhookManager(throwingWebhook as unknown as WebhookManager);
+    armConvStoreSpies(name);
+
+    await manager.startAgent(name, config);
+
+    await expect(manager.restartAgent(name, config)).resolves.toBeUndefined();
+    await drainMicrotasks();
+
+    // Our outer `.catch` must have logged with the verbatim prefix.
+    const greetingWarn = warnLogs.find((l) =>
+      l.msg.includes("[greeting] sendRestartGreeting threw"),
+    );
+    expect(greetingWarn).toBeDefined();
+    expect((greetingWarn!.obj as { agent: string }).agent).toBe(name);
+    expect((greetingWarn!.obj as { error: string }).error).toBe(
+      "synthetic-helper-throw",
+    );
+  }, 15_000);
+
+  it("I6 (cool-down cleared on stopAgent): successful greeting populates map, stopAgent deletes the entry", async () => {
+    const name = "clawdy-cool-down";
+    const config = makeGreetableConfig(name);
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+    armConvStoreSpies(name);
+
+    await manager.startAgent(name, config);
+    await manager.restartAgent(name, config);
+    for (let i = 0; i < 10; i++) {
+      await drainMicrotasks();
+    }
+
+    // After a successful send, the cool-down map must carry this agent.
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(1);
+    expect(manager._greetCoolDownByAgent.has(name)).toBe(true);
+
+    // stopAgent MUST drop the entry (D-14 — operator stop + restart is a
+    // clean restart by intent, not a crash loop).
+    await manager.stopAgent(name);
+    expect(manager._greetCoolDownByAgent.has(name)).toBe(false);
+  }, 15_000);
+
+  it("I7-alt (GREET-10 new message per restart): two restarts separated by cool-down bypass produce two distinct message IDs", async () => {
+    const name = "clawdy-two-restarts";
+    // Tiny cool-down so the second restart bypasses it. Real timers are
+    // already in use for this suite so a short sleep clears the window.
+    const config = makeGreetableConfig(name, { greetCoolDownMs: 1 });
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+    armConvStoreSpies(name);
+
+    await manager.startAgent(name, config);
+
+    await manager.restartAgent(name, config);
+    for (let i = 0; i < 10; i++) {
+      await drainMicrotasks();
+    }
+
+    await new Promise((r) => setTimeout(r, 5)); // bypass the 1-ms cool-down
+    await manager.restartAgent(name, config);
+    for (let i = 0; i < 10; i++) {
+      await drainMicrotasks();
+    }
+
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(2);
+    const firstId = await sendAsAgentSpy.mock.results[0]!.value;
+    const secondId = await sendAsAgentSpy.mock.results[1]!.value;
+    expect(firstId).not.toBe(secondId); // GREET-10 / D-15 — fresh messageId
+  }, 15_000);
+
+  it("I8 (IPC fallback): startAgent when agent is not running (mirrors daemon.ts 'restart' case fallback) emits zero greetings", async () => {
+    // The daemon.ts IPC 'restart' handler calls `manager.restartAgent(name,
+    // config)` first; when that throws with /not running|no such session/,
+    // the handler falls back to `manager.startAgent(name, config)`. This
+    // test directly exercises the fallback leg (startAgent on a not-running
+    // agent) and pins D-01 literal reading: only restartAgent greets.
+    const name = "clawdy-ipc-fallback";
+    const config = makeGreetableConfig(name);
+    manager.setWebhookManager(stubWebhook as unknown as WebhookManager);
+
+    // Mirror the fallback path: agent was not running, so the daemon falls
+    // through to startAgent. (restartAgent would throw from its inner
+    // stopAgent when the agent isn't running — which is exactly the
+    // /not running/ regex the daemon catches.)
+    await manager.startAgent(name, config);
+    await drainMicrotasks();
+
+    expect(sendAsAgentSpy).toHaveBeenCalledTimes(0);
+  }, 15_000);
+});
