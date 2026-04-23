@@ -1465,3 +1465,134 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     expect(server.env.PATH_LIKE).toBe("/usr/bin/node");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 89 GREET-07 / GREET-10 — greetOnRestart + greetCoolDownMs schema
+// additions (additive-optional — v2.1 migrated fleet parses unchanged).
+//
+// Mirrors the Phase 83 effortSchema + Phase 86 allowedModels regression
+// shape: the resolver falls back to defaults when the per-agent field is
+// omitted, defaults are populated by zod, and both paths are reloadable.
+// ---------------------------------------------------------------------------
+
+describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
+  // Local helper to build a minimum-viable DefaultsConfig (mirrors the
+  // outer test fixtures but scoped to this describe to avoid fragile
+  // cross-describe coupling).
+  function makeDefaults(): DefaultsConfig {
+    return {
+      model: "sonnet",
+      effort: "low" as const,
+      allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+      skills: [],
+      basePath: "~/.clawcode/agents",
+      skillsPath: "~/.clawcode/skills",
+      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: {
+          warningThreshold: 0.6,
+          criticalThreshold: 0.75,
+          zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 },
+        },
+      },
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+      openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+      browser: {
+        enabled: true,
+        headless: true,
+        warmOnBoot: true,
+        navigationTimeoutMs: 30000,
+        actionTimeoutMs: 10000,
+        viewport: { width: 1280, height: 720 },
+        userAgent: null,
+        maxScreenshotInlineBytes: 524288,
+      },
+      search: {
+        enabled: true,
+        backend: "brave" as const,
+        brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+        exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+        maxResults: 20,
+        timeoutMs: 10000,
+        fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
+      },
+      image: {
+        enabled: true,
+        backend: "openai" as const,
+        openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+        minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+        fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+        maxImageBytes: 10485760,
+        timeoutMs: 60000,
+        workspaceSubdir: "generated-images",
+      },
+    };
+  }
+
+  function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      name: "clawdy",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      ...overrides,
+    } as AgentConfig;
+  }
+
+  it("v2.1 fleet parses unchanged: agent without greetOnRestart resolves to true (defaults-driven)", () => {
+    // The whole point of additive-optional: migrated 15-agent fleet has
+    // no greetOnRestart field in YAML. Loader's resolver must fall back
+    // to defaults.greetOnRestart (which zod defaults to true).
+    const defaults = makeDefaults();
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.greetOnRestart).toBe(true);
+    expect(resolved.greetCoolDownMs).toBe(300_000);
+  });
+
+  it("per-agent override beats default: greetOnRestart=false wins over defaults.greetOnRestart=true", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ greetOnRestart: false });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.greetOnRestart).toBe(false);
+  });
+
+  it("custom greetCoolDownMs per agent: 60000 resolves to 60000 (not 300000)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ greetCoolDownMs: 60_000 });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.greetCoolDownMs).toBe(60_000);
+  });
+
+  it("defaults override baseline: defaults.greetOnRestart=false propagates when agent omits override", () => {
+    const defaults: DefaultsConfig = { ...makeDefaults(), greetOnRestart: false };
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.greetOnRestart).toBe(false);
+  });
+
+  it("invalid greetCoolDownMs rejected by zod: -5 / 0 / 1.5 all fail parse", async () => {
+    // We validate directly through agentSchema.parse to assert the zod
+    // constraint ships (.int().positive()). Negative, zero, and
+    // non-integer values must all throw.
+    const { agentSchema } = await import("../schema.js");
+    expect(() =>
+      agentSchema.parse({ name: "x", greetCoolDownMs: -5 }),
+    ).toThrow();
+    expect(() =>
+      agentSchema.parse({ name: "x", greetCoolDownMs: 0 }),
+    ).toThrow();
+    expect(() =>
+      agentSchema.parse({ name: "x", greetCoolDownMs: 1.5 }),
+    ).toThrow();
+  });
+});
