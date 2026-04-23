@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: OpenClaw Parity & Polish
-status: Milestone complete
-stopped_at: Phase 89 context gathered
-last_updated: "2026-04-22T23:46:04.132Z"
-last_activity: 2026-04-21
+status: Ready to execute
+stopped_at: Completed 89-01-PLAN.md (schema + restart-greeting.ts pure module)
+last_updated: "2026-04-23T00:58:51.933Z"
+last_activity: 2026-04-23
 progress:
-  total_phases: 12
+  total_phases: 13
   completed_phases: 6
-  total_plans: 17
-  completed_plans: 17
+  total_plans: 19
+  completed_plans: 18
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-21)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 85 — MCP Tool Awareness & Reliability (all 3 plans complete; phase shipped)
+**Current focus:** Phase 89 — Agent Restart Greeting
 
 ## Current Position
 
-Phase: 88
-Plan: Not started
+Phase: 89 (Agent Restart Greeting) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -131,6 +131,11 @@ Recent decisions affecting current work:
 - [Phase 88-skills-marketplace]: Plan 88-02 — Exhaustive-switch outcome rendering (renderInstallOutcome) is a new canonical pattern for IPC handlers returning discriminated unions; TypeScript enforces MKT-05 zero-silent-skip at compile time for all 8 SkillInstallOutcome kinds.
 - [Phase 88-skills-marketplace]: Plan 88-02 — Post-install hot-relink runs on {installed, installed-persist-failed, already-installed} only; remove does NOT rewire (stale symlink harmless, scanner re-reads at next boot).
 - [Phase 88-skills-marketplace]: Plan 88-02 — Closure-based IPC intercept BEFORE routeMethod (same pattern as browser/search/image-tool-call). Keeps the 24-arg routeMethod signature stable; marketplace handlers close over daemon-local resolvedMarketplaceSources + skillsPath + ledgerPath + log.
+- [Phase 89-agent-restart-greeting]: Plan 89-01 — Schema additions mirror Phase 86 MODEL-01 precedent: additive-optional agentSchema + default-bearing defaultsSchema + loader resolver + RELOADABLE_FIELDS. v2.1 fleet (15 agents) parses unchanged (regression pin).
+- [Phase 89-agent-restart-greeting]: Plan 89-01 — restart-greeting.ts is 100% pure module: zero SessionManager import, zero webhook-manager.ts concrete-class import. All I/O (webhook sender, conversation store, summarizer, clock, logger, cool-down Map) DI'd via structural types so tests use plain-object stubs — no vi.mock of session internals.
+- [Phase 89-agent-restart-greeting]: Plan 89-01 — Truncation uses U+2026 (single char) with slice(MAX_CHARS - 1) — produces exactly 500-char embed description. Plan's draft assumed '...' (3 chars) would overshoot; pinned by test P15 asserting toHaveLength(500).
+- [Phase 89-agent-restart-greeting]: Plan 89-01 — ConversationReader surface uses real public API 'getTurnsForSession(sessionId, limit?)' — plan's draft 'getTurnsForSessionLimited' refers to private prepared statement. Source-of-truth correction.
+- [Phase 89-agent-restart-greeting]: Plan 89-01 — 22 test fixtures across agent/bootstrap/config/discord/heartbeat/manager updated with greetOnRestart: true, greetCoolDownMs: 300_000 (Rule 3 blocking cascade — same pattern as Phase 86 allowedModels additive-required-field rollout).
 
 ### v2.1 closing decisions (for reference)
 
@@ -208,9 +213,10 @@ Recent decisions affecting current work:
 | Phase 87 P02 | 11min | 2 tasks | 12 files |
 | Phase 88-skills-marketplace P01 | 11min 27s | 2 tasks | 10 files |
 | Phase 88-skills-marketplace P02 | 26min 47s | 2 tasks | 10 files |
+| Phase 89 P01 | 20m 10s | 2 tasks | 30 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-21
-Stopped at: Phase 89 context gathered
+Last activity: 2026-04-23
+Stopped at: Completed 89-01-PLAN.md (schema + restart-greeting.ts pure module)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

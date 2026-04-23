@@ -259,6 +259,23 @@ Plans:
 - [x] 88-02-PLAN.md — IPC handlers + /clawcode-skills-browse + /clawcode-skills Discord slash commands + post-install hot-relink (MKT-01, MKT-05, MKT-06, MKT-07, UI-01)
 **UI hint**: yes
 
+### Phase 89: Agent Restart Greeting
+**Goal**: When an agent is explicitly restarted via `SessionManager.restartAgent()`, the daemon proactively sends a Discord message to the agent's bound channel containing a Haiku-summarized recap of the prior session — so the human sees the agent come back online with a quick "here's where we left off" signal, distinct from silent boot-reconcile (`startAll()`) and first-ever start.
+**Depends on**: Phase 88 (v2.2 milestone close-out; reuses v1.6 webhook identity + v1.2 DiscordDeliveryQueue + v1.9 SessionSummarizer + Phase 83 fire-and-forget blueprint + Phase 86 atomic YAML writer pattern — no new npm deps)
+**Requirements**: GREET-01, GREET-02, GREET-03, GREET-04, GREET-05, GREET-06, GREET-07, GREET-08, GREET-09, GREET-10 (synthesized from CONTEXT.md decisions D-01..D-16; 1:1 mapping in 89-RESEARCH.md)
+**Success Criteria** (what must be TRUE):
+  1. A `SessionManager.restartAgent()` call emits exactly one Discord greeting to the bound channel via the v1.6 per-agent webhook identity + EmbedBuilder — `startAgent()` on initial start and `startAll()` on daemon boot remain silent by construction
+  2. Greeting embed body is a fresh Haiku summarization of the agent's prior session (not a reuse of `assembleConversationBrief`), target <500 characters, content surface = prior-session summary only (no model/effort/open-loops/last-active)
+  3. Forks (by `buildForkName` prefix) and subagent threads are skipped; empty-state (no prior session) is skipped silently; dormancy (agent idle >7 days per ConversationStore last-turn-timestamp) is skipped silently
+  4. Per-agent cool-down (default 5min, configurable via `defaults.greetCoolDownMs` / `agents.*.greetCoolDownMs`) suppresses greetings on crash-loops via an in-memory daemon-scoped last-greeting-at Map
+  5. Additive-optional schema fields `agents.*.greetOnRestart` + `defaults.greetOnRestart` (default `true`) follow Phase 83/86 precedent — v2.1 migrated fleet parses unchanged; flag is reloadable, takes effect on next restart without daemon bounce
+  6. Greeting delivery failure (channel deleted / webhook 401 / rate limit) logs via pino and restart completes normally — follows Phase 83/86/87 synchronous-caller + fire-and-forget + `.catch` log-and-swallow blueprint; restart success MUST NOT depend on Discord availability
+  7. Crash-recovery vs clean-restart use differentiated embed templates when classifiable (via `registry.restartCount` delta + `session-recovery.ts` signals); unclassifiable paths fall through to the clean template — no new tracking mechanism invented for this phase
+**Plans**: 2 plans
+- [x] 89-01-PLAN.md — Schema additions (greetOnRestart + greetCoolDownMs) + pure helper module src/manager/restart-greeting.ts (classifier + summarizer wiring + EmbedBuilder templates + skip-path predicates) + unit tests (GREET-02, GREET-03, GREET-04, GREET-05, GREET-06, GREET-07, GREET-10)
+- [ ] 89-02-PLAN.md — SessionManager wiring at restartAgent chokepoint (fire-and-forget + log-and-swallow) + webhookManager DI (setWebhookManager mirror) + cool-down Map + stopAgent cleanup + integration tests (GREET-01, GREET-08, GREET-09)
+**UI hint**: yes (EmbedBuilder + webhook identity — UI-01 compliance)
+
 ## Progress
 
 **Status:** v2.1 OpenClaw Agent Migration shipped 2026-04-21. v2.2 OpenClaw Parity & Polish opened 2026-04-21 with 6 phases (83-88), 45 requirements across 7 categories. Zero new npm deps expected.
@@ -277,7 +294,7 @@ Plans:
 | v1.9 | 64-68 + 68.1 | Complete | 2026-04-18 |
 | v2.0 | 69-74 | Complete | 2026-04-20 |
 | v2.1 | 75-82 + 82.1 | Complete | 2026-04-21 |
-| v2.2 | 83-88 | In progress | — |
+| v2.2 | 83-89 | In progress | — |
 
 ### v2.2 Phase Progress
 
@@ -289,6 +306,7 @@ Plans:
 | 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
 | 87. Native CC Slash Commands | 3/3 | Complete    | 2026-04-21 |
 | 88. Skills Marketplace | 2/2 | Complete    | 2026-04-21 |
+| 89. Agent Restart Greeting | 1/2 | In Progress|  |
 
 ## v2.2 Dependency Graph
 
@@ -300,6 +318,8 @@ Phase 83 (Effort)  ──┬─→ Phase 86 (Model Picker Core)  ──┬─→
 Phase 84 (Skills)  ────────────────────────→ Phase 88 (Marketplace)
 
 Phase 85 (MCP Tools)  ── (independent; parallel-safe with 83/84/86)
+
+Phase 89 (Restart Greeting) ── (depends on v1.6 webhook + v1.9 ConversationStore + v2.2 canary blueprint; zero new deps)
 ```
 
 - **83 first** — SDK canary + P0 fix; validates SDK mid-session mutation strategy for 86/87
@@ -307,6 +327,7 @@ Phase 85 (MCP Tools)  ── (independent; parallel-safe with 83/84/86)
 - **86 after 83** — reuses the SDK mid-session-mutation pattern proven in 83; locks the unified `clawcode-*` namespace before 87
 - **87 after 83 + 86** — depends on both effort-unify and model-unify; highest risk, gated by CMD-00 spike
 - **88 after 84 + 86** — reuses Phase 84 migration pipeline for per-skill install; reuses Phase 86 atomic YAML writer for `skills:` list update
+- **89 after 88** — v2.2 milestone close-out; reuses v1.6 webhook identity + v1.9 ConversationStore + Phase 83 fire-and-forget canary + Phase 86 schema-additive precedent. Pure composition; zero new deps.
 
 ## v2.2 Notes
 
@@ -319,4 +340,4 @@ Phase 85 (MCP Tools)  ── (independent; parallel-safe with 83/84/86)
 
 *Milestone v2.1 OpenClaw Agent Migration: 8 phases (75-82) + 1 gap-closure phase (82.1). 31 requirements across SHARED/MIGR/CONF/WORK/MEM/FORK/OPS categories — all satisfied. Zero new npm deps.*
 
-*Milestone v2.2 OpenClaw Parity & Polish opened 2026-04-21: 6 phases (83-88), 45 requirements across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT categories. Zero new npm deps expected.*
+*Milestone v2.2 OpenClaw Parity & Polish opened 2026-04-21: 7 phases (83-89), 45+ requirements across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT categories plus Phase 89 GREET-01..10 (synthesized from the 16 D-01..D-16 decisions in 89-CONTEXT.md). Zero new npm deps.*
