@@ -27,6 +27,16 @@ export type ResolvedAgentConfig = {
    * unconditionally. Default is the full modelSchema enum.
    */
   readonly allowedModels: readonly ("haiku" | "sonnet" | "opus")[];
+  /**
+   * Phase 89 GREET-07 — ALWAYS populated by loader.ts from
+   * agent.greetOnRestart ?? defaults.greetOnRestart. Downstream
+   * (SessionManager.restartAgent → restart-greeting.ts) reads unconditionally.
+   */
+  readonly greetOnRestart: boolean;
+  /**
+   * Phase 89 GREET-10 — ALWAYS populated by loader.ts. Milliseconds.
+   */
+  readonly greetCoolDownMs: number;
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;

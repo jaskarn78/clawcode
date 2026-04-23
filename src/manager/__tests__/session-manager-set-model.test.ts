@@ -61,6 +61,8 @@ function makeConfig(
     model: "sonnet",
     effort: "low",
     allowedModels,
+    greetOnRestart: true, // Phase 89 GREET-07
+    greetCoolDownMs: 300_000, // Phase 89 GREET-10
     skills: [],
     soul: undefined,
     identity: undefined,

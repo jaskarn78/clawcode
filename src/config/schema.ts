@@ -693,6 +693,13 @@ export const agentSchema = z.object({
   // unknown aliases are rejected at parse time. Max 25 enforced
   // downstream (Discord StringSelectMenuBuilder cap in Plan 03).
   allowedModels: z.array(modelSchema).optional(),
+  // Phase 89 GREET-07 — per-agent override for restart-greeting emission.
+  // Additive + optional: v2.1 migrated configs parse unchanged when omitted;
+  // loader resolver fills from defaults.greetOnRestart. Reloadable.
+  greetOnRestart: z.boolean().optional(),
+  // Phase 89 GREET-10 — per-agent override for in-memory cool-down window (ms).
+  // Additive + optional; resolver falls back to defaults.greetCoolDownMs.
+  greetCoolDownMs: z.number().int().positive().optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -757,6 +764,12 @@ export const defaultsSchema = z.object({
   allowedModels: z
     .array(modelSchema)
     .default(() => ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[]),
+  // Phase 89 GREET-07 — fleet-wide default for restart-greeting emission.
+  // Default true per D-09 — every agent greets on restart unless opted out.
+  greetOnRestart: z.boolean().default(true),
+  // Phase 89 GREET-10 — fleet-wide default for the cool-down window (ms).
+  // 300_000 ms = 5 minutes per D-14.
+  greetCoolDownMs: z.number().int().positive().default(300_000),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -939,6 +952,10 @@ export const configSchema = z.object({
     // modelSchema enum so configs that omit `defaults` see identical
     // behavior to v2.1 (all three model aliases pickable).
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+    // Phase 89 GREET-07 / GREET-10 — fleet-wide defaults mirroring the
+    // zod-populated values in defaultsSchema above.
+    greetOnRestart: true,
+    greetCoolDownMs: 300_000,
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",

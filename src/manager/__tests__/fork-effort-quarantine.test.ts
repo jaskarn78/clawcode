@@ -70,6 +70,8 @@ function makeConfig(
     model: "sonnet",
     effort,
     allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
+    greetOnRestart: true, // Phase 89 GREET-07
+    greetCoolDownMs: 300_000, // Phase 89 GREET-10
     skills: [],
     soul: undefined,
     identity: undefined,

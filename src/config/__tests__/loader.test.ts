@@ -19,6 +19,9 @@ describe("resolveAgentConfig", () => {
     effort: "low" as const,
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+    // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
+    greetOnRestart: true,
+    greetCoolDownMs: 300_000,
     skills: ["default-skill"],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -474,6 +477,9 @@ describe("resolveAgentConfig - mcpServers", () => {
     effort: "low" as const,
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+    // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
+    greetOnRestart: true,
+    greetCoolDownMs: 300_000,
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -1098,6 +1104,9 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     effort: "low" as const,
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+    // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
+    greetOnRestart: true,
+    greetCoolDownMs: 300_000,
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -1484,6 +1493,9 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       model: "sonnet",
       effort: "low" as const,
       allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+      // Phase 89 — zod defaults these to true / 300_000 in defaultsSchema
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",

@@ -296,6 +296,10 @@ export function resolveAgentConfig(
     // consumers always see a concrete array — no downstream optional-chain
     // needed. Discord picker + SessionManager allowlist guard read this.
     allowedModels: agent.allowedModels ?? defaults.allowedModels,
+    // Phase 89 GREET-07 / GREET-10 — defaults.X is always populated (zod
+    // default), so the falsy-free `??` fallback is safe.
+    greetOnRestart: agent.greetOnRestart ?? defaults.greetOnRestart,
+    greetCoolDownMs: agent.greetCoolDownMs ?? defaults.greetCoolDownMs,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

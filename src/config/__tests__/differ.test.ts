@@ -12,6 +12,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       // tests that build a base Config don't produce a spurious diff on
       // the defaults.allowedModels field.
       allowedModels: ["haiku", "sonnet", "opus"],
+      // Phase 89 GREET-07/10 — defaults carry the zod-populated values.
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",

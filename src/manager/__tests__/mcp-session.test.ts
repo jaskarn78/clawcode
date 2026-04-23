@@ -33,6 +33,8 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
     model: "sonnet",
     effort: "low",
     allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
+    greetOnRestart: true, // Phase 89 GREET-07
+    greetCoolDownMs: 300_000, // Phase 89 GREET-10
     skills: [],
     soul: undefined,
     identity: undefined,

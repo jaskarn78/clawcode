@@ -62,6 +62,13 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // governs what's PICKABLE, not what's active.
   "agents.*.allowedModels",
   "defaults.allowedModels",
+  // Phase 89 GREET-07 — both flags read lazily by SessionManager.restartAgent
+  // on every call (no cached state). A YAML edit takes effect on the NEXT
+  // restart without daemon bounce.
+  "agents.*.greetOnRestart",
+  "defaults.greetOnRestart",
+  "agents.*.greetCoolDownMs",
+  "defaults.greetCoolDownMs",
 ]);
 
 /**
