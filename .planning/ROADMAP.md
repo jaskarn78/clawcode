@@ -273,7 +273,7 @@ Plans:
   7. Crash-recovery vs clean-restart use differentiated embed templates when classifiable (via `registry.restartCount` delta + `session-recovery.ts` signals); unclassifiable paths fall through to the clean template — no new tracking mechanism invented for this phase
 **Plans**: 2 plans
 - [x] 89-01-PLAN.md — Schema additions (greetOnRestart + greetCoolDownMs) + pure helper module src/manager/restart-greeting.ts (classifier + summarizer wiring + EmbedBuilder templates + skip-path predicates) + unit tests (GREET-02, GREET-03, GREET-04, GREET-05, GREET-06, GREET-07, GREET-10)
-- [ ] 89-02-PLAN.md — SessionManager wiring at restartAgent chokepoint (fire-and-forget + log-and-swallow) + webhookManager DI (setWebhookManager mirror) + cool-down Map + stopAgent cleanup + integration tests (GREET-01, GREET-08, GREET-09)
+- [x] 89-02-PLAN.md — SessionManager wiring at restartAgent chokepoint (fire-and-forget + log-and-swallow) + webhookManager DI (setWebhookManager mirror) + cool-down Map + stopAgent cleanup + integration tests (GREET-01, GREET-08, GREET-09)
 **UI hint**: yes (EmbedBuilder + webhook identity — UI-01 compliance)
 
 ## Progress
@@ -306,7 +306,7 @@ Plans:
 | 86. Dual Discord Model Picker (Core) | 2/3 | Complete    | 2026-04-21 |
 | 87. Native CC Slash Commands | 3/3 | Complete    | 2026-04-21 |
 | 88. Skills Marketplace | 2/2 | Complete    | 2026-04-21 |
-| 89. Agent Restart Greeting | 1/2 | In Progress|  |
+| 89. Agent Restart Greeting | 2/2 | Complete    | 2026-04-23 |
 
 ## v2.2 Dependency Graph
 
