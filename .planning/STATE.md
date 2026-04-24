@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 91-02-PLAN.md
-last_updated: "2026-04-24T20:00:03.772Z"
+stopped_at: Completed 91-04-PLAN.md (clawcode sync CLI subcommands)
+last_updated: "2026-04-24T20:03:39.085Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 6
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 91 (OpenClaw ↔ ClawCode fin-acquisition Workspace Sync) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 
 ## Performance Metrics
 
@@ -177,6 +177,7 @@ Recent decisions affecting current work:
 - [Phase 91]: 91-02: Safer reading of D-11 — ANY destHash drift is a conflict (never silently clobber operator edits)
 - [Phase 91]: 91-02: Per-FILE --exclude rsync args preserve non-conflicting propagation in same cycle (D-12)
 - [Phase 91]: 91-02: Stateless re-alert (D-15) — fire embed every cycle with conflicts, no path-level suppression
+- [Phase 91]: Plan 91-04 complete: clawcode sync CLI group with 8 subcommands, drain-then-flip cutover, 7-day rollback window. SYNC-09 and SYNC-10 done.
 
 ### v2.1 closing decisions (for reference)
 
@@ -269,9 +270,10 @@ Recent decisions affecting current work:
 | Phase 91 P01 | 7min 25s | 2 tasks | 10 files |
 | Phase 91 P03 | 18 | 2 tasks | 8 files |
 | Phase 91 P02 | 8m 37s | 2 tasks | 6 files |
+| Phase 91 P04 | 11m | 2 tasks | 13 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 91-02-PLAN.md
+Stopped at: Completed 91-04-PLAN.md (clawcode sync CLI subcommands)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
