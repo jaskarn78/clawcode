@@ -317,4 +317,20 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       },
     ],
   },
+  // Phase 91 Plan 05 SYNC-08 / UI-01 — daemon-routed OpenClaw ↔ ClawCode
+  // sync status view. Reads ~/.clawcode/manager/sync-state.json + tails
+  // ~/.clawcode/manager/sync.jsonl via ipcMethod "list-sync-status". The
+  // inline handler in slash-commands.ts renders the reply as a native
+  // Discord EmbedBuilder (UI-01 compliance — NOT free-text). Zero LLM
+  // turn cost per invocation. Fleet-level (no per-agent argument): the
+  // sync state is singleton for the fin-acquisition topology.
+  {
+    name: "clawcode-sync-status",
+    description:
+      "Show current OpenClaw ↔ ClawCode sync status and any active conflicts",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "list-sync-status",
+    options: [],
+  },
 ] as const;

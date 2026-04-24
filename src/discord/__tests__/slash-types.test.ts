@@ -137,11 +137,11 @@ describe("slash-types", () => {
   });
 
   describe("CONTROL_COMMANDS", () => {
-    it("contains exactly 8 control commands", () => {
+    it("contains exactly 9 control commands", () => {
       // Quick task 260419-nic — grew from 5 to 7 with clawcode-interrupt +
       // clawcode-steer. Phase 85 Plan 03 added clawcode-tools → 8.
-      // Combined default (8) + control (8) = 16 slash commands.
-      expect(CONTROL_COMMANDS).toHaveLength(8);
+      // Phase 91 Plan 05 added clawcode-sync-status → 9.
+      expect(CONTROL_COMMANDS).toHaveLength(9);
     });
 
     it("all control commands have control: true and a valid ipcMethod", () => {
@@ -157,6 +157,9 @@ describe("slash-types", () => {
         // Phase 85 Plan 03 TOOL-06 — /clawcode-tools reads MCP state via
         // the list-mcp-status IPC shipped in Plan 01.
         "list-mcp-status",
+        // Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status reads sync
+        // state via list-sync-status IPC shipped in 91-05.
+        "list-sync-status",
       ];
       for (const cmd of CONTROL_COMMANDS) {
         expect(cmd.control).toBe(true);

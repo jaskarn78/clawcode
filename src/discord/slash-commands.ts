@@ -126,6 +126,43 @@ type ToolsIpcResponse = {
   readonly servers: ReadonlyArray<ToolsIpcServer>;
 };
 
+// ---------------------------------------------------------------------------
+// Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status IPC response shape.
+//
+// Matches the daemon's `list-sync-status` handler (src/manager/daemon.ts).
+// Duplicated here instead of imported so slash-commands stays decoupled
+// from the src/sync module graph (same discipline as ToolsIpcResponse).
+// ---------------------------------------------------------------------------
+
+type SyncStatusIpcConflict = {
+  readonly path: string;
+  readonly sourceHash: string;
+  readonly destHash: string;
+  readonly detectedAt: string;
+};
+
+type SyncStatusIpcLastCycle = {
+  readonly cycleId: string;
+  readonly status: string;
+  readonly filesAdded?: number;
+  readonly filesUpdated?: number;
+  readonly filesRemoved?: number;
+  readonly filesSkippedConflict?: number;
+  readonly bytesTransferred?: number;
+  readonly durationMs: number;
+  readonly timestamp: string;
+  readonly error?: string;
+  readonly reason?: string;
+};
+
+type SyncStatusIpcResponse = {
+  readonly authoritativeSide: "openclaw" | "clawcode";
+  readonly lastSyncedAt: string | null;
+  readonly conflictCount: number;
+  readonly conflicts: ReadonlyArray<SyncStatusIpcConflict>;
+  readonly lastCycle: SyncStatusIpcLastCycle | null;
+};
+
 /**
  * Embed colour driven by the worst-state server in the set.
  * Exported for test convenience / future reuse by the dashboard.
@@ -741,6 +778,22 @@ export class SlashCommandHandler {
       return;
     }
 
+    // Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status inline handler.
+    // Eighth application of the inline-handler-short-circuit-before-
+    // CONTROL_COMMANDS pattern established by /clawcode-tools (Phase 85)
+    // and extended by /clawcode-model (86), /clawcode-permissions (87),
+    // /clawcode-skills-browse + /clawcode-skills (88), /clawcode-plugins-browse
+    // and /clawcode-clawhub-auth (90). Routes through the daemon-direct
+    // `list-sync-status` IPC (zero LLM turn cost) and renders a native
+    // Discord EmbedBuilder via the pure buildSyncStatusEmbed function
+    // in sync-status-embed.ts. Carved out BEFORE the generic CONTROL_COMMANDS
+    // dispatch so the EmbedBuilder path can't be short-circuited by the
+    // text-formatting branch in handleControlCommand.
+    if (commandName === "clawcode-sync-status") {
+      await this.handleSyncStatusCommand(interaction);
+      return;
+    }
+
     // Check if this is a control command (daemon-direct, no agent needed)
     const controlCmd = CONTROL_COMMANDS.find((c) => c.name === commandName);
     if (controlCmd) {
@@ -1090,6 +1143,91 @@ export class SlashCommandHandler {
       this.log.error(
         { command: "clawcode-tools", error: (error as Error).message },
         "failed to send tools embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 91 Plan 05 SYNC-08 — handle /clawcode-sync-status.
+   *
+   * Reads the OpenClaw ↔ ClawCode sync snapshot via the daemon-routed
+   * `list-sync-status` IPC method (zero LLM turn cost) and replies with a
+   * native Discord EmbedBuilder built by the pure buildSyncStatusEmbed
+   * function (src/discord/sync-status-embed.ts).
+   *
+   * Reply is always ephemeral (operator-only view — conflicts include file
+   * paths that shouldn't leak into public channels). IPC failures surface
+   * verbatim in an ephemeral error message so operators see the real root
+   * cause instead of a sanitised "Sync status unavailable" placeholder.
+   *
+   * Note: unlike /clawcode-tools this command is fleet-level (not per-agent).
+   * It reads `~/.clawcode/manager/sync-state.json` which is the single
+   * source-of-truth for the fin-acquisition sync topology. No `agent`
+   * option is accepted at registration time.
+   */
+  private async handleSyncStatusCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-sync-status", error: (error as Error).message },
+        "failed to defer sync-status reply",
+      );
+      return;
+    }
+
+    let response: SyncStatusIpcResponse;
+    try {
+      response = (await sendIpcRequest(
+        SOCKET_PATH,
+        "list-sync-status",
+        {},
+      )) as SyncStatusIpcResponse;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-sync-status", error: msg },
+        "list-sync-status IPC failed",
+      );
+      try {
+        await interaction.editReply(`Sync status unavailable: ${msg}`);
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    // Dynamic import keeps the slash-commands module graph decoupled from
+    // sync-status-embed's discord.js EmbedBuilder reach; mirrors the
+    // Phase 88 skills-browse pattern (lazy load when the command actually
+    // fires, keeps cold-start import graph smaller).
+    const { buildSyncStatusEmbed } = await import("./sync-status-embed.js");
+
+    // Shape-align conflict entries with SyncConflict — the daemon returns
+    // only open conflicts (resolvedAt omitted); the embed consumer expects
+    // resolvedAt: null on every entry. Map once, pass immutably.
+    const embed = buildSyncStatusEmbed({
+      authoritativeSide: response.authoritativeSide,
+      lastSyncedAt: response.lastSyncedAt,
+      conflicts: response.conflicts.map((c) => ({
+        path: c.path,
+        sourceHash: c.sourceHash,
+        destHash: c.destHash,
+        detectedAt: c.detectedAt,
+        resolvedAt: null,
+      })),
+      lastCycle: response.lastCycle,
+      now: new Date(),
+    });
+
+    try {
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-sync-status", error: (error as Error).message },
+        "failed to send sync-status embed",
       );
     }
   }
