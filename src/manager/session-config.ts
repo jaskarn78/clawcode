@@ -38,6 +38,8 @@ import {
 // Phase 85 Plan 02 — MCP section renderer (TOOL-02 / TOOL-05 / TOOL-07).
 import { renderMcpPromptBlock } from "./mcp-prompt-block.js";
 import type { McpServerState } from "../mcp/readiness.js";
+// Phase 90 MEM-01 — 50KB hard cap on MEMORY.md auto-inject (D-17).
+import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -225,6 +227,35 @@ export async function buildSessionConfig(
 
   // Inject agent name and memory_lookup guidance (LOAD-01)
   identityStr += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
+
+  // Phase 90 MEM-01 — MEMORY.md auto-load into stable prefix, AFTER
+  // SOUL+IDENTITY and BEFORE MCP status (per D-18). 50KB hard cap
+  // (MEMORY_AUTOLOAD_MAX_BYTES) with truncation marker per D-17.
+  // Silent fall-through on missing file (same semantics as SOUL/IDENTITY
+  // branches above — configured-but-unreadable must not crash session
+  // boot). Opt-out via config.memoryAutoLoad === false; override path via
+  // config.memoryAutoLoadPath (absolute, loader expanded ~/...).
+  if (config.memoryAutoLoad !== false) {
+    const memoryPath =
+      config.memoryAutoLoadPath ?? join(config.workspace, "MEMORY.md");
+    try {
+      const raw = await readFile(memoryPath, "utf-8");
+      let body = raw;
+      if (Buffer.byteLength(body, "utf8") > MEMORY_AUTOLOAD_MAX_BYTES) {
+        // Byte-level truncation (UTF-8 safe via Buffer slice + toString).
+        // Mid-multibyte-codepoint truncation is a theoretical concern but
+        // acceptable: MEMORY.md is markdown prose (mostly ASCII), and the
+        // assembler downstream treats the payload as opaque text.
+        const buf = Buffer.from(body, "utf8");
+        body = buf.slice(0, MEMORY_AUTOLOAD_MAX_BYTES).toString("utf8");
+        body += "\n\n…(truncated at 50KB cap)\n";
+      }
+      identityStr += "\n## Long-term memory (MEMORY.md)\n\n" + body + "\n";
+    } catch {
+      // MEMORY.md not present OR override path unreadable — silently skip.
+      // No warn log: absence is the common case on first-boot agents.
+    }
+  }
 
   // --- Collect hot memories source ---
   //
