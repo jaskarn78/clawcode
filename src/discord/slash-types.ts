@@ -191,6 +191,17 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     claudeCommand: "",
     options: [],
   },
+  {
+    name: "clawcode-plugins-browse",
+    description: "Browse ClawHub plugins and install one to this agent",
+    // Phase 90 Plan 05 HUB-02 / UI-01 — inline handler in slash-commands.ts
+    // owns the entire flow (StringSelectMenuBuilder → manifest fetch →
+    // ModalBuilder config collection → IPC marketplace-install-plugin →
+    // exhaustive renderPluginInstallOutcome). Mirrors Phase 88
+    // /clawcode-skills-browse shape byte-for-byte.
+    claudeCommand: "",
+    options: [],
+  },
 ] as const;
 
 /**

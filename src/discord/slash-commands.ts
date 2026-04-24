@@ -12,13 +12,17 @@ import {
   Client,
   ComponentType,
   EmbedBuilder,
+  ModalBuilder,
   REST,
   Routes,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Interaction,
+  type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
 import { join } from "node:path";
@@ -295,6 +299,115 @@ function renderInstallOutcome(
       return `**${outcome.skill}** not found in marketplace catalog.`;
     case "copy-failed":
       return `**${outcome.skill}** copy failed: ${outcome.reason}.`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 05 HUB-02 / HUB-04 — /clawcode-plugins-browse wire-types +
+// exhaustive outcome renderer. Mirrors SkillInstallOutcomeWire byte-for-byte
+// at the shape level (local declaration keeps module tree narrow — we don't
+// import install-plugin.ts here).
+// ---------------------------------------------------------------------------
+
+type PluginInstallOutcomeWire =
+  | {
+      readonly kind: "installed";
+      readonly plugin: string;
+      readonly pluginVersion: string;
+      readonly entry: {
+        readonly name: string;
+        readonly command: string;
+        readonly args: readonly string[];
+        readonly env: Readonly<Record<string, string>>;
+      };
+    }
+  | {
+      readonly kind: "installed-persist-failed";
+      readonly plugin: string;
+      readonly pluginVersion: string;
+      readonly persist_error: string;
+      readonly entry: {
+        readonly name: string;
+        readonly command: string;
+      };
+    }
+  | {
+      readonly kind: "already-installed";
+      readonly plugin: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "blocked-secret-scan";
+      readonly plugin: string;
+      readonly field: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "manifest-invalid";
+      readonly plugin: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "config-missing";
+      readonly plugin: string;
+      readonly missing_field: string;
+    }
+  | {
+      readonly kind: "auth-required";
+      readonly plugin: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "rate-limited";
+      readonly plugin: string;
+      readonly retryAfterMs: number;
+    }
+  | {
+      readonly kind: "not-in-catalog";
+      readonly plugin: string;
+    };
+
+function renderPluginInstallOutcome(
+  outcome: PluginInstallOutcomeWire,
+  agent: string,
+): string {
+  switch (outcome.kind) {
+    case "installed":
+      return (
+        `Installed **${outcome.plugin}** v${outcome.pluginVersion} on ${agent}.\n` +
+        `Command: \`${outcome.entry.command}\`\n` +
+        `Note: restart the agent to activate the new MCP server (hot-reload deferred).`
+      );
+    case "installed-persist-failed":
+      return (
+        `Installed **${outcome.plugin}** v${outcome.pluginVersion} on ${agent}, but clawcode.yaml persist failed: ${outcome.persist_error}.\n` +
+        `Manual reconciliation required — the entry may not survive a daemon restart.`
+      );
+    case "already-installed":
+      return `**${outcome.plugin}** is already installed on ${agent} (${outcome.reason}).`;
+    case "blocked-secret-scan":
+      return (
+        `Plugin **${outcome.plugin}** blocked — secret-scan refused field \`${outcome.field}\` (${outcome.reason}).\n` +
+        `Use an op:// reference (e.g. \`op://clawdbot/<item>/<field>\`) or scrub the literal and retry.`
+      );
+    case "manifest-invalid":
+      return `**${outcome.plugin}** manifest is invalid: ${outcome.reason}.`;
+    case "config-missing":
+      return (
+        `Missing required field for **${outcome.plugin}**: \`${outcome.missing_field}\`. ` +
+        `Re-run \`/clawcode-plugins-browse\` and fill it in.`
+      );
+    case "auth-required":
+      return (
+        `ClawHub requires authentication for **${outcome.plugin}** (${outcome.reason}). ` +
+        `Run the OAuth flow (Phase 90 Plan 06) or set a token in clawcode.yaml.`
+      );
+    case "rate-limited": {
+      const seconds = Math.ceil(outcome.retryAfterMs / 1000);
+      return `ClawHub rate-limited **${outcome.plugin}** — retry in ~${seconds}s.`;
+    }
+    case "not-in-catalog":
+      return `**${outcome.plugin}** not found in the ClawHub plugin catalog.`;
   }
 }
 
@@ -602,6 +715,19 @@ export class SlashCommandHandler {
     // Lists installed skills + renders a native remove picker.
     if (commandName === "clawcode-skills") {
       await this.handleSkillsCommand(interaction);
+      return;
+    }
+
+    // Phase 90 Plan 05 HUB-02 / UI-01 — /clawcode-plugins-browse inline
+    // handler. Sixth application of the inline-handler-short-circuit-
+    // before-CONTROL_COMMANDS pattern established by /clawcode-tools
+    // (Phase 85), /clawcode-model (Phase 86), /clawcode-permissions
+    // (Phase 87), /clawcode-skills-browse + /clawcode-skills (Phase 88).
+    // Carved out AFTER /clawcode-skills and BEFORE the CONTROL_COMMANDS
+    // branch so the plugin install flow can't be short-circuited by the
+    // generic control-command dispatch.
+    if (commandName === "clawcode-plugins-browse") {
+      await this.handlePluginsBrowseCommand(interaction);
       return;
     }
 
@@ -1578,6 +1704,290 @@ export class SlashCommandHandler {
       } catch {
         /* expired */
       }
+    }
+  }
+
+  /**
+   * Phase 90 Plan 05 HUB-02 / UI-01 — /clawcode-plugins-browse inline handler.
+   *
+   * Flow:
+   *   1. Defer ephemerally.
+   *   2. IPC marketplace-list-plugins → returns available ClawHub plugins.
+   *   3. Render StringSelectMenuBuilder (25-item cap + overflow note).
+   *   4. Await selection (30s TTL).
+   *   5. Dispatch IPC marketplace-install-plugin with empty configInputs.
+   *   6a. If outcome = config-missing → show Modal with the missing field,
+   *       submit → re-dispatch install with configInputs populated.
+   *   6b. Else → render outcome-specific ephemeral via renderPluginInstallOutcome.
+   *
+   * Simplified config flow vs plan D-13: this iteration handles the single-
+   * missing-field case (the most common install shape — one password / API
+   * key). Multi-field ModalBuilder with up-front manifest fetch is a
+   * follow-up refinement. The installer is already config-aware (accepts a
+   * full configInputs map); only the Discord UX is iterating.
+   */
+  private async handlePluginsBrowseCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const agentName = getAgentForChannel(
+      this.routingTable,
+      interaction.channelId,
+    );
+    if (!agentName) {
+      try {
+        await interaction.reply({
+          content: "This channel is not bound to an agent.",
+          ephemeral: true,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch {
+      return;
+    }
+
+    type PluginListItemWire = {
+      readonly name: string;
+      readonly latestVersion: string;
+      readonly displayName?: string;
+      readonly summary?: string;
+      readonly description?: string;
+      readonly family?: string;
+    };
+    let listResp: {
+      agent: string;
+      installed: readonly string[];
+      available: readonly PluginListItemWire[];
+    };
+    try {
+      listResp = (await sendIpcRequest(
+        SOCKET_PATH,
+        "marketplace-list-plugins",
+        { agent: agentName },
+      )) as typeof listResp;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(`Failed to load ClawHub plugins: ${msg}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    if (listResp.available.length === 0) {
+      try {
+        await interaction.editReply(
+          `No ClawHub plugins available right now (or all already installed for **${agentName}**). Come back soon — clawhub.ai is still filling up.`,
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const capped = listResp.available.slice(0, DISCORD_SELECT_CAP);
+    const overflow = listResp.available.length - capped.length;
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const customId = `plugins-picker:${agentName}:${nonce}`;
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder("Choose a plugin to install")
+      .addOptions(
+        capped.map((p) => {
+          const displayName = p.displayName ?? p.name;
+          const label = `${displayName} · v${p.latestVersion}`.slice(0, 100);
+          const desc = (p.summary ?? p.description ?? "(no description)").slice(
+            0,
+            100,
+          );
+          return new StringSelectMenuOptionBuilder()
+            .setLabel(label)
+            .setValue(p.name)
+            .setDescription(desc);
+        }),
+      );
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      menu,
+    );
+
+    const overflowNote =
+      overflow > 0
+        ? `\n(Showing first ${DISCORD_SELECT_CAP} of ${listResp.available.length}.)`
+        : "";
+
+    try {
+      await interaction.editReply({
+        content: `Pick a ClawHub plugin to install on **${agentName}**.${overflowNote}`,
+        components: [row],
+      });
+    } catch {
+      return;
+    }
+
+    // Await selection (30s TTL)
+    let followUp: StringSelectMenuInteraction;
+    try {
+      const channel = interaction.channel;
+      if (!channel) {
+        throw new Error("interaction has no channel — cannot collect");
+      }
+      followUp = (await channel.awaitMessageComponent({
+        componentType: ComponentType.StringSelect,
+        filter: (i: { user: { id: string }; customId: string }) =>
+          i.user.id === interaction.user.id && i.customId === customId,
+        time: MODEL_PICKER_TTL_MS,
+      })) as StringSelectMenuInteraction;
+    } catch {
+      try {
+        await interaction.editReply({
+          content: "Picker timed out (no selection in 30s).",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const chosen = followUp.values[0];
+    if (!chosen) {
+      try {
+        await followUp.update({
+          content: "No selection captured.",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // First install attempt with no configInputs. If the plugin needs
+    // required fields, the installer returns `config-missing` — we then
+    // show a Modal, collect the value, and retry.
+    let outcome: PluginInstallOutcomeWire;
+    try {
+      outcome = (await sendIpcRequest(
+        SOCKET_PATH,
+        "marketplace-install-plugin",
+        {
+          agent: agentName,
+          plugin: chosen,
+          configInputs: {},
+        },
+      )) as PluginInstallOutcomeWire;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await followUp.update({
+          content: `Plugin install failed: ${msg}`,
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Config-missing → show Modal for the missing field. Discord caps at
+    // 5 TextInput rows per Modal; single-field case is the sweet spot
+    // (API key / password), and the 5-field generalization follows the
+    // same pattern. >5 fields would need serial prompts (D-13) — deferred.
+    if (outcome.kind === "config-missing") {
+      const fieldName = outcome.missing_field;
+      const modalId = `plugins-config:${agentName}:${chosen}:${nonce}`;
+      const modal = new ModalBuilder()
+        .setCustomId(modalId)
+        .setTitle(`Configure ${chosen}`);
+      const input = new TextInputBuilder()
+        .setCustomId(fieldName)
+        .setLabel(fieldName.slice(0, 45))
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("op://clawdbot/<item>/<field> or literal value")
+        .setRequired(true);
+      const inputRow =
+        new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+      modal.addComponents(inputRow);
+
+      try {
+        await followUp.showModal(modal);
+      } catch {
+        try {
+          await interaction.editReply({
+            content: renderPluginInstallOutcome(outcome, agentName),
+            components: [],
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+
+      // Await modal submit (60s TTL — operators may need to copy/paste
+      // from a secret store).
+      let modalSubmit: ModalSubmitInteraction;
+      try {
+        modalSubmit = (await followUp.awaitModalSubmit({
+          filter: (i) =>
+            i.user.id === interaction.user.id && i.customId === modalId,
+          time: 60_000,
+        })) as ModalSubmitInteraction;
+      } catch {
+        try {
+          await interaction.editReply({
+            content: `Modal timed out — **${chosen}** not installed. Re-run \`/clawcode-plugins-browse\` to retry.`,
+            components: [],
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+
+      const value = modalSubmit.fields.getTextInputValue(fieldName);
+      try {
+        await modalSubmit.deferUpdate();
+      } catch {
+        /* expired */
+      }
+
+      // Retry install with the collected field.
+      try {
+        outcome = (await sendIpcRequest(
+          SOCKET_PATH,
+          "marketplace-install-plugin",
+          {
+            agent: agentName,
+            plugin: chosen,
+            configInputs: { [fieldName]: value },
+          },
+        )) as PluginInstallOutcomeWire;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        try {
+          await interaction.editReply({
+            content: `Plugin install failed: ${msg}`,
+            components: [],
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+    }
+
+    const msg = renderPluginInstallOutcome(outcome, agentName);
+    try {
+      await interaction.editReply({ content: msg, components: [] });
+    } catch {
+      /* expired */
     }
   }
 

@@ -61,6 +61,7 @@ import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manag
 import { provisionWebhooks } from "../discord/webhook-provisioner.js";
 import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
+import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.js";
 import { chunkText, chunkPdf } from "../documents/chunker.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
@@ -98,6 +99,22 @@ import {
   type SkillInstallOutcome,
 } from "../marketplace/install-single-skill.js";
 import { DEFAULT_SKILLS_LEDGER_PATH } from "../migration/skills-ledger.js";
+// Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin list + install + manifest fetch.
+import {
+  fetchClawhubPlugins,
+  downloadClawhubPluginManifest,
+  type ClawhubPluginsResponse,
+  type ClawhubPluginListItem,
+} from "../marketplace/clawhub-client.js";
+import {
+  installClawhubPlugin,
+  mapFetchErrorToOutcome,
+  type PluginInstallOutcome,
+} from "../marketplace/install-plugin.js";
+// Phase 90 Plan 04 HUB-08 — ClawHub cache primitive. Plan 05 instantiates
+// a daemon-scoped cache<ClawhubPluginsResponse> for plugin list calls.
+import { createClawhubCache } from "../marketplace/clawhub-cache.js";
+import type { ClawhubCache } from "../marketplace/clawhub-cache.js";
 import { resolveMarketplaceSources } from "../config/loader.js";
 import type { Logger } from "pino";
 import { runConsolidation } from "../memory/consolidation.js";
@@ -831,6 +848,213 @@ export async function handleMarketplaceRemoveIpc(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 05 HUB-02 / HUB-04 — Plugin marketplace IPC handlers.
+//
+// Parallel to handleMarketplaceList/Install/RemoveIpc but routes through
+// the ClawHub plugins endpoint (not skills) and writes to
+// `agents[*].mcpServers` via installClawhubPlugin (which calls
+// updateAgentMcpServers).
+//
+// Wired into the daemon IPC closure BEFORE routeMethod (same closure
+// pattern as the skill marketplace handlers).
+// ---------------------------------------------------------------------------
+
+export type MarketplacePluginsIpcDeps = Readonly<{
+  configs: ResolvedAgentConfig[];
+  configPath: string;
+  clawhubBaseUrl: string;
+  clawhubAuthToken?: string;
+  cache: ClawhubCache<ClawhubPluginsResponse>;
+  log: Logger;
+  // DI hooks for hermetic tests — default to real impls when omitted.
+  fetchPlugins?: typeof fetchClawhubPlugins;
+  downloadManifest?: typeof downloadClawhubPluginManifest;
+  installPlugin?: typeof installClawhubPlugin;
+}>;
+
+export type MarketplaceListPluginsIpcResult = Readonly<{
+  agent: string;
+  installed: readonly string[];
+  available: readonly ClawhubPluginListItem[];
+}>;
+
+/**
+ * `marketplace-list-plugins` — returns the installed-mcpServer-names list
+ * AND the available catalog (catalog minus already-installed) for the
+ * given agent.
+ *
+ * Plan 05 Task 2's /clawcode-plugins-browse handler consumes `available`
+ * directly into a StringSelectMenuBuilder. Rate-limited responses fail
+ * open (empty `available`) so the UI can render "no plugins" instead of
+ * an error state — the operator retries later.
+ */
+export async function handleMarketplaceListPluginsIpc(
+  deps: MarketplacePluginsIpcDeps & { params: Record<string, unknown> },
+): Promise<MarketplaceListPluginsIpcResult> {
+  const agentName = validateStringParam(deps.params, "agent");
+  const cfg = deps.configs.find((c) => c.name === agentName);
+  if (!cfg) {
+    throw new ManagerError(`Agent '${agentName}' not found in config`);
+  }
+
+  const cacheKey = {
+    endpoint: "plugins",
+    query: "",
+    cursor: "",
+  } as const;
+  const fetchFn = deps.fetchPlugins ?? fetchClawhubPlugins;
+
+  let response: ClawhubPluginsResponse;
+  const hit = deps.cache.get(cacheKey);
+  if (hit.kind === "hit") {
+    response = hit.value;
+  } else if (hit.kind === "rate-limited") {
+    // Cache says still rate-limited — fail open with empty result so the
+    // UI can surface "no plugins available right now".
+    return Object.freeze({
+      agent: agentName,
+      installed: Object.freeze([]),
+      available: Object.freeze([]),
+    });
+  } else {
+    try {
+      response = await fetchFn({
+        baseUrl: deps.clawhubBaseUrl,
+        ...(deps.clawhubAuthToken !== undefined
+          ? { authToken: deps.clawhubAuthToken }
+          : {}),
+      });
+      deps.cache.set(cacheKey, response);
+    } catch (err) {
+      // Rate-limit → cache negative entry + fail open
+      if (
+        err !== null &&
+        typeof err === "object" &&
+        "retryAfterMs" in err &&
+        typeof (err as { retryAfterMs?: unknown }).retryAfterMs === "number"
+      ) {
+        deps.cache.setNegative(
+          cacheKey,
+          (err as { retryAfterMs: number }).retryAfterMs,
+        );
+        return Object.freeze({
+          agent: agentName,
+          installed: Object.freeze([]),
+          available: Object.freeze([]),
+        });
+      }
+      throw err;
+    }
+  }
+
+  // Extract installed mcpServer names from the agent's resolved config.
+  // The config shape is a union of string-refs (→ top-level map) and
+  // inline objects; we normalize to names only (what the installer needs).
+  const mcpList = (cfg as ResolvedAgentConfig & {
+    mcpServers?: readonly (
+      | string
+      | Readonly<{ name: string; command?: string; args?: readonly string[]; env?: Readonly<Record<string, string>> }>
+    )[];
+  }).mcpServers ?? [];
+  const installed: string[] = [];
+  for (const m of mcpList) {
+    if (typeof m === "string") installed.push(m);
+    else if (typeof m === "object" && m !== null && typeof m.name === "string") {
+      installed.push(m.name);
+    }
+  }
+
+  const installedSet = new Set(installed);
+  const available = Object.freeze(
+    response.items.filter((p) => !installedSet.has(p.name)),
+  );
+
+  return Object.freeze({
+    agent: agentName,
+    installed: Object.freeze(installed),
+    available,
+  });
+}
+
+/**
+ * `marketplace-install-plugin` — install ONE plugin on the given agent.
+ *
+ * Flow: list catalog → find matching item → download manifest →
+ * installClawhubPlugin (with operator-supplied configInputs) → return
+ * the typed PluginInstallOutcome.
+ *
+ * Error passthrough: ClawhubRateLimitedError / AuthRequiredError /
+ * ManifestInvalidError are caught + mapped to outcome variants via
+ * mapFetchErrorToOutcome. Any other exception bubbles up.
+ *
+ * NOTE: Plugin hot-reload is deferred per Phase 90 CONTEXT D-5 — the
+ * installer writes the YAML but the agent's MCP subprocess doesn't
+ * hot-add the new server. Operator must restart the agent manually.
+ */
+export async function handleMarketplaceInstallPluginIpc(
+  deps: MarketplacePluginsIpcDeps & { params: Record<string, unknown> },
+): Promise<PluginInstallOutcome> {
+  const agentName = validateStringParam(deps.params, "agent");
+  const pluginName = validateStringParam(deps.params, "plugin");
+  const rawInputs = deps.params.configInputs;
+  const configInputs: Record<string, string> = {};
+  if (rawInputs !== null && typeof rawInputs === "object") {
+    for (const [k, v] of Object.entries(rawInputs as Record<string, unknown>)) {
+      if (typeof v === "string") configInputs[k] = v;
+    }
+  }
+
+  const cfg = deps.configs.find((c) => c.name === agentName);
+  if (!cfg) {
+    throw new ManagerError(`Agent '${agentName}' not found in config`);
+  }
+
+  const fetchFn = deps.fetchPlugins ?? fetchClawhubPlugins;
+  const dlFn = deps.downloadManifest ?? downloadClawhubPluginManifest;
+  const install = deps.installPlugin ?? installClawhubPlugin;
+
+  try {
+    // List call to resolve manifestUrl for the chosen plugin name.
+    const listResp = await fetchFn({
+      baseUrl: deps.clawhubBaseUrl,
+      ...(deps.clawhubAuthToken !== undefined
+        ? { authToken: deps.clawhubAuthToken }
+        : {}),
+    });
+    const item = listResp.items.find((p) => p.name === pluginName);
+    if (!item) {
+      return Object.freeze({
+        kind: "not-in-catalog" as const,
+        plugin: pluginName,
+      });
+    }
+    // manifestUrl is optional on the list response — fall back to a
+    // canonical URL derived from the plugin name. If neither resolves to
+    // a real manifest, downloadClawhubPluginManifest surfaces a
+    // manifest-invalid error.
+    const manifestUrl =
+      item.manifestUrl ??
+      `${deps.clawhubBaseUrl.replace(/\/+$/, "")}/api/v1/plugins/${encodeURIComponent(item.name)}/manifest`;
+
+    const manifest = await dlFn({
+      manifestUrl,
+      ...(deps.clawhubAuthToken !== undefined
+        ? { authToken: deps.clawhubAuthToken }
+        : {}),
+    });
+
+    return await install({
+      manifest,
+      agentName,
+      configPath: deps.configPath,
+      configInputs,
+    });
+  } catch (err) {
+    return mapFetchErrorToOutcome(err, pluginName);
+  }
+}
+
 /**
  * Base directory for manager runtime files.
  */
@@ -977,6 +1201,14 @@ export async function startDaemon(
   const resolvedMarketplaceSources = resolveMarketplaceSources(config);
   const ledgerPath = DEFAULT_SKILLS_LEDGER_PATH;
 
+  // Phase 90 Plan 05 HUB-02 — daemon-scoped cache for ClawHub /api/v1/plugins
+  // responses. TTL mirrors Plan 04 HUB-08 skills cache (configurable via
+  // defaults.clawhubCacheTtlMs, default 10 min). Negative entries carry
+  // their own retryAfterMs from Retry-After header.
+  const clawhubPluginsCache = createClawhubCache<ClawhubPluginsResponse>(
+    config.defaults.clawhubCacheTtlMs,
+  );
+
   // 5b. Build routing table and rate limiter
   const routingTable = buildRoutingTable(resolvedAgents);
   const rateLimiter = createRateLimiter(DEFAULT_RATE_LIMITER_CONFIG);
@@ -1029,6 +1261,17 @@ export async function startDaemon(
   const turnDispatcher = new TurnDispatcher({
     sessionManager: manager,
     log,
+    // Phase 90 MEM-03 — pre-turn hybrid-RRF retrieval hook. The closure
+    // defers to SessionManager.getMemoryRetrieverForAgent which produces
+    // a per-call retriever (reads topK from current agent config, uses
+    // the shared MiniLM embedder). Returns empty array when the agent
+    // has no MemoryStore (opt-out or not-yet-initialized) — zero side
+    // effects on the hot path.
+    memoryRetriever: async (agentName, query) => {
+      const retriever = manager.getMemoryRetrieverForAgent(agentName);
+      if (!retriever) return [];
+      return retriever(query);
+    },
   });
   log.info("TurnDispatcher initialized");
 
@@ -1409,6 +1652,78 @@ export async function startDaemon(
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
 
+  // Phase 90 MEM-02 — build a lazy MemoryStore proxy. Scanners are
+  // constructed at boot but the per-agent MemoryStore doesn't exist until
+  // startAgent runs initMemory. The proxy returned here defers every
+  // method lookup to the provider function so a scanner event that fires
+  // before the store initializes simply no-ops (returns null / {} /
+  // empty-string as appropriate).
+  const makeLazyMemoryStoreProxy = (
+    provider: () => unknown,
+  ): Parameters<typeof MemoryScanner>[0]["store"] => {
+    return new Proxy({} as never, {
+      get(_t, prop: string) {
+        const s = provider() as Record<string, unknown> | undefined;
+        if (!s) {
+          if (prop === "getMemoryFileSha256") return () => null;
+          if (prop === "deleteMemoryChunksByPath") return () => 0;
+          return () => "";
+        }
+        return typeof s[prop] === "function" ? (s[prop] as (...a: unknown[]) => unknown).bind(s) : s[prop];
+      },
+    }) as unknown as Parameters<typeof MemoryScanner>[0]["store"];
+  };
+
+  // 6b-bis. Phase 90 MEM-02 — per-agent MemoryScanner DI. Constructs a
+  // chokidar watcher on {workspace}/memory/**/*.md for each agent whose
+  // resolved config has memoryScannerEnabled=true (the default). The
+  // scanner maintains memory_chunks + vec_memory_chunks + memory_chunks_fts
+  // + memory_files tables live — both on boot (via backfill) and on
+  // subsequent file events.
+  //
+  // Wire-order: BETWEEN setSkillsCatalog and setAllAgentConfigs so the
+  // scanners are ready before reconcileRegistry spins up sessions (which
+  // immediately drive warm-path and may invoke memory retrieval). Per-
+  // agent MemoryStore instances are initialized inside SessionManager
+  // startAgent so the backfill runs lazily on first turn — boot stays
+  // fast even when there are thousands of indexed memory files.
+  for (const agent of resolvedAgents) {
+    if (agent.memoryScannerEnabled === false) continue;
+    const workspacePath = agent.workspace;
+    if (!workspacePath) continue;
+    // Resolve the per-agent MemoryStore lazily — SessionManager.startAgent
+    // initializes memory.memoryStores AFTER this loop runs, so a fresh
+    // scanner call at boot returns a wrapper that defers the lookup until
+    // each chokidar event fires. When the store doesn't exist yet (agent
+    // not started), the wrapper no-ops cleanly so early file events don't
+    // crash.
+    const storeProvider = () =>
+      (manager as unknown as {
+        memory: { memoryStores: Map<string, unknown> };
+      }).memory.memoryStores.get(agent.name);
+    const scanner = new MemoryScanner(
+      {
+        store: makeLazyMemoryStoreProxy(storeProvider),
+        embed: (text: string) =>
+          (manager as unknown as {
+            memory: { embedder: { embed: (t: string) => Promise<Float32Array> } };
+          }).memory.embedder.embed(text),
+        log: log.child({ scanner: agent.name }),
+      },
+      workspacePath,
+    );
+    manager.setMemoryScanner(agent.name, scanner);
+    // Fire-and-forget: chokidar watches the directory even if it doesn't
+    // exist yet (creates on first event). Scanner start failures are
+    // non-fatal — MEM-01 stable-prefix auto-load still carries standing rules.
+    void scanner.start().catch((err) => {
+      log.warn(
+        { agent: agent.name, error: (err as Error).message },
+        "memory-scanner start failed (non-fatal)",
+      );
+    });
+  }
+
   // 6c. Wire agent configs into session manager for admin prompt injection
   manager.setAllAgentConfigs(resolvedAgents);
 
@@ -1718,6 +2033,29 @@ export async function startDaemon(
         return handleMarketplaceInstallIpc(deps);
       }
       return handleMarketplaceRemoveIpc(deps);
+    }
+    // Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin list + install IPC.
+    // Closure-based intercept parallel to the skill marketplace handlers
+    // above. Writes to agents[*].mcpServers via updateAgentMcpServers.
+    if (
+      method === "marketplace-list-plugins" ||
+      method === "marketplace-install-plugin"
+    ) {
+      const pluginDeps = {
+        configs: resolvedAgents as ResolvedAgentConfig[],
+        configPath,
+        clawhubBaseUrl: config.defaults.clawhubBaseUrl,
+        // Phase 90 Plan 06 wires GitHub OAuth token here; until then the
+        // daemon relies on ClawHub's public/unauthenticated surface.
+        clawhubAuthToken: undefined,
+        cache: clawhubPluginsCache,
+        log,
+        params,
+      };
+      if (method === "marketplace-list-plugins") {
+        return handleMarketplaceListPluginsIpc(pluginDeps);
+      }
+      return handleMarketplaceInstallPluginIpc(pluginDeps);
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };
