@@ -58,7 +58,10 @@ import { provisionAgent } from "./agent-provisioner.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
-import { provisionWebhooks } from "../discord/webhook-provisioner.js";
+import {
+  provisionWebhooks,
+  verifyAgentWebhookIdentity,
+} from "../discord/webhook-provisioner.js";
 import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
 import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.js";
@@ -2353,6 +2356,36 @@ export async function startDaemon(
         { total: allWebhookIdentities.size, manual: manualWebhookIdentities.size, autoProvisioned: allWebhookIdentities.size - manualWebhookIdentities.size },
         "webhook manager initialized with auto-provisioned identities",
       );
+
+      // Phase 90 Plan 07 WIRE-05 — per-agent webhook identity probe.
+      // provisionWebhooks above does the heavy lifting; this loop surfaces
+      // per-agent {verified|provisioned|missing} status in the log so
+      // operators can spot-check at boot. Fire-and-forget — probe failures
+      // are logged but never block daemon startup.
+      for (const agent of resolvedAgents) {
+        if (!agent.webhook?.displayName) continue;
+        const channelId = agent.channels[0];
+        void verifyAgentWebhookIdentity({
+          client: discordBridge.discordClient,
+          agentName: agent.name,
+          channelId,
+          displayName: agent.webhook.displayName,
+          avatarUrl: agent.webhook.avatarUrl,
+          log,
+        })
+          .then((status) =>
+            log.info(
+              { agent: agent.name, status },
+              "webhook identity probe",
+            ),
+          )
+          .catch((err) =>
+            log.warn(
+              { agent: agent.name, error: (err as Error).message },
+              "webhook identity probe failed (non-fatal)",
+            ),
+          );
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       log.error({ error: msg }, "Discord bridge failed to start");
