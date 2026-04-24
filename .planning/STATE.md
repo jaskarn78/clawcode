@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 92-01-PLAN.md
-last_updated: "2026-04-24T23:41:22.867Z"
+stopped_at: Completed 92-02-PLAN.md
+last_updated: "2026-04-24T23:54:14.017Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 6
-  completed_plans: 1
+  total_plans: 9
+  completed_plans: 2
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 92 — openclaw-clawcode-fin-acquisition-cutover-parity-verifier
+**Current focus:** Phase 93 — Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience
 
 ## Current Position
 
-Phase: 92 (openclaw-clawcode-fin-acquisition-cutover-parity-verifier) — EXECUTING
-Plan: 2 of 6
+Phase: 93 (Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -189,6 +189,10 @@ Recent decisions affecting current work:
 - [Phase 92]: Plan 92-01: 503 'Failed to connect to OpenClaw Gateway' graceful in --source both (skip+continue), fatal in --source mc; cursor-driven incremental rerun via mc-cursor.json with monotonic lastUpdatedAt advance even on no-changes
 - [Phase 92]: Plan 92-01: Source profiler reads N JSONL paths (mc + discord union) with origin-discriminated dedup; cron-prefixed intents preserved through merge — Phase 47 cron parity surfaces in canary battery distinct from user-initiated intents
 - [Phase 92]: Plan 92-01: SQLite direct-read fallback (mission-control.db via SSH) DEFERRED to Phase 93+; pure REST API only this plan (regression-pinned by ! grep -rE 'mission-control.db' src/cutover/)
+- [Phase 92]: Plan 92-02: CutoverGap typed discriminated union with EXACTLY 9 kinds (5 additive + 4 destructive); D-11 adds cron-session-not-mirrored. Pinned by D-EXHAUSTIVE compile-time switch + assertNever witness — adding a 10th kind fails the TypeScript build until 92-03/04/06 consumers update.
+- [Phase 92]: Plan 92-02: diff-engine.ts is PURE (no fs, no clock, no env, no Math.random); target-probe.ts is DI-pure (loadConfig + listMcpStatus + readWorkspaceInventory all injected). Static-grep pins enforce both.
+- [Phase 92]: Plan 92-02: NO-LEAK invariant — probe extracts MCP env KEY NAMES via Object.keys(entry.env). Values never read or serialized. PR5 test pins via sk_live_secret_42 sentinel. Field-by-field YAML extraction (no spread on env objects).
+- [Phase 92]: Plan 92-02: TargetCapability.yaml.sessionKinds[] derived from agent.schedules presence (empty → [direct]; non-empty → [direct, scheduled]). Cron-entry detection lives in target.sessionKinds.includes('cron') — v1 emits without 'cron' so D-11 cron gaps surface end-to-end against any MC profile carrying cron-prefixed intents.
 
 ### v2.1 closing decisions (for reference)
 
@@ -288,9 +292,10 @@ Recent decisions affecting current work:
 | Phase 91 P06 | 9 min | 2 tasks | 4 files |
 | Phase 91 P05 | 10m 33s | 2 tasks | 9 files |
 | Phase 92 P01 | 29min | 2 tasks | 11 files |
+| Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier P02 | 6m | 2 (TDD) tasks | 8 files files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 92-01-PLAN.md
+Stopped at: Completed 92-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
