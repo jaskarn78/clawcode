@@ -1175,3 +1175,174 @@ describe("buildSessionConfig — soulFile / identityFile lazy-read precedence (P
     expect(result.systemPrompt).toContain("## Identity");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 01 — MEM-01: MEMORY.md auto-inject into the v1.7 stable
+// prefix, positioned AFTER SOUL+IDENTITY and BEFORE the MCP status table
+// (D-18). 50KB hard cap with truncation marker (D-17). Silent skip on
+// missing file (same precedence semantics as SOUL/IDENTITY branches).
+// Opt-out via config.memoryAutoLoad === false.
+// ---------------------------------------------------------------------------
+
+describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () => {
+  beforeEach(() => {
+    vi.mocked(readFile).mockReset();
+    vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+  });
+
+  function mockFiles(files: Record<string, string>) {
+    vi.mocked(readFile).mockImplementation(async (path: any) => {
+      const p = typeof path === "string" ? path : String(path);
+      if (p in files) return files[p];
+      throw new Error(`ENOENT: ${p}`);
+    });
+  }
+
+  it("MEM-01-C1: injection order — SOUL < IDENTITY < MEMORY < MCP Servers in stable prefix", async () => {
+    mockFiles({
+      "/tmp/ws/SOUL.md":
+        "# Agent: Fin\n\n## Soul\n- SOUL_MARKER_ORDER_TEST\n",
+      "/tmp/ws/IDENTITY.md": "IDENTITY_MARKER_ORDER_TEST",
+      "/tmp/ws/MEMORY.md": "MEMORY_MARKER_ORDER_TEST — our firm legal name is X.",
+    });
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      memoryAutoLoad: true,
+      mcpServers: [
+        { name: "finmentum-db", command: "x", args: [], env: {}, optional: false },
+      ],
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    const prompt = result.systemPrompt;
+    const idxIdentity = prompt.indexOf("## Identity");
+    const idxIdentityBody = prompt.indexOf("IDENTITY_MARKER_ORDER_TEST");
+    const idxMemoryHeading = prompt.indexOf("## Long-term memory");
+    const idxMemoryBody = prompt.indexOf("MEMORY_MARKER_ORDER_TEST");
+    const idxMcp = prompt.indexOf("| Server | Status | Tools | Last Error |");
+    // All must be present.
+    expect(idxIdentity).toBeGreaterThanOrEqual(0);
+    expect(idxIdentityBody).toBeGreaterThanOrEqual(0);
+    expect(idxMemoryHeading).toBeGreaterThanOrEqual(0);
+    expect(idxMemoryBody).toBeGreaterThan(0);
+    expect(idxMcp).toBeGreaterThan(0);
+    // Order: identity body BEFORE memory; memory BEFORE mcp status.
+    expect(idxIdentityBody).toBeLessThan(idxMemoryBody);
+    expect(idxMemoryBody).toBeLessThan(idxMcp);
+  });
+
+  it("MEM-01-C2: 50KB cap — 60KB MEMORY.md truncates to 50KB + marker", async () => {
+    // Build a 60KB payload that starts with a distinctive prefix, so we can
+    // assert the prefix survives and the tail gets truncated.
+    const big = "A".repeat(60 * 1024);
+    mockFiles({ "/tmp/ws/MEMORY.md": big });
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      memoryAutoLoad: true,
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("## Long-term memory");
+    expect(result.systemPrompt).toContain("…(truncated at 50KB cap)");
+    // The truncated body contains exactly 50KB of 'A' characters — count by
+    // searching the body within the prompt.
+    const startIdx = result.systemPrompt.indexOf("AAAA");
+    const endIdx = result.systemPrompt.indexOf("…(truncated at 50KB cap)");
+    expect(startIdx).toBeGreaterThan(0);
+    expect(endIdx).toBeGreaterThan(startIdx);
+    // ~50KB of A's (Buffer byteLength on ASCII = char count).
+    const aSlice = result.systemPrompt.slice(startIdx, endIdx).replace(/\n/g, "");
+    // Tolerance: exact 50KB slice length == 50 * 1024 = 51200 characters.
+    expect(aSlice.length).toBe(50 * 1024);
+  });
+
+  it("MEM-01-C3: opt-out via memoryAutoLoad=false — MEMORY.md never read, heading absent", async () => {
+    mockFiles({
+      "/tmp/ws/MEMORY.md": "SHOULD_NEVER_APPEAR",
+    });
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      memoryAutoLoad: false,
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("## Long-term memory");
+    expect(result.systemPrompt).not.toContain("SHOULD_NEVER_APPEAR");
+    // Explicit: readFile was NEVER called with the MEMORY.md path.
+    const memCall = vi
+      .mocked(readFile)
+      .mock.calls.find((c) => c[0] === "/tmp/ws/MEMORY.md");
+    expect(memCall).toBeUndefined();
+  });
+
+  it("MEM-01-C4: override path via memoryAutoLoadPath — reads the override, NOT workspace MEMORY.md", async () => {
+    mockFiles({
+      "/override/fixture-memory.md": "OVERRIDE_MEMORY_CONTENT",
+      "/tmp/ws/MEMORY.md": "WORKSPACE_MEMORY_CONTENT_NOT_READ",
+    });
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      memoryAutoLoad: true,
+      memoryAutoLoadPath: "/override/fixture-memory.md",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("OVERRIDE_MEMORY_CONTENT");
+    expect(result.systemPrompt).not.toContain(
+      "WORKSPACE_MEMORY_CONTENT_NOT_READ",
+    );
+    expect(vi.mocked(readFile)).toHaveBeenCalledWith(
+      "/override/fixture-memory.md",
+      "utf-8",
+    );
+    // Workspace MEMORY.md was NEVER attempted.
+    const wsCall = vi
+      .mocked(readFile)
+      .mock.calls.find((c) => c[0] === "/tmp/ws/MEMORY.md");
+    expect(wsCall).toBeUndefined();
+  });
+
+  it("MEM-01-C5: missing MEMORY.md — silent skip, no crash, heading absent", async () => {
+    // Default mock rejects ENOENT for every path.
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      memoryAutoLoad: true,
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toBeDefined();
+    expect(result.systemPrompt).not.toContain("## Long-term memory");
+    // Readfile was invoked but rejected — proven by the default ENOENT mock.
+    // buildSessionConfig MUST NOT throw.
+  });
+
+  it("MEM-01-C6: fin-acquisition integration — 'Finmentum LLC' surfaces without retrieval", async () => {
+    mockFiles({
+      "/tmp/fin-acquisition/MEMORY.md":
+        "# Firm rules\n\nOur firm legal name is Finmentum LLC — NOT 'Finmentum Investment Advisors LLC'.\n",
+    });
+    const config = makeConfig({
+      name: "fin-acquisition",
+      workspace: "/tmp/fin-acquisition",
+      memoryAutoLoad: true,
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    // The stable prefix contains the firm legal name verbatim.
+    expect(result.systemPrompt).toContain("Finmentum LLC");
+    expect(result.systemPrompt).toContain("## Long-term memory");
+  });
+
+  it("MEM-01-C7: MEMORY.md content lands in STABLE PREFIX (systemPrompt), NOT in mutableSuffix", async () => {
+    mockFiles({
+      "/tmp/ws/MEMORY.md": "STABLE_PREFIX_MEMORY_PAYLOAD",
+    });
+    const config = makeConfig({
+      workspace: "/tmp/ws",
+      memoryAutoLoad: true,
+      channels: ["channel-xyz"], // forces a mutableSuffix to exist
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("STABLE_PREFIX_MEMORY_PAYLOAD");
+    // mutableSuffix, when present, must NOT echo the MEMORY body.
+    if (result.mutableSuffix !== undefined) {
+      expect(result.mutableSuffix).not.toContain(
+        "STABLE_PREFIX_MEMORY_PAYLOAD",
+      );
+    }
+  });
+});
