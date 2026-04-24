@@ -1,5 +1,20 @@
 # Milestones: ClawCode
 
+## v2.3 Marketplace & Memory Activation (Shipped: 2026-04-24)
+
+**Phases completed:** 1 phases, 7 plans, 14 tasks
+
+**Key accomplishments:**
+
+- MEMORY.md auto-loaded into the v1.7 stable prefix at session boot (SOUL → IDENTITY → MEMORY → MCP), 50KB hard cap with truncation marker, additive-optional schema — closes the Apr 20 "Finmentum LLC" recall crisis for fin-acquisition and every other agent by default.
+- 1. [Rule 3 - Blocking] 22+2 = 24 test fixtures updated for memoryRetrievalTopK + memoryScannerEnabled required fields
+- ClawHub HTTP client + TTL cache + 11-variant SkillInstallOutcome — marketplace catalog now unions local + legacy + ClawHub skills, and installSingleSkill dispatches ClawHub entries through the full Phase 84 staging pipeline.
+- 1. [Rule 3 - Blocking] ClawHub plugins endpoint shape differs from plan assumption
+- 1Password op:// fuzzy matcher (substring + Levenshtein ≤ 3) + Discord ModalBuilder config collection (≤5 fields) + GitHub device-code OAuth device-code flow with 1P token storage + seventh inline-short-circuit application (/clawcode-clawhub-auth).
+- Fin-acquisition ClawCode agent fully configured for an operator-initiated OpenClaw→ClawCode cutover: 6 MCPs wired + 50-minute heartbeat verbatim from OpenClaw + effort/allowedModels/greet fields + memory backfill CLI + daemon webhook identity probe + 9-section operator runbook. Channel `1481670479017414767` INTENTIONALLY unchanged; cutover deferred to operator per user directive.
+
+---
+
 ## v2.2 OpenClaw Parity & Polish (Shipped: 2026-04-23)
 
 **Phases completed:** 7 phases, 19 plans, 32 tasks
