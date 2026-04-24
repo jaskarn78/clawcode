@@ -1,5 +1,20 @@
 # Milestones: ClawCode
 
+## v2.4 OpenClaw ↔ ClawCode Continuous Sync (Shipped: 2026-04-24)
+
+**Phases completed:** 1 phases, 6 plans, 10 tasks
+
+**Key accomplishments:**
+
+- rsync-over-SSH sync runner with atomic sync-state.json persistence, direction-aware pause, 5-min systemd timer, JSONL observability — callable via pure-function DI entry point syncOnce()
+- sha256 pre-sync compare + per-FILE rsync --exclude + sync-state.conflicts[] persistence + fire-and-forget bot-direct embed to admin-clawdy on any cycle with conflicts — no silent operator-edit clobber, no blocked clean-file propagation.
+- 1. [Rule 3 — Blocking] Added `ConversationStore.getDatabase()` accessor
+- 1. [Rule 2 — Missing Critical] Exit-code discipline for "user aborted prompt"
+- Zero-LLM-cost Discord slash command `/clawcode-sync-status` that renders the OpenClaw↔ClawCode sync snapshot as a native Discord EmbedBuilder via the daemon-routed `list-sync-status` IPC — red on conflicts with `clawcode sync resolve` hint, green on happy path, yellow on paused/failed-ssh/never-run.
+- 1. [Rule 1 — Bug] Filter file memory/ rules missing direct-child + intermediate-dir patterns
+
+---
+
 ## v2.3 Marketplace & Memory Activation (Shipped: 2026-04-24)
 
 **Phases completed:** 1 phases, 7 plans, 14 tasks
