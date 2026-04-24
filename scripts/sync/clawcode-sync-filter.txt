@@ -51,6 +51,8 @@ P sessions/
 + /IDENTITY.md
 + /HEARTBEAT.md
 + /memory/
++ /memory/*.md
++ /memory/**/
 + /memory/**/*.md
 + /skills/
 + /skills/**
