@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 91-04-PLAN.md (clawcode sync CLI subcommands)
-last_updated: "2026-04-24T20:03:39.085Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 91-05-PLAN.md
+last_updated: "2026-04-24T20:19:55.149Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 6
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 91 (OpenClaw ↔ ClawCode fin-acquisition Workspace Sync) — EXECUTING
-Plan: 4 of 6
+Plan: 6 of 6
 
 ## Performance Metrics
 
@@ -178,6 +178,13 @@ Recent decisions affecting current work:
 - [Phase 91]: 91-02: Per-FILE --exclude rsync args preserve non-conflicting propagation in same cycle (D-12)
 - [Phase 91]: 91-02: Stateless re-alert (D-15) — fire embed every cycle with conflicts, no path-level suppression
 - [Phase 91]: Plan 91-04 complete: clawcode sync CLI group with 8 subcommands, drain-then-flip cutover, 7-day rollback window. SYNC-09 and SYNC-10 done.
+- [Phase 91]: Plan 91-06 — Runbook appended with 5 Phase 91 sections (SSH provisioning, systemd install, cutover flip, 7-day rollback, operator-observable logs) under  heading; Phase 90-07 content preserved verbatim (RUN-SYNC-08 regression pin).
+- [Phase 91]: Plan 91-06 — Rule 1 fix: filter file memory/ rules amended with `+ /memory/*.md` (direct children) and `+ /memory/**/` (intermediate-dir descent). Original `+ /memory/**/*.md` alone missed both in rsync 3.2 (zero-path-component `**` semantic), which would have silently dropped OpenClaw's dated memory flushes (memory/YYYY-MM-DD-slug.md). All 37 existing 91-01 tests still pass after the fix.
+- [Phase 91]: Plan 91-06 — Zero new npm deps discipline preserved. Plan's test-file draft referenced execa; substituted node:child_process.execFile via promisify with non-zero-exit-tolerant wrapper (matches src/sync/sync-runner.ts:540 defaultRsyncRunner + src/marketplace/clawhub-client.ts patterns).
+- [Phase 91]: Plan 91-06 — Exclude-filter test uses both static assertions (REG-EXCL-01/02 read filter file directly) AND behavioral assertions (REG-EXCL-03..08 run real rsync against synthetic workspace with dry-run itemize parsing + real-sync destination filesystem access checks). REG-EXCL-09 control probe prevents vacuous-pass scenarios. 9 tests total (plan wanted ≥6).
+- [Phase 91]: 91-05: Colour vocabulary reuses Phase 91-02 CONFLICT_EMBED_COLOR=15158332 for red — conflict-alert embed + status embed speak the same visual language
+- [Phase 91]: 91-05: /clawcode-sync-status is fleet-level (no agent option) — reads singleton sync-state.json; per-agent arg deferred to Phase 92+ fleet-wide sync
+- [Phase 91]: 91-05: Conflict field cap at 25 with explicit '… N more conflicts' terminal marker — honest cap indicator, not silent ceiling (diverges from 91-02 alerter's silent slice)
 
 ### v2.1 closing decisions (for reference)
 
@@ -271,9 +278,11 @@ Recent decisions affecting current work:
 | Phase 91 P03 | 18 | 2 tasks | 8 files |
 | Phase 91 P02 | 8m 37s | 2 tasks | 6 files |
 | Phase 91 P04 | 11m | 2 tasks | 13 files |
+| Phase 91 P06 | 9 min | 2 tasks | 4 files |
+| Phase 91 P05 | 10m 33s | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 91-04-PLAN.md (clawcode sync CLI subcommands)
+Stopped at: Completed 91-05-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
