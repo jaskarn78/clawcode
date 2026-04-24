@@ -304,3 +304,512 @@ Include in the postmortem:
 
 *Runbook generated during Phase 90 Plan 07 (WIRE-07).*
 *Execution deferred to operator per user directive 2026-04-24.*
+
+---
+
+## Phase 91: Continuous Workspace Sync
+
+**Added by Phase 91 Plan 06 (SYNC-10).** The preceding sections cover the
+one-shot OpenClaw→ClawCode cutover; this section covers the ongoing
+workspace sync runner that keeps the ClawCode fin-acquisition mirror in
+step with the OpenClaw source of truth (and, post-cutover, flips that
+relationship).
+
+Topology (verbatim from 91-CONTEXT.md):
+
+- **ClawCode host (clawdy):** `clawcode@100.98.211.108` — runs the sync
+  runner + translator under a systemd user account.
+- **OpenClaw host:** `jjagpal@100.71.14.96` (Tailscale) — sync pulls from
+  here.
+- **Workspace source:** `~/.openclaw/workspace-finmentum/`
+- **Workspace destination:** `/home/clawcode/.clawcode/agents/finmentum/`
+- **Admin channel for conflict alerts:** `1494117043367186474`
+  (admin-clawdy).
+
+### A. SSH Key Provisioning
+
+The sync runner runs as the `clawcode` systemd user on clawdy and pulls
+via SSH from `jjagpal@100.71.14.96` over Tailscale. One-time provisioning.
+
+1. Generate a dedicated sync key on clawdy (as the `clawcode` user, no
+   passphrase because the key is unlocked by a systemd-started process):
+
+   ```bash
+   sudo -u clawcode bash -c 'ssh-keygen -t ed25519 \
+     -f ~/.ssh/clawcode-sync \
+     -C "clawcode-sync@clawdy" \
+     -N ""'
+   ```
+
+   Expected output: `Your identification has been saved in
+   /home/clawcode/.ssh/clawcode-sync` and a matching `.pub` file.
+
+2. Copy the public key to the OpenClaw host's `authorized_keys`
+   (`ssh-copy-id` would work if clawcode had an interactive TTY; this
+   equivalent works without one):
+
+   ```bash
+   sudo -u clawcode cat /home/clawcode/.ssh/clawcode-sync.pub \
+     | ssh jjagpal@100.71.14.96 \
+       'mkdir -p ~/.ssh && chmod 700 ~/.ssh \
+        && cat >> ~/.ssh/authorized_keys \
+        && chmod 600 ~/.ssh/authorized_keys'
+   ```
+
+   Expected output: a single `jjagpal@100.71.14.96`'s password prompt the
+   first time (interactive); thereafter, nothing. No errors.
+
+3. Register the sync key as the default identity for the OpenClaw host in
+   clawcode's SSH config (gives the runner a stable `openclaw-sync` alias
+   — the bash wrapper in `scripts/sync/clawcode-sync.sh` is free to use
+   either the alias or the literal hostname):
+
+   ```bash
+   sudo -u clawcode tee -a /home/clawcode/.ssh/config > /dev/null <<'EOF'
+
+   Host openclaw-sync
+       HostName 100.71.14.96
+       User jjagpal
+       IdentityFile ~/.ssh/clawcode-sync
+       IdentitiesOnly yes
+       StrictHostKeyChecking accept-new
+       ServerAliveInterval 30
+       ServerAliveCountMax 3
+       ConnectTimeout 10
+   EOF
+   sudo chmod 600 /home/clawcode/.ssh/config
+   ```
+
+4. **Verify non-interactive SSH connectivity** (BatchMode prevents the
+   client from ever prompting for a password — failure here means the
+   key isn't trusted):
+
+   ```bash
+   sudo -u clawcode ssh -o BatchMode=yes openclaw-sync 'echo OK; hostname'
+   # Expected: "OK" on the first line, OpenClaw hostname on the second.
+   # If you see: "Permission denied (publickey)" → authorized_keys
+   # wasn't written correctly on the remote; repeat step 2.
+   ```
+
+5. **Verify the session traverses Tailscale** (the remote should answer
+   from a `100.x.x.x` IPv4; if it answers from a public IP, your DNS is
+   wrong and traffic isn't on the VPN):
+
+   ```bash
+   sudo -u clawcode ssh openclaw-sync 'ip -4 addr show | grep -E "inet 100\\."'
+   # Expected: "inet 100.71.14.96/32 ..." or similar Tailscale CIDR.
+   ```
+
+6. **Verify authorized_keys on the OpenClaw side** has exactly the key
+   we just pushed (operator sanity — prevents stale keys piling up):
+
+   ```bash
+   sudo -u clawcode ssh openclaw-sync \
+     'grep clawcode-sync@clawdy ~/.ssh/authorized_keys | wc -l'
+   # Expected: 1 (exactly one matching entry).
+   ```
+
+**Failure modes:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Permission denied (publickey)` from step 4 | `authorized_keys` not updated | Re-run step 2; check remote `~/.ssh/authorized_keys` permissions are `600` |
+| `BatchMode` output prompts for password | Key isn't in `authorized_keys` OR `IdentitiesOnly yes` missing from config | Re-check step 3 SSH config exists and key path is correct |
+| Step 5 shows a non-`100.x` IP | Tailscale not connected on one side | `sudo tailscale status` on both hosts; reconnect with `sudo tailscale up` if needed |
+
+### B. Systemd Timer Installation
+
+Two user-systemd timers run on the `clawcode` account:
+
+- `clawcode-sync.timer` → `clawcode-sync.service` — 5-minute workspace rsync
+- `clawcode-translator.timer` → `clawcode-translator.service` — hourly
+  conversation-turn translator (replays OpenClaw `sessions/*.jsonl` into
+  ClawCode's ConversationStore)
+
+1. Install the unit files (system-wide user-service location so every
+   user account — including `clawcode` — picks them up):
+
+   ```bash
+   sudo install -m 644 /opt/clawcode/scripts/systemd/clawcode-sync.service       /etc/systemd/user/
+   sudo install -m 644 /opt/clawcode/scripts/systemd/clawcode-sync.timer         /etc/systemd/user/
+   sudo install -m 644 /opt/clawcode/scripts/systemd/clawcode-translator.service /etc/systemd/user/
+   sudo install -m 644 /opt/clawcode/scripts/systemd/clawcode-translator.timer   /etc/systemd/user/
+   ```
+
+2. Ensure the wrapper scripts are executable (defensive — repo ships
+   them `0755` but a cherry-pick or zip extract can strip the bit):
+
+   ```bash
+   sudo chmod +x /opt/clawcode/scripts/sync/clawcode-sync.sh
+   sudo chmod +x /opt/clawcode/scripts/sync/clawcode-translator.sh
+   ```
+
+3. **Enable lingering** so user-systemd timers run without an active
+   login session for `clawcode`:
+
+   ```bash
+   sudo loginctl enable-linger clawcode
+   # Verify: loginctl show-user clawcode | grep Linger
+   # Expected: Linger=yes
+   ```
+
+4. Reload user-systemd and enable + start both timers (run as the
+   `clawcode` user — `XDG_RUNTIME_DIR` must point to their runtime dir):
+
+   ```bash
+   sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+     systemctl --user daemon-reload
+
+   sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+     systemctl --user enable --now clawcode-sync.timer
+
+   sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+     systemctl --user enable --now clawcode-translator.timer
+   ```
+
+5. **Verify both timers are armed**:
+
+   ```bash
+   sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+     systemctl --user list-timers --all | grep clawcode
+   # Expected output (2 rows):
+   #   ... 5min left   ...  clawcode-sync.timer       clawcode-sync.service
+   #   ... 1h left     ...  clawcode-translator.timer clawcode-translator.service
+   ```
+
+6. **Tail the first real run** via the per-user journal (both services
+   log to the journal via `StandardOutput=journal`):
+
+   ```bash
+   sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+     journalctl --user -u clawcode-sync.service -f -n 50
+   ```
+
+   Expected first-cycle behaviour: exit 0, no `failed-ssh`/`failed-rsync`
+   outcome in `~/.clawcode/manager/sync.jsonl`. If the service exits 1
+   with `flock-skip`, that's benign — a prior cycle is still in flight
+   (rare on the first run; expected if you restarted the timer during a
+   long initial sync).
+
+7. **Verify the first sync.jsonl line** looks sane:
+
+   ```bash
+   sudo -u clawcode tail -n 1 /home/clawcode/.clawcode/manager/sync.jsonl \
+     | jq '{ts: .timestamp, status, filesUpdated, bytes: .bytesTransferred}'
+   # Expected: status="synced" (or "skipped-no-changes" on a second run),
+   #           filesUpdated >= 0, bytes >= 0.
+   ```
+
+**Failure modes:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `list-timers` shows timers but "n/a" next run | `Persistent=false` + machine just booted; first `OnBootSec` hasn't elapsed yet | Wait 2min (sync) or 10min (translator) from boot — these are the `OnBootSec` warmups |
+| Service exits immediately with "flock: No such file or directory" | Lock-dir missing | `sudo -u clawcode mkdir -p /home/clawcode/.clawcode/manager` |
+| All cycles log `failed-ssh` | SSH key not provisioned (Section A skipped) | Complete Section A first |
+
+### C. Sync Cutover Flip Procedure
+
+Once Phase 90 Plan 07's channel-binding flip is in place (OpenClaw bot
+silenced, ClawCode bot live in the channel), the OpenClaw workspace is
+still the sync source of truth (`authoritativeSide = openclaw`). This
+section flips that — ClawCode becomes authoritative, OpenClaw freezes.
+
+**Pre-flight checklist** (every box must be checked):
+
+- [ ] All sync cycles in the last hour are green — `/clawcode-sync-status`
+      in admin-clawdy shows zero conflicts + `status: synced`.
+- [ ] `/clawcode-sync-status` in admin-clawdy shows
+      `authoritativeSide: openclaw` (this command flips it — shouldn't
+      already be `clawcode`).
+- [ ] Both systemd timers show active + successful last-run (Section B
+      step 5 + 7).
+- [ ] Ramy (operator) is notified the flip is happening in the next ~5
+      minutes so he doesn't lose an OpenClaw-side edit in the drain.
+- [ ] No active OpenClaw session on the fin-acquisition agent — SSH in
+      and check: `ssh openclaw-sync 'ps -ef | grep -i "claude.*fin-acquisition" | grep -v grep'`
+      should be empty.
+
+**Flip sequence** (runs on clawdy as the clawcode user):
+
+1. Invoke the cutover command — this performs D-17 drain-then-flip:
+
+   ```bash
+   sudo -u clawcode /opt/clawcode/dist/cli/index.js sync set-authoritative clawcode --confirm-cutover
+   #
+   # Internals:
+   #   1. Reads sync-state.json; refuses if already authoritativeSide=clawcode.
+   #   2. Runs one synchronous OpenClaw→ClawCode syncOnce() cycle.
+   #   3. Prints SyncRunOutcome: {synced | skipped-no-changes | partial-conflicts
+   #      | failed-ssh | failed-rsync}.
+   #   4. If partial-conflicts → REFUSES to flip; prints "resolve first" hint.
+   #   5. If synced/skipped → prompts "Drain complete. Flip authoritative
+   #      to 'clawcode'? (y/N)"
+   #   6. On 'y': atomically writes authoritativeSide=clawcode to
+   #      sync-state.json (Phase 83 temp+rename pattern).
+   #   7. On 'N' or abort: state unchanged, exit 0 (normal operator flow).
+   ```
+
+2. **Verify the flag flipped**:
+
+   ```bash
+   sudo -u clawcode jq .authoritativeSide \
+     /home/clawcode/.clawcode/manager/sync-state.json
+   # Expected: "clawcode"
+   ```
+
+3. **Verify the next 5-minute timer tick is a no-op** (reverse sync is
+   opt-in per D-18; without the flag file, syncOnce returns
+   `paused`):
+
+   ```bash
+   # Force a cycle now instead of waiting:
+   sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+     systemctl --user start clawcode-sync.service
+
+   # Inspect the latest sync.jsonl line:
+   sudo -u clawcode tail -n 1 /home/clawcode/.clawcode/manager/sync.jsonl \
+     | jq '{ts: .timestamp, status, reason}'
+   # Expected: status="paused",
+   #           reason="authoritative-is-clawcode-no-reverse-opt-in"
+   ```
+
+4. **Verify the OpenClaw workspace is now frozen**: touch a file on the
+   OpenClaw side and confirm it does NOT propagate to clawdy:
+
+   ```bash
+   sudo -u clawcode ssh openclaw-sync \
+     'touch ~/.openclaw/workspace-finmentum/CUTOVER-FROZEN-TEST.md'
+   sleep 600  # wait ~10 minutes for 2 timer ticks
+   sudo -u clawcode ls /home/clawcode/.clawcode/agents/finmentum/ \
+     | grep -c CUTOVER-FROZEN-TEST.md
+   # Expected: 0 (the file is NOT mirrored because sync is paused)
+
+   # Clean up:
+   sudo -u clawcode ssh openclaw-sync \
+     'rm -f ~/.openclaw/workspace-finmentum/CUTOVER-FROZEN-TEST.md'
+   ```
+
+5. **(Optional) Opt into reverse sync** — ClawCode→OpenClaw mirroring so
+   the OpenClaw workspace stays warm as a rollback target. D-18 says
+   this is operator-opt-in:
+
+   ```bash
+   sudo -u clawcode /opt/clawcode/dist/cli/index.js sync start --reverse
+   # Creates sentinel flag at ~/.clawcode/manager/reverse-sync-enabled.flag
+   # Next timer tick will start running ClawCode→OpenClaw rsync.
+   ```
+
+   To disable reverse sync later:
+
+   ```bash
+   sudo -u clawcode /opt/clawcode/dist/cli/index.js sync stop
+   ```
+
+**Day-0 post-flip checklist:**
+
+- [ ] `/clawcode-sync-status` in admin-clawdy reports
+      `authoritativeSide: clawcode`.
+- [ ] Next scheduled cycle logs `status: paused` (or `status: synced` if
+      reverse sync was enabled in step 5).
+- [ ] Operator runs `clawcode sync status | jq '.conflictCount'` →
+      expected `0`.
+
+**Failure modes:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `--confirm-cutover` refuses with "Drain produced conflicts" | One or more files diverged during the drain | Resolve with `clawcode sync resolve <path> --side openclaw` (or `clawcode`); re-run |
+| `--confirm-cutover` aborts with "already authoritativeSide=clawcode" | Flip already happened | Verify with step 2; if this is a re-run, skip this section |
+| Flag flipped but step 3 shows cycles still syncing | Reverse sync was already enabled before flip | `sudo -u clawcode ls /home/clawcode/.clawcode/manager/reverse-sync-enabled.flag` — if present, this is expected |
+
+### D. 7-Day Rollback Window Checklist
+
+For 7 days post-cutover, the OpenClaw workspace remains frozen as a
+rollback target. This is the window where `clawcode sync
+set-authoritative openclaw --revert-cutover` is a clean, non-destructive
+operation; after Day 7 it requires `--force-rollback` and warns about
+data loss.
+
+**Daily canary** (perform on Day 1, 3, 5, and 7):
+
+- [ ] `/clawcode-sync-status` in admin-clawdy shows
+      `authoritativeSide: clawcode`, `conflictCount: 0`, last cycle
+      `status: paused` (or `synced` if reverse sync is on).
+- [ ] Spot-check a live session flow — ask fin-acquisition via Discord a
+      question about a recent client, verify the answer cites content
+      from a recent `memory/YYYY-MM-DD-*.md` file.
+- [ ] Check uploads growth (new Discord attachments Ramy drops in):
+
+  ```bash
+  du -sh /home/clawcode/.clawcode/agents/finmentum/uploads/discord
+  ```
+
+- [ ] Spot-check journal for repeated errors:
+
+  ```bash
+  sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+    journalctl --user -u clawcode-sync.service -n 50 --since "24 hours ago" \
+    | grep -Ei 'error|warn' | head -20
+  ```
+
+- [ ] If reverse sync is enabled (per Section C step 5), verify the
+      OpenClaw-side reflection of a recent ClawCode edit:
+
+  ```bash
+  # On ClawCode side — touch a known-safe file:
+  sudo -u clawcode touch /home/clawcode/.clawcode/agents/finmentum/memory/rollback-canary.md
+
+  # Wait one 5-minute timer tick + a bit:
+  sleep 360
+
+  # Verify reflection on OpenClaw:
+  sudo -u clawcode ssh openclaw-sync \
+    'ls ~/.openclaw/workspace-finmentum/memory/rollback-canary.md'
+  # Expected: the file exists on OpenClaw side.
+
+  # Clean up:
+  rm /home/clawcode/.clawcode/agents/finmentum/memory/rollback-canary.md
+  ```
+
+**If rollback needed within 7 days** (something is broken on ClawCode
+side and OpenClaw needs authority back):
+
+```bash
+# 1. Revert the sync cutover flag:
+sudo -u clawcode /opt/clawcode/dist/cli/index.js sync set-authoritative openclaw --revert-cutover
+# Internals:
+#   - Validates current authoritativeSide=clawcode.
+#   - Validates < 7 days since the cutover timestamp.
+#   - Prints an advisory about stopping reverse sync first (does NOT
+#     auto-stop it — operator decides; see D-19 in 91-CONTEXT.md).
+#   - Atomically writes authoritativeSide=openclaw.
+
+# 2. Stop reverse sync if it was enabled:
+sudo -u clawcode /opt/clawcode/dist/cli/index.js sync stop
+
+# 3. Re-arm the forward (OpenClaw→ClawCode) timer — already enabled; the
+#    next tick will detect authoritativeSide=openclaw and resume real
+#    sync cycles. No action needed.
+
+# 4. Flip the OpenClaw Discord channel binding back (refer to
+#    Section "OpenClaw Channel Config Flip" above — reverse the jq
+#    edit so OpenClaw owns the channel again).
+```
+
+**Day-7 finalize prompt** — after 7 days, close the book on the OpenClaw
+side:
+
+```bash
+sudo -u clawcode /opt/clawcode/dist/cli/index.js sync finalize
+# Internals:
+#   - If <7 days elapsed: rejected with "X days remain in rollback window"
+#     (unless --force is passed — operator escape hatch).
+#   - If >=7 days: prompts "7-day rollback window closed. Print the
+#     manual archive command? (y/N)"
+#   - On 'y': prints the exact ssh command to archive the frozen
+#     OpenClaw mirror — NEVER auto-deletes. Operator reviews then runs
+#     the command by hand.
+#   - Example printed command:
+#       ssh openclaw-sync 'mv ~/.openclaw/workspace-finmentum \
+#           ~/.openclaw/workspace-finmentum.archived-YYYYMMDD'
+```
+
+**After Day 7 — rollback still possible with `--force-rollback`**:
+
+```bash
+sudo -u clawcode /opt/clawcode/dist/cli/index.js sync set-authoritative openclaw --force-rollback
+# Use ONLY if something is broken on ClawCode side AND the 7-day window
+# has expired. Expect data loss for ClawCode-side edits since cutover
+# that never reached OpenClaw (because reverse sync was off, or because
+# the operator disabled it partway through the window).
+```
+
+**Failure modes:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `--revert-cutover` rejected with "X days remain" | Attempt was within the window but clock skew or cutover timestamp confusion | Verify with `jq .cutoverStartedAt sync-state.json`; if genuinely within window, re-try |
+| `--revert-cutover` rejected with "7-day window expired" | More than 7 days elapsed | Use `--force-rollback` (accepts data loss) |
+| `sync finalize` prompts but the printed command fails | OpenClaw-side permissions / path changed | Run the command as root on OpenClaw: `sudo mv ...` |
+
+### E. Operator-Observable Logs & Common Failure Modes
+
+**Log locations** — where to look for what:
+
+| What | Where |
+|------|-------|
+| Per-cycle structured summary | `/home/clawcode/.clawcode/manager/sync.jsonl` |
+| Current sync state snapshot | `/home/clawcode/.clawcode/manager/sync-state.json` |
+| Conversation-translator cursor | `/home/clawcode/.clawcode/manager/conversation-translator-cursor.json` |
+| Reverse-sync opt-in flag | `/home/clawcode/.clawcode/manager/reverse-sync-enabled.flag` (present = enabled) |
+| Sync service journal | `sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) journalctl --user -u clawcode-sync.service` |
+| Translator service journal | `sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) journalctl --user -u clawcode-translator.service` |
+| Discord status surface | `/clawcode-sync-status` in admin-clawdy (channel `1494117043367186474`) |
+| Conflict alerts | Bot-direct embeds in admin-clawdy (Phase 90.1 pattern) |
+| rsync filter spec | `/opt/clawcode/scripts/sync/clawcode-sync-filter.txt` (17 include + 21 exclude rules; pinned by the SYNC-10 regression test) |
+
+**Quick health check** (one-liner — paste into a shell on clawdy as the
+clawcode user):
+
+```bash
+sudo -u clawcode jq -c 'select(.timestamp > (now - 3600 | todate)) \
+    | {ts: .timestamp, status, conflicts: (.conflicts // [] | length), \
+       filesUpdated, bytes: .bytesTransferred}' \
+  /home/clawcode/.clawcode/manager/sync.jsonl \
+  | tail -20
+```
+
+Expected shape — one line per cycle in the last hour, each with a
+status, conflict count, files touched, and bytes transferred.
+
+**Common failure modes:**
+
+| Symptom | Likely cause | Remediation |
+|---------|--------------|-------------|
+| `sync.jsonl` status=`failed-ssh` | Tailscale down / OpenClaw host unreachable | `sudo -u clawcode ssh openclaw-sync hostname` — if fails, `sudo tailscale status` on both ends |
+| Cycles stuck at `failed-rsync` exitCode=23 | Partial transfer / permission issue on destination | `sudo -u clawcode ls -la /home/clawcode/.clawcode/agents/finmentum/` — verify clawcode owns everything; fix with `sudo chown -R clawcode:clawcode ...` |
+| admin-clawdy spammed with conflict alerts | Operator edited both sides — expected during the cutover transition | Review conflicts with `clawcode sync status | jq .conflicts`; resolve with `clawcode sync resolve <path> --side openclaw` (or `clawcode`) one at a time |
+| Translator cursor missing / corrupt | First run OR prior crash | Delete `conversation-translator-cursor.json`; translator starts from line 0 next hourly cycle — idempotent via Phase 80 `origin_id UNIQUE` constraint |
+| `/clawcode-sync-status` command times out in Discord | Daemon not running or IPC socket missing | `sudo systemctl --user status clawcode` (on clawdy); restart with `sudo systemctl --user restart clawcode` |
+| Unit file changed but `systemctl --user` still shows old config | Forgot `daemon-reload` after editing | `sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) systemctl --user daemon-reload` |
+| `list-timers` shows the right services but they never fire | Lingering not enabled | Re-run Section B step 3 (`loginctl enable-linger clawcode`) |
+
+**Emergency pause** — stop sync entirely without flipping authority (e.g.
+during OpenClaw maintenance window):
+
+```bash
+sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+  systemctl --user stop clawcode-sync.timer clawcode-translator.timer
+```
+
+Resume when maintenance is done:
+
+```bash
+sudo -u clawcode XDG_RUNTIME_DIR=/run/user/$(id -u clawcode) \
+  systemctl --user start clawcode-sync.timer clawcode-translator.timer
+```
+
+**Manual one-off cycle** (operator wants to force-sync NOW, not wait for
+the 5-minute timer):
+
+```bash
+sudo -u clawcode /opt/clawcode/dist/cli/index.js sync run-once
+# Exits 0 on synced/skipped/partial/paused.
+# Exits 1 on failed-ssh/failed-rsync/throw.
+# Appends one line to sync.jsonl either way.
+```
+
+**Reading the filter spec** — the exclude list (`*.sqlite`,
+`sessions/**`, `.git`, editor snapshots, etc.) is pinned in
+`scripts/sync/clawcode-sync-filter.txt` AND asserted by
+`src/sync/__tests__/exclude-filter-regression.test.ts`. Do NOT edit the
+filter file without reading the regression test — removing an exclude
+there will leak `.sqlite` files or session jsonl onto the destination
+and CI will catch it.
+
+---
+
+*Phase 91 sections added by Plan 06 (SYNC-10). Runbook is now a live
+operator document; Phase 91 sync work is complete on Day-7 after
+operator runs `clawcode sync finalize`.*
