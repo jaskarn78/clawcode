@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 90-03-PLAN.md (MemoryFlushTimer + cue detection + subagent capture MEM-04/05/06)
-last_updated: "2026-04-24T02:46:54.360Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 90-07-PLAN.md (fin-acquisition pre-cutover wiring WIRE-01..07)
+last_updated: "2026-04-24T03:12:28.291Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -162,6 +162,11 @@ Recent decisions affecting current work:
 - [Phase 90]: [Phase 90 Plan 03]: discordReact signature is ({channelId, messageId}, emoji) not (messageId, emoji) — discord.js requires channel.messages.fetch first; channelId threaded through DispatchOptions
 - [Phase 90]: [Phase 90 Plan 03]: Fourth fire-and-forget canary application (after 83/86/87/89); cue write + Discord reaction + subagent capture ALL use void fn().catch(log.warn)
 - [Phase 90]: [Phase 90 Plan 03]: atomicWriteFile exported from memory-flush.ts and reused by memory-cue.ts + subagent-capture.ts — one implementation, one unlink-on-rename-fail discipline, one nanoid-suffixed tmp path
+- [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — fourth atomic YAML writer (updateAgentConfig) generalizes updateAgentModel+Skills+McpServers to a Partial<AgentConfig> patcher with schema-validated merge + recursive literal secret scan + JSON-stable idempotency
+- [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — agentSchema.heartbeat extended z.boolean() → z.union([z.boolean(), {enabled?, every?, model?, prompt?}]) to support OpenClaw-style 50m heartbeat shape for fin-acquisition; v2.1 migrated fleet parses unchanged
+- [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — fin-acquisition channel binding INTENTIONALLY unchanged; operator-initiated OpenClaw→ClawCode cutover documented in .planning/migrations/fin-acquisition-cutover.md (9 sections, operator-executable)
+- [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — HEARTBEAT.md content (1622 bytes) read verbatim from ~/.openclaw/workspace-finmentum/HEARTBEAT.md at apply time; AUTO-RESET: DISABLED directive + zone thresholds + snapshot template preserved byte-for-byte
+- [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — verifyAgentWebhookIdentity uses pre-check-then-delegate pattern (peek fetchWebhooks before provisionWebhooks delegate) so return shape distinguishes verified vs provisioned; daemon-boot probe fire-and-forget
 
 ### v2.1 closing decisions (for reference)
 
@@ -248,9 +253,10 @@ Recent decisions affecting current work:
 | Phase 90 P02 | 25min | 2 (TDD) tasks | 34 files |
 | Phase 90 P06 | 12m 23s | 2 tasks | 13 files |
 | Phase 90 P03 | 20min | 2 tasks | 36 files |
+| Phase 90 P07 | 17min 55s | 2 (TDD) tasks | 13 files files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-03-PLAN.md (MemoryFlushTimer + cue detection + subagent capture MEM-04/05/06)
+Stopped at: Completed 90-07-PLAN.md (fin-acquisition pre-cutover wiring WIRE-01..07)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
