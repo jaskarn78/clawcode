@@ -187,8 +187,8 @@ Phase 90 delivered: ClawHub Marketplace extension (/clawcode-skills-browse union
   8. Post-cutover, rsync from ClawCode → OpenClaw preserves OpenClaw's workspace as rollback target; 7-day dual-mode period allows revert via `clawcode sync set-authoritative openclaw --revert-cutover`
   9. Sync runner degrades gracefully — if remote SSH fails (host unreachable), runner logs warning + skips cycle, does not block; next scheduled cycle retries
   10. Excluded paths verified: no .sqlite, no sessions/*.jsonl, no credential files, no .git appear on destination; regression test pins the exclude filter
-**Plans:** 6 plans (planned 2026-04-24)
-- [ ] 91-01-PLAN.md — Sync runner (rsync over SSH) + sync-state.json atomic writer + rsync include/exclude filter + systemd 5-min timer + JSONL observability (SYNC-01, SYNC-02, SYNC-05, SYNC-07)
+**Plans:** 1/6 plans executed
+- [x] 91-01-PLAN.md — Sync runner (rsync over SSH) + sync-state.json atomic writer + rsync include/exclude filter + systemd 5-min timer + JSONL observability (SYNC-01, SYNC-02, SYNC-05, SYNC-07)
 - [ ] 91-02-PLAN.md — Conflict detection (sha256 pre-sync compare, per-file skip) + admin-clawdy bot-direct alert embed (SYNC-06)
 - [ ] 91-03-PLAN.md — Conversation-turn translator (OpenClaw sessions/*.jsonl → ConversationStore via origin_id idempotency) + hourly systemd timer (SYNC-04)
 - [ ] 91-04-PLAN.md — `clawcode sync *` CLI subcommands (status, run-once, resolve, set-authoritative, reverse start/stop, finalize, translate-sessions) with drain-then-flip + 7-day rollback gate (SYNC-09, SYNC-10)

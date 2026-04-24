@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: v2.3 milestone complete
-stopped_at: Completed 90-07-PLAN.md (fin-acquisition pre-cutover wiring WIRE-01..07)
-last_updated: "2026-04-24T03:17:40.776Z"
+status: Ready to execute
+stopped_at: Completed 91-01-PLAN.md (sync runner core SYNC-01/02/05/07)
+last_updated: "2026-04-24T19:46:15.839Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
-  completed_phases: 1
-  total_plans: 7
-  completed_plans: 7
+  completed_phases: 0
+  total_plans: 6
+  completed_plans: 1
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.4 OpenClaw ↔ ClawCode Continuous Sync — Phase 91 (fin-acquisition workspace sync) added 2026-04-24, awaiting planning.
+**Current focus:** Phase 91 — OpenClaw ↔ ClawCode fin-acquisition Workspace Sync
 
 ## Current Position
 
-Phase: 91
-Plan: Not started
+Phase: 91 (OpenClaw ↔ ClawCode fin-acquisition Workspace Sync) — EXECUTING
+Plan: 2 of 6
 
 ## Performance Metrics
 
@@ -167,6 +167,10 @@ Recent decisions affecting current work:
 - [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — fin-acquisition channel binding INTENTIONALLY unchanged; operator-initiated OpenClaw→ClawCode cutover documented in .planning/migrations/fin-acquisition-cutover.md (9 sections, operator-executable)
 - [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — HEARTBEAT.md content (1622 bytes) read verbatim from ~/.openclaw/workspace-finmentum/HEARTBEAT.md at apply time; AUTO-RESET: DISABLED directive + zone thresholds + snapshot template preserved byte-for-byte
 - [Phase 90-clawhub-marketplace-fin-acquisition-memory-prep]: Plan 90-07 — verifyAgentWebhookIdentity uses pre-check-then-delegate pattern (peek fetchWebhooks before provisionWebhooks delegate) so return shape distinguishes verified vs provisioned; daemon-boot probe fire-and-forget
+- [Phase 91]: Plan 91-01 — sync-runner uses node:child_process.execFile (not execa — not in package.json); matches marketplace/clawhub-client.ts pattern. Zero new npm deps preserved (v2.2 discipline extended to v2.4).
+- [Phase 91]: Plan 91-01 — SuccessExitStatus=1 in systemd service so graceful-SSH-fail + flock-skip exits don't pollute journalctl; real bugs (exit 2+) still surface.
+- [Phase 91]: Plan 91-01 — Regression guard in syncOnce throws if .sqlite/sessions/ paths leak into rsync touchedPaths; fail loud, not silent data leak. Filter file pins 13 exclude patterns as first defense.
+- [Phase 91]: Plan 91-01 — DEFAULT_SYNC_JSONL_PATH exported alongside DEFAULT_SYNC_STATE_PATH so Plan 91-05 imports canonical path instead of re-deriving homedir join.
 
 ### v2.1 closing decisions (for reference)
 
@@ -256,9 +260,10 @@ Recent decisions affecting current work:
 | Phase 90 P06 | 12m 23s | 2 tasks | 13 files |
 | Phase 90 P03 | 20min | 2 tasks | 36 files |
 | Phase 90 P07 | 17min 55s | 2 (TDD) tasks | 13 files files |
+| Phase 91 P01 | 7min 25s | 2 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-07-PLAN.md (fin-acquisition pre-cutover wiring WIRE-01..07)
+Stopped at: Completed 91-01-PLAN.md (sync runner core SYNC-01/02/05/07)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
