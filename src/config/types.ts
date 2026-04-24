@@ -69,6 +69,12 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "defaults.greetOnRestart",
   "agents.*.greetCoolDownMs",
   "defaults.greetCoolDownMs",
+  // Phase 90 MEM-01 — Next session boot picks up a YAML edit. MEMORY.md
+  // content itself is re-read at every session boot (mtime naturally
+  // busts the stable-prefix cache); the schema flag gates the read.
+  "agents.*.memoryAutoLoad",
+  "defaults.memoryAutoLoad",
+  "agents.*.memoryAutoLoadPath",
 ]);
 
 /**

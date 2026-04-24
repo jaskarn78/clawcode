@@ -31,6 +31,18 @@ export const effortSchema = z.enum([
 export type EffortLevel = z.infer<typeof effortSchema>;
 
 /**
+ * Phase 90 MEM-01 D-17 — 50KB hard cap on MEMORY.md auto-load.
+ *
+ * ~12.5K tokens — comfortable in Sonnet stable-prefix budget. Larger files
+ * are truncated with a marker at injection time (session-config.ts); a
+ * future MEM-02 phase chunks the rest into memory_chunks for retrieval.
+ *
+ * Exported so session-config.ts can enforce the cap without re-defining
+ * the constant and to keep the regression-pin grep target stable.
+ */
+export const MEMORY_AUTOLOAD_MAX_BYTES = 50 * 1024;
+
+/**
  * Canonical latency segment names — mirrored from src/performance/types.ts
  * `CANONICAL_SEGMENTS`. Kept inline (not imported) to avoid a config -> performance
  * dependency cycle and to keep schema parsing self-contained.
@@ -700,6 +712,17 @@ export const agentSchema = z.object({
   // Phase 89 GREET-10 — per-agent override for in-memory cool-down window (ms).
   // Additive + optional; resolver falls back to defaults.greetCoolDownMs.
   greetCoolDownMs: z.number().int().positive().optional(),
+  // Phase 90 MEM-01 — Auto-load workspace MEMORY.md into the v1.7
+  // stable prefix at session boot (AFTER IDENTITY, BEFORE MCP status).
+  // Additive + optional: v2.1 migrated configs parse unchanged; loader
+  // resolver fills from defaults.memoryAutoLoad when omitted. Reloadable
+  // per D-18 — next session boot picks up a YAML edit. 50KB hard cap
+  // enforced downstream in session-config.ts (MEMORY_AUTOLOAD_MAX_BYTES).
+  memoryAutoLoad: z.boolean().optional(),
+  // Phase 90 MEM-01 — Override default MEMORY.md path (absolute or ~/...).
+  // When unset, session-config.ts reads `{workspace}/MEMORY.md`. Raw
+  // string here; expansion via expandHome() happens in loader.ts.
+  memoryAutoLoadPath: z.string().min(1).optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -770,6 +793,9 @@ export const defaultsSchema = z.object({
   // Phase 89 GREET-10 — fleet-wide default for the cool-down window (ms).
   // 300_000 ms = 5 minutes per D-14.
   greetCoolDownMs: z.number().int().positive().default(300_000),
+  // Phase 90 MEM-01 — Fleet-wide default: true (every agent auto-loads
+  // its workspace MEMORY.md unless explicitly opted out). D-17 + D-18.
+  memoryAutoLoad: z.boolean().default(true),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -781,14 +807,48 @@ export const defaultsSchema = z.object({
   // Additive + optional: v2.1/v2.2 migrated configs parse unchanged when
   // omitted; Plan 02 resolver emits a concrete [] for downstream catalog
   // loaders. `path.min(1)` rejects empty strings at parse time.
+  // Phase 90 Plan 04 HUB-01 — marketplace sources now accepts a union of
+  // (legacy path-based) and (ClawHub registry) entries. The legacy branch
+  // matches the pre-Phase-90 shape byte-for-byte so v2.1/v2.2 migrated
+  // configs parse unchanged (regression pin: clawhub-schema.test.ts
+  // HUB-SCH-2a). The ClawHub branch carries a full HTTPS baseUrl,
+  // optional authToken (op://... ref or literal), and optional per-source
+  // cacheTtlMs override. When cacheTtlMs is absent, the daemon-wide
+  // `clawhubCacheTtlMs` default below applies.
   marketplaceSources: z
     .array(
-      z.object({
-        path: z.string().min(1),
-        label: z.string().optional(),
-      }),
+      z.union([
+        // Legacy / v2.2 path-based entry — read-only filesystem source
+        // (typically ~/.openclaw/skills). Expanded via expandHome in
+        // loader.ts.
+        z.object({
+          path: z.string().min(1),
+          label: z.string().optional(),
+        }),
+        // Phase 90 HUB-01 — ClawHub registry source. baseUrl points at the
+        // root (e.g. https://clawhub.ai); the HTTP client appends
+        // /api/v1/skills?... paths. authToken can be literal or op://ref;
+        // Plan 90-06 adds the interactive GitHub-OAuth flow that populates
+        // it. cacheTtlMs overrides the fleet-wide default for this one
+        // source (D-05).
+        z.object({
+          kind: z.literal("clawhub"),
+          baseUrl: z.string().url(),
+          authToken: z.string().min(1).optional(),
+          cacheTtlMs: z.number().int().positive().optional(),
+        }),
+      ]),
     )
     .optional(),
+  // Phase 90 Plan 04 HUB-01 — ClawHub registry base URL used when an
+  // agent invokes /clawcode-skills-browse without an explicit
+  // marketplaceSources[kind:"clawhub"] entry. Default mirrors the D-01
+  // decision (confirmed via probe 2026-04-24).
+  clawhubBaseUrl: z.string().url().default("https://clawhub.ai"),
+  // Phase 90 Plan 04 HUB-08 — In-memory cache TTL for ClawHub registry
+  // responses, keyed by {endpoint, query, cursor}. Default 10 min per
+  // D-05. Per-source overrides via marketplaceSources[].cacheTtlMs.
+  clawhubCacheTtlMs: z.number().int().positive().default(600_000),
   memory: memorySchema.default(() => ({
     compactionThreshold: 0.75,
     searchTopK: 10,
@@ -956,6 +1016,12 @@ export const configSchema = z.object({
     // zod-populated values in defaultsSchema above.
     greetOnRestart: true,
     greetCoolDownMs: 300_000,
+    // Phase 90 MEM-01 — fleet-wide default mirrors the zod-populated value.
+    memoryAutoLoad: true,
+    // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
+    // mirroring the zod-populated values in defaultsSchema above.
+    clawhubBaseUrl: "https://clawhub.ai",
+    clawhubCacheTtlMs: 600_000,
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",

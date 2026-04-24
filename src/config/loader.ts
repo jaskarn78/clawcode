@@ -8,6 +8,7 @@ import { ConfigFileNotFoundError, ConfigValidationError } from "../shared/errors
 import type { Config, AgentConfig, DefaultsConfig, McpServerSchemaConfig } from "./schema.js";
 import type {
   ResolvedAgentConfig,
+  ResolvedMarketplaceSource,
   ResolvedMarketplaceSources,
 } from "../shared/types.js";
 
@@ -300,6 +301,21 @@ export function resolveAgentConfig(
     // default), so the falsy-free `??` fallback is safe.
     greetOnRestart: agent.greetOnRestart ?? defaults.greetOnRestart,
     greetCoolDownMs: agent.greetCoolDownMs ?? defaults.greetCoolDownMs,
+    // Phase 90 MEM-01 — agent-level memoryAutoLoad beats defaults.memoryAutoLoad;
+    // undefined falls back to defaults (zod default = true). Cannot use `??`
+    // here: `false ?? true` would (correctly) yield false, but `undefined ??
+    // true` yields true — keep explicit check for readability and symmetry
+    // with the greetOnRestart pattern above.
+    memoryAutoLoad:
+      agent.memoryAutoLoad !== undefined
+        ? agent.memoryAutoLoad
+        : defaults.memoryAutoLoad,
+    // Phase 90 MEM-01 — memoryAutoLoadPath is NOT in defaults (per-agent only).
+    // Expanded via expandHome when set (handles ~/... paths); undefined when
+    // unset so session-config.ts falls back to `{workspace}/MEMORY.md`.
+    memoryAutoLoadPath: agent.memoryAutoLoadPath
+      ? expandHome(agent.memoryAutoLoadPath)
+      : undefined,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,
@@ -379,26 +395,47 @@ export function resolveAllAgents(
 }
 
 /**
- * Phase 88 MKT-02 — expand `defaults.marketplaceSources` into absolute
- * filesystem paths. Pure helper: caller controls when to invoke (typically
- * once per daemon boot, or lazily in the Plan 02 /clawcode-skills-browse
- * handler). Missing / undefined field yields `[]`; explicit `[]` yields
- * `[]`. `~/...` entries are expanded via the existing `expandHome` pattern
- * used for basePath/skillsPath. Keeps `ResolvedAgentConfig` shape unchanged
- * (no per-agent cardinality bloat for a fleet-wide list).
+ * Phase 88 MKT-02 + Phase 90 Plan 04 HUB-01 — expand
+ * `defaults.marketplaceSources` into a discriminated union of
+ * `ResolvedMarketplaceSource` entries. Pure helper: caller controls when
+ * to invoke (typically once per daemon boot, or lazily in the
+ * /clawcode-skills-browse handler). Missing / undefined field yields `[]`;
+ * explicit `[]` yields `[]`.
+ *
+ * Legacy entries (path-based, v2.2 shape) get `kind: "legacy"` with `~/...`
+ * paths expanded via `expandHome`. ClawHub entries (Phase 90) pass through
+ * as `kind: "clawhub"` with baseUrl/authToken/cacheTtlMs verbatim — no
+ * filesystem expansion needed (the path portion is a URL, not a home-
+ * relative path).
  */
 export function resolveMarketplaceSources(
   config: Config,
 ): ResolvedMarketplaceSources {
   const raw = config.defaults.marketplaceSources;
   if (!raw || raw.length === 0) return [];
-  return raw.map((src) =>
-    Object.freeze(
-      src.label !== undefined
-        ? { path: expandHome(src.path), label: src.label }
-        : { path: expandHome(src.path) },
-    ),
-  );
+  return raw.map((src): ResolvedMarketplaceSource => {
+    // Discriminate on presence of `kind` — the legacy variant omits the
+    // discriminator (v2.2 shape is backward-compatible by design).
+    if ("kind" in src && src.kind === "clawhub") {
+      const clawhub: ResolvedMarketplaceSource = {
+        kind: "clawhub",
+        baseUrl: src.baseUrl,
+        ...(src.authToken !== undefined ? { authToken: src.authToken } : {}),
+        ...(src.cacheTtlMs !== undefined ? { cacheTtlMs: src.cacheTtlMs } : {}),
+      };
+      return Object.freeze(clawhub);
+    }
+    // Legacy branch — v2.2-compatible path entry. Cast-narrow via a
+    // positive type check because the zod union omits the discriminator
+    // on the legacy variant; `!("kind" in src)` is semantically correct
+    // but TS narrowing on "absent key" is weaker than on present key.
+    const legacyRaw = src as { path: string; label?: string };
+    const legacy: ResolvedMarketplaceSource =
+      legacyRaw.label !== undefined
+        ? { kind: "legacy", path: expandHome(legacyRaw.path), label: legacyRaw.label }
+        : { kind: "legacy", path: expandHome(legacyRaw.path) };
+    return Object.freeze(legacy);
+  });
 }
 
 /**

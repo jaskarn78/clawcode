@@ -15,6 +15,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       // Phase 89 GREET-07/10 — defaults carry the zod-populated values.
       greetOnRestart: true,
       greetCoolDownMs: 300_000,
+      // Phase 90 MEM-01 — defaults carry the zod-populated value.
+      memoryAutoLoad: true,
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",

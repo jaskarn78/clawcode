@@ -37,6 +37,21 @@ export type ResolvedAgentConfig = {
    * Phase 89 GREET-10 — ALWAYS populated by loader.ts. Milliseconds.
    */
   readonly greetCoolDownMs: number;
+  /**
+   * Phase 90 MEM-01 — ALWAYS populated by loader.ts from
+   * agent.memoryAutoLoad ?? defaults.memoryAutoLoad. Downstream
+   * (session-config.ts MEMORY.md injection) reads unconditionally.
+   * When false, the MEMORY.md block is omitted from the stable prefix.
+   */
+  readonly memoryAutoLoad: boolean;
+  /**
+   * Phase 90 MEM-01 — Optional absolute path override for MEMORY.md.
+   * When set (expanded via expandHome in loader.ts), session-config.ts
+   * reads from this path instead of `{workspace}/MEMORY.md`. Undefined
+   * when the agent did not declare an override — the workspace-relative
+   * default path wins.
+   */
+  readonly memoryAutoLoadPath?: string;
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;
@@ -241,16 +256,30 @@ export type ResolvedAgentConfig = {
 };
 
 /**
- * Phase 88 MKT-02 — resolved marketplace source entry (post-expandHome).
+ * Phase 88 MKT-02 + Phase 90 Plan 04 HUB-01 — resolved marketplace source
+ * entry (post-expandHome). Discriminated union covering both legacy
+ * filesystem sources and ClawHub registry sources.
  *
- * Mirrors the raw `MarketplaceSourceConfig` shape but every `path` is an
- * absolute filesystem path ready to hand to `loadMarketplaceCatalog`.
- * `label` passes through unchanged.
+ * Legacy branch: `kind: "legacy"` — path already expandHome'd. Mirrors the
+ * Phase 88 shape (label optional) and is produced from the raw path-only
+ * zod variant of marketplaceSources.
+ *
+ * ClawHub branch: `kind: "clawhub"` — baseUrl + optional authToken/
+ * cacheTtlMs pass through verbatim. `authToken` may be a literal or an
+ * `op://` reference; downstream consumers decide whether to resolve it.
  */
-export type ResolvedMarketplaceSource = Readonly<{
-  path: string;
-  label?: string;
-}>;
+export type ResolvedMarketplaceSource =
+  | Readonly<{
+      kind: "legacy";
+      path: string;
+      label?: string;
+    }>
+  | Readonly<{
+      kind: "clawhub";
+      baseUrl: string;
+      authToken?: string;
+      cacheTtlMs?: number;
+    }>;
 
 export type ResolvedMarketplaceSources = readonly ResolvedMarketplaceSource[];
 

@@ -67,6 +67,7 @@ function makeConfig(
     allowedModels: ["haiku", "sonnet", "opus"],
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
+    memoryAutoLoad: true, // Phase 90 MEM-01
     skills: [],
     soul: undefined,
     identity: undefined,
