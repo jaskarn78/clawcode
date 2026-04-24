@@ -17,6 +17,7 @@
 - :white_check_mark: **v2.2 OpenClaw Parity & Polish** - Phases 83-89 (shipped 2026-04-23)
 - :white_check_mark: **v2.3 Marketplace & Memory Activation** - Phase 90 (shipped 2026-04-24)
 - :white_check_mark: **v2.4 OpenClaw ↔ ClawCode Continuous Sync** - Phase 91 (shipped 2026-04-24)
+- :hammer: **v2.5 Cutover Parity Verification** - Phase 92 (opened 2026-04-24)
 
 ## Phases
 
@@ -183,7 +184,7 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 
 ## Progress
 
-**Status:** v2.4 OpenClaw ↔ ClawCode Continuous Sync shipped 2026-04-24 — Phase 91 only (fin-acquisition workspace sync). 10 SYNC-01..10 reqs across 6 plans, 3 waves, 166/166 sync tests green. Zero new npm deps. Ready for next milestone.
+**Status:** v2.5 Cutover Parity Verification opened 2026-04-24 — Phase 92 (fin-acquisition cutover parity verifier) awaiting `/gsd:plan-phase 92` decomposition. Blocks Phase 91 `set-authoritative clawcode --confirm-cutover` until cutover-ready: true report lands.
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -202,6 +203,27 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 | v2.2 | 83-89 | Complete | 2026-04-23 |
 | v2.3 | 90 | Complete | 2026-04-24 |
 | v2.4 | 91 | Complete | 2026-04-24 |
+| v2.5 | 92 | Opened | 2026-04-24 |
+
+### Phase 92: OpenClaw → ClawCode fin-acquisition Cutover Parity Verifier
+
+**Goal:** Before the operator flips `sync.authoritative` to clawcode, run an automated parity check that proves the ClawCode fin-acquisition agent can handle every task the OpenClaw source agent has historically handled — tool use, skill invocation, MCP access, memory recall, uploads — via both entry points (Discord bot + /v1/chat/completions API). Emits gap report, auto-applies additive-reversible fixes, gates destructive mutations behind admin-clawdy confirmation, and sets `cutover-ready: true` as a hard precondition for Phase 91 set-authoritative.
+
+**Requirements:** CUT-01..CUT-10 (Discord-history ingestor → source profiler → target probe → diff engine → additive auto-fix → destructive propose-and-confirm → dry-run default → dual-entry canary → cutover-ready gate → set-authoritative precondition)
+
+**Depends on:** Phase 91 (sync direction + set-authoritative command), Phase 90 (memory-scanner for indexing proposed files), Phase 86 (updateAgentModel/Skills/McpServers atomic writers), Phase 85 (list-mcp-status IPC), Phase 80 (memory-translator origin_id idempotency)
+
+**Plans:** 6 plans (decomposed via /gsd:plan-phase 92 on 2026-04-24)
+- [ ] 92-01-PLAN.md — Discord history ingestor + source-agent profiler (CUT-01, CUT-02) — Wave 1
+- [ ] 92-02-PLAN.md — Target capability probe + diff engine with typed CutoverGap union (CUT-03, CUT-04) — Wave 1
+- [ ] 92-03-PLAN.md — Additive fix auto-applier + ledger (CUT-05) — Wave 2 (depends on 92-02)
+- [ ] 92-04-PLAN.md — Destructive-fix admin-clawdy embed flow (CUT-06, CUT-07) — Wave 2 (depends on 92-02; checkpoint task)
+- [ ] 92-05-PLAN.md — Dual-entry canary runner (CUT-08) — Wave 3 (depends on 92-01, 92-03)
+- [ ] 92-06-PLAN.md — Cutover-ready gate + set-authoritative precondition (CUT-09, CUT-10) — Wave 3 (depends on 92-01..05)
+
+**UI hint:** yes — admin-clawdy ephemeral embed with Accept/Reject/Defer buttons (Phase 86-03 ButtonBuilder pattern); cutover-report summary embed.
+
+**Status:** Opened 2026-04-24. Zero new npm deps planned (reuses discord.js 14.26.2 + better-sqlite3 + Claude Agent SDK per v2.2 discipline).
 
 ---
 
