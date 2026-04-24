@@ -321,14 +321,38 @@ export async function sendRestartGreeting(
   }
 
   // 5/6. Dormancy + empty-state (D-10 / D-11 / GREET-05)
+  //
+  // Phase 90.1 — iterate back through the last few terminated sessions to
+  // find one with actual turns. Without this, a restart-immediately-after-
+  // restart (common during operator testing or debugging) reads the most-
+  // recent session (0 turns) and silently skips the greeting with
+  // `skipped-empty-state`. That looks identical to a broken greeting even
+  // though the agent has plenty of history. We cap the lookback at 5 sessions
+  // to avoid pathological scans — anything older than that is effectively
+  // ancient and the dormancy rule would kick in anyway.
   const recent = deps.conversationStore.listRecentTerminatedSessions(
     agentName,
-    1,
+    5,
   );
   if (recent.length === 0) return { kind: "skipped-empty-state" };
-  const lastSession = recent[0];
-  // endedAt is always set for terminated sessions; fall back to startedAt
-  // for defensive safety against malformed data.
+
+  // Find the most-recent session that actually has turns to summarize.
+  let lastSession: ConversationSession | undefined;
+  let turns: readonly ConversationTurn[] = [];
+  for (const candidate of recent) {
+    const candidateTurns = deps.conversationStore.getTurnsForSession(
+      candidate.id,
+      maxTurnsForSummary,
+    );
+    if (candidateTurns.length > 0) {
+      lastSession = candidate;
+      turns = candidateTurns;
+      break;
+    }
+  }
+  if (!lastSession) return { kind: "skipped-empty-state" };
+
+  // Dormancy check applies to the chosen session's activity time.
   const lastActivityIso = lastSession.endedAt ?? lastSession.startedAt;
   const lastActivityMs = new Date(lastActivityIso).getTime();
   // Clock-skew clamp mirrors src/memory/conversation-brief.ts:110.
@@ -336,12 +360,6 @@ export async function sendRestartGreeting(
   if (ageMs > dormancyThresholdMs) {
     return { kind: "skipped-dormant", lastActivityMs };
   }
-
-  const turns = deps.conversationStore.getTurnsForSession(
-    lastSession.id,
-    maxTurnsForSummary,
-  );
-  if (turns.length === 0) return { kind: "skipped-empty-state" };
 
   // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
   //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
