@@ -1202,7 +1202,24 @@ export class SessionManager {
   }
 
   async restartAgent(name: string, config: ResolvedAgentConfig): Promise<void> {
-    await this.stopAgent(name);
+    // Phase 90.1 hotfix — tolerate "agent not running" at the stop step.
+    // Previously, restartAgent threw when called on a stopped agent, forcing
+    // daemon.ts IPC handler to fall back to plain startAgent() which bypasses
+    // the Phase 89 greeting. Now we log-and-continue so the greeting block
+    // at the end of this method always runs.
+    try {
+      await this.stopAgent(name);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/not running|no such session|requireSession/i.test(msg)) {
+        this.log.info(
+          { agent: name },
+          "[restart] agent was already stopped — continuing to start + greeting",
+        );
+      } else {
+        throw err;
+      }
+    }
     let registry = await readRegistry(this.registryPath);
     const prevEntry = registry.entries.find((e) => e.name === name);
     // Phase 89 GREET-03 — capture BEFORE the restartCount bump so the
