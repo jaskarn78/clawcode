@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 90-05-PLAN.md
-last_updated: "2026-04-24T02:06:07.570Z"
+stopped_at: Completed 90-02-PLAN.md (memory_chunks + hybrid RRF retrieval + TurnDispatcher pre-turn injection MEM-02/MEM-03)
+last_updated: "2026-04-24T02:12:34.234Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 7
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 90 (ClawHub Marketplace + fin-acquisition Memory Prep) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 
 ## Performance Metrics
 
@@ -147,6 +147,12 @@ Recent decisions affecting current work:
 - [Phase 90]: Third atomic YAML writer (updateAgentMcpServers) mirrors updateAgentModel + updateAgentSkills with literal secret-scan guard on env values
 - [Phase 90]: Sixth application of inline-handler-short-circuit pattern (/clawcode-plugins-browse AFTER /clawcode-skills BEFORE CONTROL_COMMANDS)
 - [Phase 90]: Two-stage Modal flow for plugin install: picker→empty-configInputs install→Modal on config-missing→retry. Single-field case is 95% of plugins (API key / password)
+- [Phase 90]: RRF k=60 + cosine top-20 + FTS top-20 as the hybrid retrieval shape (Cormack/Clarke canonical); path-weight ±0.2 applied post-fusion as additive tiebreaker
+- [Phase 90]: Mutable-suffix injection via TurnDispatcher.augmentWithMemoryContext — <memory-context source=hybrid-rrf chunks=N> wrapper prefixed to user message; stable prefix (Plan 90-01 MEMORY.md auto-load) NEVER touched so v1.7 cache stability preserved
+- [Phase 90]: Lazy-MemoryStore Proxy in daemon.ts — scanner constructed at boot but MemoryStore reference resolves on each chokidar event (after SessionManager.startAgent initMemory). Pattern now available for future daemon-boot-time-but-per-agent-resource constructors
+- [Phase 90]: chokidar 5.x glob patterns silently no-op — watch memory/ directory recursively + filter via shouldIndexMemoryPath in handlers. ready-event await in scanner.start() pins the post-init race window closed
+- [Phase 90]: Seventh application of the Phase 83/86/89 additive-optional blueprint (memoryRetrievalTopK/TokenBudget/ScannerEnabled). Pattern is now routine; each rollout strengthens the v2.x convention for extending agent config
+- [Phase 90]: Per-agent scanner (Map<string, MemoryScanner>) mirrors SessionManager per-agent resource pattern; setMemoryScanner DI shape mirrors Phase 89 setWebhookManager exactly — 5th application of post-construction DI mirror pattern
 
 ### v2.1 closing decisions (for reference)
 
@@ -230,9 +236,10 @@ Recent decisions affecting current work:
 | Phase 90 P01 | 12min | 2 tasks | 28 files |
 | Phase 90-clawhub-marketplace-fin-acquisition-memory-prep P04 | 33min 1s | 2 tasks (TDD) tasks | 10 files files |
 | Phase 90 P05 | 20min 32s | 2 tasks | 14 files |
+| Phase 90 P02 | 25min | 2 (TDD) tasks | 34 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-05-PLAN.md
+Stopped at: Completed 90-02-PLAN.md (memory_chunks + hybrid RRF retrieval + TurnDispatcher pre-turn injection MEM-02/MEM-03)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

@@ -205,7 +205,7 @@ Phases 83-89 delivered: Extended-thinking effort mapping (P0 silent no-op fix + 
   14. `.planning/migrations/fin-acquisition-cutover.md` runbook exists with pre-cutover checklist, rsync commands (513MB uploads), rollback procedure — operator-executable, not auto-run
 **Plans**: 7 plans in 4 execution waves (planned 2026-04-24)
 - [x] 90-01-PLAN.md — MEMORY.md auto-inject into v1.7 stable prefix (MEM-01) [Wave 1]
-- [ ] 90-02-PLAN.md — chokidar file-scanner + memory_chunks tables + hybrid RRF retrieval (MEM-02 + MEM-03) [Wave 2 — depends on 90-01]
+- [x] 90-02-PLAN.md — chokidar file-scanner + memory_chunks tables + hybrid RRF retrieval (MEM-02 + MEM-03) [Wave 2 — depends on 90-01]
 - [ ] 90-03-PLAN.md — periodic 15-min flush + "remember this" cue detection + subagent-output capture (MEM-04 + MEM-05 + MEM-06) [Wave 3 — depends on 90-01 + 90-02]
 - [x] 90-04-PLAN.md — ClawHub HTTP client + TTL cache + catalog union + skills install pipeline (HUB-01 + HUB-03 + HUB-06 + HUB-08) [Wave 1]
 - [x] 90-05-PLAN.md — updateAgentMcpServers atomic YAML writer + ClawHub plugins install + /clawcode-plugins-browse slash command (HUB-02 + HUB-04) [Wave 2 — depends on 90-04]
