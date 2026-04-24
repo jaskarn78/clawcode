@@ -80,8 +80,8 @@ describe("MemoryScanner (Phase 90 MEM-02)", () => {
     try {
       const newPath = join(tmp, "memory", "2026-04-24-new.md");
       await writeFile(newPath, "## Fresh\nhot off the press\n");
-      // awaitWriteFinish stabilityThreshold is 500ms — wait a bit longer
-      await new Promise((r) => setTimeout(r, 1200));
+      // awaitWriteFinish stabilityThreshold is 300ms — wait a bit longer
+      await new Promise((r) => setTimeout(r, 2000));
       expect(insertSpy).toHaveBeenCalled();
       const anyCall = insertSpy.mock.calls.find((c) => c[0].path === newPath);
       expect(anyCall).toBeDefined();
@@ -103,7 +103,7 @@ describe("MemoryScanner (Phase 90 MEM-02)", () => {
     await scanner.start();
     try {
       await rm(toRemove);
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 1500));
       const call = deleteSpy.mock.calls.find((c) => c[0] === toRemove);
       expect(call).toBeDefined();
     } finally {

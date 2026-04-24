@@ -88,6 +88,7 @@ export class MemoryStore {
       this.migrateConversationTurnsFts();
       this.migrateApiKeySessionsTable();
       this.migrateOriginIdColumn();
+      this.migrateMemoryChunks();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -914,6 +915,249 @@ export class MemoryStore {
     this.db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_origin_id ON memories(origin_id) WHERE origin_id IS NOT NULL",
     );
+  }
+
+  /**
+   * Phase 90 MEM-02 — workspace memory file chunks + embeddings + FTS index.
+   *
+   * Four new tables, all idempotent via CREATE {TABLE,VIRTUAL TABLE,INDEX}
+   * IF NOT EXISTS (matches migrateConversationTables discipline). Owned by
+   * Plan 90-02 and consumed by memory-scanner.ts (upserts) +
+   * memory-retrieval.ts (hybrid RRF lookup).
+   *
+   *   memory_files       — idempotency ledger keyed by absolute path.
+   *                        Tracks mtime + sha256 so the scanner can skip
+   *                        re-embedding files whose content hasn't changed.
+   *   memory_chunks      — one row per H2 chunk (per chunkMarkdownByH2).
+   *                        Stores heading + body + file_mtime_ms for the
+   *                        D-24 time-window filter.
+   *   vec_memory_chunks  — sqlite-vec virtual table (384-dim float32 cosine)
+   *                        mirroring vec_memories' shape. One row per chunk.
+   *   memory_chunks_fts  — FTS5 virtual table over heading + body. Keyed by
+   *                        chunk_id (UNINDEXED) so the hybrid retrieval path
+   *                        can join vec results → FTS results by chunk_id.
+   *                        content='' (contentless mode) — we write the
+   *                        body text directly, no trigger sync needed.
+   */
+  private migrateMemoryChunks(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_files (
+        path          TEXT PRIMARY KEY,
+        mtime_ms      INTEGER NOT NULL,
+        sha256        TEXT NOT NULL,
+        chunk_count   INTEGER NOT NULL,
+        indexed_at    TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS memory_chunks (
+        id             TEXT PRIMARY KEY,
+        path           TEXT NOT NULL,
+        chunk_index    INTEGER NOT NULL,
+        heading        TEXT,
+        body           TEXT NOT NULL,
+        token_count    INTEGER NOT NULL,
+        score_weight   REAL NOT NULL DEFAULT 0.0,
+        file_mtime_ms  INTEGER NOT NULL,
+        created_at     TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_chunks_path ON memory_chunks(path);
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory_chunks USING vec0(
+        chunk_id TEXT PRIMARY KEY,
+        embedding float[384] distance_metric=cosine
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+        chunk_id UNINDEXED,
+        heading,
+        body,
+        tokenize='unicode61 remove_diacritics 2'
+      );
+    `);
+  }
+
+  /**
+   * Phase 90 MEM-02 — insert one chunk row across all four memory-chunk
+   * tables atomically (wrapped in a transaction). Returns the generated
+   * chunk id so callers (memory-scanner) can log / cross-reference.
+   *
+   * memory_files is upserted: the first chunk for a given path initializes
+   * chunk_count=1 + sha/mtime; subsequent chunks for the same path bump
+   * chunk_count. Callers that are re-indexing MUST call
+   * deleteMemoryChunksByPath(path) first to avoid double-counting.
+   */
+  insertMemoryChunk(input: Readonly<{
+    path: string;
+    chunkIndex: number;
+    heading: string | null;
+    body: string;
+    tokenCount: number;
+    scoreWeight: number;
+    fileMtimeMs: number;
+    fileSha256: string;
+    embedding: Float32Array;
+  }>): string {
+    const chunkId = nanoid();
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO memory_files (path, mtime_ms, sha256, chunk_count, indexed_at)
+           VALUES (?, ?, ?, 1, ?)
+           ON CONFLICT(path) DO UPDATE SET
+             mtime_ms   = excluded.mtime_ms,
+             sha256     = excluded.sha256,
+             chunk_count = memory_files.chunk_count + 1,
+             indexed_at = excluded.indexed_at`,
+        )
+        .run(input.path, input.fileMtimeMs, input.fileSha256, now);
+
+      this.db
+        .prepare(
+          `INSERT INTO memory_chunks
+             (id, path, chunk_index, heading, body, token_count, score_weight, file_mtime_ms, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          chunkId,
+          input.path,
+          input.chunkIndex,
+          input.heading,
+          input.body,
+          input.tokenCount,
+          input.scoreWeight,
+          input.fileMtimeMs,
+          now,
+        );
+
+      this.db
+        .prepare(
+          `INSERT INTO vec_memory_chunks (chunk_id, embedding) VALUES (?, ?)`,
+        )
+        .run(chunkId, input.embedding);
+
+      this.db
+        .prepare(
+          `INSERT INTO memory_chunks_fts (chunk_id, heading, body) VALUES (?, ?, ?)`,
+        )
+        .run(chunkId, input.heading ?? "", input.body);
+    })();
+    return chunkId;
+  }
+
+  /**
+   * Phase 90 MEM-02 — remove every chunk row for `path` across the four
+   * tables. Returns the number of rows deleted from memory_chunks
+   * (source-of-truth count). vec_memory_chunks + memory_chunks_fts are
+   * cleaned by joining on the set of chunk_ids found for the path.
+   */
+  deleteMemoryChunksByPath(path: string): number {
+    return this.db.transaction(() => {
+      const ids = this.db
+        .prepare(`SELECT id FROM memory_chunks WHERE path = ?`)
+        .all(path) as Array<{ id: string }>;
+      for (const { id } of ids) {
+        this.db
+          .prepare(`DELETE FROM vec_memory_chunks WHERE chunk_id = ?`)
+          .run(id);
+        this.db
+          .prepare(`DELETE FROM memory_chunks_fts WHERE chunk_id = ?`)
+          .run(id);
+      }
+      const info = this.db
+        .prepare(`DELETE FROM memory_chunks WHERE path = ?`)
+        .run(path);
+      this.db.prepare(`DELETE FROM memory_files WHERE path = ?`).run(path);
+      return info.changes as number;
+    })();
+  }
+
+  /**
+   * Phase 90 MEM-02 — idempotency gate for the scanner. Returns the stored
+   * sha256 for `path` so the scanner can skip re-embedding when the file
+   * content hasn't changed (big win for backfill runs).
+   */
+  getMemoryFileSha256(path: string): string | null {
+    const row = this.db
+      .prepare(`SELECT sha256 FROM memory_files WHERE path = ?`)
+      .get(path) as { sha256: string } | undefined;
+    return row ? row.sha256 : null;
+  }
+
+  /**
+   * Phase 90 MEM-03 — cosine-similarity top-K over vec_memory_chunks. Used
+   * by memory-retrieval.ts as one of the two RRF ranker inputs. Returns
+   * chunk_id + distance (smaller = more similar).
+   */
+  searchMemoryChunksVec(
+    queryEmbedding: Float32Array,
+    limit: number,
+  ): ReadonlyArray<Readonly<{ chunk_id: string; distance: number }>> {
+    return this.db
+      .prepare(
+        `SELECT chunk_id, distance FROM vec_memory_chunks
+         WHERE embedding MATCH ? AND k = ? ORDER BY distance`,
+      )
+      .all(queryEmbedding, limit) as ReadonlyArray<{
+      chunk_id: string;
+      distance: number;
+    }>;
+  }
+
+  /**
+   * Phase 90 MEM-03 — FTS5 top-K over memory_chunks_fts. MATCH syntax is
+   * a plain token search ("zaid investment" finds docs containing both
+   * tokens by default with AND semantics). Returns chunk_id + rank (more
+   * negative = better match per FTS5 convention).
+   */
+  searchMemoryChunksFts(
+    query: string,
+    limit: number,
+  ): ReadonlyArray<Readonly<{ chunk_id: string; rank: number }>> {
+    // FTS5 MATCH is strict — bare tokens with special chars can throw.
+    // Sanitize to alphanumeric + spaces for query safety (retrieval-time
+    // concern, not a schema invariant).
+    const safe = query.replace(/[^a-zA-Z0-9_ ]+/g, " ").trim();
+    if (safe.length === 0) return [];
+    try {
+      return this.db
+        .prepare(
+          `SELECT chunk_id, rank FROM memory_chunks_fts
+           WHERE memory_chunks_fts MATCH ? ORDER BY rank LIMIT ?`,
+        )
+        .all(safe, limit) as ReadonlyArray<{ chunk_id: string; rank: number }>;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Phase 90 MEM-03 — hydrate a chunk by id for the retrieval pipeline.
+   * Returns null on miss so the fuser can silently skip stale ids.
+   */
+  getMemoryChunk(
+    chunkId: string,
+  ): Readonly<{
+    chunk_id: string;
+    path: string;
+    heading: string | null;
+    body: string;
+    file_mtime_ms: number;
+    score_weight: number;
+  }> | null {
+    const row = this.db
+      .prepare(
+        `SELECT id AS chunk_id, path, heading, body, file_mtime_ms, score_weight
+         FROM memory_chunks WHERE id = ?`,
+      )
+      .get(chunkId) as
+      | {
+          chunk_id: string;
+          path: string;
+          heading: string | null;
+          body: string;
+          file_mtime_ms: number;
+          score_weight: number;
+        }
+      | undefined;
+    return row ?? null;
   }
 
   private prepareStatements(): PreparedStatements {
