@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 90-02-PLAN.md (memory_chunks + hybrid RRF retrieval + TurnDispatcher pre-turn injection MEM-02/MEM-03)
-last_updated: "2026-04-24T02:12:34.234Z"
+stopped_at: Completed 90-06-PLAN.md (HUB-05 + HUB-07)
+last_updated: "2026-04-24T02:32:24.444Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 7
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 90 (ClawHub Marketplace + fin-acquisition Memory Prep) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 
 ## Performance Metrics
 
@@ -153,6 +153,10 @@ Recent decisions affecting current work:
 - [Phase 90]: chokidar 5.x glob patterns silently no-op — watch memory/ directory recursively + filter via shouldIndexMemoryPath in handlers. ready-event await in scanner.start() pins the post-init race window closed
 - [Phase 90]: Seventh application of the Phase 83/86/89 additive-optional blueprint (memoryRetrievalTopK/TokenBudget/ScannerEnabled). Pattern is now routine; each rollout strengthens the v2.x convention for extending agent config
 - [Phase 90]: Per-agent scanner (Map<string, MemoryScanner>) mirrors SessionManager per-agent resource pattern; setMemoryScanner DI shape mirrors Phase 89 setWebhookManager exactly — 5th application of post-construction DI mirror pattern
+- [Phase 90]: Device-code OAuth over web-redirect (D-02 Claude's Discretion): ClawCode daemon is headless, no HTTPS callback surface
+- [Phase 90]: Two-pass fuzzy matcher (substring containment first, Levenshtein ≤ 3 second) + first-word tokenization on both label and field-name sides for op:// rewrite
+- [Phase 90]: Module-namespace imports (import * as mod) in install-plugin.ts + daemon.ts to enable vi.spyOn without breaking ESM live bindings
+- [Phase 90]: Long-lived IPC (clawhub-oauth-poll, up to 15min) without client-side timeoutMs — daemon handler self-terminates at expires_at
 
 ### v2.1 closing decisions (for reference)
 
@@ -237,9 +241,10 @@ Recent decisions affecting current work:
 | Phase 90-clawhub-marketplace-fin-acquisition-memory-prep P04 | 33min 1s | 2 tasks (TDD) tasks | 10 files files |
 | Phase 90 P05 | 20min 32s | 2 tasks | 14 files |
 | Phase 90 P02 | 25min | 2 (TDD) tasks | 34 files |
+| Phase 90 P06 | 12m 23s | 2 tasks | 13 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-02-PLAN.md (memory_chunks + hybrid RRF retrieval + TurnDispatcher pre-turn injection MEM-02/MEM-03)
+Stopped at: Completed 90-06-PLAN.md (HUB-05 + HUB-07)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
