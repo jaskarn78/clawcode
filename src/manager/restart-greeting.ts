@@ -350,7 +350,48 @@ export async function sendRestartGreeting(
       break;
     }
   }
-  if (!lastSession) return { kind: "skipped-empty-state" };
+  // Phase 90.1 hotfix (D-11 relaxation) — if no session has turns (happens
+  // after repeated /clawcode-restart which creates+ends zero-turn sessions,
+  // or for freshly-curated agents), skip the summarization but STILL send a
+  // minimal "I'm back" embed so the operator gets visual confirmation the
+  // restart fired. The original D-11 silent-skip was intended to avoid
+  // noise on fleet boots, but operator-triggered restarts deserve feedback.
+  if (!lastSession) {
+    const displayName = config.webhook?.displayName ?? agentName;
+    const avatarUrl = config.webhook?.avatarUrl;
+    const minimalEmbed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("I'm back")
+      .setDescription(
+        "Restart complete — no prior session to recap. Ask me anything to get rolling.",
+      );
+    const minimalChannelId = config.channels?.[0];
+    let sentId: string;
+    try {
+      if (deps.webhookManager.hasWebhook(agentName)) {
+        sentId = await deps.webhookManager.sendAsAgent(
+          agentName,
+          displayName,
+          avatarUrl,
+          minimalEmbed,
+        );
+      } else if (deps.botDirectSender && minimalChannelId) {
+        sentId = await deps.botDirectSender.sendEmbed(
+          minimalChannelId,
+          minimalEmbed,
+        );
+      } else {
+        return { kind: "skipped-empty-state" };
+      }
+    } catch (err) {
+      return {
+        kind: "send-failed",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    deps.coolDownState.set(agentName, deps.now());
+    return { kind: "sent", messageId: sentId };
+  }
 
   // Dormancy check applies to the chosen session's activity time.
   const lastActivityIso = lastSession.endedAt ?? lastSession.startedAt;
