@@ -347,3 +347,240 @@ export async function downloadClawhubSkill(
   const files = await walkFiles(extractedDir);
   return { extractedDir, files: Object.freeze(files) };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 05 HUB-02 — ClawHub plugin registry.
+//
+// Parallel to fetchClawhubSkills + downloadClawhubSkill but for plugin
+// packages that map to ClawCode `mcpServers` entries (not skill dirs).
+//
+// Shape note (2026-04-24 live probe of https://clawhub.ai/api/v1/plugins):
+//   { "items": [{ name, displayName, summary, latestVersion, runtimeId,
+//                 ownerHandle, family, executesCode, capabilityTags[],
+//                 channel, verificationTier, ... }], nextCursor: string|null }
+//
+// The list endpoint returns PACKAGE-LEVEL metadata (browsable catalog);
+// the per-package MANIFEST (with command/args/env) is fetched separately
+// via downloadClawhubPluginManifest against a package-specific URL. The
+// exact manifest URL shape is not enumerated by clawhub yet; we model it
+// as an opaque `manifestUrl` field populated downstream from the list
+// response (when ClawHub backfills it) or constructed from `runtimeId`.
+// Until the registry publishes that URL, the install pipeline returns
+// `manifest-invalid` and the Discord UI surfaces the error gracefully.
+// ---------------------------------------------------------------------------
+
+/**
+ * One plugin item in the ClawHub `/api/v1/plugins` list response.
+ *
+ * Defensive types: only `name` + `latestVersion` are contractually required;
+ * everything else is best-effort surfaced in the Discord picker. If the
+ * registry omits `manifestUrl`, the installer falls back to a runtimeId-
+ * derived URL (see installClawhubPlugin below).
+ */
+export type ClawhubPluginListItem = Readonly<{
+  name: string;
+  latestVersion: string;
+  displayName?: string;
+  summary?: string;
+  description?: string;
+  runtimeId?: string;
+  ownerHandle?: string;
+  family?: string;
+  channel?: string;
+  capabilityTags?: readonly string[];
+  manifestUrl?: string;
+}>;
+
+/**
+ * Response body shape of `GET /api/v1/plugins?q=...&cursor=...`.
+ * Cursor pagination parallels the skills endpoint (D-03).
+ */
+export type ClawhubPluginsResponse = Readonly<{
+  items: readonly ClawhubPluginListItem[];
+  nextCursor: string | null;
+}>;
+
+/**
+ * Plugin manifest JSON shape — per-package. Fetched by manifestUrl (or
+ * derived URL). Mirrors the spec in 90-05-PLAN.md interfaces block.
+ *
+ * `env.<name>.required` is the gate on install-time config collection:
+ * missing + no default → outcome "config-missing".
+ *
+ * `config.fields[]` drives the Discord ModalBuilder (≤5 fields) OR the
+ * serial follow-up prompt flow (>5 fields) per D-13.
+ */
+export type ClawhubPluginManifest = Readonly<{
+  name: string;
+  description: string;
+  version: string;
+  command: string;
+  args: readonly string[];
+  env: Readonly<
+    Record<
+      string,
+      Readonly<{
+        default?: string | null;
+        required: boolean;
+        sensitive: boolean;
+        description?: string;
+      }>
+    >
+  >;
+  config?: Readonly<{
+    fields: readonly Readonly<{
+      name: string;
+      label: string;
+      type: "short" | "paragraph";
+      placeholder?: string;
+      pattern?: string;
+      sensitive: boolean;
+    }>[];
+  }>;
+  dependencies?: Readonly<{ mcpServers?: readonly string[] }>;
+}>;
+
+/**
+ * GET <baseUrl>/api/v1/plugins?q=<query>&cursor=<cursor>
+ *
+ * Mirrors fetchClawhubSkills byte-for-byte modulo the URL path + response
+ * typing. See fetchClawhubSkills for URL / auth / error-mapping details.
+ */
+export async function fetchClawhubPlugins(
+  args: Readonly<{
+    baseUrl: string;
+    query?: string;
+    cursor?: string;
+    authToken?: string;
+    deps?: ClawhubClientDeps;
+  }>,
+): Promise<ClawhubPluginsResponse> {
+  const fetchFn = args.deps?.fetch ?? globalThis.fetch;
+  const trimmedBase = args.baseUrl.replace(/\/+$/, "");
+  const params = new URLSearchParams();
+  if (args.query !== undefined && args.query.length > 0) {
+    params.set("q", args.query);
+  }
+  if (args.cursor !== undefined && args.cursor.length > 0) {
+    params.set("cursor", args.cursor);
+  }
+  const qs = params.toString();
+  const urlStr = `${trimmedBase}/api/v1/plugins${qs.length > 0 ? `?${qs}` : ""}`;
+
+  const res = await fetchFn(urlStr, {
+    headers: buildHeaders(args.authToken),
+  });
+
+  if (res.status === 429) {
+    const retryAfterMs = parseRetryAfter(res);
+    throw new ClawhubRateLimitedError(
+      retryAfterMs,
+      `clawhub plugins: rate-limited (retry in ${retryAfterMs}ms)`,
+    );
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new ClawhubAuthRequiredError(
+      `clawhub plugins: auth required (status ${res.status})`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(`clawhub plugins: ${res.status} ${res.statusText}`);
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new ClawhubManifestInvalidError(
+      `clawhub plugins: response is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    !Array.isArray((body as { items?: unknown }).items)
+  ) {
+    throw new ClawhubManifestInvalidError(
+      "clawhub plugins: malformed response (no items[])",
+    );
+  }
+  const parsed = body as ClawhubPluginsResponse;
+  return Object.freeze({
+    items: Object.freeze(parsed.items.map((i) => Object.freeze(i))),
+    nextCursor: parsed.nextCursor ?? null,
+  });
+}
+
+/**
+ * Download + validate one ClawHub plugin manifest. Unlike skills (tarball)
+ * plugins are JSON manifests — zero filesystem staging needed; the entire
+ * install pipeline works from the parsed manifest + operator-supplied
+ * configInputs.
+ *
+ * Contract:
+ *   - 429 → ClawhubRateLimitedError (retryAfterMs)
+ *   - 401/403 → ClawhubAuthRequiredError
+ *   - other !ok → generic Error with status text
+ *   - body missing required fields (name, command) → ClawhubManifestInvalidError
+ */
+export async function downloadClawhubPluginManifest(
+  args: Readonly<{
+    manifestUrl: string;
+    authToken?: string;
+    deps?: ClawhubClientDeps;
+  }>,
+): Promise<ClawhubPluginManifest> {
+  const fetchFn = args.deps?.fetch ?? globalThis.fetch;
+
+  const res = await fetchFn(args.manifestUrl, {
+    headers: buildHeaders(args.authToken),
+  });
+
+  if (res.status === 429) {
+    throw new ClawhubRateLimitedError(
+      parseRetryAfter(res),
+      `clawhub plugin manifest: rate-limited`,
+    );
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new ClawhubAuthRequiredError(
+      `clawhub plugin manifest: auth required (${res.status})`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `clawhub plugin manifest: ${res.status} ${res.statusText}`,
+    );
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new ClawhubManifestInvalidError(
+      `clawhub plugin manifest: invalid JSON (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    typeof (body as { name?: unknown }).name !== "string" ||
+    typeof (body as { command?: unknown }).command !== "string"
+  ) {
+    throw new ClawhubManifestInvalidError(
+      "clawhub plugin manifest: missing required name/command",
+    );
+  }
+  const m = body as ClawhubPluginManifest;
+  return Object.freeze({
+    name: m.name,
+    description: m.description ?? "",
+    version: m.version ?? "0.0.0",
+    command: m.command,
+    args: Object.freeze([...(m.args ?? [])]),
+    env: Object.freeze({ ...(m.env ?? {}) }),
+    ...(m.config !== undefined ? { config: m.config } : {}),
+    ...(m.dependencies !== undefined ? { dependencies: m.dependencies } : {}),
+  });
+}

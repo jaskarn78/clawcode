@@ -414,3 +414,82 @@ function makePreview(line: string, secretToken: string): string {
   if (trimmed.length <= 60) return trimmed;
   return trimmed.slice(0, 57) + "...";
 }
+
+/**
+ * Phase 90 Plan 05 HUB-04 — credential-context detection for plugin env
+ * field names. Unlike hasCredentialContext (designed for skill file line
+ * context), this helper splits on common env-name separators (`_`, `-`,
+ * case transitions) so compound identifiers like `DB_PASSWORD`,
+ * `API_KEY`, `clientSecret`, `REFRESH-TOKEN` all trip the gate.
+ *
+ * The base hasCredentialContext uses `\b...\b` which does NOT treat `_`
+ * as a word boundary (both sides of `_PASSWORD` are word chars), so
+ * `DB_PASSWORD` passes silently. Env field names don't have this
+ * property — we need to explicitly enumerate the credential tokens.
+ */
+const CREDENTIAL_TOKENS_RE =
+  /(password|passwd|pwd|secret|apikey|api_key|api-key|accesskey|access_key|access-key|privatekey|private_key|private-key|bearer|auth|authorization|credential|clientsecret|client_secret|client-secret|refreshtoken|refresh_token|refresh-token|sessiontoken|session_token|session-token|token|key)/i;
+
+function hasCredentialContextForField(fieldName: string): boolean {
+  // Normalize: remove separators + lowercase. `DB_PASSWORD` → `dbpassword`
+  // `client-secret` → `clientsecret` — both still test positive on
+  // `password` / `clientsecret` via substring match.
+  const normalized = fieldName.toLowerCase().replace(/[_\-\s]/g, "");
+  return CREDENTIAL_TOKENS_RE.test(normalized);
+}
+
+/**
+ * Phase 90 Plan 05 HUB-04 — scan a single field-label + literal-value pair
+ * for secret shape. Reuses the same classifier as scanSkillSecrets but
+ * the credential-context gate fires on FIELD NAMES (not line context)
+ * because plugin env values arrive as structured (name, value) pairs from
+ * a Discord modal, not free-form SKILL.md text.
+ *
+ * Used by install-plugin.ts + yaml-writer.ts updateAgentMcpServers as a
+ * defense-in-depth literal-value scanner for plugin env values that don't
+ * yet carry an `op://` prefix (operator hand-pasted literal at install
+ * time). Returns `refused:true` iff the value is either a known-prefix
+ * secret (sk-/MT-) OR high-entropy-on-credential-labeled-field.
+ *
+ * Safe inputs (always pass):
+ *   - Empty strings
+ *   - `op://...` 1Password references
+ *   - Short identifiers / numeric / path-shaped / URL values
+ *   - Values on non-credential-labeled fields (FOO_HOST=<high-entropy>)
+ *
+ * Refused (`refused:true`):
+ *   - sk- / MT- prefixed tokens (ALWAYS refuse, regardless of label)
+ *   - High-entropy (≥12 chars / 3 classes / ≥3.8 bits) + credential-
+ *     labeled field name (password/secret/token/api_key/... anywhere
+ *     in the normalized field name)
+ *
+ * The `reason` string is the classifier verdict — one of "sk-prefix",
+ * "discord-prefix", or "high-entropy" for refusals; empty string for pass.
+ */
+export function scanLiteralValueForSecret(
+  fieldName: string,
+  value: string,
+): { refused: boolean; reason: string } {
+  // Empty / op:// short-circuits — exact parity with scanSkillSecrets policy.
+  if (value === "") return { refused: false, reason: "" };
+  if (OP_REF.test(value)) return { refused: false, reason: "" };
+
+  // Credential context is derived from the FIELD NAME (structured input),
+  // not from line context. This is the Plan 05 HUB-04 policy refinement:
+  // plugin env values arrive as (name, value) pairs from a Discord modal,
+  // and the name carries the credential semantics (MYSQL_PASSWORD is the
+  // "password field" regardless of what value the operator pastes).
+  const hasCredContext = hasCredentialContextForField(fieldName);
+
+  // sk-/MT-prefixed tokens ALWAYS refuse, regardless of field context.
+  const prefixHit = hasSecretPrefix(value);
+  if (prefixHit !== null) {
+    return { refused: true, reason: prefixHit };
+  }
+
+  // High-entropy refusal gated by field context.
+  if (!hasCredContext) return { refused: false, reason: "" };
+  if (isWhitelisted(value)) return { refused: false, reason: "" };
+  if (!isHighEntropySecret(value)) return { refused: false, reason: "" };
+  return { refused: true, reason: "high-entropy" };
+}

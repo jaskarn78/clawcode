@@ -24,6 +24,8 @@ const execFileP = promisify(execFile);
 import {
   fetchClawhubSkills,
   downloadClawhubSkill,
+  fetchClawhubPlugins,
+  downloadClawhubPluginManifest,
   ClawhubRateLimitedError,
   ClawhubAuthRequiredError,
   ClawhubManifestInvalidError,
@@ -291,6 +293,131 @@ describe("downloadClawhubSkill — Phase 90 Plan 04 (HUB-CLI-7)", () => {
       await downloadClawhubSkill({
         downloadUrl: "https://example.com/x.tar.gz",
         stagingDir: await mkdtemp(join(tmpdir(), "clawhub-dl-")),
+        deps: { fetch },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ClawhubAuthRequiredError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 05 HUB-02 — fetchClawhubPlugins + downloadClawhubPluginManifest
+// ---------------------------------------------------------------------------
+
+describe("fetchClawhubPlugins — Phase 90 Plan 05 (PL-C1-fetch)", () => {
+  it("PL-C1-fetch: happy path — returns {items, nextCursor}; URL includes /api/v1/plugins", async () => {
+    const mockBody = {
+      items: [
+        {
+          name: "finmentum-db-helper",
+          latestVersion: "1.2.0",
+          displayName: "Finmentum DB",
+          summary: "MySQL helper",
+          runtimeId: "finmentum-db-helper",
+          ownerHandle: "finmentum",
+          family: "code-plugin",
+        },
+      ],
+      nextCursor: null,
+    };
+    const { fetch, calls } = makeMockFetch(() => jsonResponse(mockBody));
+    const result = await fetchClawhubPlugins({
+      baseUrl: "http://localhost/mock",
+      query: "mysql",
+      deps: { fetch },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(
+      "http://localhost/mock/api/v1/plugins?q=mysql",
+    );
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.name).toBe("finmentum-db-helper");
+    expect(result.nextCursor).toBeNull();
+  });
+
+  it("fetchClawhubPlugins: 429 → ClawhubRateLimitedError with Retry-After * 1000", async () => {
+    const { fetch } = makeMockFetch(
+      () =>
+        new Response("", {
+          status: 429,
+          headers: { "Retry-After": "30" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await fetchClawhubPlugins({
+        baseUrl: "http://localhost/mock",
+        deps: { fetch },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ClawhubRateLimitedError);
+    if (caught instanceof ClawhubRateLimitedError) {
+      expect(caught.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  it("fetchClawhubPlugins: malformed response → ClawhubManifestInvalidError", async () => {
+    const { fetch } = makeMockFetch(() => jsonResponse({ not_items: 1 }));
+    let caught: unknown;
+    try {
+      await fetchClawhubPlugins({
+        baseUrl: "http://localhost/mock",
+        deps: { fetch },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ClawhubManifestInvalidError);
+  });
+});
+
+describe("downloadClawhubPluginManifest — Phase 90 Plan 05 (PL-C4-fetch)", () => {
+  it("PL-C4-fetch: returns normalized manifest with defaulted optional fields", async () => {
+    const manifest = {
+      name: "test-plugin",
+      command: "mcporter",
+      // description/version/args omitted — client defaults
+    };
+    const { fetch } = makeMockFetch(() => jsonResponse(manifest));
+    const result = await downloadClawhubPluginManifest({
+      manifestUrl: "https://clawhub.ai/api/v1/plugins/test/manifest",
+      deps: { fetch },
+    });
+    expect(result.name).toBe("test-plugin");
+    expect(result.command).toBe("mcporter");
+    expect(result.description).toBe("");
+    expect(result.version).toBe("0.0.0");
+    expect(result.args).toEqual([]);
+  });
+
+  it("downloadClawhubPluginManifest: missing command → ClawhubManifestInvalidError", async () => {
+    const { fetch } = makeMockFetch(() =>
+      jsonResponse({ name: "test-plugin" }), // no command
+    );
+    let caught: unknown;
+    try {
+      await downloadClawhubPluginManifest({
+        manifestUrl: "https://clawhub.ai/manifest",
+        deps: { fetch },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ClawhubManifestInvalidError);
+  });
+
+  it("downloadClawhubPluginManifest: 401 → ClawhubAuthRequiredError", async () => {
+    const { fetch } = makeMockFetch(() =>
+      new Response("", { status: 401 }),
+    );
+    let caught: unknown;
+    try {
+      await downloadClawhubPluginManifest({
+        manifestUrl: "https://clawhub.ai/manifest",
         deps: { fetch },
       });
     } catch (err) {

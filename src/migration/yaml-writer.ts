@@ -36,7 +36,8 @@ import { parseDocument, YAMLSeq, YAMLMap } from "yaml";
 import type { MappedAgentNode, MapAgentWarning } from "./config-mapper.js";
 import { scanSecrets } from "./guards.js";
 import type { PlanReport, AgentPlan } from "./diff-builder.js";
-import { modelSchema } from "../config/schema.js";
+import { modelSchema, mcpServerSchema } from "../config/schema.js";
+import { scanLiteralValueForSecret } from "./skills-secret-scan.js";
 
 /**
  * Mutable fs-dispatch holder — the ESM-safe pattern used by
@@ -667,6 +668,276 @@ export async function updateAgentSkills(
     const removeIdx = currentSkills.indexOf(args.skillName);
     if (removeIdx >= 0) {
       seqItems.splice(removeIdx, 1);
+    }
+  }
+
+  // --- Serialize with no line-wrap ---------------------------------
+  const newText = doc.toString({ lineWidth: 0 });
+
+  // --- Atomic temp+rename ------------------------------------------
+  const destDir = dirname(args.existingConfigPath);
+  const tmpPath = join(
+    destDir,
+    `.clawcode.yaml.${pid}.${Date.now()}.tmp`,
+  );
+  await writerFs.writeFile(tmpPath, newText, "utf8");
+  try {
+    await writerFs.rename(tmpPath, args.existingConfigPath);
+  } catch (err) {
+    try {
+      await writerFs.unlink(tmpPath);
+    } catch {
+      // best-effort — tmp may already be gone
+    }
+    throw err;
+  }
+
+  const targetSha256 = createHash("sha256")
+    .update(newText, "utf8")
+    .digest("hex");
+  return {
+    outcome: "updated",
+    destPath: args.existingConfigPath,
+    targetSha256,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 05 HUB-04 — updateAgentMcpServers.
+//
+// Atomic add/remove of one MCP-server entry on `agents[*].mcpServers`.
+// Third atomic YAML writer — mirrors updateAgentModel + updateAgentSkills
+// structural template verbatim (parseDocument → find-by-name → YAMLSeq
+// mutate → toString({lineWidth:0}) → tmp+rename → sha256 witness).
+//
+// The Phase 90 plugin installer (install-plugin.ts) calls this AFTER the
+// plugin manifest is normalized to a ClawCode `mcpServerSchema` entry so
+// the new server appears in the agent's `mcpServers:` list on the next
+// daemon boot. Plugin hot-reload is DEFERRED per Phase 90 CONTEXT (D-5
+// flag) — the operator must restart the agent after install.
+//
+// Contract (outcome matrix):
+//   "updated"        — entry appended / replaced / removed; file rewritten
+//   "no-op"          — idempotent (add on byte-identical entry; remove on absent)
+//   "not-found"      — clawcode.yaml valid but agent missing from seq
+//   "file-not-found" — clawcode.yaml does not exist
+//   "refused"        — entry failed mcpServerSchema validation (step:invalid-entry)
+//                      OR env value failed literal secret-scan (step:secret-scan)
+//   throws           — rename failure (tmp unlinked), structural YAML corruption
+//
+// DO NOT:
+//   - Treat scalar string elements as a ClawCode-native install target. The
+//     mcpServers seq accepts a union of (YAMLMap | scalar-string-ref); add
+//     always emits a YAMLMap. Remove matches by .name on YAMLMap AND by
+//     scalar equality on strings so operator-edited string-refs are
+//     removable symmetrically.
+//   - Re-emit secret scan when the value is an `op://` reference — those
+//     are explicitly safe. Plain env literals carry the classifier.
+// ---------------------------------------------------------------------------
+
+export type UpdateAgentMcpServersArgs = Readonly<{
+  existingConfigPath: string;
+  agentName: string;
+  entry: Readonly<{
+    name: string;
+    command: string;
+    args: readonly string[];
+    env: Readonly<Record<string, string>>;
+    optional?: boolean;
+  }>;
+  op: "add" | "remove";
+  /** DI for test determinism — defaults to process.pid. */
+  pid?: number;
+}>;
+
+export type UpdateAgentMcpServersResult =
+  | {
+      readonly outcome: "updated";
+      readonly destPath: string;
+      readonly targetSha256: string;
+    }
+  | { readonly outcome: "no-op"; readonly reason: string }
+  | { readonly outcome: "not-found"; readonly reason: string }
+  | { readonly outcome: "file-not-found"; readonly reason: string }
+  | {
+      readonly outcome: "refused";
+      readonly reason: string;
+      readonly step: "secret-scan" | "invalid-entry";
+    };
+
+export async function updateAgentMcpServers(
+  args: UpdateAgentMcpServersArgs,
+): Promise<UpdateAgentMcpServersResult> {
+  const pid = args.pid ?? process.pid;
+
+  // --- Gate: schema validation (defense-in-depth) --------------------
+  // The caller (install-plugin.ts normalizePluginManifest) is expected to
+  // hand in a valid shape; this self-guard catches future callers that
+  // slip through with an invalid entry.
+  const schemaCheck = mcpServerSchema.safeParse({
+    name: args.entry.name,
+    command: args.entry.command,
+    args: [...args.entry.args],
+    env: { ...args.entry.env },
+    optional: args.entry.optional ?? false,
+  });
+  if (!schemaCheck.success) {
+    return {
+      outcome: "refused",
+      reason: `invalid entry: ${schemaCheck.error.message.slice(0, 200)}`,
+      step: "invalid-entry",
+    };
+  }
+
+  // --- Gate: literal-value secret scan (ADD only) --------------------
+  // Remove is a no-op from the secret perspective (we're DELETING bytes,
+  // not inserting). Skip for remove to keep the happy-path cheap.
+  if (args.op === "add") {
+    for (const [k, v] of Object.entries(args.entry.env)) {
+      const scan = scanLiteralValueForSecret(k, v);
+      if (scan.refused) {
+        return {
+          outcome: "refused",
+          reason: `env.${k}: ${scan.reason}`,
+          step: "secret-scan",
+        };
+      }
+    }
+  }
+
+  // --- Gate: file presence ------------------------------------------
+  if (!existsSync(args.existingConfigPath)) {
+    return {
+      outcome: "file-not-found",
+      reason: `clawcode.yaml not found at ${args.existingConfigPath}`,
+    };
+  }
+
+  // --- Read + parse (Document AST preserves comments + order) ------
+  const existingText = await writerFs.readFile(
+    args.existingConfigPath,
+    "utf8",
+  );
+  const doc = parseDocument(existingText, { prettyErrors: true });
+  const contents = doc.contents;
+  if (!(contents instanceof YAMLMap)) {
+    throw new Error(
+      `clawcode.yaml top-level is not a map: ${args.existingConfigPath}`,
+    );
+  }
+  const rootMap = contents as unknown as YAMLMap<unknown, unknown>;
+  const agentsSeq = rootMap.get("agents") as unknown;
+  if (!(agentsSeq instanceof YAMLSeq)) {
+    return {
+      outcome: "not-found",
+      reason: `no agents seq in clawcode.yaml`,
+    };
+  }
+  const items = (agentsSeq as YAMLSeq).items as unknown as Array<unknown>;
+  const idx = items.findIndex((it) => {
+    if (it === null || typeof it !== "object") return false;
+    const maybeMap = it as { get?: (k: string) => unknown };
+    if (typeof maybeMap.get !== "function") return false;
+    const name = maybeMap.get("name");
+    return name === args.agentName;
+  });
+  if (idx < 0) {
+    return {
+      outcome: "not-found",
+      reason: `agent '${args.agentName}' not in agents seq`,
+    };
+  }
+
+  const agentMap = items[idx] as {
+    get?: (k: string) => unknown;
+    set?: (k: string, v: unknown) => void;
+  };
+  if (
+    typeof agentMap.get !== "function" ||
+    typeof agentMap.set !== "function"
+  ) {
+    throw new Error(
+      `agent '${args.agentName}' entry is not a map at agents[${idx}]`,
+    );
+  }
+
+  // --- Locate or initialize the mcpServers seq ---------------------
+  let mcpSeq = agentMap.get("mcpServers");
+  if (!(mcpSeq instanceof YAMLSeq)) {
+    mcpSeq = new YAMLSeq();
+    agentMap.set("mcpServers", mcpSeq);
+  }
+  const seq = mcpSeq as YAMLSeq;
+  const mcpSeqItems = seq.items as unknown as Array<unknown>;
+
+  // --- Find existing element by .name (YAMLMap) or scalar equality --
+  // A mcpServers entry may be a YAMLMap (inline def) OR a scalar string
+  // (reference to top-level `mcpServers:` map keyed by name). Handle both.
+  function getNameOfItem(node: unknown): string | undefined {
+    if (node !== null && typeof node === "object") {
+      const maybeMap = node as {
+        get?: (k: string) => unknown;
+        value?: unknown;
+      };
+      if (typeof maybeMap.get === "function") {
+        const nm = maybeMap.get("name");
+        return typeof nm === "string" ? nm : undefined;
+      }
+      if ("value" in maybeMap && typeof maybeMap.value === "string") {
+        return maybeMap.value;
+      }
+    }
+    if (typeof node === "string") return node;
+    return undefined;
+  }
+  const existingIdx = mcpSeqItems.findIndex(
+    (it) => getNameOfItem(it) === args.entry.name,
+  );
+
+  if (args.op === "remove") {
+    if (existingIdx < 0) {
+      return {
+        outcome: "no-op",
+        reason: `agent '${args.agentName}' mcpServer '${args.entry.name}' not present`,
+      };
+    }
+    mcpSeqItems.splice(existingIdx, 1);
+  } else {
+    // ADD: build a new YAMLMap for the entry.
+    const newMap = new YAMLMap();
+    newMap.set("name", args.entry.name);
+    newMap.set("command", args.entry.command);
+    const argsSeq = new YAMLSeq();
+    for (const a of args.entry.args) argsSeq.add(a);
+    newMap.set("args", argsSeq);
+    const envMap = new YAMLMap();
+    for (const [k, v] of Object.entries(args.entry.env)) envMap.set(k, v);
+    newMap.set("env", envMap);
+    if (args.entry.optional === true) {
+      newMap.set("optional", true);
+    }
+
+    if (existingIdx >= 0) {
+      // Byte-identical idempotency check. Compare serialized forms of
+      // old vs new YAMLMap — if equal, treat as no-op (matches Phase 86
+      // MODEL-04 and Phase 88 MKT-04 precedents).
+      const existing = mcpSeqItems[existingIdx];
+      const oldSerialized =
+        existing instanceof YAMLMap
+          ? existing.toString()
+          : String(
+              (existing as { value?: unknown } | null)?.value ?? existing,
+            );
+      const newSerialized = newMap.toString();
+      if (oldSerialized === newSerialized) {
+        return {
+          outcome: "no-op",
+          reason: `agent '${args.agentName}' mcpServer '${args.entry.name}' byte-identical`,
+        };
+      }
+      mcpSeqItems[existingIdx] = newMap;
+    } else {
+      seq.add(newMap);
     }
   }
 

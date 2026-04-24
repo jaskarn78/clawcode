@@ -66,6 +66,12 @@ export const IPC_METHODS = [
   "marketplace-list",
   "marketplace-install",
   "marketplace-remove",
+  // Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin listing + install.
+  // Parallel to marketplace-list/install but routes through the ClawHub
+  // plugin registry (not the skill flow) and writes to agents[*].mcpServers
+  // via updateAgentMcpServers (yaml-writer.ts).
+  "marketplace-list-plugins",
+  "marketplace-install-plugin",
   // Cost tracking (Phase 40)
   "costs",
   // Latency (Phase 50)

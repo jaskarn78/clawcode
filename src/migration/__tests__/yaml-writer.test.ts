@@ -31,6 +31,7 @@ import {
   removeAgentFromConfig,
   updateAgentModel,
   updateAgentSkills,
+  updateAgentMcpServers,
 } from "../yaml-writer.js";
 import { SECRET_REFUSE_MESSAGE } from "../guards.js";
 import { configSchema } from "../../config/schema.js";
@@ -1024,6 +1025,280 @@ agents:
     if (r2.outcome === "no-op") {
       expect(r2.reason).toMatch(/not in list/i);
     }
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 05 HUB-04 — updateAgentMcpServers tests (MCP-W1..W9).
+// Mirrors the updateAgentModel + updateAgentSkills contracts. Atomic add/
+// remove of one mcpServers entry onto agents[*].mcpServers, comment-
+// preserving, idempotent, literal-value secret-scan guarded.
+// ---------------------------------------------------------------------------
+
+describe("updateAgentMcpServers — Phase 90 Plan 05 (Tests MCP-W1..W9)", () => {
+  async function setupMcpFixture(
+    yaml: string,
+  ): Promise<{ destPath: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-update-mcp-"));
+    const destPath = join(dir, "clawcode.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(destPath, yaml, "utf8");
+    return { destPath };
+  }
+
+  const EMPTY_MCP_YAML = `# fleet comment at top
+version: 1
+defaults:
+  model: sonnet
+agents:
+  # clawdy header comment
+  - name: clawdy  # personal
+    workspace: ~/.clawcode/agents/clawdy
+    model: haiku
+    channels:
+      - "111"
+    skills: []
+    mcpServers: []
+  - name: alpha
+    workspace: ~/.clawcode/agents/alpha
+    model: sonnet
+    channels:
+      - "222"
+    skills: []
+    mcpServers:
+      - name: foo
+        command: cmd-foo
+        args: []
+        env: {}
+`;
+
+  it("MCP-W1: add happy path — appends new YAMLMap entry to clawdy; 64-char hex hash", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    const result = await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      entry: {
+        name: "test-mcp",
+        command: "my-cmd",
+        args: ["serve"],
+        env: { DB_HOST: "db.example.com" },
+      },
+      op: "add",
+    });
+    expect(result.outcome).toBe("updated");
+    if (result.outcome !== "updated") return;
+    expect(result.destPath).toBe(destPath);
+    expect(result.targetSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{
+        name: string;
+        mcpServers: Array<{
+          name: string;
+          command: string;
+          args: string[];
+          env: Record<string, string>;
+        }>;
+      }>;
+    };
+    const clawdy = parsed.agents.find((a) => a.name === "clawdy")!;
+    expect(clawdy.mcpServers).toHaveLength(1);
+    const entry = clawdy.mcpServers[0]!;
+    expect(entry.name).toBe("test-mcp");
+    expect(entry.command).toBe("my-cmd");
+    expect(entry.args).toEqual(["serve"]);
+    expect(entry.env).toEqual({ DB_HOST: "db.example.com" });
+  });
+
+  it("MCP-W2: preserves top-of-file + header + inline comments", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      entry: {
+        name: "test-mcp",
+        command: "my-cmd",
+        args: [],
+        env: {},
+      },
+      op: "add",
+    });
+
+    const after = readFileSync(destPath, "utf8");
+    expect(after).toContain("# fleet comment at top");
+    expect(after).toContain("# clawdy header comment");
+    expect(after).toMatch(/name:\s*clawdy\s*#\s*personal/);
+  });
+
+  it("MCP-W3: no-op idempotent — re-adding byte-identical entry returns no-op; bytes unchanged", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    // First add
+    await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      entry: {
+        name: "foo",
+        command: "cmd-foo",
+        args: [],
+        env: {},
+      },
+      op: "add",
+    });
+    const afterFirst = readFileSync(destPath, "utf8");
+
+    // Re-add identical entry
+    const result = await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      entry: {
+        name: "foo",
+        command: "cmd-foo",
+        args: [],
+        env: {},
+      },
+      op: "add",
+    });
+    expect(result.outcome).toBe("no-op");
+    if (result.outcome === "no-op") {
+      expect(result.reason).toMatch(/byte-identical/i);
+    }
+    const afterSecond = readFileSync(destPath, "utf8");
+    expect(afterSecond).toBe(afterFirst);
+  });
+
+  it("MCP-W4: remove happy — removes entry by name; remaining entries preserved", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    // Add bar first so alpha has foo + bar
+    await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      entry: { name: "bar", command: "cmd-bar", args: [], env: {} },
+      op: "add",
+    });
+    // Remove foo
+    const result = await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "alpha",
+      entry: { name: "foo", command: "_unused_", args: [], env: {} },
+      op: "remove",
+    });
+    expect(result.outcome).toBe("updated");
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{ name: string; mcpServers: Array<{ name: string }> }>;
+    };
+    const alpha = parsed.agents.find((a) => a.name === "alpha")!;
+    const names = alpha.mcpServers.map((m) => m.name);
+    expect(names).toEqual(["bar"]);
+  });
+
+  it("MCP-W5: agent not found — returns not-found; bytes unchanged", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+
+    const result = await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "ghost",
+      entry: { name: "x", command: "y", args: [], env: {} },
+      op: "add",
+    });
+    expect(result.outcome).toBe("not-found");
+    if (result.outcome === "not-found") {
+      expect(result.reason).toMatch(/ghost/);
+    }
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+
+  it("MCP-W6: file missing — returns file-not-found", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-mcp-missing-"));
+    const missing = join(dir, "nope.yaml");
+    const result = await updateAgentMcpServers({
+      existingConfigPath: missing,
+      agentName: "clawdy",
+      entry: { name: "x", command: "y", args: [], env: {} },
+      op: "add",
+    });
+    expect(result.outcome).toBe("file-not-found");
+    if (result.outcome === "file-not-found") {
+      expect(result.reason).toMatch(/not found/i);
+    }
+  });
+
+  it("MCP-W7: rename failure — unlinks tmp and re-throws", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    const unlinkCalls: string[] = [];
+    writerFs.rename = (async () => {
+      throw new Error("EACCES: simulated rename failure");
+    }) as typeof writerFs.rename;
+    writerFs.unlink = (async (...args: unknown[]) => {
+      unlinkCalls.push(String(args[0]));
+      return ORIG_FS.unlink(
+        args[0] as Parameters<typeof ORIG_FS.unlink>[0],
+      );
+    }) as typeof writerFs.unlink;
+
+    await expect(
+      updateAgentMcpServers({
+        existingConfigPath: destPath,
+        agentName: "clawdy",
+        entry: { name: "x", command: "y", args: [], env: {} },
+        op: "add",
+      }),
+    ).rejects.toThrow(/EACCES/);
+
+    const tmpUnlink = unlinkCalls.find((p) =>
+      /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p),
+    );
+    expect(tmpUnlink).toBeDefined();
+  });
+
+  it("MCP-W8: round-trip — configSchema.safeParse succeeds after add", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      entry: {
+        name: "test-mcp",
+        command: "my-cmd",
+        args: ["serve"],
+        env: { FOO: "bar" },
+      },
+      op: "add",
+    });
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as unknown;
+    const schemaResult = configSchema.safeParse(parsed);
+    expect(schemaResult.success).toBe(true);
+  });
+
+  it("MCP-W9: literal secret-scan refuses high-entropy + credential context; bytes unchanged", async () => {
+    const { destPath } = await setupMcpFixture(EMPTY_MCP_YAML);
+    const beforeBytes = readFileSync(destPath, "utf8");
+
+    // High-entropy (len>=12, 3 classes, entropy>=3.8, no word boundary).
+    // "password" label triggers credential-context gate.
+    const result = await updateAgentMcpServers({
+      existingConfigPath: destPath,
+      agentName: "clawdy",
+      entry: {
+        name: "mysql",
+        command: "mcporter",
+        args: [],
+        env: { DB_PASSWORD: "Kz9xQwertY2p8Zn!MQ" },
+      },
+      op: "add",
+    });
+    expect(result.outcome).toBe("refused");
+    if (result.outcome === "refused") {
+      expect(result.step).toBe("secret-scan");
+      expect(result.reason).toMatch(/DB_PASSWORD|high-entropy/i);
+    }
+
     const afterBytes = readFileSync(destPath, "utf8");
     expect(afterBytes).toBe(beforeBytes);
   });

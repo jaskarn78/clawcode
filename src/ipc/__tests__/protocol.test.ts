@@ -63,6 +63,9 @@ describe("IPC_METHODS", () => {
       "marketplace-list",
       "marketplace-install",
       "marketplace-remove",
+      // Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin list/install
+      "marketplace-list-plugins",
+      "marketplace-install-plugin",
       // Cost tracking (Phase 40)
       "costs",
       // Latency (Phase 50)
