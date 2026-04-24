@@ -316,6 +316,18 @@ export function resolveAgentConfig(
     memoryAutoLoadPath: agent.memoryAutoLoadPath
       ? expandHome(agent.memoryAutoLoadPath)
       : undefined,
+    // Phase 90 MEM-03 — per-agent top-K beats defaults.memoryRetrievalTopK.
+    // defaults.* is always populated (zod default 5), so `??` fallback is safe
+    // since topK=0 would be invalid (positive int constraint).
+    memoryRetrievalTopK:
+      agent.memoryRetrievalTopK ?? defaults.memoryRetrievalTopK,
+    // Phase 90 MEM-02 — scanner gate. Use explicit `!== undefined` check so
+    // `memoryScannerEnabled: false` in an agent yaml wins over a true default
+    // (mirrors memoryAutoLoad shape).
+    memoryScannerEnabled:
+      agent.memoryScannerEnabled !== undefined
+        ? agent.memoryScannerEnabled
+        : defaults.memoryScannerEnabled,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

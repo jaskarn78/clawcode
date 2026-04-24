@@ -281,3 +281,108 @@ describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
     expect(mock.sm.streamFromAgent).toHaveBeenCalledWith("alice", "hi", expect.any(Function), ownedTurn, { signal: undefined });
   });
 });
+
+// Phase 90 MEM-03 — memoryRetriever pre-turn injection tests
+describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () => {
+  it("MEM-03-TD1: retrieveMemoryChunks invoked with query; result wrapped as <memory-context>", async () => {
+    const mock = makeMockSessionManager();
+    const retriever = vi.fn(async () =>
+      Object.freeze([
+        Object.freeze({
+          chunkId: "c1",
+          path: "/ws/memory/zaid.md",
+          heading: "Investment",
+          body: "Zaid wants 40% SGOV",
+          fusedScore: 0.5,
+          scoreWeight: 0,
+        }),
+      ]),
+    );
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryRetriever: retriever,
+    });
+    const origin = makeRootOrigin("discord", "msg_m1");
+    await dispatcher.dispatch(origin, "alice", "Zaid investment proportion?");
+
+    expect(retriever).toHaveBeenCalledWith("alice", "Zaid investment proportion?");
+    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sentMessage = sendCall[1] as string;
+    expect(sentMessage).toMatch(/<memory-context/);
+    expect(sentMessage).toContain("Zaid wants 40% SGOV");
+    expect(sentMessage).toContain("Zaid investment proportion?"); // original user text preserved
+  });
+
+  it("MEM-03-TD2: retriever throws → dispatch fails-open, original message sent, warn logged", async () => {
+    const mock = makeMockSessionManager();
+    const retriever = vi.fn(async () => {
+      throw new Error("retrieval boom");
+    });
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryRetriever: retriever,
+    });
+    const origin = makeRootOrigin("discord", "msg_m2");
+    await dispatcher.dispatch(origin, "alice", "hello world");
+    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sentMessage = sendCall[1] as string;
+    expect(sentMessage).toBe("hello world"); // unchanged
+    expect(sentMessage).not.toContain("<memory-context");
+  });
+
+  it("MEM-03-TD3: zero chunks returned → no wrapper injected", async () => {
+    const mock = makeMockSessionManager();
+    const retriever = vi.fn(async () => Object.freeze([]));
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryRetriever: retriever,
+    });
+    const origin = makeRootOrigin("discord", "msg_m3");
+    await dispatcher.dispatch(origin, "alice", "random text");
+    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sendCall[1]).toBe("random text");
+  });
+
+  it("MEM-03-TD4: no memoryRetriever wired → message passes through unchanged (zero side effects)", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      // memoryRetriever NOT provided
+    });
+    const origin = makeRootOrigin("discord", "msg_m4");
+    await dispatcher.dispatch(origin, "alice", "plain message");
+    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sendCall[1]).toBe("plain message");
+  });
+
+  it("MEM-03-TD5: dispatchStream also augments with memory context", async () => {
+    const mock = makeMockSessionManager();
+    const retriever = vi.fn(async () =>
+      Object.freeze([
+        Object.freeze({
+          chunkId: "c1",
+          path: "/ws/memory/standing.md",
+          heading: null,
+          body: "body text",
+          fusedScore: 0.5,
+          scoreWeight: 0,
+        }),
+      ]),
+    );
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryRetriever: retriever,
+    });
+    const origin = makeRootOrigin("discord", "msg_m5");
+    await dispatcher.dispatchStream(origin, "alice", "streamed question", () => {});
+    const streamCall = (mock.sm.streamFromAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(streamCall[1]).toContain("<memory-context");
+    expect(streamCall[1]).toContain("body text");
+    expect(streamCall[1]).toContain("streamed question");
+  });
+});

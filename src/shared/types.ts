@@ -52,6 +52,20 @@ export type ResolvedAgentConfig = {
    * default path wins.
    */
   readonly memoryAutoLoadPath?: string;
+  /**
+   * Phase 90 MEM-03 — ALWAYS populated by loader.ts from
+   * agent.memoryRetrievalTopK ?? defaults.memoryRetrievalTopK. Consumed
+   * by SessionManager.getMemoryRetrieverForAgent to cap the retrieved
+   * chunk set per turn.
+   */
+  readonly memoryRetrievalTopK: number;
+  /**
+   * Phase 90 MEM-02 — ALWAYS populated by loader.ts from
+   * agent.memoryScannerEnabled ?? defaults.memoryScannerEnabled.
+   * When false, daemon.ts skips the MemoryScanner construction for
+   * this agent (memory/ content is managed externally).
+   */
+  readonly memoryScannerEnabled: boolean;
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;

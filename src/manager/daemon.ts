@@ -1660,7 +1660,7 @@ export async function startDaemon(
   // empty-string as appropriate).
   const makeLazyMemoryStoreProxy = (
     provider: () => unknown,
-  ): Parameters<typeof MemoryScanner>[0]["store"] => {
+  ): MemoryScannerDeps["store"] => {
     return new Proxy({} as never, {
       get(_t, prop: string) {
         const s = provider() as Record<string, unknown> | undefined;
@@ -1671,7 +1671,7 @@ export async function startDaemon(
         }
         return typeof s[prop] === "function" ? (s[prop] as (...a: unknown[]) => unknown).bind(s) : s[prop];
       },
-    }) as unknown as Parameters<typeof MemoryScanner>[0]["store"];
+    }) as unknown as MemoryScannerDeps["store"];
   };
 
   // 6b-bis. Phase 90 MEM-02 — per-agent MemoryScanner DI. Constructs a

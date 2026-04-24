@@ -24,6 +24,7 @@ import type { SessionManager } from "./session-manager.js";
 import type { TurnOrigin } from "./turn-origin.js";
 import type { Turn } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
+import type { MemoryRetrievalResult } from "../memory/memory-retrieval.js";
 
 /** Thrown when dispatch is called with invalid arguments. */
 export class TurnDispatcherError extends Error {
@@ -87,9 +88,35 @@ export type DispatchOptions = {
   readonly skillEffort?: EffortLevel;
 };
 
+/**
+ * Phase 90 MEM-03 — pre-turn memory retriever.
+ *
+ * Optional DI hook wired by daemon.ts: given an agent name + the user's
+ * query text, returns a (frozen) list of relevant memory chunks to
+ * prepend to the user's message as a `<memory-context>` block. Lands
+ * in the mutable-suffix region (per-turn), NEVER the stable prefix —
+ * v1.7 cache stability depends on the stable prefix staying byte-identical
+ * across turns.
+ *
+ * Errors from the retriever are caught and logged — retrieval is strictly
+ * best-effort (fail-open): the turn proceeds with the raw user message
+ * if retrieval throws.
+ */
+export type MemoryRetriever = (
+  agentName: string,
+  query: string,
+) => Promise<readonly MemoryRetrievalResult[]>;
+
 export type TurnDispatcherOptions = {
   readonly sessionManager: SessionManager;
   readonly log?: Logger;
+  /**
+   * Phase 90 MEM-03 — optional pre-turn retrieval hook. When undefined,
+   * dispatch proceeds with zero memory augmentation (no <memory-context>
+   * block, no perf cost). Wired by daemon.ts once both TurnDispatcher and
+   * MemoryScanner/SessionManager are constructed.
+   */
+  readonly memoryRetriever?: MemoryRetriever;
 };
 
 /**
@@ -100,10 +127,12 @@ export type TurnDispatcherOptions = {
 export class TurnDispatcher {
   private readonly sessionManager: SessionManager;
   private readonly log: Logger;
+  private readonly memoryRetriever: MemoryRetriever | undefined;
 
   constructor(options: TurnDispatcherOptions) {
     this.sessionManager = options.sessionManager;
     this.log = (options.log ?? logger).child({ component: "TurnDispatcher" });
+    this.memoryRetriever = options.memoryRetriever;
   }
 
   /**
@@ -132,13 +161,18 @@ export class TurnDispatcher {
     // time so live /clawcode-effort changes between turns propagate correctly.
     const priorEffort = this.applySkillEffort(agentName, options.skillEffort);
 
+    // Phase 90 MEM-03 — pre-turn hybrid RRF retrieval. Prepends a
+    // <memory-context> block to the user message when chunks are found.
+    // Lands in mutable suffix — stable prefix cache untouched. Fail-open.
+    const augmentedMessage = await this.augmentWithMemoryContext(agentName, message);
+
     // Phase 57 Plan 03: caller-owned Turn branch. When the caller provided
     // their own Turn (DiscordBridge pre-opens the Turn + receive-span before
     // calling us), attach the origin and forward — caller retains end() ownership.
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal — trace side-effect */ }
       try {
-        return await this.sessionManager.sendToAgent(agentName, message, options.turn, { signal: options.signal });
+        return await this.sessionManager.sendToAgent(agentName, augmentedMessage, options.turn, { signal: options.signal });
       } finally {
         this.restoreEffort(agentName, priorEffort);
       }
@@ -149,7 +183,7 @@ export class TurnDispatcher {
       try { turn.recordOrigin(origin); } catch { /* non-fatal */ }
     }
     try {
-      const response = await this.sessionManager.sendToAgent(agentName, message, turn, { signal: options.signal });
+      const response = await this.sessionManager.sendToAgent(agentName, augmentedMessage, turn, { signal: options.signal });
       try { turn?.end("success"); } catch { /* non-fatal — trace write is best-effort */ }
       return response;
     } catch (err) {
@@ -178,11 +212,14 @@ export class TurnDispatcher {
     // Phase 83 EFFORT-05 — same pre/post wrap as dispatch().
     const priorEffort = this.applySkillEffort(agentName, options.skillEffort);
 
+    // Phase 90 MEM-03 — pre-turn retrieval + <memory-context> wrap.
+    const augmentedMessage = await this.augmentWithMemoryContext(agentName, message);
+
     // Phase 57 Plan 03: caller-owned Turn branch (see dispatch() for rationale).
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal */ }
       try {
-        return await this.sessionManager.streamFromAgent(agentName, message, onChunk, options.turn, { signal: options.signal });
+        return await this.sessionManager.streamFromAgent(agentName, augmentedMessage, onChunk, options.turn, { signal: options.signal });
       } finally {
         this.restoreEffort(agentName, priorEffort);
       }
@@ -195,7 +232,7 @@ export class TurnDispatcher {
     try {
       const response = await this.sessionManager.streamFromAgent(
         agentName,
-        message,
+        augmentedMessage,
         onChunk,
         turn,
         { signal: options.signal },
@@ -207,6 +244,45 @@ export class TurnDispatcher {
       throw err;
     } finally {
       this.restoreEffort(agentName, priorEffort);
+    }
+  }
+
+  /**
+   * Phase 90 MEM-03 — augment the user message with retrieved memory
+   * chunks as a `<memory-context>` prefix. Runs only when a memoryRetriever
+   * was wired (DI), the message is non-trivially short, and retrieval
+   * returns chunks. Fail-open: any retriever error or no-chunks-found
+   * result yields the original message unchanged.
+   *
+   * Landing region: mutable suffix (the per-turn user message body). The
+   * stable prefix (system prompt / SOUL / IDENTITY / MEMORY.md auto-load
+   * per Plan 90-01) is NOT touched — v1.7 two-block cache stability is
+   * preserved.
+   */
+  private async augmentWithMemoryContext(
+    agentName: string,
+    message: string,
+  ): Promise<string> {
+    if (!this.memoryRetriever) return message;
+    const query = message.trim();
+    if (query.length === 0) return message;
+    try {
+      const chunks = await this.memoryRetriever(agentName, query);
+      if (chunks.length === 0) return message;
+      const rendered = chunks
+        .map((c) => {
+          const heading = c.heading ?? c.path;
+          return `### ${heading}\n${c.body}`;
+        })
+        .join("\n\n");
+      const wrapper = `<memory-context source="hybrid-rrf" chunks="${chunks.length}">\n${rendered}\n</memory-context>\n\n`;
+      return wrapper + message;
+    } catch (err) {
+      this.log.warn(
+        { agent: agentName, error: (err as Error).message },
+        "memory retrieval failed — continuing without context (fail-open)",
+      );
+      return message;
     }
   }
 

@@ -723,6 +723,14 @@ export const agentSchema = z.object({
   // When unset, session-config.ts reads `{workspace}/MEMORY.md`. Raw
   // string here; expansion via expandHome() happens in loader.ts.
   memoryAutoLoadPath: z.string().min(1).optional(),
+  // Phase 90 MEM-03 — per-agent override for the hybrid-RRF top-K. When
+  // omitted, resolver falls back to defaults.memoryRetrievalTopK (5 per
+  // D-RETRIEVAL). Reloadable (next turn picks up the new value).
+  memoryRetrievalTopK: z.number().int().positive().max(50).optional(),
+  // Phase 90 MEM-02 — per-agent gate for the chokidar scanner. Default true
+  // (via defaults.memoryScannerEnabled). Set to false to skip scanner start
+  // for an agent whose memory/ is managed externally.
+  memoryScannerEnabled: z.boolean().optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -796,6 +804,17 @@ export const defaultsSchema = z.object({
   // Phase 90 MEM-01 — Fleet-wide default: true (every agent auto-loads
   // its workspace MEMORY.md unless explicitly opted out). D-17 + D-18.
   memoryAutoLoad: z.boolean().default(true),
+  // Phase 90 MEM-03 — fleet-wide hybrid-RRF retrieval top-K (default 5
+  // per D-RETRIEVAL). Reloadable — next turn picks up the new value via
+  // the getMemoryRetrieverForAgent closure re-read.
+  memoryRetrievalTopK: z.number().int().positive().max(50).default(5),
+  // Phase 90 MEM-03 — fleet-wide token budget for retrieved chunks injected
+  // into the mutable suffix. 2000 tokens ≈ ~8000 chars; keeps the per-turn
+  // payload well under any sane model's context ceiling.
+  memoryRetrievalTokenBudget: z.number().int().positive().default(2000),
+  // Phase 90 MEM-02 — fleet-wide scanner on/off. Default true — every
+  // agent starts a chokidar watcher on its {workspace}/memory/**/*.md.
+  memoryScannerEnabled: z.boolean().default(true),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -1018,6 +1037,12 @@ export const configSchema = z.object({
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — fleet-wide default mirrors the zod-populated value.
     memoryAutoLoad: true,
+    // Phase 90 MEM-02 / MEM-03 — fleet-wide defaults mirror the zod-populated
+    // values in defaultsSchema above. Scanner on by default; retrieval
+    // topK=5 + token budget 2000 per D-RETRIEVAL.
+    memoryRetrievalTopK: 5,
+    memoryRetrievalTokenBudget: 2000,
+    memoryScannerEnabled: true,
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",

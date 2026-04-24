@@ -47,6 +47,11 @@ import { ModelNotAllowedError } from "./model-errors.js";
 import type { PermissionMode } from "./sdk-types.js";
 import type { WebhookManager } from "../discord/webhook-manager.js";
 import { sendRestartGreeting, classifyRestart } from "./restart-greeting.js";
+import type { MemoryScanner } from "../memory/memory-scanner.js";
+import {
+  retrieveMemoryChunks,
+  type MemoryRetrievalResult,
+} from "../memory/memory-retrieval.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -215,6 +220,17 @@ export class SessionManager {
   private webhookManager: WebhookManager | undefined = undefined;
 
   /**
+   * Phase 90 MEM-02 — per-agent MemoryScanner references, wired in from
+   * daemon.ts via setMemoryScanner(name, scanner) AFTER daemon boot
+   * constructs the scanner for each agent (mirrors the
+   * setWebhookManager DI pattern). When an agent has no scanner (opt-out
+   * via memoryScannerEnabled=false), retrieval still works against the
+   * existing memory_chunks rows — the scanner is only responsible for
+   * keeping them up-to-date. Scanners are stop()'d on agent stop.
+   */
+  private readonly memoryScanners: Map<string, MemoryScanner> = new Map();
+
+  /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
    * `streamFromAgent` / `sendToAgent` to reject new work with
    * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
@@ -283,6 +299,61 @@ export class SessionManager {
    */
   setWebhookManager(wm: WebhookManager): void {
     this.webhookManager = wm;
+  }
+
+  /**
+   * Phase 90 MEM-02 — inject a per-agent MemoryScanner reference. Called
+   * exactly once per agent by daemon.ts during boot after the scanner is
+   * constructed. Mirrors the setWebhookManager post-construction DI
+   * pattern; keeps the SessionManager constructor signature stable.
+   *
+   * Idempotent — re-calling with the same name replaces the previous
+   * scanner (daemon config reload path). The caller is responsible for
+   * stopping the prior scanner before re-injecting.
+   */
+  setMemoryScanner(agentName: string, scanner: MemoryScanner): void {
+    this.memoryScanners.set(agentName, scanner);
+  }
+
+  /**
+   * Phase 90 MEM-02 — test helper (read-only view of the scanner map).
+   * Tests assert scanner stop() called on stopAgent; production callers
+   * MUST NOT reach into this map directly.
+   * @internal
+   */
+  get _memoryScanners(): ReadonlyMap<string, MemoryScanner> {
+    return this.memoryScanners;
+  }
+
+  /**
+   * Phase 90 MEM-03 — build a pre-turn retrieval closure for `agentName`.
+   * Returns undefined when the agent has no MemoryStore (not initialized /
+   * already stopped) — the TurnDispatcher short-circuits to zero-retrieval
+   * in that case.
+   *
+   * The closure captures the agent's MemoryStore + the shared MiniLM
+   * embedder. Re-reads topK per turn from this.configs so a YAML hot-reload
+   * takes effect without re-wiring. 14-day time window is hard-coded per
+   * D-24; the budget reads from this.allAgentConfigs' defaults (defaults.
+   * memoryRetrievalTokenBudget).
+   */
+  getMemoryRetrieverForAgent(
+    agentName: string,
+  ): ((query: string) => Promise<readonly MemoryRetrievalResult[]>) | undefined {
+    const store = this.memory.memoryStores.get(agentName);
+    if (!store) return undefined;
+    const config = this.configs.get(agentName);
+    const topK = config?.memoryRetrievalTopK ?? 5;
+    const embedder = this.memory.embedder;
+    return async (query: string) => {
+      return retrieveMemoryChunks({
+        query,
+        store,
+        embed: (text: string) => embedder.embed(text),
+        topK,
+        timeWindowDays: 14,
+      });
+    };
   }
 
   /**
@@ -885,6 +956,20 @@ export class SessionManager {
     // stop + restart sequence bypasses the 5-min suppression (operator intent
     // is NOT a crash loop).
     this.greetCoolDownByAgent.delete(name);
+    // Phase 90 MEM-02 — stop the chokidar watcher + drop the reference.
+    // Swallow errors (a mid-close watcher on a unit-tested path shouldn't
+    // block agent stop). Scheduled for a future unit-level refactor if
+    // chokidar close() starts throwing during daemon shutdown.
+    const scanner = this.memoryScanners.get(name);
+    if (scanner) {
+      this.memoryScanners.delete(name);
+      void scanner.stop().catch((err) => {
+        this.log.warn(
+          { agent: name, error: (err as Error).message },
+          "memory-scanner stop failed (non-fatal)",
+        );
+      });
+    }
 
     registry = await readRegistry(this.registryPath);
     // clawdy-v2-stability (2026-04-19): record stoppedAt so reconcileRegistry's

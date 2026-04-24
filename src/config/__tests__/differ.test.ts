@@ -17,6 +17,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — defaults carry the zod-populated value.
       memoryAutoLoad: true,
+      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTopK: 5, // Phase 90 MEM-03
+      memoryScannerEnabled: true, // Phase 90 MEM-02
       // Phase 90 Plan 04 HUB-01/HUB-08 — defaults carry the zod-populated values.
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,

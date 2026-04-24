@@ -24,6 +24,9 @@ describe("resolveAgentConfig", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
+    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTopK: 5, // Phase 90 MEM-03
+    memoryScannerEnabled: true, // Phase 90 MEM-02
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: ["default-skill"],
@@ -486,6 +489,9 @@ describe("resolveAgentConfig - mcpServers", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
+    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTopK: 5, // Phase 90 MEM-03
+    memoryScannerEnabled: true, // Phase 90 MEM-02
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: [],
@@ -1117,6 +1123,9 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
+    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTopK: 5, // Phase 90 MEM-03
+    memoryScannerEnabled: true, // Phase 90 MEM-02
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: [],
@@ -1510,6 +1519,9 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
+      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTopK: 5, // Phase 90 MEM-03
+      memoryScannerEnabled: true, // Phase 90 MEM-02
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,
       skills: [],
@@ -1642,6 +1654,9 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
+      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTopK: 5, // Phase 90 MEM-03
+      memoryScannerEnabled: true, // Phase 90 MEM-02
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,
       skills: [],

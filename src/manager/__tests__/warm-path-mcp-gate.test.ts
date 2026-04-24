@@ -80,6 +80,8 @@ function makeConfig(
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
     memoryAutoLoad: true, // Phase 90 MEM-01
+    memoryRetrievalTopK: 5, // Phase 90 MEM-03
+    memoryScannerEnabled: true, // Phase 90 MEM-02
     skills: [],
     soul: undefined,
     identity: undefined,

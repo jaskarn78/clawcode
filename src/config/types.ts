@@ -75,6 +75,19 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "agents.*.memoryAutoLoad",
   "defaults.memoryAutoLoad",
   "agents.*.memoryAutoLoadPath",
+  // Phase 90 MEM-03 — top-K + token budget read lazily by
+  // getMemoryRetrieverForAgent at each turn. A YAML edit takes effect on
+  // the NEXT turn without daemon bounce.
+  "agents.*.memoryRetrievalTopK",
+  "defaults.memoryRetrievalTopK",
+  "defaults.memoryRetrievalTokenBudget",
+  // Phase 90 MEM-02 — scanner enable flag. Reloadable semantics: a YAML
+  // flip from true→false at runtime does NOT stop an already-running
+  // scanner (requires daemon restart); a false→true flip starts scanners
+  // only for newly-added agents. Pragmatic compromise vs. full watcher-
+  // lifecycle churn.
+  "agents.*.memoryScannerEnabled",
+  "defaults.memoryScannerEnabled",
 ]);
 
 /**

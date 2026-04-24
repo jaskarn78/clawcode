@@ -28,6 +28,8 @@ function makeConfig(name: string): ResolvedAgentConfig {
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
     memoryAutoLoad: true, // Phase 90 MEM-01
+    memoryRetrievalTopK: 5, // Phase 90 MEM-03
+    memoryScannerEnabled: true, // Phase 90 MEM-02
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -1571,6 +1573,8 @@ describe("restartAgent greeting emission (Phase 89)", () => {
       greetOnRestart: true,
       greetCoolDownMs: 300_000,
       memoryAutoLoad: true, // Phase 90 MEM-01
+      memoryRetrievalTopK: 5, // Phase 90 MEM-03
+      memoryScannerEnabled: true, // Phase 90 MEM-02
       ...overrides,
     };
   }
@@ -1914,4 +1918,79 @@ describe("restartAgent greeting emission (Phase 89)", () => {
 
     expect(sendAsAgentSpy).toHaveBeenCalledTimes(0);
   }, 15_000);
+});
+
+// Phase 90 MEM-02 / MEM-03 — setMemoryScanner DI + getMemoryRetrieverForAgent
+describe("SessionManager — memory scanner + retriever DI (Phase 90 MEM-02/MEM-03)", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-mem-"));
+    registryPath = join(tmpDir, "registry.json");
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* cleanup */
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("MEM-03-SM1: setMemoryScanner stores the reference, accessible via internal view", () => {
+    const stopSpy = vi.fn(async () => {});
+    const startSpy = vi.fn(async () => {});
+    const stub = {
+      start: startSpy,
+      stop: stopSpy,
+      backfill: vi.fn(async () => ({ indexed: 0, chunks: 0, skipped: 0 })),
+    };
+    manager.setMemoryScanner("alice", stub as never);
+    expect(manager._memoryScanners.get("alice")).toBe(stub);
+  });
+
+  it("MEM-03-SM2: stopAgent calls scanner.stop() and drops the reference", async () => {
+    const config = makeConfig("alice-mem");
+    const stopSpy = vi.fn(async () => {});
+    const stub = {
+      start: vi.fn(async () => {}),
+      stop: stopSpy,
+      backfill: vi.fn(async () => ({ indexed: 0, chunks: 0, skipped: 0 })),
+    };
+    await manager.startAgent("alice-mem", config);
+    manager.setMemoryScanner("alice-mem", stub as never);
+    await manager.stopAgent("alice-mem");
+    // stop is fire-and-forget — give the microtask queue a beat
+    await new Promise((r) => setImmediate(r));
+    expect(stopSpy).toHaveBeenCalled();
+    expect(manager._memoryScanners.get("alice-mem")).toBeUndefined();
+  });
+
+  it("MEM-03-SM3: getMemoryRetrieverForAgent returns undefined when no MemoryStore", () => {
+    // Agent never started → no MemoryStore → retriever is undefined
+    const retriever = manager.getMemoryRetrieverForAgent("ghost-agent");
+    expect(retriever).toBeUndefined();
+  });
+
+  it("MEM-03-SM4: getMemoryRetrieverForAgent returns a function when agent running", async () => {
+    const config = makeConfig("bob-mem");
+    await manager.startAgent("bob-mem", config);
+    const retriever = manager.getMemoryRetrieverForAgent("bob-mem");
+    expect(retriever).toBeDefined();
+    expect(typeof retriever).toBe("function");
+    // Empty store → zero results, no throw
+    const results = await retriever!("anything");
+    expect(results).toEqual([]);
+  });
 });
