@@ -3649,6 +3649,67 @@ async function routeMethod(
       return { agent: agentName, servers };
     }
 
+    case "list-sync-status": {
+      // Phase 91 Plan 05 SYNC-08 — OpenClaw ↔ ClawCode sync snapshot.
+      //
+      // Reads two on-disk artifacts produced by Plan 91-01/02:
+      //   - ~/.clawcode/manager/sync-state.json → authoritativeSide,
+      //     conflicts[], lastSyncedAt (SyncStateFile from src/sync/types.ts)
+      //   - ~/.clawcode/manager/sync.jsonl (last line) → last cycle outcome
+      //     (filesAdded/Updated/Removed/Bytes/Duration/status/cycleId)
+      //
+      // Consumed by the /clawcode-sync-status inline handler in
+      // slash-commands.ts (Phase 85 /clawcode-tools blueprint mirrored
+      // verbatim). Zero LLM turn cost — pure file reads, no network.
+      //
+      // Missing/unparseable files fall back to DEFAULT_SYNC_STATE +
+      // lastCycle:null respectively (never throws to the IPC caller).
+      const { readSyncState, DEFAULT_SYNC_STATE_PATH, DEFAULT_SYNC_JSONL_PATH } =
+        await import("../sync/sync-state-store.js");
+
+      const state = await readSyncState(DEFAULT_SYNC_STATE_PATH, logger);
+      const openConflicts = state.conflicts.filter((c) => c.resolvedAt === null);
+
+      let lastCycle: Record<string, unknown> | null = null;
+      try {
+        const raw = await readFile(DEFAULT_SYNC_JSONL_PATH, "utf8");
+        const lines = raw.trim().split("\n").filter((l) => l.length > 0);
+        if (lines.length > 0) {
+          const parsed = JSON.parse(lines[lines.length - 1]!) as unknown;
+          if (parsed && typeof parsed === "object") {
+            lastCycle = parsed as Record<string, unknown>;
+          }
+        }
+      } catch (err) {
+        // Missing jsonl is the first-boot path — silent. Other failures
+        // (corrupt JSON, permission) warn but still return a snapshot so
+        // the embed can render "never-run".
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") {
+          logger.warn(
+            {
+              path: DEFAULT_SYNC_JSONL_PATH,
+              error: err instanceof Error ? err.message : String(err),
+            },
+            "list-sync-status: failed to read sync.jsonl, returning lastCycle=null",
+          );
+        }
+      }
+
+      return {
+        authoritativeSide: state.authoritativeSide,
+        lastSyncedAt: state.lastSyncedAt,
+        conflictCount: openConflicts.length,
+        conflicts: openConflicts.map((c) => ({
+          path: c.path,
+          sourceHash: c.sourceHash,
+          destHash: c.destHash,
+          detectedAt: c.detectedAt,
+        })),
+        lastCycle,
+      };
+    }
+
     case "ask-advisor": {
       const agentName = validateStringParam(params, "agent");
       const question = validateStringParam(params, "question");

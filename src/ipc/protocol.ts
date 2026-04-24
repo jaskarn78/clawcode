@@ -29,6 +29,12 @@ export const IPC_METHODS = [
   // the `mcp-reconnect` heartbeat). Read by Plan 03's `/clawcode-tools`
   // slash command and by operators verifying live tool health.
   "list-mcp-status",
+  // Phase 91 Plan 05 SYNC-08 — OpenClaw↔ClawCode sync snapshot. Reads
+  // ~/.clawcode/manager/sync-state.json (authoritativeSide, open conflicts,
+  // perFileHashes) and the last line of ~/.clawcode/manager/sync.jsonl
+  // (last cycle outcome). Consumed by the /clawcode-sync-status inline
+  // slash handler in slash-commands.ts — zero LLM turn cost, daemon-routed.
+  "list-sync-status",
   // Messaging
   "send-message",
   "send-to-agent",
