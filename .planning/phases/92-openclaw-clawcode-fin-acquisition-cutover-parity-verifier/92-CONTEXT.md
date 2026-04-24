@@ -16,12 +16,12 @@ Before the operator flips `sync.authoritative` to clawcode (Phase 91 SYNC-09), r
 <decisions>
 ## Implementation Decisions
 
-### D-01: Source corpus — Discord message store
-OpenClaw does not persist Claude Code-style `sessions/*.jsonl` at the workspace path (confirmed absent at `~/.openclaw/workspace-finmentum/sessions/`). Authoritative behavior corpus is the Discord message history for fin-acquisition's channels.
+### D-01: Source corpus — Mission Control API (primary) + Discord fallback (SUPERSEDED — see D-11 below for amended plan)
+OpenClaw does not persist Claude Code-style `sessions/*.jsonl` at the workspace path (confirmed absent at `~/.openclaw/workspace-finmentum/sessions/`). **Original plan:** Discord history as authoritative corpus. **Amended (D-11):** primary source is OpenClaw Mission Control's REST API at `http://100.71.14.96:4000/api/*` with bearer token; Discord fetch_messages becomes the fallback for any channel-only context not represented in MC sessions.
 
-**How:** ingestor uses the existing `plugin:discord:fetch_messages` tool through the Claude Agent SDK to pull full history per channel. Writes to clawdy-local JSONL staging at `~/.clawcode/manager/cutover-staging/<agent>/discord-history.jsonl`. Idempotent by Discord message id (UNIQUE index).
+**How (amended):** ingestor calls Mission Control API endpoints (auth: `Authorization: Bearer ${MC_API_TOKEN}`) to enumerate agents + sessions + per-session full history, including subagent threads. Writes to clawdy-local JSONL staging at `~/.clawcode/manager/cutover-staging/<agent>/mc-history.jsonl` + `discord-history.jsonl` (one per source). Idempotent by `session_id + sequence_index` for MC, by `message_id` for Discord (UNIQUE indexes).
 
-**Depth default:** max(10000 messages, 90 days) per channel. Configurable via `--depth-msgs N --depth-days N` CLI flags. Covers the production corpus for fin-acquisition (4900 msgs observed 2026-04-23/24 window per prior analysis).
+**Depth default:** all available history per agent. Per-channel Discord fetch capped at max(10000 msgs, 90 days). MC API has no inherent cap but pagination still applies.
 
 ### D-02: Behavior profiler — single LLM pass
 Profiler is a single `TurnDispatcher.dispatch` call (reuse existing SDK path, no new primitive) with the Discord history JSONL as input and a structured-output system prompt that emits `AGENT-PROFILE.json`. Shape:
@@ -127,6 +127,45 @@ Escape hatch: `--skip-verify` flag. When set, writes an audit-log entry to `~/.c
 
 Additive fixes are trivially reversible (just delete/remove). Destructive fixes require snapshot capture at apply time — ledger row stores full pre-change content sha256 + compressed blob for files < 64KB. Files > 64KB logged as "irreversible-without-backup" and excluded from rollback.
 
+### D-11: Mission Control API as primary source corpus (AMENDS D-01)
+
+**Discovered 2026-04-24 mid-Phase-92-execution:** OpenClaw runs an "OpenClaw Mission Control" Next.js dashboard on host `100.71.14.96:4000` (systemd unit `mission-control.service`) that exposes a bearer-token-protected REST API surface over OpenClaw's internal session and orchestration data.
+
+**Endpoint surface (verified live):**
+- `GET /api/agents` → array of imported agents (id, name, role, model, status, gateway_agent_id, source, workspace_id, soul_md, user_md, agents_md)
+- `GET /api/agents/discover` → discovers agents from gateway (currently failing on stale WS — Mission Control has its own WS lifecycle to OpenClaw gateway at `ws://127.0.0.1:34238` with token `4fa2551407c5e927ede9b7457406fa194b66ef8eb0f782f0`)
+- `GET /api/openclaw/status` → all 19 active sessions with `{sessionId, key, kind ('direct'|'cron'|...), label, displayName, updatedAt, defaults: {modelProvider, model, contextTokens}}`
+- `GET /api/openclaw/sessions/{sessionId}/history` → full conversation history per session (relays to gateway `sessions.history` JSON-RPC method; returns `unknown[]` typed array of message records)
+- `GET /api/openclaw/orchestra` → orchestration graph (orchestrators + workspaceId)
+- `GET /api/openclaw/models` → model usage data
+- `GET /api/agents/{id}/openclaw` → per-agent OpenClaw-specific data
+
+**Auth shape:** `Authorization: Bearer ${MC_API_TOKEN}`. Token sourced from `/etc/systemd/system/mission-control.service` Environment line. **Operator must rotate before any GitHub commit.**
+
+**Backing storage:** Mission Control's own SQLite at `/home/jjagpal/clawd/projects/mission-control/mission-control.db` (alternative direct-read path if WS relay fails — schema TBD; fallback only).
+
+**Why this changes the ingestor (Plan 92-01):**
+- Subagent threads visible (Discord doesn't surface internal subagent dispatch)
+- Session-level metadata (model used per turn, kind: direct/cron/orchestra/...) gives the profiler stronger signal than Discord text alone
+- Cron-triggered sessions tracked separately from user-initiated (e.g., `Cron: ha-presence-check`, `Cron: finmentum-db-sync`) — cutover parity depends on these continuing to fire on ClawCode side
+- All 19 active sessions enumerable in one API call (vs N Discord channels × M messages each)
+
+**Plan 92-01 amendment:**
+- Primary ingestor target: `mc-history-ingestor.ts` calls Mission Control API (paginate via `lastUpdatedAt` cursor)
+- Secondary ingestor: existing `discord-history-ingestor.ts` for the Discord-only delta (operator messages via webhooks/bots that didn't traverse OpenClaw)
+- Both write to staging JSONL files (`mc-history.jsonl` + `discord-history.jsonl`); profiler reads union
+- Add CLI flag `--source mc|discord|both` (default: `both`)
+- New env vars (read from `/etc/clawcode/clawcode.env` or `/home/clawcode/.clawcode/manager/cutover.env`): `MC_API_BASE` (default `http://100.71.14.96:4000`), `MC_API_TOKEN` (no default — must be set, refuse to run if missing)
+- Idempotency: MC `(sessionId, sequence_index)` UNIQUE; Discord `(channelId, messageId)` UNIQUE
+- Resilience: if MC API returns "Failed to connect to OpenClaw Gateway" (503), fall back to direct SQLite read of `mission-control.db` via SSH+sqlite3 (read-only DB attach; never mutate)
+
+**Plan 92-02 amendment (target probe):**
+- TARGET-CAPABILITY.json gains a `sessionKinds[]` field listing direct/cron/orchestra/scheduled session types the source agent has used; target verification confirms ClawCode side has matching cron entries (Phase 47 cron config) and orchestra hookups
+
+**Plan 92-04 amendment (destructive proposer):**
+- New gap kind: `cron-session-not-mirrored` — DESTRUCTIVE because cron creation requires schedule + skill + tool wiring; operator confirmation per-cron in admin-clawdy
+- Update CutoverGap discriminated union from 8 → 9 kinds in 92-02
+
 ### Claude's Discretion
 
 - **Ledger format:** JSONL append-only (no binary encoding), matches Phase 84 skills-ledger.jsonl convention
@@ -181,6 +220,10 @@ Additive fixes are trivially reversible (just delete/remove). Destructive fixes 
 - **Report output:** /home/clawcode/.clawcode/manager/cutover-reports/<agent>/<timestamp>.md (one report per run; latest symlinked to /latest.md)
 - **Ledger path:** /home/clawcode/.clawcode/manager/cutover-ledger.jsonl (single file, all agents — per-line agent field)
 - **Discord history: fin-acquisition's channels from current clawcode.yaml:** 1471307765401129002 (admin-clawdy) + 1492939095696216307 (former fin-test, now fin-acquisition)
+- **Mission Control API base:** `http://100.71.14.96:4000` (systemd `mission-control.service`); reachable from clawdy via Tailscale; bearer token in `MC_API_TOKEN` env (rotate before any public commit)
+- **Mission Control SQLite (fallback):** `/home/jjagpal/clawd/projects/mission-control/mission-control.db` on OpenClaw host; read via `ssh ... sqlite3 file 'select ...'` only; never mutate
+- **OpenClaw Gateway WS (downstream of MC, not direct target):** `ws://127.0.0.1:34238` with token `4fa2551407c5e927ede9b7457406fa194b66ef8eb0f782f0` (gateway-internal — accessible from MC process only, not from clawdy directly)
+- **Source-agent identity in MC:** look up via `/api/agents` filter on `gateway_agent_id == 'fin-acquisition'`; expected workspace_id, source=`gateway`, model field present
 
 </specifics>
 
