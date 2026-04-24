@@ -1221,6 +1221,17 @@ export class SessionManager {
     // Phase 83 canary blueprint (see setEffortForAgent at line ~656).
     const webhookManager = this.webhookManager;
     const convStore = this.memory.conversationStores.get(name);
+    // Phase 90.1 debug — log the OUTER GUARD state so we can see whether we
+    // even reached sendRestartGreeting. Previously this branch was silent.
+    this.log.info(
+      {
+        agent: name,
+        hasWebhookManager: Boolean(webhookManager),
+        hasConvStore: Boolean(convStore),
+        hasBotDirectSender: Boolean(this.botDirectSender),
+      },
+      "[greeting] restartAgent: evaluating greeting guards",
+    );
     if (webhookManager && convStore) {
       void sendRestartGreeting(
         {
@@ -1239,12 +1250,22 @@ export class SessionManager {
           config,
           restartKind: classifyRestart(prevConsecutiveFailures),
         },
-      ).catch((err: unknown) => {
-        this.log.warn(
-          { agent: name, error: (err as Error).message },
-          "[greeting] sendRestartGreeting threw (non-fatal)",
-        );
-      });
+      )
+        .then((outcome) => {
+          // Phase 90.1 debug — log every greeting outcome so silent-skip
+          // classes (empty-state, cool-down, dormant, no-webhook) are
+          // visible in production logs without requiring a debugger.
+          this.log.info(
+            { agent: name, outcome },
+            "[greeting] sendRestartGreeting outcome",
+          );
+        })
+        .catch((err: unknown) => {
+          this.log.warn(
+            { agent: name, error: (err as Error).message },
+            "[greeting] sendRestartGreeting threw (non-fatal)",
+          );
+        });
     }
   }
 
