@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 90-06-PLAN.md (HUB-05 + HUB-07)
-last_updated: "2026-04-24T02:32:24.444Z"
+stopped_at: Completed 90-03-PLAN.md (MemoryFlushTimer + cue detection + subagent capture MEM-04/05/06)
+last_updated: "2026-04-24T02:46:54.360Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 7
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 90 (ClawHub Marketplace + fin-acquisition Memory Prep) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 
 ## Performance Metrics
 
@@ -157,6 +157,11 @@ Recent decisions affecting current work:
 - [Phase 90]: Two-pass fuzzy matcher (substring containment first, Levenshtein ≤ 3 second) + first-word tokenization on both label and field-name sides for op:// rewrite
 - [Phase 90]: Module-namespace imports (import * as mod) in install-plugin.ts + daemon.ts to enable vi.spyOn without breaking ESM live bindings
 - [Phase 90]: Long-lived IPC (clawhub-oauth-poll, up to 15min) without client-side timeoutMs — daemon handler self-terminates at expires_at
+- [Phase 90]: [Phase 90 Plan 03]: MemoryFlushTimer per-agent timer separate from existing Gap 3 flushTimers map (distinct concerns: markdown disk vs SQLite memories); memoryFileFlushTimers naming prevents name clash
+- [Phase 90]: [Phase 90 Plan 03]: flushNow() declared NON-async so concurrent callers receive the EXACT same inFlight Promise instance (toBe-referential equality); async wrapper would mint fresh Promise on every call, breaking dedup
+- [Phase 90]: [Phase 90 Plan 03]: discordReact signature is ({channelId, messageId}, emoji) not (messageId, emoji) — discord.js requires channel.messages.fetch first; channelId threaded through DispatchOptions
+- [Phase 90]: [Phase 90 Plan 03]: Fourth fire-and-forget canary application (after 83/86/87/89); cue write + Discord reaction + subagent capture ALL use void fn().catch(log.warn)
+- [Phase 90]: [Phase 90 Plan 03]: atomicWriteFile exported from memory-flush.ts and reused by memory-cue.ts + subagent-capture.ts — one implementation, one unlink-on-rename-fail discipline, one nanoid-suffixed tmp path
 
 ### v2.1 closing decisions (for reference)
 
@@ -242,9 +247,10 @@ Recent decisions affecting current work:
 | Phase 90 P05 | 20min 32s | 2 tasks | 14 files |
 | Phase 90 P02 | 25min | 2 (TDD) tasks | 34 files |
 | Phase 90 P06 | 12m 23s | 2 tasks | 13 files |
+| Phase 90 P03 | 20min | 2 tasks | 36 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-06-PLAN.md (HUB-05 + HUB-07)
+Stopped at: Completed 90-03-PLAN.md (MemoryFlushTimer + cue detection + subagent capture MEM-04/05/06)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
