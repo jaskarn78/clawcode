@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, securityConfigSchema, streamingConfigSchema } from "../schema.js";
+import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, securityConfigSchema, streamingConfigSchema, MEMORY_AUTOLOAD_MAX_BYTES } from "../schema.js";
+import { RELOADABLE_FIELDS } from "../types.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
 
 describe("mcpServerSchema", () => {
@@ -1563,6 +1564,110 @@ describe("configSchema - soul/soulFile + identity/identityFile mutual exclusion 
       expect(messages).toMatch(/memoryPath.*conflict/i);
       expect(messages).toContain("fin-acquisition");
       expect(messages).toContain("fin-research");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 01 — MEM-01: agentSchema.memoryAutoLoad + memoryAutoLoadPath
+// additions, defaultsSchema.memoryAutoLoad default, MEMORY_AUTOLOAD_MAX_BYTES
+// constant, RELOADABLE_FIELDS entries. Mirrors Phase 86 allowedModels +
+// Phase 89 greetOnRestart additive-optional rollout shape.
+// ---------------------------------------------------------------------------
+
+describe("agentSchema - memoryAutoLoad / memoryAutoLoadPath (Phase 90 MEM-01)", () => {
+  it("MEM-01-S1: agentSchema.parse({name:'x'}) leaves memoryAutoLoad undefined (optional)", () => {
+    const result = agentSchema.safeParse({ name: "x" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.memoryAutoLoad).toBeUndefined();
+      expect(result.data.memoryAutoLoadPath).toBeUndefined();
+    }
+  });
+
+  it("MEM-01-S3a: agentSchema accepts explicit memoryAutoLoad=false override", () => {
+    const result = agentSchema.safeParse({ name: "x", memoryAutoLoad: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.memoryAutoLoad).toBe(false);
+    }
+  });
+
+  it("MEM-01-S3b: agentSchema accepts memoryAutoLoadPath override as abs path", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      memoryAutoLoadPath: "/abs/memo.md",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.memoryAutoLoadPath).toBe("/abs/memo.md");
+    }
+  });
+
+  it("MEM-01-S3c: agentSchema rejects empty memoryAutoLoadPath string (min(1))", () => {
+    const result = agentSchema.safeParse({ name: "x", memoryAutoLoadPath: "" });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("defaultsSchema - memoryAutoLoad (Phase 90 MEM-01)", () => {
+  it("MEM-01-S2: defaultsSchema.parse({}) defaults memoryAutoLoad to true", () => {
+    const result = defaultsSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.memoryAutoLoad).toBe(true);
+    }
+  });
+
+  it("MEM-01-S2b: defaultsSchema accepts explicit memoryAutoLoad=false override", () => {
+    const result = defaultsSchema.safeParse({ memoryAutoLoad: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.memoryAutoLoad).toBe(false);
+    }
+  });
+});
+
+describe("MEMORY_AUTOLOAD_MAX_BYTES constant (Phase 90 MEM-01 D-17)", () => {
+  it("MEM-01-L3: MEMORY_AUTOLOAD_MAX_BYTES === 50 * 1024", () => {
+    expect(MEMORY_AUTOLOAD_MAX_BYTES).toBe(50 * 1024);
+  });
+});
+
+describe("RELOADABLE_FIELDS - MEM-01 entries (Phase 90 MEM-01 / D-18)", () => {
+  it("MEM-01-S4a: RELOADABLE_FIELDS contains agents.*.memoryAutoLoad", () => {
+    expect(RELOADABLE_FIELDS.has("agents.*.memoryAutoLoad")).toBe(true);
+  });
+
+  it("MEM-01-S4b: RELOADABLE_FIELDS contains defaults.memoryAutoLoad", () => {
+    expect(RELOADABLE_FIELDS.has("defaults.memoryAutoLoad")).toBe(true);
+  });
+
+  it("MEM-01-S4c: RELOADABLE_FIELDS contains agents.*.memoryAutoLoadPath", () => {
+    expect(RELOADABLE_FIELDS.has("agents.*.memoryAutoLoadPath")).toBe(true);
+  });
+});
+
+describe("configSchema - memoryAutoLoad backward compatibility (Phase 90 MEM-01)", () => {
+  it("v2.1-style config (15 agents without memoryAutoLoad) parses unchanged; defaults populated", () => {
+    // Simulate a migrated v2.1 fleet: 15 agents, none declaring memoryAutoLoad.
+    const agents = Array.from({ length: 15 }, (_, i) => ({
+      name: `agent-${i}`,
+      channels: [`${1000000000000000 + i}`],
+      model: "sonnet" as const,
+      effort: "low" as const,
+    }));
+    const result = configSchema.safeParse({ version: 1, agents });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Defaults.memoryAutoLoad is populated to true.
+      expect(result.data.defaults.memoryAutoLoad).toBe(true);
+      // Every agent's memoryAutoLoad is undefined on the raw parse —
+      // loader resolves against defaults downstream.
+      for (const agent of result.data.agents) {
+        expect(agent.memoryAutoLoad).toBeUndefined();
+        expect(agent.memoryAutoLoadPath).toBeUndefined();
+      }
     }
   });
 });

@@ -1608,3 +1608,126 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
     ).toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 01 — MEM-01 memoryAutoLoad resolver fallback.
+// Mirrors the greetOnRestart / allowedModels additive-optional rollout:
+// defaults.memoryAutoLoad defaults to true; per-agent memoryAutoLoad=false
+// overrides; per-agent memoryAutoLoadPath is expanded via expandHome.
+// ---------------------------------------------------------------------------
+
+describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
+  function makeDefaults(): DefaultsConfig {
+    return {
+      model: "sonnet",
+      effort: "low" as const,
+      allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
+      // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
+      memoryAutoLoad: true,
+      skills: [],
+      basePath: "~/.clawcode/agents",
+      skillsPath: "~/.clawcode/skills",
+      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: {
+          warningThreshold: 0.6,
+          criticalThreshold: 0.75,
+          zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 },
+        },
+      },
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+      openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+      browser: {
+        enabled: true,
+        headless: true,
+        warmOnBoot: true,
+        navigationTimeoutMs: 30000,
+        actionTimeoutMs: 10000,
+        viewport: { width: 1280, height: 720 },
+        userAgent: null,
+        maxScreenshotInlineBytes: 524288,
+      },
+      search: {
+        enabled: true,
+        backend: "brave" as const,
+        brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+        exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+        maxResults: 20,
+        timeoutMs: 10000,
+        fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
+      },
+      image: {
+        enabled: true,
+        backend: "openai" as const,
+        openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+        minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+        fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+        maxImageBytes: 10485760,
+        timeoutMs: 60000,
+        workspaceSubdir: "generated-images",
+      },
+    };
+  }
+
+  function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      name: "clawdy",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      ...overrides,
+    } as AgentConfig;
+  }
+
+  it("MEM-01-L1: v2.1 fleet (15 agents, none declaring memoryAutoLoad) resolves — every ResolvedAgentConfig has memoryAutoLoad=true", () => {
+    const defaults = makeDefaults();
+    for (let i = 0; i < 15; i++) {
+      const agent = makeAgent({ name: `agent-${i}` });
+      const resolved = resolveAgentConfig(agent, defaults);
+      expect(resolved.memoryAutoLoad).toBe(true);
+      // memoryAutoLoadPath stays undefined when neither agent nor defaults set it.
+      expect(resolved.memoryAutoLoadPath).toBeUndefined();
+    }
+  });
+
+  it("MEM-01-L2: agent-level memoryAutoLoad=false keeps the override; resolver does NOT override with default true", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ memoryAutoLoad: false });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryAutoLoad).toBe(false);
+  });
+
+  it("MEM-01-L2b: defaults.memoryAutoLoad=false propagates when agent omits override", () => {
+    const defaults: DefaultsConfig = { ...makeDefaults(), memoryAutoLoad: false };
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryAutoLoad).toBe(false);
+  });
+
+  it("MEM-01-L2c: memoryAutoLoadPath is expanded via expandHome when set", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ memoryAutoLoadPath: "~/custom/memo.md" });
+    const resolved = resolveAgentConfig(agent, defaults);
+    // expandHome should replace the tilde with the current HOME dir.
+    expect(resolved.memoryAutoLoadPath).toBe(expandHome("~/custom/memo.md"));
+    expect(resolved.memoryAutoLoadPath).not.toContain("~");
+  });
+
+  it("MEM-01-L2d: absolute memoryAutoLoadPath passes through unchanged post-expandHome", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ memoryAutoLoadPath: "/abs/memo.md" });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.memoryAutoLoadPath).toBe("/abs/memo.md");
+  });
+});
