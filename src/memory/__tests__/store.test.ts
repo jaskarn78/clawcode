@@ -786,4 +786,151 @@ describe("MemoryStore", () => {
       expect(row.source_turn_ids).toBe('["alpha","beta"]');
     });
   });
+
+  // Phase 90 Plan 02 — MEM-02: memory_chunks + vec_memory_chunks + FTS5 + memory_files tables
+  describe("memory_chunks (Phase 90 MEM-02)", () => {
+    function randomEmbedding384(): Float32Array {
+      const arr = new Float32Array(384);
+      for (let i = 0; i < 384; i++) arr[i] = Math.random() * 2 - 1;
+      return arr;
+    }
+
+    it("MEM-02-S1: migrateMemoryChunks creates memory_chunks + memory_files + vec_memory_chunks + memory_chunks_fts", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+
+      const tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('memory_chunks','memory_files')")
+        .all() as Array<{ name: string }>;
+      const names = tables.map((t) => t.name).sort();
+      expect(names).toEqual(["memory_chunks", "memory_files"]);
+
+      // Virtual tables register differently — query them directly
+      const vcount = db
+        .prepare("SELECT count(*) AS n FROM vec_memory_chunks")
+        .get() as { n: number };
+      expect(vcount.n).toBe(0);
+      const fcount = db
+        .prepare("SELECT count(*) AS n FROM memory_chunks_fts")
+        .get() as { n: number };
+      expect(fcount.n).toBe(0);
+    });
+
+    it("MEM-02-S2: insertMemoryChunk writes to all three chunk tables + memory_files", () => {
+      store = createTestStore();
+      const chunkId = store.insertMemoryChunk({
+        path: "/ws/memory/2026-04-24-test.md",
+        chunkIndex: 0,
+        heading: "Section A",
+        body: "Zaid wants 40% allocation in SGOV for safety.",
+        tokenCount: 50,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "abc123",
+        embedding: randomEmbedding384(),
+      });
+      expect(chunkId).toBeTruthy();
+
+      const db = store.getDatabase();
+      const chunkCount = db
+        .prepare("SELECT count(*) AS n FROM memory_chunks WHERE path = ?")
+        .get("/ws/memory/2026-04-24-test.md") as { n: number };
+      expect(chunkCount.n).toBe(1);
+
+      const fileCount = db
+        .prepare("SELECT count(*) AS n FROM memory_files WHERE path = ?")
+        .get("/ws/memory/2026-04-24-test.md") as { n: number };
+      expect(fileCount.n).toBe(1);
+
+      const vecCount = db
+        .prepare("SELECT count(*) AS n FROM vec_memory_chunks WHERE chunk_id = ?")
+        .get(chunkId) as { n: number };
+      expect(vecCount.n).toBe(1);
+
+      const ftsCount = db
+        .prepare("SELECT count(*) AS n FROM memory_chunks_fts WHERE chunk_id = ?")
+        .get(chunkId) as { n: number };
+      expect(ftsCount.n).toBe(1);
+    });
+
+    it("MEM-02-S3: deleteMemoryChunksByPath removes rows from all tables", () => {
+      store = createTestStore();
+      const path = "/ws/memory/2026-04-24-doomed.md";
+      store.insertMemoryChunk({
+        path,
+        chunkIndex: 0,
+        heading: "Doomed",
+        body: "about to die",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "sha",
+        embedding: randomEmbedding384(),
+      });
+      const removed = store.deleteMemoryChunksByPath(path);
+      expect(removed).toBe(1);
+
+      const db = store.getDatabase();
+      const chunkCount = db
+        .prepare("SELECT count(*) AS n FROM memory_chunks WHERE path = ?")
+        .get(path) as { n: number };
+      expect(chunkCount.n).toBe(0);
+      const fileCount = db
+        .prepare("SELECT count(*) AS n FROM memory_files WHERE path = ?")
+        .get(path) as { n: number };
+      expect(fileCount.n).toBe(0);
+    });
+
+    it("MEM-02-S4: re-insert after delete works (idempotency)", () => {
+      store = createTestStore();
+      const path = "/ws/memory/2026-04-24-redo.md";
+      store.insertMemoryChunk({
+        path,
+        chunkIndex: 0,
+        heading: "v1",
+        body: "old body",
+        tokenCount: 5,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "v1hash",
+        embedding: randomEmbedding384(),
+      });
+      store.deleteMemoryChunksByPath(path);
+      store.insertMemoryChunk({
+        path,
+        chunkIndex: 0,
+        heading: "v2",
+        body: "new body",
+        tokenCount: 5,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "v2hash",
+        embedding: randomEmbedding384(),
+      });
+      const db = store.getDatabase();
+      const rows = db
+        .prepare("SELECT heading, body FROM memory_chunks WHERE path = ?")
+        .all(path) as Array<{ heading: string; body: string }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].heading).toBe("v2");
+      expect(rows[0].body).toBe("new body");
+    });
+
+    it("MEM-02-S5: searchMemoryChunksFts finds inserted body text", () => {
+      store = createTestStore();
+      store.insertMemoryChunk({
+        path: "/ws/memory/fts-test.md",
+        chunkIndex: 0,
+        heading: "Investment",
+        body: "Zaid wants 40% SGOV allocation for safety",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "x",
+        embedding: randomEmbedding384(),
+      });
+      const results = store.searchMemoryChunksFts("Zaid", 10);
+      expect(results.length).toBeGreaterThan(0);
+    });
+  });
 });
