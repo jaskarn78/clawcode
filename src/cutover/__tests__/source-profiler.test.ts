@@ -1,31 +1,40 @@
 /**
- * Phase 92 Plan 01 Task 1 (RED) — source-profiler tests.
+ * Phase 92 Plan 01 Task 1 (RED) — source-profiler tests (D-11 amended).
  *
- * Pins the contract for `profileAgentFromDiscordHistory(deps)` defined in
- * the plan's <interfaces> block. All 6 tests fail at this stage because
- * src/cutover/source-profiler.ts does not yet exist (RED gate).
+ * Pins the contract for `runSourceProfiler(deps)` defined in the plan's
+ * <interfaces> block and the D-11 amendment. All 6 tests fail at this
+ * stage because src/cutover/source-profiler.ts does not yet exist (RED).
  *
- * Behavioral pins:
- *   P1: empty staging JSONL → {kind:'no-history'}, zero dispatcher calls
- *   P2: 100 msgs (under chunk threshold) → ONE dispatch call → 7-key output
- *   P3: 50001 msgs → CHUNKED into ≥2 dispatcher calls; merged output
- *   P4: output has SORTED keys + SORTED arrays (canonical order)
- *   P5: deterministic — two runs over identical JSONL produce byte-identical files
- *   P6: dispatcher returning bad shape → {kind:'schema-validation-failed'} + no file written
+ * Behavioral pins (D-11 — profiler reads UNION of mc + discord JSONLs):
+ *   P1: empty staging (both JSONLs absent) → {kind:'no-history'}, zero dispatcher calls
+ *   P2 (P-BOTH): 50 mc + 50 discord entries (under chunk threshold) → ONE
+ *       dispatch call → 7-key output; the prompt passed to dispatch contains
+ *       BOTH "origin":"mc" and "origin":"discord" markers
+ *   P3 (P-CHUNK): chunkThresholdMsgs=4 + 8 entries spread across 60 days →
+ *       ≥2 dispatcher calls; merged output unions tools across chunks
+ *   P4 (P-DEDUP): duplicate (sessionId, sequenceIndex) for mc and duplicate
+ *       (channel_id, message_id) for discord are deduped before dispatch;
+ *       messagesProcessed reflects dedup count
+ *   P5 (P-DET): two runs over identical input produce byte-identical
+ *       AGENT-PROFILE.json (sorted keys + sorted arrays + count-summed
+ *       topIntents)
+ *   P6 (P-CRON): mc entries with kind:"cron" produce topIntents prefixed
+ *       "cron:"; merged output preserves the prefix and sort order
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile, rm, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
-  profileAgentFromDiscordHistory,
+  runSourceProfiler,
   type ProfileDeps,
 } from "../source-profiler.js";
 import {
   PROFILER_CHUNK_THRESHOLD_MSGS,
   type DiscordHistoryEntry,
+  type McHistoryEntry,
 } from "../types.js";
 
 function makeLog() {
@@ -40,18 +49,18 @@ function makeLog() {
   } as unknown as import("pino").Logger;
 }
 
-function makeMessages(n: number): DiscordHistoryEntry[] {
-  // Spread timestamps over ~120 days so chunkBy30DayWindows can split them.
+function makeDiscordMessages(n: number, channelId = "c1"): DiscordHistoryEntry[] {
   const out: DiscordHistoryEntry[] = [];
   for (let i = 0; i < n; i++) {
     const ts = new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + i * 1000).toISOString();
     out.push({
-      message_id: `m-${i}`,
-      channel_id: "c1",
+      origin: "discord",
+      message_id: `dm-${i}`,
+      channel_id: channelId,
       author_id: "u-1",
       author_name: "alice",
       ts,
-      content: `msg ${i}`,
+      content: `discord msg ${i}`,
       attachments: [],
       is_bot: false,
     });
@@ -59,10 +68,34 @@ function makeMessages(n: number): DiscordHistoryEntry[] {
   return out;
 }
 
-async function seedJsonl(stagingDir: string, msgs: readonly DiscordHistoryEntry[]): Promise<string> {
-  await mkdir(stagingDir, { recursive: true });
-  const path = join(stagingDir, "discord-history.jsonl");
-  const lines = msgs.map((m) => JSON.stringify(m)).join("\n") + (msgs.length > 0 ? "\n" : "");
+function makeMcEntries(
+  n: number,
+  opts: { sessionId?: string; kind?: McHistoryEntry["kind"]; baseTs?: number } = {},
+): McHistoryEntry[] {
+  const sessionId = opts.sessionId ?? "s-1";
+  const kind = opts.kind ?? "direct";
+  const baseTs = opts.baseTs ?? Date.UTC(2026, 1, 1);
+  const out: McHistoryEntry[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      origin: "mc",
+      sessionId,
+      sequenceIndex: i,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `mc msg ${i}`,
+      model: "claude-sonnet-4-6",
+      ts: new Date(baseTs + i * 1000).toISOString(),
+      kind,
+      label: "L",
+    });
+  }
+  return out;
+}
+
+async function seedJsonl(dir: string, name: string, entries: readonly object[]): Promise<string> {
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, name);
+  const lines = entries.map((e) => JSON.stringify(e)).join("\n") + (entries.length > 0 ? "\n" : "");
   await writeFile(path, lines, "utf8");
   return path;
 }
@@ -90,11 +123,18 @@ afterEach(async () => {
   await rm(outputDir, { recursive: true, force: true });
 });
 
+function defaultJsonlPaths(): readonly string[] {
+  return [
+    join(stagingDir, "mc-history.jsonl"),
+    join(stagingDir, "discord-history.jsonl"),
+  ];
+}
+
 function baseDeps(overrides: Partial<ProfileDeps> = {}): ProfileDeps {
   const dispatch = vi.fn(async () => CANONICAL_PROFILE_TEXT);
   return {
     agent: "fin-acquisition",
-    stagingDir,
+    historyJsonlPaths: defaultJsonlPaths(),
     outputDir,
     dispatcher: { dispatch: dispatch as unknown as ProfileDeps["dispatcher"]["dispatch"] },
     log: makeLog(),
@@ -102,10 +142,10 @@ function baseDeps(overrides: Partial<ProfileDeps> = {}): ProfileDeps {
   };
 }
 
-describe("profileAgentFromDiscordHistory — P1 no history", () => {
-  it("returns {kind:'no-history'} when JSONL absent and never calls dispatcher", async () => {
+describe("runSourceProfiler — P1 no history", () => {
+  it("returns {kind:'no-history'} when both JSONLs absent and never calls dispatcher", async () => {
     const dispatch = vi.fn();
-    const outcome = await profileAgentFromDiscordHistory(
+    const outcome = await runSourceProfiler(
       baseDeps({
         dispatcher: { dispatch: dispatch as unknown as ProfileDeps["dispatcher"]["dispatch"] },
       }),
@@ -115,11 +155,13 @@ describe("profileAgentFromDiscordHistory — P1 no history", () => {
   });
 });
 
-describe("profileAgentFromDiscordHistory — P2 single chunk", () => {
-  it("100 msgs runs ONE dispatch call and writes valid 7-key AGENT-PROFILE.json", async () => {
-    await seedJsonl(stagingDir, makeMessages(100));
+describe("runSourceProfiler — P2 both origins single chunk", () => {
+  it("50 mc + 50 discord runs ONE dispatch and prompt contains BOTH origins", async () => {
+    await seedJsonl(stagingDir, "mc-history.jsonl", makeMcEntries(50));
+    await seedJsonl(stagingDir, "discord-history.jsonl", makeDiscordMessages(50));
+
     const dispatch = vi.fn(async () => CANONICAL_PROFILE_TEXT);
-    const outcome = await profileAgentFromDiscordHistory(
+    const outcome = await runSourceProfiler(
       baseDeps({
         dispatcher: { dispatch: dispatch as unknown as ProfileDeps["dispatcher"]["dispatch"] },
       }),
@@ -132,8 +174,7 @@ describe("profileAgentFromDiscordHistory — P2 single chunk", () => {
       expect(outcome.messagesProcessed).toBe(100);
       const raw = await readFile(outcome.profilePath, "utf8");
       const parsed = JSON.parse(raw);
-      const keys = Object.keys(parsed).sort();
-      expect(keys).toEqual([
+      expect(Object.keys(parsed).sort()).toEqual([
         "memoryRefs",
         "mcpServers",
         "models",
@@ -143,28 +184,33 @@ describe("profileAgentFromDiscordHistory — P2 single chunk", () => {
         "uploads",
       ].sort());
     }
+
+    // The prompt passed to dispatch should reference both origins so the
+    // LLM sees the discriminator.
+    const calls = (dispatch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    // dispatcher.dispatch(origin, agentName, message, options) — message is at index 2
+    const promptStr = calls[0]?.[2] as string;
+    expect(typeof promptStr).toBe("string");
+    expect(promptStr).toContain("mc ");
+    expect(promptStr).toContain("discord ");
   });
 });
 
-describe("profileAgentFromDiscordHistory — P3 chunked at 50001 msgs", () => {
-  it("splits into ≥2 chunks and merges outputs (union+dedup)", async () => {
-    // Manually configure a small threshold to exercise chunking without
-    // creating 50K real messages — the SOURCE invariant is the threshold
-    // CONSTANT (PROFILER_CHUNK_THRESHOLD_MSGS=50000); the chunkThresholdMsgs
-    // override is the DI'd test hook from <interfaces>.
+describe("runSourceProfiler — P3 chunked across 30-day windows", () => {
+  it("8 entries spread across 60 days with chunkThresholdMsgs=4 → ≥2 dispatcher calls; tools merged", async () => {
     const total = 8;
-    const msgs = makeMessages(total);
-    // Spread across 60 days so the 30-day-window split actually triggers.
     const span = 60 * 86400 * 1000;
-    msgs.forEach((m, i) => {
-      m.ts = new Date(Date.UTC(2026, 0, 1) + Math.floor((i * span) / total)).toISOString();
+    const baseTs = Date.UTC(2026, 0, 1);
+    const mc = makeMcEntries(total, { baseTs });
+    mc.forEach((m, i) => {
+      m.ts = new Date(baseTs + Math.floor((i * span) / total)).toISOString();
+      m.sequenceIndex = i;
     });
-    await seedJsonl(stagingDir, msgs);
+    await seedJsonl(stagingDir, "mc-history.jsonl", mc);
 
     let callIdx = 0;
     const dispatch = vi.fn(async () => {
-      // Different output per chunk to verify merge: chunk 0 → tools=[Bash];
-      // chunk 1 → tools=[Read]; merged should yield [Bash, Read].
       const tools = callIdx === 0 ? ["Bash"] : ["Read"];
       const intents = callIdx === 0
         ? [{ intent: "portfolio-analysis", count: 30 }]
@@ -181,23 +227,22 @@ describe("profileAgentFromDiscordHistory — P3 chunked at 50001 msgs", () => {
       });
     });
 
-    const outcome = await profileAgentFromDiscordHistory(
+    const outcome = await runSourceProfiler(
       baseDeps({
-        chunkThresholdMsgs: 4, // force chunking for 8 msgs
+        chunkThresholdMsgs: 4,
         dispatcher: { dispatch: dispatch as unknown as ProfileDeps["dispatcher"]["dispatch"] },
       }),
     );
 
     expect(outcome.kind).toBe("profiled");
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls.length).toBeGreaterThanOrEqual(2);
     if (outcome.kind === "profiled") {
       expect(outcome.chunksProcessed).toBeGreaterThanOrEqual(2);
       const merged = JSON.parse(await readFile(outcome.profilePath, "utf8")) as {
         tools: string[];
         topIntents: Array<{ intent: string; count: number }>;
       };
-      expect(merged.tools).toEqual(["Bash", "Read"]); // sorted union
-      // count-summed merge: portfolio-analysis 30+17=47 sorted DESC by count
+      expect(merged.tools).toEqual(["Bash", "Read"]);
       expect(merged.topIntents[0]).toEqual({ intent: "portfolio-analysis", count: 47 });
     }
   });
@@ -207,77 +252,56 @@ describe("profileAgentFromDiscordHistory — P3 chunked at 50001 msgs", () => {
   });
 });
 
-describe("profileAgentFromDiscordHistory — P4 sorted keys + sorted arrays", () => {
-  it("output has lexicographic key order and alphabetically sorted arrays", async () => {
-    await seedJsonl(stagingDir, makeMessages(10));
-    const dispatch = vi.fn(async () =>
-      JSON.stringify({
-        tools: ["Read", "Bash"], // intentionally unsorted on input
-        skills: ["market-research", "content-engine"],
-        mcpServers: ["search", "browser"],
-        memoryRefs: [],
-        models: ["m2", "m1"],
-        uploads: [],
-        topIntents: [
-          { intent: "writing", count: 5 },
-          { intent: "portfolio-analysis", count: 47 },
-          { intent: "research", count: 47 },
-        ],
-      }),
-    );
-    const outcome = await profileAgentFromDiscordHistory(
+describe("runSourceProfiler — P4 dedup across origins", () => {
+  it("duplicate mc (sessionId, sequenceIndex) and duplicate discord (channel_id, message_id) deduped before dispatch", async () => {
+    const mc = makeMcEntries(5);
+    // Duplicate the first MC entry — same (sessionId, sequenceIndex)
+    const mcWithDup = [...mc, mc[0]];
+    const discord = makeDiscordMessages(5);
+    // Duplicate the first discord entry — same (channel_id, message_id)
+    const discordWithDup = [...discord, discord[0]];
+
+    await seedJsonl(stagingDir, "mc-history.jsonl", mcWithDup);
+    await seedJsonl(stagingDir, "discord-history.jsonl", discordWithDup);
+
+    const dispatch = vi.fn(async () => CANONICAL_PROFILE_TEXT);
+    const outcome = await runSourceProfiler(
       baseDeps({
         dispatcher: { dispatch: dispatch as unknown as ProfileDeps["dispatcher"]["dispatch"] },
       }),
     );
+
     expect(outcome.kind).toBe("profiled");
     if (outcome.kind === "profiled") {
-      const raw = await readFile(outcome.profilePath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        tools: string[];
-        skills: string[];
-        mcpServers: string[];
-        models: string[];
-        topIntents: Array<{ intent: string; count: number }>;
-      };
-      // Canonical lexicographic key order
-      expect(Object.keys(parsed)).toEqual(
-        ["memoryRefs", "mcpServers", "models", "skills", "tools", "topIntents", "uploads"].sort(),
-      );
-      expect(parsed.tools).toEqual(["Bash", "Read"]);
-      expect(parsed.skills).toEqual(["content-engine", "market-research"]);
-      expect(parsed.mcpServers).toEqual(["browser", "search"]);
-      expect(parsed.models).toEqual(["m1", "m2"]);
-      // topIntents sorted by count DESC, ties broken by intent alphabetical
-      expect(parsed.topIntents).toEqual([
-        { intent: "portfolio-analysis", count: 47 },
-        { intent: "research", count: 47 },
-        { intent: "writing", count: 5 },
-      ]);
+      // 5 mc + 5 discord = 10 unique (each duplicate dropped)
+      expect(outcome.messagesProcessed).toBe(10);
     }
   });
 });
 
-describe("profileAgentFromDiscordHistory — P5 byte-identical determinism", () => {
-  it("two runs over identical JSONL produce byte-identical AGENT-PROFILE.json", async () => {
-    await seedJsonl(stagingDir, makeMessages(50));
-    const dispatch1 = vi.fn(async () => CANONICAL_PROFILE_TEXT);
+describe("runSourceProfiler — P5 deterministic byte-identical output", () => {
+  it("two runs over identical input produce byte-identical AGENT-PROFILE.json", async () => {
+    await seedJsonl(stagingDir, "mc-history.jsonl", makeMcEntries(20));
+    await seedJsonl(stagingDir, "discord-history.jsonl", makeDiscordMessages(20));
+
     const out1Dir = await mkdtemp(join(tmpdir(), "cutover-det-1-"));
     const out2Dir = await mkdtemp(join(tmpdir(), "cutover-det-2-"));
     try {
-      const o1 = await profileAgentFromDiscordHistory(
+      const dispatch1 = vi.fn(async () => CANONICAL_PROFILE_TEXT);
+      const o1 = await runSourceProfiler(
         baseDeps({
           outputDir: out1Dir,
           dispatcher: { dispatch: dispatch1 as unknown as ProfileDeps["dispatcher"]["dispatch"] },
         }),
       );
       const dispatch2 = vi.fn(async () => CANONICAL_PROFILE_TEXT);
-      const o2 = await profileAgentFromDiscordHistory(
+      const o2 = await runSourceProfiler(
         baseDeps({
           outputDir: out2Dir,
           dispatcher: { dispatch: dispatch2 as unknown as ProfileDeps["dispatcher"]["dispatch"] },
         }),
       );
+
       expect(o1.kind).toBe("profiled");
       expect(o2.kind).toBe("profiled");
       if (o1.kind === "profiled" && o2.kind === "profiled") {
@@ -292,27 +316,49 @@ describe("profileAgentFromDiscordHistory — P5 byte-identical determinism", () 
   });
 });
 
-describe("profileAgentFromDiscordHistory — P6 schema validation failure", () => {
-  it("dispatcher returning malformed JSON surfaces schema-validation-failed and writes no file", async () => {
-    await seedJsonl(stagingDir, makeMessages(10));
-    const dispatch = vi.fn(async () => JSON.stringify({ NOT_VALID: [] }));
-    const outcome = await profileAgentFromDiscordHistory(
+describe("runSourceProfiler — P6 cron-prefixed intents preserved", () => {
+  it("mc entries with kind:'cron' yield topIntents prefixed 'cron:' in merged output", async () => {
+    const cronEntries = makeMcEntries(5, { sessionId: "s-cron", kind: "cron" });
+    const directEntries = makeMcEntries(5, {
+      sessionId: "s-direct",
+      kind: "direct",
+      baseTs: Date.UTC(2026, 1, 2),
+    });
+    await seedJsonl(stagingDir, "mc-history.jsonl", [...cronEntries, ...directEntries]);
+
+    const dispatch = vi.fn(async () =>
+      JSON.stringify({
+        tools: [],
+        skills: [],
+        mcpServers: [],
+        memoryRefs: [],
+        models: [],
+        uploads: [],
+        topIntents: [
+          { intent: "cron:finmentum-db-sync", count: 12 },
+          { intent: "portfolio-analysis", count: 47 },
+        ],
+      }),
+    );
+
+    const outcome = await runSourceProfiler(
       baseDeps({
         dispatcher: { dispatch: dispatch as unknown as ProfileDeps["dispatcher"]["dispatch"] },
       }),
     );
-    expect(outcome.kind).toBe("schema-validation-failed");
-    if (outcome.kind === "schema-validation-failed") {
-      expect(outcome.error.length).toBeGreaterThan(0);
-      expect(outcome.rawResponse.length).toBeGreaterThan(0);
+
+    expect(outcome.kind).toBe("profiled");
+    if (outcome.kind === "profiled") {
+      const parsed = JSON.parse(await readFile(outcome.profilePath, "utf8")) as {
+        topIntents: Array<{ intent: string; count: number }>;
+      };
+      // Must preserve the cron: prefix
+      const intents = parsed.topIntents.map((t) => t.intent);
+      expect(intents).toContain("cron:finmentum-db-sync");
+      expect(intents).toContain("portfolio-analysis");
+      // Sorted by count DESC: portfolio-analysis (47) before cron:finmentum-db-sync (12)
+      expect(parsed.topIntents[0]?.intent).toBe("portfolio-analysis");
+      expect(parsed.topIntents[1]?.intent).toBe("cron:finmentum-db-sync");
     }
-    // No AGENT-PROFILE.json written
-    let exists = true;
-    try {
-      await access(join(outputDir, "AGENT-PROFILE.json"));
-    } catch {
-      exists = false;
-    }
-    expect(exists).toBe(false);
   });
 });

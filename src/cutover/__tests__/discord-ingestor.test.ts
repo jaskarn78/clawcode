@@ -22,9 +22,9 @@ import { tmpdir } from "node:os";
 import {
   ingestDiscordHistory,
   type DiscordFetchMessagesFn,
-  type IngestDeps,
+  type DiscordIngestDeps,
 } from "../discord-ingestor.js";
-import type { DiscordHistoryEntry, IngestOutcome } from "../types.js";
+import type { DiscordHistoryEntry, DiscordIngestOutcome } from "../types.js";
 
 function makeLog() {
   return {
@@ -41,10 +41,13 @@ function makeLog() {
 function makeMessages(n: number, channelId: string): DiscordHistoryEntry[] {
   // Deterministic synthetic messages — id includes channelId for assertion
   // clarity and `ts` is unique per index to allow oldest→newest sort checks.
+  // D-11: `origin: "discord"` is the discriminator literal threaded through
+  // the merged-corpus profiler.
   const out: DiscordHistoryEntry[] = [];
   for (let i = 0; i < n; i++) {
     const ts = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
     out.push({
+      origin: "discord",
       message_id: `m-${channelId}-${i}`,
       channel_id: channelId,
       author_id: "u-1",
@@ -87,7 +90,7 @@ afterEach(async () => {
   await rm(stagingDir, { recursive: true, force: true });
 });
 
-function baseDeps(overrides: Partial<IngestDeps> = {}): IngestDeps {
+function baseDeps(overrides: Partial<DiscordIngestDeps> = {}): DiscordIngestDeps {
   return {
     agent: "fin-acquisition",
     channels: ["c1"],
@@ -117,7 +120,7 @@ describe("ingestDiscordHistory — I2 paginates 250 msgs over 3 pages", () => {
   it("writes 250 JSONL lines and reports newMessages=250", async () => {
     const corpus = makeMessages(250, "c1");
     const fetchMessages = pagedFetch(corpus);
-    const outcome: IngestOutcome = await ingestDiscordHistory(
+    const outcome: DiscordIngestOutcome = await ingestDiscordHistory(
       baseDeps({ fetchMessages }),
     );
 
