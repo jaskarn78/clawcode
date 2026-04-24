@@ -52,6 +52,7 @@ import { registerOpenAiLogCommand } from "./commands/openai-log.js";
 import { registerRegistryCommand } from "./commands/registry.js";
 import { registerMigrateOpenclawCommand } from "./commands/migrate-openclaw.js";
 import { registerSyncCommand } from "./commands/sync.js";
+import { registerCutoverCommand } from "./commands/cutover.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -184,6 +185,7 @@ registerOpenAiLogCommand(program);
 registerRegistryCommand(program);
 registerMigrateOpenclawCommand(program);
 registerSyncCommand(program);
+registerCutoverCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,
