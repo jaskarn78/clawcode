@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2
-milestone_name: OpenClaw Parity & Polish
-status: v2.2 milestone complete
-stopped_at: Completed 89-01-PLAN.md (schema + restart-greeting.ts pure module)
-last_updated: "2026-04-23T23:15:31.793Z"
-last_activity: 2026-04-23
+milestone: v1.0
+milestone_name: milestone
+status: Ready to execute
+stopped_at: Completed 90-01-PLAN.md (MEMORY.md auto-inject into stable prefix + additive-optional memoryAutoLoad schema)
+last_updated: "2026-04-24T01:16:40.688Z"
+last_activity: 2026-04-24
 progress:
-  total_phases: 13
-  completed_phases: 7
-  total_plans: 19
-  completed_plans: 19
+  total_phases: 7
+  completed_phases: 0
+  total_plans: 7
+  completed_plans: 1
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.3 Marketplace & Memory Activation — Phase 90 (ClawHub Marketplace + fin-acquisition Memory Prep) added 2026-04-24, awaiting planning.
+**Current focus:** Phase 90 — ClawHub Marketplace + fin-acquisition Memory Prep
 
 ## Current Position
 
-Phase: 90
-Plan: Not started
+Phase: 90 (ClawHub Marketplace + fin-acquisition Memory Prep) — EXECUTING
+Plan: 2 of 7
 
 ## Performance Metrics
 
@@ -136,6 +136,10 @@ Recent decisions affecting current work:
 - [Phase 89-agent-restart-greeting]: Plan 89-01 — Truncation uses U+2026 (single char) with slice(MAX_CHARS - 1) — produces exactly 500-char embed description. Plan's draft assumed '...' (3 chars) would overshoot; pinned by test P15 asserting toHaveLength(500).
 - [Phase 89-agent-restart-greeting]: Plan 89-01 — ConversationReader surface uses real public API 'getTurnsForSession(sessionId, limit?)' — plan's draft 'getTurnsForSessionLimited' refers to private prepared statement. Source-of-truth correction.
 - [Phase 89-agent-restart-greeting]: Plan 89-01 — 22 test fixtures across agent/bootstrap/config/discord/heartbeat/manager updated with greetOnRestart: true, greetCoolDownMs: 300_000 (Rule 3 blocking cascade — same pattern as Phase 86 allowedModels additive-required-field rollout).
+- [Phase 90]: Plan 90-01 — Sixth application of Phase 83/86/89 additive-optional schema blueprint for memoryAutoLoad (agentSchema optional + defaultsSchema default true + RELOADABLE_FIELDS + loader resolver + configSchema literal). Zero behavior change for v2.1 migrated fleet.
+- [Phase 90]: Plan 90-01 — MEMORY.md injected into identityStr (sources.identity) so the assembler places it in the stable prefix; order SOUL → IDENTITY → MEMORY → MCP pinned by MEM-01-C1 four-monotonic-indexOf test. 50KB cap enforced via Buffer.byteLength + Buffer.slice(50*1024).toString('utf8') + literal marker '…(truncated at 50KB cap)'.
+- [Phase 90]: Plan 90-01 — Opt-out readFile-zero-call invariant (MEM-01-C3): when memoryAutoLoad=false, readFile is NEVER invoked against MEMORY.md path. Override path (MEM-01-C4): when memoryAutoLoadPath is set, workspace/MEMORY.md is NEVER read, even if override fails. Silent fall-through on missing file mirrors Phase 78 soulFile/identityFile.
+- [Phase 90]: Plan 90-01 — Rule 3 blocking cascade: 22 test fixtures updated to populate memoryAutoLoad: true. Matches Phase 89 GREET-10 cascade (22 fixtures then, 22 fixtures now). Pattern now routine for each additive-required field rollout in v2.x.
 
 ### v2.1 closing decisions (for reference)
 
@@ -216,9 +220,10 @@ Recent decisions affecting current work:
 | Phase 88-skills-marketplace P01 | 11min 27s | 2 tasks | 10 files |
 | Phase 88-skills-marketplace P02 | 26min 47s | 2 tasks | 10 files |
 | Phase 89 P01 | 20m 10s | 2 tasks | 30 files |
+| Phase 90 P01 | 12min | 2 tasks | 28 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-23
-Stopped at: Completed 89-01-PLAN.md (schema + restart-greeting.ts pure module)
+Last activity: 2026-04-24
+Stopped at: Completed 90-01-PLAN.md (MEMORY.md auto-inject into stable prefix + additive-optional memoryAutoLoad schema)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
