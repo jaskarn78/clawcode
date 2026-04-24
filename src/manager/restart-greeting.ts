@@ -84,6 +84,18 @@ export type ConversationReader = Readonly<{
   ): readonly ConversationTurn[];
 }>;
 
+/**
+ * Fallback sender used when no per-agent webhook is provisioned. Sends the
+ * greeting embed to the bound Discord channel under the bot's own identity
+ * (instead of the per-agent webhook identity). Less pretty (no custom
+ * avatar/display name), but keeps the greeting functional when the bot lacks
+ * MANAGE_WEBHOOKS or the auto-provisioner hasn't created webhooks yet.
+ * Phase 90.1 hotfix — 2026-04-24.
+ */
+export type BotDirectSender = Readonly<{
+  sendEmbed(channelId: string, embed: EmbedBuilder): Promise<string>;
+}>;
+
 export type SendRestartGreetingDeps = Readonly<{
   webhookManager: WebhookSender;
   conversationStore: ConversationReader;
@@ -97,6 +109,8 @@ export type SendRestartGreetingDeps = Readonly<{
    * clean restart does not trip the cool-down gate.
    */
   coolDownState: Map<string, number>;
+  /** Optional bot-direct fallback when no webhook is provisioned (Phase 90.1). */
+  botDirectSender?: BotDirectSender;
 }>;
 
 export type RestartKind = "clean" | "crash-suspected";
@@ -289,7 +303,11 @@ export async function sendRestartGreeting(
   if (!config.channels || config.channels.length === 0) {
     return { kind: "skipped-no-channel" };
   }
-  if (!deps.webhookManager.hasWebhook(agentName)) {
+  // Phase 90.1: only skip here if NEITHER webhook nor bot-direct fallback is
+  // available. If bot-direct is wired, we fall through and use it at the
+  // send step (branch below).
+  const hasWebhook = deps.webhookManager.hasWebhook(agentName);
+  if (!hasWebhook && !deps.botDirectSender) {
     return { kind: "skipped-no-webhook" };
   }
 
@@ -355,23 +373,55 @@ export async function sendRestartGreeting(
       ? buildCrashRecoveryEmbed(displayName, avatarUrl, summary)
       : buildCleanRestartEmbed(displayName, avatarUrl, summary);
 
-  // 9. Send via webhook (D-08 / D-13 / D-15 / GREET-06). A failure here is
-  //    non-fatal at the session-manager layer — our caller wraps the whole
-  //    invocation in `.catch(log-and-swallow)`. We still surface the typed
-  //    outcome so observability surfaces (future metrics phase) can count.
+  // 9. Send via webhook (D-08 / D-13 / D-15 / GREET-06), OR fall back to
+  //    bot-direct (Phase 90.1) when no webhook is provisioned / webhook send
+  //    fails. Bot-direct targets the first bound channel directly under the
+  //    bot's own identity — less pretty (no per-agent avatar) but functional
+  //    when MANAGE_WEBHOOKS is missing. A failure here is still non-fatal at
+  //    the session-manager layer — our caller wraps the whole invocation in
+  //    `.catch(log-and-swallow)`.
   let messageId: string;
-  try {
-    messageId = await deps.webhookManager.sendAsAgent(
-      agentName,
-      displayName,
-      avatarUrl,
-      embed,
-    );
-  } catch (err) {
-    return {
-      kind: "send-failed",
-      error: err instanceof Error ? err.message : String(err),
-    };
+  const channelId = config.channels?.[0];
+  if (hasWebhook) {
+    try {
+      messageId = await deps.webhookManager.sendAsAgent(
+        agentName,
+        displayName,
+        avatarUrl,
+        embed,
+      );
+    } catch (err) {
+      // Webhook send failed — try bot-direct fallback if available.
+      if (deps.botDirectSender && channelId) {
+        try {
+          messageId = await deps.botDirectSender.sendEmbed(channelId, embed);
+        } catch (err2) {
+          return {
+            kind: "send-failed",
+            error: err2 instanceof Error ? err2.message : String(err2),
+          };
+        }
+      } else {
+        return {
+          kind: "send-failed",
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+  } else {
+    // No webhook — use bot-direct. (hasWebhook=false here implies
+    // deps.botDirectSender is truthy per the guard at step 3.)
+    if (!deps.botDirectSender || !channelId) {
+      return { kind: "skipped-no-webhook" };
+    }
+    try {
+      messageId = await deps.botDirectSender.sendEmbed(channelId, embed);
+    } catch (err) {
+      return {
+        kind: "send-failed",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   // 10. Cool-down write-back (D-14). MUST run AFTER the successful send —

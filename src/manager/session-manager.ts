@@ -221,6 +221,16 @@ export class SessionManager {
   private webhookManager: WebhookManager | undefined = undefined;
 
   /**
+   * Phase 90.1 hotfix — bot-direct fallback sender for Phase 89 restart
+   * greetings when per-agent webhooks are missing (e.g., bot lacks
+   * MANAGE_WEBHOOKS permission in the target channel, or the auto-provisioner
+   * hasn't run). Wired from daemon.ts via setBotDirectSender() AFTER the
+   * DiscordBridge starts. When undefined, behavior matches Phase 89 original:
+   * greeting is skipped with `skipped-no-webhook` outcome.
+   */
+  private botDirectSender: import("./restart-greeting.js").BotDirectSender | undefined = undefined;
+
+  /**
    * Phase 90 MEM-02 — per-agent MemoryScanner references, wired in from
    * daemon.ts via setMemoryScanner(name, scanner) AFTER daemon boot
    * constructs the scanner for each agent (mirrors the
@@ -313,6 +323,15 @@ export class SessionManager {
    */
   setWebhookManager(wm: WebhookManager): void {
     this.webhookManager = wm;
+  }
+
+  /**
+   * Phase 90.1 hotfix — inject the bot-direct fallback sender. Called once by
+   * daemon.ts AFTER the DiscordBridge starts. Greeting helper will use this
+   * when the per-agent webhook is missing. Idempotent.
+   */
+  setBotDirectSender(sender: import("./restart-greeting.js").BotDirectSender): void {
+    this.botDirectSender = sender;
   }
 
   /**
@@ -1211,6 +1230,9 @@ export class SessionManager {
           now: () => Date.now(),
           log: this.log,
           coolDownState: this.greetCoolDownByAgent,
+          // Phase 90.1 hotfix — pass bot-direct fallback if wired. Greeting
+          // helper uses it when no per-agent webhook is provisioned.
+          botDirectSender: this.botDirectSender,
         },
         {
           agentName: name,

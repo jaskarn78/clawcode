@@ -2343,6 +2343,24 @@ export async function startDaemon(
       discordBridgeRef.current = discordBridge;
       log.info({ boundChannels: routingTable.channelToAgent.size }, "Discord bridge started");
 
+      // Phase 90.1 hotfix — wire bot-direct fallback into SessionManager so
+      // Phase 89 restart greetings can fall back to plain bot-identity send
+      // when per-agent webhooks are missing (MANAGE_WEBHOOKS missing / auto-
+      // provisioner no-oped). Captures the bridge via closure.
+      {
+        const bridgeForGreeting = discordBridge;
+        manager.setBotDirectSender({
+          async sendEmbed(channelId, embed) {
+            const channel = await bridgeForGreeting.discordClient.channels.fetch(channelId);
+            if (!channel || !channel.isTextBased() || !("send" in channel)) {
+              throw new Error(`channel ${channelId} is not a sendable text channel`);
+            }
+            const msg = await (channel as import("discord.js").TextBasedChannel & { send: (opts: { embeds: import("discord.js").EmbedBuilder[] }) => Promise<{ id: string }> }).send({ embeds: [embed] });
+            return msg.id;
+          },
+        });
+      }
+
       // Auto-provision webhooks for agents without manual webhookUrl
       const allWebhookIdentities = await provisionWebhooks({
         client: discordBridge.discordClient,
