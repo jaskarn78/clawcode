@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.3 Marketplace & Memory Activation shipped 2026-04-24 — Phase 90 complete (7 plans, 21 requirements). Awaiting next milestone or operator-initiated fin-acquisition cutover per `.planning/migrations/fin-acquisition-cutover.md`.
+**Current focus:** v2.4 OpenClaw ↔ ClawCode Continuous Sync — Phase 91 (fin-acquisition workspace sync) added 2026-04-24, awaiting planning.
 
 ## Current Position
 
-Phase: —
-Plan: —
+Phase: 91
+Plan: Not started
 
 ## Performance Metrics
 
@@ -204,6 +204,8 @@ Recent decisions affecting current work:
 - 2026-04-22: Phase 89 added — Agent restart greeting (active Discord send of prior-context summary on restart)
 - 2026-04-23: v2.2 shipped (phases 83-89, 19 plans, 32 tasks) — OpenClaw Parity & Polish complete; tech_debt audit status (2 Phase 89 UAT items deferred)
 - 2026-04-24: v2.3 Marketplace & Memory Activation opened — Phase 90 added: ClawHub Marketplace + fin-acquisition Memory Prep. Scope synthesized from Apr 23-24 fin-acquisition Discord conversation-history analysis (4900 msgs) + v2.2 gap analysis of OpenClaw → ClawCode fin-acquisition migration readiness. 21 requirements (HUB-01..08 + MEM-01..06 + WIRE-01..07) across 7 suggested plans.
+- 2026-04-24: v2.3 shipped — Phase 90 autonomously executed (7 plans, 4 waves, 21 reqs, 1454/1462 tests). Milestone archived. Phase 90.1 hotfixes applied live: bot-direct greeting fallback + iterate-back empty-session + minimal greeting always-fires + restartAgent tolerates 'not running'. fin-acquisition channel binding mingled into test channel (1492939095696216307) per operator directive. fin-test agent removed from config.
+- 2026-04-24: v2.4 OpenClaw ↔ ClawCode Continuous Sync opened — Phase 91 added: fin-acquisition workspace sync (markdown + uploads + skills + conversation-turn translator, uni-directional OpenClaw→ClawCode until operator flips `sync.authoritative`). 10 SYNC-01..10 requirements, 6-plan decomposition hint. Built on Phase 80 memory-translator + rsync + chokidar/inotify.
 
 ### Pending Todos
 

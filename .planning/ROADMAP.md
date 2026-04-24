@@ -16,6 +16,7 @@
 - :white_check_mark: **v2.1 OpenClaw Agent Migration** - Phases 75-82 + 82.1 (shipped 2026-04-21)
 - :white_check_mark: **v2.2 OpenClaw Parity & Polish** - Phases 83-89 (shipped 2026-04-23)
 - :white_check_mark: **v2.3 Marketplace & Memory Activation** - Phase 90 (shipped 2026-04-24)
+- :hammer: **v2.4 OpenClaw ↔ ClawCode Continuous Sync** - Phase 91+ (opened 2026-04-24)
 
 ## Phases
 
@@ -171,10 +172,34 @@ Phase 90 delivered: ClawHub Marketplace extension (/clawcode-skills-browse union
 **Goal**: Caller-provided agent config on `/v1/chat/completions` — OpenClaw agents use ClawCode as a rendering backend without pre-registration.
 **Status**: Shipped 2026-04-20. See `.planning/phases/74-seamless-openclaw-backend-caller-provided-agent-config/`.
 
+### Phase 91: OpenClaw ↔ ClawCode fin-acquisition Workspace Sync
+**Goal**: Keep the OpenClaw fin-acquisition agent (host `100.71.14.96`, workspace `~/.openclaw/workspace-finmentum/`) continuously synchronized with its ClawCode mirror (host `100.98.211.108`, workspace `/home/clawcode/.clawcode/agents/finmentum/`) so that when the operator flips the OpenClaw channel model binding from `anthropic-api/claude-sonnet-4-6` to `clawcode/fin-acquisition`, the ClawCode agent picks up with zero perceived context loss — same MEMORY.md, same memory/**/*.md dated session notes, same 513MB uploads, same skills, same vault/procedures docs, and ideally same conversation-turn history.
+**Depends on**: Phase 90 (fin-acquisition pre-cutover wiring), Phase 80 (memory translation pattern), Phase 74 (seamless OpenClaw backend), v2.1 OpenClaw Agent Migration (initial one-shot migration, now continuous), Phase 85 (MCP readiness handshake). Zero new npm deps expected — chokidar + rsync + ssh already in place.
+**Requirements**: SYNC-01, SYNC-02, SYNC-03, SYNC-04, SYNC-05, SYNC-06, SYNC-07, SYNC-08, SYNC-09, SYNC-10
+**Success Criteria** (what must be TRUE):
+  1. A change to `~/.openclaw/workspace-finmentum/MEMORY.md` on OpenClaw host is reflected on clawdy host's `/home/clawcode/.clawcode/agents/finmentum/MEMORY.md` within 10 seconds (via inotify) OR 5 minutes (via scheduled rsync fallback), whichever fires first
+  2. New dated session files in OpenClaw's `memory/2026-XX-YY-*.md` appear on ClawCode side within 5 min with identical content + byte-equal hash; the ClawCode scanner auto-indexes them into memory_chunks
+  3. Uploads (e.g., Ramy sends a new PDF in the fin-acquisition channel) land in OpenClaw's uploads/discord/ and propagate to ClawCode's uploads/discord/ within 5 min; byte-equal; no truncation
+  4. The conversation-turn translator can ingest N hours of OpenClaw `sessions/*.jsonl` updates into ClawCode's ConversationStore with zero duplicates (verified by origin_id UNIQUE constraint); re-running the translator is a no-op
+  5. During cutover (operator flips model binding), the first turn on ClawCode side sees identical MEMORY.md, identical memory_chunks retrieval surface, identical uploads catalog as OpenClaw's prior session would have. No "fresh slate" or "no memory" response
+  6. `/clawcode-sync-status` shows last-run JSON with: files_added/updated/removed counts, duration, 0 conflicts (happy path); on conflict: lists specific paths + checksums
+  7. `sync.authoritative: openclaw` (default) blocks ANY write FROM ClawCode → OpenClaw; attempting to flip manually via `clawcode sync set-authoritative clawcode` is rejected unless operator passes `--confirm-cutover` flag
+  8. Post-cutover, rsync from ClawCode → OpenClaw preserves OpenClaw's workspace as rollback target; 7-day dual-mode period allows revert via `clawcode sync set-authoritative openclaw --revert-cutover`
+  9. Sync runner degrades gracefully — if remote SSH fails (host unreachable), runner logs warning + skips cycle, does not block; next scheduled cycle retries
+  10. Excluded paths verified: no .sqlite, no sessions/*.jsonl, no credential files, no .git appear on destination; regression test pins the exclude filter
+**Plans**: TBD — suggested 6-plan decomposition:
+- 91-01 Sync runner (bash + rsync over ssh) + direction-aware mode + exclude filter + systemd timer + observability JSONL (SYNC-01, SYNC-02, SYNC-05, SYNC-07, SYNC-09, SYNC-10)
+- 91-02 Inotify hot-watch for MEMORY.md + memory/*.md with sub-10s propagation (SYNC-03)
+- 91-03 Conversation-turn translator — OpenClaw sessions/*.jsonl → ClawCode ConversationStore rows (SYNC-04)
+- 91-04 Conflict detection + admin-clawdy channel alert + MEMORY.md reconciliation prompt (SYNC-06, SYNC-10)
+- 91-05 `/clawcode-sync-status` Discord slash command — reuses Phase 85 CONTROL_COMMANDS pattern + EmbedBuilder (SYNC-08)
+- 91-06 Cutover runbook extension — direction flip command + 7-day rollback window + verification steps; ties into Phase 90's `.planning/migrations/fin-acquisition-cutover.md`
+**UI hint**: yes — `/clawcode-sync-status` uses EmbedBuilder (Phase 85 precedent)
+
 
 ## Progress
 
-**Status:** v2.3 Marketplace & Memory Activation shipped 2026-04-24 — Phase 90 only, 7 plans, 21 requirements across HUB/MEM/WIRE. ClawHub marketplace + fin-acquisition memory prep (cutover deferred to operator). Ready for next milestone.
+**Status:** v2.4 OpenClaw ↔ ClawCode Continuous Sync opened 2026-04-24 with Phase 91 (fin-acquisition workspace sync). 10 SYNC-01..10 requirements; 6-plan decomposition hint. No new npm deps expected.
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -192,6 +217,7 @@ Phase 90 delivered: ClawHub Marketplace extension (/clawcode-skills-browse union
 | v2.1 | 75-82 + 82.1 | Complete | 2026-04-21 |
 | v2.2 | 83-89 | Complete | 2026-04-23 |
 | v2.3 | 90 | Complete | 2026-04-24 |
+| v2.4 | 91+ | In progress | — |
 
 ---
 
