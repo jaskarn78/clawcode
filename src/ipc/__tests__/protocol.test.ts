@@ -66,6 +66,11 @@ describe("IPC_METHODS", () => {
       // Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin list/install
       "marketplace-list-plugins",
       "marketplace-install-plugin",
+      // Phase 90 Plan 06 HUB-05 / HUB-07 — GitHub OAuth device-code +
+      // 1Password op:// rewrite probe for install-time config collection.
+      "clawhub-oauth-start",
+      "clawhub-oauth-poll",
+      "marketplace-probe-op-items",
       // Cost tracking (Phase 40)
       "costs",
       // Latency (Phase 50)
