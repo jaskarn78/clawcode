@@ -164,6 +164,19 @@ export class ConversationStore {
   }
 
   /**
+   * Phase 91 Plan 03 — expose the underlying better-sqlite3 handle for
+   * specialized consumers (conversation-turn-translator.ts) that need
+   * INSERT OR IGNORE against the UNIQUE(session_id, turn_index, role)
+   * index for idempotent historical imports.
+   *
+   * Parallels the existing MemoryStore.getDatabase() accessor — do NOT
+   * use for general CRUD; go through the typed methods above instead.
+   */
+  getDatabase(): DatabaseType {
+    return this.db;
+  }
+
+  /**
    * Create a new conversation session for the given agent.
    * Returns a frozen ConversationSession with status="active".
    */

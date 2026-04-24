@@ -1,0 +1,23 @@
+[Unit]
+Description=ClawCode fin-acquisition conversation-turn translator (hourly)
+Documentation=https://github.com/jjagpal/clawcode
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Distinct service unit from clawcode-sync.service (Plan 91-01) — this is
+# the hourly conversation-turn translator per D-07, not the 5-min workspace
+# rsync. Keeps failure scopes and log streams independent.
+ExecStart=/opt/clawcode/scripts/sync/clawcode-translator.sh
+StandardOutput=journal
+StandardError=journal
+# Tight timeout — rsync + translate should finish well under 10 minutes even
+# on a slow link with the full sessions corpus.
+TimeoutStartSec=900
+
+# Failure-mode: translator exits 2 when rsync fails (OpenClaw unreachable,
+# SSH auth refused). Don't treat that as a unit failure — the next hourly
+# cycle will retry. Exit 1 (CLI error) still marks a failure for operator
+# visibility.
+SuccessExitStatus=0 2

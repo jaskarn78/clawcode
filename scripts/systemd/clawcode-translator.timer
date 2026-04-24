@@ -1,0 +1,19 @@
+[Unit]
+Description=Fire ClawCode fin-acquisition conversation-turn translator hourly
+Documentation=https://github.com/jjagpal/clawcode
+
+[Timer]
+# First run 10 minutes after boot so rsync + translate doesn't race with
+# the 5-min workspace sync timer or daemon warm-path on startup.
+OnBootSec=10min
+# Hourly thereafter, measured from the end of the previous invocation
+# (not wall-clock) — prevents pile-up if a run overruns.
+OnUnitActiveSec=1h
+AccuracySec=1min
+# Persistent=false — don't fire missed cycles after sleep/resume; the next
+# scheduled cycle is acceptable, OpenClaw sessions aren't time-critical.
+Persistent=false
+Unit=clawcode-translator.service
+
+[Install]
+WantedBy=timers.target
