@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { provisionWebhooks, type ProvisionConfig } from "./webhook-provisioner.js";
+import {
+  provisionWebhooks,
+  verifyAgentWebhookIdentity,
+  type ProvisionConfig,
+} from "./webhook-provisioner.js";
 import type { WebhookIdentity } from "./webhook-types.js";
 import type { Logger } from "pino";
 
@@ -151,5 +155,88 @@ describe("provisionWebhooks", () => {
     // Should not throw, should return empty map
     expect(result.size).toBe(0);
     expect(silentLog.error).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 07 WIRE-05 — verifyAgentWebhookIdentity tests (WH-V1..V3)
+// Thin per-agent wrapper over provisionWebhooks that returns a three-state
+// status ({verified|provisioned|missing}) for daemon-boot identity probing.
+// ---------------------------------------------------------------------------
+
+describe("verifyAgentWebhookIdentity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("WH-V1: returns 'verified' when an existing bot-owned webhook is present", async () => {
+    const channel = makeMockChannel([
+      { owner: { id: "bot-123" }, url: "https://discord.com/api/webhooks/existing/token" },
+    ]);
+    const client = makeMockClient("bot-123");
+    (client.channels.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(channel);
+
+    const result = await verifyAgentWebhookIdentity({
+      client,
+      agentName: "fin-acquisition",
+      channelId: "1481670479017414767",
+      displayName: "Finance Clawdy",
+      avatarUrl: "https://finmentum.example/avatar.png",
+      log: silentLog,
+    });
+
+    expect(result.status).toBe("verified");
+    if (result.status === "verified") {
+      expect(result.webhookUrl).toBe(
+        "https://discord.com/api/webhooks/existing/token",
+      );
+      expect(result.displayName).toBe("Finance Clawdy");
+    }
+    // Reuses existing webhook — createWebhook never fires.
+    expect(channel.createWebhook).not.toHaveBeenCalled();
+  });
+
+  it("WH-V2: returns 'provisioned' when no bot-owned webhook exists (auto-creates one)", async () => {
+    const channel = makeMockChannel([
+      { owner: { id: "some-other-user" }, url: "https://other.webhook" },
+    ]);
+    const client = makeMockClient("bot-123");
+    (client.channels.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(channel);
+
+    const result = await verifyAgentWebhookIdentity({
+      client,
+      agentName: "fin-acquisition",
+      channelId: "1481670479017414767",
+      displayName: "Finance Clawdy",
+      log: silentLog,
+    });
+
+    expect(result.status).toBe("provisioned");
+    if (result.status === "provisioned") {
+      expect(result.webhookUrl).toBe(
+        "https://discord.com/api/webhooks/new/token",
+      );
+      expect(result.displayName).toBe("Finance Clawdy");
+    }
+    expect(channel.createWebhook).toHaveBeenCalledWith({
+      name: "Finance Clawdy",
+      avatar: null,
+    });
+  });
+
+  it("WH-V3: returns 'missing' when channelId is undefined (no binding)", async () => {
+    const client = makeMockClient();
+
+    const result = await verifyAgentWebhookIdentity({
+      client,
+      agentName: "no-channel-agent",
+      channelId: undefined,
+      displayName: "Nobody",
+      log: silentLog,
+    });
+
+    expect(result.status).toBe("missing");
+    // No Discord API calls should fire when channelId is absent.
+    expect(client.channels.fetch).not.toHaveBeenCalled();
   });
 });

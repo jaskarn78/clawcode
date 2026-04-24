@@ -32,6 +32,7 @@ import {
   updateAgentModel,
   updateAgentSkills,
   updateAgentMcpServers,
+  updateAgentConfig,
 } from "../yaml-writer.js";
 import { SECRET_REFUSE_MESSAGE } from "../guards.js";
 import { configSchema } from "../../config/schema.js";
@@ -1301,5 +1302,223 @@ agents:
 
     const afterBytes = readFileSync(destPath, "utf8");
     expect(afterBytes).toBe(beforeBytes);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 07 WIRE-01..04 — updateAgentConfig generic patcher
+// Tests UAC-W1..UAC-W8. Generic single-agent patch writer used to apply
+// the fin-acquisition wiring (heartbeat + effort + allowedModels + mcpServers
+// + greetOnRestart + greetCoolDownMs) in one atomic call.
+// ---------------------------------------------------------------------------
+
+describe("updateAgentConfig — Phase 90 Plan 07 (Tests UAC-W1..W8)", () => {
+  async function setupUacFixture(yaml: string): Promise<{ destPath: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-yaml-update-config-"));
+    const destPath = join(dir, "clawcode.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(destPath, yaml, "utf8");
+    return { destPath };
+  }
+
+  const BASE_UAC_YAML = `# top-of-file comment preserved
+version: 1
+defaults:
+  model: sonnet
+agents:
+  # clawdy header comment
+  - name: clawdy  # inline comment
+    workspace: ~/.clawcode/agents/clawdy
+    model: sonnet
+    channels:
+      - "111"
+    skills: []
+    mcpServers: []
+  - name: fin-acquisition
+    workspace: ~/.clawcode/agents/finmentum
+    model: sonnet
+    channels:
+      - "1481670479017414767"
+    skills: []
+    mcpServers: []
+`;
+
+  it("UAC-W1: happy path — patches effort + allowedModels; other agents untouched", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: {
+        effort: "auto",
+        allowedModels: ["sonnet", "opus", "haiku"],
+      },
+    });
+    expect(result.outcome).toBe("updated");
+    if (result.outcome === "updated") {
+      expect(result.keysChanged).toEqual(
+        expect.arrayContaining(["effort", "allowedModels"]),
+      );
+      expect(result.targetSha256).toMatch(/^[a-f0-9]{64}$/);
+    }
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{
+        name: string;
+        effort?: unknown;
+        allowedModels?: unknown;
+      }>;
+    };
+    const fin = parsed.agents.find((a) => a.name === "fin-acquisition")!;
+    expect(fin.effort).toBe("auto");
+    expect(fin.allowedModels).toEqual(["sonnet", "opus", "haiku"]);
+
+    // Other agent untouched.
+    const clawdy = parsed.agents.find((a) => a.name === "clawdy")!;
+    expect(clawdy.effort).toBeUndefined();
+    expect(clawdy.allowedModels).toBeUndefined();
+  });
+
+  it("UAC-W2: nested heartbeat object — every/model/prompt round-trip correctly", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const heartbeatPrompt = "Line one\nLine two with *markdown*\n- bullet";
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: {
+        heartbeat: {
+          every: "50m",
+          model: "haiku",
+          prompt: heartbeatPrompt,
+        },
+      },
+    });
+    expect(result.outcome).toBe("updated");
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{ name: string; heartbeat?: unknown }>;
+    };
+    const fin = parsed.agents.find((a) => a.name === "fin-acquisition")!;
+    expect(fin.heartbeat).toEqual({
+      every: "50m",
+      model: "haiku",
+      prompt: heartbeatPrompt,
+    });
+  });
+
+  it("UAC-W3: mcpServers string refs — seq contains string scalars", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: {
+        mcpServers: [
+          "finmentum-db",
+          "finmentum-content",
+          "google-workspace",
+          "browserless",
+          "fal-ai",
+          "brave-search",
+        ],
+      },
+    });
+    expect(result.outcome).toBe("updated");
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<{ name: string; mcpServers?: unknown }>;
+    };
+    const fin = parsed.agents.find((a) => a.name === "fin-acquisition")!;
+    expect(fin.mcpServers).toEqual([
+      "finmentum-db",
+      "finmentum-content",
+      "google-workspace",
+      "browserless",
+      "fal-ai",
+      "brave-search",
+    ]);
+  });
+
+  it("UAC-W4: preserves top-of-file + inline comments verbatim", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: { effort: "auto" },
+    });
+    const after = readFileSync(destPath, "utf8");
+    expect(after).toContain("# top-of-file comment preserved");
+    expect(after).toContain("# clawdy header comment");
+    expect(after).toContain("# inline comment");
+  });
+
+  it("UAC-W5: no-op — patch with identical values yields outcome no-op; bytes byte-identical", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    // First set effort: auto so the second no-op patch truly matches.
+    await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: { effort: "auto" },
+    });
+    const beforeBytes = readFileSync(destPath, "utf8");
+
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: { effort: "auto" },
+    });
+    expect(result.outcome).toBe("no-op");
+
+    const afterBytes = readFileSync(destPath, "utf8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+
+  it("UAC-W6: agent not found — outcome 'not-found'", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "ghost",
+      patch: { effort: "auto" },
+    });
+    expect(result.outcome).toBe("not-found");
+  });
+
+  it("UAC-W7: schema refuses invalid values — outcome 'refused' step:'invalid-patch'", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: { effort: "banana" },
+    });
+    expect(result.outcome).toBe("refused");
+    if (result.outcome === "refused") {
+      expect(result.step).toBe("invalid-patch");
+    }
+  });
+
+  it("UAC-W8: atomic rename failure unlinks tmp + re-throws", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const unlinkCalls: string[] = [];
+    writerFs.rename = (async () => {
+      throw new Error("EACCES: simulated rename failure");
+    }) as typeof writerFs.rename;
+    writerFs.unlink = (async (...args: unknown[]) => {
+      unlinkCalls.push(String(args[0]));
+      return ORIG_FS.unlink(
+        args[0] as Parameters<typeof ORIG_FS.unlink>[0],
+      );
+    }) as typeof writerFs.unlink;
+
+    await expect(
+      updateAgentConfig({
+        existingConfigPath: destPath,
+        agentName: "fin-acquisition",
+        patch: { effort: "auto" },
+      }),
+    ).rejects.toThrow(/EACCES/);
+    expect(
+      unlinkCalls.some((p) => /\.clawcode\.yaml\.\d+\.\d+\.tmp$/.test(p)),
+    ).toBe(true);
   });
 });
