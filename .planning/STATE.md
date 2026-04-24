@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 90-01-PLAN.md (MEMORY.md auto-inject into stable prefix + additive-optional memoryAutoLoad schema)
-last_updated: "2026-04-24T01:16:40.688Z"
+stopped_at: Completed 90-04-PLAN.md (ClawHub HTTP client + TTL cache + 11-variant outcome union + install pipeline)
+last_updated: "2026-04-24T01:38:21.237Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 7
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 90 (ClawHub Marketplace + fin-acquisition Memory Prep) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 
 ## Performance Metrics
 
@@ -140,6 +140,10 @@ Recent decisions affecting current work:
 - [Phase 90]: Plan 90-01 — MEMORY.md injected into identityStr (sources.identity) so the assembler places it in the stable prefix; order SOUL → IDENTITY → MEMORY → MCP pinned by MEM-01-C1 four-monotonic-indexOf test. 50KB cap enforced via Buffer.byteLength + Buffer.slice(50*1024).toString('utf8') + literal marker '…(truncated at 50KB cap)'.
 - [Phase 90]: Plan 90-01 — Opt-out readFile-zero-call invariant (MEM-01-C3): when memoryAutoLoad=false, readFile is NEVER invoked against MEMORY.md path. Override path (MEM-01-C4): when memoryAutoLoadPath is set, workspace/MEMORY.md is NEVER read, even if override fails. Silent fall-through on missing file mirrors Phase 78 soulFile/identityFile.
 - [Phase 90]: Plan 90-01 — Rule 3 blocking cascade: 22 test fixtures updated to populate memoryAutoLoad: true. Matches Phase 89 GREET-10 cascade (22 fixtures then, 22 fixtures now). Pattern now routine for each additive-required field rollout in v2.x.
+- [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — ClawHub API shape confirmed via live probe (GET /api/v1/skills returns {items, nextCursor}); zero new npm deps (Node 22 fetch + execFile for tar instead of execa)
+- [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — SkillInstallOutcome extended 8→11 variants (auth-required, rate-limited, manifest-invalid); exhaustive-switch enforcement preserved via compile-time never-check. Each variant carries the exact payload Discord renderer needs — no second IPC round-trip
+- [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — ClawHub install pipeline reuses Phase 84 verbatim (secret-scan → normalize → scope → copy+hash → YAML persist → ledger) AFTER a download+extract staging step; staging dir ~/.clawcode/manager/clawhub-staging/<nanoid>/ cleaned in try/finally regardless of outcome (D-07)
+- [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — marketplaceSources zod union: legacy variant OMITS kind (v2.2 back-compat preserved — regression pin HUB-SCH-2a); ClawHub variant REQUIRES kind: 'clawhub'. Loader narrows via presence of kind with a cast fallback for legacy (TS narrowing on absent keys is weaker than on present)
 
 ### v2.1 closing decisions (for reference)
 
@@ -221,9 +225,10 @@ Recent decisions affecting current work:
 | Phase 88-skills-marketplace P02 | 26min 47s | 2 tasks | 10 files |
 | Phase 89 P01 | 20m 10s | 2 tasks | 30 files |
 | Phase 90 P01 | 12min | 2 tasks | 28 files |
+| Phase 90-clawhub-marketplace-fin-acquisition-memory-prep P04 | 33min 1s | 2 tasks (TDD) tasks | 10 files files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-01-PLAN.md (MEMORY.md auto-inject into stable prefix + additive-optional memoryAutoLoad schema)
+Stopped at: Completed 90-04-PLAN.md (ClawHub HTTP client + TTL cache + 11-variant outcome union + install pipeline)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
