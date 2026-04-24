@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 91-03-PLAN.md (conversation-turn translator, SYNC-04)
-last_updated: "2026-04-24T19:46:40.115Z"
+stopped_at: Completed 91-02-PLAN.md
+last_updated: "2026-04-24T20:00:03.772Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 6
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 91 (OpenClaw ↔ ClawCode fin-acquisition Workspace Sync) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 
 ## Performance Metrics
 
@@ -174,6 +174,9 @@ Recent decisions affecting current work:
 - [Phase 91]: Plan 91-03 — Idempotency via existing UNIQUE(session_id, turn_index, role) on conversation_turns (idx_turns_session_order), NOT a new origin_id UNIQUE column. Translator uses INSERT OR IGNORE via new ConversationStore.getDatabase() accessor; origin-id string stored in existing 'origin' TEXT column for human traceability.
 - [Phase 91]: Plan 91-03 — Deterministic computeClawcodeSessionId(openclawSessionId)=openclaw-<sha256-20> as conversation_sessions PK so re-runs converge on one row per OpenClaw session uuid; session rows imported with status='ended' so Phase 67 SESS-03 gap-check sees them as terminated.
 - [Phase 91]: Plan 91-03 — Remote→local via rsync staging (bash wrapper step 1) rather than SSH-per-file in translator. Keeps translator pure-function + testable without SSH; staging dir ~/.clawcode/manager/openclaw-sessions-staging/ is read-only from translator's perspective. Hourly timer distinct from 91-01's 5-min workspace sync per D-07.
+- [Phase 91]: 91-02: Safer reading of D-11 — ANY destHash drift is a conflict (never silently clobber operator edits)
+- [Phase 91]: 91-02: Per-FILE --exclude rsync args preserve non-conflicting propagation in same cycle (D-12)
+- [Phase 91]: 91-02: Stateless re-alert (D-15) — fire embed every cycle with conflicts, no path-level suppression
 
 ### v2.1 closing decisions (for reference)
 
@@ -265,9 +268,10 @@ Recent decisions affecting current work:
 | Phase 90 P07 | 17min 55s | 2 (TDD) tasks | 13 files files |
 | Phase 91 P01 | 7min 25s | 2 tasks | 10 files |
 | Phase 91 P03 | 18 | 2 tasks | 8 files |
+| Phase 91 P02 | 8m 37s | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 91-03-PLAN.md (conversation-turn translator, SYNC-04)
+Stopped at: Completed 91-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
