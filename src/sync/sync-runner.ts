@@ -40,13 +40,24 @@ import type { Logger } from "pino";
 import { nanoid } from "nanoid";
 import {
   readSyncState,
+  updateSyncStateConflict,
   writeSyncState,
 } from "./sync-state-store.js";
 import type {
+  SyncConflict,
   SyncJsonlEntry,
   SyncRunOutcome,
   SyncStateFile,
 } from "./types.js";
+import {
+  detectConflicts,
+  type FileHashPair,
+} from "./conflict-detector.js";
+import {
+  ADMIN_CLAWDY_CHANNEL_ID,
+  sendConflictAlert,
+  type ConflictAlertDeps,
+} from "./conflict-alerter.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection struct
@@ -76,6 +87,38 @@ export type JsonlAppender = (
  */
 export type DestHasher = (absPath: string) => Promise<string | null>;
 
+/**
+ * Probe for source-side (OpenClaw) sha256 hashes keyed by relpath.
+ *
+ * Plan 91-02 Task 2: used PRE-rsync to enumerate candidate files + their
+ * source hashes so `detectConflicts` can classify each vs the dest's
+ * current sha256 + sync-state's perFileHashes baseline.
+ *
+ * Default impl runs `ssh <host> 'cd <workspace> && find ... | xargs
+ * sha256sum'` — isolated here so tests don't need a real SSH tunnel.
+ */
+export type SourceHashProbe = (
+  relpaths: readonly string[],
+) => Promise<ReadonlyMap<string, string>>;
+
+/**
+ * Dry-run rsync — returns the list of relpaths that WOULD transfer this
+ * cycle, without actually transferring anything. Plan 91-02 Task 2 uses
+ * this to enumerate candidates before the real run.
+ *
+ * Default impl adds `-n` (--dry-run) to the normal rsync argv + parses
+ * `-i` itemize lines the same way parseRsyncStats does. Separate DI slot
+ * from `runRsync` so tests can simulate "10 candidates → 2 conflicts"
+ * without entangling the real-run stub.
+ */
+export type DryRunRsync = (
+  baseArgs: readonly string[],
+) => Promise<{
+  readonly candidateRelpaths: readonly string[];
+  readonly stderr: string;
+  readonly exitCode: number;
+}>;
+
 export type SyncRunnerDeps = {
   readonly syncStatePath: string;
   readonly filterFilePath: string;
@@ -85,6 +128,16 @@ export type SyncRunnerDeps = {
   readonly runRsync?: RsyncRunner;
   readonly appendJsonl?: JsonlAppender;
   readonly hashDest?: DestHasher;
+  /** Plan 91-02 — probe OpenClaw source sha256 for candidate files. */
+  readonly probeSourceHashes?: SourceHashProbe;
+  /** Plan 91-02 — dry-run rsync to enumerate candidates without transfer. */
+  readonly dryRunRsync?: DryRunRsync;
+  /** Plan 91-02 — bot token for fire-and-forget conflict alerts. */
+  readonly alertBotToken?: string;
+  /** Plan 91-02 — override admin-clawdy channel (default ADMIN_CLAWDY_CHANNEL_ID). */
+  readonly alertChannelId?: string;
+  /** Plan 91-02 — fetch DI for tests. */
+  readonly alertFetch?: typeof fetch;
 };
 
 // ---------------------------------------------------------------------------
@@ -128,7 +181,7 @@ export async function syncOnce(deps: SyncRunnerDeps): Promise<SyncRunOutcome> {
   //   BatchMode=yes            → never prompt for password (key-only auth)
   //   ConnectTimeout=10        → bail fast on Tailscale outage
   //   StrictHostKeyChecking=accept-new  → auto-trust first connection
-  const rsyncArgs: readonly string[] = [
+  const baseRsyncArgs: readonly string[] = [
     "-av",
     "--filter",
     `merge ${deps.filterFilePath}`,
@@ -143,6 +196,70 @@ export async function syncOnce(deps: SyncRunnerDeps): Promise<SyncRunOutcome> {
     `${state.openClawHost}:${state.openClawWorkspace}/`,
     `${state.clawcodeWorkspace}/`,
   ];
+
+  // Plan 91-02 conflict-detection pre-flight. Engages ONLY when BOTH the
+  // dryRunRsync + probeSourceHashes probes are wired (production or test
+  // injection). Plan 91-01 tests don't wire them, so this block is a no-op
+  // there — full backward compatibility with the Wave 1 contract.
+  const conflicts: SyncConflict[] = [];
+  const excludeArgs: string[] = [];
+  const hashDestForProbe = deps.hashDest ?? ((abs) => defaultDestHasher(abs));
+  if (deps.dryRunRsync && deps.probeSourceHashes) {
+    try {
+      const dryRun = await deps.dryRunRsync(baseRsyncArgs);
+      if (dryRun.exitCode !== 0 && dryRun.exitCode !== 23) {
+        // Dry-run failed — skip conflict detection this cycle, let the
+        // real rsync below surface the real failure. Don't swallow.
+        deps.log.warn(
+          { cycleId, exitCode: dryRun.exitCode, stderr: dryRun.stderr.slice(0, 500) },
+          "sync dry-run failed; proceeding without conflict detection",
+        );
+      } else if (dryRun.candidateRelpaths.length > 0) {
+        // Probe source hashes (ssh + sha256sum) + dest hashes (local) for
+        // every candidate, then run the pure detectConflicts partition.
+        const sourceHashes = await deps.probeSourceHashes(
+          dryRun.candidateRelpaths,
+        );
+        const pairs: FileHashPair[] = [];
+        for (const relpath of dryRun.candidateRelpaths) {
+          const srcHash = sourceHashes.get(relpath);
+          if (srcHash === undefined) continue; // missing on source — skip
+          const absDest = join(state.clawcodeWorkspace, relpath);
+          let destHash: string | null;
+          try {
+            destHash = await hashDestForProbe(absDest);
+          } catch (err) {
+            deps.log.warn({ relpath, err }, "sync pre-probe dest hash failed");
+            destHash = null;
+          }
+          pairs.push({ path: relpath, sourceHash: srcHash, destHash });
+        }
+        const detection = detectConflicts(state.perFileHashes, pairs, start);
+        for (const c of detection.conflicts) {
+          conflicts.push(c);
+          // rsync --exclude targets relpaths from the source root. Each
+          // conflicting path becomes a per-cycle skip (D-12: per-FILE,
+          // not per-CYCLE — other clean files still propagate).
+          excludeArgs.push(`--exclude=${c.path}`);
+        }
+        if (conflicts.length > 0) {
+          deps.log.info(
+            { cycleId, conflictCount: conflicts.length },
+            "sync conflicts detected — excluding from this cycle",
+          );
+        }
+      }
+    } catch (err) {
+      // Conflict detection itself errored — log + proceed without it.
+      // The real rsync below will still run; next cycle will retry.
+      deps.log.warn(
+        { cycleId, err },
+        "sync conflict-detection pre-flight failed; proceeding without it",
+      );
+    }
+  }
+
+  const rsyncArgs: readonly string[] = [...baseRsyncArgs, ...excludeArgs];
 
   const runRsync = deps.runRsync ?? defaultRsyncRunner;
   let result: { stdout: string; stderr: string; exitCode: number };
@@ -200,8 +317,11 @@ export async function syncOnce(deps: SyncRunnerDeps): Promise<SyncRunOutcome> {
     }
   }
 
-  // Early-out: nothing changed this cycle.
-  if (parsed.filesAdded + parsed.filesUpdated + parsed.filesRemoved === 0) {
+  // Early-out: nothing changed this cycle AND no conflicts to record.
+  if (
+    parsed.filesAdded + parsed.filesUpdated + parsed.filesRemoved === 0 &&
+    conflicts.length === 0
+  ) {
     const outcome: SyncRunOutcome = {
       kind: "skipped-no-changes",
       cycleId,
@@ -243,17 +363,67 @@ export async function syncOnce(deps: SyncRunnerDeps): Promise<SyncRunOutcome> {
   };
   await writeSyncState(deps.syncStatePath, nextState, deps.log);
 
-  const outcome: SyncRunOutcome = {
-    kind: "synced",
-    cycleId,
-    filesAdded: parsed.filesAdded,
-    filesUpdated: parsed.filesUpdated,
-    filesRemoved: parsed.filesRemoved,
-    filesSkippedConflict: 0, // Plan 91-02 fills this in
-    bytesTransferred: parsed.bytesTransferred,
-    durationMs: elapsed(),
-  };
+  // Plan 91-02: persist each conflict to sync-state.json.conflicts[] via
+  // updateSyncStateConflict (idempotent — duplicate unresolved conflicts
+  // collapse). Writes happen sequentially so the final sync-state.json
+  // reflects the full set. If persistence fails mid-list, operators still
+  // see SOME conflicts + can diagnose via sync.jsonl.
+  for (const c of conflicts) {
+    try {
+      await updateSyncStateConflict(deps.syncStatePath, c, deps.log);
+    } catch (err) {
+      deps.log.warn(
+        { cycleId, path: c.path, err },
+        "sync conflict persistence failed",
+      );
+    }
+  }
+
+  const outcome: SyncRunOutcome =
+    conflicts.length > 0
+      ? {
+          kind: "partial-conflicts",
+          cycleId,
+          filesAdded: parsed.filesAdded,
+          filesUpdated: parsed.filesUpdated,
+          filesRemoved: parsed.filesRemoved,
+          filesSkippedConflict: conflicts.length,
+          bytesTransferred: parsed.bytesTransferred,
+          durationMs: elapsed(),
+          conflicts: Object.freeze([...conflicts]),
+        }
+      : {
+          kind: "synced",
+          cycleId,
+          filesAdded: parsed.filesAdded,
+          filesUpdated: parsed.filesUpdated,
+          filesRemoved: parsed.filesRemoved,
+          filesSkippedConflict: 0,
+          bytesTransferred: parsed.bytesTransferred,
+          durationMs: elapsed(),
+        };
   await appendOutcomeToJsonl(deps, outcome, start);
+
+  // Plan 91-02 D-15: fire-and-forget conflict alert. `.catch(log.warn)`
+  // ensures Discord unavailability never bubbles up to our caller. Every
+  // cycle that ends with conflicts fires — operators need visibility on
+  // ongoing divergence (same-cycle suppression would hide persistent
+  // issues).
+  if (conflicts.length > 0 && deps.alertBotToken) {
+    const alertDeps: ConflictAlertDeps = {
+      botToken: deps.alertBotToken,
+      channelId: deps.alertChannelId ?? ADMIN_CLAWDY_CHANNEL_ID,
+      log: deps.log,
+      fetchImpl: deps.alertFetch,
+      now: deps.now,
+    };
+    void sendConflictAlert(conflicts, cycleId, alertDeps).catch((err) => {
+      deps.log.warn(
+        { cycleId, err },
+        "conflict-alert fire-and-forget failed",
+      );
+    });
+  }
   deps.log.info(
     {
       cycleId,
