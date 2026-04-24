@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 90-04-PLAN.md (ClawHub HTTP client + TTL cache + 11-variant outcome union + install pipeline)
-last_updated: "2026-04-24T01:38:21.237Z"
+stopped_at: Completed 90-05-PLAN.md
+last_updated: "2026-04-24T02:06:07.570Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 7
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 90 (ClawHub Marketplace + fin-acquisition Memory Prep) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 
 ## Performance Metrics
 
@@ -144,6 +144,9 @@ Recent decisions affecting current work:
 - [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — SkillInstallOutcome extended 8→11 variants (auth-required, rate-limited, manifest-invalid); exhaustive-switch enforcement preserved via compile-time never-check. Each variant carries the exact payload Discord renderer needs — no second IPC round-trip
 - [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — ClawHub install pipeline reuses Phase 84 verbatim (secret-scan → normalize → scope → copy+hash → YAML persist → ledger) AFTER a download+extract staging step; staging dir ~/.clawcode/manager/clawhub-staging/<nanoid>/ cleaned in try/finally regardless of outcome (D-07)
 - [Phase 90-04-clawhub-http-and-install-pipeline]: Plan 90-04 — marketplaceSources zod union: legacy variant OMITS kind (v2.2 back-compat preserved — regression pin HUB-SCH-2a); ClawHub variant REQUIRES kind: 'clawhub'. Loader narrows via presence of kind with a cast fallback for legacy (TS narrowing on absent keys is weaker than on present)
+- [Phase 90]: Third atomic YAML writer (updateAgentMcpServers) mirrors updateAgentModel + updateAgentSkills with literal secret-scan guard on env values
+- [Phase 90]: Sixth application of inline-handler-short-circuit pattern (/clawcode-plugins-browse AFTER /clawcode-skills BEFORE CONTROL_COMMANDS)
+- [Phase 90]: Two-stage Modal flow for plugin install: picker→empty-configInputs install→Modal on config-missing→retry. Single-field case is 95% of plugins (API key / password)
 
 ### v2.1 closing decisions (for reference)
 
@@ -226,9 +229,10 @@ Recent decisions affecting current work:
 | Phase 89 P01 | 20m 10s | 2 tasks | 30 files |
 | Phase 90 P01 | 12min | 2 tasks | 28 files |
 | Phase 90-clawhub-marketplace-fin-acquisition-memory-prep P04 | 33min 1s | 2 tasks (TDD) tasks | 10 files files |
+| Phase 90 P05 | 20min 32s | 2 tasks | 14 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 90-04-PLAN.md (ClawHub HTTP client + TTL cache + 11-variant outcome union + install pipeline)
+Stopped at: Completed 90-05-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

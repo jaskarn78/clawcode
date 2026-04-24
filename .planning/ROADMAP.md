@@ -208,7 +208,7 @@ Phases 83-89 delivered: Extended-thinking effort mapping (P0 silent no-op fix + 
 - [ ] 90-02-PLAN.md — chokidar file-scanner + memory_chunks tables + hybrid RRF retrieval (MEM-02 + MEM-03) [Wave 2 — depends on 90-01]
 - [ ] 90-03-PLAN.md — periodic 15-min flush + "remember this" cue detection + subagent-output capture (MEM-04 + MEM-05 + MEM-06) [Wave 3 — depends on 90-01 + 90-02]
 - [x] 90-04-PLAN.md — ClawHub HTTP client + TTL cache + catalog union + skills install pipeline (HUB-01 + HUB-03 + HUB-06 + HUB-08) [Wave 1]
-- [ ] 90-05-PLAN.md — updateAgentMcpServers atomic YAML writer + ClawHub plugins install + /clawcode-plugins-browse slash command (HUB-02 + HUB-04) [Wave 2 — depends on 90-04]
+- [x] 90-05-PLAN.md — updateAgentMcpServers atomic YAML writer + ClawHub plugins install + /clawcode-plugins-browse slash command (HUB-02 + HUB-04) [Wave 2 — depends on 90-04]
 - [ ] 90-06-PLAN.md — Discord install-time config modal + 1Password op:// fuzzy rewrite + GitHub OAuth device-code flow + /clawcode-clawhub-auth (HUB-05 + HUB-07) [Wave 3 — depends on 90-04 + 90-05]
 - [ ] 90-07-PLAN.md — fin-acquisition agent wiring (6 MCPs + heartbeat + effort + allowedModels) + webhook identity probe + `clawcode memory backfill` CLI + cutover runbook (WIRE-01..07) [Wave 4 — depends on all prior]
 **UI hint**: yes (StringSelectMenuBuilder + Modal + EmbedBuilder — UI-01 compliance)
