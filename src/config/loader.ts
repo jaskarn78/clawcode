@@ -128,10 +128,23 @@ export function resolveAgentConfig(
    */
   onMcpResolutionError?: McpResolutionErrorHandler,
 ): ResolvedAgentConfig {
-  // Resolve heartbeat: if agent has heartbeat: false, disable but keep global config values
-  const heartbeatConfig = agent.heartbeat === false
-    ? { ...defaults.heartbeat, enabled: false }
-    : defaults.heartbeat;
+  // Resolve heartbeat:
+  //   - agent.heartbeat === false → disable but keep global config values
+  //   - agent.heartbeat === true / undefined → use global config as-is
+  //   - agent.heartbeat === { enabled?, every?, model?, prompt? } → object
+  //     shape (Phase 90 Plan 07 WIRE-02, used by fin-acquisition for the
+  //     50-minute OpenClaw-style heartbeat). The daemon-level heartbeat
+  //     runner still consumes `defaults.heartbeat` for intervalSeconds +
+  //     contextFill; the per-agent object carries operator-specified
+  //     cadence/prompt/model that downstream consumers read separately.
+  const heartbeatConfig = (() => {
+    const h = agent.heartbeat;
+    if (h === false) return { ...defaults.heartbeat, enabled: false };
+    if (typeof h === "object" && h !== null && "enabled" in h && h.enabled === false) {
+      return { ...defaults.heartbeat, enabled: false };
+    }
+    return defaults.heartbeat;
+  })();
 
   // Resolve MCP servers: string refs -> shared lookup, objects -> passthrough
   const resolvedMcpMap = new Map<string, McpServerSchemaConfig>();

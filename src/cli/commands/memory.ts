@@ -3,6 +3,7 @@ import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
 import { cliLog, cliError } from "../output.js";
+import { registerMemoryBackfillCommand } from "./memory-backfill.js";
 
 /**
  * A single memory search result from the IPC response.
@@ -294,6 +295,9 @@ export function registerMemoryCommand(program: Command): void {
         process.exit(1);
       }
     });
+
+  // Phase 90 Plan 07 WIRE-06 — `clawcode memory backfill <agent>` subcommand.
+  registerMemoryBackfillCommand(memoryCmd);
 
   memoryCmd
     .command("episodes <agent>")

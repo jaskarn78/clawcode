@@ -3,6 +3,38 @@ import type { WebhookIdentity } from "./webhook-types.js";
 import type { Logger } from "pino";
 
 /**
+ * Three-state identity status returned by verifyAgentWebhookIdentity.
+ *
+ * - "verified"    — a webhook already existed on the channel (bot-owned
+ *                   reuse path); no new webhook was created
+ * - "provisioned" — no bot-owned webhook existed; one was auto-created
+ * - "missing"     — agent has no channel binding OR provisioning failed
+ *                   (fetch/create threw); provisionWebhooks logs details
+ */
+export type AgentWebhookIdentityStatus =
+  | {
+      readonly status: "verified";
+      readonly webhookUrl: string;
+      readonly displayName: string;
+    }
+  | {
+      readonly status: "provisioned";
+      readonly webhookUrl: string;
+      readonly displayName: string;
+    }
+  | { readonly status: "missing"; readonly reason: string };
+
+export type VerifyAgentWebhookIdentityArgs = Readonly<{
+  client: Client;
+  agentName: string;
+  /** First bound channel ID for the agent (undefined when no binding). */
+  channelId: string | undefined;
+  displayName: string;
+  avatarUrl?: string;
+  log: Logger;
+}>;
+
+/**
  * Configuration for auto-provisioning webhooks.
  */
 export type ProvisionConfig = {
@@ -113,4 +145,99 @@ export async function provisionWebhooks(
   }
 
   return result;
+}
+
+/**
+ * Phase 90 Plan 07 WIRE-05 — per-agent webhook identity probe.
+ *
+ * Thin wrapper over provisionWebhooks that:
+ *   - returns `missing` when no channel is bound (no Discord API call fires)
+ *   - probes the channel directly to distinguish `verified` vs `provisioned`
+ *   - delegates actual create/reuse to provisionWebhooks (single source of
+ *     truth for the auto-provision contract)
+ *
+ * Called at daemon boot for agents with a webhook config block so operators
+ * can see per-agent identity status in the log without manually poking
+ * Discord.
+ */
+export async function verifyAgentWebhookIdentity(
+  args: VerifyAgentWebhookIdentityArgs,
+): Promise<AgentWebhookIdentityStatus> {
+  if (!args.channelId) {
+    return { status: "missing", reason: "no channel bound" };
+  }
+
+  // Pre-check: does a bot-owned webhook already exist on the channel?
+  // provisionWebhooks contains the reuse-vs-create branching but doesn't
+  // surface WHICH path it took. We peek at fetchWebhooks first so the
+  // return shape can distinguish "verified" (already present) from
+  // "provisioned" (freshly created).
+  let existedBefore = false;
+  try {
+    const channel = await args.client.channels.fetch(args.channelId);
+    if (
+      channel &&
+      "fetchWebhooks" in channel &&
+      typeof (channel as unknown as Record<string, unknown>).fetchWebhooks ===
+        "function"
+    ) {
+      const textChannel = channel as {
+        fetchWebhooks: () => Promise<
+          Map<string, { owner?: { id: string }; url: string }>
+        >;
+      };
+      const existingWebhooks = await textChannel.fetchWebhooks();
+      const botId = args.client.user?.id;
+      for (const [, webhook] of existingWebhooks) {
+        if (webhook.owner?.id === botId) {
+          existedBefore = true;
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    args.log.warn(
+      { agent: args.agentName, error: (err as Error).message },
+      "verifyAgentWebhookIdentity: channel pre-check failed",
+    );
+    return { status: "missing", reason: (err as Error).message };
+  }
+
+  // Delegate actual create/reuse to provisionWebhooks. It either reuses
+  // the bot-owned webhook we detected above or creates a new one.
+  const merged = await provisionWebhooks({
+    client: args.client,
+    agents: [
+      {
+        name: args.agentName,
+        channels: [args.channelId],
+        webhook: {
+          displayName: args.displayName,
+          avatarUrl: args.avatarUrl,
+        },
+      },
+    ],
+    manualIdentities: new Map(),
+    log: args.log,
+  });
+
+  const ident = merged.get(args.agentName);
+  if (!ident?.webhookUrl) {
+    return {
+      status: "missing",
+      reason: "provisionWebhooks returned no webhookUrl",
+    };
+  }
+
+  return existedBefore
+    ? {
+        status: "verified",
+        webhookUrl: ident.webhookUrl,
+        displayName: args.displayName,
+      }
+    : {
+        status: "provisioned",
+        webhookUrl: ident.webhookUrl,
+        displayName: args.displayName,
+      };
 }

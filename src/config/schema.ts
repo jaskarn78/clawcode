@@ -753,7 +753,31 @@ export const agentSchema = z.object({
   soulFile: z.string().min(1).optional(),
   identityFile: z.string().min(1).optional(),
   memory: memorySchema.optional(),
-  heartbeat: z.boolean().default(true),
+  // Phase 90 Plan 07 WIRE-02 — per-agent heartbeat config.
+  //
+  // Legacy shape: `heartbeat: true|false` — a simple enable/disable flag
+  // (behavior pre-Phase-90; `false` disables the heartbeat for this agent,
+  // `true` defers to `defaults.heartbeat`).
+  //
+  // Extended shape: `heartbeat: { every?, model?, prompt? }` — carries an
+  // OpenClaw-style per-agent heartbeat prompt + cadence (e.g. the 50-minute
+  // context-zone monitor used by fin-acquisition). All fields optional so
+  // a partial override is fine; resolver falls back to `defaults.heartbeat`
+  // for unset fields.
+  //
+  // Accepted as a `z.union` so v2.1 migrated configs (all use boolean)
+  // parse unchanged.
+  heartbeat: z
+    .union([
+      z.boolean(),
+      z.object({
+        enabled: z.boolean().optional(),
+        every: z.string().min(1).optional(),
+        model: modelSchema.optional(),
+        prompt: z.string().optional(),
+      }),
+    ])
+    .default(true),
   schedules: z.array(scheduleEntrySchema).default([]),
   admin: z.boolean().default(false),
   subagentModel: modelSchema.optional(),

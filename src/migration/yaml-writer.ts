@@ -36,7 +36,7 @@ import { parseDocument, YAMLSeq, YAMLMap } from "yaml";
 import type { MappedAgentNode, MapAgentWarning } from "./config-mapper.js";
 import { scanSecrets } from "./guards.js";
 import type { PlanReport, AgentPlan } from "./diff-builder.js";
-import { modelSchema, mcpServerSchema } from "../config/schema.js";
+import { modelSchema, mcpServerSchema, agentSchema } from "../config/schema.js";
 import { scanLiteralValueForSecret } from "./skills-secret-scan.js";
 
 /**
@@ -969,5 +969,260 @@ export async function updateAgentMcpServers(
     outcome: "updated",
     destPath: args.existingConfigPath,
     targetSha256,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 07 WIRE-01..04 — updateAgentConfig.
+//
+// Fourth atomic YAML writer in the series (after updateAgentModel,
+// updateAgentSkills, updateAgentMcpServers). Unlike its siblings which
+// each target ONE field, this one is a generic patcher: apply an arbitrary
+// Partial<AgentConfig> patch to a single agent entry atomically. Used by
+// Plan 07 to apply the fin-acquisition wiring (effort + allowedModels +
+// greetOnRestart + greetCoolDownMs + heartbeat + mcpServers) in one call.
+//
+// Defense in depth:
+//   1. Defense-in-depth schema validation — agentSchema.safeParse on the
+//      MERGED agent object (existing + patch). Catches runtime type errors
+//      the call site might miss.
+//   2. Literal secret scan — walk the patch (including nested) looking for
+//      plain strings that are NOT op:// refs. Any credential-context string
+//      refuses with step: "secret-scan".
+//   3. Idempotency — diff each patch key against the current YAMLMap value;
+//      no-op when no key actually changed (JSON-stable comparison).
+//
+// Contract:
+//   "updated"        — patch applied; file rewritten
+//   "no-op"          — every patch key already matched current value
+//   "not-found"      — agent missing from agents: seq
+//   "file-not-found" — clawcode.yaml does not exist
+//   "refused"        — schema validation failed OR literal secret detected
+//   throws           — rename failure (tmp unlinked), structural YAML corruption
+// ---------------------------------------------------------------------------
+
+export type UpdateAgentConfigArgs = Readonly<{
+  existingConfigPath: string;
+  agentName: string;
+  /** Partial agent config — validated against agentSchema when merged. */
+  patch: Readonly<Record<string, unknown>>;
+  /** DI for test determinism — defaults to process.pid. */
+  pid?: number;
+}>;
+
+export type UpdateAgentConfigResult =
+  | {
+      readonly outcome: "updated";
+      readonly destPath: string;
+      readonly targetSha256: string;
+      readonly keysChanged: readonly string[];
+    }
+  | { readonly outcome: "no-op"; readonly reason: string }
+  | { readonly outcome: "not-found"; readonly reason: string }
+  | { readonly outcome: "file-not-found"; readonly reason: string }
+  | {
+      readonly outcome: "refused";
+      readonly reason: string;
+      readonly step: "invalid-patch" | "secret-scan";
+    };
+
+/**
+ * Walk a patch object (arbitrary depth) and check every plain-string value
+ * against the Phase 84 literal-secret gate. Returns `undefined` if clean;
+ * a `{reason}` object if any value looks secret-like.
+ *
+ * `op://` references are always safe (they're 1Password resolvers).
+ */
+function scanPatchForLiteralSecrets(
+  patch: Readonly<Record<string, unknown>>,
+): { reason: string } | undefined {
+  for (const [key, val] of Object.entries(patch)) {
+    const refused = scanValueRecursive(key, val);
+    if (refused) return refused;
+  }
+  return undefined;
+}
+
+function scanValueRecursive(
+  key: string,
+  val: unknown,
+): { reason: string } | undefined {
+  if (typeof val === "string") {
+    if (val.startsWith("op://")) return undefined;
+    const scan = scanLiteralValueForSecret(key, val);
+    if (scan.refused) return { reason: `${key}: ${scan.reason}` };
+    return undefined;
+  }
+  if (Array.isArray(val)) {
+    for (const el of val) {
+      const refused = scanValueRecursive(key, el);
+      if (refused) return refused;
+    }
+    return undefined;
+  }
+  if (val !== null && typeof val === "object") {
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      const refused = scanValueRecursive(k, v);
+      if (refused) return refused;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Convert a plain-JS value into a yaml-lib node, preserving the seq/map
+ * distinction + nesting. Used when mutating a YAMLMap so nested objects
+ * + arrays round-trip correctly.
+ */
+function buildYamlNode(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const seq = new YAMLSeq();
+    for (const el of value) seq.add(buildYamlNode(el));
+    return seq;
+  }
+  if (value !== null && typeof value === "object") {
+    const m = new YAMLMap();
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      m.set(k, buildYamlNode(v));
+    }
+    return m;
+  }
+  return value;
+}
+
+export async function updateAgentConfig(
+  args: UpdateAgentConfigArgs,
+): Promise<UpdateAgentConfigResult> {
+  const pid = args.pid ?? process.pid;
+
+  // --- Gate: file presence ------------------------------------------
+  if (!existsSync(args.existingConfigPath)) {
+    return {
+      outcome: "file-not-found",
+      reason: `clawcode.yaml not found at ${args.existingConfigPath}`,
+    };
+  }
+
+  // --- Read + parse (Document AST preserves comments + order) ------
+  const existingText = await writerFs.readFile(
+    args.existingConfigPath,
+    "utf8",
+  );
+  const doc = parseDocument(existingText, { prettyErrors: true });
+  const contents = doc.contents;
+  if (!(contents instanceof YAMLMap)) {
+    throw new Error(
+      `clawcode.yaml top-level is not a map: ${args.existingConfigPath}`,
+    );
+  }
+  const rootMap = contents as unknown as YAMLMap<unknown, unknown>;
+  const agentsSeq = rootMap.get("agents") as unknown;
+  if (!(agentsSeq instanceof YAMLSeq)) {
+    return {
+      outcome: "not-found",
+      reason: `no agents seq in clawcode.yaml`,
+    };
+  }
+  const items = (agentsSeq as YAMLSeq).items as unknown as Array<unknown>;
+  const idx = items.findIndex((it) => {
+    if (it === null || typeof it !== "object") return false;
+    const maybeMap = it as { get?: (k: string) => unknown };
+    if (typeof maybeMap.get !== "function") return false;
+    const name = maybeMap.get("name");
+    return name === args.agentName;
+  });
+  if (idx < 0) {
+    return {
+      outcome: "not-found",
+      reason: `agent '${args.agentName}' not in agents seq`,
+    };
+  }
+
+  const agentMap = items[idx] as YAMLMap;
+  if (!(agentMap instanceof YAMLMap)) {
+    throw new Error(
+      `agent '${args.agentName}' entry is not a map at agents[${idx}]`,
+    );
+  }
+
+  // --- Gate: defense-in-depth schema validation ---------------------
+  // Serialize the agent node to plain JS, merge the patch, and run
+  // agentSchema.safeParse. Catches invalid patch values (e.g. effort:
+  // "banana") before we rewrite the file.
+  const currentJs = (agentMap.toJSON() as Record<string, unknown>) ?? {};
+  const merged: Record<string, unknown> = { ...currentJs };
+  for (const [k, v] of Object.entries(args.patch)) merged[k] = v;
+
+  const schemaCheck = agentSchema.safeParse(merged);
+  if (!schemaCheck.success) {
+    const firstIssue = schemaCheck.error.issues[0];
+    const issueDesc = firstIssue
+      ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+      : "validation failed";
+    return {
+      outcome: "refused",
+      reason: `invalid patch: ${issueDesc}`,
+      step: "invalid-patch",
+    };
+  }
+
+  // --- Gate: literal-value secret scan across the patch -------------
+  const secretRefused = scanPatchForLiteralSecrets(args.patch);
+  if (secretRefused) {
+    return {
+      outcome: "refused",
+      reason: secretRefused.reason,
+      step: "secret-scan",
+    };
+  }
+
+  // --- Mutate ONLY the keys that actually changed -------------------
+  // JSON-stable comparison tolerates YAMLMap vs plain-object shape drift
+  // (agentMap.toJSON() returned a plain obj; patch values are plain).
+  const keysChanged: string[] = [];
+  for (const [k, v] of Object.entries(args.patch)) {
+    const existing = currentJs[k];
+    if (JSON.stringify(existing) === JSON.stringify(v)) continue;
+    agentMap.set(k, buildYamlNode(v));
+    keysChanged.push(k);
+  }
+
+  if (keysChanged.length === 0) {
+    return {
+      outcome: "no-op",
+      reason: `all patch keys already match current values`,
+    };
+  }
+
+  // --- Serialize with no line-wrap ---------------------------------
+  const newText = doc.toString({ lineWidth: 0 });
+
+  // --- Atomic temp+rename ------------------------------------------
+  const destDir = dirname(args.existingConfigPath);
+  const tmpPath = join(
+    destDir,
+    `.clawcode.yaml.${pid}.${Date.now()}.tmp`,
+  );
+  await writerFs.writeFile(tmpPath, newText, "utf8");
+  try {
+    await writerFs.rename(tmpPath, args.existingConfigPath);
+  } catch (err) {
+    try {
+      await writerFs.unlink(tmpPath);
+    } catch {
+      // best-effort — tmp may already be gone
+    }
+    throw err;
+  }
+
+  const targetSha256 = createHash("sha256")
+    .update(newText, "utf8")
+    .digest("hex");
+  return {
+    outcome: "updated",
+    destPath: args.existingConfigPath,
+    targetSha256,
+    keysChanged: Object.freeze(keysChanged),
   };
 }
