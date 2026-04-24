@@ -1497,6 +1497,103 @@ agents:
     }
   });
 
+  it("WIRE-A1: integration — applies the fin-acquisition Phase 90 Plan 07 patch end-to-end", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const heartbeatPrompt = "AUTO-RESET: DISABLED\nDo NOT send /clear";
+    const result = await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: {
+        effort: "auto",
+        allowedModels: ["sonnet", "opus", "haiku"],
+        greetOnRestart: true,
+        greetCoolDownMs: 300_000,
+        heartbeat: { every: "50m", model: "haiku", prompt: heartbeatPrompt },
+        mcpServers: [
+          "finmentum-db",
+          "finmentum-content",
+          "google-workspace",
+          "browserless",
+          "fal-ai",
+          "brave-search",
+        ],
+      },
+    });
+    expect(result.outcome).toBe("updated");
+
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<Record<string, unknown>>;
+    };
+    const fin = parsed.agents.find(
+      (a) => (a.name as string) === "fin-acquisition",
+    )! as Record<string, unknown>;
+    expect(fin.effort).toBe("auto");
+    expect(fin.allowedModels).toEqual(["sonnet", "opus", "haiku"]);
+    expect(fin.greetOnRestart).toBe(true);
+    expect(fin.greetCoolDownMs).toBe(300_000);
+    expect(fin.heartbeat).toEqual({
+      every: "50m",
+      model: "haiku",
+      prompt: heartbeatPrompt,
+    });
+    expect(fin.mcpServers).toEqual([
+      "finmentum-db",
+      "finmentum-content",
+      "google-workspace",
+      "browserless",
+      "fal-ai",
+      "brave-search",
+    ]);
+  });
+
+  it("WIRE-A2: integration — channel binding UNCHANGED after fin-acquisition wiring patch", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: {
+        effort: "auto",
+        allowedModels: ["sonnet", "opus", "haiku"],
+      },
+    });
+    const after = readFileSync(destPath, "utf8");
+    const parsed = parseYaml(after) as {
+      agents: Array<Record<string, unknown>>;
+    };
+    const fin = parsed.agents.find(
+      (a) => (a.name as string) === "fin-acquisition",
+    )!;
+    expect(fin.channels).toEqual(["1481670479017414767"]);
+  });
+
+  it("WIRE-A3: integration — other agents structurally untouched after fin-acquisition patch", async () => {
+    const { destPath } = await setupUacFixture(BASE_UAC_YAML);
+    const beforeParsed = parseYaml(
+      readFileSync(destPath, "utf8"),
+    ) as { agents: Array<Record<string, unknown>> };
+    const clawdyBefore = beforeParsed.agents.find(
+      (a) => (a.name as string) === "clawdy",
+    );
+
+    await updateAgentConfig({
+      existingConfigPath: destPath,
+      agentName: "fin-acquisition",
+      patch: {
+        effort: "auto",
+        heartbeat: { every: "50m", model: "haiku", prompt: "test" },
+      },
+    });
+
+    const afterParsed = parseYaml(
+      readFileSync(destPath, "utf8"),
+    ) as { agents: Array<Record<string, unknown>> };
+    const clawdyAfter = afterParsed.agents.find(
+      (a) => (a.name as string) === "clawdy",
+    );
+    expect(JSON.stringify(clawdyAfter)).toBe(JSON.stringify(clawdyBefore));
+  });
+
   it("UAC-W8: atomic rename failure unlinks tmp + re-throws", async () => {
     const { destPath } = await setupUacFixture(BASE_UAC_YAML);
     const unlinkCalls: string[] = [];
