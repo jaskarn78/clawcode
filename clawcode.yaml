@@ -240,8 +240,63 @@ agents:
     model: sonnet
     channels:
       - "1481670479017414767"
-    mcpServers: []
+    mcpServers:
+      - finmentum-db
+      - finmentum-content
+      - google-workspace
+      - browserless
+      - fal-ai
+      - brave-search
     memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-acquisition
+    effort: auto
+    allowedModels:
+      - sonnet
+      - opus
+      - haiku
+    greetOnRestart: true
+    greetCoolDownMs: 300000
+    heartbeat:
+      every: 50m
+      model: haiku
+      prompt: |
+        # Context Health Monitor
+
+        ## ⚠️ AUTO-RESET: DISABLED
+        Auto session reset is **disabled** for all Finmentum workspaces.
+        Do NOT send `/clear`, do NOT recommend `/clear`, do NOT auto-reset at any threshold.
+        Context management is manual — Jas or Ramy will reset when they choose to.
+
+        ## Every Heartbeat — Run This Check
+
+        1. Call `session_status` to get current token usage
+        2. Identify zone and act:
+
+        ### Zones
+        - 🟢 **0–50%** — Normal. No action needed.
+        - 🟡 **50–70%** — Begin routing heavy tasks (research, analysis, drafts) to sub-agents. Keep replies concise.
+        - 🟠 **70–85%** — Post a brief note to the active channel. Save context snapshot to today's daily notes. Offload all non-trivial tasks. **Do NOT reset or recommend /clear.**
+        - 🔴 **85%+** — Save full state to daily notes immediately. Post an alert that context is nearly full. **Do NOT auto-reset. Do NOT send /clear.** Let the user decide.
+
+        ### Context Snapshot Template (Yellow+ zones)
+        Save to `memory/YYYY-MM-DD.md`:
+        ```
+        ## Context Snapshot [HH:MM UTC]
+        - Active topics: [list]
+        - Pending requests: [list]
+        - Key decisions: [list]
+        ```
+
+        ### User-Facing Messages
+        - Yellow: "Running warm on context — routing heavy tasks to background agents."
+        - Orange: "⚡ Context at ~75%. Keeping things concise, using sub-agents for heavy work."
+        - Red: "🔴 Context nearly full — state saved. Let me know if you'd like to reset."
+
+        ## Heavy Task Routing Rule
+        If a response needs search/analysis/code OR would be > ~2 paragraphs → spawn sub-agent.
+        Sub-agents: write detailed output to files, return a short summary + file path only.
+
+        ## If Nothing Needs Attention
+        Reply: HEARTBEAT_OK
   - name: finmentum-content-creator
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
