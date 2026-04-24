@@ -187,13 +187,15 @@ Phase 90 delivered: ClawHub Marketplace extension (/clawcode-skills-browse union
   8. Post-cutover, rsync from ClawCode → OpenClaw preserves OpenClaw's workspace as rollback target; 7-day dual-mode period allows revert via `clawcode sync set-authoritative openclaw --revert-cutover`
   9. Sync runner degrades gracefully — if remote SSH fails (host unreachable), runner logs warning + skips cycle, does not block; next scheduled cycle retries
   10. Excluded paths verified: no .sqlite, no sessions/*.jsonl, no credential files, no .git appear on destination; regression test pins the exclude filter
-**Plans**: TBD — suggested 6-plan decomposition:
-- 91-01 Sync runner (bash + rsync over ssh) + direction-aware mode + exclude filter + systemd timer + observability JSONL (SYNC-01, SYNC-02, SYNC-05, SYNC-07, SYNC-09, SYNC-10)
-- 91-02 Inotify hot-watch for MEMORY.md + memory/*.md with sub-10s propagation (SYNC-03)
-- 91-03 Conversation-turn translator — OpenClaw sessions/*.jsonl → ClawCode ConversationStore rows (SYNC-04)
-- 91-04 Conflict detection + admin-clawdy channel alert + MEMORY.md reconciliation prompt (SYNC-06, SYNC-10)
-- 91-05 `/clawcode-sync-status` Discord slash command — reuses Phase 85 CONTROL_COMMANDS pattern + EmbedBuilder (SYNC-08)
-- 91-06 Cutover runbook extension — direction flip command + 7-day rollback window + verification steps; ties into Phase 90's `.planning/migrations/fin-acquisition-cutover.md`
+**Plans:** 6 plans (planned 2026-04-24)
+- [ ] 91-01-PLAN.md — Sync runner (rsync over SSH) + sync-state.json atomic writer + rsync include/exclude filter + systemd 5-min timer + JSONL observability (SYNC-01, SYNC-02, SYNC-05, SYNC-07)
+- [ ] 91-02-PLAN.md — Conflict detection (sha256 pre-sync compare, per-file skip) + admin-clawdy bot-direct alert embed (SYNC-06)
+- [ ] 91-03-PLAN.md — Conversation-turn translator (OpenClaw sessions/*.jsonl → ConversationStore via origin_id idempotency) + hourly systemd timer (SYNC-04)
+- [ ] 91-04-PLAN.md — `clawcode sync *` CLI subcommands (status, run-once, resolve, set-authoritative, reverse start/stop, finalize, translate-sessions) with drain-then-flip + 7-day rollback gate (SYNC-09, SYNC-10)
+- [ ] 91-05-PLAN.md — /clawcode-sync-status Discord slash (Phase 85 CONTROL_COMMANDS + EmbedBuilder blueprint) (SYNC-08)
+- [ ] 91-06-PLAN.md — fin-acquisition-cutover.md runbook extension (SSH provisioning, systemd install, cutover flip, 7-day rollback, observability) + exclude-filter regression test (SYNC-10 pin)
+
+Note: SYNC-03 (sub-10s inotify propagation) is DEFERRED to Phase 92+ per CONTEXT.md §D-05. Phase 91 ships the 5-min rsync baseline only.
 **UI hint**: yes — `/clawcode-sync-status` uses EmbedBuilder (Phase 85 precedent)
 
 
