@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.2 OpenClaw Parity & Polish shipped 2026-04-23. Planning next milestone (`/gsd:new-milestone`).
+**Current focus:** v2.3 Marketplace & Memory Activation — Phase 90 (ClawHub Marketplace + fin-acquisition Memory Prep) added 2026-04-24, awaiting planning.
 
 ## Current Position
 
-Phase: —
-Plan: —
+Phase: 90
+Plan: Not started
 
 ## Performance Metrics
 
@@ -171,6 +171,8 @@ Recent decisions affecting current work:
 - 2026-04-21: v2.2 research complete — STACK/FEATURES/ARCHITECTURE/PITFALLS/SUMMARY across `.planning/research/`
 - 2026-04-21: v2.2 roadmap created — 6 phases (83-88), 45 requirements mapped across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT; UI-01 cross-cutting across 4 UI phases; zero orphans
 - 2026-04-22: Phase 89 added — Agent restart greeting (active Discord send of prior-context summary on restart)
+- 2026-04-23: v2.2 shipped (phases 83-89, 19 plans, 32 tasks) — OpenClaw Parity & Polish complete; tech_debt audit status (2 Phase 89 UAT items deferred)
+- 2026-04-24: v2.3 Marketplace & Memory Activation opened — Phase 90 added: ClawHub Marketplace + fin-acquisition Memory Prep. Scope synthesized from Apr 23-24 fin-acquisition Discord conversation-history analysis (4900 msgs) + v2.2 gap analysis of OpenClaw → ClawCode fin-acquisition migration readiness. 21 requirements (HUB-01..08 + MEM-01..06 + WIRE-01..07) across 7 suggested plans.
 
 ### Pending Todos
 

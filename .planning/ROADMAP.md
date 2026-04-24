@@ -15,6 +15,7 @@
 - :white_check_mark: **v2.0 Open Endpoint + Eyes & Hands** - Phases 69-74 (shipped 2026-04-20)
 - :white_check_mark: **v2.1 OpenClaw Agent Migration** - Phases 75-82 + 82.1 (shipped 2026-04-21)
 - :white_check_mark: **v2.2 OpenClaw Parity & Polish** - Phases 83-89 (shipped 2026-04-23)
+- :hammer: **v2.3 Marketplace & Memory Activation** - Phase 90+ (opened 2026-04-24)
 
 ## Phases
 
@@ -164,7 +165,7 @@ Phases 83-89 delivered: Extended-thinking effort mapping (P0 silent no-op fix + 
 
 ## Progress
 
-**Status:** v2.2 OpenClaw Parity & Polish shipped 2026-04-23 — 7 phases (83-89), 55+ requirements across UI/SKILL/EFFORT/MODEL/CMD/TOOL/MKT/GREET categories, zero new npm deps. Awaiting next milestone (`/gsd:new-milestone`).
+**Status:** v2.3 Marketplace & Memory Activation opened 2026-04-24 with Phase 90 (ClawHub marketplace + fin-acquisition memory prep). Phase 90 breaks down into ~7 plans spanning HUB/MEM/WIRE requirement categories. Additional v2.3 phases TBD.
 
 | Milestone | Phases | Status | Completed |
 |-----------|--------|--------|-----------|
@@ -181,6 +182,36 @@ Phases 83-89 delivered: Extended-thinking effort mapping (P0 silent no-op fix + 
 | v2.0 | 69-74 | Complete | 2026-04-20 |
 | v2.1 | 75-82 + 82.1 | Complete | 2026-04-21 |
 | v2.2 | 83-89 | Complete | 2026-04-23 |
+| v2.3 | 90+ | In progress | — |
+
+### Phase 90: ClawHub Marketplace + fin-acquisition Memory Prep
+**Goal**: Extend `/clawcode-skills-browse` to discover and install from clawhub.ai (skills + plugins/MCPs) with install-time configuration, and prep the fin-acquisition ClawCode agent for a future manual cutover from OpenClaw by wiring the MEMORY.md auto-load, workspace-file scanner, dated-session flush, and MCP server list — without flipping the channel yet.
+**Depends on**: Phase 88 (Skills Marketplace — reuses `loadMarketplaceCatalog`, `installSingleSkill`, `updateAgentSkills`), Phase 84 (skills migration pipeline — secret-scan, frontmatter normalize, idempotency, scope-tag check), Phase 86 (atomic YAML writer pattern `updateAgentModel`), Phase 69 (OpenAI endpoint — target of eventual cutover), Phase 85 (MCP readiness handshake), Phase 89 (restart greeting — `memory_chunks` retrieval feeds its greeting summary). v2.1 OpenClaw Agent Migration produced the ClawCode fin-acquisition agent + migrated skills + MEMORY.md workspace artifacts — Phase 90 activates them.
+**Requirements**: HUB-01, HUB-02, HUB-03, HUB-04, HUB-05, HUB-06, HUB-07, HUB-08, MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, WIRE-01, WIRE-02, WIRE-03, WIRE-04, WIRE-05, WIRE-06, WIRE-07 (synthesized from the Apr 23-24 fin-acquisition Discord conversation-history gap analysis; 1:1 mapping will live in 90-CONTEXT.md)
+**Success Criteria** (what must be TRUE):
+  1. `/clawcode-skills-browse` with no argument shows ClawHub results alongside local skills, paginated, with category/rating/download-count badges
+  2. Selecting a ClawHub skill runs the full Phase 84 pipeline and Phase 88 atomic YAML persist — secret-scan refusals block with a specific ephemeral Discord message (never silently skipped, per Phase 88 MKT-05 precedent)
+  3. `/clawcode-plugins-browse` (new sibling command) lists ClawHub plugins; selecting one writes a new `mcpServers:` entry via a new `updateAgentMcpServers` atomic YAML writer (mirrors Phase 86 `updateAgentModel` + Phase 88 `updateAgentSkills`)
+  4. Install-time config modal surfaces required env vars and credentials; rewrites values to `op://` references where 1Password has a matching item; writes literals only with explicit operator confirmation
+  5. Invalid clawhub packages (missing frontmatter, deprecated category, scope mismatch with bound agent, hard-coded secret) are rejected with a specific ephemeral Discord message — never silently skipped
+  6. On fin-acquisition ClawCode agent session start, `MEMORY.md` is injected into the system prompt — next turn answers "what's our firm legal name?" with "Finmentum LLC" without being re-told (closes the Apr 20 "remember the last thing we worked on?" crisis class)
+  7. Within 30s of `memory/2026-04-24-<anything>.md` being written to workspace, `memory_chunks` table has the new chunks indexed and retrievable by semantic query
+  8. A pre-turn retrieval for "Zaid's investment proportion" returns the relevant chunk from the seeded dated memory files (via WIRE-06 backfill)
+  9. Mid-session flush produces `memory/YYYY-MM-DD-HHMM.md` files every 15 minutes (default) during active use; on SIGKILL, the most recent flush survives intact on disk (closes the dashboard-restart-drop crisis)
+  10. "Remember this: Zaid wants 40% in SGOV" in chat triggers a one-shot `memory/YYYY-MM-DD-<slug>.md` write and is retrievable on the next turn
+  11. Opus subagent return captured as `memory/YYYY-MM-DD-subagent-<hash>.md`; parent can answer "do you recall the opus agent you spawned?" across session boundaries (closes Apr 23 gap)
+  12. After Phase 90 ships, `cat clawcode.yaml` shows fin-acquisition with full `mcpServers` list (finmentum-db, finmentum-content, google-workspace, browserless, fal-ai, brave-search), heartbeat config (50m + haiku + HEARTBEAT.md prompt), effort=auto, allowedModels=[sonnet, opus, haiku] — but channel binding still routes to OpenClaw (no cutover yet)
+  13. `clawcode mcp-status fin-acquisition` shows all 6 MCP servers with `ready` status (verifies WIRE-01 + Phase 85 readiness gate end-to-end)
+  14. `.planning/migrations/fin-acquisition-cutover.md` runbook exists with pre-cutover checklist, rsync commands (513MB uploads), rollback procedure — operator-executable, not auto-run
+**Plans**: TBD (run `/gsd:plan-phase 90` to break down). Suggested 7-plan decomposition:
+- 90-01 MEMORY.md auto-inject (MEM-01) — smallest, immediate fin-acquisition benefit
+- 90-02 chokidar file-scanner + `memory_chunks` table + pre-turn retrieval (MEM-02 + MEM-03)
+- 90-03 Dated session flush + "remember this" cue detection + subagent capture (MEM-04 + MEM-05 + MEM-06)
+- 90-04 ClawHub catalog client + skills install + cache (HUB-01 + HUB-03 + HUB-06 + HUB-08)
+- 90-05 ClawHub plugins install + `updateAgentMcpServers` atomic YAML writer (HUB-02 + HUB-04)
+- 90-06 Install-time config modal + 1Password op:// rewrite + GitHub OAuth (HUB-05 + HUB-07)
+- 90-07 fin-acquisition agent wiring + memory backfill + cutover runbook (WIRE-01..07)
+**UI hint**: yes (StringSelectMenuBuilder + Modal + EmbedBuilder — UI-01 compliance)
 
 ---
 
