@@ -212,7 +212,9 @@ describe("loadMarketplaceCatalog — Phase 88 Plan 01 (C1-C7)", () => {
     const legacy = result.find((e) => e.name === "tuya-ac")!;
     expect(legacy).toBeDefined();
     expect(typeof legacy.source).toBe("object");
-    if (typeof legacy.source === "object") {
+    // Phase 90 Plan 04 HUB-01 — source is now a 3-way union; narrow with
+    // a type guard that excludes the clawhub variant before .path access.
+    if (typeof legacy.source === "object" && !("kind" in legacy.source)) {
       expect(legacy.source.path).toBe(legacyRoot);
       expect(legacy.source.label).toBe("legacy");
     }

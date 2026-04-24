@@ -40,6 +40,12 @@ import {
 import { SCOPE_TAGS } from "../migration/skills-scope-tags.js";
 import type { ResolvedMarketplaceSources } from "../shared/types.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
+import {
+  ClawhubAuthRequiredError,
+  ClawhubRateLimitedError,
+  fetchClawhubSkills,
+  type ClawhubSkillListItem,
+} from "./clawhub-client.js";
 
 /**
  * One advertised skill in the browser-facing catalog.
@@ -52,8 +58,32 @@ export type MarketplaceEntry = Readonly<{
   name: string;
   description: string;
   category: "finmentum" | "personal" | "fleet";
-  source: "local" | Readonly<{ path: string; label?: string }>;
-  /** Absolute path to the skill's source directory (used by install-time copier). */
+  /**
+   * Phase 88 MKT-02 + Phase 90 Plan 04 HUB-01 — source discriminant.
+   *
+   * - "local"                                    → local skills directory
+   * - { path, label? }                           → legacy filesystem source
+   *                                                (OpenClaw skill library)
+   * - { kind: "clawhub", baseUrl, downloadUrl,   → ClawHub registry source;
+   *     authToken?, version }                      skillDir is "" until
+   *                                                install-time staging
+   *                                                (Plan 90-04 Task 2).
+   */
+  source:
+    | "local"
+    | Readonly<{ path: string; label?: string }>
+    | Readonly<{
+        kind: "clawhub";
+        baseUrl: string;
+        downloadUrl: string;
+        authToken?: string;
+        version: string;
+      }>;
+  /**
+   * Absolute path to the skill's source directory (used by install-time
+   * copier). Empty string for ClawHub entries — the installer resolves
+   * this by downloading + extracting into a staging dir.
+   */
   skillDir: string;
   /** Only set for legacy-source entries — local ones are curated. */
   classification?: SkillClassification;
@@ -124,6 +154,38 @@ async function readLegacyDescription(skillDir: string): Promise<string> {
 }
 
 /**
+ * Convert a ClawHub list item into a MarketplaceEntry. ClawHub skills
+ * default to the `fleet` category because the registry's `category` field
+ * is free-form (productivity, ai, etc.) and doesn't map cleanly onto the
+ * Phase 84 scope tags (finmentum/personal/fleet). The scope gate
+ * (canLinkSkillToAgent) enforces the narrower check at install time.
+ */
+function clawhubItemToEntry(
+  item: ClawhubSkillListItem,
+  src: Readonly<{
+    kind: "clawhub";
+    baseUrl: string;
+    authToken?: string;
+    cacheTtlMs?: number;
+  }>,
+): MarketplaceEntry {
+  const sourceDescriptor: MarketplaceEntry["source"] = Object.freeze({
+    kind: "clawhub" as const,
+    baseUrl: src.baseUrl,
+    downloadUrl: item.downloadUrl,
+    version: item.version,
+    ...(src.authToken !== undefined ? { authToken: src.authToken } : {}),
+  });
+  return Object.freeze({
+    name: item.name,
+    description: truncateDescription(item.description || DESCRIPTION_FALLBACK),
+    category: "fleet" as const,
+    source: sourceDescriptor,
+    skillDir: "", // Resolved at install-time via downloadClawhubSkill staging.
+  });
+}
+
+/**
  * Load the unioned marketplace catalog for a given local skills dir and
  * set of legacy sources.
  *
@@ -166,15 +228,53 @@ export async function loadMarketplaceCatalog(
     });
   }
 
-  // --- Step 2: legacy sources (union; local wins on collision) ------
-  // Phase 90 Plan 04 HUB-01 — discriminate on `kind`. The ClawHub branch
-  // is added in Plan 90-04 Task 2; for now we ONLY process legacy entries
-  // (backward compat with the pre-Phase-90 `{path, label?}` shape: entries
-  // lacking a `kind` discriminator are treated as legacy).
+  // --- Step 2: legacy + clawhub sources (union; local wins on collision) --
+  // Phase 90 Plan 04 HUB-01 — discriminate on `kind`. ClawHub entries
+  // trigger a cursor-less first-page fetch via `fetchClawhubSkills`; each
+  // item becomes a MarketplaceEntry with source.kind="clawhub" and
+  // skillDir="" (install-time staging resolves the actual directory).
+  //
+  // Error handling matches HUB-CAT-4/HUB-CAT-5 behavior:
+  //   - ClawhubRateLimitedError → log.warn + skip (zero entries from this
+  //     source this call); caller's cache marks the 429 window
+  //     (integration deferred to Plan 90-05 /clawcode-skills-browse).
+  //   - ClawhubAuthRequiredError → log.warn + skip (ditto; operator
+  //     eventually re-auths via Plan 90-06).
+  //   - Other errors → log.warn + skip (no source kills the whole catalog).
   for (const source of opts.sources) {
-    // Skip ClawHub entries — Task 2 extends this loop to fetch + union
-    // ClawHub items alongside local+legacy.
+    // ClawHub branch — fetch the first page of skills and union.
     if ("kind" in source && source.kind === "clawhub") {
+      try {
+        const resp = await fetchClawhubSkills({
+          baseUrl: source.baseUrl,
+          ...(source.authToken !== undefined
+            ? { authToken: source.authToken }
+            : {}),
+        });
+        for (const item of resp.items) {
+          // Local wins — skip if name collision.
+          if (byName.has(item.name)) continue;
+          byName.set(item.name, clawhubItemToEntry(item, source));
+        }
+      } catch (err) {
+        if (err instanceof ClawhubRateLimitedError) {
+          opts.log?.warn(
+            { retryAfterMs: err.retryAfterMs, source: source.baseUrl },
+            "loadMarketplaceCatalog: clawhub rate-limited; skipping source",
+          );
+        } else if (err instanceof ClawhubAuthRequiredError) {
+          opts.log?.warn(
+            { source: source.baseUrl },
+            "loadMarketplaceCatalog: clawhub auth-required; skipping source",
+          );
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          opts.log?.warn(
+            { source: source.baseUrl, err: msg },
+            "loadMarketplaceCatalog: clawhub fetch failed; skipping source",
+          );
+        }
+      }
       continue;
     }
     // Narrow to the legacy shape. Works for both {kind:"legacy", path,
