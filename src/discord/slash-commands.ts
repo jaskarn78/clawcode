@@ -731,6 +731,16 @@ export class SlashCommandHandler {
       return;
     }
 
+    // Phase 90 Plan 06 HUB-07 — /clawcode-clawhub-auth inline handler.
+    // Seventh application of the inline-handler-short-circuit pattern.
+    // Kicks off the GitHub device-code OAuth flow, displays the user_code
+    // in an embed, and blocks on the long-lived poll IPC until the token
+    // is stored in 1Password (or expires).
+    if (commandName === "clawcode-clawhub-auth") {
+      await this.handleClawhubAuthCommand(interaction);
+      return;
+    }
+
     // Check if this is a control command (daemon-direct, no agent needed)
     const controlCmd = CONTROL_COMMANDS.find((c) => c.name === commandName);
     if (controlCmd) {
@@ -1958,7 +1968,94 @@ export class SlashCommandHandler {
         /* expired */
       }
 
-      // Retry install with the collected field.
+      // Phase 90 Plan 06 HUB-05 — op:// rewrite probe.
+      // Before the retry install, ask the daemon whether the operator has
+      // a matching 1Password item for this field. If so, surface a button
+      // row: "Use op://..." (Primary) vs "Use literal" (Danger — still
+      // gated by install-plugin's secret-scan on actual credentials).
+      //
+      // Only probe if the submitted value doesn't already look like an
+      // op:// ref (operator may have explicitly typed one).
+      let effectiveValue = value;
+      if (!value.startsWith("op://")) {
+        try {
+          type ProbeResp = {
+            proposal: {
+              uri: string;
+              confidence: string;
+              itemTitle: string;
+            } | null;
+          };
+          const probe = (await sendIpcRequest(
+            SOCKET_PATH,
+            "marketplace-probe-op-items",
+            {
+              fieldName,
+              fieldLabel: fieldName,
+            },
+          )) as ProbeResp;
+
+          if (probe.proposal) {
+            const acceptId = `oprewrite-accept:${agentName}:${chosen}:${nonce}`;
+            const literalId = `oprewrite-literal:${agentName}:${chosen}:${nonce}`;
+            const acceptLabel = `Use ${probe.proposal.uri}`.slice(0, 79);
+            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(acceptId)
+                .setLabel(acceptLabel)
+                .setStyle(ButtonStyle.Primary),
+              new ButtonBuilder()
+                .setCustomId(literalId)
+                .setLabel("Use literal value (may be refused)")
+                .setStyle(ButtonStyle.Danger),
+            );
+            try {
+              await interaction.editReply({
+                content:
+                  `**${fieldName}**: 1Password match found (${probe.proposal.confidence}) — ` +
+                  `**${probe.proposal.itemTitle}**. Use the 1Password reference, or use the ` +
+                  `literal value you typed? Literal credentials may be refused by the ` +
+                  `install-time secret-scan.`,
+                components: [row],
+              });
+            } catch {
+              /* expired — fall through with literal */
+            }
+
+            try {
+              const channel = interaction.channel;
+              if (channel) {
+                const btn = (await channel.awaitMessageComponent({
+                  componentType: ComponentType.Button,
+                  filter: (i: { user: { id: string }; customId: string }) =>
+                    i.user.id === interaction.user.id &&
+                    (i.customId === acceptId || i.customId === literalId),
+                  time: 60_000,
+                })) as ButtonInteraction;
+                try {
+                  await btn.deferUpdate();
+                } catch {
+                  /* expired */
+                }
+                if (btn.customId === acceptId) {
+                  effectiveValue = probe.proposal.uri;
+                }
+                // literal button → keep `value` as-is; install-plugin's
+                // secret-scan gate will refuse credentials-shaped literals.
+              }
+            } catch {
+              // No click within timeout — default to literal (what the
+              // operator typed). The install-plugin secret-scan still gates.
+            }
+          }
+        } catch {
+          // Probe unavailable (1P not signed in, etc.) — fall through to
+          // literal. The install-plugin secret-scan still gates.
+        }
+      }
+
+      // Retry install with the effective field value (either the typed
+      // literal or the operator-confirmed op:// URI).
       try {
         outcome = (await sendIpcRequest(
           SOCKET_PATH,
@@ -1966,7 +2063,7 @@ export class SlashCommandHandler {
           {
             agent: agentName,
             plugin: chosen,
-            configInputs: { [fieldName]: value },
+            configInputs: { [fieldName]: effectiveValue },
           },
         )) as PluginInstallOutcomeWire;
       } catch (err) {
@@ -1986,6 +2083,133 @@ export class SlashCommandHandler {
     const msg = renderPluginInstallOutcome(outcome, agentName);
     try {
       await interaction.editReply({ content: msg, components: [] });
+    } catch {
+      /* expired */
+    }
+  }
+
+  /**
+   * Phase 90 Plan 06 HUB-07 — /clawcode-clawhub-auth inline handler.
+   *
+   * Flow:
+   *   1. deferReply ephemerally.
+   *   2. sendIpcRequest("clawhub-oauth-start") → {user_code, verification_uri,
+   *      device_code, poll_interval_s, expires_at}.
+   *   3. editReply with EmbedBuilder showing the verification_uri hyperlink +
+   *      bold user_code + expiry countdown.
+   *   4. sendIpcRequest("clawhub-oauth-poll", {...}) — this RPC blocks until
+   *      the user completes the flow or the code expires (up to 15 min).
+   *      Passes an explicit timeoutMs so the IPC client doesn't kill the
+   *      request at the default shorter window.
+   *   5. editReply with success ("Token stored at op://...") or failure
+   *      message from the poll handler.
+   *
+   * Auth-deferred fallback: if the ClawHub GitHub OAuth App client_id is a
+   * placeholder (unset env var), the initiate request will fail. The caller
+   * catches + surfaces a helpful message asking the operator to register the
+   * app and set CLAWHUB_GITHUB_CLIENT_ID.
+   */
+  private async handleClawhubAuthCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch {
+      return;
+    }
+
+    type DeviceCodeInitWire = {
+      readonly user_code: string;
+      readonly verification_uri: string;
+      readonly device_code: string;
+      readonly poll_interval_s: number;
+      readonly expires_at: number;
+    };
+    let init: DeviceCodeInitWire;
+    try {
+      init = (await sendIpcRequest(
+        SOCKET_PATH,
+        "clawhub-oauth-start",
+        {},
+      )) as DeviceCodeInitWire;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply({
+          content:
+            `ClawHub OAuth unavailable: ${msg}\n` +
+            `This is usually because the ClawHub GitHub OAuth App isn't configured yet. ` +
+            `Operator: set CLAWHUB_GITHUB_CLIENT_ID in the daemon env and restart.`,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    const expiresDate = new Date(init.expires_at);
+    const expiresRel = `<t:${Math.floor(init.expires_at / 1000)}:R>`;
+    const embed = new EmbedBuilder()
+      .setTitle("🔐 ClawHub GitHub OAuth")
+      .setColor(0x2ea043)
+      .setDescription(
+        `Step 1: Visit **${init.verification_uri}**\n` +
+          `Step 2: Enter code **\`${init.user_code}\`**\n` +
+          `Step 3: Wait here — I'll poll GitHub and store the token in 1Password.`,
+      )
+      .addFields({
+        name: "Expires",
+        value: `${expiresRel} (${expiresDate.toISOString()})`,
+        inline: false,
+      });
+
+    try {
+      await interaction.editReply({ embeds: [embed] });
+    } catch {
+      /* expired */
+    }
+
+    type PollResultWire = { readonly stored: boolean; readonly message: string };
+    let result: PollResultWire;
+    try {
+      // Long-lived IPC — the daemon-side handler blocks until the user
+      // completes the flow or the device code expires (hard-capped at
+      // ~15 min by GitHub). The IPC client uses Unix-socket lifetime (no
+      // fixed timeout); the daemon handler self-terminates at expires_at.
+      result = (await sendIpcRequest(
+        SOCKET_PATH,
+        "clawhub-oauth-poll",
+        {
+          device_code: init.device_code,
+          poll_interval_s: init.poll_interval_s,
+          expires_at: init.expires_at,
+        },
+      )) as PollResultWire;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply({
+          content: `⛔ OAuth poll failed: ${msg}`,
+          embeds: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      if (result.stored) {
+        await interaction.editReply({
+          content: `✅ ${result.message}`,
+          embeds: [],
+        });
+      } else {
+        await interaction.editReply({
+          content: `⛔ OAuth did not complete: ${result.message}`,
+          embeds: [],
+        });
+      }
     } catch {
       /* expired */
     }

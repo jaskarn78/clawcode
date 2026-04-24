@@ -12,8 +12,8 @@ describe("slash-types", () => {
     // DEFAULT_SLASH_COMMANDS. They are re-provided at registration time by the
     // SDK discovery loop via native-cc-commands.buildNativeCommandDefs so the
     // native-dispatch path is the ONLY path for /compact and /cost going forward.
-    it("contains exactly 9 commands with clawcode- prefix (Phase 90 Plan 05 added plugins-browse)", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(9);
+    it("contains exactly 10 commands with clawcode- prefix (Phase 90 Plan 06 added clawhub-auth)", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(10);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
@@ -25,6 +25,7 @@ describe("slash-types", () => {
         "clawcode-skills-browse",
         "clawcode-skills",
         "clawcode-plugins-browse",
+        "clawcode-clawhub-auth",
       ]);
     });
 
@@ -57,6 +58,7 @@ describe("slash-types", () => {
         "clawcode-skills-browse",
         "clawcode-skills",
         "clawcode-plugins-browse",
+        "clawcode-clawhub-auth",
       ]);
       for (const cmd of DEFAULT_SLASH_COMMANDS) {
         expect(cmd.name).toBeTruthy();
@@ -92,7 +94,7 @@ describe("slash-types", () => {
       // the no-options set.
       const withOptions = new Set(["clawcode-memory", "clawcode-model", "clawcode-effort"]);
       const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
-      expect(noOptionCmds.length).toBe(6);
+      expect(noOptionCmds.length).toBe(7);
       for (const cmd of noOptionCmds) {
         expect(cmd.options).toEqual([]);
       }

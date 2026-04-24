@@ -202,6 +202,17 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     claudeCommand: "",
     options: [],
   },
+  {
+    name: "clawcode-clawhub-auth",
+    description:
+      "Authenticate ClawCode with ClawHub via GitHub OAuth (device-code flow)",
+    // Phase 90 Plan 06 HUB-07 / UI-01 — inline handler in slash-commands.ts
+    // runs the GitHub device-code flow. Shows an embed with the user_code +
+    // verification_uri, long-polls the token endpoint via IPC, then stores
+    // the resulting access_token at op://clawdbot/ClawHub Token/credential.
+    claudeCommand: "",
+    options: [],
+  },
 ] as const;
 
 /**

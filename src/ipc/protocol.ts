@@ -72,6 +72,13 @@ export const IPC_METHODS = [
   // via updateAgentMcpServers (yaml-writer.ts).
   "marketplace-list-plugins",
   "marketplace-install-plugin",
+  // Phase 90 Plan 06 HUB-05 / HUB-07 — install-time config UX primitives.
+  //   clawhub-oauth-start:  kick off GitHub device-code flow + return user_code
+  //   clawhub-oauth-poll:   long-lived poll (up to 15min) that stores token in 1P
+  //   marketplace-probe-op-items: 1Password op:// rewrite proposal for one field
+  "clawhub-oauth-start",
+  "clawhub-oauth-poll",
+  "marketplace-probe-op-items",
   // Cost tracking (Phase 40)
   "costs",
   // Latency (Phase 50)

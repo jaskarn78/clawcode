@@ -36,6 +36,11 @@ import {
 } from "./clawhub-client.js";
 import { updateAgentMcpServers } from "../migration/yaml-writer.js";
 import { scanLiteralValueForSecret } from "../migration/skills-secret-scan.js";
+// Phase 90 Plan 06 HUB-05 — 1Password op:// rewrite probe. Imported via the
+// module object (not named imports) so tests can vi.spyOn(opRewriteMod,
+// "listOpItems") without breaking ESM bindings.
+import * as opRewriteMod from "./op-rewrite.js";
+import type { OpRewriteProposal } from "./op-rewrite.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -365,4 +370,66 @@ export function mapFetchErrorToOutcome(
     plugin: pluginName,
     reason: err instanceof Error ? err.message : String(err),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 06 HUB-05 — op:// rewrite candidate generator
+// ---------------------------------------------------------------------------
+
+/**
+ * One sensitive field that has a matching 1Password item — the operator
+ * will see this as a "Use op://..." / "Use literal" button row in Discord.
+ */
+export type OpRewriteCandidate = Readonly<{
+  fieldName: string;
+  fieldLabel: string;
+  typedValue: string;
+  proposal: OpRewriteProposal;
+}>;
+
+/**
+ * Probe the operator's 1Password vault and, for any sensitive field where
+ *   (1) the typed value isn't already an op:// ref, AND
+ *   (2) a fuzzy match (substring or Levenshtein ≤ 3) exists against an
+ *       existing 1Password item title,
+ * return a candidate op:// proposal. The operator confirms each proposal
+ * via a Discord button click; on confirmation the caller substitutes the
+ * op:// URI for the typed value in configInputs before dispatching the
+ * install IPC.
+ *
+ * Does NOT mutate configInputs — returns an advisory list. The caller is
+ * responsible for applying the substitution after operator confirmation.
+ *
+ * When 1Password is unavailable (listOpItems returns []), this function
+ * returns an empty array and the UI falls through to literal paste (which
+ * still passes through the install-plugin.ts secret-scan gate — literal
+ * high-entropy credentials are refused even after an explicit "use literal"
+ * button click).
+ */
+export async function buildOpRewriteCandidates(
+  manifest: ClawhubPluginManifest,
+  configInputs: Readonly<Record<string, string>>,
+): Promise<readonly OpRewriteCandidate[]> {
+  const items = await opRewriteMod.listOpItems();
+  if (items.length === 0) return Object.freeze([]);
+
+  const fields = manifest.config?.fields ?? [];
+  const out: OpRewriteCandidate[] = [];
+  for (const f of fields) {
+    if (!f.sensitive) continue;
+    const v = configInputs[f.name] ?? "";
+    if (v.startsWith("op://")) continue;
+    const proposal = opRewriteMod.proposeOpUri(f.name, f.label, items);
+    if (proposal) {
+      out.push(
+        Object.freeze({
+          fieldName: f.name,
+          fieldLabel: f.label,
+          typedValue: v,
+          proposal,
+        }),
+      );
+    }
+  }
+  return Object.freeze(out);
 }

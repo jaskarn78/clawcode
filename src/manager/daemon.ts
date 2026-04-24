@@ -111,6 +111,12 @@ import {
   mapFetchErrorToOutcome,
   type PluginInstallOutcome,
 } from "../marketplace/install-plugin.js";
+// Phase 90 Plan 06 HUB-05 / HUB-07 — GitHub OAuth device-code flow +
+// 1Password op:// rewrite probe for install-time config collection.
+// Imported via module namespace so tests can vi.spyOn() the exports.
+import * as githubOauthMod from "../marketplace/github-oauth.js";
+import * as opRewriteMod from "../marketplace/op-rewrite.js";
+import type { OpRewriteProposal } from "../marketplace/op-rewrite.js";
 // Phase 90 Plan 04 HUB-08 — ClawHub cache primitive. Plan 05 instantiates
 // a daemon-scoped cache<ClawhubPluginsResponse> for plugin list calls.
 import { createClawhubCache } from "../marketplace/clawhub-cache.js";
@@ -1053,6 +1059,125 @@ export async function handleMarketplaceInstallPluginIpc(
   } catch (err) {
     return mapFetchErrorToOutcome(err, pluginName);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 90 Plan 06 HUB-05 / HUB-07 — install-time config UX IPC handlers.
+//
+// Three pure-function handlers exported here so the slash-command inline
+// handler (slash-commands.ts) can trigger them via sendIpcRequest:
+//   - clawhub-oauth-start:       kick off GitHub device-code flow
+//   - clawhub-oauth-poll:        long-lived RPC (up to 15min) that polls the
+//                                 token endpoint and writes the received token
+//                                 to 1Password on success
+//   - marketplace-probe-op-items: single-field 1P rewrite probe; used by
+//                                 the caller to decide whether to show the
+//                                 "Use op://..." confirmation button row
+//
+// All three are closed-over in the IPC handler closure below and route
+// BEFORE routeMethod so the existing routeMethod signature stays stable.
+// ---------------------------------------------------------------------------
+
+/**
+ * IPC handler for `clawhub-oauth-start`.
+ *
+ * Initiates the GitHub device-code flow and returns the payload the Discord
+ * UI needs to render the "visit {URL} and enter {code}" embed. The device_code
+ * + poll_interval_s + expires_at are passed back to `clawhub-oauth-poll` to
+ * complete the flow.
+ */
+export async function handleClawhubOauthStartIpc(
+  deps: { log: Logger },
+  _params: Record<string, unknown>,
+): Promise<
+  Readonly<{
+    user_code: string;
+    verification_uri: string;
+    device_code: string;
+    poll_interval_s: number;
+    expires_at: number;
+  }>
+> {
+  const init = await githubOauthMod.initiateDeviceCodeFlow();
+  return Object.freeze({
+    user_code: init.user_code,
+    verification_uri: init.verification_uri,
+    device_code: init.device_code,
+    poll_interval_s: init.interval,
+    expires_at: init.expires_at,
+  });
+}
+
+/**
+ * IPC handler for `clawhub-oauth-poll`. Long-lived RPC — may block for up
+ * to 15 minutes (device-code expiry). The caller (slash-commands.ts)
+ * extends the IPC request timeout for this method specifically.
+ *
+ * Success → stores token at op://clawdbot/ClawHub Token/credential via
+ * `op item create` and returns {stored:true, message}. Any error (expired,
+ * access_denied, network) → returns {stored:false, message:<description>}
+ * so the Discord UI can show a friendly message.
+ */
+export async function handleClawhubOauthPollIpc(
+  deps: { log: Logger },
+  params: Record<string, unknown>,
+): Promise<Readonly<{ stored: boolean; message: string }>> {
+  const deviceCode = validateStringParam(params, "device_code");
+  const pollIntervalS =
+    typeof params.poll_interval_s === "number"
+      ? params.poll_interval_s
+      : 5;
+  const expiresAt =
+    typeof params.expires_at === "number"
+      ? params.expires_at
+      : Date.now() + 900_000;
+
+  try {
+    const token = await githubOauthMod.pollForAccessToken({
+      user_code: "",
+      verification_uri: "",
+      device_code: deviceCode,
+      interval: pollIntervalS,
+      expires_at: expiresAt,
+    });
+    await githubOauthMod.storeTokenTo1Password(token, "ClawHub Token");
+    return Object.freeze({
+      stored: true,
+      message:
+        "Token stored at op://clawdbot/ClawHub Token/credential — restart the daemon to pick up authenticated ClawHub fetches.",
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    deps.log.warn({ err: msg }, "clawhub OAuth poll failed");
+    return Object.freeze({
+      stored: false,
+      message: msg,
+    });
+  }
+}
+
+/**
+ * IPC handler for `marketplace-probe-op-items`.
+ *
+ * Returns {proposal} where proposal is an op:// URI + confidence + item
+ * title if a fuzzy match exists against the operator's 1Password vault,
+ * else null. Called once per sensitive field before the Discord UI decides
+ * whether to show the "Use op://..." confirmation button row.
+ *
+ * Graceful degradation: if `op item list` fails (binary missing, not
+ * signed in), listOpItems returns [] → proposal is null → UI skips the
+ * confirmation step and falls through to literal paste (still gated by
+ * Plan 05's secret-scan on install).
+ */
+export async function handleMarketplaceProbeOpItemsIpc(
+  deps: { log: Logger },
+  params: Record<string, unknown>,
+): Promise<Readonly<{ proposal: OpRewriteProposal | null }>> {
+  const fieldName = validateStringParam(params, "fieldName");
+  const fieldLabel = validateStringParam(params, "fieldLabel");
+  const items = await opRewriteMod.listOpItems({ log: deps.log });
+  const proposal = opRewriteMod.proposeOpUri(fieldName, fieldLabel, items);
+  return Object.freeze({ proposal });
 }
 
 /**
@@ -2056,6 +2181,19 @@ export async function startDaemon(
         return handleMarketplaceListPluginsIpc(pluginDeps);
       }
       return handleMarketplaceInstallPluginIpc(pluginDeps);
+    }
+    // Phase 90 Plan 06 HUB-05 / HUB-07 — install-time config UX.
+    // Three pure handlers: OAuth start/poll (long-lived — the poll request
+    // may block for up to 15min) + 1Password rewrite probe per sensitive
+    // field. Routed BEFORE routeMethod per the closure-intercept pattern.
+    if (method === "clawhub-oauth-start") {
+      return handleClawhubOauthStartIpc({ log }, params);
+    }
+    if (method === "clawhub-oauth-poll") {
+      return handleClawhubOauthPollIpc({ log }, params);
+    }
+    if (method === "marketplace-probe-op-items") {
+      return handleMarketplaceProbeOpItemsIpc({ log }, params);
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };
