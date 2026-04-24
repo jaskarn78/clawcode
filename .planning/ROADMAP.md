@@ -213,8 +213,8 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 
 **Depends on:** Phase 91 (sync direction + set-authoritative command), Phase 90 (memory-scanner for indexing proposed files), Phase 86 (updateAgentModel/Skills/McpServers atomic writers), Phase 85 (list-mcp-status IPC), Phase 80 (memory-translator origin_id idempotency)
 
-**Plans:** 6 plans (decomposed via /gsd:plan-phase 92 on 2026-04-24)
-- [ ] 92-01-PLAN.md — Discord history ingestor + source-agent profiler (CUT-01, CUT-02) — Wave 1
+**Plans:** 1/6 plans executed
+- [x] 92-01-PLAN.md — Discord history ingestor + source-agent profiler (CUT-01, CUT-02) — Wave 1
 - [ ] 92-02-PLAN.md — Target capability probe + diff engine with typed CutoverGap union (CUT-03, CUT-04) — Wave 1
 - [ ] 92-03-PLAN.md — Additive fix auto-applier + ledger (CUT-05) — Wave 2 (depends on 92-02)
 - [ ] 92-04-PLAN.md — Destructive-fix admin-clawdy embed flow (CUT-06, CUT-07) — Wave 2 (depends on 92-02; checkpoint task)
@@ -224,6 +224,16 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 **UI hint:** yes — admin-clawdy ephemeral embed with Accept/Reject/Defer buttons (Phase 86-03 ButtonBuilder pattern); cutover-report summary embed.
 
 **Status:** Opened 2026-04-24. Zero new npm deps planned (reuses discord.js 14.26.2 + better-sqlite3 + Claude Agent SDK per v2.2 discipline).
+
+### Phase 93: Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 92
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 93 to break down)
 
 ---
 

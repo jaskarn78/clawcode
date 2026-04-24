@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: v2.4 milestone complete
-stopped_at: Completed 91-05-PLAN.md
-last_updated: "2026-04-24T20:20:58.293Z"
+status: Ready to execute
+stopped_at: Completed 92-01-PLAN.md
+last_updated: "2026-04-24T23:41:22.867Z"
 last_activity: 2026-04-24
 progress:
-  total_phases: 7
-  completed_phases: 1
+  total_phases: 8
+  completed_phases: 0
   total_plans: 6
-  completed_plans: 6
+  completed_plans: 1
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** v2.4 OpenClaw ↔ ClawCode Continuous Sync shipped 2026-04-24 — Phase 91 complete (6 plans, 10 SYNC reqs, 166/166 sync tests green). Awaiting next milestone or operator-initiated sync activation + cutover.
+**Current focus:** Phase 92 — openclaw-clawcode-fin-acquisition-cutover-parity-verifier
 
 ## Current Position
 
-Phase: —
-Plan: —
+Phase: 92 (openclaw-clawcode-fin-acquisition-cutover-parity-verifier) — EXECUTING
+Plan: 2 of 6
 
 ## Performance Metrics
 
@@ -185,6 +185,10 @@ Recent decisions affecting current work:
 - [Phase 91]: 91-05: Colour vocabulary reuses Phase 91-02 CONFLICT_EMBED_COLOR=15158332 for red — conflict-alert embed + status embed speak the same visual language
 - [Phase 91]: 91-05: /clawcode-sync-status is fleet-level (no agent option) — reads singleton sync-state.json; per-agent arg deferred to Phase 92+ fleet-wide sync
 - [Phase 91]: 91-05: Conflict field cap at 25 with explicit '… N more conflicts' terminal marker — honest cap indicator, not silent ceiling (diverges from 91-02 alerter's silent slice)
+- [Phase 92]: Plan 92-01: Mission Control REST API as PRIMARY corpus (D-11 amendment); bearer-token sourced from env MC_API_TOKEN ONLY at CLI surface, NEVER logged or in error strings (sanitizeError + status/statusText-only error classification)
+- [Phase 92]: Plan 92-01: 503 'Failed to connect to OpenClaw Gateway' graceful in --source both (skip+continue), fatal in --source mc; cursor-driven incremental rerun via mc-cursor.json with monotonic lastUpdatedAt advance even on no-changes
+- [Phase 92]: Plan 92-01: Source profiler reads N JSONL paths (mc + discord union) with origin-discriminated dedup; cron-prefixed intents preserved through merge — Phase 47 cron parity surfaces in canary battery distinct from user-initiated intents
+- [Phase 92]: Plan 92-01: SQLite direct-read fallback (mission-control.db via SSH) DEFERRED to Phase 93+; pure REST API only this plan (regression-pinned by ! grep -rE 'mission-control.db' src/cutover/)
 
 ### v2.1 closing decisions (for reference)
 
@@ -225,6 +229,8 @@ Recent decisions affecting current work:
 - 2026-04-24: v2.3 shipped — Phase 90 autonomously executed (7 plans, 4 waves, 21 reqs, 1454/1462 tests). Milestone archived. Phase 90.1 hotfixes applied live: bot-direct greeting fallback + iterate-back empty-session + minimal greeting always-fires + restartAgent tolerates 'not running'. fin-acquisition channel binding mingled into test channel (1492939095696216307) per operator directive. fin-test agent removed from config.
 - 2026-04-24: v2.4 OpenClaw ↔ ClawCode Continuous Sync opened — Phase 91 added: fin-acquisition workspace sync (markdown + uploads + skills + conversation-turn translator, uni-directional OpenClaw→ClawCode until operator flips `sync.authoritative`). 10 SYNC-01..10 requirements, 6-plan decomposition hint. Built on Phase 80 memory-translator + rsync + chokidar/inotify.
 - 2026-04-24: v2.4 shipped — Phase 91 autonomously executed (6 plans, 6 waves, 10 SYNC reqs, 166/166 sync tests green). Milestone archived to `.planning/milestones/v2.4-ROADMAP.md`. Zero new npm deps preserved via node:child_process.execFile + existing chokidar/yaml/better-sqlite3. Cutover command + 7-day rollback window implemented; `clawcode sync` CLI group with 8 subcommands + /clawcode-sync-status Discord slash. Sync runner + translator ship as systemd user timers with graceful-SSH-fail tolerance.
+- 2026-04-24: v2.5 Cutover Parity Verification opened — Phase 92 added: OpenClaw → ClawCode fin-acquisition cutover parity verifier. Uses Discord message store (not OpenClaw internal sessions, which are absent) as behavior corpus. Emits gap report, auto-applies additive-reversible fixes, gates destructive mutations behind admin-clawdy ephemeral confirmation. `cutover-ready: true` report becomes hard precondition for Phase 91 `sync set-authoritative clawcode --confirm-cutover`. 10 CUT-01..CUT-10 requirements across 6 suggested plans (92-01..92-06). Reuses Phase 85 list-mcp-status IPC, Phase 86 atomic YAML writers, Phase 80 origin_id idempotency. Zero new npm deps expected.
+- 2026-04-24: Phase 93 added — Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience. Bundles three user-reported fixes from fin-acquisition Discord (2026-04-24): (93-01) restore rich `/clawcode-status` output deferred in Phase 83 EFFORT-07 to match OpenClaw /status (version+commit, model+key-source, fallbacks, context/compactions, session/updated, runtime/runner/think/elevated, activation/queue); (93-02) auto-inject `defaults.clawhubBaseUrl` as synthetic ClawHub source in `loadMarketplaceCatalog` when no explicit marketplaceSources[kind:"clawhub"] present so `/clawcode-skills-browse` surfaces public skills (today: local-only); (93-03) distinguish manifest-404 from manifest-invalid in `downloadClawhubPluginManifest` + `mapFetchErrorToOutcome` so hivemind-style "listed without manifest" emits `manifest-unavailable` outcome with actionable UI copy instead of misleading "manifest is invalid". IN: all three + tests + Discord UI strings. OUT: skill-side OAuth (Phase 90-06), publishing hivemind manifest (registry-side).
 
 ### Pending Todos
 
@@ -281,9 +287,10 @@ Recent decisions affecting current work:
 | Phase 91 P04 | 11m | 2 tasks | 13 files |
 | Phase 91 P06 | 9 min | 2 tasks | 4 files |
 | Phase 91 P05 | 10m 33s | 2 tasks | 9 files |
+| Phase 92 P01 | 29min | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-24
-Stopped at: Completed 91-05-PLAN.md
+Stopped at: Completed 92-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
