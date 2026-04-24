@@ -227,13 +227,23 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 
 ### Phase 93: Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 92
-**Plans:** 0 plans
+**Goal:** Bundle three user-reported fixes from the 2026-04-24 fin-acquisition Discord session into a single phase: (a) restore the rich `/clawcode-status` output deferred in Phase 83 EFFORT-07 by mirroring the OpenClaw `/status` 17-element field set with honest `unknown`/`n/a` placeholders for ClawCode-only gaps; (b) auto-inject `defaults.clawhubBaseUrl` as a synthetic ClawHub catalog source so `/clawcode-skills-browse` surfaces public skills out-of-the-box without requiring an explicit `marketplaceSources[{kind:"clawhub"}]` config entry; (c) distinguish HTTP 404 from malformed-body errors in the plugin install pipeline so plugins listed without a fetchable manifest (e.g. `hivemind`) emit a `manifest-unavailable` outcome with actionable Discord copy instead of misleading "manifest is invalid" wording. Zero new npm deps; pure UX-resilience work against the existing stack.
 
-Plans:
-- [ ] TBD (run /gsd:plan-phase 93 to break down)
+**Requirements:** Sub-plan IDs (no formal REQ-IDs — added outside the milestone requirements process):
+- 93-01 — Status-detail parity (rich `/clawcode-status` block via pure status-render module)
+- 93-02 — ClawHub public-catalog default injection + dropdown divider
+- 93-03 — Plugin manifest-URL 404 vs invalid distinction
+
+**Depends on:** Phase 92 (logical ordering only — no shared code surfaces)
+
+**Plans:** 3 plans (decomposed via /gsd:plan-phase 93 on 2026-04-24)
+- [ ] 93-01-PLAN.md — Pure status-render module + /clawcode-status daemon short-circuit rewire — Wave 1
+- [ ] 93-02-PLAN.md — loadMarketplaceCatalog auto-inject + /clawcode-skills-browse divider — Wave 1
+- [ ] 93-03-PLAN.md — ClawhubManifestNotFoundError + manifest-unavailable outcome + Discord copy — Wave 1
+
+**UI hint:** yes — Discord ephemeral embed parity with OpenClaw `/status` (canonical Unicode emojis, no FE0F variation selectors); StringSelectMenu sentinel-value divider in skills picker; new "manifest unavailable (404)" copy in plugin install error path.
+
+**Status:** Opened 2026-04-24. Plans created 2026-04-24. Zero new npm deps planned (reuses date-fns ^4.1.0 + discord.js ^14.26.2 + existing zod schemas + native fetch). All three plans run in Wave 1 (independent code surfaces — discord/status-render.ts vs marketplace/catalog.ts vs marketplace/clawhub-client.ts).
 
 ---
 
