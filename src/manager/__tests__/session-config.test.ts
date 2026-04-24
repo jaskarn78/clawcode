@@ -52,6 +52,8 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -1212,6 +1214,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryAutoLoad: true,
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       mcpServers: [
         { name: "finmentum-db", command: "x", args: [], env: {}, optional: false },
       ],
@@ -1244,6 +1248,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryAutoLoad: true,
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     });
     const result = await buildSessionConfig(config, makeDeps());
     expect(result.systemPrompt).toContain("## Long-term memory");
@@ -1288,6 +1294,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryAutoLoad: true,
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       memoryAutoLoadPath: "/override/fixture-memory.md",
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -1313,6 +1321,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryAutoLoad: true,
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     });
     const result = await buildSessionConfig(config, makeDeps());
     expect(result.systemPrompt).toBeDefined();
@@ -1332,6 +1342,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryAutoLoad: true,
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     });
     const result = await buildSessionConfig(config, makeDeps());
     // The stable prefix contains the firm legal name verbatim.
@@ -1348,6 +1360,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryAutoLoad: true,
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       channels: ["channel-xyz"], // forces a mutableSuffix to exist
     });
     const result = await buildSessionConfig(config, makeDeps());

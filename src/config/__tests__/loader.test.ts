@@ -27,6 +27,8 @@ describe("resolveAgentConfig", () => {
     memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: ["default-skill"],
@@ -492,6 +494,8 @@ describe("resolveAgentConfig - mcpServers", () => {
     memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: [],
@@ -1126,6 +1130,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: [],
@@ -1522,6 +1528,8 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,
       skills: [],
@@ -1657,6 +1665,8 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,
       skills: [],

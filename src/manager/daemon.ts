@@ -1397,6 +1397,54 @@ export async function startDaemon(
       if (!retriever) return [];
       return retriever(query);
     },
+    // Phase 90 MEM-05 — cue-memory writer DI. Wrapped into a closure so
+    // memory-cue.ts stays pure (no Logger import from the daemon layer);
+    // the dispatcher's own log.child is threaded in.
+    memoryCueWriter: async (args) => {
+      const { writeCueMemory } = await import("../memory/memory-cue.js");
+      return writeCueMemory({ ...args, log });
+    },
+    // Phase 90 MEM-06 — subagent-return capture DI. Mirror shape of
+    // memoryCueWriter — pure module imported lazily.
+    subagentCapture: async (args) => {
+      const { captureSubagentReturn } = await import(
+        "../memory/subagent-capture.js"
+      );
+      return captureSubagentReturn({ ...args, log });
+    },
+    // Phase 90 MEM-05 / MEM-06 — per-agent workspace resolver. Looks up
+    // the resolved agent config from the manager's in-memory map. Returns
+    // undefined when the agent isn't registered (e.g., daemon boot race).
+    workspaceForAgent: (agentName) => {
+      const cfg = resolvedAgents.find((a) => a.name === agentName);
+      return cfg?.workspace;
+    },
+    // Phase 90 MEM-05 D-32 — Discord reaction adder. DiscordBridge isn't
+    // constructed until later in boot; we close over discordBridgeRef so
+    // the resolved reference is read at CALL TIME (when a cue actually
+    // fires), not construction time. When discord isn't available (no
+    // token / no bindings), the reaction is a no-op. All discord.js calls
+    // are try/catch-wrapped — a stale snowflake or permission error MUST
+    // NOT poison the cue-write path.
+    discordReact: async (target, emoji) => {
+      const bridge = discordBridgeRef.current;
+      if (!bridge) return;
+      try {
+        const channel = await bridge.discordClient.channels.fetch(
+          target.channelId,
+        );
+        if (!channel || !("messages" in channel)) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const message = await (channel as any).messages.fetch(target.messageId);
+        if (!message) return;
+        await message.react(emoji);
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message, target, emoji },
+          "discord reaction failed (non-fatal)",
+        );
+      }
+    },
   });
   log.info("TurnDispatcher initialized");
 

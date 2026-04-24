@@ -66,6 +66,20 @@ export type ResolvedAgentConfig = {
    * this agent (memory/ content is managed externally).
    */
   readonly memoryScannerEnabled: boolean;
+  /**
+   * Phase 90 MEM-04 — ALWAYS populated by loader.ts from
+   * agent.memoryFlushIntervalMs ?? defaults.memoryFlushIntervalMs.
+   * Consumed by SessionManager.startAgent when constructing the per-agent
+   * MemoryFlushTimer. Milliseconds — default 900_000 (15 minutes) per D-26.
+   */
+  readonly memoryFlushIntervalMs: number;
+  /**
+   * Phase 90 MEM-05 — ALWAYS populated by loader.ts from
+   * agent.memoryCueEmoji ?? defaults.memoryCueEmoji. Consumed by
+   * TurnDispatcher's cue-detection post-turn hook to determine which
+   * reaction emoji to post (D-32). Default "✅".
+   */
+  readonly memoryCueEmoji: string;
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;

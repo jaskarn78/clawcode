@@ -731,6 +731,16 @@ export const agentSchema = z.object({
   // (via defaults.memoryScannerEnabled). Set to false to skip scanner start
   // for an agent whose memory/ is managed externally.
   memoryScannerEnabled: z.boolean().optional(),
+  // Phase 90 MEM-04 — per-agent override for the mid-session flush cadence
+  // in milliseconds (D-26). When omitted, resolver falls back to
+  // defaults.memoryFlushIntervalMs (15 min). Positive integer only —
+  // set defaults to a huge value (e.g. 24h) to effectively disable.
+  memoryFlushIntervalMs: z.number().int().positive().optional(),
+  // Phase 90 MEM-05 — per-agent override for the ✅ reaction emoji posted
+  // on cue-detection (D-32). Short string (1–4 chars so a single unicode
+  // glyph or short custom emoji name fits). Fallback via
+  // defaults.memoryCueEmoji.
+  memoryCueEmoji: z.string().min(1).max(8).optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -815,6 +825,13 @@ export const defaultsSchema = z.object({
   // Phase 90 MEM-02 — fleet-wide scanner on/off. Default true — every
   // agent starts a chokidar watcher on its {workspace}/memory/**/*.md.
   memoryScannerEnabled: z.boolean().default(true),
+  // Phase 90 MEM-04 — fleet-wide mid-session flush cadence (D-26). Default
+  // 15 minutes. Every active session's MemoryFlushTimer fires this often
+  // (skip heuristic bails if no meaningful turns since last flush).
+  memoryFlushIntervalMs: z.number().int().positive().default(900_000),
+  // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
+  // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
+  memoryCueEmoji: z.string().min(1).max(8).default("✅"),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -1043,6 +1060,9 @@ export const configSchema = z.object({
     memoryRetrievalTopK: 5,
     memoryRetrievalTokenBudget: 2000,
     memoryScannerEnabled: true,
+    // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
+    memoryFlushIntervalMs: 900_000,
+    memoryCueEmoji: "✅",
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",

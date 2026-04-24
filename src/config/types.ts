@@ -88,6 +88,17 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // lifecycle churn.
   "agents.*.memoryScannerEnabled",
   "defaults.memoryScannerEnabled",
+  // Phase 90 MEM-04 — flush cadence. Reloadable: YAML edit takes effect
+  // on the NEXT agent start (current timers keep running at the old
+  // interval). A full daemon restart is NOT required for the fleet to
+  // pick up a new default.
+  "agents.*.memoryFlushIntervalMs",
+  "defaults.memoryFlushIntervalMs",
+  // Phase 90 MEM-05 — reaction emoji read lazily by TurnDispatcher at each
+  // cue-detection event. A YAML edit takes effect on the NEXT cue-detected
+  // turn.
+  "agents.*.memoryCueEmoji",
+  "defaults.memoryCueEmoji",
 ]);
 
 /**

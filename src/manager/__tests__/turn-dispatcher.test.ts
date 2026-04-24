@@ -386,3 +386,162 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
     expect(streamCall[1]).toContain("streamed question");
   });
 });
+
+// Phase 90 MEM-05 — cue detection + discord reaction post-turn hook
+describe("TurnDispatcher — cue detection hook (Phase 90 MEM-05)", () => {
+  it("MEM-05-TD1: cue in user message triggers memoryCueWriter + discordReact", async () => {
+    const mock = makeMockSessionManager();
+    const cueWriter = vi.fn(async () => "/ws/memory/2026-04-24-remember-abcd.md");
+    const reactSpy = vi.fn(async () => {});
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryCueWriter: cueWriter,
+      discordReact: reactSpy,
+      workspaceForAgent: () => "/ws",
+    });
+    const origin = makeRootOrigin("discord", "msg_c1");
+    await dispatcher.dispatch(origin, "alice", "remember this: Zaid wants 40% SGOV.", {
+      channelId: "ch1",
+    });
+    // Give the fire-and-forget cue write a tick to resolve
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(cueWriter).toHaveBeenCalledTimes(1);
+    const args = cueWriter.mock.calls[0][0];
+    expect(args.workspacePath).toBe("/ws");
+    expect(args.cue.toLowerCase()).toContain("remember");
+    expect(args.context).toContain("Zaid wants 40%");
+    // Discord reaction invoked with the originating messageId + channelId
+    expect(reactSpy).toHaveBeenCalledTimes(1);
+    expect(reactSpy.mock.calls[0][0]).toEqual({
+      channelId: "ch1",
+      messageId: "msg_c1",
+    });
+    expect(reactSpy.mock.calls[0][1]).toBe("✅");
+  });
+
+  it("MEM-05-TD2: cue-writer throw → dispatch still resolves successfully (fire-and-forget)", async () => {
+    const mock = makeMockSessionManager();
+    const cueWriter = vi.fn(async () => {
+      throw new Error("write boom");
+    });
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryCueWriter: cueWriter,
+      workspaceForAgent: () => "/ws",
+    });
+    const origin = makeRootOrigin("discord", "msg_c2");
+    const result = await dispatcher.dispatch(origin, "alice", "remember this: something");
+    expect(result).toBe("mock-response"); // dispatch succeeded despite cue-writer throw
+  });
+
+  it("MEM-05-TD3: no cue in user message → memoryCueWriter NOT called", async () => {
+    const mock = makeMockSessionManager();
+    const cueWriter = vi.fn(async () => "/nope");
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryCueWriter: cueWriter,
+      workspaceForAgent: () => "/ws",
+    });
+    const origin = makeRootOrigin("discord", "msg_c3");
+    await dispatcher.dispatch(origin, "alice", "What's the weather today?");
+    await new Promise((r) => setImmediate(r));
+    expect(cueWriter).not.toHaveBeenCalled();
+  });
+
+  it("MEM-05-TD4: no memoryCueWriter wired → dispatch proceeds unchanged", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      // memoryCueWriter NOT provided
+    });
+    const origin = makeRootOrigin("discord", "msg_c4");
+    const result = await dispatcher.dispatch(origin, "alice", "remember this: x");
+    expect(result).toBe("mock-response");
+  });
+
+  it("MEM-05-TD5: workspaceForAgent returns undefined → cue write skipped", async () => {
+    const mock = makeMockSessionManager();
+    const cueWriter = vi.fn(async () => "/nope");
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      memoryCueWriter: cueWriter,
+      workspaceForAgent: () => undefined,
+    });
+    const origin = makeRootOrigin("discord", "msg_c5");
+    await dispatcher.dispatch(origin, "alice", "remember this: x");
+    await new Promise((r) => setImmediate(r));
+    expect(cueWriter).not.toHaveBeenCalled();
+  });
+});
+
+// Phase 90 MEM-06 — subagent Task-return observer
+describe("TurnDispatcher — subagent capture hook (Phase 90 MEM-06)", () => {
+  it("MEM-06-TD1: onTaskToolReturn DI slot is callable from external caller", async () => {
+    const mock = makeMockSessionManager();
+    const captureSpy = vi.fn(async () => "/ws/memory/2026-04-24-subagent-research.md");
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      subagentCapture: captureSpy,
+      workspaceForAgent: () => "/ws",
+    });
+    // Invoke the public observer entry point
+    await dispatcher.handleTaskToolReturn("alice", {
+      subagent_type: "researcher",
+      task_description: "Research Phase 90",
+      return_summary: "Done.",
+      spawned_at_iso: "2026-04-24T18:30:00.000Z",
+      duration_ms: 5000,
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    expect(captureSpy.mock.calls[0][0].workspacePath).toBe("/ws");
+    expect(captureSpy.mock.calls[0][0].subagent_type).toBe("researcher");
+  });
+
+  it("MEM-06-TD2: subagentCapture throw → handleTaskToolReturn does NOT throw (fire-and-forget)", async () => {
+    const mock = makeMockSessionManager();
+    const captureSpy = vi.fn(async () => {
+      throw new Error("capture boom");
+    });
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+      subagentCapture: captureSpy,
+      workspaceForAgent: () => "/ws",
+    });
+    // Must not throw
+    await expect(
+      dispatcher.handleTaskToolReturn("alice", {
+        subagent_type: "researcher",
+        task_description: "x",
+        return_summary: "y",
+        spawned_at_iso: "2026-04-24T18:30:00.000Z",
+        duration_ms: 1,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("MEM-06-TD3: no subagentCapture wired → handleTaskToolReturn is a no-op", async () => {
+    const mock = makeMockSessionManager();
+    const dispatcher = new TurnDispatcher({
+      sessionManager: mock.sm as never,
+      log: silentLog,
+    });
+    await expect(
+      dispatcher.handleTaskToolReturn("alice", {
+        subagent_type: "researcher",
+        task_description: "x",
+        return_summary: "y",
+        spawned_at_iso: "2026-04-24T18:30:00.000Z",
+        duration_ms: 1,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});

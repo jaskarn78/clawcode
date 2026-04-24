@@ -173,7 +173,9 @@ describe("MemoryFlushTimer (Phase 90 MEM-04)", () => {
   });
 
   it("MEM-04-T4: passes the D-27 verbatim prompt to summarize()", async () => {
-    const summarizeSpy = vi.fn(async () => "out");
+    const summarizeSpy = vi.fn(
+      async (_prompt: string, _opts: { readonly signal?: AbortSignal }) => "out",
+    );
     const timer = new MemoryFlushTimer({
       workspacePath: tmp,
       agentName: "alice",
@@ -187,7 +189,7 @@ describe("MemoryFlushTimer (Phase 90 MEM-04)", () => {
     });
     await timer.flushNow();
     expect(summarizeSpy).toHaveBeenCalled();
-    const prompt = summarizeSpy.mock.calls[0][0] as string;
+    const prompt = summarizeSpy.mock.calls[0][0];
     expect(prompt).toContain(
       "Summarize the most important decisions, tasks in progress, and standing rules from this session segment.",
     );

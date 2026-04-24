@@ -20,6 +20,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       // Phase 90 Plan 04 HUB-01/HUB-08 — defaults carry the zod-populated values.
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,

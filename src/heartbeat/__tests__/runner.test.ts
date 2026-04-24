@@ -104,6 +104,8 @@ describe("HeartbeatRunner", () => {
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -205,6 +207,8 @@ describe("HeartbeatRunner", () => {
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -326,6 +330,8 @@ describe("HeartbeatRunner", () => {
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -386,6 +392,8 @@ describe("HeartbeatRunner", () => {
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -431,6 +439,8 @@ describe("HeartbeatRunner", () => {
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
         skills: [],
         soul: undefined,
         identity: undefined,

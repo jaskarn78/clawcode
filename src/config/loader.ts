@@ -328,6 +328,13 @@ export function resolveAgentConfig(
       agent.memoryScannerEnabled !== undefined
         ? agent.memoryScannerEnabled
         : defaults.memoryScannerEnabled,
+    // Phase 90 MEM-04 — per-agent flush cadence beats defaults. Both sides
+    // are positive-int constrained by zod so `??` cannot smuggle a zero.
+    memoryFlushIntervalMs:
+      agent.memoryFlushIntervalMs ?? defaults.memoryFlushIntervalMs,
+    // Phase 90 MEM-05 — per-agent cue emoji beats defaults.memoryCueEmoji
+    // (zod-populated default "✅").
+    memoryCueEmoji: agent.memoryCueEmoji ?? defaults.memoryCueEmoji,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

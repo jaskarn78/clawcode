@@ -30,6 +30,8 @@ function makeConfig(name: string): ResolvedAgentConfig {
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -1575,6 +1577,8 @@ describe("restartAgent greeting emission (Phase 89)", () => {
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
       ...overrides,
     };
   }
@@ -1992,5 +1996,67 @@ describe("SessionManager — memory scanner + retriever DI (Phase 90 MEM-02/MEM-
     // Empty store → zero results, no throw
     const results = await retriever!("anything");
     expect(results).toEqual([]);
+  });
+});
+
+// Phase 90 MEM-04 — MemoryFlushTimer wiring at the SessionManager layer.
+describe("SessionManager — memory-file flush timer (Phase 90 MEM-04)", () => {
+  let adapter: MockSessionAdapter;
+  let registryPath: string;
+  let tmpDir: string;
+  let manager: SessionManager;
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    adapter = createMockAdapter();
+    tmpDir = await mkdtemp(join(tmpdir(), "sm-memflush-"));
+    registryPath = join(tmpDir, "registry.json");
+    manager = new SessionManager({
+      adapter,
+      registryPath,
+      backoffConfig: TEST_BACKOFF,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await manager.stopAll();
+    } catch {
+      /* cleanup */
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("MEM-04-SM2: startAgent constructs a MemoryFlushTimer entry in the per-agent map", async () => {
+    const config = {
+      ...makeConfig("mf-start"),
+      workspace: tmpDir,
+      memoryPath: tmpDir,
+      // very long interval so the timer never fires during the test; we
+      // only assert construction here, not behavior.
+      memoryFlushIntervalMs: 60 * 60 * 1000,
+    };
+    await manager.startAgent("mf-start", config);
+    // _memoryFileFlushTimers is a readonly view exposed for integration
+    // tests (mirrors _memoryScanners / _greetCoolDownByAgent)
+    const timers = (manager as unknown as {
+      _memoryFileFlushTimers: ReadonlyMap<string, unknown>;
+    })._memoryFileFlushTimers;
+    expect(timers.has("mf-start")).toBe(true);
+  });
+
+  it("MEM-04-SM1: stopAgent awaits final flush then removes the timer entry", async () => {
+    const config = {
+      ...makeConfig("mf-stop"),
+      workspace: tmpDir,
+      memoryPath: tmpDir,
+      memoryFlushIntervalMs: 60 * 60 * 1000,
+    };
+    await manager.startAgent("mf-stop", config);
+    await manager.stopAgent("mf-stop");
+    const timers = (manager as unknown as {
+      _memoryFileFlushTimers: ReadonlyMap<string, unknown>;
+    })._memoryFileFlushTimers;
+    expect(timers.has("mf-stop")).toBe(false);
   });
 });

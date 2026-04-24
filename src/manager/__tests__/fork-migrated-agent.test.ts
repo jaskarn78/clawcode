@@ -76,6 +76,8 @@ function makeMigratedAgentConfig(
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
+    memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
+    memoryCueEmoji: "✅", // Phase 90 MEM-05
     skills: [],
     soul: "I am a migrated test agent.",
     identity: "migrated-test",

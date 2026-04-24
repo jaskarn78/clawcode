@@ -25,6 +25,7 @@ import type { TurnOrigin } from "./turn-origin.js";
 import type { Turn } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { MemoryRetrievalResult } from "../memory/memory-retrieval.js";
+import { detectCue, extractCueContext } from "../memory/memory-cue.js";
 
 /** Thrown when dispatch is called with invalid arguments. */
 export class TurnDispatcherError extends Error {
@@ -107,6 +108,72 @@ export type MemoryRetriever = (
   query: string,
 ) => Promise<readonly MemoryRetrievalResult[]>;
 
+/**
+ * Phase 90 MEM-05 — cue-memory writer DI signature. Mirrors
+ * writeCueMemory(...) from src/memory/memory-cue.ts. When wired, the
+ * post-turn hook fires this on every user message whose text matches
+ * MEMORY_CUE_REGEX. Fire-and-forget — rejection is warn-logged and does
+ * NOT propagate.
+ */
+export type MemoryCueWriter = (
+  args: Readonly<{
+    workspacePath: string;
+    cue: string;
+    context: string;
+    turnIso: string;
+    messageLink?: string;
+  }>,
+) => Promise<string>;
+
+/**
+ * Phase 90 MEM-06 — subagent-return capture DI signature. Mirrors
+ * captureSubagentReturn(...) from src/memory/subagent-capture.ts.
+ * Returns null when the subagent_type is gsd-* (D-35 exclusion).
+ */
+export type SubagentCapture = (
+  args: Readonly<{
+    workspacePath: string;
+    subagent_type: string;
+    task_description: string;
+    return_summary: string;
+    spawned_at_iso: string;
+    duration_ms: number;
+  }>,
+) => Promise<string | null>;
+
+/**
+ * Phase 90 MEM-05 — per-agent workspace resolver. Injected by daemon.ts
+ * so the dispatcher can derive the on-disk memory/ path without reaching
+ * into SessionManager state. Returns undefined when the agent is unknown
+ * (daemon not finished registering) — hook short-circuits to no-op.
+ */
+export type WorkspaceResolver = (agentName: string) => string | undefined;
+
+/**
+ * Phase 90 MEM-05 D-32 — Discord reaction adder. When wired, the cue
+ * hook fires `discordReact({channelId, messageId}, emoji)` on success of
+ * the cue write. Rejection is warn-logged and does NOT propagate
+ * (fire-and-forget). OpenAI-endpoint turns and task-scheduled turns skip
+ * this entirely (no messageId available).
+ */
+export type DiscordReactFn = (
+  target: Readonly<{ channelId: string; messageId: string }>,
+  emoji: string,
+) => Promise<void>;
+
+/**
+ * Phase 90 MEM-06 — Task tool-return event. Payload the observer needs to
+ * construct a captureSubagentReturn call. Shape matches captureSubagentReturn
+ * minus workspacePath (resolved via workspaceForAgent).
+ */
+export type TaskToolReturnEvent = Readonly<{
+  subagent_type: string;
+  task_description: string;
+  return_summary: string;
+  spawned_at_iso: string;
+  duration_ms: number;
+}>;
+
 export type TurnDispatcherOptions = {
   readonly sessionManager: SessionManager;
   readonly log?: Logger;
@@ -117,6 +184,31 @@ export type TurnDispatcherOptions = {
    * MemoryScanner/SessionManager are constructed.
    */
   readonly memoryRetriever?: MemoryRetriever;
+  /**
+   * Phase 90 MEM-05 — cue write hook. When wired, every user message
+   * that matches MEMORY_CUE_REGEX (D-30) triggers a background write to
+   * {workspace}/memory/YYYY-MM-DD-remember-<nanoid>.md (D-31).
+   */
+  readonly memoryCueWriter?: MemoryCueWriter;
+  /**
+   * Phase 90 MEM-05 — per-agent workspace resolver. Required when
+   * memoryCueWriter is wired (otherwise the hook has nowhere to write).
+   * Also consumed by MEM-06 subagent-capture for the same reason.
+   */
+  readonly workspaceForAgent?: WorkspaceResolver;
+  /**
+   * Phase 90 MEM-05 D-32 — Discord reaction post-turn. When wired, a
+   * successful cue write triggers a ✅ reaction (or config-overridden
+   * emoji) on the originating Discord message.
+   */
+  readonly discordReact?: DiscordReactFn;
+  /**
+   * Phase 90 MEM-06 — subagent final-report capture. When wired,
+   * handleTaskToolReturn forwards Task tool returns (non-gsd-*) to this
+   * hook for disk persistence. D-35 gsd-* exclusion is enforced inside
+   * the hook itself (isGsdSubagent).
+   */
+  readonly subagentCapture?: SubagentCapture;
 };
 
 /**
@@ -128,11 +220,19 @@ export class TurnDispatcher {
   private readonly sessionManager: SessionManager;
   private readonly log: Logger;
   private readonly memoryRetriever: MemoryRetriever | undefined;
+  private readonly memoryCueWriter: MemoryCueWriter | undefined;
+  private readonly workspaceForAgent: WorkspaceResolver | undefined;
+  private readonly discordReact: DiscordReactFn | undefined;
+  private readonly subagentCapture: SubagentCapture | undefined;
 
   constructor(options: TurnDispatcherOptions) {
     this.sessionManager = options.sessionManager;
     this.log = (options.log ?? logger).child({ component: "TurnDispatcher" });
     this.memoryRetriever = options.memoryRetriever;
+    this.memoryCueWriter = options.memoryCueWriter;
+    this.workspaceForAgent = options.workspaceForAgent;
+    this.discordReact = options.discordReact;
+    this.subagentCapture = options.subagentCapture;
   }
 
   /**
@@ -160,6 +260,14 @@ export class TurnDispatcher {
     // (zero side effects on the normal path). Snapshot happens AT dispatch
     // time so live /clawcode-effort changes between turns propagate correctly.
     const priorEffort = this.applySkillEffort(agentName, options.skillEffort);
+
+    // Phase 90 MEM-05 — fire-and-forget cue detection on the RAW user
+    // message (not the augmented one). Runs BEFORE the SDK send so the
+    // cue write races the turn; scanner picks it up on the next poll
+    // (but the current turn still sees any prior standing rules via MEM-03
+    // retrieval). Synchronous caller: no await — .catch on the inner
+    // Promise swallows rejections with a warn log.
+    this.maybeFireCueHook(origin, agentName, message, options.channelId ?? null);
 
     // Phase 90 MEM-03 — pre-turn hybrid RRF retrieval. Prepends a
     // <memory-context> block to the user message when chunks are found.
@@ -211,6 +319,9 @@ export class TurnDispatcher {
 
     // Phase 83 EFFORT-05 — same pre/post wrap as dispatch().
     const priorEffort = this.applySkillEffort(agentName, options.skillEffort);
+
+    // Phase 90 MEM-05 — fire-and-forget cue hook (same contract as dispatch).
+    this.maybeFireCueHook(origin, agentName, message, options.channelId ?? null);
 
     // Phase 90 MEM-03 — pre-turn retrieval + <memory-context> wrap.
     const augmentedMessage = await this.augmentWithMemoryContext(agentName, message);
@@ -332,6 +443,115 @@ export class TurnDispatcher {
         "turn-dispatcher: skill-effort revert failed — agent may be at wrong level",
       );
     }
+  }
+
+  /**
+   * Phase 90 MEM-05 — cue detection + writeCueMemory + Discord ✅ reaction,
+   * all wrapped in a fire-and-forget canary per Phase 83/86/87/89 blueprint.
+   *
+   * The synchronous caller returns immediately — the cue write + reaction
+   * race the agent turn. The scanner picks up the new memory file within
+   * ≤1s (chokidar awaitWriteFinish 300ms + stabilityThreshold + ready),
+   * so the standing rule is available on the NEXT turn's retrieval pass.
+   *
+   * Rejections on any leg (cue writer throw, Discord reaction failure) are
+   * warn-logged and DO NOT propagate — the user's turn must complete
+   * regardless of the cue-capture side-channel's health.
+   */
+  private maybeFireCueHook(
+    origin: TurnOrigin,
+    agentName: string,
+    userMessage: string,
+    channelId: string | null,
+  ): void {
+    if (!this.memoryCueWriter || !this.workspaceForAgent) return;
+    const detection = detectCue(userMessage);
+    if (!detection.match || !detection.captured) return;
+    const workspace = this.workspaceForAgent(agentName);
+    if (!workspace) return; // agent not yet registered / workspace unknown
+    const turnIso = new Date().toISOString();
+    const context = extractCueContext(userMessage);
+    // Extract the originating Discord message id (if any) so the reaction
+    // and discord_link frontmatter land correctly. The TurnOrigin shape
+    // carries the sourceId under source.id; we only fire the reaction for
+    // discord-originated turns (OpenAI / scheduler / task / trigger have
+    // nothing to react to).
+    const messageId: string | undefined =
+      origin.source.kind === "discord" ? origin.source.id : undefined;
+    // discord_link frontmatter — left undefined here because constructing
+    // a canonical discord.com/channels/<guild>/<channel>/<message> URL
+    // requires the guildId which TurnDispatcher doesn't carry. Consumers
+    // (memory retrieval / operators) can look up the link via the
+    // message_id if needed. Future plan can add the full URL by threading
+    // guildId through DispatchOptions.
+    const messageLink: string | undefined = undefined;
+
+    const writer = this.memoryCueWriter;
+    const reactor = this.discordReact;
+    void writer({
+      workspacePath: workspace,
+      cue: detection.captured,
+      context,
+      turnIso,
+      messageLink,
+    })
+      .then(() => {
+        if (messageId && channelId && reactor) {
+          void reactor({ channelId, messageId }, "✅").catch((err) => {
+            this.log.warn(
+              { err: (err as Error).message, agent: agentName, messageId },
+              "cue discord reaction failed (non-fatal)",
+            );
+          });
+        }
+      })
+      .catch((err) => {
+        this.log.warn(
+          { err: (err as Error).message, agent: agentName },
+          "cue memory write failed (non-fatal)",
+        );
+      });
+  }
+
+  /**
+   * Phase 90 MEM-06 — public entry point for Task-tool-return observers.
+   *
+   * Invoked by the session adapter (or its tool-return stream-observer)
+   * when a Task tool call resolves with a subagent's final report. Does
+   * NOT take an AbortSignal — this is a persistence side-channel, not a
+   * turn-lifecycle operation.
+   *
+   * D-35 exclusion lives inside captureSubagentReturn itself (isGsdSubagent
+   * short-circuits there), so we don't re-check here; keeps the public
+   * interface decoupled from the exclusion policy.
+   */
+  async handleTaskToolReturn(
+    agentName: string,
+    event: TaskToolReturnEvent,
+  ): Promise<void> {
+    if (!this.subagentCapture || !this.workspaceForAgent) return;
+    const workspace = this.workspaceForAgent(agentName);
+    if (!workspace) return;
+    const capture = this.subagentCapture;
+    // Fire-and-forget discipline — never reject back to the caller. The
+    // SDK's Task tool call continues regardless of whether this persists.
+    void capture({
+      workspacePath: workspace,
+      subagent_type: event.subagent_type,
+      task_description: event.task_description,
+      return_summary: event.return_summary,
+      spawned_at_iso: event.spawned_at_iso,
+      duration_ms: event.duration_ms,
+    }).catch((err) => {
+      this.log.warn(
+        {
+          err: (err as Error).message,
+          agent: agentName,
+          subagent_type: event.subagent_type,
+        },
+        "subagent capture failed (non-fatal)",
+      );
+    });
   }
 
   /**

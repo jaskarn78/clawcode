@@ -52,6 +52,7 @@ import {
   retrieveMemoryChunks,
   type MemoryRetrievalResult,
 } from "../memory/memory-retrieval.js";
+import { MemoryFlushTimer } from "../memory/memory-flush.js";
 
 /** Configuration for creating a SessionManager. */
 export type SessionManagerOptions = {
@@ -231,6 +232,19 @@ export class SessionManager {
   private readonly memoryScanners: Map<string, MemoryScanner> = new Map();
 
   /**
+   * Phase 90 MEM-04 — per-agent MemoryFlushTimer map. NOT to be confused
+   * with `flushTimers` above (Gap 3 memory-persistence-gaps: mid-session
+   * DB summarization via flushSessionMidway). The MEM-04 timer fires a
+   * Haiku-summarized DISK flush to memory/YYYY-MM-DD-HHMM.md every 15 min
+   * (configurable), surviving SIGKILL-class shutdowns. Distinct concerns;
+   * distinct map.
+   *
+   * Created in startAgent AFTER warm-path success; stopped + final-flushed
+   * (with 10s cap, D-29) in stopAgent BEFORE handle.close.
+   */
+  private readonly memoryFileFlushTimers: Map<string, MemoryFlushTimer> = new Map();
+
+  /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
    * `streamFromAgent` / `sendToAgent` to reject new work with
    * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
@@ -323,6 +337,16 @@ export class SessionManager {
    */
   get _memoryScanners(): ReadonlyMap<string, MemoryScanner> {
     return this.memoryScanners;
+  }
+
+  /**
+   * Phase 90 MEM-04 — test helper (read-only view of the disk-flush timer
+   * map). Tests assert the timer is created on startAgent and removed on
+   * stopAgent. Production callers MUST NOT reach into this map directly.
+   * @internal
+   */
+  get _memoryFileFlushTimers(): ReadonlyMap<string, MemoryFlushTimer> {
+    return this.memoryFileFlushTimers;
   }
 
   /**
@@ -692,6 +716,98 @@ export class SessionManager {
     // conversation to flush, and starting the timer earlier would waste a
     // tick if warm-path fails.
     this.startFlushTimer(name, config);
+
+    // Phase 90 MEM-04 — per-agent disk-flush timer. Writes a Haiku-summarized
+    // session delta to memory/YYYY-MM-DD-HHMM.md every intervalMs. Separate
+    // from the Gap 3 DB flush above (that one summarizes into the memories
+    // table via flushSessionMidway; this one lands on DISK so a SIGKILL
+    // between DB flushes doesn't lose the active session's context). Skip
+    // heuristic prevents spam on idle windows.
+    this.startMemoryFileFlushTimer(name, config);
+  }
+
+  /**
+   * Phase 90 MEM-04 — construct + start the disk-flush MemoryFlushTimer
+   * for `name`. Safe to call from startAgent; defensive stop-first so
+   * hot-reloads don't leak a timer. Uses the agent's config
+   * memoryFlushIntervalMs (populated by loader.ts from the defaults
+   * fallback) and wires getTurnsSince against the active ConversationStore
+   * session (falls back to empty array when no active session, which
+   * yields a skip per the meaningfulTurnsSince heuristic).
+   */
+  private startMemoryFileFlushTimer(
+    name: string,
+    config: ResolvedAgentConfig,
+  ): void {
+    this.stopMemoryFileFlushTimer(name); // defensive: never leak a prior timer
+
+    const timer = new MemoryFlushTimer({
+      workspacePath: config.workspace,
+      agentName: name,
+      intervalMs: config.memoryFlushIntervalMs,
+      getTurnsSince: (sinceTs: number) => {
+        const convStore = this.memory.conversationStores.get(name);
+        const convSessionId = this.activeConversationSessionIds.get(name);
+        if (!convStore || !convSessionId) return [];
+        const turns = convStore.getTurnsForSession(convSessionId);
+        // Filter to turns created after sinceTs (epoch ms). ConversationTurn
+        // carries an ISO createdAt — parse once per turn. When parsing fails
+        // (defensive), include the turn rather than silently drop it.
+        return turns.filter((t) => {
+          const ts = Date.parse(t.createdAt);
+          return Number.isFinite(ts) ? ts > sinceTs : true;
+        });
+      },
+      summarize: (prompt, opts) =>
+        this.summarizeFn(prompt, { signal: opts.signal }),
+      log: this.log.child({ memoryFlush: name }),
+    });
+    timer.start();
+    this.memoryFileFlushTimers.set(name, timer);
+    this.log.info(
+      { agent: name, intervalMs: config.memoryFlushIntervalMs },
+      "memory-file flush timer started (MEM-04)",
+    );
+  }
+
+  /**
+   * Phase 90 MEM-04 — stop the disk-flush timer for `name`. Safe to call
+   * when no timer is registered (no-op). Does NOT await in-flight flush —
+   * use awaitMemoryFileFinalFlush for that (stopAgent path).
+   */
+  private stopMemoryFileFlushTimer(name: string): void {
+    const timer = this.memoryFileFlushTimers.get(name);
+    if (timer) {
+      timer.stop();
+      this.memoryFileFlushTimers.delete(name);
+    }
+  }
+
+  /**
+   * Phase 90 MEM-04 D-29 — final flush with 10s cap, invoked by stopAgent
+   * BEFORE handle.close() so the final session delta lands on disk. Both
+   * paths (resolve / 10s-timeout) log and fall through — a stuck summarizer
+   * must not block operator-initiated stops.
+   */
+  private async awaitMemoryFileFinalFlush(name: string): Promise<void> {
+    const timer = this.memoryFileFlushTimers.get(name);
+    if (!timer) return;
+    try {
+      await Promise.race([
+        timer.flushNow(),
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error("flush timeout")), 10_000),
+        ),
+      ]);
+    } catch (err) {
+      this.log.warn(
+        { agent: name, err: (err as Error).message },
+        "final memory-file flush hit 10s cap or failed (non-fatal)",
+      );
+    } finally {
+      timer.stop();
+      this.memoryFileFlushTimers.delete(name);
+    }
   }
 
   /**
@@ -905,6 +1021,13 @@ export class SessionManager {
     // summarization so a timer tick cannot race against endSession and
     // try to flush a session that has just transitioned out of 'active'.
     this.stopFlushTimer(name);
+
+    // Phase 90 MEM-04 D-29 — final disk flush with 10s cap BEFORE
+    // handle.close. Awaits an in-flight flush OR starts a final one
+    // (skip heuristic applies — no flush if no meaningful turns since
+    // last tick). Sibling to the Gap 3 DB-summarization cleanup above;
+    // distinct concerns (DB memories vs disk markdown).
+    await this.awaitMemoryFileFinalFlush(name);
 
     // Phase 65: end the ConversationStore session before memory cleanup
     const convSessionId = this.activeConversationSessionIds.get(name);
@@ -1534,6 +1657,10 @@ export class SessionManager {
       // crashSession transitioned the session out of 'active' so flushes
       // would now skip anyway, but killing the timer here saves wakeups.
       this.stopFlushTimer(name);
+      // Phase 90 MEM-04 — stop the disk-flush timer on crash. Do NOT await
+      // a final flush here: the session already crashed and the Haiku call
+      // would likely fail on the corrupted state. Timer is just stopped.
+      this.stopMemoryFileFlushTimer(name);
 
       this.recovery.handleCrash(name, config, error, this.sessions);
       // Invoke session end callback on crash (e.g., subagent thread cleanup)
