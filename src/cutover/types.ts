@@ -289,3 +289,262 @@ export type ProfileOutcome =
  * import a single name when they want the union.
  */
 export type AgentProfilerOutcome = ProfileOutcome;
+
+// ============================================================================
+// Phase 92 Plan 02 — Target capability probe + diff engine types (D-04 + D-11)
+// ============================================================================
+//
+// Extends the cutover pipeline contract with:
+//   - CutoverGap: typed discriminated union of EXACTLY 9 kinds (D-11 added
+//     `cron-session-not-mirrored`). 4 additive + 5 destructive variants.
+//   - TargetCapability: mirror-shape of AgentProfile + workspace inventory +
+//     MCP runtime state (read by `src/cutover/target-probe.ts`).
+//   - ProbeOutcome / DiffOutcome: exhaustive-switch outcome unions for the
+//     `cutover probe` and `cutover diff` CLI subcommands.
+//   - sortGaps + assertNever: deterministic-order helper + compile-time
+//     exhaustiveness witness.
+//
+// Adding a 10th CutoverGap kind requires updating downstream consumers:
+//   - src/cutover/diff-engine.ts                 (the producer)
+//   - src/cutover/additive-applier.ts            (Plan 92-03 — 4 additive)
+//   - src/cutover/destructive-embed-renderer.ts  (Plan 92-04 — 5 destructive)
+//   - src/cutover/report-writer.ts               (Plan 92-06)
+// The exhaustive-switch + assertNever pattern enforces this at compile time.
+
+/**
+ * D-04 typed CutoverGap discriminated union — EXACTLY 9 kinds (D-11 added
+ * `cron-session-not-mirrored`).
+ *
+ * Severity:
+ *   - additive    → Plan 92-03 auto-applier handles these (no operator gate)
+ *   - destructive → Plan 92-04 destructive embed renderer; admin-clawdy
+ *     ephemeral confirmation Accept/Reject/Defer required
+ *
+ * Identifier discipline (deterministic-sort key):
+ *   - missing-skill          → skill name
+ *   - missing-mcp            → MCP server name
+ *   - missing-memory-file    → memory file path (relative to memoryRoot)
+ *   - missing-upload         → upload filename
+ *   - outdated-memory-file   → memory file path
+ *   - model-not-in-allowlist → model id
+ *   - mcp-credential-drift   → MCP server name
+ *   - tool-permission-gap    → tool name (e.g. "Bash")
+ *   - cron-session-not-mirrored → MC sessionKey (e.g. "cron:finmentum-db-sync")
+ */
+export type CutoverGap =
+  | {
+      kind: "missing-skill";
+      identifier: string;
+      severity: "additive";
+      sourceRef: { skillName: string };
+      targetRef: { skills: readonly string[] };
+    }
+  | {
+      kind: "missing-mcp";
+      identifier: string;
+      severity: "additive";
+      sourceRef: { mcpServerName: string; toolsUsed: readonly string[] };
+      targetRef: { mcpServers: readonly string[] };
+    }
+  | {
+      kind: "missing-memory-file";
+      identifier: string;
+      severity: "additive";
+      sourceRef: { path: string; sourceHash: string };
+      targetRef: { exists: false };
+    }
+  | {
+      kind: "missing-upload";
+      identifier: string;
+      severity: "additive";
+      sourceRef: { filename: string };
+      targetRef: { uploads: readonly string[] };
+    }
+  | {
+      kind: "outdated-memory-file";
+      identifier: string;
+      severity: "destructive";
+      sourceRef: { path: string; sourceHash: string };
+      targetRef: { path: string; targetHash: string };
+    }
+  | {
+      kind: "model-not-in-allowlist";
+      identifier: string;
+      severity: "additive";
+      sourceRef: { modelId: string };
+      targetRef: { allowedModels: readonly string[] };
+    }
+  | {
+      kind: "mcp-credential-drift";
+      identifier: string;
+      severity: "destructive";
+      sourceRef: { mcpServerName: string; envKeys: readonly string[] };
+      targetRef: {
+        mcpServerName: string;
+        envKeys: readonly string[];
+        status: string;
+      };
+    }
+  | {
+      kind: "tool-permission-gap";
+      identifier: string;
+      severity: "destructive";
+      sourceRef: { toolName: string };
+      targetRef: { aclDenies: readonly string[] };
+    }
+  | {
+      kind: "cron-session-not-mirrored";
+      identifier: string;
+      severity: "destructive";
+      sourceRef: {
+        sessionKey: string;
+        label: string;
+        kind: "cron";
+        lastSeenAt: string;
+      };
+      targetRef: { mirroredCronEntries: readonly string[] };
+    };
+
+/** Sub-union of CutoverGap variants safe for Plan 92-03's auto-applier. */
+export type AdditiveCutoverGap = Extract<CutoverGap, { severity: "additive" }>;
+
+/**
+ * Sub-union of CutoverGap variants requiring Plan 92-04's admin-clawdy
+ * ephemeral Accept/Reject/Defer confirmation before any mutation.
+ */
+export type DestructiveCutoverGap = Extract<
+  CutoverGap,
+  { severity: "destructive" }
+>;
+
+/**
+ * Compile-time exhaustiveness witness — Plan 92-03/04/06 consumers MUST
+ * call this in their default branches so adding a 10th CutoverGap kind
+ * fails the TypeScript build until every consumer is updated.
+ *
+ * Throws at runtime if reached (which only happens if an as-cast bypassed
+ * the type system). The runtime throw includes the variant payload for
+ * diagnostic value.
+ */
+export function assertNever(x: never): never {
+  throw new Error(
+    "Unhandled CutoverGap variant: " + JSON.stringify(x),
+  );
+}
+
+/**
+ * Deterministic ordering for CutoverGap[] — sorts by (kind asc, identifier asc).
+ *
+ * Returns a NEW array (immutability rule from CLAUDE.md): the input array is
+ * never sorted in place. Downstream consumers (Plan 92-04 embed renderer,
+ * Plan 92-06 report writer) rely on this canonical order so the rendered
+ * output is byte-stable across reruns of the same input.
+ */
+export function sortGaps(
+  gaps: readonly CutoverGap[],
+): readonly CutoverGap[] {
+  return [...gaps].sort((a, b) =>
+    a.kind === b.kind
+      ? a.identifier.localeCompare(b.identifier)
+      : a.kind.localeCompare(b.kind),
+  );
+}
+
+/**
+ * TargetCapability — mirror-shape of AgentProfile + workspace inventory +
+ * MCP runtime state. Emitted by `probeTargetCapability` and read by
+ * `diffAgentVsTarget`.
+ *
+ * NO-LEAK invariant (regression-pinned): `mcpServers[].envKeys` carries
+ * KEY NAMES ONLY (e.g. ["STRIPE_SECRET_KEY"]). Values NEVER appear in
+ * this schema. The probe's extraction step uses `Object.keys(env)` —
+ * never accesses `env[key]`.
+ *
+ * D-11 — `sessionKinds[]` lists the direct/cron/orchestra/scheduled session
+ * types the target supports. Diff against AgentProfile-derived cron sessions
+ * surfaces `cron-session-not-mirrored` gaps when MC has cron but target
+ * lacks the schedule entry.
+ */
+export const targetCapabilitySchema = z.object({
+  agent: z.string(),
+  generatedAt: z.string(),
+  yaml: z.object({
+    skills: z.array(z.string()),
+    mcpServers: z.array(
+      z.object({
+        name: z.string(),
+        // KEY NAMES ONLY — values never enter this surface (NO-LEAK pin).
+        envKeys: z.array(z.string()),
+      }),
+    ),
+    model: z.string(),
+    allowedModels: z.array(z.string()),
+    memoryAutoLoad: z.boolean(),
+    // D-11 — direct/cron/orchestra/scheduled session types the target
+    // currently mirrors (e.g. via Phase 47 cron schedules + orchestra wiring).
+    sessionKinds: z.array(z.string()).default([]),
+  }),
+  workspace: z.object({
+    memoryRoot: z.string(),
+    memoryFiles: z.array(
+      z.object({
+        // Path relative to memoryRoot, e.g. "memory/2026-04-15-x.md".
+        path: z.string(),
+        sha256: z.string(),
+      }),
+    ),
+    // Sha256 of MEMORY.md root file, or null if absent.
+    memoryMdSha256: z.string().nullable(),
+    // Filenames in uploads/discord/.
+    uploads: z.array(z.string()),
+    // Skill directory names actually present on disk under skills/.
+    skillsInstalled: z.array(z.string()),
+  }),
+  mcpRuntime: z.array(
+    z.object({
+      name: z.string(),
+      status: z.enum(["healthy", "warning", "critical", "unknown"]),
+      lastError: z.string().nullable(),
+      failureCount: z.number().int().nonnegative(),
+    }),
+  ),
+});
+
+export type TargetCapability = z.infer<typeof targetCapabilitySchema>;
+
+/**
+ * Outcome of a single `cutover probe` cycle. Exhaustively switched in the
+ * Plan 92-06 report writer.
+ *
+ * Note: the YAML loader, agent lookup, workspace inventory, and MCP IPC
+ * are all separately failable; `probeTargetCapability` collapses
+ * inventory-failures into `yaml-load-failed` (with phase prefix in error)
+ * to keep the outcome surface tractable for Plan 92-06.
+ */
+export type ProbeOutcome =
+  | {
+      kind: "probed";
+      agent: string;
+      capabilityPath: string;
+      durationMs: number;
+    }
+  | { kind: "agent-not-found"; agent: string }
+  | { kind: "yaml-load-failed"; agent: string; error: string }
+  | { kind: "ipc-failed"; agent: string; error: string };
+
+/**
+ * Outcome of a single `cutover diff` cycle. Exhaustively switched in
+ * Plan 92-06's report-writer + the CLI exit-code branch.
+ */
+export type DiffOutcome =
+  | {
+      kind: "diffed";
+      agent: string;
+      gapCount: number;
+      additiveCount: number;
+      destructiveCount: number;
+      gapsPath: string;
+      durationMs: number;
+    }
+  | { kind: "missing-profile"; agent: string; profilePath: string }
+  | { kind: "missing-capability"; agent: string; capabilityPath: string };
