@@ -548,3 +548,137 @@ export type DiffOutcome =
     }
   | { kind: "missing-profile"; agent: string; profilePath: string }
   | { kind: "missing-capability"; agent: string; capabilityPath: string };
+
+// ============================================================================
+// Phase 92 Plan 03 — Cutover ledger row + additive-applier outcome (D-05 + D-10)
+// ============================================================================
+//
+// Adds:
+//   - cutoverLedgerActionSchema / CutoverLedgerAction
+//   - cutoverLedgerRowSchema    / CutoverLedgerRow
+//   - AdditiveApplyOutcome (discriminated union)
+//
+// The ledger row is the audit witness for every applied (or attempted)
+// cutover fix. Append-only JSONL at `~/.clawcode/manager/cutover-ledger.jsonl`
+// per Phase 84 / Phase 82 ledger.ts conventions:
+//   1. Validated on WRITE (zod parse before fs touch)
+//   2. appendFile only — no read-modify-write
+//   3. No truncate/clear/rewrite helpers exposed
+//
+// `preChangeSnapshot` is the D-10 reversibility hook for destructive gaps
+// (Plan 92-04 territory). Additive gaps are trivially reversible (delete
+// the added file, remove the YAML entry) so they emit `null` for that field.
+
+/**
+ * D-05 ledger row action vocabulary.
+ *
+ *  - "apply-additive"      Plan 92-03 wrote a fix for an additive gap
+ *  - "apply-destructive"   Plan 92-04 wrote a fix after admin-clawdy Accept
+ *  - "reject-destructive"  Plan 92-04 logged operator Reject
+ *  - "rollback"            Plan 92-06 rewound a prior fix
+ *  - "skip-verify"         Plan 92-06 escape hatch (D-09 emergency cutover)
+ */
+export const cutoverLedgerActionSchema = z.enum([
+  "apply-additive",
+  "apply-destructive",
+  "reject-destructive",
+  "rollback",
+  "skip-verify",
+]);
+export type CutoverLedgerAction = z.infer<typeof cutoverLedgerActionSchema>;
+
+/**
+ * D-05 single-row schema for `~/.clawcode/manager/cutover-ledger.jsonl`.
+ *
+ * Validated on WRITE — `appendCutoverRow` zod-parses BEFORE mkdir+appendFile
+ * so a malformed row never reaches the filesystem.
+ *
+ * `preChangeSnapshot` is the D-10 reversibility hook: destructive applies
+ * (Plan 92-04) populate it; additive applies (Plan 92-03) leave it `null`.
+ *
+ * `reason` is populated for skip-verify, reject-destructive, and any
+ * refusal (e.g., secret-scan-refused). `null` for normal apply rows.
+ */
+export const cutoverLedgerRowSchema = z.object({
+  // ISO 8601 with time component — Phase 82 ledger.ts ts invariant.
+  timestamp: z
+    .string()
+    .refine(
+      (v) => !Number.isNaN(Date.parse(v)) && v.includes("T"),
+      "timestamp must be ISO 8601 with time component",
+    ),
+  agent: z.string().min(1),
+  action: cutoverLedgerActionSchema,
+  // CutoverGap['kind'] for apply rows; meta values like "skip-verify" otherwise.
+  kind: z.string().min(1),
+  identifier: z.string(),
+  // sha256 of source content (null when not applicable, e.g. yaml-only updates).
+  sourceHash: z.string().nullable(),
+  // sha256 of target content after apply (null on dry-run / refusal).
+  targetHash: z.string().nullable(),
+  // true for additive; for destructive only when preChangeSnapshot fits.
+  reversible: z.boolean(),
+  // false at apply time; rollback action appends a new row (NOT mutate).
+  rolledBack: z.boolean(),
+  // Base64-gzipped pre-apply content for files < 64KB (destructive only).
+  preChangeSnapshot: z.string().nullable(),
+  // skip-verify / reject-destructive / refusal-due-to-secret-scan reasons.
+  reason: z.string().nullable(),
+});
+export type CutoverLedgerRow = z.infer<typeof cutoverLedgerRowSchema>;
+
+/**
+ * D-05 — Outcome of one `cutover apply-additive` invocation.
+ *
+ * Discriminated by `kind`. Plan 92-06 report writer + the CLI exit-code
+ * branch in cutover-apply-additive.ts switch exhaustively over this union.
+ *
+ * One terminal outcome per invocation. Per-gap success contributes to
+ * `gapsApplied`; idempotency-skipped gaps contribute to `gapsSkipped`.
+ * A single secret-scan-refused / yaml-write-failed / rsync-failed
+ * short-circuits the run.
+ */
+export type AdditiveApplyOutcome =
+  | {
+      kind: "applied";
+      agent: string;
+      gapsApplied: number;
+      gapsSkipped: number;
+      destructiveDeferred: number;
+      ledgerPath: string;
+      durationMs: number;
+    }
+  | {
+      kind: "dry-run";
+      agent: string;
+      plannedAdditive: number;
+      destructiveDeferred: number;
+    }
+  | {
+      kind: "no-gaps-file";
+      agent: string;
+      gapsPath: string;
+    }
+  | {
+      kind: "secret-scan-refused";
+      agent: string;
+      identifier: string;
+      reason: string;
+    }
+  | {
+      kind: "yaml-write-failed";
+      agent: string;
+      identifier: string;
+      error: string;
+    }
+  | {
+      kind: "rsync-failed";
+      agent: string;
+      identifier: string;
+      error: string;
+    }
+  | {
+      kind: "destructive-gaps-deferred";
+      agent: string;
+      destructiveCount: number;
+    };
