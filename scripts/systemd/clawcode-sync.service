@@ -1,0 +1,16 @@
+[Unit]
+Description=ClawCode fin-acquisition workspace sync (one-shot cycle)
+Documentation=file:///opt/clawcode/.planning/phases/91-openclaw-clawcode-fin-acquisition-workspace-sync/91-01-PLAN.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/clawcode/scripts/sync/clawcode-sync.sh
+StandardOutput=journal
+StandardError=journal
+# SSH / rsync failure must not mark the unit failed — Plan 91-01 D-04 says
+# the runner exits non-zero but systemd should treat it as a completed
+# cycle. SuccessExitStatus=1 covers the flock-skip + graceful-ssh-fail
+# paths. A true bug (exit 2+) still shows up as failed in journalctl.
+SuccessExitStatus=1

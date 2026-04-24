@@ -1,0 +1,18 @@
+[Unit]
+Description=Fire ClawCode fin-acquisition sync every 5 minutes
+Documentation=file:///opt/clawcode/.planning/phases/91-openclaw-clawcode-fin-acquisition-workspace-sync/91-01-PLAN.md
+
+[Timer]
+# First cycle 2 minutes after boot so the daemon has warmed up.
+OnBootSec=2min
+# Subsequent cycles every 5 minutes after the previous one finished (D-03).
+OnUnitActiveSec=5min
+# Small jitter tolerance — don't wake the CPU precisely on the minute.
+AccuracySec=30s
+# If clawdy was off for hours, don't backfill missed cycles — next live
+# cycle is enough. The sync model is incremental anyway.
+Persistent=false
+Unit=clawcode-sync.service
+
+[Install]
+WantedBy=timers.target

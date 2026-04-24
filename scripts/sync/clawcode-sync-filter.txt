@@ -1,0 +1,70 @@
+# Phase 91 Plan 01 — rsync filter for OpenClaw→ClawCode fin-acquisition sync.
+#
+# This file is loaded via `rsync --filter="merge <path>"`. Rules run in order;
+# the FIRST matching rule wins. Includes must come BEFORE their broadening
+# excludes, and the trailing `- *` catches everything not explicitly allowed.
+#
+# Regression pin (src/sync/__tests__/sync-runner.test.ts R7): the excludes
+# below MUST keep *.sqlite and sessions/*.jsonl off the destination. If you
+# reorder or remove an exclude, that test fails.
+
+# ----------------------------------------------------------------------------
+# Protect (P) — destination-only files that rsync --delete must never remove.
+# ----------------------------------------------------------------------------
+P memories.db
+P memories.db-shm
+P memories.db-wal
+P sessions/
+
+# ----------------------------------------------------------------------------
+# Hard excludes — evaluated BEFORE includes so they win regardless of
+# subsequent include patterns. These paths never land on the destination.
+# ----------------------------------------------------------------------------
+- *.sqlite
+- *.sqlite-shm
+- *.sqlite-wal
+- /sessions/
+- /sessions/**
+- /.git/
+- /.git/**
+- *-backup-*
+- *.bak-*
+- *.pre-*
+- *.pre-fix-*
+- *.pre-restore-*
+- *.tmp-*
+- *~
+- .#*
+- *.swp
+- *.swo
+- .DS_Store
+- node_modules/
+- node_modules/**
+
+# ----------------------------------------------------------------------------
+# Explicit includes — agent content that MUST sync (SYNC-02 verbatim).
+# Directories are included first so rsync descends into them; then specific
+# file patterns inside each directory are included.
+# ----------------------------------------------------------------------------
++ /MEMORY.md
++ /SOUL.md
++ /IDENTITY.md
++ /HEARTBEAT.md
++ /memory/
++ /memory/**/*.md
++ /skills/
++ /skills/**
++ /uploads/
++ /uploads/discord/
++ /uploads/discord/**
++ /vault/
++ /vault/**
++ /procedures/
++ /procedures/**
++ /archive/
++ /archive/**
+
+# ----------------------------------------------------------------------------
+# Catch-all — drop everything not explicitly included above.
+# ----------------------------------------------------------------------------
+- *
