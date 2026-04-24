@@ -18,7 +18,9 @@ import { mkdtemp, writeFile, mkdir, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execa } from "execa";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const execFileP = promisify(execFile);
 import {
   fetchClawhubSkills,
   downloadClawhubSkill,
@@ -216,7 +218,7 @@ describe("downloadClawhubSkill — Phase 90 Plan 04 (HUB-CLI-7)", () => {
         "utf8",
       );
       const tarPath = join(fixtureRoot, "fixture.tar.gz");
-      await execa("tar", [
+      await execFileP("tar", [
         "-czf",
         tarPath,
         "-C",

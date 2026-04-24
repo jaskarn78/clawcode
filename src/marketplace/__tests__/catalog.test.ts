@@ -310,13 +310,17 @@ describe("defaultsSchema.marketplaceSources — Phase 88 Plan 01 (C8-C9)", () =>
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.marketplaceSources?.length).toBe(2);
-      expect(result.data.marketplaceSources?.[0].path).toBe(
+      // Phase 90 Plan 04 HUB-01 — marketplaceSources is now a discriminated
+      // union. Narrow to the legacy branch (path-based) via type-guard.
+      const first = result.data.marketplaceSources?.[0];
+      const second = result.data.marketplaceSources?.[1];
+      expect(first && "path" in first && first.path).toBe(
         "~/.openclaw/skills",
       );
-      expect(result.data.marketplaceSources?.[0].label).toBe(
+      expect(first && "path" in first && first.label).toBe(
         "OpenClaw legacy",
       );
-      expect(result.data.marketplaceSources?.[1].label).toBeUndefined();
+      expect(second && "path" in second && second.label).toBeUndefined();
     }
   });
 

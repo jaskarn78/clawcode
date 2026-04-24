@@ -24,6 +24,8 @@ describe("resolveAgentConfig", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
+    clawhubBaseUrl: "https://clawhub.ai",
+    clawhubCacheTtlMs: 600_000,
     skills: ["default-skill"],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -484,6 +486,8 @@ describe("resolveAgentConfig - mcpServers", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
+    clawhubBaseUrl: "https://clawhub.ai",
+    clawhubCacheTtlMs: 600_000,
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -1113,6 +1117,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
+    clawhubBaseUrl: "https://clawhub.ai",
+    clawhubCacheTtlMs: 600_000,
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
@@ -1504,6 +1510,8 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
+      clawhubBaseUrl: "https://clawhub.ai",
+      clawhubCacheTtlMs: 600_000,
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",
@@ -1634,6 +1642,8 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
+      clawhubBaseUrl: "https://clawhub.ai",
+      clawhubCacheTtlMs: 600_000,
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",

@@ -38,6 +38,7 @@ import {
   type SkillClassification,
 } from "../migration/skills-discovery.js";
 import { SCOPE_TAGS } from "../migration/skills-scope-tags.js";
+import type { ResolvedMarketplaceSources } from "../shared/types.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 
 /**
@@ -61,8 +62,20 @@ export type MarketplaceEntry = Readonly<{
 export type LoadMarketplaceCatalogOpts = Readonly<{
   /** Absolute, already-expandHome'd path to the ClawCode local skills dir. */
   localSkillsPath: string;
-  /** Absolute-path, already-resolved legacy source entries. May be empty. */
-  sources: readonly { path: string; label?: string }[];
+  /**
+   * Phase 88 MKT-02 + Phase 90 Plan 04 HUB-01 — discriminated-union source
+   * list. Legacy entries (kind: "legacy") carry a filesystem path; ClawHub
+   * entries (kind: "clawhub") carry a registry baseUrl. Plan 90-04 Task 2
+   * adds the ClawHub branch to the loader body.
+   *
+   * Backward-compat note: older callers passing a plain `{path, label?}[]`
+   * (pre-Phase-90 shape) are still accepted — the loader's legacy branch
+   * accepts either `kind: "legacy"` OR the bare shape (produced by
+   * resolveMarketplaceSources for v2.2 configs where kind is implicit).
+   */
+  sources:
+    | ResolvedMarketplaceSources
+    | readonly { path: string; label?: string }[];
   log?: Logger;
 }>;
 
@@ -154,14 +167,27 @@ export async function loadMarketplaceCatalog(
   }
 
   // --- Step 2: legacy sources (union; local wins on collision) ------
+  // Phase 90 Plan 04 HUB-01 — discriminate on `kind`. The ClawHub branch
+  // is added in Plan 90-04 Task 2; for now we ONLY process legacy entries
+  // (backward compat with the pre-Phase-90 `{path, label?}` shape: entries
+  // lacking a `kind` discriminator are treated as legacy).
   for (const source of opts.sources) {
+    // Skip ClawHub entries — Task 2 extends this loop to fetch + union
+    // ClawHub items alongside local+legacy.
+    if ("kind" in source && source.kind === "clawhub") {
+      continue;
+    }
+    // Narrow to the legacy shape. Works for both {kind:"legacy", path,
+    // label?} and the pre-Phase-90 {path, label?} bare shape.
+    const legacy = source as { path: string; label?: string };
+
     let discovered: Awaited<ReturnType<typeof discoverOpenclawSkills>>;
     try {
-      discovered = await discoverOpenclawSkills(source.path);
+      discovered = await discoverOpenclawSkills(legacy.path);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       opts.log?.warn(
-        { source: source.path, err: msg },
+        { source: legacy.path, err: msg },
         "loadMarketplaceCatalog: failed to read source; continuing",
       );
       continue;
@@ -178,9 +204,9 @@ export async function loadMarketplaceCatalog(
       const description = await readLegacyDescription(skill.path);
       const category = SCOPE_TAGS.get(skill.name) ?? "fleet";
       const sourceDescriptor =
-        source.label !== undefined
-          ? Object.freeze({ path: source.path, label: source.label })
-          : Object.freeze({ path: source.path });
+        legacy.label !== undefined
+          ? Object.freeze({ path: legacy.path, label: legacy.label })
+          : Object.freeze({ path: legacy.path });
       byName.set(skill.name, {
         name: skill.name,
         description: truncateDescription(description),

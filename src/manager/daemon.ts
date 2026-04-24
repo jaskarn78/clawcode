@@ -84,7 +84,7 @@ import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-bud
 import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
-import type { ResolvedAgentConfig } from "../shared/types.js";
+import type { ResolvedAgentConfig, ResolvedMarketplaceSources } from "../shared/types.js";
 // Phase 86 Plan 02 MODEL-04 — atomic YAML persistence for `agents[*].model`.
 import { updateAgentModel, updateAgentSkills } from "../migration/yaml-writer.js";
 import { ModelNotAllowedError } from "./model-errors.js";
@@ -595,7 +595,10 @@ export async function handleSetPermissionModeIpc(
 export type MarketplaceIpcDeps = Readonly<{
   configs: ResolvedAgentConfig[];
   configPath: string;
-  marketplaceSources: readonly { readonly path: string; readonly label?: string }[];
+  // Phase 90 Plan 04 HUB-01 — union of legacy {path,label?} and clawhub
+  // {kind:"clawhub",baseUrl,...} shapes. Consumers (loadMarketplaceCatalog
+  // + Plan 90-04 Task 2) discriminate on .kind.
+  marketplaceSources: ResolvedMarketplaceSources;
   localSkillsPath: string;
   skillsTargetDir: string;
   ledgerPath: string;
