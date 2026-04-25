@@ -231,8 +231,8 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Depends on:** Phase 85 (MCP awareness foundation), Phase 90.1 (bot-direct fallback), Phase 92 (cutover-time verification — extends to steady-state)
 
-**Plans:** 7 plans (decomposed 2026-04-25)
-- [ ] 94-01: Capability probe primitive + per-server registry (TOOL-01, TOOL-02)
+**Plans:** 1/7 plans executed
+- [x] 94-01: Capability probe primitive + per-server registry (TOOL-01, TOOL-02)
 - [ ] 94-02: Dynamic tool advertising — system-prompt filter (TOOL-03)
 - [ ] 94-03: Auto-recovery primitives — Playwright install, op:// refresh, subprocess restart (TOOL-04, 05, 06)
 - [ ] 94-04: Honest ToolCallError schema + executor wrap (TOOL-07)

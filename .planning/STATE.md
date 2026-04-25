@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: v2.5 milestone complete
-stopped_at: Completed 93-03-PLAN.md
-last_updated: "2026-04-25T01:51:59.244Z"
+status: Ready to execute
+stopped_at: Completed 94-01-PLAN.md
+last_updated: "2026-04-25T04:07:22.932Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
-  completed_phases: 2
-  total_plans: 9
-  completed_plans: 9
+  completed_phases: 0
+  total_plans: 7
+  completed_plans: 1
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 93 — Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience
+**Current focus:** Phase 94 — tool-reliability-self-awareness
 
 ## Current Position
 
-Phase: 93
-Plan: Not started
+Phase: 94 (tool-reliability-self-awareness) — EXECUTING
+Plan: 2 of 7
 
 ## Performance Metrics
 
@@ -215,6 +215,9 @@ Recent decisions affecting current work:
 - [Phase 93]: Plan 93-03 — ClawhubManifestNotFoundError is a sibling (not subclass) of ClawhubManifestInvalidError. Subclassing would defeat the differentiation purpose; instanceof checks must distinguish 404 from malformed-body errors.
 - [Phase 93]: Plan 93-03 — daemon.ts:1116-1118 fallback URL construction deliberately UNCHANGED per RESEARCH §Pitfall 5 (13-URL probe table confirmed every shape returns 404 for unpublished plugins like hivemind; the registry is the source of truth, not the URL shape). Pinned by DPM-93-1 regression test.
 - [Phase 93]: Plan 93-03 — PluginInstallOutcome union grows 10 → 11 variants (manifest-unavailable). Eleventh exhaustive-switch application of the Phase 88 MKT-05 / Phase 90 Plan 05 pattern; TypeScript never branch enforces completeness across PluginInstallOutcome + PluginInstallOutcomeWire + renderPluginInstallOutcome at compile time.
+- [Phase 94]: 5-value CapabilityProbeStatus enum (ready|degraded|reconnecting|failed|unknown) locked at the contract layer (D-02); adding a 6th value cascades through Plans 94-02/03/04/07
+- [Phase 94]: Capability probe is DI-pure: no SDK imports, no fs imports, no bare new Date() — primitive funnels Date construction through currentTime(deps) helper using integer-arg signature so static-grep regression pin holds
+- [Phase 94]: Heartbeat layer runs probe with stub callTool (throws) + getProbeFor override forcing default-fallback; connect-ok → ready, connect-fail → failed mirror. Plan 94-03 lifts override and wires real callTool through SDK surface
 
 ### v2.1 closing decisions (for reference)
 
@@ -322,9 +325,10 @@ Recent decisions affecting current work:
 | Phase 92 P06 | 7m | 2 tasks | 11 files |
 | Phase 93 P02 | 21min | 2 tasks | 6 files |
 | Phase 93 P03 | 25min | 2 tasks | 5 files |
+| Phase 94 P01 | 13min | 2 tasks | 15 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 93-03-PLAN.md
+Stopped at: Completed 94-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
