@@ -41,6 +41,133 @@ export class TurnDispatcherError extends Error {
   }
 }
 
+/**
+ * Phase 96 Plan 04 D-10 — post-turn missed-upload detector regex.
+ *
+ * Matches the D-10 verbatim "file-as-artifact" phrases that should have
+ * triggered a clawcode_share_file call. The regex is broad on purpose
+ * (LLMs phrase artifact references many ways); the toolCallNames check
+ * inside detectMissedUpload guards against false positives when the agent
+ * actually DID share. Negative case: text-only Q&A about file content
+ * ("the PDF says X") does NOT match — only artifact references do.
+ *
+ * Pinned by static-grep regression: `grep -q "MISSED_UPLOAD_PATTERN"
+ * src/manager/turn-dispatcher.ts`. The verbatim regex tokens
+ * (here's|attached|generated|saved to|i made/created/edited) are also
+ * pinned by D-10 acceptance.
+ */
+export const MISSED_UPLOAD_PATTERN =
+  /here's|attached|generated|saved to|i (made|created|edited) .* (file|pdf|image|doc)/i;
+
+/**
+ * Phase 96 Plan 04 D-10 — post-turn OpenClaw-fallback anti-pattern detector.
+ *
+ * Catches cases where the bot recommends falling back to OpenClaw to work
+ * around a capability gap (filesystem, network, DB, MCP, etc.). OpenClaw
+ * is being deprecated; recommending it as a fallback reinforces a sunset
+ * path. Operator surfaced this 2026-04-25 in #finmentum-client-acquisition
+ * (DB-access scenario where bot said "I'll spawn a subagent on the
+ * OpenClaw side").
+ *
+ * Pinned by static-grep regression: `grep -q "OPENCLAW_FALLBACK_PATTERN"
+ * src/manager/turn-dispatcher.ts`. The verbatim regex tokens
+ * (openclaw side|openclaw agent|openclaw host|spawn.*subagent.*openclaw)
+ * are also pinned by D-10 acceptance.
+ */
+export const OPENCLAW_FALLBACK_PATTERN =
+  /openclaw (side|agent|host)|spawn.*subagent.*openclaw/i;
+
+/**
+ * Phase 96 Plan 04 D-10 — negative-match exception for OpenClaw fallback.
+ *
+ * `archive/openclaw-sessions/` references are LEGITIMATE (reading historical
+ * sessions is a normal operator workflow). Only fallback recommendations
+ * are the anti-pattern. When the response also contains this archive path
+ * pattern, detectOpenClawFallback skips the alert entirely.
+ */
+export const OPENCLAW_LEGITIMATE_ARCHIVE_PATTERN = /archive\/openclaw-sessions\//;
+
+/**
+ * Phase 91 alert dedup primitive — admin-clawdy alert with throttling.
+ *
+ * Same shape used by both missed-upload and OpenClaw-fallback detectors;
+ * each detector passes a DISTINCT `dedupKey` so they throttle independently
+ * (one missed-upload alert in a window does NOT throttle an OpenClaw
+ * alert). Production wires this from the daemon's existing
+ * sendConflictAlert / admin-clawdy posting primitive (Phase 91 Plan 02).
+ */
+export type AdminClawdyAlertFn = (message: string, dedupKey: string) => void;
+
+export interface DetectMissedUploadDeps {
+  readonly alert: AdminClawdyAlertFn;
+}
+
+export type DetectOpenClawFallbackDeps = DetectMissedUploadDeps;
+
+/**
+ * Phase 96 Plan 04 D-10 — pure post-turn missed-upload detector.
+ *
+ * Returns true when the LLM response references a file as an artifact
+ * AND clawcode_share_file was NOT called this turn. Fires a soft warning
+ * to admin-clawdy via the supplied alert primitive (Phase 91 alert dedup
+ * with key 'missed-upload'). Throttled at the alert primitive layer —
+ * the same response repeated within a dedup window emits at most one
+ * alert.
+ *
+ * Soft signal — caller does NOT block on the return value. Used purely
+ * for operator-side observability so the next system-prompt directive
+ * iteration can be informed by real data.
+ */
+export function detectMissedUpload(
+  response: string,
+  toolCallNames: readonly string[],
+  deps: DetectMissedUploadDeps,
+): boolean {
+  const referencesArtifact = MISSED_UPLOAD_PATTERN.test(response);
+  const sharedFile = toolCallNames.includes("clawcode_share_file");
+  if (referencesArtifact && !sharedFile) {
+    deps.alert(
+      "Possible missed upload — agent response references file as artifact but did not call clawcode_share_file. Operator review.",
+      "missed-upload",
+    );
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Phase 96 Plan 04 D-10 — pure post-turn OpenClaw-fallback detector.
+ *
+ * Sibling of detectMissedUpload — runs alongside in the post-turn hook
+ * (separate try/catch so a failure in one does NOT prevent the other).
+ * Returns true when the LLM response recommends falling back to OpenClaw
+ * for capability work; emits a HIGH-PRIORITY warning to admin-clawdy via
+ * the alert primitive (dedup key 'openclaw-fallback', distinct from
+ * missed-upload so they throttle independently).
+ *
+ * Negative-match exception: response containing `archive/openclaw-sessions/`
+ * is legitimate (operator workflow reading historical sessions); this
+ * skips the alert entirely.
+ *
+ * Soft signal — non-blocking. Operator reviews and decides whether to
+ * tune the system-prompt directive further.
+ */
+export function detectOpenClawFallback(
+  response: string,
+  deps: DetectOpenClawFallbackDeps,
+): boolean {
+  const recommendsFallback = OPENCLAW_FALLBACK_PATTERN.test(response);
+  const isLegitimateArchive = OPENCLAW_LEGITIMATE_ARCHIVE_PATTERN.test(response);
+  if (recommendsFallback && !isLegitimateArchive) {
+    deps.alert(
+      "HIGH PRIORITY — agent recommended OpenClaw fallback to work around capability gap. OpenClaw is being deprecated; review system prompt + capability config. Operator review required.",
+      "openclaw-fallback",
+    );
+    return true;
+  }
+  return false;
+}
+
 export type DispatchOptions = {
   /** Discord channel id when this turn is Discord-originated; else null. */
   readonly channelId?: string | null;
@@ -229,6 +356,34 @@ export type TurnDispatcherOptions = {
    * verbatim message + classification + alternatives.
    */
   readonly toolErrorSuggestion?: (errorClass: ErrorClass) => string | undefined;
+  /**
+   * Phase 96 Plan 04 D-10 — admin-clawdy alert primitive for the post-turn
+   * DUAL detector hook (detectMissedUpload + detectOpenClawFallback).
+   *
+   * When wired, every successful dispatch invokes both detectors with
+   * sibling try/catch blocks. Each detector calls alert(message, dedupKey)
+   * with a DISTINCT dedup key ('missed-upload' vs 'openclaw-fallback') so
+   * they throttle independently. Both are non-blocking — failures in the
+   * detector layer never propagate to the caller.
+   *
+   * Daemon edge wires this from the existing Phase 91 admin-clawdy alert
+   * primitive (sendConflictAlert / bot-direct fallback). When omitted, the
+   * post-turn hook is a no-op (zero perf cost on the normal path).
+   */
+  readonly alertAdminClawdy?: AdminClawdyAlertFn;
+  /**
+   * Phase 96 Plan 04 D-10 — OPTIONAL provider returning the tool-call
+   * names executed during the most recent turn. When wired, the post-turn
+   * detectMissedUpload check uses this to gate the warning (response
+   * references file artifact AND clawcode_share_file NOT in the list →
+   * fire). When omitted, the missed-upload detector is treated as if no
+   * tools ran — same behavior, just less precise.
+   *
+   * The provider is a closure rather than a per-turn arg to keep the
+   * dispatch() signature stable. Production wires this from the
+   * SessionManager's per-turn tool-call observer.
+   */
+  readonly recentToolCallNames?: () => readonly string[];
 };
 
 /**
@@ -261,6 +416,8 @@ export class TurnDispatcher {
   private readonly subagentCapture: SubagentCapture | undefined;
   private readonly mcpStateProvider: McpStateProvider | undefined;
   private readonly toolErrorSuggestion: ((errorClass: ErrorClass) => string | undefined) | undefined;
+  private readonly alertAdminClawdy: AdminClawdyAlertFn | undefined;
+  private readonly recentToolCallNames: (() => readonly string[]) | undefined;
 
   constructor(options: TurnDispatcherOptions) {
     this.sessionManager = options.sessionManager;
@@ -272,6 +429,57 @@ export class TurnDispatcher {
     this.subagentCapture = options.subagentCapture;
     this.mcpStateProvider = options.mcpStateProvider;
     this.toolErrorSuggestion = options.toolErrorSuggestion;
+    this.alertAdminClawdy = options.alertAdminClawdy;
+    this.recentToolCallNames = options.recentToolCallNames;
+  }
+
+  /**
+   * Phase 96 Plan 04 D-10 — post-turn DUAL detector hook.
+   *
+   * Invoked at the end of every successful TurnDispatcher.dispatch() /
+   * dispatchStream() call (BEFORE returning to the caller). Runs both
+   * detectMissedUpload AND detectOpenClawFallback in SIBLING try/catch
+   * blocks so a failure in one detector does NOT prevent the other from
+   * firing. Neither blocks the caller — both detectors are non-blocking
+   * soft signals that surface to admin-clawdy via Phase 91 alert dedup.
+   *
+   * No-op when alertAdminClawdy is not wired (zero perf cost on the
+   * normal path).
+   */
+  private firePostTurnDetectors(response: string): void {
+    if (!this.alertAdminClawdy) return;
+    const alert = this.alertAdminClawdy;
+    const toolCallNames = this.recentToolCallNames?.() ?? [];
+
+    // Sibling 1 — missed-upload (non-blocking).
+    try {
+      detectMissedUpload(response, toolCallNames, { alert });
+    } catch (err) {
+      try {
+        this.log.warn(
+          { err: (err as Error).message },
+          "missed-upload detector failed (non-blocking)",
+        );
+      } catch {
+        // Logger threw — swallow.
+      }
+    }
+
+    // Sibling 2 — OpenClaw-fallback (non-blocking).
+    // SEPARATE try/catch so a failure here can't prevent missed-upload from
+    // running and vice versa. Each detector has its OWN failure isolation.
+    try {
+      detectOpenClawFallback(response, { alert });
+    } catch (err) {
+      try {
+        this.log.warn(
+          { err: (err as Error).message },
+          "openclaw-fallback detector failed (non-blocking)",
+        );
+      } catch {
+        // Logger threw — swallow.
+      }
+    }
   }
 
   /**
@@ -371,7 +579,11 @@ export class TurnDispatcher {
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal — trace side-effect */ }
       try {
-        return await this.sessionManager.sendToAgent(agentName, augmentedMessage, options.turn, { signal: options.signal });
+        const response = await this.sessionManager.sendToAgent(agentName, augmentedMessage, options.turn, { signal: options.signal });
+        // Phase 96 D-10 — post-turn DUAL detector hook. Non-blocking; runs after
+        // SDK send completes, before returning to caller-owned-Turn caller.
+        this.firePostTurnDetectors(response);
+        return response;
       } finally {
         this.restoreEffort(agentName, priorEffort);
       }
@@ -384,6 +596,11 @@ export class TurnDispatcher {
     try {
       const response = await this.sessionManager.sendToAgent(agentName, augmentedMessage, turn, { signal: options.signal });
       try { turn?.end("success"); } catch { /* non-fatal — trace write is best-effort */ }
+      // Phase 96 D-10 — post-turn DUAL detector hook (missed-upload +
+      // openclaw-fallback). Non-blocking sibling try/catch in
+      // firePostTurnDetectors. Soft warnings to admin-clawdy via Phase 91
+      // alert dedup (distinct keys).
+      this.firePostTurnDetectors(response);
       return response;
     } catch (err) {
       try { turn?.end("error"); } catch { /* non-fatal */ }
@@ -421,7 +638,10 @@ export class TurnDispatcher {
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal */ }
       try {
-        return await this.sessionManager.streamFromAgent(agentName, augmentedMessage, onChunk, options.turn, { signal: options.signal });
+        const response = await this.sessionManager.streamFromAgent(agentName, augmentedMessage, onChunk, options.turn, { signal: options.signal });
+        // Phase 96 D-10 — post-turn DUAL detector hook (caller-owned-Turn streaming branch).
+        this.firePostTurnDetectors(response);
+        return response;
       } finally {
         this.restoreEffort(agentName, priorEffort);
       }
@@ -440,6 +660,8 @@ export class TurnDispatcher {
         { signal: options.signal },
       );
       try { turn?.end("success"); } catch { /* non-fatal */ }
+      // Phase 96 D-10 — post-turn DUAL detector hook (streaming branch).
+      this.firePostTurnDetectors(response);
       return response;
     } catch (err) {
       try { turn?.end("error"); } catch { /* non-fatal */ }
