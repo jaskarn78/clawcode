@@ -31,6 +31,9 @@ describe("IPC_METHODS", () => {
       "list-mcp-status",
       // Phase 94 Plan 01 TOOL-01 — on-demand capability probe trigger
       "mcp-probe",
+      // Phase 94 Plan 05 TOOL-08 / TOOL-09 — built-in Discord helpers
+      "fetch-discord-messages",
+      "share-file",
       // Messaging
       "send-message",
       "send-to-agent",

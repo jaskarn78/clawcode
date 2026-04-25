@@ -35,6 +35,13 @@ export const IPC_METHODS = [
   // continues unaffected). Writes results back via setMcpStateForAgent
   // and returns the resulting capabilityProbe entries to the caller.
   "mcp-probe",
+  // Phase 94 Plan 05 TOOL-08 / TOOL-09 — built-in Discord helpers wired
+  // through the clawcode MCP server. The MCP tool handlers in
+  // src/mcp/server.ts forward to these IPC methods so the daemon owns
+  // the discord.js client + WebhookManager singletons (same pattern as
+  // send-attachment / read-thread).
+  "fetch-discord-messages",
+  "share-file",
   // Phase 91 Plan 05 SYNC-08 — OpenClaw↔ClawCode sync snapshot. Reads
   // ~/.clawcode/manager/sync-state.json (authoritativeSide, open conflicts,
   // perFileHashes) and the last line of ~/.clawcode/manager/sync.jsonl

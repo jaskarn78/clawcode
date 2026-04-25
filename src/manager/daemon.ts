@@ -3635,6 +3635,195 @@ async function routeMethod(
       return { ok: true, agent: agentName, channel: targetChannelId, file: filePath };
     }
 
+    // ----------------------------------------------------------------
+    // Phase 94 Plan 05 TOOL-08 / D-08 — fetch-discord-messages (Gap 3
+    // closure). Built-in helper auto-injected through the clawcode MCP
+    // server (src/mcp/server.ts). Wires production deps (discord.js
+    // client.channels.fetch + messages.fetch) onto the DI-pure handler
+    // (src/manager/tools/clawcode-fetch-discord-messages.ts).
+    // ----------------------------------------------------------------
+    case "fetch-discord-messages": {
+      const channelId = validateStringParam(params, "channel_id");
+      const limit = typeof params.limit === "number"
+        ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+        : 50;
+      const before = typeof params.before === "string" ? params.before : undefined;
+
+      const bridge = discordBridgeRef.current;
+      if (!bridge) {
+        throw new ManagerError("Discord bridge not available");
+      }
+      const { clawcodeFetchDiscordMessages } = await import(
+        "./tools/clawcode-fetch-discord-messages.js"
+      );
+      const pinoMod = (await import("pino")).default;
+      const log = pinoMod({ level: "silent" });
+
+      const result = await clawcodeFetchDiscordMessages(
+        {
+          channel_id: channelId,
+          limit,
+          ...(before !== undefined ? { before } : {}),
+        },
+        {
+          fetchMessages: async (cid, opts) => {
+            const ch = await bridge.discordClient.channels.fetch(cid);
+            if (!ch || typeof (ch as { messages?: unknown }).messages !== "object") {
+              throw new Error(`Channel '${cid}' is not a text channel/thread`);
+            }
+            const fetchOpts: { limit?: number; before?: string } = {};
+            if (opts.limit !== undefined) fetchOpts.limit = opts.limit;
+            if (opts.before !== undefined) fetchOpts.before = opts.before;
+            const collection = await (
+              ch as {
+                messages: {
+                  fetch: (
+                    o: { limit?: number; before?: string },
+                  ) => Promise<Map<string, unknown>>;
+                };
+              }
+            ).messages.fetch(fetchOpts);
+            type DiscordMsg = {
+              id: string;
+              author: { username: string };
+              content: string;
+              createdAt: Date;
+              attachments: Map<string, { name?: string | null; url: string }>;
+            };
+            return [...(collection as Map<string, DiscordMsg>).values()].map((m) => ({
+              id: m.id,
+              author: m.author.username,
+              content: m.content ?? "",
+              ts: m.createdAt.toISOString(),
+              attachments: [...m.attachments.values()].map((a) => ({
+                filename: a.name ?? "attachment",
+                url: a.url,
+              })),
+            }));
+          },
+          log,
+        },
+      );
+
+      // The DI-pure handler returns either FetchDiscordMessagesOutput or
+      // ToolCallError. Surface ToolCallError as a ManagerError so the
+      // MCP wrapper in src/mcp/server.ts renders it as isError:true.
+      if ("kind" in result && result.kind === "ToolCallError") {
+        throw new ManagerError(result.message);
+      }
+      return result;
+    }
+
+    // ----------------------------------------------------------------
+    // Phase 94 Plan 05 TOOL-09 / D-09 — share-file (Gap 3 closure).
+    // Built-in helper auto-injected through the clawcode MCP server.
+    // Wires production deps (fs.promises.stat + discord.js channel.send
+    // bot-direct upload) onto the DI-pure handler. The webhook→bot-direct
+    // fallback specified in 94-05 is reduced here to bot-direct only;
+    // webhook-manager.sendFile is deferred until a future phase adds a
+    // file-upload primitive to WebhookManager (acknowledged in 94-05
+    // SUMMARY "Next Phase Readiness").
+    // ----------------------------------------------------------------
+    case "share-file": {
+      const agentName = validateStringParam(params, "agent");
+      const filePath = validateStringParam(params, "path");
+      const caption = typeof params.caption === "string" ? params.caption : undefined;
+      const channelIdParam =
+        typeof params.channel_id === "string" ? params.channel_id : undefined;
+
+      const agentConfig = configs.find((c) => c.name === agentName);
+      if (!agentConfig) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+
+      const bridge = discordBridgeRef.current;
+      if (!bridge) {
+        throw new ManagerError("Discord bridge not available");
+      }
+
+      // Resolve allowedRoots to the agent's workspace + memoryPath.
+      const allowedRoots: string[] = [];
+      if (agentConfig.workspace) allowedRoots.push(agentConfig.workspace);
+      if (agentConfig.memoryPath) allowedRoots.push(agentConfig.memoryPath);
+      if (allowedRoots.length === 0) {
+        throw new ManagerError(
+          `Agent '${agentName}' has no workspace or memoryPath configured`,
+        );
+      }
+
+      // Default channel: explicit param, otherwise first configured channel.
+      const channelId = channelIdParam ?? agentConfig.channels[0];
+      if (!channelId) {
+        throw new ManagerError(
+          `Agent '${agentName}' has no Discord channels configured and no channel_id provided`,
+        );
+      }
+
+      const { clawcodeShareFile } = await import("./tools/clawcode-share-file.js");
+      const pinoMod = (await import("pino")).default;
+      const log = pinoMod({ level: "silent" });
+
+      // Bot-direct upload primitive — captures the message's first
+      // attachment URL after Discord uploads the file. Used both as the
+      // primary path and the fallback (single-channel UX consistency
+      // pending webhook-manager.sendFile in a future phase).
+      const botUpload = async (
+        cid: string,
+        file: { path: string; filename: string; caption?: string },
+      ): Promise<{ url: string }> => {
+        const channel = await bridge.discordClient.channels.fetch(cid);
+        if (!channel || !("send" in channel) || typeof channel.send !== "function") {
+          throw new Error(`Cannot send to channel ${cid}`);
+        }
+        const sendOpts: { content?: string; files: string[] } = {
+          files: [file.path],
+        };
+        if (file.caption !== undefined) sendOpts.content = file.caption;
+        const message = (await (
+          channel as {
+            send: (
+              opts: { content?: string; files: string[] },
+            ) => Promise<{ attachments: Map<string, { url: string }> }>;
+          }
+        ).send(sendOpts)) as { attachments: Map<string, { url: string }> };
+        const attachment = [...message.attachments.values()][0];
+        if (!attachment) {
+          throw new Error("Discord upload returned no attachment URL");
+        }
+        return { url: attachment.url };
+      };
+
+      const result = await clawcodeShareFile(
+        {
+          path: filePath,
+          ...(caption !== undefined ? { caption } : {}),
+        },
+        {
+          allowedRoots,
+          // Webhook path deferred — both DI surfaces forward to bot-direct.
+          // The 94-05 handler tries webhook first, then bot. Until
+          // webhook-manager.sendFile lands, both calls resolve to the
+          // same primitive (idempotent — Discord deduplication is
+          // not a concern because webhook will never reject when both
+          // paths are identical).
+          sendViaWebhook: botUpload,
+          sendViaBot: botUpload,
+          currentChannelId: () => channelId,
+          stat: async (p: string) => {
+            await access(p);
+            const s = await stat(p);
+            return { size: s.size, isFile: s.isFile() };
+          },
+          log,
+        },
+      );
+
+      if ("kind" in result && result.kind === "ToolCallError") {
+        throw new ManagerError(result.message);
+      }
+      return result;
+    }
+
     case "slash-commands": {
       const commands = configs.map((a) => ({
         agent: a.name,

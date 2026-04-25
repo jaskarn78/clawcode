@@ -818,6 +818,114 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     },
   );
 
+  // Phase 94 Plan 05 TOOL-08 / D-08 — built-in Discord message fetcher
+  // (Gap 3 closure). Forwards to the daemon's fetch-discord-messages IPC,
+  // where the discord.js client + channel/thread fetch lives. Auto-injected
+  // into every agent's tool list because the clawcode MCP server is auto-
+  // injected. Pure dispatch wrapper — handler logic + production deps are
+  // bound at the daemon edge (src/manager/tools/clawcode-fetch-discord-messages.ts
+  // accepts deps; the IPC handler wires discord.js client.channels.fetch).
+  server.tool(
+    "clawcode_fetch_discord_messages",
+    "Fetch the most recent messages from a Discord channel or thread (Discord treats threads as channels). " +
+      "Use channel_id for either. Limit defaults to 50, max 100. " +
+      "Use before=<message_id> to page back further when N > 100 needed.",
+    {
+      channel_id: z.string().describe("Discord channel or thread ID (snowflake)"),
+      limit: z.number().int().min(1).max(100).default(50).describe(
+        "Number of messages to fetch (1-100; default 50)",
+      ),
+      before: z
+        .string()
+        .optional()
+        .describe("Message snowflake — fetch messages older than this ID"),
+    },
+    async ({ channel_id, limit, before }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "fetch-discord-messages", {
+          channel_id,
+          limit,
+          ...(before !== undefined ? { before } : {}),
+        })) as {
+          messages: ReadonlyArray<{
+            id: string;
+            author: string;
+            content: string;
+            ts: string;
+            attachments: ReadonlyArray<{ filename: string; url: string }>;
+          }>;
+        };
+        // Return as JSON text so the LLM can read the full structure.
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            { type: "text" as const, text: `Failed to fetch messages: ${msg}` },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Phase 94 Plan 05 TOOL-09 / D-09 — built-in file-share helper (Gap 3
+  // closure). Forwards to the daemon's share-file IPC, where the
+  // discord.js bot-direct upload + 25MB cap + allowedRoots enforcement
+  // live. Auto-injected into every agent's tool list because the
+  // clawcode MCP server is auto-injected.
+  server.tool(
+    "clawcode_share_file",
+    "Upload a file from the agent's workspace to the Discord channel/thread the agent is currently answering in. " +
+      "Returns the CDN URL the user can click. " +
+      "Use this WHENEVER the user wants a file — never tell the user a local path " +
+      "(e.g. /home/clawcode/...). " +
+      "Path must be absolute and inside the agent's workspace or memory directory.",
+    {
+      agent: z.string().describe("Your agent name (pass your own name)"),
+      path: z
+        .string()
+        .describe("Absolute path inside agent workspace or memoryPath"),
+      caption: z
+        .string()
+        .optional()
+        .describe("Optional caption sent alongside the file"),
+      channel_id: z
+        .string()
+        .optional()
+        .describe(
+          "Channel or thread ID for the upload destination. Defaults to the first configured channel for the agent.",
+        ),
+    },
+    async ({ agent, path, caption, channel_id }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "share-file", {
+          agent,
+          path,
+          ...(caption !== undefined ? { caption } : {}),
+          ...(channel_id !== undefined ? { channel_id } : {}),
+        })) as { url: string; filename: string; sizeBytes: number };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            { type: "text" as const, text: `Failed to share file: ${msg}` },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return server;
 }
 
