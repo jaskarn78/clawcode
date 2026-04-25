@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 96-03-PLAN.md
-last_updated: "2026-04-25T19:49:05.398Z"
+stopped_at: Completed 96-04-PLAN.md (Wave 2 parallel executor)
+last_updated: "2026-04-25T19:56:12.673Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 17
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 96 (discord-routing-and-file-sharing-hygiene) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 
 ## Performance Metrics
 
@@ -266,6 +266,10 @@ Recent decisions affecting current work:
 - [Phase 96]: Plan 96-02: Flap-stability constants reused by NAME from Phase 94 plan 02 (FS_FLAP_WINDOW_MS = 5*60*1000, FS_FLAP_TRANSITION_THRESHOLD = 3) — cross-domain consistency between tools and filesystem capabilities.
 - [Phase 96-discord-routing-and-file-sharing-hygiene]: Phase 94 5-value ErrorClass enum NOT extended in 96-03. clawcode_list_files maps boundary refusal → 'permission'; depth/entries/size/missing → 'unknown' with rich suggestion. Pin established for 96-04 (share-file) which will face the same choice.
 - [Phase 96-discord-routing-and-file-sharing-hygiene]: Auto-injection site verified at src/manager/session-config.ts:421-440 (NOT non-existent agent-bootstrap.ts per RESEARCH.md Pitfall 1). 96-03 wires clawcode_list_files as the third built-in tool alongside Phase 94 plan 05's two.
+- [Phase 96]: [96-04] Phase 94 5-value ErrorClass enum LOCKED — D-12 4-class taxonomy (size/missing/permission/transient) maps onto existing 5 values via classifyShareFileError; size/missing → unknown with rich suggestion; permission/transient verbatim. NO enum extension.
+- [Phase 96]: [96-04] outputDir runtime expansion (NOT loader) — loader returns literal template; runtime resolveOutputDir expands per-call with fresh ctx. Loader-time expansion would freeze {date} at config-load time.
+- [Phase 96]: [96-04] D-10 directive text BOTH blocks — file-sharing directive contains auto-upload heuristic AND OpenClaw-fallback prohibition (added 2026-04-25 after operator surfaced anti-pattern in #finmentum-client-acquisition).
+- [Phase 96]: [96-04] Sibling pure detectors with DISTINCT dedup keys — detectMissedUpload + detectOpenClawFallback throttle independently via 'missed-upload' vs 'openclaw-fallback' keys; sibling try/catch isolation in firePostTurnDetectors so one detector failure cannot prevent the other.
 
 ### v2.1 closing decisions (for reference)
 
@@ -388,9 +392,10 @@ Recent decisions affecting current work:
 | Phase 96 P01 | 25min | 3 tasks | 17 files |
 | Phase 96 P02 | 12min | 3 tasks | 3 files |
 | Phase 96-discord-routing-and-file-sharing-hygiene P03 | 18min | 2 tasks | 5 files |
+| Phase 96 P04 | 23min | 3 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 96-03-PLAN.md
+Stopped at: Completed 96-04-PLAN.md (Wave 2 parallel executor)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
