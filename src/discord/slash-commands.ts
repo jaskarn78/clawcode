@@ -25,6 +25,7 @@ import {
   type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
@@ -32,6 +33,8 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
+// Phase 93 Plan 01 — pure renderer for /clawcode-status daemon short-circuit.
+import { buildStatusData, renderStatus } from "./status-render.js";
 // Phase 87 CMD-01 — SDK-driven native command registration.
 // Phase 87 CMD-03 — buildNativePromptString for prompt-channel dispatch.
 import {
@@ -88,6 +91,37 @@ const MODEL_CONFIRM_TTL_MS = 30_000;
  * no silent truncation.
  */
 const MAX_COMMANDS_PER_GUILD = 90;
+
+/**
+ * Phase 93 Plan 01 — version sourced from src/cli/index.ts L118
+ * (`.version("0.2.0")`). Hard-coded so the status renderer doesn't depend on
+ * Commander's dynamic version surface (no circular import, no runtime cost).
+ * Bump this in lockstep with the CLI when minting a release.
+ */
+const CLAWCODE_VERSION = "0.2.0";
+
+/**
+ * Phase 93 Plan 01 — best-effort short git sha for /clawcode-status. Mirrors
+ * the benchmarks/runner.ts pattern (try execSync, fallback to undefined).
+ * Resolved once at first /clawcode-status call (lazy + cached) to avoid
+ * per-startup git-rev-parse cost when the command is never used. The
+ * `null` sentinel indicates "not yet resolved"; `undefined` means "git
+ * unavailable / repo missing — render as 'unknown'".
+ */
+let CACHED_COMMIT_SHA: string | undefined | null = null;
+function resolveCommitSha(): string | undefined {
+  if (CACHED_COMMIT_SHA !== null) return CACHED_COMMIT_SHA;
+  try {
+    const sha = execSync("git rev-parse --short HEAD", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    CACHED_COMMIT_SHA = sha.length > 0 ? sha : undefined;
+  } catch {
+    CACHED_COMMIT_SHA = undefined;
+  }
+  return CACHED_COMMIT_SHA;
+}
 
 // ---------------------------------------------------------------------------
 // Phase 85 Plan 03 TOOL-06 / UI-01 — /clawcode-tools inline handler helpers.
@@ -916,35 +950,37 @@ export class SlashCommandHandler {
       }
     }
 
-    // Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit.
-    // Pulls the authoritative runtime effort + model directly from the
-    // running session handle; does NOT consume an LLM turn. Mirrors the
-    // clawcode-effort shortcut below (same no-turn-cost pattern).
+    // Phase 83 EFFORT-07 + Phase 93 Plan 01 — /clawcode-status daemon-side
+    // short-circuit, now backed by the pure renderStatus(buildStatusData)
+    // module. Pulls authoritative runtime state directly from the session
+    // handle; does NOT consume an LLM turn (EFFORT-07 reliability win
+    // preserved).
     //
-    // Trade-off: the old prompt-routed `/clawcode-status` produced a rich
-    // agent-authored block (tokens, context fill, compactions, etc.). That
-    // data lives only in the agent's context — not in the daemon — so we
-    // can't reproduce it server-side without asking the agent. The concise
-    // server-side view is authoritative, cheap, and always available
-    // (including when the agent is hung mid-turn). Plan 83-03 scope is
-    // EFFORT-07's VISIBILITY requirement only; a future `/clawcode-status-detail`
-    // can restore the rich prompt-routed form if needed.
+    // Phase 93 restores the rich OpenClaw-parity 9-line block deferred in
+    // EFFORT-07. Where ClawCode has no equivalent for an OpenClaw field
+    // (Runner / Fast Mode / Harness / Reasoning / Elevated / Activation /
+    // Queue / Context / Compactions / Tokens), the renderer emits
+    // `unknown` / `n/a` placeholders per CONTEXT.md D-93-01-1. Defensive
+    // try/catch in buildStatusData (Pitfall 6) means a stopped/crashed
+    // agent still gets all 9 lines with `unknown` placeholders rather than
+    // a generic "Failed to read status" wipe.
     if (commandName === "clawcode-status") {
       try {
-        const effort = this.sessionManager.getEffortForAgent(agentName);
-        // Phase 86 MODEL-07 — prefer the live handle's model (may reflect a
-        // recent /clawcode-model swap before the YAML write); fall back to
-        // the resolved-config alias when the handle reports undefined
-        // (fresh boot, no setModel call yet).
-        const liveModel = this.sessionManager.getModelForAgent(agentName);
-        const configModel =
-          this.resolvedAgents.find((a) => a.name === agentName)?.model ??
-          "(unknown)";
-        const model = liveModel ?? configModel;
-        await interaction.editReply(
-          `📋 ${agentName}\n🤖 Model: ${model}\n🎚️ Effort: ${effort}`,
-        );
+        const data = buildStatusData({
+          sessionManager: this.sessionManager,
+          resolvedAgents: this.resolvedAgents,
+          agentName,
+          agentVersion: CLAWCODE_VERSION,
+          commitSha: resolveCommitSha(),
+          now: Date.now(),
+        });
+        await interaction.editReply(renderStatus(data));
       } catch (error) {
+        // Defense-in-depth: buildStatusData/renderStatus are pure and don't
+        // throw under expected conditions (every accessor is try/catch'd
+        // internally — Pitfall 6). This catch only fires if Discord
+        // editReply itself errors out (expired interaction, network blip).
+        // Swallow per surrounding command-handler discipline.
         const msg = error instanceof Error ? error.message : String(error);
         try {
           await interaction.editReply(`Failed to read status: ${msg}`);

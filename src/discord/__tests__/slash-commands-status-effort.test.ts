@@ -174,19 +174,29 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
     vi.restoreAllMocks();
   });
 
-  it("replies with `🎚️ Effort: <level>` pulled from sessionManager.getEffortForAgent", async () => {
+  it("replies with `Think: <level>` pulled from sessionManager.getEffortForAgent", async () => {
+    // Phase 93 Plan 01 — renderer replaces the legacy `🎚️ Effort: <level>`
+    // line with the OpenClaw-parity options line. Effort surfaces as
+    // `Think: <level>` inside `⚙️ Runtime: SDK session · Runner: n/a · Think:
+    // <level> · ...`. EFFORT-07's "no LLM turn" reliability win is preserved
+    // — the data still flows from sessionManager.getEffortForAgent through
+    // buildStatusData.
     const agent = makeAgent("clawdy");
     const routingTable: RoutingTable = {
       channelToAgent: new Map([["chan-1", "clawdy"]]),
       agentToChannels: new Map([["clawdy", ["chan-1"]]]),
     };
     const getEffortForAgent = vi.fn().mockReturnValue("max");
-    // Phase 86 MODEL-07 — /clawcode-status now also calls
-    // getModelForAgent. Falls back to resolved-config model when undefined.
+    // Phase 86 MODEL-07 — /clawcode-status calls getModelForAgent.
     const getModelForAgent = vi.fn().mockReturnValue(undefined);
+    // Phase 93 Plan 01 — buildStatusData additionally calls these.
+    const getPermissionModeForAgent = vi.fn().mockReturnValue("default");
+    const getSessionHandle = vi.fn().mockReturnValue(undefined);
     const sessionManager = {
       getEffortForAgent,
       getModelForAgent,
+      getPermissionModeForAgent,
+      getSessionHandle,
     } as unknown as SessionManager;
 
     const fakeClient = {
@@ -204,7 +214,6 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
       log: makeStubLogger(),
     } as never);
 
-    // Minimal ChatInputCommandInteraction mock — just the surface our handler uses.
     const editReply = vi.fn().mockResolvedValue(undefined);
     const deferReply = vi.fn().mockResolvedValue(undefined);
     const interaction = {
@@ -221,36 +230,37 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
       id: "interaction-1",
     };
 
-    // Invoke the private handler via the internal dispatch path used by start().
-    // The class exposes the interaction handler via the public interactionCreate
-    // callback — to drive it directly in tests we call the private method by
-    // name (TypeScript won't stop us here).
     await (handler as unknown as {
       handleInteraction: (i: unknown) => Promise<void>;
     }).handleInteraction(interaction);
 
     expect(getEffortForAgent).toHaveBeenCalledWith("clawdy");
     expect(editReply).toHaveBeenCalled();
-    // Find the editReply call containing the effort line (may be preceded by
-    // an initial "Thinking..." edit on other paths — here short-circuit means
-    // one call only, but we assert presence not exclusivity).
     const allContents = editReply.mock.calls.map((c) => String(c[0]));
-    const effortLineCall = allContents.find((s) => s.includes("🎚️ Effort: max"));
+    // Effort surfaces inside the options line as `Think: <level>`.
+    const effortLineCall = allContents.find((s) => s.includes("Think: max"));
     expect(effortLineCall).toBeDefined();
   });
 
-  it("includes the agent name and model in the status reply", async () => {
+  it("includes the model in the status reply", async () => {
+    // Phase 93 Plan 01 — agent name no longer appears in the rich block
+    // (OpenClaw /status omits it; channel binding implies the agent). The
+    // model is still pinned via the `🧠 Model:` line. Updated assertion
+    // mirrors the new contract.
     const agent = makeAgent("clawdy");
     const routingTable: RoutingTable = {
       channelToAgent: new Map([["chan-1", "clawdy"]]),
       agentToChannels: new Map([["clawdy", ["chan-1"]]]),
     };
     const getEffortForAgent = vi.fn().mockReturnValue("xhigh");
-    // Phase 86 MODEL-07 — same fallback stub as above.
     const getModelForAgent = vi.fn().mockReturnValue(undefined);
+    const getPermissionModeForAgent = vi.fn().mockReturnValue("default");
+    const getSessionHandle = vi.fn().mockReturnValue(undefined);
     const sessionManager = {
       getEffortForAgent,
       getModelForAgent,
+      getPermissionModeForAgent,
+      getSessionHandle,
     } as unknown as SessionManager;
 
     const fakeClient = {
@@ -289,13 +299,21 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
     }).handleInteraction(interaction);
 
     const contents = editReply.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(contents).toContain("clawdy");
-    // Either "haiku" (model) or "🤖 Model:" prefix should appear.
-    expect(contents).toMatch(/(haiku|🤖 Model:)/);
-    expect(contents).toContain("🎚️ Effort: xhigh");
+    // Phase 93 Plan 01 — model surfaces via the `🧠 Model:` line; falls back
+    // to resolved config alias when getModelForAgent returns undefined.
+    expect(contents).toContain("🧠 Model: haiku");
+    // Effort surfaces inside the options line as `Think: <level>`.
+    expect(contents).toContain("Think: xhigh");
   });
 
-  it("gracefully reports failure if getEffortForAgent throws", async () => {
+  it("Pitfall 6 — getEffortForAgent throw collapses to `Think: unknown` (defensive read)", async () => {
+    // Phase 93 Plan 01 — Pitfall 6 closure: the new renderer's
+    // buildStatusData wraps every accessor in try/catch so a thrown
+    // SessionError on getEffortForAgent collapses to "unknown" placeholders
+    // INSTEAD OF dropping the whole render to the legacy "Failed to read
+    // status: ..." string. This test pins that contract: throwing accessors
+    // must NOT yield "Failed to read status" — they yield a 9-line block
+    // with `Think: unknown` and `Permissions: unknown`.
     const agent = makeAgent("clawdy");
     const routingTable: RoutingTable = {
       channelToAgent: new Map([["chan-1", "clawdy"]]),
@@ -304,8 +322,18 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
     const getEffortForAgent = vi.fn().mockImplementation(() => {
       throw new Error("agent not running");
     });
+    const getModelForAgent = vi.fn().mockImplementation(() => {
+      throw new Error("agent not running");
+    });
+    const getPermissionModeForAgent = vi.fn().mockImplementation(() => {
+      throw new Error("agent not running");
+    });
+    const getSessionHandle = vi.fn().mockReturnValue(undefined);
     const sessionManager = {
       getEffortForAgent,
+      getModelForAgent,
+      getPermissionModeForAgent,
+      getSessionHandle,
     } as unknown as SessionManager;
 
     const fakeClient = {
@@ -344,6 +372,12 @@ describe("Phase 83 EFFORT-07 — /clawcode-status daemon-side short-circuit", ()
     }).handleInteraction(interaction);
 
     const contents = editReply.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(contents).toMatch(/Failed to read status|agent not running/);
+    // Pitfall 6 closure — defensive read MUST suppress the legacy error path.
+    expect(contents).not.toMatch(/Failed to read status/);
+    // 9-line block still emits with placeholders.
+    expect(contents).toContain("Think: unknown");
+    expect(contents).toContain("Permissions: unknown");
+    // Falls back to configModel ("haiku" from makeAgent) when liveModel throws.
+    expect(contents).toContain("🧠 Model: haiku");
   });
 });
