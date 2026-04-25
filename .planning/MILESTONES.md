@@ -1,5 +1,22 @@
 # Milestones: ClawCode
 
+## v2.5 v2.5 (Shipped: 2026-04-25)
+
+**Phases completed:** 2 phases, 9 plans, 2 tasks
+
+**Key accomplishments:**
+
+- Three pure-DI modules + one CLI subcommand group.
+- Two pure-DI modules + two CLI subcommand wrappers + extended types.ts.
+- One append-only ledger module + one DI-pure dispatcher + one production CLI wrapper.
+- Three pure-DI modules + extended types.ts + daemon IPC handler + slash command + 14 new tests.
+- Three pure-DI modules + one CLI subcommand + 12 tests.
+- CUT-09 (Cutover-ready gate):
+- Pure renderer module
+- One-liner:
+
+---
+
 ## v2.4 OpenClaw ↔ ClawCode Continuous Sync (Shipped: 2026-04-24)
 
 **Phases completed:** 1 phases, 6 plans, 10 tasks
