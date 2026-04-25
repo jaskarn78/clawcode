@@ -140,6 +140,24 @@ export const systemPromptDirectiveOverrideSchema = z.object({
 });
 
 /**
+ * Phase 96 D-05 — 10th additive-optional schema application — fleet-wide
+ * default fileAccess paths.
+ *
+ * The literal `{agent}` token is preserved verbatim in the schema; the
+ * loader's `resolveFileAccess(agentName, ...)` helper substitutes the
+ * actual agent name at call time. This indirection lets defaults be
+ * defined once for the whole fleet while still resolving to per-agent
+ * canonical paths at runtime.
+ *
+ * Pinned by static-grep regression: `grep -q "DEFAULT_FILE_ACCESS"
+ * src/config/schema.ts`. Frozen so downstream code cannot mutate the
+ * global default array.
+ */
+export const DEFAULT_FILE_ACCESS: readonly string[] = Object.freeze([
+  "/home/clawcode/.clawcode/agents/{agent}/",
+]);
+
+/**
  * Phase 95 DREAM-01..03 — Memory dreaming (autonomous reflection) config.
  *
  * 9th application of the Phase 83/86/89/90/94 additive-optional schema
@@ -853,6 +871,15 @@ export const agentSchema = z.object({
   // defaults. 9th application of the Phase 83/86/89/90/94 additive-
   // optional schema blueprint.
   dream: dreamConfigSchema.optional(),
+  // Phase 96 D-05 — 10th additive-optional schema application; per-agent
+  // operator-shared filesystem path candidates verified by runFsProbe at
+  // boot + heartbeat tick. Schema preserves literal `{agent}` token; loader
+  // resolveFileAccess expands it at call time. Each entry must be a non-
+  // empty string; empty array allowed for explicit no-access fleet config.
+  // Resolved set merges defaults.fileAccess (default-bearing) + per-agent
+  // override (additive). v2.5 migrated configs parse unchanged. Reload
+  // classification deferred to Plan 96-07 (config-watcher hot-reload).
+  fileAccess: z.array(z.string().min(1)).optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -992,6 +1019,15 @@ export const defaultsSchema = z.object({
     idleMinutes: 30,
     model: "haiku" as const,
   })),
+  // Phase 96 D-05 — 10th additive-optional schema application; fleet-wide
+  // default filesystem path candidates. The `{agent}` literal token is
+  // preserved here verbatim (NOT expanded at parse time) — loader
+  // resolveFileAccess(agentName, ...) substitutes the actual agent name
+  // at call time. v2.5/v2.6 migrated configs parse unchanged when omitted.
+  // Reload classification deferred to Plan 96-07 (config-watcher hot-reload).
+  fileAccess: z
+    .array(z.string().min(1))
+    .default(() => [...DEFAULT_FILE_ACCESS]),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
