@@ -34,6 +34,7 @@ import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
+import type { AttemptRecord } from "./recovery/types.js";
 
 /**
  * Phase 94 Plan 01 — capability probe types re-anchored at this file path
@@ -183,6 +184,12 @@ export function createPersistentSessionHandle(
   // correctly counts ready ↔ non-ready transitions over time. The filter
   // mutates this Map on every call; same handle → same Map identity.
   const flapHistory: Map<string, FlapHistoryEntry> = new Map();
+
+  // Phase 94 Plan 03 TOOL-04/05/06 — per-handle recovery-attempt history.
+  // Lazily-initialized at handle-construction; the registry mutates in-place
+  // per heartbeat tick. Stable Map identity is the contract — bounded
+  // 3-attempts-per-hour budget accumulates across ticks via this Map.
+  const recoveryAttemptHistory: Map<string, AttemptRecord[]> = new Map();
 
   // Phase 87 CMD-01 — cache of SDK-reported slash commands. Populated once via
   // q.initializationResult() on first call; subsequent calls hit the cache.
@@ -810,6 +817,20 @@ export function createPersistentSessionHandle(
      */
     getFlapHistory(): Map<string, FlapHistoryEntry> {
       return flapHistory;
+    },
+
+    /**
+     * Phase 94 Plan 03 TOOL-04/05/06 — per-handle recovery-attempt history.
+     *
+     * Stable Map identity across the handle's lifetime so the registry's
+     * bounded 3-attempts-per-hour budget counter accumulates correctly
+     * across heartbeat ticks. The registry mutates the Map in-place by
+     * replacing AttemptRecord arrays with `[...prev, new]` (immutability
+     * preserved at the inner-array level — old entries retain reference
+     * identity).
+     */
+    getRecoveryAttemptHistory(): Map<string, AttemptRecord[]> {
+      return recoveryAttemptHistory;
     },
 
     /**

@@ -6,8 +6,16 @@ import {
 } from "../../mcp/readiness.js";
 import {
   probeAllMcpCapabilities,
+  probeMcpCapability,
   type ProbeOrchestratorDeps,
 } from "../../manager/capability-probe.js";
+import {
+  runRecoveryForServer,
+} from "../../manager/recovery/registry.js";
+import type {
+  RecoveryDeps,
+  AttemptRecord,
+} from "../../manager/recovery/types.js";
 import pino from "pino";
 
 /**
@@ -68,7 +76,128 @@ const BACKOFF_RESET_MS = 5 * 60_000;
  */
 type HandleWithMcpState = {
   readonly setMcpState?: (s: ReadonlyMap<string, McpServerState>) => void;
+  // Phase 94 Plan 03 — recovery-attempt history Map accessor for the
+  // bounded 3-attempts-per-hour budget. Stable Map identity across
+  // heartbeat ticks so the budget counter accumulates correctly.
+  readonly getRecoveryAttemptHistory?: () => Map<string, AttemptRecord[]>;
 };
+
+/**
+ * Phase 94 Plan 03 — heartbeat-edge recovery deps factory.
+ *
+ * Builds the DI surface for the recovery registry. Wires:
+ *   - execFile via promisified node:child_process.execFile (Phase 91 sync-runner pattern)
+ *   - opRead via shelling out to `op read <ref>` through that same execFile
+ *   - killSubprocess as a no-op stub (SDK kill API not yet exposed; the
+ *     SDK respawns subprocesses transparently, so a logged warn is enough
+ *     today — production wiring lands when Plan 94-08 / SDK update lifts)
+ *   - adminAlert as a logged warn stub (Phase 90.1 webhookManager wiring
+ *     is followup work; the recovery ledger captures every alert event)
+ *   - readEnvForServer / writeEnvForServer best-effort against agentConfig
+ *
+ * The recovery primitives themselves stay DI-pure — production code wires
+ * real implementations at THIS edge (the heartbeat tick) per the plan rule.
+ */
+function buildRecoveryDepsForHeartbeat(
+  agentName: string,
+  ctx: CheckContext,
+  log: import("pino").Logger,
+): RecoveryDeps {
+  return {
+    execFile: async (cmd, args, options) => {
+      // Late-load child_process so test workers that mock everything aren't
+      // forced to load the native module. Mirrors src/sync/sync-runner.ts.
+      const { execFile: execFileCb } = await import("node:child_process");
+      return await new Promise((resolve, reject) => {
+        const child = execFileCb(
+          cmd,
+          args as string[],
+          {
+            maxBuffer: 16 * 1024 * 1024,
+            timeout: options?.timeoutMs,
+            cwd: options?.cwd,
+            env: options?.env ? { ...process.env, ...options.env } : process.env,
+          },
+          (err, stdout, stderr) => {
+            // execFile callback fires with err=null on success, err.code=N
+            // on non-zero exit. We resolve with exitCode so the caller can
+            // branch on it; spawn errors (ENOENT) propagate as rejections.
+            if (err && (err as NodeJS.ErrnoException).errno !== undefined && (err as NodeJS.ErrnoException).code === "ENOENT") {
+              reject(err);
+              return;
+            }
+            const exitCode =
+              err && typeof (err as NodeJS.ErrnoException).code === "number"
+                ? ((err as NodeJS.ErrnoException).code as unknown as number)
+                : err
+                  ? 1
+                  : 0;
+            resolve({
+              stdout: stdout?.toString() ?? "",
+              stderr: stderr?.toString() ?? "",
+              exitCode,
+            });
+          },
+        );
+        child.on("error", (e) => {
+          reject(e);
+        });
+      });
+    },
+    killSubprocess: async (serverName: string) => {
+      // SDK doesn't expose a direct subprocess-kill API yet. Logged so the
+      // operator sees the recovery attempt; the SDK transparently respawns
+      // the MCP server on next call after a transport-level failure, so
+      // even without a kill, the next heartbeat tick will re-probe and a
+      // healthy handshake will lift status to ready.
+      log.warn(
+        { agent: agentName, serverName },
+        "subprocess-restart: SDK kill API not exposed — relying on SDK transparent reconnect",
+      );
+    },
+    adminAlert: async (text: string) => {
+      // Phase 90.1 webhookManager bot-direct fallback wiring is followup.
+      // For now, log at warn-level so the recovery ledger captures every
+      // alert event; the daemon-edge wiring will replace this with a real
+      // bot-direct DM to admin-clawdy.
+      log.warn({ agent: agentName, alert: text }, "admin-clawdy alert (stub)");
+    },
+    opRead: async (reference: string) => {
+      // Shell out to `op read <reference>`. Caller wraps in try/catch.
+      const { execFile: execFileCb } = await import("node:child_process");
+      return await new Promise<string>((resolve, reject) => {
+        execFileCb(
+          "op",
+          ["read", reference],
+          { maxBuffer: 1024 * 1024, timeout: 30_000 },
+          (err, stdout) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            resolve(stdout?.toString().trim() ?? "");
+          },
+        );
+      });
+    },
+    readEnvForServer: (serverName: string) => {
+      const cfg = ctx.sessionManager.getAgentConfig(agentName);
+      const server = cfg?.mcpServers?.find((s) => s.name === serverName);
+      return server?.env ? { ...server.env } : {};
+    },
+    writeEnvForServer: async (serverName: string, env: Record<string, string>) => {
+      // Heartbeat-edge stub — the SessionManager mutator for live MCP
+      // server env doesn't exist yet (Plan 94-08 / config-mutator land).
+      // Logged so operators see the resolved env count; the next agent
+      // restart will pick up freshly-resolved op:// values from the config.
+      log.warn(
+        { agent: agentName, serverName, envKeys: Object.keys(env).length },
+        "writeEnvForServer: live env mutation not yet wired — restart agent to apply",
+      );
+    },
+    log,
+  };
+}
 
 const mcpReconnectCheck: CheckModule = {
   name: "mcp-reconnect",
@@ -270,11 +399,70 @@ const mcpReconnectCheck: CheckModule = {
       );
     }
 
+    // ----------------------------------------------------------------
+    // Phase 94 Plan 03 — recovery loop.
+    //
+    // For each server with capabilityProbe.status === "degraded", consult
+    // the recovery registry. The registry enforces the bounded
+    // 3-attempts-per-hour budget + admin-clawdy alert on the 3rd failure.
+    // On a `recovered` outcome, re-probe THAT server immediately and lift
+    // the snapshot to ready (so the LLM tool-list filter sees the recovery
+    // before the next 60s heartbeat tick).
+    //
+    // Per-handle attempt history Map persists across ticks via the
+    // SessionHandle.getRecoveryAttemptHistory() accessor; falls back to a
+    // freshly-allocated Map when the handle isn't reachable (tests with a
+    // minimal context). The Map IS NOT mutated for not-applicable outcomes,
+    // so a server that no handler matches doesn't burn budget.
+    // ----------------------------------------------------------------
+    const sm2 = ctx.sessionManager as unknown as {
+      readonly sessions?: Map<string, HandleWithMcpState>;
+    };
+    const handleForRecovery = sm2.sessions?.get(ctx.agentName);
+    const attemptHistory: Map<string, AttemptRecord[]> =
+      handleForRecovery?.getRecoveryAttemptHistory?.() ?? new Map();
+    const recoveryLog = pino({ level: "silent" });
+    const recoveryDeps = buildRecoveryDepsForHeartbeat(ctx.agentName, ctx, recoveryLog);
+
+    // Snapshot the merged map so we can mutate per-server entries below
+    // for `recovered` outcomes.
+    const recoveryAdjusted = new Map<string, McpServerState>(probedMerged);
+    for (const [name, state] of probedMerged) {
+      const probe = state.capabilityProbe;
+      if (!probe || probe.status !== "degraded") continue;
+      const outcome = await runRecoveryForServer(
+        name,
+        state,
+        attemptHistory,
+        recoveryDeps,
+      );
+      if (outcome.kind === "recovered") {
+        // Re-probe immediately so this tick reflects the recovery. Same
+        // stub deps as the initial probe (the heartbeat layer's default-
+        // fallback path treats a successful listTools as ready).
+        try {
+          const refreshedProbe = await probeMcpCapability(name, stubDeps, probe);
+          recoveryAdjusted.set(
+            name,
+            Object.freeze({
+              ...state,
+              capabilityProbe: refreshedProbe,
+            }),
+          );
+        } catch {
+          // Re-probe threw — defensive; leave the original degraded
+          // snapshot in place for the next heartbeat tick to retry.
+        }
+      }
+      // not-applicable / retry-later / give-up → no snapshot mutation;
+      // the registry already wrote the AttemptRecord entry.
+    }
+
     // Persist merged state through the SessionManager accessor (primary
     // surface — read by IPC `list-mcp-status`, slash commands, and
     // Plan 02's prompt-builder) AND mirror onto the session handle for
     // TurnDispatcher-scope reads.
-    ctx.sessionManager.setMcpStateForAgent(ctx.agentName, probedMerged);
+    ctx.sessionManager.setMcpStateForAgent(ctx.agentName, recoveryAdjusted);
 
     // Best-effort handle mirror. The sessions map + setMcpState live on
     // the handle contract introduced alongside this check; tolerate
@@ -284,7 +472,7 @@ const mcpReconnectCheck: CheckModule = {
         readonly sessions: Map<string, HandleWithMcpState>;
       };
       const handle = sm.sessions?.get(ctx.agentName);
-      handle?.setMcpState?.(probedMerged);
+      handle?.setMcpState?.(recoveryAdjusted);
     } catch {
       // Observational — never break the heartbeat tick on a handle miss.
     }

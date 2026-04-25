@@ -5,6 +5,7 @@ import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
+import type { AttemptRecord } from "./recovery/types.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
@@ -152,6 +153,17 @@ export type SessionHandle = {
    * assembling the LLM-visible MCP server list.
    */
   getFlapHistory: () => Map<string, FlapHistoryEntry>;
+  /**
+   * Phase 94 Plan 03 TOOL-04/05/06 — per-handle recovery-attempt history.
+   *
+   * Keyed by serverName; values are append-only AttemptRecord arrays
+   * pruned to the rolling 1hr window by the registry on each call. Stable
+   * Map identity across the handle's lifetime so the bounded budget
+   * counter (3 attempts/hour) accumulates correctly across heartbeat
+   * ticks. Read+mutated by `runRecoveryForServer` in
+   * `src/manager/recovery/registry.ts`.
+   */
+  getRecoveryAttemptHistory: () => Map<string, AttemptRecord[]>;
   /**
    * Phase 87 CMD-01 — enumerate SDK-reported slash commands for this session.
    *
@@ -363,6 +375,16 @@ export class MockSessionHandle implements SessionHandle {
   private flapHistoryMap: Map<string, FlapHistoryEntry> = new Map();
   getFlapHistory(): Map<string, FlapHistoryEntry> {
     return this.flapHistoryMap;
+  }
+
+  /**
+   * Phase 94 Plan 03 — test-mock recovery-attempt history accessor.
+   * Stable Map identity matches the production handle contract; the
+   * registry mutates in-place per heartbeat tick.
+   */
+  private recoveryAttemptHistoryMap: Map<string, AttemptRecord[]> = new Map();
+  getRecoveryAttemptHistory(): Map<string, AttemptRecord[]> {
+    return this.recoveryAttemptHistoryMap;
   }
 
   /**
@@ -769,6 +791,8 @@ function wrapSdkQuery(
   // parity. wrapSdkQuery is test-only (createTracedSessionHandle) so this
   // is effectively dormant in production paths.
   let legacyMcpState: ReadonlyMap<string, McpServerState> = new Map();
+  // Phase 94 Plan 03 — legacy recovery-attempt history (test-only path).
+  const legacyRecoveryAttemptHistory: Map<string, AttemptRecord[]> = new Map();
   // Phase 94 Plan 02 TOOL-03 — legacy flap-history Map (test-only path).
   const legacyFlapHistory: Map<string, FlapHistoryEntry> = new Map();
 
@@ -1313,6 +1337,14 @@ function wrapSdkQuery(
      */
     getFlapHistory(): Map<string, FlapHistoryEntry> {
       return legacyFlapHistory;
+    },
+
+    /**
+     * Phase 94 Plan 03 — legacy recovery-attempt history accessor.
+     * Stable Map identity matches the persistent-handle contract.
+     */
+    getRecoveryAttemptHistory(): Map<string, AttemptRecord[]> {
+      return legacyRecoveryAttemptHistory;
     },
 
     /**

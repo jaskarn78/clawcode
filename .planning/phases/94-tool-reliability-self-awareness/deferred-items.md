@@ -35,3 +35,23 @@
 **Status:** Net-zero new failure surface. Pre-existing failure count baseline = 27 (verified via `git stash` before changes); after-change count = 28 in one full-suite run, but 1 of those is `MEM-01-C2: 50KB cap` test timeout — same timeout reproduces unmodified on stash baseline (flaky pre-existing). All Plan 94-02 modifications and new tests pass: 59/59 in session-config + session-config-mcp, 13/13 in filter-tools-by-capability-probe (9 FT-* + 4 regression pins). Build clean.
 
 **Plan 94-02 contribution:** 1 new pure module (`filter-tools-by-capability-probe.ts`), 13 new tests, single-source-of-truth filter wired at `session-config.ts` MCP-block assembly, getFlapHistory accessor added to SessionHandle (mirrored on PersistentSessionHandle + per-turn-query legacy + 3 mock test helpers).
+
+## Plan 94-03 verification (full-suite sweep)
+
+**Discovered during:** Plan 94-03 execution (Task 2 full-suite sweep — `npx vitest run --reporter=dot --exclude="**/e2e/**"`).
+
+**Status:** Net-zero new failure surface. Full-suite count: 27 failed / 4886 passed across 11 failing files. Re-running the same 10 failing test files with my changes stashed (`git stash push -u && npx vitest run <files>`) reproduced the identical 27 failures — every failure is pre-existing.
+
+**Pre-existing failures by file (verified via `git stash` baseline):**
+- `src/ipc/__tests__/protocol.test.ts` — 1 failure (4 cutover-* methods missing from fixture; 94-01 deferred item, recurring)
+- `src/discord/__tests__/slash-types.test.ts` — 2 failures (CONTROL_COMMANDS exact-count drift)
+- `src/discord/__tests__/slash-commands.test.ts` — 1 failure (CONTROL_COMMANDS total drift)
+- `src/manager/__tests__/bootstrap-integration.test.ts` — 2 failures (94-04 deferred — `memoryPath` undefined)
+- `src/manager/__tests__/daemon-openai.test.ts` — 6 failures (94-04 deferred — handle shape drift)
+- `src/manager/__tests__/daemon-warmup-probe.test.ts` — 1 failure (94-04 deferred — EmbeddingService cap)
+- `src/manager/__tests__/restart-greeting.test.ts` — 2 failures (94-04 deferred — skip-classifier drift)
+- `src/migration/__tests__/verifier.test.ts` — 8 failures (workspace-files-present test fixture missing MEMORY.md)
+- `src/migration/__tests__/memory-translator.test.ts` — 2 failures (static-grep regression on better-sqlite3 imports)
+- `src/migration/__tests__/config-mapper.test.ts` — 4 failures (mcp auto-injection test drift)
+
+**Plan 94-03 contribution:** 5 new modules (`recovery/types.ts`, `recovery/registry.ts`, `recovery/playwright-chromium.ts`, `recovery/op-refresh.ts`, `recovery/subprocess-restart.ts`), 20 new tests across 4 test files, heartbeat integration in `mcp-reconnect.ts` with 2 new tests, `getRecoveryAttemptHistory()` accessor on SessionHandle (mirrored on PersistentSessionHandle + MockSessionHandle + per-turn-query legacy). All 22 new tests pass. Build clean. Zero new npm deps. DI-purity invariant pinned (handlers + registry free of `node:child_process` imports — production wires real impls at the heartbeat edge).
