@@ -231,14 +231,14 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Depends on:** Phase 85 (MCP awareness foundation), Phase 90.1 (bot-direct fallback), Phase 92 (cutover-time verification — extends to steady-state)
 
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans complete
 - [x] 94-01: Capability probe primitive + per-server registry (TOOL-01, TOOL-02)
 - [x] 94-02: Dynamic tool advertising — system-prompt filter (TOOL-03)
 - [x] 94-03: Auto-recovery primitives — Playwright install, op:// refresh, subprocess restart (TOOL-04, 05, 06)
 - [x] 94-04: Honest ToolCallError schema + executor wrap (TOOL-07)
 - [x] 94-05: clawcode_fetch_discord_messages + clawcode_share_file auto-injected tools (TOOL-08, 09)
 - [x] 94-06: defaults.systemPromptDirectives + file-sharing default directive (TOOL-10)
-- [ ] 94-07: /clawcode-tools surface upgrade + cross-agent routing suggestions (TOOL-11, 12)
+- [x] 94-07: /clawcode-tools surface upgrade + cross-agent routing suggestions (TOOL-11, 12)
 
 **UI hint:** yes — /clawcode-tools embed gains capability probe column with status emoji + last-good timestamp + recovery suggestion. Cross-agent routing surfaces as ephemeral mention chips for healthy alternative agents.
 

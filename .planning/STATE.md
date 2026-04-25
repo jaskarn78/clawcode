@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 94-05-PLAN.md
-last_updated: "2026-04-25T05:58:56.109Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 94-07-PLAN.md (final plan in phase 94)
+last_updated: "2026-04-25T06:13:25.969Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -235,6 +235,8 @@ Recent decisions affecting current work:
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — Pre-rendered block in ContextSources (caller computes via resolver+renderer pair); assembler stays config-type-agnostic (no schema imports). Empty string short-circuits — stable prefix byte-identical to no-directives baseline (REG-ASSEMBLER-EMPTY-WHEN-DISABLED).
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — RELOADABLE classification: agents.*.systemPromptDirectives + defaults.systemPromptDirectives both reloadable at next-turn boundary (assembler reads via resolver each turn). No daemon restart for directive edits.
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-05 — clawcode_fetch_discord_messages + clawcode_share_file built-in tools auto-injected for every agent in session-config.ts toolDefinitionsStr; NO mcpServer attribution (Plan 94-02 capability filter sees them as built-in, never removes); 100-msg fetch clamp + 25MB share cap + allowedRoots security boundary + webhook→bot-direct fallback (Phase 90.1); failures wrap via 94-04 ToolCallError; DI-pure (no fs/discord.js imports in tool modules)
+- [Phase 94]: Daemon-side computation of cross-agent alternatives — IPC payload is single source of truth, both renderers consume the same enriched payload
+- [Phase 94]: Shared probe-renderer.ts module pattern — pure helpers (buildProbeRow / paginateRows / recoverySuggestionFor / STATUS_EMOJI) consumed by /clawcode-tools (Discord) AND clawcode mcp-status (CLI); cross-renderer parity test pins content equivalence
 
 ### v2.1 closing decisions (for reference)
 
@@ -348,9 +350,10 @@ Recent decisions affecting current work:
 | Phase 94 P03 | 23min | 2 tasks | 14 files |
 | Phase 94-tool-reliability-self-awareness P06 | 7min | 2 tasks | 8 files |
 | Phase 94-tool-reliability-self-awareness P05 | 6min | 2 tasks | 5 files |
+| Phase 94 P07 | 10min | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-05-PLAN.md
+Stopped at: Completed 94-07-PLAN.md (final plan in phase 94)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
