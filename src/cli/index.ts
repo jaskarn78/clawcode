@@ -54,6 +54,12 @@ import { registerMigrateOpenclawCommand } from "./commands/migrate-openclaw.js";
 import { registerSyncCommand } from "./commands/sync.js";
 import { registerCutoverCommand } from "./commands/cutover.js";
 import { registerDreamCommand } from "./commands/dream.js";
+// Phase 96 Plan 05 — filesystem-capability operator surfaces. Both invoke
+// the SAME daemon IPC primitives ('probe-fs' for clawcode probe-fs, and
+// 'list-fs-status' for clawcode fs-status) used by the Discord slash
+// /clawcode-probe-fs (single source of truth — Discord/CLI parity invariant).
+import { registerProbeFsCommand } from "./commands/probe-fs.js";
+import { registerFsStatusCommand } from "./commands/fs-status.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -189,6 +195,9 @@ registerMigrateOpenclawCommand(program);
 registerSyncCommand(program);
 registerCutoverCommand(program);
 registerDreamCommand(program);
+// Phase 96 Plan 05 — filesystem capability operator surfaces.
+registerProbeFsCommand(program);
+registerFsStatusCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,
