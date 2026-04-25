@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 94-04-PLAN.md
-last_updated: "2026-04-25T04:29:01.074Z"
+stopped_at: Completed 94-02-PLAN.md
+last_updated: "2026-04-25T05:08:34.266Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 7
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 94 (tool-reliability-self-awareness) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 
 ## Performance Metrics
 
@@ -223,6 +223,10 @@ Recent decisions affecting current work:
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — TurnDispatcher integration via new public method executeMcpTool (single-source-of-truth wrap site) rather than refactoring iterateUntilResult: production MCP tool calls flow through SDK driverIter inside persistent session handle, not through any direct dispatcher method; new method gives Plan 94-05 (auto-injected tools) a wrap-route they can hit directly + provides seam for future direct-MCP-call sites
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — Single-attempt-then-wrap (NO silent retry) inside dispatcher: recovery (Plan 94-03) is heartbeat-driven at the connection layer, NOT at the tool-execution layer; LLM sees structured failure and adapts naturally (asks user, switches to alternative agent) instead of silently retrying same bad call
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — mcpStateProvider DI is additive-optional on TurnDispatcherOptions (Phase 86/89 schema-extension blueprint reused): when absent, ToolCallError.alternatives is undefined; existing tests without the field continue to pass; daemon edge wires the provider once SessionManager construction is touched in a follow-up plan
+- [Phase 94]: Plan 94-02: 5min flap window + 3-transition threshold LOCKED at contract layer (FLAP_WINDOW_MS, FLAP_TRANSITION_THRESHOLD); pinned by static-grep. Lower threshold would block all recovery cycles.
+- [Phase 94]: Plan 94-02: Conservative default for unknown / missing capabilityProbe — filter OUT, NOT pass-through. First-boot agents see zero MCP servers in their LLM tool table for the first 60s window until the heartbeat populates probe state. Don't advertise unproven tools.
+- [Phase 94]: Plan 94-02: Single-source-of-truth filter call site at session-config.ts (NOT mcp-prompt-block.ts). Renderer stays pure; filter logic stays in one place. 4 inline static-grep regression tests pin the invariant.
+- [Phase 94]: Plan 94-02: Failed/degraded servers FILTERED OUT entirely from LLM table — no row, no verbatim error in the prompt. Replaces pre-94 contract that surfaced lastError.message into the prompt (was a phantom-error vector). Operator-truth flows through /clawcode-tools + clawcode mcp-status (Phase 85 Plan 03).
 
 ### v2.1 closing decisions (for reference)
 
@@ -332,9 +336,10 @@ Recent decisions affecting current work:
 | Phase 93 P03 | 25min | 2 tasks | 5 files |
 | Phase 94 P01 | 13min | 2 tasks | 15 files |
 | Phase 94-tool-reliability-self-awareness P04 | 17min | 2 tasks | 5 files |
+| Phase 94 P02 | 34min | 2 tasks | 13 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-04-PLAN.md
+Stopped at: Completed 94-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
