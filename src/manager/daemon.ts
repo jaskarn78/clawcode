@@ -4167,13 +4167,37 @@ async function routeMethod(
         throw new ManagerError("Discord bridge not available");
       }
 
-      // Resolve allowedRoots to the agent's workspace + memoryPath.
+      // Resolve allowedRoots to the agent's workspace + memoryPath + Phase 96
+      // D-05/D-06 fileAccess paths (operator-shared via ACL). Without
+      // fileAccess inclusion, share-file refused operator-shared paths even
+      // though the Phase 96 capability probe + clawcode_list_files honored
+      // them — surfaced as deploy bug 2026-04-25 when fin-acquisition tried
+      // to share /home/jjagpal/.openclaw/workspace-finmentum/research/*.pdf
+      // and got "outside the agent workspace; refused" despite the path
+      // being in the resolved fileAccess set.
       const allowedRoots: string[] = [];
       if (agentConfig.workspace) allowedRoots.push(agentConfig.workspace);
       if (agentConfig.memoryPath) allowedRoots.push(agentConfig.memoryPath);
+      // Phase 96.1 hotfix — extend allowedRoots with resolved fileAccess.
+      // resolveFileAccess merges defaults.fileAccess + agent.fileAccess and
+      // expands the {agent} token. Defaults are always populated by zod
+      // default ([/home/clawcode/.clawcode/agents/{agent}/]).
+      const { resolveFileAccess: resolveFileAccessForShare } = await import(
+        "../config/loader.js"
+      );
+      const fileAccessPaths = resolveFileAccessForShare(
+        agentName,
+        agentConfig as unknown as { readonly fileAccess?: readonly string[] },
+        config.defaults as unknown as {
+          readonly fileAccess?: readonly string[];
+        },
+      );
+      for (const p of fileAccessPaths) {
+        if (!allowedRoots.includes(p)) allowedRoots.push(p);
+      }
       if (allowedRoots.length === 0) {
         throw new ManagerError(
-          `Agent '${agentName}' has no workspace or memoryPath configured`,
+          `Agent '${agentName}' has no workspace, memoryPath, or fileAccess configured`,
         );
       }
 
