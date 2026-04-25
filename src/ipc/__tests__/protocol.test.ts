@@ -34,6 +34,8 @@ describe("IPC_METHODS", () => {
       // Phase 94 Plan 05 TOOL-08 / TOOL-09 — built-in Discord helpers
       "fetch-discord-messages",
       "share-file",
+      // Phase 91 Plan 05 SYNC-08 — sync snapshot
+      "list-sync-status",
       // Messaging
       "send-message",
       "send-to-agent",
@@ -114,6 +116,13 @@ describe("IPC_METHODS", () => {
       "search-tool-call",
       // Image generation MCP (Phase 72)
       "image-tool-call",
+      // Phase 92 Plan 04 / Plan 06 — destructive cutover IPC surface
+      "cutover-verify-summary",
+      "cutover-button-action",
+      "cutover-verify",
+      "cutover-rollback",
+      // Phase 95 Plan 03 DREAM-07 — operator-driven dream-pass trigger
+      "run-dream-pass",
     ]);
   });
 });
