@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 94-02-PLAN.md
-last_updated: "2026-04-25T05:08:34.266Z"
+stopped_at: Completed 94-03-PLAN.md
+last_updated: "2026-04-25T05:36:12.308Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 7
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 94 (tool-reliability-self-awareness) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 
 ## Performance Metrics
 
@@ -227,6 +227,9 @@ Recent decisions affecting current work:
 - [Phase 94]: Plan 94-02: Conservative default for unknown / missing capabilityProbe — filter OUT, NOT pass-through. First-boot agents see zero MCP servers in their LLM tool table for the first 60s window until the heartbeat populates probe state. Don't advertise unproven tools.
 - [Phase 94]: Plan 94-02: Single-source-of-truth filter call site at session-config.ts (NOT mcp-prompt-block.ts). Renderer stays pure; filter logic stays in one place. 4 inline static-grep regression tests pin the invariant.
 - [Phase 94]: Plan 94-02: Failed/degraded servers FILTERED OUT entirely from LLM table — no row, no verbatim error in the prompt. Replaces pre-94 contract that surfaced lastError.message into the prompt (was a phantom-error vector). Operator-truth flows through /clawcode-tools + clawcode mcp-status (Phase 85 Plan 03).
+- [Phase 94]: DI-purity over convenience: handlers + registry have ZERO node:child_process imports. Production wires real execFile/killSubprocess/adminAlert/opRead at heartbeat-tick edge in buildRecoveryDepsForHeartbeat (Phase 91 sync-runner pattern). Static-grep pin verifies on every commit.
+- [Phase 94]: Bounded budget at the registry, not the handler. Per-server budget is global across all 3 handlers — Playwright fails 2x + op:// fails 1x means total budget exhausted. Operational intent: 'this server has been hammering recovery; back off'.
+- [Phase 94]: 3rd-failure admin-clawdy alert counts give-up + retry-later as failures; not-applicable + recovered are not failures (no budget burn for not-applicable; recovered means system healed itself).
 
 ### v2.1 closing decisions (for reference)
 
@@ -337,9 +340,10 @@ Recent decisions affecting current work:
 | Phase 94 P01 | 13min | 2 tasks | 15 files |
 | Phase 94-tool-reliability-self-awareness P04 | 17min | 2 tasks | 5 files |
 | Phase 94 P02 | 34min | 2 tasks | 13 files |
+| Phase 94 P03 | 23min | 2 tasks | 14 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-02-PLAN.md
+Stopped at: Completed 94-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
