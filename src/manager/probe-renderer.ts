@@ -30,7 +30,7 @@
  * update both places (the duplication is small and explicit).
  */
 
-import { formatDistanceToNow } from "date-fns";
+import { formatDistance } from "date-fns";
 import type { CapabilityProbeStatus } from "../mcp/readiness.js";
 
 /**
@@ -148,16 +148,21 @@ export function buildProbeRow(
   let lastSuccessRelative: string | null = null;
   if (lastSuccessIso) {
     const d = new Date(lastSuccessIso);
-    if (!Number.isNaN(d.getTime())) {
-      lastSuccessRelative = formatDistanceToNow(d, { addSuffix: true, now });
+    const ts = d.getTime();
+    if (!Number.isNaN(ts)) {
+      // date-fns formatDistance(date, baseDate) — pure, takes both dates
+      // explicitly so the renderer is deterministic for tests using a
+      // synthetic `now`. Avoid formatDistanceToNow which reads the
+      // system clock.
+      lastSuccessRelative = formatDistance(d, now, { addSuffix: true });
     }
   }
   const recoverySuggestion =
     status === "ready" ? null : recoverySuggestionFor(probe?.error);
-  const altsForRender =
+  const altsForRender: readonly string[] =
     status !== "ready" && alternatives.length > 0
-      ? Object.freeze([...alternatives])
-      : Object.freeze<string>([]);
+      ? Object.freeze<string[]>([...alternatives])
+      : Object.freeze<string[]>([]);
 
   return Object.freeze({
     serverName,
@@ -183,11 +188,17 @@ export function paginateRows(
   rows: readonly ProbeRowOutput[],
   pageSize: number,
 ): readonly (readonly ProbeRowOutput[])[] {
-  if (rows.length === 0) return Object.freeze([Object.freeze<ProbeRowOutput>([])]);
+  if (rows.length === 0) {
+    const emptyPage: readonly ProbeRowOutput[] = Object.freeze<ProbeRowOutput[]>([]);
+    return Object.freeze([emptyPage]);
+  }
   const pages: ProbeRowOutput[][] = [];
   const size = Math.max(1, pageSize);
   for (let i = 0; i < rows.length; i += size) {
     pages.push(rows.slice(i, i + size));
   }
-  return Object.freeze(pages.map((p) => Object.freeze(p)));
+  const frozenPages: (readonly ProbeRowOutput[])[] = pages.map((p) =>
+    Object.freeze<ProbeRowOutput[]>(p),
+  );
+  return Object.freeze(frozenPages);
 }

@@ -30,6 +30,14 @@ import { sendIpcRequest } from "../../ipc/client.js";
 import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
 import { cliLog, cliError } from "../output.js";
+// Phase 94 Plan 07 — shared pure renderer with /clawcode-tools (Discord).
+// Cross-renderer parity test pins content equivalence against the embed.
+import {
+  buildProbeRow,
+  STATUS_EMOJI,
+  type ProbeRowOutput,
+  type ProbeRowState,
+} from "../../manager/probe-renderer.js";
 
 /**
  * Shape of a single server entry returned by the `list-mcp-status` IPC
@@ -56,6 +64,12 @@ export type McpStatusServer = {
   readonly optional: boolean;
   readonly lastError: string | null;
   readonly capabilityProbe?: CapabilityProbeSnapshot;
+  /**
+   * Phase 94 Plan 07 D-07 / TOOL-12 — cross-agent alternatives for non-
+   * ready servers; populated daemon-side via findAlternativeAgents (94-04).
+   * The renderer suppresses the line for ready servers itself.
+   */
+  readonly alternatives?: ReadonlyArray<string>;
 };
 
 export type McpStatusResponse = {
@@ -110,15 +124,30 @@ export function formatMcpStatusTable(
     readonly capability: string;
   };
 
-  const rows: readonly Row[] = resp.servers.map((s) => ({
-    agent: resp.agent,
-    server: s.optional ? `${s.name} (opt)` : s.name,
-    status: s.status,
-    lastSuccess: formatRelative(s.lastSuccessAt, now),
-    failures: String(s.failureCount),
-    lastError: s.lastError ?? "",
-    capability: s.capabilityProbe?.status ?? "unknown",
-  }));
+  // Phase 94 Plan 07 — capability column is now emoji + status text. Built
+  // via the shared probe-renderer.ts helper so the CLI and the Discord
+  // /clawcode-tools embed produce identical content for the same payload.
+  const nowDate = new Date(now);
+  const probeRows: readonly ProbeRowOutput[] = resp.servers.map((s) => {
+    const stateLike: ProbeRowState = { capabilityProbe: s.capabilityProbe };
+    return buildProbeRow(s.name, stateLike, s.alternatives ?? [], nowDate);
+  });
+
+  const rows: readonly Row[] = resp.servers.map((s, i) => {
+    const probe = probeRows[i]!;
+    return {
+      agent: resp.agent,
+      server: s.optional ? `${s.name} (opt)` : s.name,
+      status: s.status,
+      lastSuccess: formatRelative(s.lastSuccessAt, now),
+      failures: String(s.failureCount),
+      lastError: s.lastError ?? "",
+      // CLI parity with Discord embed — emoji + status string. The
+      // shared renderer is the single source of truth for the emoji map
+      // (STATUS_EMOJI in probe-renderer.ts).
+      capability: `${probe.statusEmoji} ${probe.status}`,
+    };
+  });
 
   const widths = {
     agent: Math.max("AGENT".length, ...rows.map((r) => r.agent.length)),
@@ -172,7 +201,43 @@ export function formatMcpStatusTable(
     ].join("  "),
   );
 
-  return [header, separator, ...body].join("\n");
+  // Phase 94 Plan 07 — capability-probe detail block. For each server with
+  // an actionable probe state (degraded / failed / reconnecting AND a
+  // recovery hint, last-good timestamp, or cross-agent alternative),
+  // surface the detail lines below the table. Mirrors the Discord
+  // embed's per-row probe detail. Ready servers + bare "unknown"
+  // (probe-not-yet-run) rows stay compact — no noise lines.
+  const detailBlocks: string[] = [];
+  for (let i = 0; i < probeRows.length; i++) {
+    const row = probeRows[i]!;
+    const hasContent =
+      row.lastSuccessIso !== null ||
+      row.recoverySuggestion !== null ||
+      row.alternatives.length > 0;
+    if (!hasContent) continue;
+    const lines: string[] = [];
+    lines.push(`  ${row.serverName}: ${row.statusEmoji} ${row.status}`);
+    if (row.lastSuccessIso) {
+      lines.push(
+        `    last good: ${row.lastSuccessIso}${row.lastSuccessRelative ? ` (${row.lastSuccessRelative})` : ""}`,
+      );
+    }
+    if (row.recoverySuggestion) {
+      lines.push(`    ${row.recoverySuggestion}`);
+    }
+    if (row.alternatives.length > 0) {
+      lines.push(`    Healthy alternatives: ${row.alternatives.join(", ")}`);
+    }
+    if (lines.length > 1) {
+      detailBlocks.push(lines.join("\n"));
+    }
+  }
+
+  const tableLines = [header, separator, ...body];
+  if (detailBlocks.length > 0) {
+    return [...tableLines, "", "Capability Probe Details:", ...detailBlocks].join("\n");
+  }
+  return tableLines.join("\n");
 }
 
 /**

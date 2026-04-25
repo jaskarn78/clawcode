@@ -163,6 +163,232 @@ describe("formatMcpStatusTable", () => {
   });
 });
 
+// ----------------------------------------------------------------------
+// Phase 94 Plan 07 — capability-probe column tests + cross-renderer parity
+// ----------------------------------------------------------------------
+
+describe("Phase 94 Plan 07 — formatMcpStatusTable capability probe column", () => {
+  it("CLI-CAP-EMOJI — surfaces all 5 capability-probe status emojis (✅ 🟡 ⏳ 🔴 ⚪) when the IPC payload carries one of each", () => {
+    const now = Date.now();
+    const lastGoodIso = new Date(now - 60_000).toISOString();
+    const out = formatMcpStatusTable(
+      {
+        agent: "clawdy",
+        servers: [
+          {
+            name: "ready-srv",
+            status: "ready",
+            lastSuccessAt: now,
+            lastFailureAt: null,
+            failureCount: 0,
+            optional: false,
+            lastError: null,
+            capabilityProbe: { lastRunAt: new Date(now).toISOString(), status: "ready", lastSuccessAt: lastGoodIso },
+          },
+          {
+            name: "degraded-srv",
+            status: "degraded",
+            lastSuccessAt: now - 60_000,
+            lastFailureAt: now - 1_000,
+            failureCount: 1,
+            optional: false,
+            lastError: "rpc timeout",
+            capabilityProbe: { lastRunAt: new Date(now).toISOString(), status: "degraded", error: "rpc timeout", lastSuccessAt: lastGoodIso },
+          },
+          {
+            name: "reconn-srv",
+            status: "reconnecting",
+            lastSuccessAt: null,
+            lastFailureAt: now,
+            failureCount: 2,
+            optional: false,
+            lastError: "transient",
+            capabilityProbe: { lastRunAt: new Date(now).toISOString(), status: "reconnecting", error: "transient" },
+          },
+          {
+            name: "failed-srv",
+            status: "failed",
+            lastSuccessAt: null,
+            lastFailureAt: now,
+            failureCount: 5,
+            optional: false,
+            lastError: "process down",
+            capabilityProbe: { lastRunAt: new Date(now).toISOString(), status: "failed", error: "process down" },
+          },
+          {
+            name: "unknown-srv",
+            status: "ready",
+            lastSuccessAt: now,
+            lastFailureAt: null,
+            failureCount: 0,
+            optional: false,
+            lastError: null,
+            // capabilityProbe omitted → unknown emoji ⚪
+          },
+        ],
+      },
+      now,
+    );
+    // Each emoji must appear in the rendered table.
+    expect(out).toContain("\u2705"); // ✅ ready
+    expect(out).toContain("\u{1F7E1}"); // 🟡 degraded
+    expect(out).toContain("\u23F3"); // ⏳ reconnecting
+    expect(out).toContain("\u{1F534}"); // 🔴 failed
+    expect(out).toContain("\u26AA"); // ⚪ unknown
+  });
+
+  it("renders 'Healthy alternatives:' line for a degraded server with cross-agent alternatives + the recovery suggestion for the Playwright pattern", () => {
+    const now = Date.now();
+    const out = formatMcpStatusTable(
+      {
+        agent: "fin-tax",
+        servers: [
+          {
+            name: "browser",
+            status: "degraded",
+            lastSuccessAt: now - 60_000,
+            lastFailureAt: now - 1_000,
+            failureCount: 1,
+            optional: false,
+            lastError: "Executable doesn't exist at /home/clawcode/.cache/ms-playwright/chromium-1187/chrome-linux/chrome",
+            capabilityProbe: {
+              lastRunAt: new Date(now).toISOString(),
+              status: "degraded",
+              error: "Executable doesn't exist at /home/clawcode/.cache/ms-playwright/chromium-1187/chrome-linux/chrome",
+              lastSuccessAt: new Date(now - 3_600_000).toISOString(),
+            },
+            alternatives: ["fin-acquisition", "general"],
+          },
+        ],
+      },
+      now,
+    );
+    expect(out).toContain("Healthy alternatives:");
+    expect(out).toContain("fin-acquisition");
+    expect(out).toContain("general");
+    expect(out).toContain("auto-recovery: npx playwright install chromium");
+  });
+
+  it("does NOT render the alternatives line for a ready server even when the IPC payload carries them", () => {
+    const now = Date.now();
+    const out = formatMcpStatusTable(
+      {
+        agent: "clawdy",
+        servers: [
+          {
+            name: "browser",
+            status: "ready",
+            lastSuccessAt: now - 5_000,
+            lastFailureAt: null,
+            failureCount: 0,
+            optional: false,
+            lastError: null,
+            capabilityProbe: {
+              lastRunAt: new Date(now).toISOString(),
+              status: "ready",
+              lastSuccessAt: new Date(now - 5_000).toISOString(),
+            },
+            alternatives: ["fin-acquisition", "general"],
+          },
+        ],
+      },
+      now,
+    );
+    expect(out).not.toContain("Healthy alternatives");
+  });
+});
+
+describe("Phase 94 Plan 07 — REG-SINGLE-DATA-SOURCE static-grep regression", () => {
+  it("/clawcode-tools and mcp-status both read only from list-mcp-status IPC (no second cache or jsonl source)", async () => {
+    const fs = await import("node:fs");
+    const slashContent = fs.readFileSync("src/discord/slash-commands.ts", "utf8");
+    const cliContent = fs.readFileSync("src/cli/commands/mcp-status.ts", "utf8");
+    // Both must reference the IPC method.
+    expect(slashContent).toMatch(/["']list-mcp-status["']/);
+    expect(cliContent).toMatch(/["']list-mcp-status["']/);
+    // Neither must read mcp-probe-state.jsonl directly (post-incident
+    // analysis ledger is NOT a real-time UI source).
+    expect(slashContent).not.toContain("mcp-probe-state.jsonl");
+    expect(cliContent).not.toContain("mcp-probe-state.jsonl");
+  });
+});
+
+describe("Phase 94 Plan 07 — CLI-EMBED-PARITY cross-renderer content equivalence", () => {
+  it("CLI text output and Discord buildProbeRow output share the same per-server content (server name, status, last-good ISO, alternatives) for the same snapshot", async () => {
+    const now = Date.now();
+    const nowDate = new Date(now);
+    const lastGoodIso = new Date(now - 30_000).toISOString();
+    const snapshot: McpStatusResponse = {
+      agent: "clawdy",
+      servers: [
+        {
+          name: "browser",
+          status: "degraded",
+          lastSuccessAt: now - 30_000,
+          lastFailureAt: now - 1_000,
+          failureCount: 2,
+          optional: false,
+          lastError: "rpc timeout",
+          capabilityProbe: {
+            lastRunAt: new Date(now).toISOString(),
+            status: "degraded",
+            error: "rpc timeout",
+            lastSuccessAt: lastGoodIso,
+          },
+          alternatives: ["fin-acquisition"],
+        },
+        {
+          name: "1password",
+          status: "ready",
+          lastSuccessAt: now - 5_000,
+          lastFailureAt: null,
+          failureCount: 0,
+          optional: false,
+          lastError: null,
+          capabilityProbe: {
+            lastRunAt: new Date(now).toISOString(),
+            status: "ready",
+            lastSuccessAt: new Date(now - 5_000).toISOString(),
+          },
+          alternatives: [],
+        },
+      ],
+    };
+    const cliOut = formatMcpStatusTable(snapshot, now);
+
+    // Render the embed-side via the same shared helper the slash uses.
+    const { buildProbeRow } = await import("../../../manager/probe-renderer.js");
+    const embedRows = snapshot.servers.map((s) =>
+      buildProbeRow(
+        s.name,
+        { capabilityProbe: s.capabilityProbe },
+        s.alternatives ?? [],
+        nowDate,
+      ),
+    );
+
+    // Per-server content equivalence: every meaningful field a row carries
+    // should also appear in the CLI output.
+    for (const row of embedRows) {
+      // Server name.
+      expect(cliOut).toContain(row.serverName);
+      // Status text.
+      expect(cliOut).toContain(row.status);
+      // Status emoji parity.
+      expect(cliOut).toContain(row.statusEmoji);
+      // Last-good ISO appears only for non-ready (gates the detail block) but
+      // the CLI table also surfaces ISO via the detail block when present.
+      if (row.lastSuccessIso && row.status !== "ready") {
+        expect(cliOut).toContain(row.lastSuccessIso);
+      }
+      // Alternatives only surface for non-ready servers.
+      for (const alt of row.alternatives) {
+        expect(cliOut).toContain(alt);
+      }
+    }
+  });
+});
+
 describe("registerMcpStatusCommand", () => {
   let program: Command;
 
