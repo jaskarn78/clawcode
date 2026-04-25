@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 92-04-PLAN.md
-last_updated: "2026-04-25T00:26:28.228Z"
+stopped_at: Completed 93-01-PLAN.md
+last_updated: "2026-04-25T00:29:41.798Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 9
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -199,6 +199,8 @@ Recent decisions affecting current work:
 - [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: secret-scan ordering pin (A2 test) — scanSkillForSecrets called BEFORE runRsync for missing-skill; refusal terminal-short-circuits the entire applier (operator must move secrets before re-running)
 - [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: dry-run is the DEFAULT at the wrapper layer (apply: false → no writes, no ledger). --apply opt-in per D-07 three-tier safety; preChangeSnapshot field reserved for D-10 destructive reversibility (Plan 92-04 populates)
 - [Phase 92]: Plan 92-04: customId namespace 'cutover-' reserved (D2 collision regression pins 9 existing prefixes); preChangeSnapshot capture order fixed (read→gz+b64→rsync→ledger); 64KB threshold; non-file destructive kinds emit audit-only ledger rows per D-06 propose-and-confirm
+- [Phase 93]: Plan 93-01 — pure renderStatus(buildStatusData) module shipped: 9-line OpenClaw-parity output with unknown/n/a placeholders for ClawCode-only gaps; Pitfall 6 closure via tryRead-wrapped accessors at the StatusData boundary; date-fns/formatDistanceToNow reused (zero new deps).
+- [Phase 93]: Plan 93-01 — Existing slash-commands-status-effort.test.ts 'Failed to read status' assertion was rewritten as the Pitfall 6 closure pin; the new contract is defensive-read collapses to 'Think: unknown' / 'Permissions: unknown' placeholders, never the legacy error path.
 
 ### v2.1 closing decisions (for reference)
 
@@ -301,9 +303,10 @@ Recent decisions affecting current work:
 | Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier P02 | 6m | 2 (TDD) tasks | 8 files files |
 | Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier P03 | 9m | 2 tasks | 5 files |
 | Phase 92 P04 | 12 | 2 tasks | 11 files |
+| Phase 93-status-detail-parity-clawhub-public-catalog-defaults-plugin-manifest-url-resilience P01 | 33m 40s | 2 tasks tasks | 5 files files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 92-04-PLAN.md
+Stopped at: Completed 93-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

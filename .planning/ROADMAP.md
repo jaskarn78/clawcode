@@ -236,8 +236,8 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 
 **Depends on:** Phase 92 (logical ordering only — no shared code surfaces)
 
-**Plans:** 3 plans (decomposed via /gsd:plan-phase 93 on 2026-04-24)
-- [ ] 93-01-PLAN.md — Pure status-render module + /clawcode-status daemon short-circuit rewire — Wave 1
+**Plans:** 1/3 plans executed
+- [x] 93-01-PLAN.md — Pure status-render module + /clawcode-status daemon short-circuit rewire — Wave 1
 - [ ] 93-02-PLAN.md — loadMarketplaceCatalog auto-inject + /clawcode-skills-browse divider — Wave 1
 - [ ] 93-03-PLAN.md — ClawhubManifestNotFoundError + manifest-unavailable outcome + Discord copy — Wave 1
 
