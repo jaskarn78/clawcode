@@ -30,6 +30,16 @@
 import { formatDistanceToNow } from "date-fns";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+// Phase 96 Plan 05 D-04 — single-source-of-truth filesystem capability
+// renderer. The same pure renderer used to assemble the system-prompt
+// <filesystem_capability> block (Phase 96 Plan 02) is reused here for
+// operator-facing /clawcode-status output, ensuring LLM-visible truth and
+// operator-visible truth never drift.
+import {
+  renderFilesystemCapabilityBlock,
+  type FlapHistoryEntry,
+} from "../prompt/filesystem-capability-block.js";
+import type { FsCapabilitySnapshot } from "../manager/persistent-session-handle.js";
 
 /**
  * Snapshot of all values needed to render the status block. Frozen at
@@ -211,4 +221,85 @@ export function renderStatus(data: StatusData): string {
     optionsLine,
     activationLine,
   ].join("\n");
+}
+
+/**
+ * Phase 96 Plan 05 D-04 — render the filesystem capability section for
+ * /clawcode-status (operator inspection surface).
+ *
+ * REUSES `renderFilesystemCapabilityBlock` from Phase 96 Plan 02 — single
+ * source of truth between the LLM system-prompt block AND the operator's
+ * /clawcode-status inspection. A separate render path would drift over
+ * time; sharing the same renderer guarantees what the operator sees IS
+ * what the LLM sees (modulo the operator-friendly diagnostic suffix below
+ * which is appended OUTSIDE the LLM-visible XML block).
+ *
+ * Operator-friendly diagnostic suffix:
+ *   When the snapshot has degraded entries, append a "Degraded paths
+ *   (operator diagnostic)" section listing each degraded path with its
+ *   lastProbeAt timestamp + verbatim error. Operators inspect via
+ *   /clawcode-status to see EVERYTHING (including paths the LLM is
+ *   intentionally NOT shown — degraded/unknown/sticky). Phase 96 D-04
+ *   spec — "operator inspects via /clawcode-status".
+ *
+ * Status emoji LOCKED ✓/⚠ matches the renderProbeFsEmbed convention.
+ *
+ * @param snapshot           ReadonlyMap<canonicalPath, FsCapabilitySnapshot>
+ *                           keyed by canonical absPath (from
+ *                           SessionHandle.getFsCapabilitySnapshot()).
+ * @param agentWorkspaceRoot Canonical absPath of this agent's workspace
+ *                           (e.g. /home/clawcode/.clawcode/agents/{agent}).
+ * @param flapHistory        Optional flap-stability tracker (Phase 94/96
+ *                           5-min sticky-degraded window).
+ * @returns Formatted markdown string. Empty string when snapshot is empty
+ *          AND no degraded entries — preserves stable-prefix invariant.
+ */
+export function renderCapabilityBlock(
+  snapshot: ReadonlyMap<string, FsCapabilitySnapshot>,
+  agentWorkspaceRoot: string,
+  flapHistory?: Map<string, FlapHistoryEntry>,
+): string {
+  // Single-source-of-truth: reuse the pure renderer from 96-02. The output
+  // is the SAME XML-tagged block injected into the LLM system prompt.
+  const block = renderFilesystemCapabilityBlock(
+    snapshot,
+    agentWorkspaceRoot,
+    flapHistory !== undefined ? { flapHistory } : undefined,
+  );
+
+  // Operator-friendly diagnostic suffix — degraded entries with lastProbeAt
+  // freshness signal. CRITICAL invariant: lastProbeAt MUST appear so
+  // operators see freshness. Pinned by static-grep on "lastProbeAt" in
+  // status-render.ts (96-05 acceptance criteria).
+  const degraded: string[] = [];
+  for (const [path, state] of snapshot) {
+    if (state.status === "degraded") {
+      const errSuffix = state.error ? `, error: ${state.error}` : "";
+      degraded.push(
+        `- ⚠ ${path} (lastProbeAt: ${state.lastProbeAt}${errSuffix})`,
+      );
+    }
+  }
+
+  if (block.length === 0 && degraded.length === 0) {
+    // Nothing advertisable AND nothing degraded — empty string preserves
+    // /clawcode-status invariant for v2.5 fixtures without fileAccess.
+    return "";
+  }
+
+  if (degraded.length === 0) {
+    return block;
+  }
+
+  const diagnosticSection = [
+    "",
+    "## Degraded paths (operator diagnostic)",
+    ...degraded,
+  ].join("\n");
+
+  // When the LLM-visible block is empty (all entries degraded/sticky) we
+  // still surface the diagnostic for the operator. The block + diagnostic
+  // join honors the W-4 invariant from 96-02: an empty `block` does NOT
+  // produce a stub header.
+  return block.length === 0 ? diagnosticSection.trim() : `${block}${diagnosticSection}`;
 }

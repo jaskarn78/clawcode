@@ -381,4 +381,31 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       },
     ],
   },
+  // Phase 96 Plan 05 PFS- / UI-01 — operator-driven on-demand filesystem
+  // capability re-probe. Admin-only ephemeral; the inline-short-circuit
+  // handler in slash-commands.ts checks isAdminClawdyInteraction BEFORE
+  // routing through ipcMethod "probe-fs" so non-admins get an instant
+  // "Admin-only command" reply (zero IPC + zero LLM turn cost). Renders
+  // FsProbeOutcome via renderProbeFsEmbed (paths probed, ready/degraded
+  // counts, top 3 changes since last probe). 11th application of the
+  // inline-short-circuit pattern (after Phases 85/86/87/88/90/91/92/95).
+  // D-03 refresh trigger: operator runs after ACL/group/systemd change
+  // to force re-probe BEFORE asking user to retry — eliminates the 60s
+  // heartbeat-stale window per RESEARCH.md Pitfall 7.
+  {
+    name: "clawcode-probe-fs",
+    description:
+      "Force re-probe of an agent's filesystem capability (admin-only)",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "probe-fs",
+    options: [
+      {
+        name: "agent",
+        type: 3,
+        description: "Agent name to re-probe",
+        required: true,
+      },
+    ],
+  },
 ] as const;

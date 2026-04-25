@@ -730,6 +730,140 @@ export function renderDreamEmbed(
   return embed;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 96 Plan 05 PFS- — /clawcode-probe-fs helpers (FsProbeOutcome embed
+// renderer). 11th application of the inline-handler-short-circuit pattern.
+// Pure exported function so the slash-commands tests exercise it without
+// spinning up the full SlashCommandHandler.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire shape of a single FsCapabilitySnapshot entry returned by the daemon's
+ * `probe-fs` IPC handler. Mirrors src/manager/persistent-session-handle.ts
+ * FsCapabilitySnapshot but re-declared here so this module doesn't reach into
+ * the manager's type graph (decoupling discipline).
+ */
+type FsCapabilitySnapshotWire = {
+  readonly status: "ready" | "degraded" | "unknown";
+  readonly mode: "rw" | "ro" | "denied";
+  readonly lastProbeAt: string;
+  readonly lastSuccessAt?: string;
+  readonly error?: string;
+};
+
+/**
+ * Wire shape of FsProbeOutcome (mirror of src/manager/fs-probe.ts). The
+ * snapshot is JSON-serialized as an array of [path, state] tuples (Maps don't
+ * round-trip through JSON-RPC). Optional `changes` field populated by the
+ * daemon when the operator passes a previous snapshot for diff rendering.
+ */
+type FsProbeOutcomeWire =
+  | {
+      readonly kind: "completed";
+      readonly snapshot: ReadonlyArray<readonly [string, FsCapabilitySnapshotWire]>;
+      readonly durationMs: number;
+      readonly changes?: ReadonlyArray<{
+        readonly path: string;
+        readonly from: string;
+        readonly to: string;
+      }>;
+    }
+  | { readonly kind: "failed"; readonly error: string };
+
+/**
+ * Phase 96 Plan 05 PFS- — themed filesystem-capability probe embed.
+ *
+ * Color palette mirrors the conflict-color literals used by other slash
+ * embeds (sync-status / dream):
+ *   completed (all ready):     0x2ecc71 (green)
+ *   completed (some degraded): 0xf1c40f (yellow)
+ *   failed:                    0xe74c3c (red)
+ *
+ * D-03 spec — three fields:
+ *   1. "Probed paths" — comma-list of canonical paths
+ *   2. "Ready / Degraded" — count summary (e.g. "2 ready / 1 degraded")
+ *   3. (optional) "Changes since last probe" — top 3 transitions
+ *
+ * Status emoji LOCKED per CRITICAL invariant:
+ *   ✓ ready · ⚠ degraded · ? unknown
+ * (Phase 96 uses simpler ✓/⚠ vs Phase 85 plan 03's ✅/❌ — filesystem has
+ * no failed/reconnecting analog so the simpler palette suffices.)
+ */
+export function renderProbeFsEmbed(
+  agent: string,
+  outcome: FsProbeOutcomeWire,
+): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setTitle(`Filesystem capability — ${agent}`)
+    .setTimestamp();
+
+  if (outcome.kind === "failed") {
+    embed.setColor(0xe74c3c);
+    embed.addFields({
+      name: "Error",
+      value: outcome.error,
+      inline: false,
+    });
+    return embed;
+  }
+
+  // outcome.kind === "completed"
+  const entries = outcome.snapshot;
+  const readyCount = entries.filter(([, s]) => s.status === "ready").length;
+  const degradedCount = entries.filter(
+    ([, s]) => s.status === "degraded",
+  ).length;
+  const unknownCount = entries.filter(
+    ([, s]) => s.status === "unknown",
+  ).length;
+
+  embed.setColor(degradedCount > 0 ? 0xf1c40f : 0x2ecc71);
+
+  // Field 1 — paths probed (truncate to 1024 char Discord field cap if huge)
+  const pathLines = entries.map(([path, state]) => {
+    const emoji =
+      state.status === "ready" ? "✓" : state.status === "degraded" ? "⚠" : "?";
+    return `${emoji} ${path}`;
+  });
+  const pathsValue =
+    pathLines.length > 0 ? pathLines.join("\n").slice(0, 1024) : "(none)";
+  embed.addFields({
+    name: "Probed paths",
+    value: pathsValue,
+    inline: false,
+  });
+
+  // Field 2 — counts summary
+  const countParts: string[] = [];
+  countParts.push(`${readyCount} ready`);
+  if (degradedCount > 0) countParts.push(`${degradedCount} degraded`);
+  if (unknownCount > 0) countParts.push(`${unknownCount} unknown`);
+  embed.addFields({
+    name: "Ready / Degraded",
+    value: countParts.join(" / "),
+    inline: false,
+  });
+
+  // Field 3 (optional) — Changes since last probe (top 3 transitions)
+  if (outcome.changes && outcome.changes.length > 0) {
+    const changeLines = outcome.changes
+      .slice(0, 3)
+      .map((c) => `${c.path}: ${c.from} → ${c.to}`);
+    embed.addFields({
+      name: "Changes since last probe",
+      value: changeLines.join("\n").slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  // Field 4 (footer info) — duration probed in
+  embed.setFooter({
+    text: `Probed in ${outcome.durationMs}ms`,
+  });
+
+  return embed;
+}
+
 /**
  * Handles Discord slash command registration and interaction dispatch.
  *
@@ -1105,6 +1239,21 @@ export class SlashCommandHandler {
     // EmbedBuilder render via the pure renderDreamEmbed helper (above).
     if (commandName === "clawcode-dream") {
       await this.handleDreamCommand(interaction);
+      return;
+    }
+
+    // Phase 96 Plan 05 PFS- / UI-01 — /clawcode-probe-fs inline handler.
+    // 11th application of the inline-handler-short-circuit-before-
+    // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95). Admin-only
+    // ephemeral: gates BEFORE deferReply so non-admins never see the IPC
+    // call land. Routes through the daemon's `probe-fs` IPC method
+    // (Plan 96-05 daemon edge wires runFsProbe → writeFsSnapshot →
+    // setFsCapabilitySnapshot). EmbedBuilder render via the pure
+    // renderProbeFsEmbed helper (above). D-03 refresh trigger: operator
+    // forces re-probe immediately after ACL/group/systemd change to
+    // eliminate the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
+    if (commandName === "clawcode-probe-fs") {
+      await this.handleProbeFsCommand(interaction);
       return;
     }
 
@@ -1591,6 +1740,91 @@ export class SlashCommandHandler {
       this.log.error(
         { command: "clawcode-dream", error: (error as Error).message },
         "failed to send dream embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 96 Plan 05 PFS- / UI-01 — handle /clawcode-probe-fs.
+   *
+   * Admin-only ephemeral. Gates on isAdminClawdyInteraction BEFORE deferring
+   * the reply so non-admins receive an instant "Admin-only command" reply
+   * (zero IPC + zero LLM turn cost — mirrors handleDreamCommand). Admin
+   * invocations defer ephemerally, dispatch through the daemon's `probe-fs`
+   * IPC method (which invokes runFsProbe → writeFsSnapshot →
+   * setFsCapabilitySnapshot at the daemon edge), and render the
+   * FsProbeOutcome via the pure renderProbeFsEmbed helper.
+   *
+   * D-03 refresh trigger: operator runs `/clawcode-probe-fs <agent>` after
+   * ACL/group/systemd change to force re-probe BEFORE asking user to retry.
+   * Eliminates the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
+   *
+   * D-04 silent: After probe completes, NO Discord broadcast post. Operator
+   * inspects via this slash response only (ephemeral) or `clawcode fs-status`
+   * CLI. Capability change reflects in next turn's stable-prefix re-render.
+   *
+   * Discord/CLI parity invariant: Both this slash and `clawcode probe-fs`
+   * CLI invoke the SAME daemon IPC primitive ("probe-fs") which routes
+   * through runFsProbe (96-01); identical FsProbeOutcome rendered to both
+   * surfaces (RESEARCH.md Validation Architecture Dim 6).
+   */
+  private async handleProbeFsCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    // Admin gate FIRST — no IPC, no defer for non-admins.
+    if (!isAdminClawdyInteraction(interaction, this.adminUserIds)) {
+      try {
+        await interaction.reply({
+          content: "Admin-only command",
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const agent = interaction.options.getString("agent", true);
+
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-probe-fs", error: (error as Error).message },
+        "failed to defer probe-fs reply",
+      );
+      return;
+    }
+
+    let outcome: FsProbeOutcomeWire;
+    try {
+      outcome = (await sendIpcRequest(SOCKET_PATH, "probe-fs", {
+        agent,
+      })) as FsProbeOutcomeWire;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-probe-fs", agent, error: msg },
+        "probe-fs IPC failed",
+      );
+      try {
+        await interaction.editReply({
+          content: `probe-fs error: ${msg}`,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.editReply({
+        embeds: [renderProbeFsEmbed(agent, outcome)],
+      });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-probe-fs", error: (error as Error).message },
+        "failed to send probe-fs embed",
       );
     }
   }
