@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 94-01-PLAN.md
-last_updated: "2026-04-25T04:07:22.932Z"
+stopped_at: Completed 94-04-PLAN.md
+last_updated: "2026-04-25T04:29:01.074Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 7
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 94 (tool-reliability-self-awareness) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 
 ## Performance Metrics
 
@@ -218,6 +218,11 @@ Recent decisions affecting current work:
 - [Phase 94]: 5-value CapabilityProbeStatus enum (ready|degraded|reconnecting|failed|unknown) locked at the contract layer (D-02); adding a 6th value cascades through Plans 94-02/03/04/07
 - [Phase 94]: Capability probe is DI-pure: no SDK imports, no fs imports, no bare new Date() — primitive funnels Date construction through currentTime(deps) helper using integer-arg signature so static-grep regression pin holds
 - [Phase 94]: Heartbeat layer runs probe with stub callTool (throws) + getProbeFor override forcing default-fallback; connect-ok → ready, connect-fail → failed mirror. Plan 94-03 lifts override and wires real callTool through SDK surface
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — D-06 ToolCallError discriminated-shape contract landed: 5-value ErrorClass enum (transient|auth|quota|permission|unknown) locked at the contract layer with 12 literal occurrences pinned by static-grep; verbatim-message pass-through (Phase 85 TOOL-04 inheritance) preserved exact substring including Playwright sentinel error
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — Classification regex priority order auth → quota → permission → transient → unknown: when 'HTTP 401 timeout' matches both auth and transient, auth wins because more specific class better signals what LLM should do; pinned by TCE-CLASS priority test
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — TurnDispatcher integration via new public method executeMcpTool (single-source-of-truth wrap site) rather than refactoring iterateUntilResult: production MCP tool calls flow through SDK driverIter inside persistent session handle, not through any direct dispatcher method; new method gives Plan 94-05 (auto-injected tools) a wrap-route they can hit directly + provides seam for future direct-MCP-call sites
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — Single-attempt-then-wrap (NO silent retry) inside dispatcher: recovery (Plan 94-03) is heartbeat-driven at the connection layer, NOT at the tool-execution layer; LLM sees structured failure and adapts naturally (asks user, switches to alternative agent) instead of silently retrying same bad call
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-04 — mcpStateProvider DI is additive-optional on TurnDispatcherOptions (Phase 86/89 schema-extension blueprint reused): when absent, ToolCallError.alternatives is undefined; existing tests without the field continue to pass; daemon edge wires the provider once SessionManager construction is touched in a follow-up plan
 
 ### v2.1 closing decisions (for reference)
 
@@ -326,9 +331,10 @@ Recent decisions affecting current work:
 | Phase 93 P02 | 21min | 2 tasks | 6 files |
 | Phase 93 P03 | 25min | 2 tasks | 5 files |
 | Phase 94 P01 | 13min | 2 tasks | 15 files |
+| Phase 94-tool-reliability-self-awareness P04 | 17min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-01-PLAN.md
+Stopped at: Completed 94-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
