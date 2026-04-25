@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: v2.6 milestone complete
-stopped_at: Phase 96 context gathered
-last_updated: "2026-04-25T16:52:27.027Z"
+status: Ready to execute
+stopped_at: Completed 96-06-PLAN.md (Phase 91 mirror deprecation surface)
+last_updated: "2026-04-25T19:14:02.525Z"
 last_activity: 2026-04-25
 progress:
-  total_phases: 9
+  total_phases: 10
   completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 17
+  completed_plans: 11
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 95 — memory-dreaming-autonomous-reflection-and-consolidation
+**Current focus:** Phase 96 — discord-routing-and-file-sharing-hygiene
 
 ## Current Position
 
-Phase: 95
-Plan: Not started
+Phase: 96 (discord-routing-and-file-sharing-hygiene) — EXECUTING
+Plan: 2 of 7
 
 ## Performance Metrics
 
@@ -250,6 +250,11 @@ Recent decisions affecting current work:
 - [Phase 95]: Plan 95-03 — CLI exit-code 0/1/2 contract: 0=completed, 1=failed/IPC-error, 2=skipped. Operator scripts can branch on exit code without parsing JSON. Mirrors Phase 91/92 sync/cutover CLI patterns; extends with 2-for-skipped semantic.
 - [Phase 95]: Plan 95-03 — Discord slash defaults idleBypass:true; CLI defaults idleBypass:false. Operator-driven Discord trigger semantically wants to fire; CLI requires explicit opt-in. Both share the daemon's run-dream-pass IPC handler — only the call-site contract differs.
 - [Phase 95]: Plan 95-03 — 10th application of inline-handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95) and 5th application of pure-IPC-handler blueprint (handleSetModelIpc / handleSetPermissionModeIpc / mcp-probe / handleCutoverButtonActionIpc / handleRunDreamPassIpc). Pattern is now canonical for operator-tier slash commands.
+- [Phase 96]: [Phase 96 Plan 06] 3-value Zod enum extension for authoritativeSide (openclaw|clawcode|deprecated) — additive non-breaking schema migration; v2.4 fixtures parse unchanged.
+- [Phase 96]: [Phase 96 Plan 06] DEPRECATION_ROLLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000 ms locked at types.ts level; pinned by grep -F (W-2 convention robust to regex meta-chars in arithmetic literals).
+- [Phase 96]: [Phase 96 Plan 06] Asymmetric systemctl-vs-state-update ordering — disable-timer: state-first (graceful systemctl); re-enable-timer: systemctl-first (fatal — rollback semantics demand timer running before claiming state restored).
+- [Phase 96]: [Phase 96 Plan 06] sync run-once exit code 2 (NOT 1) when deprecated — bypasses systemd SuccessExitStatus=1, forces journalctl to surface deprecation as failed unit (operator attention).
+- [Phase 96]: [Phase 96 Plan 06] State-machine guard at CLI layer (not runtime gate): deprecated → clawcode forward-cutover refused with operator-actionable error; operator must re-enable-timer or fresh setup before forward-cutover.
 
 ### v2.1 closing decisions (for reference)
 
@@ -368,9 +373,10 @@ Recent decisions affecting current work:
 | Phase 95 P01 | 30min | 2 tasks | 9 files |
 | Phase 95 P02 | 24min | 2 tasks | 6 files |
 | Phase 95 P03 | 25min | 2 tasks | 12 files |
+| Phase 96 P06 | 28min | 2 tasks | 13 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Phase 96 context gathered
+Stopped at: Completed 96-06-PLAN.md (Phase 91 mirror deprecation surface)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
