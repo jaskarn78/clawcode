@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 96-06-PLAN.md (Phase 91 mirror deprecation surface)
-last_updated: "2026-04-25T19:14:02.525Z"
+stopped_at: Completed 96-01-PLAN.md (Wave 1 parallel executor)
+last_updated: "2026-04-25T19:25:07.622Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 17
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 96 (discord-routing-and-file-sharing-hygiene) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 
 ## Performance Metrics
 
@@ -255,6 +255,11 @@ Recent decisions affecting current work:
 - [Phase 96]: [Phase 96 Plan 06] Asymmetric systemctl-vs-state-update ordering — disable-timer: state-first (graceful systemctl); re-enable-timer: systemctl-first (fatal — rollback semantics demand timer running before claiming state restored).
 - [Phase 96]: [Phase 96 Plan 06] sync run-once exit code 2 (NOT 1) when deprecated — bypasses systemd SuccessExitStatus=1, forces journalctl to surface deprecation as failed unit (operator attention).
 - [Phase 96]: [Phase 96 Plan 06] State-machine guard at CLI layer (not runtime gate): deprecated → clawcode forward-cutover refused with operator-actionable error; operator must re-enable-timer or fresh setup before forward-cutover.
+- [Phase 96]: Plan 96-01: 3-value FsCapabilityStatus enum (ready|degraded|unknown) intentionally diverges from Phase 94's 5-value MCP enum because filesystem capability has no reconnect/failed analog — operator-driven ACL changes don't transition through transient connect states
+- [Phase 96]: Plan 96-01: D-06 boundary check (checkFsCapability) uses exact-match canonical-absPath Map lookup with NO startsWith — ACLs grant per-subtree access so a parent ready snapshot does NOT imply subtree readability; Phase 94 isPathInsideRoots startsWith pattern intentionally avoided
+- [Phase 96]: Plan 96-01: fileAccess Zod schema is 10th additive-optional application (Phase 83/86/89/90/94 blueprint). Schema preserves literal {agent} token; loader resolveFileAccess(agentName, ...) substitutes at call time. v2.5 fixtures parse unchanged (5 fixtures regression-pinned)
+- [Phase 96]: Plan 96-01: SessionHandle gains FsCapabilitySnapshot lazy-init mirror (getFsCapabilitySnapshot/setFsCapabilitySnapshot) — 6th application of post-construction DI mirror pattern (after McpState/FlapHistory/RecoveryAttemptHistory/SupportedCommands/ModelMirror). Stable Map identity contract matches Phase 85 exactly
+- [Phase 96]: Plan 96-01: TS error count REDUCED net 13 (101 → 88) by sweeping up Phase 95's missing dream field while adding fileAccess to test fixtures (Rule 3 cascade pattern matches Phase 89 GREET-10 + Phase 90 MEM-01 precedent)
 
 ### v2.1 closing decisions (for reference)
 
@@ -374,9 +379,10 @@ Recent decisions affecting current work:
 | Phase 95 P02 | 24min | 2 tasks | 6 files |
 | Phase 95 P03 | 25min | 2 tasks | 12 files |
 | Phase 96 P06 | 28min | 2 tasks | 13 files |
+| Phase 96 P01 | 25min | 3 tasks | 17 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 96-06-PLAN.md (Phase 91 mirror deprecation surface)
+Stopped at: Completed 96-01-PLAN.md (Wave 1 parallel executor)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
