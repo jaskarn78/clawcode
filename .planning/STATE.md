@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 94-03-PLAN.md
-last_updated: "2026-04-25T05:36:12.308Z"
+stopped_at: Completed 94-06-PLAN.md
+last_updated: "2026-04-25T05:48:17.636Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 7
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 94 (tool-reliability-self-awareness) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7 complete (94-05 + 94-07 still outstanding — Wave 2 parallel; 94-06 ran ahead independently per `wave: 2, depends_on: []` frontmatter)
 
 ## Performance Metrics
 
@@ -230,6 +230,10 @@ Recent decisions affecting current work:
 - [Phase 94]: DI-purity over convenience: handlers + registry have ZERO node:child_process imports. Production wires real execFile/killSubprocess/adminAlert/opRead at heartbeat-tick edge in buildRecoveryDepsForHeartbeat (Phase 91 sync-runner pattern). Static-grep pin verifies on every commit.
 - [Phase 94]: Bounded budget at the registry, not the handler. Per-server budget is global across all 3 handlers — Playwright fails 2x + op:// fails 1x means total budget exhausted. Operational intent: 'this server has been hammering recovery; back off'.
 - [Phase 94]: 3rd-failure admin-clawdy alert counts give-up + retry-later as failures; not-applicable + recovered are not failures (no budget burn for not-applicable; recovered means system healed itself).
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — TOOL-10 8th application of additive-optional schema blueprint: defaults.systemPromptDirectives default-bearing record (DEFAULT_SYSTEM_PROMPT_DIRECTIVES with verbatim D-09 file-sharing + D-07 cross-agent-routing) + agents.*.systemPromptDirectives optional partial override; v2.5 migrated configs parse unchanged (REG-V25-BACKCOMPAT).
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — resolveSystemPromptDirectives: pure per-key merge (override?.field ?? defaults?.field), filter enabled && text !== ''; alphabetical sort + Object.freeze on output for prompt-cache hash stability + CLAUDE.md immutability invariant.
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — Pre-rendered block in ContextSources (caller computes via resolver+renderer pair); assembler stays config-type-agnostic (no schema imports). Empty string short-circuits — stable prefix byte-identical to no-directives baseline (REG-ASSEMBLER-EMPTY-WHEN-DISABLED).
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — RELOADABLE classification: agents.*.systemPromptDirectives + defaults.systemPromptDirectives both reloadable at next-turn boundary (assembler reads via resolver each turn). No daemon restart for directive edits.
 
 ### v2.1 closing decisions (for reference)
 
@@ -341,9 +345,10 @@ Recent decisions affecting current work:
 | Phase 94-tool-reliability-self-awareness P04 | 17min | 2 tasks | 5 files |
 | Phase 94 P02 | 34min | 2 tasks | 13 files |
 | Phase 94 P03 | 23min | 2 tasks | 14 files |
+| Phase 94-tool-reliability-self-awareness P06 | 7min | 2 tasks | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-03-PLAN.md
+Stopped at: Completed 94-06-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
