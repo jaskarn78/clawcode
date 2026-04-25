@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase complete — ready for verification
-stopped_at: Completed 94-07-PLAN.md (final plan in phase 94)
-last_updated: "2026-04-25T06:13:25.969Z"
+status: Ready to execute
+stopped_at: Completed 95-01-PLAN.md
+last_updated: "2026-04-25T07:31:25.669Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 10
+  completed_plans: 8
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 94 — tool-reliability-self-awareness
+**Current focus:** Phase 95 — memory-dreaming-autonomous-reflection-and-consolidation
 
 ## Current Position
 
-Phase: 94 (tool-reliability-self-awareness) — EXECUTING
-Plan: 7 of 7 complete (94-05 + 94-07 still outstanding — Wave 2 parallel; 94-06 ran ahead independently per `wave: 2, depends_on: []` frontmatter)
+Phase: 95 (memory-dreaming-autonomous-reflection-and-consolidation) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -237,6 +237,12 @@ Recent decisions affecting current work:
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-05 — clawcode_fetch_discord_messages + clawcode_share_file built-in tools auto-injected for every agent in session-config.ts toolDefinitionsStr; NO mcpServer attribution (Plan 94-02 capability filter sees them as built-in, never removes); 100-msg fetch clamp + 25MB share cap + allowedRoots security boundary + webhook→bot-direct fallback (Phase 90.1); failures wrap via 94-04 ToolCallError; DI-pure (no fs/discord.js imports in tool modules)
 - [Phase 94]: Daemon-side computation of cross-agent alternatives — IPC payload is single source of truth, both renderers consume the same enriched payload
 - [Phase 94]: Shared probe-renderer.ts module pattern — pure helpers (buildProbeRow / paginateRows / recoverySuggestionFor / STATUS_EMOJI) consumed by /clawcode-tools (Discord) AND clawcode mcp-status (CLI); cross-renderer parity test pins content equivalence
+- [Phase 95]: [Phase 95]: Plan 95-01 — DreamPassOutcome 3-variant union (completed | skipped | failed) LOCKED — pinned by kind: z.literal count regression test
+- [Phase 95]: [Phase 95]: Plan 95-01 — Token estimation via chars/4 heuristic; oldest-first chunk truncation drops tail after DESC sort until estimate ≤ 32K
+- [Phase 95]: [Phase 95]: Plan 95-01 — Dream-pass primitive does NOT consult lastTurnAt — idle gating belongs to cron timer (Plan 95-02); manual triggers (CLI/Discord 95-03) bypass idle gating intentionally
+- [Phase 95]: [Phase 95]: Plan 95-01 — Idle-detector hard floor 5min + hard ceiling 6h LOCKED at module-constant level (IDLE_HARD_FLOOR_MS/IDLE_HARD_CEILING_MS); per-agent dream.idleMinutes cannot override floor
+- [Phase 95]: [Phase 95]: Plan 95-01 — MemoryChunk + ConversationSummary shapes decoupled from canonical SQLite-row types — narrow DI getter contracts kept independent so dream-pass schema evolves freely
+- [Phase 95]: [Phase 95]: Plan 95-01 — 9th application of additive-optional schema blueprint: agents.*.dream + defaults.dream — v2.5/v2.6 migrated configs parse unchanged; both registered in RELOADABLE_FIELDS
 
 ### v2.1 closing decisions (for reference)
 
@@ -351,9 +357,10 @@ Recent decisions affecting current work:
 | Phase 94-tool-reliability-self-awareness P06 | 7min | 2 tasks | 8 files |
 | Phase 94-tool-reliability-self-awareness P05 | 6min | 2 tasks | 5 files |
 | Phase 94 P07 | 10min | 2 tasks | 6 files |
+| Phase 95 P01 | 30min | 2 tasks | 9 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-07-PLAN.md (final plan in phase 94)
+Stopped at: Completed 95-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
