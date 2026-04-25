@@ -558,6 +558,201 @@ describe("Phase 88 MKT-01 / UI-01 — /clawcode-skills-browse inline handler", (
     expect(combined).toMatch(/persist|yaml|EACCES/i);
   });
 
+  // ---------------------------------------------------------------------------
+  // Phase 93 Plan 02 — ClawHub-aware divider + sentinel filter (SB-93-1..3)
+  // ---------------------------------------------------------------------------
+
+  it("SB-93-1 picker interleaves local → divider → clawhub options", async () => {
+    mockedSendIpcRequest.mockResolvedValueOnce({
+      agent: "clawdy",
+      installed: [],
+      available: [
+        {
+          name: "local-a",
+          description: "a",
+          category: "fleet",
+          source: "local",
+          skillDir: "/tmp/a",
+        },
+        {
+          name: "local-b",
+          description: "b",
+          category: "fleet",
+          source: "local",
+          skillDir: "/tmp/b",
+        },
+        {
+          name: "remote-x",
+          description: "x",
+          category: "fleet",
+          source: {
+            kind: "clawhub",
+            baseUrl: "https://clawhub.ai",
+            downloadUrl: "https://clawhub.ai/dl/remote-x.tar.gz",
+            version: "1.0.0",
+          },
+          skillDir: "",
+        },
+        {
+          name: "remote-y",
+          description: "y",
+          category: "fleet",
+          source: {
+            kind: "clawhub",
+            baseUrl: "https://clawhub.ai",
+            downloadUrl: "https://clawhub.ai/dl/remote-y.tar.gz",
+            version: "1.0.0",
+          },
+          skillDir: "",
+        },
+      ],
+    });
+    const handler = makeHandler({
+      routingTable: boundRouting,
+      resolvedAgents: [makeAgent("clawdy")],
+    });
+    const harness = makeInteraction({
+      channelId: "chan-1",
+      awaitMessageComponent: () => new Promise(() => {}),
+    });
+    void (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(harness.interaction);
+    await new Promise((r) => setTimeout(r, 5));
+
+    const callArg = harness.editReply.mock.calls.find(
+      (c) =>
+        typeof c[0] === "object" &&
+        (c[0] as { components?: unknown }).components !== undefined,
+    )?.[0] as {
+      components?: ReadonlyArray<{
+        components: ReadonlyArray<{
+          options: ReadonlyArray<{
+            data: { value: string; label: string; description?: string };
+          }>;
+        }>;
+      }>;
+    };
+    expect(callArg).toBeDefined();
+    const options = callArg.components![0]!.components[0]!.options;
+    expect(options).toHaveLength(5);
+    expect(options[0]!.data.value).toBe("local-a");
+    expect(options[1]!.data.value).toBe("local-b");
+    expect(options[2]!.data.value).toBe("__separator_clawhub__");
+    expect(options[2]!.data.label).toBe("── ClawHub public ──");
+    expect(options[2]!.data.description).toBe("(category divider)");
+    expect(options[3]!.data.value).toBe("remote-x");
+    expect(options[4]!.data.value).toBe("remote-y");
+  });
+
+  it("SB-93-2 selecting the divider does NOT fire marketplace-install", async () => {
+    mockedSendIpcRequest.mockResolvedValueOnce({
+      agent: "clawdy",
+      installed: [],
+      available: [
+        {
+          name: "local-a",
+          description: "a",
+          category: "fleet",
+          source: "local",
+          skillDir: "/tmp/a",
+        },
+        {
+          name: "remote-x",
+          description: "x",
+          category: "fleet",
+          source: {
+            kind: "clawhub",
+            baseUrl: "https://clawhub.ai",
+            downloadUrl: "https://clawhub.ai/dl/remote-x.tar.gz",
+            version: "1.0.0",
+          },
+          skillDir: "",
+        },
+      ],
+    });
+    const handler = makeHandler({
+      routingTable: boundRouting,
+      resolvedAgents: [makeAgent("clawdy")],
+    });
+    const followUp = {
+      values: ["__separator_clawhub__"],
+      user: { id: "user-1" },
+      customId: "skills-picker:clawdy:abc",
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    const harness = makeInteraction({
+      channelId: "chan-1",
+      awaitMessageComponent: async () => followUp,
+    });
+    await (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(harness.interaction);
+
+    // Only marketplace-list was called — NEVER marketplace-install
+    expect(mockedSendIpcRequest).toHaveBeenCalledTimes(1);
+    expect(mockedSendIpcRequest.mock.calls[0]![1]).toBe("marketplace-list");
+    // followUp.update was called with the divider hint
+    expect(followUp.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringMatching(/pick a skill, not the divider/i),
+        components: [],
+      }),
+    );
+  });
+
+  it("SB-93-3 picker omits divider when zero ClawHub items would render", async () => {
+    mockedSendIpcRequest.mockResolvedValueOnce({
+      agent: "clawdy",
+      installed: [],
+      available: [
+        {
+          name: "local-a",
+          description: "a",
+          category: "fleet",
+          source: "local",
+          skillDir: "/tmp/a",
+        },
+        {
+          name: "local-b",
+          description: "b",
+          category: "fleet",
+          source: "local",
+          skillDir: "/tmp/b",
+        },
+      ],
+    });
+    const handler = makeHandler({
+      routingTable: boundRouting,
+      resolvedAgents: [makeAgent("clawdy")],
+    });
+    const harness = makeInteraction({
+      channelId: "chan-1",
+      awaitMessageComponent: () => new Promise(() => {}),
+    });
+    void (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(harness.interaction);
+    await new Promise((r) => setTimeout(r, 5));
+
+    const callArg = harness.editReply.mock.calls.find(
+      (c) =>
+        typeof c[0] === "object" &&
+        (c[0] as { components?: unknown }).components !== undefined,
+    )?.[0] as {
+      components?: ReadonlyArray<{
+        components: ReadonlyArray<{
+          options: ReadonlyArray<{ data: { value: string } }>;
+        }>;
+      }>;
+    };
+    expect(callArg).toBeDefined();
+    const options = callArg.components![0]!.components[0]!.options;
+    expect(options).toHaveLength(2);
+    const values = options.map((o) => o.data.value);
+    expect(values).not.toContain("__separator_clawhub__");
+  });
+
   it("B10: picker timeout → 'timed out'; no install IPC call", async () => {
     mockedSendIpcRequest.mockResolvedValueOnce({
       agent: "clawdy",

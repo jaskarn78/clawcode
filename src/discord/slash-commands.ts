@@ -77,6 +77,16 @@ const MODEL_PICKER_TTL_MS = 30_000;
 const DISCORD_SELECT_CAP = 25;
 
 /**
+ * Phase 93 Plan 02 D-93-02-3 — sentinel value for the non-installable
+ * "── ClawHub public ──" divider in the /clawcode-skills-browse picker.
+ * The slash handler filters this value out of marketplace-install IPC
+ * calls (Pitfall 1: discord.js StringSelectMenu has no setDisabled).
+ */
+const CLAWHUB_DIVIDER_VALUE = "__separator_clawhub__";
+const CLAWHUB_DIVIDER_LABEL = "── ClawHub public ──";
+const CLAWHUB_DIVIDER_DESC = "(category divider)";
+
+/**
  * Phase 86 MODEL-05 — TTL for the cache-invalidation confirmation collector.
  * Users get 30s to confirm before the dialog auto-dismisses. Mirrors the
  * picker TTL above for consistency (operators only have one "model switch"
@@ -1987,7 +1997,16 @@ export class SlashCommandHandler {
       readonly name: string;
       readonly description: string;
       readonly category: "finmentum" | "personal" | "fleet";
-      readonly source: "local" | { readonly path: string; readonly label?: string };
+      readonly source:
+        | "local"
+        | { readonly path: string; readonly label?: string }
+        | {
+            readonly kind: "clawhub";
+            readonly baseUrl: string;
+            readonly downloadUrl: string;
+            readonly version: string;
+            readonly authToken?: string;
+          };
       readonly skillDir: string;
     };
     let listResp: {
@@ -2020,8 +2039,64 @@ export class SlashCommandHandler {
       return;
     }
 
-    const capped = listResp.available.slice(0, DISCORD_SELECT_CAP);
-    const overflow = listResp.available.length - capped.length;
+    // Phase 93 Plan 02 — partition into local-side vs clawhub-side. Legacy
+    // {path,label?} sources are treated as "local-side" — they're operator-
+    // curated filesystem mounts and read visually like locals to the
+    // operator. Only kind:"clawhub" entries are placed BELOW the divider.
+    const isClawhubEntry = (e: MarketplaceEntryWire): boolean =>
+      typeof e.source === "object" &&
+      e.source !== null &&
+      "kind" in (e.source as object) &&
+      (e.source as { kind?: unknown }).kind === "clawhub";
+
+    const localSide = listResp.available.filter((e) => !isClawhubEntry(e));
+    const clawhubSide = listResp.available.filter(isClawhubEntry);
+
+    // Build option list with cap. Reserve 1 slot for the divider WHEN
+    // ClawHub entries will follow; otherwise omit per Pitfall 2 (no
+    // divider when zero ClawHub items would render). Pitfall 3: if the
+    // cap squeezes ClawHub entries to zero, drop the divider too.
+    type SkillOptionDescriptor = {
+      readonly value: string;
+      readonly label: string;
+      readonly description: string;
+      readonly isDivider: boolean;
+    };
+    const optionDescriptors: SkillOptionDescriptor[] = [];
+    for (const s of localSide) {
+      if (optionDescriptors.length >= DISCORD_SELECT_CAP) break;
+      optionDescriptors.push({
+        value: s.name,
+        label: `${s.name} · ${s.category}`.slice(0, 100),
+        description: (s.description || "(no description)").slice(0, 100),
+        isDivider: false,
+      });
+    }
+    // Inject divider only if at least 1 clawhub entry will follow under cap.
+    const remainingSlots = DISCORD_SELECT_CAP - optionDescriptors.length;
+    if (clawhubSide.length > 0 && remainingSlots >= 2) {
+      optionDescriptors.push({
+        value: CLAWHUB_DIVIDER_VALUE,
+        label: CLAWHUB_DIVIDER_LABEL,
+        description: CLAWHUB_DIVIDER_DESC,
+        isDivider: true,
+      });
+      for (const s of clawhubSide) {
+        if (optionDescriptors.length >= DISCORD_SELECT_CAP) break;
+        optionDescriptors.push({
+          value: s.name,
+          label: `${s.name} · ${s.category}`.slice(0, 100),
+          description: (s.description || "(no description)").slice(0, 100),
+          isDivider: false,
+        });
+      }
+    }
+    // Re-derive overflow against the FULL available list (not partitioned).
+    // Dividers are not installable entries, so exclude them from the count.
+    const totalCappedCount = optionDescriptors.filter(
+      (o) => !o.isDivider,
+    ).length;
+    const overflow = listResp.available.length - totalCappedCount;
     const nonce = Math.random().toString(36).slice(2, 8);
     const customId = `skills-picker:${agentName}:${nonce}`;
 
@@ -2029,14 +2104,12 @@ export class SlashCommandHandler {
       .setCustomId(customId)
       .setPlaceholder("Choose a skill to install")
       .addOptions(
-        capped.map((s) => {
-          const label = `${s.name} · ${s.category}`.slice(0, 100);
-          const desc = (s.description || "(no description)").slice(0, 100);
-          return new StringSelectMenuOptionBuilder()
-            .setLabel(label)
-            .setValue(s.name)
-            .setDescription(desc);
-        }),
+        optionDescriptors.map((o) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(o.label)
+            .setValue(o.value)
+            .setDescription(o.description),
+        ),
       );
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       menu,
@@ -2044,7 +2117,7 @@ export class SlashCommandHandler {
 
     const overflowNote =
       overflow > 0
-        ? `\n(Showing first ${DISCORD_SELECT_CAP} of ${listResp.available.length}.)`
+        ? `\n(Showing first ${totalCappedCount} of ${listResp.available.length}.)`
         : "";
 
     try {
@@ -2086,6 +2159,21 @@ export class SlashCommandHandler {
       try {
         await followUp.update({
           content: "No selection captured.",
+          components: [],
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Phase 93 Plan 02 — Pitfall 1 closure: divider is selectable in
+    // discord.js (no setDisabled API on StringSelectMenuOption). Filter the
+    // sentinel value out of the install path with a clear ephemeral hint.
+    if (chosen === CLAWHUB_DIVIDER_VALUE) {
+      try {
+        await followUp.update({
+          content: "Pick a skill, not the divider.",
           components: [],
         });
       } catch {
