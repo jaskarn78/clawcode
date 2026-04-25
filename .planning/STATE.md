@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 95-01-PLAN.md
-last_updated: "2026-04-25T07:31:25.669Z"
+stopped_at: Completed 95-02-PLAN.md
+last_updated: "2026-04-25T08:00:31.536Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 95 (memory-dreaming-autonomous-reflection-and-consolidation) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -243,6 +243,9 @@ Recent decisions affecting current work:
 - [Phase 95]: [Phase 95]: Plan 95-01 — Idle-detector hard floor 5min + hard ceiling 6h LOCKED at module-constant level (IDLE_HARD_FLOOR_MS/IDLE_HARD_CEILING_MS); per-agent dream.idleMinutes cannot override floor
 - [Phase 95]: [Phase 95]: Plan 95-01 — MemoryChunk + ConversationSummary shapes decoupled from canonical SQLite-row types — narrow DI getter contracts kept independent so dream-pass schema evolves freely
 - [Phase 95]: [Phase 95]: Plan 95-01 — 9th application of additive-optional schema blueprint: agents.*.dream + defaults.dream — v2.5/v2.6 migrated configs parse unchanged; both registered in RELOADABLE_FIELDS
+- [Phase 95]: Plan 95-02: same-day dream-log files APPEND new ## sections (not overwrite); preserves prior passes byte-for-byte
+- [Phase 95]: Plan 95-02: writeDreamLog failure does NOT roll back applyAutoLinks; wikilinks persisted on best-effort, structured error surfaces missing log to operator
+- [Phase 95]: Plan 95-02: created src/manager/dream-cron.ts (mirroring daily-summary-cron.ts) instead of modifying non-existent src/manager/agent-bootstrap.ts; daemon-edge wiring deferred to Plan 95-03
 
 ### v2.1 closing decisions (for reference)
 
@@ -358,9 +361,10 @@ Recent decisions affecting current work:
 | Phase 94-tool-reliability-self-awareness P05 | 6min | 2 tasks | 5 files |
 | Phase 94 P07 | 10min | 2 tasks | 6 files |
 | Phase 95 P01 | 30min | 2 tasks | 9 files |
+| Phase 95 P02 | 24min | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 95-01-PLAN.md
+Stopped at: Completed 95-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
