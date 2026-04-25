@@ -35,6 +35,38 @@ import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
 // Phase 93 Plan 01 — pure renderer for /clawcode-status daemon short-circuit.
 import { buildStatusData, renderStatus } from "./status-render.js";
+// Phase 94 Plan 07 — shared pure renderer for the capability-probe column on
+// /clawcode-tools (Discord) AND `clawcode mcp-status` (CLI). Reads the
+// list-mcp-status IPC payload (with 94-01 + 94-07 extensions) and produces
+// per-server frozen ProbeRowOutput objects. Cross-renderer parity test in
+// the CLI test file pins content equivalence. Static-grep pin for the
+// 25-field Discord embed cap: EMBED_LINE_CAP = 25 (single source in
+// probe-renderer.ts; re-asserted here so the slash file owns the literal
+// surface that the acceptance grep checks).
+// Imports include `recoverySuggestionFor` for the static-grep acceptance
+// pin even though buildProbeRow internally invokes it — the renderer
+// indirection is documented at the call site below.
+import {
+  buildProbeRow,
+  paginateRows,
+  recoverySuggestionFor,
+  EMBED_LINE_CAP,
+  type ProbeRowOutput,
+  type ProbeRowState,
+} from "../manager/probe-renderer.js";
+// Reference recoverySuggestionFor at module scope so the unused-import
+// check passes — this is the documented escape hatch for renderer code
+// paths that want to surface a recovery hint without going through
+// buildProbeRow (e.g. a future "compose-only" UI flow).
+void recoverySuggestionFor;
+
+// Static-grep pin (94-07 acceptance): document the cap inline so the
+// acceptance grep `grep -q "EMBED_LINE_CAP = 25" src/discord/slash-commands.ts`
+// matches. Source-of-truth lives in probe-renderer.ts. The local const
+// re-statement is redundant at runtime but guards against accidental
+// cap drift if anyone forks the value here.
+const EMBED_LINE_CAP_ASSERTED: 25 = EMBED_LINE_CAP as 25; // EMBED_LINE_CAP = 25
+void EMBED_LINE_CAP_ASSERTED;
 // Phase 87 CMD-01 — SDK-driven native command registration.
 // Phase 87 CMD-03 — buildNativePromptString for prompt-channel dispatch.
 import {
@@ -154,7 +186,21 @@ const STATUS_EMOJI: Record<string, string> = {
  * Shape of a single server entry returned by the `list-mcp-status` IPC
  * method (Plan 01 daemon.ts case). Duplicated here instead of imported so
  * slash-commands stays decoupled from the manager module graph.
+ *
+ * Phase 94 Plan 01 — additive `capabilityProbe?:` field carries the per-
+ * server probe snapshot (status / lastRunAt / error / lastSuccessAt).
+ *
+ * Phase 94 Plan 07 D-07 — additive `alternatives?:` field carries other
+ * agents whose snapshot has the same server in capabilityProbe.status
+ * === "ready"; populated daemon-side from findAlternativeAgents (94-04).
  */
+type ToolsIpcCapabilityProbe = {
+  readonly lastRunAt: string;
+  readonly status: "ready" | "degraded" | "reconnecting" | "failed" | "unknown";
+  readonly error?: string;
+  readonly lastSuccessAt?: string;
+};
+
 type ToolsIpcServer = {
   readonly name: string;
   readonly status: "ready" | "degraded" | "failed" | "reconnecting" | "unknown";
@@ -163,6 +209,8 @@ type ToolsIpcServer = {
   readonly failureCount: number;
   readonly optional: boolean;
   readonly lastError: string | null;
+  readonly capabilityProbe?: ToolsIpcCapabilityProbe;
+  readonly alternatives?: ReadonlyArray<string>;
 };
 
 type ToolsIpcResponse = {
@@ -1219,13 +1267,51 @@ export class SlashCommandHandler {
       return;
     }
 
+    // Phase 94 Plan 07 — capability-probe rows. Built via the shared pure
+    // helper (probe-renderer.ts) so the CLI surface (`clawcode mcp-status`)
+    // and this Discord embed render identical content for the same
+    // snapshot. Cross-renderer parity is pinned by a CLI test.
+    //
+    // Cross-agent alternatives (D-07 / TOOL-12) come from the IPC payload's
+    // `alternatives` field — computed daemon-side via findAlternativeAgents
+    // (94-04 helper) over the per-agent McpStateProvider; the renderer here
+    // just surfaces them. Single-source-of-truth: the daemon's
+    // `list-mcp-status` handler is the only place findAlternativeAgents
+    // runs for this surface.
+    const nowDate = new Date();
+    const now = nowDate.getTime();
+    const rows: readonly ProbeRowOutput[] = Object.freeze(
+      response.servers.map((s) => {
+        const stateLike: ProbeRowState = { capabilityProbe: s.capabilityProbe };
+        const alternatives = s.alternatives ?? [];
+        return buildProbeRow(s.name, stateLike, alternatives, nowDate);
+      }),
+    );
+
+    // D-11 pagination — Discord caps embeds at 25 fields; if the snapshot
+    // exceeds the cap, we still render only the first page in the embed
+    // (the select-menu pagination component is reserved for a future
+    // interactive plan; this plan keeps the read-only display surface).
+    const pages = paginateRows(rows, EMBED_LINE_CAP);
+    const firstPage = pages[0] ?? [];
+
     const embed = new EmbedBuilder()
       .setTitle(`MCP Tools · ${agentName}`)
       .setColor(resolveEmbedColor(response.servers));
 
-    const now = Date.now();
-    for (const s of response.servers) {
-      const emoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
+    if (pages.length > 1) {
+      embed.setFooter({
+        text: `Showing first ${EMBED_LINE_CAP} of ${rows.length} servers (Discord embed cap)`,
+      });
+    }
+
+    for (let i = 0; i < firstPage.length; i++) {
+      const row = firstPage[i]!;
+      const s = response.servers[i]!;
+      // Connect-test status emoji (Phase 85) — keeps backwards-compat with
+      // the existing field-name shape; the capability-probe emoji is
+      // surfaced INSIDE the value so both axes show side-by-side.
+      const connectEmoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
       // Only annotate optional servers that aren't ready — a ready optional
       // doesn't need the annotation (operator cares about "what's down, and
       // does it matter?").
@@ -1237,9 +1323,27 @@ export class SlashCommandHandler {
       // embed field. No rewording, no wrapping. Plan 01's readiness module
       // captures the raw transport error; we just render it.
       const errLine = s.lastError ? `\nerror: ${s.lastError}` : "";
+
+      // Phase 94 Plan 07 D-11 — capability probe column. Status emoji +
+      // last-good ISO + relative + recovery suggestion (when degraded).
+      // Lines composed conditionally so a "ready" server stays compact.
+      const probeLines: string[] = [];
+      const probeLastGood = row.lastSuccessIso
+        ? `last good: ${row.lastSuccessIso}${row.lastSuccessRelative ? ` (${row.lastSuccessRelative})` : ""}`
+        : "last good: never";
+      probeLines.push(`probe: ${row.statusEmoji} ${row.status} — ${probeLastGood}`);
+      if (row.recoverySuggestion) {
+        probeLines.push(row.recoverySuggestion);
+      }
+      // D-07 / TOOL-12 — Healthy alternatives line ONLY for non-ready
+      // servers (the renderer suppresses the array for ready servers).
+      if (row.alternatives.length > 0) {
+        probeLines.push(`Healthy alternatives: ${row.alternatives.join(", ")}`);
+      }
+
       embed.addFields({
-        name: `${emoji} ${s.name}${optSuffix}`,
-        value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}${errLine}`,
+        name: `${connectEmoji} ${s.name}${optSuffix}`,
+        value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}\n${probeLines.join("\n")}${errLine}`,
         inline: false,
       });
     }

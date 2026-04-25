@@ -341,6 +341,200 @@ describe("Phase 85 Plan 03 — /clawcode-tools inline handler", () => {
     expect(imgField.name).toContain("(optional)");
   });
 
+  // ----------------------------------------------------------------------
+  // Phase 94 Plan 07 — capability-probe column tests.
+  //
+  // The renderer surfaces (via the shared probe-renderer.ts helper) the
+  // 5-status capability-probe emoji + last-good ISO timestamp + recovery
+  // suggestion + cross-agent alternatives. These tests pin the wire
+  // payload → embed-field-value mapping for the new column.
+  // ----------------------------------------------------------------------
+
+  it("TLS-EMOJI-ALL — surfaces all 5 capability-probe status emojis (✅ 🟡 ⏳ 🔴 ⚪) when the IPC payload carries one of each", async () => {
+    const nowMs = Date.now();
+    const lastSuccessIso = new Date(nowMs - 60_000).toISOString();
+    mockedSendIpcRequest.mockResolvedValue({
+      agent: "clawdy",
+      servers: [
+        {
+          name: "ready-srv",
+          status: "ready",
+          lastSuccessAt: nowMs - 5_000,
+          lastFailureAt: null,
+          failureCount: 0,
+          optional: false,
+          lastError: null,
+          capabilityProbe: { lastRunAt: new Date(nowMs).toISOString(), status: "ready", lastSuccessAt: lastSuccessIso },
+          alternatives: [],
+        },
+        {
+          name: "degraded-srv",
+          status: "degraded",
+          lastSuccessAt: nowMs - 60_000,
+          lastFailureAt: nowMs - 1_000,
+          failureCount: 1,
+          optional: false,
+          lastError: "rpc timeout",
+          capabilityProbe: { lastRunAt: new Date(nowMs).toISOString(), status: "degraded", error: "rpc timeout", lastSuccessAt: lastSuccessIso },
+          alternatives: [],
+        },
+        {
+          name: "reconnecting-srv",
+          status: "reconnecting",
+          lastSuccessAt: null,
+          lastFailureAt: nowMs,
+          failureCount: 2,
+          optional: false,
+          lastError: "transient",
+          capabilityProbe: { lastRunAt: new Date(nowMs).toISOString(), status: "reconnecting", error: "transient" },
+          alternatives: [],
+        },
+        {
+          name: "failed-srv",
+          status: "failed",
+          lastSuccessAt: null,
+          lastFailureAt: nowMs,
+          failureCount: 5,
+          optional: false,
+          lastError: "process down",
+          capabilityProbe: { lastRunAt: new Date(nowMs).toISOString(), status: "failed", error: "process down" },
+          alternatives: [],
+        },
+        {
+          name: "unknown-srv",
+          status: "ready",
+          lastSuccessAt: nowMs,
+          lastFailureAt: null,
+          failureCount: 0,
+          optional: false,
+          lastError: null,
+          // capabilityProbe omitted → renderer falls back to "unknown" status emoji
+          alternatives: [],
+        },
+      ],
+    });
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
+    const handler = makeHandler({ routingTable });
+    const { editReply, interaction } = makeInteraction({ channelId: "chan-1" });
+
+    await (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(interaction);
+
+    const lastCall = editReply.mock.calls[editReply.mock.calls.length - 1]![0] as {
+      embeds?: Array<{ data: { fields: Array<{ name: string; value: string }> } }>;
+    };
+    const fields = lastCall.embeds![0]!.data.fields;
+    const valueByName = new Map(fields.map((f) => [f.name, f.value]));
+    // Each row's value carries the capability-probe emoji on the "probe:" line.
+    const ready = [...valueByName.entries()].find(([n]) => n.includes("ready-srv"))![1];
+    expect(ready).toContain("✅");
+    expect(ready).toContain("ready");
+    const degraded = [...valueByName.entries()].find(([n]) => n.includes("degraded-srv"))![1];
+    expect(degraded).toContain("🟡");
+    const reconnecting = [...valueByName.entries()].find(([n]) => n.includes("reconnecting-srv"))![1];
+    expect(reconnecting).toContain("⏳");
+    const failed = [...valueByName.entries()].find(([n]) => n.includes("failed-srv"))![1];
+    expect(failed).toContain("🔴");
+    const unknown = [...valueByName.entries()].find(([n]) => n.includes("unknown-srv"))![1];
+    expect(unknown).toContain("⚪");
+  });
+
+  it("TLS-ALTS-DEGRADED — for a degraded server with cross-agent alternatives, embed value contains 'Healthy alternatives:' line + agent name", async () => {
+    const nowMs = Date.now();
+    mockedSendIpcRequest.mockResolvedValue({
+      agent: "fin-tax",
+      servers: [
+        {
+          name: "browser",
+          status: "degraded",
+          lastSuccessAt: nowMs - 60_000,
+          lastFailureAt: nowMs - 1_000,
+          failureCount: 1,
+          optional: false,
+          lastError: "Executable doesn't exist at /home/clawcode/.cache/ms-playwright/chromium-1187/chrome-linux/chrome",
+          capabilityProbe: {
+            lastRunAt: new Date(nowMs).toISOString(),
+            status: "degraded",
+            error: "Executable doesn't exist at /home/clawcode/.cache/ms-playwright/chromium-1187/chrome-linux/chrome",
+            lastSuccessAt: new Date(nowMs - 3_600_000).toISOString(),
+          },
+          alternatives: ["fin-acquisition", "general"],
+        },
+      ],
+    });
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "fin-tax"]]),
+      agentToChannels: new Map([["fin-tax", ["chan-1"]]]),
+    };
+    const handler = makeHandler({ routingTable });
+    const { editReply, interaction } = makeInteraction({ channelId: "chan-1" });
+
+    await (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(interaction);
+
+    const lastCall = editReply.mock.calls[editReply.mock.calls.length - 1]![0] as {
+      embeds?: Array<{ data: { fields: Array<{ name: string; value: string }> } }>;
+    };
+    const fields = lastCall.embeds![0]!.data.fields;
+    const browserField = fields.find((f) => f.name.includes("browser"))!;
+    expect(browserField.value).toContain("Healthy alternatives:");
+    expect(browserField.value).toContain("fin-acquisition");
+    expect(browserField.value).toContain("general");
+    // Recovery suggestion surfaced for the Playwright pattern.
+    expect(browserField.value).toContain("auto-recovery: npx playwright install chromium");
+  });
+
+  it("TLS-ALT-NOT-FOR-READY — ready server with alternatives in payload still does NOT render the alternatives line", async () => {
+    const nowMs = Date.now();
+    mockedSendIpcRequest.mockResolvedValue({
+      agent: "clawdy",
+      servers: [
+        {
+          name: "browser",
+          status: "ready",
+          lastSuccessAt: nowMs - 5_000,
+          lastFailureAt: null,
+          failureCount: 0,
+          optional: false,
+          lastError: null,
+          capabilityProbe: {
+            lastRunAt: new Date(nowMs).toISOString(),
+            status: "ready",
+            lastSuccessAt: new Date(nowMs - 5_000).toISOString(),
+          },
+          // Daemon may still ship alternatives even for ready servers; the
+          // renderer is responsible for hiding the line when the server
+          // itself is fine.
+          alternatives: ["fin-acquisition", "general"],
+        },
+      ],
+    });
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
+    const handler = makeHandler({ routingTable });
+    const { editReply, interaction } = makeInteraction({ channelId: "chan-1" });
+
+    await (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(interaction);
+
+    const lastCall = editReply.mock.calls[editReply.mock.calls.length - 1]![0] as {
+      embeds?: Array<{ data: { fields: Array<{ name: string; value: string }> } }>;
+    };
+    const fields = lastCall.embeds![0]!.data.fields;
+    const browserField = fields.find((f) => f.name.includes("browser"))!;
+    expect(browserField.value).not.toContain("Healthy alternatives");
+    // No recovery suggestion for ready servers either.
+    expect(browserField.value).not.toContain("auto-recovery");
+  });
+
   it("renders 'last success: never' when lastSuccessAt is null", async () => {
     mockedSendIpcRequest.mockResolvedValue({
       agent: "clawdy",

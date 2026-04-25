@@ -4267,22 +4267,55 @@ async function routeMethod(
       // from the per-server CapabilityProbeSnapshot written by the
       // mcp-reconnect heartbeat. Phase 85 readers that don't consult
       // capabilityProbe continue to work unchanged.
+      //
+      // Phase 94 Plan 07 D-07 / TOOL-12 — payload extension: each entry
+      // also carries an `alternatives` array listing other agents whose
+      // snapshot has the SAME server in capabilityProbe.status==="ready".
+      // Computed daemon-side via findAlternativeAgents (94-04 helper) so
+      // both /clawcode-tools and `clawcode mcp-status` render from the
+      // same single-source-of-truth IPC payload (D-11 invariant).
       const agentName = validateStringParam(params, "agent");
       const state = manager.getMcpStateForAgent(agentName);
-      const servers = [...state.values()].map((s) => ({
-        name: s.name,
-        status: s.status,
-        lastSuccessAt: s.lastSuccessAt,
-        lastFailureAt: s.lastFailureAt,
-        failureCount: s.failureCount,
-        optional: s.optional,
-        lastError: s.lastError?.message ?? null,
-        // Phase 94 Plan 01 — capability probe block (undefined until first
-        // probe runs; serializes through JSON-RPC as null).
-        ...(s.capabilityProbe !== undefined
-          ? { capabilityProbe: s.capabilityProbe }
-          : {}),
-      }));
+      const { findAlternativeAgents } = await import(
+        "./find-alternative-agents.js"
+      );
+      // Build a one-shot McpStateProvider over all known agents (excluding
+      // the querying agent itself — operators don't need "this agent" in
+      // its own alternatives list). The toolToServer override returns the
+      // server name verbatim because we already pass the server name as
+      // the lookup key (skips the SDK-prefix heuristic which would mis-
+      // tokenize server names containing underscores or hyphens).
+      const allAgentNames = configs
+        .filter((c) => !c.name.includes("-sub-") && !c.name.includes("-thread-"))
+        .map((c) => c.name);
+      const otherAgents = allAgentNames.filter((n) => n !== agentName);
+      const altsProvider = {
+        listAgents: () => otherAgents,
+        getStateFor: (name: string) => manager.getMcpStateForAgent(name),
+        toolToServer: (s: string) => s,
+      };
+      const servers = [...state.values()].map((s) => {
+        const alternatives = findAlternativeAgents(s.name, altsProvider);
+        return {
+          name: s.name,
+          status: s.status,
+          lastSuccessAt: s.lastSuccessAt,
+          lastFailureAt: s.lastFailureAt,
+          failureCount: s.failureCount,
+          optional: s.optional,
+          lastError: s.lastError?.message ?? null,
+          // Phase 94 Plan 01 — capability probe block (undefined until first
+          // probe runs; serializes through JSON-RPC as null).
+          ...(s.capabilityProbe !== undefined
+            ? { capabilityProbe: s.capabilityProbe }
+            : {}),
+          // Phase 94 Plan 07 D-07 — alternatives is always present (frozen
+          // empty array when no other agent has the server ready). Renderer
+          // suppresses the line for ready servers itself; the wire payload
+          // carries the data unconditionally for symmetry.
+          alternatives: [...alternatives],
+        };
+      });
       return { agent: agentName, servers };
     }
 
