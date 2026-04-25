@@ -693,6 +693,13 @@ export type MarketplaceIpcDeps = Readonly<{
   updateSkills?: typeof updateAgentSkills;
   scanCatalog?: typeof scanSkillsDirectory;
   linkSkills?: typeof linkAgentSkills;
+  /**
+   * Phase 93 Plan 02 D-93-02-2 — config.defaults.clawhubBaseUrl forwarded
+   * here so handleMarketplaceListIpc can pass it to loadMarketplaceCatalog
+   * for auto-injection. Optional → back-compat preserved when caller omits
+   * (Pitfall 4 — keep the field optional to avoid the Rule 3 fixture cascade).
+   */
+  defaultClawhubBaseUrl?: string;
 }>;
 
 export type MarketplaceListIpcResult = Readonly<{
@@ -739,6 +746,12 @@ export async function handleMarketplaceListIpc(
     localSkillsPath: deps.localSkillsPath,
     sources: deps.marketplaceSources,
     log: deps.log,
+    // Phase 93 Plan 02 D-93-02-2 — auto-inject default ClawHub source when
+    // the operator hasn't configured an explicit clawhub source. Conditional
+    // spread keeps the call argument clean when the field is undefined.
+    ...(deps.defaultClawhubBaseUrl !== undefined
+      ? { defaultClawhubBaseUrl: deps.defaultClawhubBaseUrl }
+      : {}),
   });
 
   const installed = [...agent.skills];
@@ -2258,6 +2271,9 @@ export async function startDaemon(
         skillsTargetDir: skillsPath,
         ledgerPath,
         log,
+        // Phase 93 Plan 02 D-93-02-2 — auto-inject the public ClawHub default
+        // when the operator hasn't configured an explicit clawhub source.
+        defaultClawhubBaseUrl: config.defaults.clawhubBaseUrl,
         params,
       };
       if (method === "marketplace-list") {

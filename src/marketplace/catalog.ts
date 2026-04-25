@@ -107,6 +107,13 @@ export type LoadMarketplaceCatalogOpts = Readonly<{
     | ResolvedMarketplaceSources
     | readonly { path: string; label?: string }[];
   log?: Logger;
+  /**
+   * Phase 93 Plan 02 D-93-02-1 — when sources contains no `kind:"clawhub"`
+   * entry AND this field is provided, the loader synthesizes a public
+   * (no authToken) ClawHub source before the iteration loop. Honors
+   * existing cacheTtlMs default. Back-compat: undefined → no-op.
+   */
+  defaultClawhubBaseUrl?: string;
 }>;
 
 const DESCRIPTION_CAP = 100; // Discord StringSelectMenuOption description cap
@@ -241,7 +248,41 @@ export async function loadMarketplaceCatalog(
   //   - ClawhubAuthRequiredError → log.warn + skip (ditto; operator
   //     eventually re-auths via Plan 90-06).
   //   - Other errors → log.warn + skip (no source kills the whole catalog).
-  for (const source of opts.sources) {
+
+  // Phase 93 Plan 02 D-93-02-1 — auto-inject default ClawHub source when:
+  //   (a) opts.defaultClawhubBaseUrl is provided AND
+  //   (b) opts.sources contains no kind:"clawhub" entry.
+  // Synthetic source is appended (after locals, before legacy/explicit
+  // sources are processed). Public access only — no authToken. opts.sources
+  // is NEVER mutated; we build a new array for the iteration.
+  const sourcesArr: Array<(typeof opts.sources)[number]> = Array.from(
+    opts.sources,
+  );
+  const hasExplicitClawhub = sourcesArr.some(
+    (s) =>
+      typeof s === "object" &&
+      s !== null &&
+      "kind" in s &&
+      (s as { kind?: unknown }).kind === "clawhub",
+  );
+  if (
+    opts.defaultClawhubBaseUrl !== undefined &&
+    opts.defaultClawhubBaseUrl.length > 0 &&
+    !hasExplicitClawhub
+  ) {
+    sourcesArr.push(
+      Object.freeze({
+        kind: "clawhub" as const,
+        baseUrl: opts.defaultClawhubBaseUrl,
+      }) as unknown as (typeof opts.sources)[number],
+    );
+    opts.log?.info(
+      { baseUrl: opts.defaultClawhubBaseUrl },
+      "loadMarketplaceCatalog: auto-injecting default clawhub source",
+    );
+  }
+
+  for (const source of sourcesArr) {
     // ClawHub branch — fetch the first page of skills and union.
     if ("kind" in source && source.kind === "clawhub") {
       try {

@@ -404,3 +404,23 @@ describe("Phase 88 Plan 02 Task 1 — marketplace IPC handlers", () => {
     expect(methods).toContain("marketplace-remove");
   });
 });
+
+describe("Phase 93 Plan 02 — defaultClawhubBaseUrl plumbing", () => {
+  it("M12 handleMarketplaceListIpc forwards defaultClawhubBaseUrl to loadCatalog", async () => {
+    const configs = [makeAgent("fin")];
+    const loadCatalog = vi.fn().mockResolvedValue([] as readonly MarketplaceEntry[]);
+    const deps = baseDeps(configs, {
+      loadCatalog,
+      defaultClawhubBaseUrl: "https://example.test",
+    });
+
+    await handleMarketplaceListIpc({
+      ...deps,
+      params: { agent: "fin" },
+    });
+
+    expect(loadCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultClawhubBaseUrl: "https://example.test" }),
+    );
+  });
+});
