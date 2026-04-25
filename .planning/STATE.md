@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 95-02-PLAN.md
-last_updated: "2026-04-25T08:00:31.536Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 95-03-PLAN.md (Phase 95 SHIP-READY — v2.6 milestone closed)
+last_updated: "2026-04-25T08:34:12.369Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -246,6 +246,10 @@ Recent decisions affecting current work:
 - [Phase 95]: Plan 95-02: same-day dream-log files APPEND new ## sections (not overwrite); preserves prior passes byte-for-byte
 - [Phase 95]: Plan 95-02: writeDreamLog failure does NOT roll back applyAutoLinks; wikilinks persisted on best-effort, structured error surfaces missing log to operator
 - [Phase 95]: Plan 95-02: created src/manager/dream-cron.ts (mirroring daily-summary-cron.ts) instead of modifying non-existent src/manager/agent-bootstrap.ts; daemon-edge wiring deferred to Plan 95-03
+- [Phase 95]: Plan 95-03 — Admin-gate-FIRST ordering: isAdminClawdyInteraction fires BEFORE deferReply so non-admins receive instant ephemeral 'Admin-only command' (zero IPC + zero LLM + zero log noise). Fail-closed default (empty adminUserIds → no admins recognized).
+- [Phase 95]: Plan 95-03 — CLI exit-code 0/1/2 contract: 0=completed, 1=failed/IPC-error, 2=skipped. Operator scripts can branch on exit code without parsing JSON. Mirrors Phase 91/92 sync/cutover CLI patterns; extends with 2-for-skipped semantic.
+- [Phase 95]: Plan 95-03 — Discord slash defaults idleBypass:true; CLI defaults idleBypass:false. Operator-driven Discord trigger semantically wants to fire; CLI requires explicit opt-in. Both share the daemon's run-dream-pass IPC handler — only the call-site contract differs.
+- [Phase 95]: Plan 95-03 — 10th application of inline-handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95) and 5th application of pure-IPC-handler blueprint (handleSetModelIpc / handleSetPermissionModeIpc / mcp-probe / handleCutoverButtonActionIpc / handleRunDreamPassIpc). Pattern is now canonical for operator-tier slash commands.
 
 ### v2.1 closing decisions (for reference)
 
@@ -362,9 +366,10 @@ Recent decisions affecting current work:
 | Phase 94 P07 | 10min | 2 tasks | 6 files |
 | Phase 95 P01 | 30min | 2 tasks | 9 files |
 | Phase 95 P02 | 24min | 2 tasks | 6 files |
+| Phase 95 P03 | 25min | 2 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 95-02-PLAN.md
+Stopped at: Completed 95-03-PLAN.md (Phase 95 SHIP-READY — v2.6 milestone closed)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
