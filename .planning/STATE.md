@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 92-02-PLAN.md
-last_updated: "2026-04-24T23:54:14.017Z"
-last_activity: 2026-04-24
+stopped_at: Completed 92-03-PLAN.md
+last_updated: "2026-04-25T00:08:50.110Z"
+last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 9
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 93 (Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -193,6 +193,11 @@ Recent decisions affecting current work:
 - [Phase 92]: Plan 92-02: diff-engine.ts is PURE (no fs, no clock, no env, no Math.random); target-probe.ts is DI-pure (loadConfig + listMcpStatus + readWorkspaceInventory all injected). Static-grep pins enforce both.
 - [Phase 92]: Plan 92-02: NO-LEAK invariant — probe extracts MCP env KEY NAMES via Object.keys(entry.env). Values never read or serialized. PR5 test pins via sk_live_secret_42 sentinel. Field-by-field YAML extraction (no spread on env objects).
 - [Phase 92]: Plan 92-02: TargetCapability.yaml.sessionKinds[] derived from agent.schedules presence (empty → [direct]; non-empty → [direct, scheduled]). Cron-entry detection lives in target.sessionKinds.includes('cron') — v1 emits without 'cron' so D-11 cron gaps surface end-to-end against any MC profile carrying cron-prefixed intents.
+- [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: append-only cutover-ledger.jsonl mirrors Phase 82 invariants verbatim — validate-on-write (zod safeParse before mkdir+appendFile), no truncate/clear/rewrite helpers, appendFile-only (no read-modify-write race)
+- [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: AdditiveApplierDeps DI-pure shape mirrors Plan 92-04 destructive applier blueprint; Phase 84/86/91 primitives all injected; CLI wrapper iterates Phase 86 updateAgentSkills(op:add) per skill (writer takes one at a time) — idempotency-safe via no-op return
+- [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: missing-mcp 5th additive kind routed to deferred-with-reason ledger entry (operator must add op:// refs via /clawcode-plugins-browse) — applier never auto-mutates MCP credential surface
+- [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: secret-scan ordering pin (A2 test) — scanSkillForSecrets called BEFORE runRsync for missing-skill; refusal terminal-short-circuits the entire applier (operator must move secrets before re-running)
+- [Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier]: Plan 92-03: dry-run is the DEFAULT at the wrapper layer (apply: false → no writes, no ledger). --apply opt-in per D-07 three-tier safety; preChangeSnapshot field reserved for D-10 destructive reversibility (Plan 92-04 populates)
 
 ### v2.1 closing decisions (for reference)
 
@@ -293,9 +298,10 @@ Recent decisions affecting current work:
 | Phase 91 P05 | 10m 33s | 2 tasks | 9 files |
 | Phase 92 P01 | 29min | 2 tasks | 11 files |
 | Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier P02 | 6m | 2 (TDD) tasks | 8 files files |
+| Phase 92-openclaw-clawcode-fin-acquisition-cutover-parity-verifier P03 | 9m | 2 tasks | 5 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-24
-Stopped at: Completed 92-02-PLAN.md
+Last activity: 2026-04-25
+Stopped at: Completed 92-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
