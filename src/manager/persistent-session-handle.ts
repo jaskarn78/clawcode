@@ -85,6 +85,50 @@ const _capabilityProbeSnapshotGuard: CapabilityProbeSnapshot = {
   status: "unknown",
 } as import("../mcp/readiness.js").CapabilityProbeSnapshot;
 void _capabilityProbeSnapshotGuard;
+
+/**
+ * Phase 96 Plan 01 D-CONTEXT — filesystem capability primitives.
+ *
+ * 3-value status enum (ready|degraded|unknown) — INTENTIONALLY DIVERGES
+ * from Phase 94's 5-value MCP capability enum because filesystem capability
+ * has no reconnect/failed analog: operator-driven ACL changes don't
+ * transition through transient connect states. A path is either readable
+ * NOW (ready), declared-but-not-readable (degraded), or never probed
+ * (unknown).
+ *
+ * Adding a 4th value (e.g., "failed" or "reconnecting") requires explicit
+ * STATE.md decision and cascades through Plans 96-02/03/04/05/07
+ * consumers. Pinned by static-grep in 96-01-PLAN.md.
+ *
+ * Mode enum models POSIX read/write permissions:
+ *   - "rw"     — fs.access(R_OK | W_OK) succeeded
+ *   - "ro"     — fs.access(R_OK) succeeded; W_OK either denied or not probed
+ *   - "denied" — fs.access(R_OK) failed
+ *
+ * Verbatim error pass-through (Phase 85 TOOL-04 inheritance): the `error`
+ * field carries the raw `err.message` from `fs.access` — no wrapping, no
+ * classification at probe layer. ToolCallError schema (Phase 94 D-06) does
+ * the classification at the executor edge in 96-03 / 96-04.
+ */
+export type FsCapabilityStatus =
+  | "ready"          // fs.access(R_OK) succeeded — path readable now
+  | "degraded"       // declared in fileAccess but fs.access failed
+  | "unknown";       // never probed (boot pre-warm-path)
+
+export type FsCapabilityMode = "rw" | "ro" | "denied";
+
+export interface FsCapabilitySnapshot {
+  /** D-02 3-value status enum. */
+  readonly status: FsCapabilityStatus;
+  /** POSIX read/write mode classification. */
+  readonly mode: FsCapabilityMode;
+  /** ISO8601 — when this probe last ran. */
+  readonly lastProbeAt: string;
+  /** ISO8601 — most recent ready outcome; preserved across degraded ticks. */
+  readonly lastSuccessAt?: string;
+  /** Verbatim error from fs.access — Phase 85 TOOL-04 inheritance. */
+  readonly error?: string;
+}
 import { AsyncPushQueue, SerialTurnQueue } from "./persistent-session-queue.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 import { mapEffortToTokens } from "./effort-mapping.js";
@@ -196,6 +240,16 @@ export function createPersistentSessionHandle(
   // Kept null on failure so the next call retries — the SDK may not be ready
   // at the moment of first query (e.g. early in the warm-path).
   let supportedCommandsCache: readonly SlashCommand[] | null = null;
+
+  // Phase 96 Plan 01 D-CONTEXT — per-handle filesystem capability snapshot
+  // mirror. Lazy-init: undefined until the first runFsProbe outcome is
+  // populated by SessionManager (boot probe + heartbeat tick + on-demand).
+  // Accessor returns an empty Map when null so callers can read
+  // unconditionally without a reachable null path. Mirrors the Phase 85
+  // getMcpState/setMcpState pair exactly — 6th application of the post-
+  // construction DI mirror pattern (after McpState, FlapHistory,
+  // RecoveryAttemptHistory, SupportedCommands, and ModelMirror).
+  let _fsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> | undefined;
 
   function notifyError(err: Error): void {
     generatorDead = true;
@@ -800,6 +854,35 @@ export function createPersistentSessionHandle(
      */
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       currentMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 96 Plan 01 D-CONTEXT — read the per-handle filesystem capability
+     * snapshot mirror.
+     *
+     * Always returns a Map (empty when first probe hasn't yet run). Allows
+     * callers (Plan 96-02 prompt-builder, Plan 96-03 clawcode_list_files,
+     * Plan 96-04 share-file boundary check) to read unconditionally — the
+     * empty-map default is the "no paths probed yet" signal.
+     */
+    getFsCapabilitySnapshot(): ReadonlyMap<string, FsCapabilitySnapshot> {
+      return _fsCapabilitySnapshot ?? new Map();
+    },
+
+    /**
+     * Phase 96 Plan 01 D-CONTEXT — update the per-handle filesystem
+     * capability snapshot mirror.
+     *
+     * Called by:
+     *   - SessionManager (at warm-path gate / boot probe)
+     *   - heartbeat fs-probe check (every 60s tick — wired in 96-07)
+     *   - on-demand /clawcode-probe-fs slash + clawcode probe-fs CLI (96-05)
+     *
+     * Always stores a defensive copy so external mutations of the passed-
+     * in map don't leak into the handle's state. NEVER mutates the input.
+     */
+    setFsCapabilitySnapshot(next: ReadonlyMap<string, FsCapabilitySnapshot>): void {
+      _fsCapabilitySnapshot = new Map(next);
     },
 
     /**

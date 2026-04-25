@@ -6,6 +6,7 @@ import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 import type { AttemptRecord } from "./recovery/types.js";
+import type { FsCapabilitySnapshot } from "./persistent-session-handle.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
@@ -146,6 +147,17 @@ export type SessionHandle = {
    */
   getMcpState: () => ReadonlyMap<string, McpServerState>;
   setMcpState: (state: ReadonlyMap<string, McpServerState>) => void;
+  /**
+   * Phase 96 Plan 01 D-CONTEXT — per-handle filesystem capability snapshot
+   * accessor. Lazy-init: returns an empty Map until the first runFsProbe
+   * outcome is populated by SessionManager (boot probe + heartbeat tick +
+   * on-demand). Read by Plan 96-02 prompt-builder, Plan 96-03
+   * clawcode_list_files, Plan 96-04 share-file boundary check.
+   *
+   * 6th application of the post-construction DI mirror pattern.
+   */
+  getFsCapabilitySnapshot: () => ReadonlyMap<string, FsCapabilitySnapshot>;
+  setFsCapabilitySnapshot: (snapshot: ReadonlyMap<string, FsCapabilitySnapshot>) => void;
   /**
    * Phase 94 Plan 02 TOOL-03 — per-handle flap-history Map for the D-12
    * 5min flap-stability window. Stable Map identity across calls (the
@@ -365,6 +377,20 @@ export class MockSessionHandle implements SessionHandle {
   }
   setMcpState(state: ReadonlyMap<string, McpServerState>): void {
     this.mcpState = new Map(state);
+  }
+
+  /**
+   * Phase 96 Plan 01 D-CONTEXT — test-mock filesystem capability snapshot
+   * accessor. In-memory map, no fs interaction. Tests can drive
+   * setFsCapabilitySnapshot to exercise downstream consumers (Plans
+   * 96-02/03/04 prompt-builder / list-files / share-file).
+   */
+  private fsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> = new Map();
+  getFsCapabilitySnapshot(): ReadonlyMap<string, FsCapabilitySnapshot> {
+    return this.fsCapabilitySnapshot;
+  }
+  setFsCapabilitySnapshot(snapshot: ReadonlyMap<string, FsCapabilitySnapshot>): void {
+    this.fsCapabilitySnapshot = new Map(snapshot);
   }
 
   /**
@@ -795,6 +821,8 @@ function wrapSdkQuery(
   const legacyRecoveryAttemptHistory: Map<string, AttemptRecord[]> = new Map();
   // Phase 94 Plan 02 TOOL-03 — legacy flap-history Map (test-only path).
   const legacyFlapHistory: Map<string, FlapHistoryEntry> = new Map();
+  // Phase 96 Plan 01 D-CONTEXT — legacy fs-capability snapshot (test-only).
+  let legacyFsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> = new Map();
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
@@ -1329,6 +1357,17 @@ function wrapSdkQuery(
     },
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       legacyMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 96 Plan 01 D-CONTEXT — legacy fs-capability snapshot accessor.
+     * Test-only path; production routes through the persistent handle.
+     */
+    getFsCapabilitySnapshot(): ReadonlyMap<string, FsCapabilitySnapshot> {
+      return legacyFsCapabilitySnapshot;
+    },
+    setFsCapabilitySnapshot(snapshot: ReadonlyMap<string, FsCapabilitySnapshot>): void {
+      legacyFsCapabilitySnapshot = new Map(snapshot);
     },
 
     /**
