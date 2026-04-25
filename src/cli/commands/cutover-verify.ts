@@ -1,16 +1,18 @@
 /**
  * Phase 92 Plan 06 — `clawcode cutover verify` subcommand (CUT-09).
  *
- * The single operator-facing entry point that orchestrates Plans 92-01..05
- * end-to-end via `runVerifyPipeline`. Emits CUTOVER-REPORT.md with the
- * `cutover_ready: true|false` binary signal in BOTH the YAML frontmatter
- * AND the literal end-of-document line `Cutover ready: true|false`.
+ * Phase 92 GAP CLOSURE (post-VERIFICATION) — replaces the prior daemon-IPC
+ * scaffold (which returned exit 1 unconditionally) with a fully-wired IPC
+ * client that calls the daemon's `cutover-verify` handler. The daemon owns
+ * all DI primitives (TurnDispatcher, dispatchStream, fetchApi, listMcpStatus,
+ * runRsync, atomic YAML writers) and runs runVerifyPipeline + writes
+ * CUTOVER-REPORT.md; this CLI prints the resulting summary and surfaces
+ * the `Cutover ready: true|false` literal as the operator-facing exit signal.
  *
- * Production invocation requires daemon-IPC for the dispatcher / dispatchStream
- * / probe primitives — until the daemon-side IPC handler lands, this command
- * is callable only from hermetic tests OR daemon contexts that inject the
- * required dependencies. Standalone CLI invocation surfaces a clear "daemon
- * required" error (matching the precedent set by `clawcode cutover canary`).
+ * Exit codes:
+ *   0 — pipeline completed AND cutoverReady = true
+ *   1 — pipeline completed but cutoverReady = false (gaps remain), OR
+ *       daemon-IPC failure / pipeline failure
  */
 
 import type { Command } from "commander";
@@ -19,11 +21,25 @@ import { join } from "node:path";
 import pino, { type Logger } from "pino";
 
 import { cliError, cliLog } from "../output.js";
+import { sendIpcRequest } from "../../ipc/client.js";
+import { SOCKET_PATH } from "../../manager/daemon.js";
 import {
-  CANARY_API_ENDPOINT,
-  CANARY_CHANNEL_ID,
-  CANARY_TIMEOUT_MS,
-} from "../../cutover/types.js";
+  IpcError,
+  ManagerNotRunningError,
+} from "../../shared/errors.js";
+
+/**
+ * Shape of the daemon's `cutover-verify` IPC response. Mirrors the
+ * VerifyOutcome union's `verified-ready` / `verified-not-ready` projection
+ * collapsed to a flat record because the operator surface only needs the
+ * binary signal + the report path.
+ */
+export type CutoverVerifyIpcResponse = {
+  readonly cutoverReady: boolean;
+  readonly gapCount: number;
+  readonly canaryPassRate: number;
+  readonly reportPath: string;
+};
 
 export type RunCutoverVerifyArgs = Readonly<{
   agent: string;
@@ -31,36 +47,111 @@ export type RunCutoverVerifyArgs = Readonly<{
   outputDir?: string;
   stagingDir?: string;
   depthMsgs?: number;
+  depthDays?: number;
   log?: Logger;
+  /**
+   * DI hook — override the IPC sender for hermetic tests. Production callers
+   * pass nothing (default wires `sendIpcRequest` against the daemon socket).
+   */
+  sendIpc?: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<unknown>;
 }>;
 
 /**
- * Run one cutover verify cycle. Daemon-side IPC dispatch is required to wire
- * the LLM dispatcher / Discord stream / MCP IPC — this CLI surface remains
- * thin until a follow-up plan adds the daemon-IPC handler (mirrors
- * `cutover canary` which has the same constraint).
+ * Run one cutover verify cycle by calling the daemon's `cutover-verify` IPC
+ * handler. The daemon side wires the production DI surface (LLM dispatcher,
+ * Discord stream, MCP probe, atomic YAML writers, rsync runner) — this CLI
+ * stays a thin RPC wrapper.
+ *
+ * Returns the process exit code so tests can assert without spawning
+ * subprocesses (mirrors the runSyncRunOnceAction pattern from Phase 91-04).
  */
 export async function runCutoverVerifyAction(
   args: RunCutoverVerifyArgs,
 ): Promise<number> {
   const log = args.log ?? (pino({ level: "info" }) as unknown as Logger);
 
-  cliError(
-    "cutover verify requires daemon-IPC for the LLM dispatcher + Discord stream + MCP probe — invoke via daemon IPC handler (follow-up plan) or pass DI hooks programmatically. " +
-      `Defaults: outputDir=~/.clawcode/manager/cutover-reports/${args.agent}/, stagingDir=~/.clawcode/manager/cutover-staging/${args.agent}/, canary=${CANARY_API_ENDPOINT} + channel ${CANARY_CHANNEL_ID} + timeout ${CANARY_TIMEOUT_MS}ms.`,
+  // Production wiring: connect to the daemon over the canonical Unix socket.
+  // Tests inject a stub via args.sendIpc so they never touch the filesystem.
+  const sender =
+    args.sendIpc ??
+    ((method: string, params: Record<string, unknown>) =>
+      sendIpcRequest(SOCKET_PATH, method, params));
+
+  // Build the IPC params record. We forward ONLY what the operator passed +
+  // the resolved defaults so the daemon can compute its own paths off the
+  // agent name (avoids cross-host path bleed in tests).
+  const params: Record<string, unknown> = {
+    agent: args.agent,
+  };
+  if (args.applyAdditive !== undefined) params.applyAdditive = args.applyAdditive;
+  if (args.outputDir !== undefined) params.outputDir = args.outputDir;
+  if (args.stagingDir !== undefined) params.stagingDir = args.stagingDir;
+  if (args.depthMsgs !== undefined) params.depthMsgs = args.depthMsgs;
+  if (args.depthDays !== undefined) params.depthDays = args.depthDays;
+
+  let response: CutoverVerifyIpcResponse;
+  try {
+    const raw = await sender("cutover-verify", params);
+    response = raw as CutoverVerifyIpcResponse;
+  } catch (err) {
+    if (err instanceof ManagerNotRunningError) {
+      cliError(
+        "cutover verify: clawcode daemon is not running. Start it with `clawcode start-all`.",
+      );
+      return 1;
+    }
+    if (err instanceof IpcError) {
+      cliError(`cutover verify: daemon-IPC error: ${err.message}`);
+      return 1;
+    }
+    cliError(
+      `cutover verify: unexpected error: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return 1;
+  }
+
+  // Operator-facing summary on stdout. The literal `Cutover ready: true|false`
+  // line mirrors the same source-of-truth field that the report writer emits
+  // at the end of CUTOVER-REPORT.md, so a grep on either surface gets the
+  // same answer.
+  cliLog(
+    JSON.stringify(
+      {
+        agent: args.agent,
+        cutoverReady: response.cutoverReady,
+        gapCount: response.gapCount,
+        canaryPassRate: response.canaryPassRate,
+        reportPath: response.reportPath,
+      },
+      null,
+      2,
+    ),
   );
-  log.warn(
-    { agent: args.agent },
-    "cutover verify: daemon-IPC not yet wired; CLI standalone invocation is a no-op",
+  cliLog(`Cutover ready: ${response.cutoverReady}`);
+
+  log.info(
+    {
+      agent: args.agent,
+      cutoverReady: response.cutoverReady,
+      gapCount: response.gapCount,
+      canaryPassRate: response.canaryPassRate,
+    },
+    "cutover verify: completed",
   );
-  return 1;
+
+  return response.cutoverReady ? 0 : 1;
 }
 
 export function registerCutoverVerifyCommand(parent: Command): void {
   parent
     .command("verify")
     .description(
-      "Run the full cutover verify pipeline (ingest → profile → probe → diff → apply-additive[dry-run-default] → canary[opt-in] → report). Emits CUTOVER-REPORT.md with cutover_ready signal.",
+      "Run the full cutover verify pipeline (ingest → profile → probe → diff → apply-additive[dry-run-default] → canary[opt-in] → report) via daemon IPC. Emits CUTOVER-REPORT.md with cutover_ready signal.",
     )
     .requiredOption("--agent <name>", "Agent under verification")
     .option(
@@ -80,6 +171,11 @@ export function registerCutoverVerifyCommand(parent: Command): void {
       "Discord history depth cap per channel (default: 10000)",
       (v) => parseInt(v, 10),
     )
+    .option(
+      "--depth-days <n>",
+      "Discord history depth cap in days (default: 90)",
+      (v) => parseInt(v, 10),
+    )
     .action(
       async (opts: {
         agent: string;
@@ -87,6 +183,7 @@ export function registerCutoverVerifyCommand(parent: Command): void {
         outputDir?: string;
         stagingDir?: string;
         depthMsgs?: number;
+        depthDays?: number;
       }) => {
         const code = await runCutoverVerifyAction({
           agent: opts.agent,
@@ -118,8 +215,10 @@ export function registerCutoverVerifyCommand(parent: Command): void {
           ...(opts.depthMsgs !== undefined
             ? { depthMsgs: opts.depthMsgs }
             : {}),
+          ...(opts.depthDays !== undefined
+            ? { depthDays: opts.depthDays }
+            : {}),
         });
-        cliLog(`cutover verify exit code: ${code}`);
         process.exit(code);
       },
     );
