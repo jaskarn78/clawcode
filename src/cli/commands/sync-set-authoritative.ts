@@ -59,15 +59,122 @@ import type {
 } from "../../sync/types.js";
 import { DEFAULT_FILTER_FILE_PATH } from "./sync-run-once.js";
 import { cliError, cliLog } from "../output.js";
+import {
+  REPORT_FRESHNESS_MS,
+  defaultCutoverReportPath,
+  type SetAuthoritativePreconditionResult,
+} from "../../cutover/types.js";
+import { readCutoverReport } from "../../cutover/report-writer.js";
+import {
+  appendCutoverRow,
+  DEFAULT_CUTOVER_LEDGER_PATH,
+} from "../../cutover/ledger.js";
 
 /** D-20 rollback window: 7 days in milliseconds. */
 export const ROLLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Phase 92 Plan 06 — agent identity for the cutover-ready precondition gate.
+ *
+ * First-pass: hardcoded "fin-acquisition" since v2.5 cutover scope is the
+ * single fin-acquisition agent (CUT-09). Future fleet generalization (Phase
+ * 93+) should derive this from sync-state.json's bound agent OR from a CLI
+ * --agent option. Extracted to a constant so the seam is searchable.
+ */
+export const CUTOVER_AGENT_NAME = "fin-acquisition";
+
+/**
+ * Phase 92 Plan 06 — cutover-ready precondition gate (D-09 + CUT-10).
+ *
+ * Reads CUTOVER-REPORT.md and refuses to proceed unless:
+ *   - The report exists, parses, and is schema-valid
+ *   - `cutover_ready: true`
+ *   - `report_generated_at` is within REPORT_FRESHNESS_MS (24h)
+ *
+ * The `--skip-verify --reason "<reason>"` escape hatch bypasses the gate
+ * AND appends a `skip-verify` audit row to cutover-ledger.jsonl per D-09.
+ * The audit row carries the operator-provided reason for forensic trace.
+ *
+ * Pure function — no process.exit, no cliError. Returns a discriminated
+ * union; the caller is responsible for mapping outcome → exit code +
+ * stderr message.
+ */
+export async function checkCutoverReportPrecondition(args: {
+  agent: string;
+  reportPath?: string;
+  skipVerify?: boolean;
+  skipReason?: string;
+  now: Date;
+  ledgerPath?: string;
+  log?: Logger;
+}): Promise<SetAuthoritativePreconditionResult> {
+  // --skip-verify branch — write audit row + return precondition-skipped-by-flag.
+  if (args.skipVerify) {
+    const reason = args.skipReason ?? "(no reason provided)";
+    const ledgerPath = args.ledgerPath ?? DEFAULT_CUTOVER_LEDGER_PATH;
+    try {
+      await appendCutoverRow(
+        ledgerPath,
+        {
+          timestamp: args.now.toISOString(),
+          agent: args.agent,
+          action: "skip-verify",
+          kind: "skip-verify",
+          identifier: args.agent,
+          sourceHash: null,
+          targetHash: null,
+          reversible: false,
+          rolledBack: false,
+          preChangeSnapshot: null,
+          reason,
+        },
+        args.log,
+      );
+    } catch (err) {
+      args.log?.warn(
+        { err },
+        "checkCutoverReportPrecondition: failed to append skip-verify ledger row",
+      );
+    }
+    return { kind: "precondition-skipped-by-flag", reason };
+  }
+
+  const reportPath = args.reportPath ?? defaultCutoverReportPath(args.agent);
+  const readRes = await readCutoverReport(reportPath);
+  if (readRes.kind === "missing") {
+    return { kind: "report-missing", reportPath };
+  }
+  if (readRes.kind === "invalid") {
+    return { kind: "report-invalid", reportPath, error: readRes.error };
+  }
+  const generatedAt = new Date(readRes.frontmatter.report_generated_at);
+  const ageMs = args.now.getTime() - generatedAt.getTime();
+  if (ageMs > REPORT_FRESHNESS_MS) {
+    return { kind: "report-stale", reportPath, ageMs };
+  }
+  if (!readRes.frontmatter.cutover_ready) {
+    return {
+      kind: "report-not-ready",
+      reportPath,
+      reason: `cutover_ready: false (gap_count=${readRes.frontmatter.gap_count}, canary_pass_rate=${readRes.frontmatter.canary_pass_rate})`,
+    };
+  }
+  return { kind: "precondition-passed", reportPath, ageMs };
+}
 
 export type RunSyncSetAuthoritativeArgs = Readonly<{
   side: "openclaw" | "clawcode";
   confirmCutover?: boolean;
   revertCutover?: boolean;
   forceRollback?: boolean;
+  /** Phase 92 Plan 06 — emergency bypass of the cutover-ready precondition. */
+  skipVerify?: boolean;
+  /** Phase 92 Plan 06 — operator-provided reason for the skip-verify ledger audit row. */
+  skipReason?: string;
+  /** Phase 92 Plan 06 — override CUTOVER-REPORT.md path (testing). */
+  cutoverReportPath?: string;
+  /** Phase 92 Plan 06 — override cutover-ledger.jsonl path (testing). */
+  cutoverLedgerPath?: string;
   syncStatePath?: string;
   syncJsonlPath?: string;
   filterFilePath?: string;
@@ -175,6 +282,53 @@ async function executeForwardCutover(
       "Flipping TO clawcode is destructive — pass --confirm-cutover to proceed.\n" +
         "This will: (1) drain OpenClaw→ClawCode one final time, (2) prompt y/N, (3) flip the authoritative flag.\n" +
         "The 5-min timer becomes a no-op post-flip (opt into reverse via `clawcode sync start --reverse`).",
+    );
+    return 1;
+  }
+
+  // Phase 92 Plan 06 — cutover-ready precondition gate (D-09 + CUT-10).
+  // Runs BEFORE drain. Refuses unless the report exists, is fresh (<24h), and
+  // cutover_ready: true. The --skip-verify --reason "..." escape hatch
+  // bypasses the gate AND appends a `skip-verify` audit row to cutover-ledger.
+  const preconditionRes = await checkCutoverReportPrecondition({
+    agent: CUTOVER_AGENT_NAME,
+    ...(args.cutoverReportPath !== undefined
+      ? { reportPath: args.cutoverReportPath }
+      : {}),
+    ...(args.skipVerify !== undefined ? { skipVerify: args.skipVerify } : {}),
+    ...(args.skipReason !== undefined ? { skipReason: args.skipReason } : {}),
+    now,
+    ...(args.cutoverLedgerPath !== undefined
+      ? { ledgerPath: args.cutoverLedgerPath }
+      : {}),
+    log,
+  });
+  if (preconditionRes.kind === "precondition-skipped-by-flag") {
+    cliLog(
+      `WARNING: --skip-verify used. Audit row appended to cutover-ledger.jsonl. Reason: ${preconditionRes.reason}`,
+    );
+  } else if (preconditionRes.kind !== "precondition-passed") {
+    // EXPLICIT non-passed branch (not bool coercion) — precondition-skipped-by-flag
+    // is also non-passed but allowed via the separate branch above.
+    let detail: string;
+    switch (preconditionRes.kind) {
+      case "report-missing":
+        detail = `missing CUTOVER-REPORT.md at ${preconditionRes.reportPath} — run \`clawcode cutover verify --agent ${CUTOVER_AGENT_NAME}\` first`;
+        break;
+      case "report-stale": {
+        const hours = Math.floor(preconditionRes.ageMs / (60 * 60 * 1000));
+        detail = `CUTOVER-REPORT.md is stale (${hours}h old, max 24h) — re-run \`clawcode cutover verify --agent ${CUTOVER_AGENT_NAME}\``;
+        break;
+      }
+      case "report-not-ready":
+        detail = `cutover-not-ready: ${preconditionRes.reason}. Address the gaps and re-run \`clawcode cutover verify\``;
+        break;
+      case "report-invalid":
+        detail = `CUTOVER-REPORT.md at ${preconditionRes.reportPath} failed to parse: ${preconditionRes.error}`;
+        break;
+    }
+    cliError(
+      `Cutover precondition failed: ${detail}.\nUse \`--skip-verify --reason "<reason>"\` for emergency override.`,
     );
     return 1;
   }
@@ -330,8 +484,24 @@ export function registerSyncSetAuthoritativeCommand(parent: Command): void {
       "Override 7-day window (post-Day-7 emergency rollback)",
     )
     .option(
+      "--skip-verify",
+      "Phase 92 Plan 06 emergency bypass of the cutover-ready precondition gate (writes a skip-verify audit row to cutover-ledger.jsonl); requires --reason",
+    )
+    .option(
+      "--reason <reason>",
+      "Phase 92 Plan 06 operator-provided reason for --skip-verify; recorded verbatim in the cutover-ledger.jsonl audit row",
+    )
+    .option(
       "--sync-state-path <path>",
       "Override sync-state.json path (testing)",
+    )
+    .option(
+      "--cutover-report-path <path>",
+      "Phase 92 Plan 06 — override CUTOVER-REPORT.md path (testing)",
+    )
+    .option(
+      "--cutover-ledger-path <path>",
+      "Phase 92 Plan 06 — override cutover-ledger.jsonl path (testing)",
     )
     .option(
       "--filter-file <path>",
@@ -345,7 +515,11 @@ export function registerSyncSetAuthoritativeCommand(parent: Command): void {
           confirmCutover?: boolean;
           revertCutover?: boolean;
           forceRollback?: boolean;
+          skipVerify?: boolean;
+          reason?: string;
           syncStatePath?: string;
+          cutoverReportPath?: string;
+          cutoverLedgerPath?: string;
           filterFile?: string;
         },
       ) => {
@@ -354,12 +528,23 @@ export function registerSyncSetAuthoritativeCommand(parent: Command): void {
           process.exit(1);
           return;
         }
+        if (opts.skipVerify && (opts.reason === undefined || opts.reason.trim().length === 0)) {
+          cliError(
+            "--skip-verify requires --reason \"<operator-provided reason>\" (recorded in cutover-ledger.jsonl audit row)",
+          );
+          process.exit(1);
+          return;
+        }
         const code = await runSyncSetAuthoritativeAction({
           side,
           confirmCutover: opts.confirmCutover,
           revertCutover: opts.revertCutover,
           forceRollback: opts.forceRollback,
+          skipVerify: opts.skipVerify,
+          skipReason: opts.reason,
           syncStatePath: opts.syncStatePath,
+          cutoverReportPath: opts.cutoverReportPath,
+          cutoverLedgerPath: opts.cutoverLedgerPath,
           filterFilePath: opts.filterFile,
         });
         process.exit(code);

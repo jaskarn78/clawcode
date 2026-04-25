@@ -146,6 +146,10 @@ describe("sync set-authoritative (Plan 91-04 Task 2)", () => {
     const code = await runSyncSetAuthoritativeAction({
       side: "clawcode",
       confirmCutover: true,
+      // Phase 92 Plan 06: bypass cutover-ready precondition for Phase 91 drain regressions
+      skipVerify: true,
+      skipReason: "phase-91 regression test",
+      cutoverLedgerPath: join(tempDir, "cutover-ledger.jsonl"),
       syncStatePath: statePath,
       runSyncOnceDep: runner,
       promptConfirm: prompt,
@@ -169,6 +173,9 @@ describe("sync set-authoritative (Plan 91-04 Task 2)", () => {
     const code = await runSyncSetAuthoritativeAction({
       side: "clawcode",
       confirmCutover: true,
+      skipVerify: true,
+      skipReason: "phase-91 regression test",
+      cutoverLedgerPath: join(tempDir, "cutover-ledger.jsonl"),
       syncStatePath: statePath,
       runSyncOnceDep: runner,
       promptConfirm: prompt,
@@ -194,6 +201,9 @@ describe("sync set-authoritative (Plan 91-04 Task 2)", () => {
     const code = await runSyncSetAuthoritativeAction({
       side: "clawcode",
       confirmCutover: true,
+      skipVerify: true,
+      skipReason: "phase-91 regression test",
+      cutoverLedgerPath: join(tempDir, "cutover-ledger.jsonl"),
       syncStatePath: statePath,
       runSyncOnceDep: runner,
       promptConfirm: prompt,
@@ -233,6 +243,9 @@ describe("sync set-authoritative (Plan 91-04 Task 2)", () => {
     const code = await runSyncSetAuthoritativeAction({
       side: "clawcode",
       confirmCutover: true,
+      skipVerify: true,
+      skipReason: "phase-91 regression test",
+      cutoverLedgerPath: join(tempDir, "cutover-ledger.jsonl"),
       syncStatePath: statePath,
       runSyncOnceDep: runner,
       promptConfirm: prompt,
@@ -275,6 +288,9 @@ describe("sync set-authoritative (Plan 91-04 Task 2)", () => {
     const code = await runSyncSetAuthoritativeAction({
       side: "clawcode",
       confirmCutover: true,
+      skipVerify: true,
+      skipReason: "phase-91 regression test",
+      cutoverLedgerPath: join(tempDir, "cutover-ledger.jsonl"),
       syncStatePath: statePath,
       runSyncOnceDep: runner,
       promptConfirm: prompt,
