@@ -15,8 +15,12 @@
  *   - SCHFA-3   per-agent override merges with defaults at loader layer
  *   - SCHFA-4   {agent} token preserved literally in parsed schema
  *   - SCHFA-5   array element non-empty validation (empty string rejected)
- *   - SCHFA-6   FORWARD-LOOKING — RELOADABLE_FIELDS does NOT yet contain
- *               fileAccess at 96-01 wave-1 time (Wave 3 96-07 will flip)
+ *   - SCHFA-6   POST-EXTENSION — RELOADABLE_FIELDS contains fileAccess
+ *               (Wave 3 96-07 flipped this from the 96-01 forward-looking
+ *               assertion). Phase 96 plan 07 wave 3 flipped this from
+ *               NOT-reloadable to reloadable when RELOADABLE_FIELDS was
+ *               extended with agents.*.fileAccess + defaults.fileAccess
+ *               (and parallel outputDir entries) per D-03.
  *
  * Static-grep regression pins:
  *   - "fileAccess: z.array" — schema field marker
@@ -167,12 +171,14 @@ describe("Phase 96 D-05 — fileAccess Zod schema (10th additive-optional)", () 
     expect(agentEmpty.success).toBe(false);
   });
 
-  it("SCHFA-6: FORWARD-LOOKING — RELOADABLE_FIELDS does NOT yet contain fileAccess (Wave 3 96-07 will flip)", () => {
-    // Wave 1 (96-01) lands the schema but does NOT classify fileAccess as
-    // reloadable — that's Wave 3 (96-07) when config-watcher gets wired.
-    // This test will FLIP from `false` to `true` in 96-07.
-    expect(RELOADABLE_FIELDS.has("agents.*.fileAccess")).toBe(false);
-    expect(RELOADABLE_FIELDS.has("defaults.fileAccess")).toBe(false);
+  it("SCHFA-6: POST-EXTENSION — RELOADABLE_FIELDS contains fileAccess (Phase 96 plan 07 wave 3 flipped this from NOT-reloadable to reloadable)", () => {
+    // Wave 1 (96-01) authored this as forward-looking asserting `false` —
+    // RELOADABLE_FIELDS did NOT yet contain fileAccess at 96-01 wave-1 time.
+    // Wave 3 (96-07) extended RELOADABLE_FIELDS with agents.*.fileAccess +
+    // defaults.fileAccess (D-03) AND agents.*.outputDir + defaults.outputDir
+    // (D-09). This assertion now reflects the post-extension reality.
+    expect(RELOADABLE_FIELDS.has("agents.*.fileAccess")).toBe(true);
+    expect(RELOADABLE_FIELDS.has("defaults.fileAccess")).toBe(true);
     // Sanity: existing reloadable fields still classified correctly
     expect(RELOADABLE_FIELDS.has("agents.*.allowedModels")).toBe(true);
   });
