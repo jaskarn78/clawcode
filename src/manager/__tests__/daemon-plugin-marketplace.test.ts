@@ -333,4 +333,107 @@ describe("Phase 90 Plan 05 — plugin marketplace IPC handlers", () => {
     ).rejects.toThrow(/Agent 'ghost' not found/);
     expect(installPlugin).not.toHaveBeenCalled();
   });
+
+  // -----------------------------------------------------------------------
+  // Phase 93 Plan 03 — fallback URL regression (DPM-93-1)
+  //
+  // The handler at daemon.ts:1116-1118 implements:
+  //   const manifestUrl =
+  //     item.manifestUrl ??
+  //     `${baseUrl}/api/v1/plugins/${encodeURIComponent(item.name)}/manifest`;
+  //
+  // This regression pin ensures item.manifestUrl is preferred when present
+  // and the fallback fires only when item.manifestUrl is undefined. Per
+  // RESEARCH §Pitfall 5, the fallback URL is intentionally NOT modified —
+  // every probed URL shape returns 404 for unpublished plugins like
+  // hivemind, and the registry is the source of truth. Changing the
+  // fallback would just relocate the 404.
+  // -----------------------------------------------------------------------
+  describe("Phase 93 Plan 03 — fallback URL regression", () => {
+    it("DPM-93-1 prefers item.manifestUrl when present, falls back only when undefined", async () => {
+      const configs = [makeAgent("clawdy")];
+
+      // --- Case A: item.manifestUrl SET → that exact URL is used ---
+      const respWithUrl: ClawhubPluginsResponse = Object.freeze({
+        items: Object.freeze([
+          pluginItem("with-url", {
+            manifestUrl: "https://override.example/manifest",
+          }),
+        ]),
+        nextCursor: null,
+      });
+      const manifestA = Object.freeze({
+        name: "with-url",
+        description: "",
+        version: "1.0.0",
+        command: "cmd",
+        args: Object.freeze([]),
+        env: {},
+      });
+      const dlA = vi.fn().mockResolvedValue(manifestA);
+      const installA = vi.fn().mockResolvedValue(
+        Object.freeze({
+          kind: "installed",
+          plugin: "with-url",
+          pluginVersion: "1.0.0",
+          entry: { name: "with-url", command: "cmd", args: [], env: {} },
+        }) as PluginInstallOutcome,
+      );
+      const depsA = baseDeps(configs, {
+        fetchPlugins: vi.fn().mockResolvedValue(respWithUrl),
+        downloadManifest: dlA,
+        installPlugin: installA,
+      });
+      await handleMarketplaceInstallPluginIpc({
+        ...depsA,
+        params: { agent: "clawdy", plugin: "with-url", configInputs: {} },
+      });
+      expect(dlA).toHaveBeenCalledTimes(1);
+      expect(dlA.mock.calls[0]![0]).toMatchObject({
+        manifestUrl: "https://override.example/manifest",
+      });
+
+      // --- Case B: item.manifestUrl UNDEFINED → fallback URL is used ---
+      // pluginItem() helper omits manifestUrl by default, so this exercises
+      // the `??` fallback branch verbatim.
+      const respWithoutUrl: ClawhubPluginsResponse = Object.freeze({
+        items: Object.freeze([pluginItem("no-url")]),
+        nextCursor: null,
+      });
+      const manifestB = Object.freeze({
+        name: "no-url",
+        description: "",
+        version: "1.0.0",
+        command: "cmd",
+        args: Object.freeze([]),
+        env: {},
+      });
+      const dlB = vi.fn().mockResolvedValue(manifestB);
+      const installB = vi.fn().mockResolvedValue(
+        Object.freeze({
+          kind: "installed",
+          plugin: "no-url",
+          pluginVersion: "1.0.0",
+          entry: { name: "no-url", command: "cmd", args: [], env: {} },
+        }) as PluginInstallOutcome,
+      );
+      const depsB = baseDeps(configs, {
+        fetchPlugins: vi.fn().mockResolvedValue(respWithoutUrl),
+        downloadManifest: dlB,
+        installPlugin: installB,
+      });
+      await handleMarketplaceInstallPluginIpc({
+        ...depsB,
+        params: { agent: "clawdy", plugin: "no-url", configInputs: {} },
+      });
+      expect(dlB).toHaveBeenCalledTimes(1);
+      const fallbackArg = dlB.mock.calls[0]![0] as { manifestUrl: string };
+      // Baseline URL trimmed + canonical path; encodeURIComponent ensures
+      // identifier-shaped names round-trip unchanged. baseUrl in baseDeps
+      // is "http://localhost/mock" (trailing-slash safe).
+      expect(fallbackArg.manifestUrl).toBe(
+        "http://localhost/mock/api/v1/plugins/no-url/manifest",
+      );
+    });
+  });
 });

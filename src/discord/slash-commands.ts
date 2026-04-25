@@ -476,6 +476,16 @@ type PluginInstallOutcomeWire =
   | {
       readonly kind: "not-in-catalog";
       readonly plugin: string;
+    }
+  | {
+      // Phase 93 Plan 03 — registry lists the plugin but its manifest URL
+      // 404s. Mirrors the install-plugin.ts PluginInstallOutcome variant
+      // byte-for-byte at the wire level (no NormalizedMcpServerEntry on
+      // failure paths).
+      readonly kind: "manifest-unavailable";
+      readonly plugin: string;
+      readonly manifestUrl: string;
+      readonly status: number;
     };
 
 function renderPluginInstallOutcome(
@@ -500,6 +510,14 @@ function renderPluginInstallOutcome(
       return (
         `Plugin **${outcome.plugin}** blocked — secret-scan refused field \`${outcome.field}\` (${outcome.reason}).\n` +
         `Use an op:// reference (e.g. \`op://clawdbot/<item>/<field>\`) or scrub the literal and retry.`
+      );
+    case "manifest-unavailable":
+      // Phase 93 Plan 03 — distinguish 404 from malformed body. Operator
+      // can curl the manifestUrl manually if they want to confirm; the
+      // common case is the registry just hasn't published a manifest yet.
+      return (
+        `**${outcome.plugin}** manifest unavailable (404) — the registry lists this plugin but can't serve its manifest. ` +
+        `Retry later or choose a different plugin.`
       );
     case "manifest-invalid":
       return `**${outcome.plugin}** manifest is invalid: ${outcome.reason}.`;

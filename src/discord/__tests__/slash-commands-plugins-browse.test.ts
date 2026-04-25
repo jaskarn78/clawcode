@@ -444,6 +444,60 @@ describe("Phase 90 Plan 05 — /clawcode-plugins-browse inline handler", () => {
     expect(combined).toMatch(/timed out/i);
   });
 
+  it("PB-93-1 renders manifest-unavailable copy distinguishing it from manifest-invalid (Phase 93 Plan 03)", async () => {
+    // Drive /clawcode-plugins-browse → mocked IPC list returns hivemind →
+    // user picks hivemind → install IPC returns manifest-unavailable 404
+    // outcome → assert ephemeral copy uses the new wording.
+    mockedSendIpcRequest
+      .mockResolvedValueOnce({
+        agent: "clawdy",
+        installed: [],
+        available: [
+          {
+            name: "hivemind",
+            latestVersion: "0.6.55",
+            displayName: "Hivemind",
+            summary: "Group thinking plugin",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        kind: "manifest-unavailable",
+        plugin: "hivemind",
+        manifestUrl:
+          "https://clawhub.ai/api/v1/plugins/hivemind/manifest",
+        status: 404,
+      });
+
+    const handler = makeHandler({
+      routingTable: boundRouting,
+      resolvedAgents: [makeAgent("clawdy")],
+    });
+    const followUp = {
+      values: ["hivemind"],
+      user: { id: "user-1" },
+      customId: "plugins-picker:clawdy:abc",
+      update: vi.fn().mockResolvedValue(undefined),
+      showModal: vi.fn().mockResolvedValue(undefined),
+    };
+    const harness = makeInteraction({
+      channelId: "chan-1",
+      awaitMessageComponent: async () => followUp,
+    });
+    await (handler as unknown as {
+      handleInteraction: (i: unknown) => Promise<void>;
+    }).handleInteraction(harness.interaction);
+
+    const combined = extractReplyContent(harness.editReply.mock.calls);
+    expect(combined).toMatch(/\*\*hivemind\*\*/);
+    expect(combined).toMatch(/manifest unavailable \(404\)/);
+    expect(combined).toMatch(/registry lists this plugin but can't serve its manifest/);
+    expect(combined).toMatch(/Retry later or choose a different plugin/);
+    // CRITICAL: must NOT use the misleading "manifest is invalid" wording
+    // that prompted this plan in the first place.
+    expect(combined).not.toMatch(/manifest is invalid/);
+  });
+
   it("SL-P10: handleInteraction ladder — clawcode-plugins-browse fires BEFORE CONTROL_COMMANDS", async () => {
     // Smoke: the interaction reaches handlePluginsBrowseCommand (which
     // needs routingTable) and NOT the CONTROL_COMMANDS dispatcher (which

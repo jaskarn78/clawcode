@@ -31,6 +31,7 @@
 import {
   ClawhubAuthRequiredError,
   ClawhubManifestInvalidError,
+  ClawhubManifestNotFoundError,
   ClawhubRateLimitedError,
   type ClawhubPluginManifest,
 } from "./clawhub-client.js";
@@ -118,6 +119,21 @@ export type PluginInstallOutcome =
   | {
       readonly kind: "not-in-catalog";
       readonly plugin: string;
+    }
+  | {
+      /**
+       * Phase 93 Plan 03 — registry lists the plugin but its manifest URL
+       * 404s. Distinct from manifest-invalid (the body parsed but had wrong
+       * shape) and not-in-catalog (the plugin name isn't in the list).
+       *
+       * Operator UX: retry later or pick a different plugin. This is a
+       * registry-side fix (publish the manifest); not actionable in
+       * ClawCode itself.
+       */
+      readonly kind: "manifest-unavailable";
+      readonly plugin: string;
+      readonly manifestUrl: string;
+      readonly status: number;
     };
 
 // ---------------------------------------------------------------------------
@@ -356,6 +372,18 @@ export function mapFetchErrorToOutcome(
       kind: "auth-required" as const,
       plugin: pluginName,
       reason: err.message,
+    });
+  }
+  // Phase 93 Plan 03 — must precede the ClawhubManifestInvalidError branch
+  // so the more-specific 404 routing fires first. Carries manifestUrl +
+  // status so the Discord renderer can surface the exact URL operators can
+  // probe by hand.
+  if (err instanceof ClawhubManifestNotFoundError) {
+    return Object.freeze({
+      kind: "manifest-unavailable" as const,
+      plugin: pluginName,
+      manifestUrl: err.manifestUrl,
+      status: err.status,
     });
   }
   if (err instanceof ClawhubManifestInvalidError) {
