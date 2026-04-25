@@ -4185,12 +4185,21 @@ async function routeMethod(
       const { resolveFileAccess: resolveFileAccessForShare } = await import(
         "../config/loader.js"
       );
+      // routeMethod doesn't receive the top-level `config` object — only
+      // the resolved per-agent `configs[]`. Pass undefined for defaults;
+      // resolveFileAccess will skip the defaults merge. The defaults
+      // template `{agent}` expands to the agent's workspace dir which is
+      // already in allowedRoots from line 4172 (agentConfig.workspace),
+      // so no functional loss. Per-agent fileAccess override (which IS
+      // populated for cross-workspace cases like fin-acquisition reading
+      // /home/jjagpal/.openclaw/workspace-finmentum/) still applies.
+      // Bug fix 2026-04-25 evening: original Phase 96.1 hotfix referenced
+      // `config.defaults` but `config` is not in routeMethod scope —
+      // ReferenceError at runtime broke clawcode_share_file entirely.
       const fileAccessPaths = resolveFileAccessForShare(
         agentName,
         agentConfig as unknown as { readonly fileAccess?: readonly string[] },
-        config.defaults as unknown as {
-          readonly fileAccess?: readonly string[];
-        },
+        undefined,
       );
       for (const p of fileAccessPaths) {
         if (!allowedRoots.includes(p)) allowedRoots.push(p);
