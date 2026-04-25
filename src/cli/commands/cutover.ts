@@ -23,6 +23,7 @@ import { registerCutoverProfileCommand } from "./cutover-profile.js";
 import { registerCutoverProbeCommand } from "./cutover-probe.js";
 import { registerCutoverDiffCommand } from "./cutover-diff.js";
 import { registerCutoverApplyAdditiveCommand } from "./cutover-apply-additive.js";
+import { registerCutoverCanaryCommand } from "./cutover-canary.js";
 
 /**
  * Attach the `cutover` command group (and all its subcommands) to
@@ -46,5 +47,7 @@ export function registerCutoverCommand(parent: Command): void {
   registerCutoverDiffCommand(cutover);
   // Phase 92 Plan 03 — CUT-05 (additive auto-applier + cutover-ledger.jsonl)
   registerCutoverApplyAdditiveCommand(cutover);
-  // Plans 92-04..92-06 add: canary, verify, rollback
+  // Phase 92 Plan 05 — CUT-08 (dual-entry canary runner)
+  registerCutoverCanaryCommand(cutover);
+  // Plan 92-06 adds: verify, rollback
 }
