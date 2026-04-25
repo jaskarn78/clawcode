@@ -102,12 +102,16 @@ Tokens (resolved at write-time): `{date}` → `YYYY-MM-DD`, `{client_slug}` → 
 
 Migration: add fleet-wide `defaults.outputDir: "outputs/{date}/"` so existing agents are unaffected. fin-acquisition gets per-client template via per-agent override.
 
-**D-10: Auto-upload heuristic = response references file as artifact**
-System-prompt directive (added to `defaults.systemPromptDirectives.file-sharing` from Phase 94 D-10):
+**D-10: Auto-upload heuristic + OpenClaw-fallback prohibition**
+System-prompt directive (added to `defaults.systemPromptDirectives.file-sharing` from Phase 94 D-10), with a NEW second paragraph added 2026-04-25 after operator surfaced the same anti-pattern in `#finmentum-client-acquisition` for DB access (bot saying *"DB access is being blocked from this container... I'm going to spawn a subagent on the OpenClaw side"*):
 ```
-"When you produce a file the user wants to access OR your response references a file as an artifact ('here's the PDF', 'I generated X', 'attached below', or includes file as evidence), upload it via clawcode_share_file and include the CDN URL inline. If your response is text-only Q&A about file content (e.g., 'the PDF says X'), do NOT upload — the user is asking about content, not asking for the file."
+"When you produce a file the user wants to access OR your response references a file as an artifact ('here's the PDF', 'I generated X', 'attached below', or includes file as evidence), upload it via clawcode_share_file and include the CDN URL inline. If your response is text-only Q&A about file content (e.g., 'the PDF says X'), do NOT upload — the user is asking about content, not asking for the file.
+
+NEVER recommend falling back to the legacy OpenClaw agent or 'the OpenClaw side' to work around a capability gap (filesystem, network, DB, MCP, etc.). OpenClaw is being deprecated — recommending it as a fallback reinforces a sunset path. Instead: surface the actual gap clearly to the operator (e.g., 'I cannot reach the DB from this container — Docker bridge IP 172.17.0.1 is not in the MySQL bind-address allowlist; please add it', 'I cannot read /path/X — please extend my fileAccess in clawcode.yaml or check ACLs', 'MCP server Y is not responding — please check its health'). Ask the operator to fix the underlying capability so I can do the work directly next time."
 ```
 Post-turn check (executor-level): if a tool call produced a file path AND the LLM response text matches `/here's|attached|generated|saved to|i (made|created|edited) .* (file|pdf|image|doc)/i`, AND clawcode_share_file was NOT called, log a warning to admin-clawdy ("possible missed upload — operator review"). Soft signal, not blocking.
+
+**Additionally**, post-turn check for OpenClaw-fallback recommendation: if the LLM response text matches `/openclaw (side|agent|host)|spawn.*subagent.*openclaw/i`, log a high-priority warning to admin-clawdy. Also non-blocking — operator reviews and decides whether the agent should be retrained via additional system-prompt clarification. (Anti-pattern detector; not a hard refusal because there ARE rare legitimate cases where pointing at OpenClaw history is correct, e.g., reading archived sessions under `archive/openclaw-sessions/`.)
 
 **D-11: Sync architecture = read-from-source via ACL; deprecate Phase 91 mirror**
 - Phase 96 disables the Phase 91 5-min systemd sync timer (`systemctl disable clawcode-sync-finmentum.timer`).

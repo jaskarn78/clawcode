@@ -267,3 +267,45 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 **UI hint:** yes — `/clawcode-dream` Discord slash with EmbedBuilder showing latest dream summary; `/clawcode-memory` dashboard adds "Promotion candidates" section listing chunks the dream pass flagged for MEMORY.md inclusion.
 
 **Status:** Opened 2026-04-25. Zero new npm deps planned (reuses Claude Agent SDK + sqlite-vec + croner from existing stack).
+
+### Phase 96: Discord routing and file-sharing hygiene
+
+**Goal:** Eliminate the inverse-of-Phase-94 bug class — agents *under-promising* filesystem capabilities they actually have. Production trigger (2026-04-25 finmentum-client-acquisition Discord screenshot): agent replied "that path is not accessible from my side... use OpenClaw" despite operator-granted ACL on `/home/jjagpal/.openclaw/workspace-finmentum/` and relaxed `clawcode` systemd unit. Phase 96 makes every filesystem capability the agent claims (or denies) match runtime reality: probe accessible paths at boot/heartbeat/on-demand, render a `<filesystem_capability>` block in the system prompt classifying paths (My workspace / Operator-shared / Off-limits), accept ACL-approved cross-workspace paths in `clawcode_share_file`, deprecate Phase 91 mirror sync (read source via ACL instead). Twin of Phase 94 — same primitives reapplied to filesystem instead of MCP capability.
+
+**Requirements:** D-01..D-14 (14 operator-locked decisions in 96-CONTEXT.md — probe schedule + system-prompt block + refresh trigger + silent re-render + declaration model + boundary check + clawcode_list_files tool + alternative-agent suggestion + outputDir template + auto-upload heuristic + Phase 91 mirror deprecation + share-file failure classification + heartbeat refresh + Tara-PDF E2E acceptance)
+
+**Depends on:** Phase 91 (sync-state.json + 7-day rollback semantics — being deprecated), Phase 94 (capability-probe + ToolCallError + auto-injected tools blueprint — Phase 96 mirrors verbatim), Phase 85 (MCP probe + heartbeat foundation), Phase 22 (config-watcher hot-reload)
+
+**Plans:** 7 plans
+- [ ] 96-01-PLAN.md — Filesystem capability probe primitive + per-agent snapshot store + fileAccess schema (D-01, D-05, D-06)
+- [ ] 96-02-PLAN.md — System-prompt `<filesystem_capability>` block + assembler integration + cache-stability handling (D-02)
+- [ ] 96-03-PLAN.md — clawcode_list_files auto-injected tool + findAlternativeFsAgents helper + ToolCallError (permission) for fs reads (D-07, D-08)
+- [ ] 96-04-PLAN.md — Extend clawcode_share_file with outputDir resolution + auto-upload heuristic directive + ToolCallError classification (D-09, D-10, D-12)
+- [ ] 96-05-PLAN.md — /clawcode-probe-fs Discord slash + clawcode probe-fs CLI + /clawcode-status capability block + clawcode fs-status CLI (D-03, D-04)
+- [ ] 96-06-PLAN.md — Phase 91 mirror deprecation — disable systemd timer, mark deprecated, sync CLI deprecation messaging, 3-value authoritative enum, 7-day re-enable window (D-11)
+- [ ] 96-07-PLAN.md — Heartbeat fs-probe check + config-watcher reload trigger + auto-refresh on heartbeat tick + clawdy-deploy procedure + UAT-95 (D-01 heartbeat, D-03 watcher, D-13, D-14)
+
+**Wave structure:** 3 waves
+- Wave 1 (parallel): 96-01 (primitives + schema) + 96-06 (Phase 91 deprecation — independent subsystem)
+- Wave 2 (parallel — all depend on 96-01): 96-02 (system prompt) + 96-03 (list-files tool + alternatives) + 96-04 (share-file extension + outputDir + classified errors)
+- Wave 3 (sequential): 96-05 (Discord slash + CLIs + IPC) → 96-07 (heartbeat scheduling + config-watcher + deploy + UAT-95)
+
+**UI hint:** yes — /clawcode-probe-fs Discord slash with EmbedBuilder showing per-path probe status; /clawcode-status gains Capability section reusing renderFilesystemCapabilityBlock from system-prompt block (single source of truth between LLM-visible prompt and operator inspection); status emoji: ✓ ready, ⚠ degraded, ? unknown.
+
+**Status:** Opened 2026-04-25. Zero new npm deps planned (reuses node:fs/promises + Phase 91 atomic temp+rename + Phase 94 wrapMcpToolError + Phase 85 heartbeat runner + Phase 22 config-watcher RELOADABLE_FIELDS + Phase 53 stable-prefix assembler).
+
+### Phase 97: Network capability probe + turn-dispatch lag (deferred to v2.7)
+
+**Goal:** [To be planned in v2.7] Two related issues surfaced during Phase 96 work that were intentionally deferred to keep Phase 96 scope focused. Both deserve their own phase:
+
+**Sub-scope A — Network capability probe (extends Phase 96 D-01..D-06 model):**
+- Trigger: 2026-04-25 `#finmentum-client-acquisition` Discord screenshot — Clawdy claimed *"DB access is being blocked from this container (172.17.0.1 is Docker bridge)"*. Belief may have been current OR stale; Phase 96's filesystem probe doesn't cover network/DB reachability.
+- Scope: extend Phase 96's capability snapshot model to network endpoints. Probe DB/MCP/HTTP reachability at boot + heartbeat. Surface in `<network_capability>` system-prompt block (sibling to `<filesystem_capability>`). When probe fails, suggest the actual fix (e.g., "add 172.17.0.1 to MySQL `bind-address`") via the existing Phase 94 ToolCallError suggestion field.
+- Phase 96's D-10 directive extension (post-2026-04-25) already kills the OpenClaw-fallback anti-pattern across filesystem AND DB AND MCP — Phase 97 just adds the proactive probe so agents know about gaps before trying.
+
+**Sub-scope B — Turn-dispatch one-message-behind lag:**
+- Trigger: 2026-04-25 operator report — *"When I prompt the bot, it responds to the previous message... if I send a follow-up with a period, it responds to the previous prompt."*
+- Scope: investigate `src/discord/capture.ts` ↔ `src/manager/turn-dispatcher.ts` ↔ `src/discord/streaming.ts` race or buffering. Likely candidates: (a) DiscordBridge message-N captures while turn-N is mid-flight, response attaches to N+1's queue slot; (b) TurnDispatcher one-deep queue; (c) streaming final-flush attaches to next message. Reproduce with deterministic test fixture, fix root cause, add regression test pinning message-N → response-N invariant.
+
+**Plans:** TBD (run /gsd:plan-phase 97 in v2.7 to break down)
+**Status:** Backlog — Phase 96 must ship first. Phase 97 opens after Phase 96 deploys + UAT-95 passes.
