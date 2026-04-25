@@ -238,6 +238,7 @@ agents:
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
     model: sonnet
+    subagentModel: opus
     channels:
       - "1481670479017414767"
     mcpServers:
