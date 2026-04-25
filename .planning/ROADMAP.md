@@ -259,10 +259,10 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Depends on:** Phase 36-41 (knowledge graph + auto-linker), Phase 80 (memory translator + origin_id idempotency), Phase 90 (memory-scanner + RRF retrieval — provides the chunk corpus to dream over), Phase 94 (capability probe — dream pass needs to know which tools/MCPs are healthy before suggesting consolidations that depend on them)
 
-**Plans (suggested — run /gsd:plan-phase 95 to decompose):** ~3 plans
-- [ ] 95-01: Idle-window detector + dream prompt builder + LLM pass (DREAM-01..03)
-- [ ] 95-02: Auto-apply pipeline + dream-log writer + cron timer (DREAM-04..06)
-- [ ] 95-03: CLI + Discord slash + observability (DREAM-07)
+**Plans:** 3 plans
+- [ ] 95-01-PLAN.md — Idle-window detector + dream prompt builder + LLM dream pass primitive (DREAM-01/02/03)
+- [ ] 95-02-PLAN.md — Auto-apply additive + dream-log writer + per-agent cron timer (DREAM-04/05/06)
+- [ ] 95-03-PLAN.md — CLI clawcode dream + /clawcode-dream Discord slash + run-dream-pass IPC (DREAM-07)
 
 **UI hint:** yes — `/clawcode-dream` Discord slash with EmbedBuilder showing latest dream summary; `/clawcode-memory` dashboard adds "Promotion candidates" section listing chunks the dream pass flagged for MEMORY.md inclusion.
 
