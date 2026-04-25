@@ -642,6 +642,33 @@ export function resolveFileAccess(
 }
 
 /**
+ * Phase 96 D-09 — resolve outputDir template for an agent.
+ *
+ * Returns the LITERAL template string (per-agent override beats defaults;
+ * else fallback to 'outputs/{date}/'). Loader does NOT expand tokens —
+ * runtime resolveOutputDir(template, ctx, deps) expands at write time
+ * with fresh per-call ctx. Loader-time expansion would freeze {date} at
+ * config-load time (wrong on the second day) and would pin {client_slug}
+ * to the load-time value (wrong across multiple client conversations).
+ *
+ * Distinct from src/manager/resolve-output-dir.ts:resolveOutputDir — this
+ * loader helper just merges templates; the runtime helper expands them.
+ *
+ * @param _agentName   Agent name (currently unused — reserved for future
+ *                     {agent}-token expansion if needed at loader layer)
+ * @param agentCfg     Per-agent override (may omit `outputDir`)
+ * @param defaultsCfg  Fleet-wide default (always populated by zod default)
+ * @returns The merged outputDir template string (tokens preserved verbatim)
+ */
+export function resolveOutputDirTemplate(
+  _agentName: string,
+  agentCfg: { readonly outputDir?: string } | undefined,
+  defaultsCfg: { readonly outputDir?: string } | undefined,
+): string {
+  return agentCfg?.outputDir ?? defaultsCfg?.outputDir ?? "outputs/{date}/";
+}
+
+/**
  * Check if a file exists at the given path.
  */
 async function fileExists(path: string): Promise<boolean> {

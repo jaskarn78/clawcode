@@ -117,13 +117,48 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
 > = Object.freeze({
   "file-sharing": Object.freeze({
     enabled: true,
-    text: "When you produce a file the user wants to access, ALWAYS upload via Discord (the channel/thread you're answering in) and return the CDN URL. NEVER just tell the user a local file path they can't reach (e.g., '/home/clawcode/...'). If unsure where to send it, ask which channel.",
+    // Phase 94 D-09 baseline + Phase 96 D-10 extension (2026-04-25):
+    //   1. Auto-upload heuristic — distinguishes file-as-artifact references
+    //      ("here's the PDF", "I generated X") from text-only Q&A about file
+    //      content ("the PDF says X"). The former MUST upload via
+    //      clawcode_share_file; the latter MUST NOT.
+    //   2. OpenClaw-fallback prohibition — operator surfaced this anti-pattern
+    //      in #finmentum-client-acquisition on 2026-04-25 (bot recommended
+    //      "spawn a subagent on the OpenClaw side" for DB access). OpenClaw
+    //      is being deprecated; recommending it as a fallback reinforces a
+    //      sunset path. Agents instead surface the actual gap to the operator.
+    //
+    // Pinned by static-grep regression tests:
+    //   - "ALWAYS upload via Discord"            (Phase 94 D-09 verbatim)
+    //   - "NEVER just tell the user a local file path" (Phase 94 D-09 NEVER)
+    //   - "When you produce a file the user wants to access" (D-10 auto-upload)
+    //   - "If your response is text-only Q&A about file content" (D-10 negative)
+    //   - "NEVER recommend falling back to the legacy OpenClaw agent" (D-10 prohibition)
+    //   - "OpenClaw is being deprecated"          (D-10 deprecation rationale)
+    text:
+      "When you produce a file the user wants to access, ALWAYS upload via Discord (the channel/thread you're answering in) and return the CDN URL. NEVER just tell the user a local file path they can't reach (e.g., '/home/clawcode/...'). If unsure where to send it, ask which channel.\n\n" +
+      "When you produce a file the user wants to access OR your response references a file as an artifact (\"here's the PDF\", \"I generated X\", \"attached below\", or includes file as evidence), upload it via clawcode_share_file and include the CDN URL inline. If your response is text-only Q&A about file content (e.g., \"the PDF says X\"), do NOT upload — the user is asking about content, not asking for the file.\n\n" +
+      "NEVER recommend falling back to the legacy OpenClaw agent or \"the OpenClaw side\" to work around a capability gap (filesystem, network, DB, MCP, etc.). OpenClaw is being deprecated — recommending it as a fallback reinforces a sunset path. Instead: surface the actual gap clearly to the operator (e.g., \"I cannot reach the DB from this container — Docker bridge IP 172.17.0.1 is not in the MySQL bind-address allowlist; please add it\"; \"I cannot read /path/X — please extend my fileAccess in clawcode.yaml or check ACLs\"; \"MCP server Y is not responding — please check its health\"). Ask the operator to fix the underlying capability so I can do the work directly next time.",
   }),
   "cross-agent-routing": Object.freeze({
     enabled: true,
     text: "If a user asks you to do something requiring a tool you don't have, check your tool list. If unavailable, suggest the user ask another agent (mention specific channel/agent name) that has the tool ready.",
   }),
 });
+
+/**
+ * Phase 96 D-09 — 11th additive-optional schema application.
+ *
+ * Fleet-wide default outputDir template. Tokens ({date}/{agent}/
+ * {channel_name}/{client_slug}) are preserved verbatim in the schema; the
+ * runtime resolveOutputDir helper (src/manager/resolve-output-dir.ts) expands
+ * them at call time with fresh ctx (per-call clock, per-call clientSlug).
+ *
+ * Pinned by static-grep regression: `grep -q "DEFAULT_OUTPUT_DIR"
+ * src/config/schema.ts`. Frozen for immutability — exported so loader can
+ * reference the literal default without re-stating the string.
+ */
+export const DEFAULT_OUTPUT_DIR: string = "outputs/{date}/";
 
 /**
  * Phase 94 D-10 — per-agent override shape.
@@ -880,6 +915,13 @@ export const agentSchema = z.object({
   // override (additive). v2.5 migrated configs parse unchanged. Reload
   // classification deferred to Plan 96-07 (config-watcher hot-reload).
   fileAccess: z.array(z.string().min(1)).optional(),
+  // Phase 96 D-09 — 11th additive-optional schema application; per-agent
+  // outputDir template string. Tokens ({date}/{agent}/{channel_name}/
+  // {client_slug}) preserved literally; runtime resolveOutputDir expands
+  // them with fresh ctx. Per-agent override beats defaults.outputDir.
+  // v2.5/v2.6 migrated configs parse unchanged when omitted. Path traversal
+  // is blocked at runtime (resolveOutputDir refuses leading `/` and `..`).
+  outputDir: z.string().optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -1028,6 +1070,13 @@ export const defaultsSchema = z.object({
   fileAccess: z
     .array(z.string().min(1))
     .default(() => [...DEFAULT_FILE_ACCESS]),
+  // Phase 96 D-09 — 11th additive-optional schema application; fleet-wide
+  // default outputDir template. Default 'outputs/{date}/' lands generated
+  // files under a dated subdirectory of the agent workspace root. Tokens
+  // preserved literally; runtime expansion via resolveOutputDir at write
+  // time keeps {date} fresh per call (loader-time expansion would freeze
+  // the date at config-load time — wrong on the second day).
+  outputDir: z.string().default(DEFAULT_OUTPUT_DIR),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -1275,6 +1324,10 @@ export const configSchema = z.object({
     // exported constant (defensive copy — downstream merges via
     // resolveFileAccess never see the frozen reference).
     fileAccess: [...DEFAULT_FILE_ACCESS],
+    // Phase 96 D-09 — fleet-wide default outputDir mirrors the zod-populated
+    // value in defaultsSchema above. Tokens preserved literally; runtime
+    // resolveOutputDir expands them per call.
+    outputDir: DEFAULT_OUTPUT_DIR,
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",
