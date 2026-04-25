@@ -131,6 +131,16 @@ export const IPC_METHODS = [
   // shared image provider clients + the pure handlers in
   // src/image/tools.ts.
   "image-tool-call",
+  // Phase 92 Plan 04 CUT-06 / CUT-07 — destructive-fix admin-clawdy embed
+  // surface. Two IPC methods:
+  //   - cutover-verify-summary: returns DestructiveCutoverGap[] for the
+  //     /clawcode-cutover-verify slash command's embed batch render
+  //   - cutover-button-action: handles Accept/Reject/Defer routed from
+  //     the slash-commands.ts button collector with customId prefix
+  //     `cutover-`. Closure-based intercept BEFORE routeMethod (mirrors
+  //     marketplace handler pattern in daemon.ts ~line 2185).
+  "cutover-verify-summary",
+  "cutover-button-action",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

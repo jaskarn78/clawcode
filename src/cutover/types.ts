@@ -682,3 +682,157 @@ export type AdditiveApplyOutcome =
       agent: string;
       destructiveCount: number;
     };
+
+// ============================================================================
+// Phase 92 Plan 04 — Destructive-fix admin-clawdy embed surface (D-06 + D-07 + D-10)
+// ============================================================================
+//
+// Adds:
+//   - CUTOVER_BUTTON_PREFIX constant + namespace marker
+//   - destructiveButtonActionSchema / DestructiveButtonAction enum (accept/reject/defer)
+//   - CutoverButtonCustomId template-literal type (cutover-{agent}-{gapId}:{action})
+//   - parseCutoverButtonCustomId — null-safe parser (collision-safe with all other
+//     prefix namespaces: model-confirm:, skills-picker:, plugins-picker:, marketplace-,
+//     cancel:, modal-, skills-action-confirm:, plugin-confirm-x:)
+//   - DestructiveButtonOutcome — 6-variant discriminated union returned by the
+//     button-handler; consumed by Plan 92-06 report writer
+//
+// customId namespace is reserved by this plan. Collision regression test in
+// daemon-cutover-button.test.ts D2 pins parseCutoverButtonCustomId returns null
+// for ALL existing prefix shapes and NON-null only for cutover-* shape.
+
+/**
+ * D-06 namespace marker for cutover destructive-fix buttons. Reserved exclusively
+ * for Plan 92-04. Any string starting with this prefix is a cutover button and
+ * is routed to handleCutoverButtonInteraction; any string NOT starting with this
+ * prefix is left for other handlers to pick up.
+ *
+ * Collision-safe with: model-confirm:, model-cancel:, skills-picker:,
+ * plugins-picker:, marketplace-, cancel:, modal-, skills-action-confirm:,
+ * plugin-confirm-x:. Pinned by D2 collision regression test.
+ */
+export const CUTOVER_BUTTON_PREFIX = "cutover-";
+
+/**
+ * D-06 button-action vocabulary. Operator clicks one of three buttons in
+ * the destructive-fix admin-clawdy embed:
+ *   - accept: invoke applyDestructiveFix with pre-captured snapshot
+ *   - reject: append reject-destructive ledger row; target unchanged
+ *   - defer:  no-op at applier layer; next verify run re-surfaces the gap
+ */
+export const destructiveButtonActionSchema = z.enum([
+  "accept",
+  "reject",
+  "defer",
+]);
+export type DestructiveButtonAction = z.infer<
+  typeof destructiveButtonActionSchema
+>;
+
+/**
+ * Template-literal type pinning the customId shape for cutover destructive
+ * buttons: `cutover-{agent}-{gapId}:{action}`. The agent + gapId components
+ * MAY contain hyphens (agent names like "fin-acquisition" are common); the
+ * parser splits on the LAST hyphen of the body to extract gapId, and on the
+ * LAST colon to extract action. The body is the substring between the prefix
+ * and the action delimiter.
+ */
+export type CutoverButtonCustomId =
+  `cutover-${string}-${string}:${DestructiveButtonAction}`;
+
+/**
+ * Parse a Discord ButtonInteraction.customId into its (agent, gapId, action)
+ * components. Returns `null` when:
+ *   - The customId does NOT start with `cutover-` (collision-safe gate — leaves
+ *     other handlers' customIds untouched)
+ *   - There is no `:` separator in the string
+ *   - The action component is not one of accept/reject/defer
+ *   - The body (between prefix and `:`) lacks a hyphen separator (so we cannot
+ *     split it into agent + gapId)
+ *
+ * Body shape: `agent-gapId`. Splits on the LAST hyphen to allow agent names
+ * with hyphens (fin-acquisition, content-creator, etc.).
+ *
+ * Collision regression: returns null for all of these (D2 test):
+ *   - "model-confirm:fin:n"
+ *   - "model-cancel:fin:n"
+ *   - "skills-picker:fin:n"
+ *   - "plugins-picker:fin:n"
+ *   - "marketplace-skills-confirm:fin:n"
+ *   - "cancel:abc"
+ *   - "modal-1:fin"
+ *   - "skills-action-confirm:fin:n"
+ *   - "plugin-confirm-x:fin:n"
+ *
+ * Returns NON-null for "cutover-fin-acquisition-abc:accept".
+ */
+export function parseCutoverButtonCustomId(
+  customId: string,
+): {
+  agent: string;
+  gapId: string;
+  action: DestructiveButtonAction;
+} | null {
+  if (!customId.startsWith(CUTOVER_BUTTON_PREFIX)) return null;
+  const colonIdx = customId.lastIndexOf(":");
+  if (colonIdx < 0) return null;
+  const action = customId.slice(colonIdx + 1);
+  const parsedAction = destructiveButtonActionSchema.safeParse(action);
+  if (!parsedAction.success) return null;
+  const body = customId.slice(CUTOVER_BUTTON_PREFIX.length, colonIdx);
+  // Body shape: agent-gapId — split on LAST hyphen to allow agent names with
+  // hyphens (fin-acquisition, content-creator, ...).
+  const lastHyphen = body.lastIndexOf("-");
+  if (lastHyphen < 0) return null;
+  const agent = body.slice(0, lastHyphen);
+  const gapId = body.slice(lastHyphen + 1);
+  if (!agent || !gapId) return null;
+  return { agent, gapId, action: parsedAction.data };
+}
+
+/**
+ * D-06 — Outcome of a single destructive-button interaction. Discriminated by
+ * `kind`. Plan 92-06 report writer + the slash-commands.ts inline handler
+ * switch exhaustively over this union.
+ *
+ *   - accepted-applied:      Operator clicked Accept, applyDestructiveFix succeeded
+ *   - accepted-apply-failed: Operator clicked Accept, applier returned failure
+ *                            (ledger row appended for audit trail with reason)
+ *   - rejected:              Operator clicked Reject; ledger row written, target
+ *                            unchanged
+ *   - deferred:              Operator clicked Defer; NO ledger row, NO mutation
+ *                            (next verify run re-surfaces the gap)
+ *   - expired:               Discord collector timed out before any click
+ *   - invalid-customId:      customId failed parseCutoverButtonCustomId, OR
+ *                            gapById returned null (gap-not-found case)
+ */
+export type DestructiveButtonOutcome =
+  | {
+      kind: "accepted-applied";
+      agent: string;
+      gapKind: string;
+      identifier: string;
+      ledgerRow: CutoverLedgerRow;
+    }
+  | {
+      kind: "accepted-apply-failed";
+      agent: string;
+      gapKind: string;
+      identifier: string;
+      error: string;
+    }
+  | {
+      kind: "rejected";
+      agent: string;
+      gapKind: string;
+      identifier: string;
+      ledgerRow: CutoverLedgerRow;
+    }
+  | {
+      kind: "deferred";
+      agent: string;
+      gapKind: string;
+      identifier: string;
+    }
+  | { kind: "expired"; customId: string }
+  | { kind: "invalid-customId"; customId: string };
