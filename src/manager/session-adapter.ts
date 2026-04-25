@@ -4,6 +4,7 @@ import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
+import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
@@ -144,6 +145,13 @@ export type SessionHandle = {
    */
   getMcpState: () => ReadonlyMap<string, McpServerState>;
   setMcpState: (state: ReadonlyMap<string, McpServerState>) => void;
+  /**
+   * Phase 94 Plan 02 TOOL-03 — per-handle flap-history Map for the D-12
+   * 5min flap-stability window. Stable Map identity across calls (the
+   * filter mutates in-place per tick). Read by session-config.ts when
+   * assembling the LLM-visible MCP server list.
+   */
+  getFlapHistory: () => Map<string, FlapHistoryEntry>;
   /**
    * Phase 87 CMD-01 — enumerate SDK-reported slash commands for this session.
    *
@@ -345,6 +353,16 @@ export class MockSessionHandle implements SessionHandle {
   }
   setMcpState(state: ReadonlyMap<string, McpServerState>): void {
     this.mcpState = new Map(state);
+  }
+
+  /**
+   * Phase 94 Plan 02 TOOL-03 — test-mock flap-history accessor.
+   * Stable Map identity across calls (matches the production handle
+   * contract); filter mutates in-place per tick.
+   */
+  private flapHistoryMap: Map<string, FlapHistoryEntry> = new Map();
+  getFlapHistory(): Map<string, FlapHistoryEntry> {
+    return this.flapHistoryMap;
   }
 
   /**
@@ -751,6 +769,8 @@ function wrapSdkQuery(
   // parity. wrapSdkQuery is test-only (createTracedSessionHandle) so this
   // is effectively dormant in production paths.
   let legacyMcpState: ReadonlyMap<string, McpServerState> = new Map();
+  // Phase 94 Plan 02 TOOL-03 — legacy flap-history Map (test-only path).
+  const legacyFlapHistory: Map<string, FlapHistoryEntry> = new Map();
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
@@ -1285,6 +1305,14 @@ function wrapSdkQuery(
     },
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       legacyMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 94 Plan 02 TOOL-03 — legacy flap-history accessor (test-only).
+     * Stable Map identity matches the persistent-handle contract.
+     */
+    getFlapHistory(): Map<string, FlapHistoryEntry> {
+      return legacyFlapHistory;
     },
 
     /**

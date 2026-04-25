@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildSessionConfig, type SessionConfigDeps } from "../session-config.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
+import type { McpServerState } from "../../mcp/readiness.js";
 import type { MemoryEntry, MemoryTier } from "../../memory/types.js";
 import { MemoryStore } from "../../memory/store.js";
 import { ConversationStore } from "../../memory/conversation-store.js";
@@ -91,6 +92,38 @@ function makeDeps(overrides: Partial<SessionConfigDeps> = {}): SessionConfigDeps
   };
 }
 
+/**
+ * Phase 94 Plan 02 TOOL-03 — build a ready-state mcpStateProvider for the
+ * given server names. The filter consults `capabilityProbe.status === "ready"`
+ * to decide whether each server appears in the LLM-visible MCP table; tests
+ * that just want the table to render must wire an explicit ready snapshot.
+ */
+function readyMcpStateProvider(
+  serverNames: readonly string[],
+): (agentName: string) => ReadonlyMap<string, McpServerState> {
+  const map = new Map<string, McpServerState>();
+  for (const name of serverNames) {
+    map.set(
+      name,
+      Object.freeze({
+        name,
+        status: "ready",
+        lastSuccessAt: 1_700_000_000_000,
+        lastFailureAt: null,
+        lastError: null,
+        failureCount: 0,
+        optional: false,
+        capabilityProbe: Object.freeze({
+          status: "ready",
+          lastRunAt: "2026-04-25T12:00:00.000Z",
+        }),
+      }),
+    );
+  }
+  const frozen = Object.freeze(map) as ReadonlyMap<string, McpServerState>;
+  return () => frozen;
+}
+
 describe("buildSessionConfig — subagent thread skill guidance", () => {
   it("includes Subagent Thread Skill section when agent has subagent-thread skill", async () => {
     const config = makeConfig({ skills: ["subagent-thread"] });
@@ -144,13 +177,19 @@ describe("buildSessionConfig — subagent thread skill guidance", () => {
 });
 
 describe("buildSessionConfig — MCP tools injection", () => {
-  it("includes MCP tools in Available Tools section when agent has mcpServers configured", async () => {
+  it("includes MCP tools in Available Tools section when agent has mcpServers configured (with ready capability probe)", async () => {
     const config = makeConfig({
       mcpServers: [
         { name: "finnhub", command: "npx", args: ["-y", "finnhub-mcp"], env: {}, optional: false },
       ],
     });
-    const result = await buildSessionConfig(config, makeDeps());
+    // Phase 94 Plan 02 TOOL-03: filter requires capabilityProbe.status === "ready"
+    // to advertise the server to the LLM. Wire a ready state provider so the
+    // server passes the filter and appears in the table.
+    const deps = makeDeps({
+      mcpStateProvider: readyMcpStateProvider(["finnhub"]),
+    });
+    const result = await buildSessionConfig(config, deps);
     expect(result.systemPrompt).toContain("## Available Tools");
     expect(result.systemPrompt).toContain("finnhub");
   });
@@ -162,12 +201,17 @@ describe("buildSessionConfig — MCP tools injection", () => {
         { name: "google-workspace", command: "node", args: ["gw-server.js"], env: { API_KEY: "test" }, optional: false },
       ],
     });
-    const result = await buildSessionConfig(config, makeDeps());
+    // Phase 94 Plan 02 TOOL-03: ready-state provider so both servers appear
+    // in the table (filter would otherwise suppress unprobed servers).
+    const deps = makeDeps({
+      mcpStateProvider: readyMcpStateProvider(["finnhub", "google-workspace"]),
+    });
+    const result = await buildSessionConfig(config, deps);
     // Phase 85 Plan 02 — new markdown-table format replaces the legacy
     // bullet-list that leaked `command` + `args` into every prompt.
     expect(result.systemPrompt).toContain("| Server | Status | Tools | Last Error |");
-    expect(result.systemPrompt).toMatch(/\| finnhub \| unknown \|/);
-    expect(result.systemPrompt).toMatch(/\| google-workspace \| unknown \|/);
+    expect(result.systemPrompt).toMatch(/\| finnhub \| ready \|/);
+    expect(result.systemPrompt).toMatch(/\| google-workspace \| ready \|/);
     // Regression pin for the removed leak — none of these fields should
     // appear anywhere in the rendered prompt.
     expect(result.systemPrompt).not.toContain("`npx -y finnhub-mcp`");
@@ -1220,7 +1264,13 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
         { name: "finmentum-db", command: "x", args: [], env: {}, optional: false },
       ],
     });
-    const result = await buildSessionConfig(config, makeDeps());
+    // Phase 94 Plan 02 TOOL-03: wire ready capabilityProbe so the MCP block
+    // renders in the stable prefix (filter would otherwise hide an unprobed
+    // server).
+    const result = await buildSessionConfig(
+      config,
+      makeDeps({ mcpStateProvider: readyMcpStateProvider(["finmentum-db"]) }),
+    );
     const prompt = result.systemPrompt;
     const idxIdentity = prompt.indexOf("## Identity");
     const idxIdentityBody = prompt.indexOf("IDENTITY_MARKER_ORDER_TEST");

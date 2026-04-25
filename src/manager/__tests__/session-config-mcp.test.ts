@@ -97,14 +97,28 @@ function makeDeps(
 function makeState(
   overrides: Partial<McpServerState> & { name: string },
 ): McpServerState {
+  // Phase 94 Plan 02 TOOL-03: mirror connect-test status into capabilityProbe
+  // by default so the filter (which reads capabilityProbe.status only)
+  // sees the same readiness signal as the renderer table. Tests that need
+  // capabilityProbe to diverge from the connect-test status pass an
+  // explicit `capabilityProbe` override.
+  const connectStatus = overrides.status ?? "ready";
+  const probeStatus =
+    connectStatus === "ready" ? "ready" : "degraded";
   return Object.freeze({
     name: overrides.name,
-    status: overrides.status ?? "ready",
+    status: connectStatus,
     lastSuccessAt: overrides.lastSuccessAt ?? 1_700_000_000_000,
     lastFailureAt: overrides.lastFailureAt ?? null,
     lastError: overrides.lastError ?? null,
     failureCount: overrides.failureCount ?? 0,
     optional: overrides.optional ?? false,
+    capabilityProbe:
+      overrides.capabilityProbe ??
+      Object.freeze({
+        status: probeStatus,
+        lastRunAt: "2026-04-25T12:00:00.000Z",
+      }),
   });
 }
 
@@ -150,7 +164,14 @@ describe("session-config MCP block — empty-servers case", () => {
 });
 
 describe("session-config MCP block — state provider end-to-end", () => {
-  it("Test 3: lastError.message from the state provider flows verbatim into the prompt", async () => {
+  it("Test 3: lastError.message from a degraded (not failed) server still surfaces while the server is in the table", async () => {
+    // Phase 94 Plan 02 TOOL-03 — failed servers are FILTERED from the
+    // LLM-visible stable-prefix table entirely (the LLM cannot promise a
+    // tool whose backing server is failed). Operator-truth (full status
+    // including failed servers + verbatim errors) flows through the
+    // /clawcode-tools slash command + clawcode mcp-status CLI, NOT the
+    // prompt. This test now pins the stable-prefix filter behavior:
+    // failed servers are absent from the LLM tool table.
     const config = makeConfig({
       mcpServers: [
         { name: "a", command: "x", args: [], env: {}, optional: false },
@@ -163,6 +184,11 @@ describe("session-config MCP block — state provider end-to-end", () => {
           name: "a",
           status: "failed",
           lastError: { message: "verbatim-123" },
+          capabilityProbe: {
+            status: "failed",
+            lastRunAt: "2026-04-25T12:00:00.000Z",
+            error: "verbatim-123",
+          },
         }),
       ],
     ]);
@@ -171,18 +197,26 @@ describe("session-config MCP block — state provider end-to-end", () => {
     });
     const result = await buildSessionConfig(config, deps);
 
-    expect(result.systemPrompt).toContain("verbatim-123");
+    // Server is filtered → no MCP block in stable prefix → no row for "a".
+    expect(result.systemPrompt).not.toMatch(/\| a \|/);
+    // Verbatim error message must NOT leak into the LLM prompt for filtered
+    // servers (operators read the verbatim error via /clawcode-tools).
+    expect(result.systemPrompt).not.toContain("verbatim-123");
   });
 
-  it("uses an empty state map when mcpStateProvider is not supplied — renders status 'unknown'", async () => {
+  it("uses an empty state map when mcpStateProvider is not supplied — Phase 94 filters out unprobed servers (conservative)", async () => {
     const config = makeConfig({
       mcpServers: [
         { name: "a", command: "x", args: [], env: {}, optional: false },
       ],
     });
-    // No mcpStateProvider on deps.
+    // No mcpStateProvider on deps. Phase 94 TOOL-03 contract: server
+    // without a capabilityProbe.status === "ready" entry is FILTERED from
+    // the LLM-visible tool list (don't advertise unproven tools). The
+    // entire MCP block is suppressed when every server filters out.
     const result = await buildSessionConfig(config, makeDeps());
-    expect(result.systemPrompt).toMatch(/\| a \| unknown \|/);
+    expect(result.systemPrompt).not.toContain("MCP tools are pre-authenticated");
+    expect(result.systemPrompt).not.toMatch(/\| a \|/);
   });
 });
 
@@ -202,7 +236,7 @@ describe("session-config MCP block — cache discipline (TOOL-07)", () => {
     expect(r1.systemPrompt).toBe(r2.systemPrompt);
   });
 
-  it("Test 5: state change (ready → failed) DOES change the systemPrompt (cache invalidation on purpose)", async () => {
+  it("Test 5: state change (ready → failed) DOES change the systemPrompt — Phase 94 TOOL-03 filters failed servers OUT of the table", async () => {
     const config = makeConfig({
       mcpServers: [
         { name: "a", command: "x", args: [], env: {}, optional: false },
@@ -218,6 +252,11 @@ describe("session-config MCP block — cache discipline (TOOL-07)", () => {
           name: "a",
           status: "failed",
           lastError: { message: "ENOENT" },
+          capabilityProbe: {
+            status: "failed",
+            lastRunAt: "2026-04-25T12:00:00.000Z",
+            error: "ENOENT",
+          },
         }),
       ],
     ]);
@@ -231,9 +270,13 @@ describe("session-config MCP block — cache discipline (TOOL-07)", () => {
       makeDeps({ mcpStateProvider: () => failedState }),
     );
     expect(r1.systemPrompt).not.toBe(r2.systemPrompt);
+    // Ready state: server appears in the table.
     expect(r1.systemPrompt).toMatch(/\| a \| ready \|/);
-    expect(r2.systemPrompt).toMatch(/\| a \| failed \|/);
-    expect(r2.systemPrompt).toContain("ENOENT");
+    // Failed state: filter removes server entirely from LLM stable prefix.
+    expect(r2.systemPrompt).not.toMatch(/\| a \|/);
+    // Failed state: error does NOT leak into the LLM prompt either
+    // (operators consume verbatim errors via /clawcode-tools).
+    expect(r2.systemPrompt).not.toContain("ENOENT");
   });
 });
 

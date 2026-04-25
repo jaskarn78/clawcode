@@ -32,6 +32,12 @@
  *   `metadata_json.section_tokens` key, consumed by Plan 53-01's audit CLI.
  */
 
+// Phase 94 Plan 02 TOOL-03 contract: the `toolDefinitions` source string
+// reaching this assembler has ALREADY been filtered by the
+// capability-probe filter in session-config.ts. The assembler MUST NOT
+// call the filter directly — single-source-of-truth invariant pinned by
+// static-grep regression test. context-assembler renders whatever it is
+// given; do not re-inject raw MCP server lists here.
 import { createHash } from "node:crypto";
 import type { Turn } from "../performance/trace-collector.js";
 import { countTokens } from "../performance/token-count.js";

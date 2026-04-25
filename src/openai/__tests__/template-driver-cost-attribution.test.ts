@@ -106,6 +106,8 @@ function makeMockHandleWithUsage(opts: {
     // Phase 85 TOOL-01 — required by SessionHandle surface.
     getMcpState: vi.fn().mockReturnValue(new Map()) as unknown as SessionHandle["getMcpState"],
     setMcpState: vi.fn(),
+    // Phase 94 Plan 02 TOOL-03 — required by SessionHandle surface.
+    getFlapHistory: vi.fn().mockReturnValue(new Map()) as unknown as SessionHandle["getFlapHistory"],
     // Phase 87 CMD-01 — required by SessionHandle surface (empty default).
     getSupportedCommands: vi.fn().mockResolvedValue([]) as unknown as SessionHandle["getSupportedCommands"],
   };

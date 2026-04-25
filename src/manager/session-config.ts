@@ -38,6 +38,16 @@ import {
 // Phase 85 Plan 02 — MCP section renderer (TOOL-02 / TOOL-05 / TOOL-07).
 import { renderMcpPromptBlock } from "./mcp-prompt-block.js";
 import type { McpServerState } from "../mcp/readiness.js";
+// Phase 94 Plan 02 TOOL-03 — single-source-of-truth filter for the LLM-
+// visible tool list. The filter wraps the MCP server set BEFORE the
+// renderer assembles the stable-prefix tool block so the LLM never sees
+// servers in degraded/failed/reconnecting/unknown states. The mutable
+// suffix (operator-truth) reads the UNFILTERED snapshot for full
+// visibility — see mcp-prompt-block.ts for that contract.
+import {
+  filterToolsByCapabilityProbe,
+  type FlapHistoryEntry,
+} from "./filter-tools-by-capability-probe.js";
 // Phase 90 MEM-01 — 50KB hard cap on MEMORY.md auto-inject (D-17).
 import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
 
@@ -122,6 +132,21 @@ export type SessionConfigDeps = {
   readonly mcpStateProvider?: (
     agentName: string,
   ) => ReadonlyMap<string, McpServerState>;
+  /**
+   * Phase 94 Plan 02 TOOL-03 — per-agent flap-history Map provider.
+   *
+   * The filter mutates the returned Map in-place per call to count
+   * ready ↔ non-ready transitions for the D-12 5min flap-stability
+   * window. SessionManager wires this to the per-handle Map (stable
+   * identity across all session-config rebuilds for the same agent).
+   *
+   * Optional — when absent, the filter still applies the ready/degraded
+   * gate; the flap-stability window simply doesn't engage. Tests that
+   * don't care about flap behavior can skip wiring it.
+   */
+  readonly flapHistoryProvider?: (
+    agentName: string,
+  ) => Map<string, FlapHistoryEntry>;
 };
 
 /**
@@ -346,8 +371,38 @@ export async function buildSessionConfig(
   const mcpServers = config.mcpServers ?? [];
   if (mcpServers.length > 0) {
     const mcpState = deps.mcpStateProvider?.(config.name) ?? new Map();
+    // Phase 94 Plan 02 TOOL-03 — single-source-of-truth filter call site.
+    // Pre-filter the LLM-visible server set BEFORE the renderer assembles
+    // the stable-prefix tool block. Each MCP server is represented as a
+    // ToolDef whose mcpServer attribution is its own name; the filter
+    // drops any server whose capabilityProbe.status !== "ready" (D-04 +
+    // D-12 sticky-degraded). When Playwright is degraded, the LLM does
+    // not see the `browser` server in its tool table at all → it cannot
+    // promise screenshots. When auto-recovery (Plan 94-03) restores the
+    // probe to ready, the next session-config rebuild re-includes the
+    // server.
+    //
+    // Static-grep regression pin: this is the SOLE call site of
+    // filterToolsByCapabilityProbe in src/. context-assembler.ts and
+    // mcp-prompt-block.ts MUST NOT call the filter — they consume the
+    // already-filtered output (mcp-prompt-block) or render unrelated
+    // structure (context-assembler).
+    const flapHistory = deps.flapHistoryProvider?.(config.name);
+    const tools = mcpServers.map((s) => ({
+      name: s.name,
+      mcpServer: s.name,
+    }));
+    const filteredToolNames = new Set(
+      filterToolsByCapabilityProbe(tools, {
+        snapshot: mcpState,
+        flapHistory,
+      }).map((t) => t.name),
+    );
+    const advertisedServers = mcpServers.filter((s) =>
+      filteredToolNames.has(s.name),
+    );
     const mcpBlock = renderMcpPromptBlock({
-      servers: mcpServers,
+      servers: advertisedServers,
       stateByName: mcpState,
     });
     if (mcpBlock.length > 0) {

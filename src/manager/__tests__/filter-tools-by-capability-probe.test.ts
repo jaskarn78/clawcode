@@ -20,6 +20,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   filterToolsByCapabilityProbe,
   FLAP_WINDOW_MS,
@@ -269,5 +270,41 @@ describe("filterToolsByCapabilityProbe — D-04 dynamic tool advertising", () =>
     expect(result).toEqual([{ name: "browser_snapshot", mcpServer: "browser" }]);
     const reset = flapHistory.get("browser");
     expect(reset?.stickyDegraded).toBe(false);
+  });
+});
+
+describe("FT-REG-SINGLE-SRC: single-source-of-truth filter call site (D-04 + plan rule 3)", () => {
+  it("session-config.ts is the SOLE call site of filterToolsByCapabilityProbe", () => {
+    const sessionConfig = readFileSync(
+      "src/manager/session-config.ts",
+      "utf8",
+    );
+    expect(sessionConfig).toContain("filterToolsByCapabilityProbe");
+  });
+
+  it("context-assembler.ts MUST NOT call the filter (consumes filtered output)", () => {
+    const assembler = readFileSync(
+      "src/manager/context-assembler.ts",
+      "utf8",
+    );
+    // Allow the contract comment to mention the function name once but
+    // reject any actual `filterToolsByCapabilityProbe(` call expression.
+    expect(assembler).not.toMatch(/filterToolsByCapabilityProbe\s*\(/);
+  });
+
+  it("mcp-prompt-block.ts MUST NOT call the filter (renders given list)", () => {
+    const block = readFileSync("src/manager/mcp-prompt-block.ts", "utf8");
+    expect(block).not.toMatch(/filterToolsByCapabilityProbe\s*\(/);
+  });
+
+  it("FT-PURITY: filter module has no fs/sdk/setTimeout/process.env imports", () => {
+    const src = readFileSync(
+      "src/manager/filter-tools-by-capability-probe.ts",
+      "utf8",
+    );
+    expect(src).not.toMatch(/from\s+["']node:fs/);
+    expect(src).not.toMatch(/from\s+["']@anthropic-ai\/claude-agent-sdk/);
+    expect(src).not.toMatch(/setTimeout\s*\(/);
+    expect(src).not.toMatch(/process\.env/);
   });
 });

@@ -27,3 +27,11 @@
 **Plan 94-04 contribution:** Net-zero new failure surface. The 33 new tests added by 94-04 (tool-call-error.test.ts + find-alternative-agents.test.ts + turn-dispatcher-tool-error.test.ts) all pass. The TurnDispatcher tests (`turn-dispatcher.test.ts` + `turn-dispatcher-skill-effort.test.ts`) all pass after my edits — no regressions.
 
 **Suggested fix (out of scope for 94-04):** A small dedicated cleanup phase to chase down the 4 separate root causes — bootstrap memoryPath wiring, OpenAI handle shape regression, EmbeddingService cap, and restart-greeting skip-classifier — each is independent.
+
+## Plan 94-02 verification (full-suite sweep)
+
+**Discovered during:** Plan 94-02 execution (Task 2 full-suite sweep — `npx vitest run --reporter=dot`).
+
+**Status:** Net-zero new failure surface. Pre-existing failure count baseline = 27 (verified via `git stash` before changes); after-change count = 28 in one full-suite run, but 1 of those is `MEM-01-C2: 50KB cap` test timeout — same timeout reproduces unmodified on stash baseline (flaky pre-existing). All Plan 94-02 modifications and new tests pass: 59/59 in session-config + session-config-mcp, 13/13 in filter-tools-by-capability-probe (9 FT-* + 4 regression pins). Build clean.
+
+**Plan 94-02 contribution:** 1 new pure module (`filter-tools-by-capability-probe.ts`), 13 new tests, single-source-of-truth filter wired at `session-config.ts` MCP-block assembly, getFlapHistory accessor added to SessionHandle (mirrored on PersistentSessionHandle + per-turn-query legacy + 3 mock test helpers).

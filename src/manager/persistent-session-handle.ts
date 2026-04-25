@@ -33,6 +33,7 @@ import type {
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
+import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 
 /**
  * Phase 94 Plan 01 — capability probe types re-anchored at this file path
@@ -175,6 +176,13 @@ export function createPersistentSessionHandle(
   // consumers in Plans 02 + 03). Updated at warm-path gate + on every
   // mcp-reconnect heartbeat tick.
   let currentMcpState: ReadonlyMap<string, McpServerState> = new Map();
+
+  // Phase 94 Plan 02 TOOL-03 — per-handle flap-history Map for the D-12
+  // 5min flap-stability window. Lazily initialized; persists across all
+  // session-config rebuilds for this handle so the filter's flap-tracker
+  // correctly counts ready ↔ non-ready transitions over time. The filter
+  // mutates this Map on every call; same handle → same Map identity.
+  const flapHistory: Map<string, FlapHistoryEntry> = new Map();
 
   // Phase 87 CMD-01 — cache of SDK-reported slash commands. Populated once via
   // q.initializationResult() on first call; subsequent calls hit the cache.
@@ -785,6 +793,23 @@ export function createPersistentSessionHandle(
      */
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       currentMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 94 Plan 02 TOOL-03 — accessor for the per-handle flap-history
+     * Map consumed by `filterToolsByCapabilityProbe` in session-config.
+     *
+     * Map identity is stable across all calls for the lifetime of this
+     * handle — the filter mutates it in-place per tick to count ready ↔
+     * non-ready transitions for the D-12 5min flap-stability window.
+     *
+     * Production wiring: `buildSessionConfig` reads this via
+     * `SessionConfigDeps.flapHistoryProvider(agentName)` and threads it
+     * into the filter call. Tests can stub the provider directly without
+     * needing a real handle.
+     */
+    getFlapHistory(): Map<string, FlapHistoryEntry> {
+      return flapHistory;
     },
 
     /**

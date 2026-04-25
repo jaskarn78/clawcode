@@ -4,6 +4,16 @@ import type { McpServerState } from "../mcp/readiness.js";
 /**
  * Phase 85 Plan 02 — pure renderer for the MCP section of the system prompt.
  *
+ * Phase 94 Plan 02 TOOL-03 — this renderer DOES NOT filter. The server
+ * list passed in via `input.servers` has ALREADY been filtered upstream
+ * in `session-config.ts` (the single-source-of-truth call site). This
+ * renderer's job is to render whatever it is given. The filter happens
+ * UPSTREAM so the LLM stable prefix never names a degraded/failed/
+ * reconnecting/unknown server. Operator-truth (full server list
+ * including degraded) is exposed via the `/clawcode-tools` slash
+ * command + `clawcode mcp-status` CLI (Phase 85 Plan 03), NOT by
+ * re-injecting the unfiltered list here.
+ *
  * Emits, in order:
  *   1. A `## MCP Tools (pre-authenticated)` heading
  *   2. The {@link MCP_PREAUTH_STATEMENT} (TOOL-02)
