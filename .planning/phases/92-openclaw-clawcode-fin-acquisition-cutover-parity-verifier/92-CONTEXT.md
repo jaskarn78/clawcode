@@ -127,7 +127,27 @@ Escape hatch: `--skip-verify` flag. When set, writes an audit-log entry to `~/.c
 
 Additive fixes are trivially reversible (just delete/remove). Destructive fixes require snapshot capture at apply time — ledger row stores full pre-change content sha256 + compressed blob for files < 64KB. Files > 64KB logged as "irreversible-without-backup" and excluded from rollback.
 
-### D-11: Mission Control API as primary source corpus (AMENDS D-01)
+### D-12: Post-execution finding — fin-acquisition has no discrete OpenClaw source identity (RECONTEXTUALIZES D-01 + D-11)
+
+**Discovered 2026-04-25 during live verifier run on clawdy:** When `clawcode cutover verify --agent fin-acquisition` was invoked end-to-end against production, the MC ingestor reported "Agent fin-acquisition not found in Mission Control's /api/agents response". Investigation showed:
+
+- Mission Control's `/api/agents` enumerates only the OpenClaw gateway-level agents: `personal`, `projects`, `work`, `general`, `shopping`, `research`, `kimi`, `local-clawdy` (8 entries; gateway_agent_id field).
+- `fin-acquisition` is NOT a discrete OpenClaw agent — it is a model-binding alias (`clawcode/fin-acquisition` in `channels.modelByChannel`) that routes traffic via Phase 74's seamless backend (`/v1/chat/completions` against ClawCode itself).
+- Therefore: there is no OpenClaw-only behavior corpus to diff against. Pre-cutover, the underlying handler was *already* ClawCode (via the seamless-backend bridge); the operator-visible "cutover" is just a model-binding swap, not a content/skill/MCP migration.
+
+**Implication for D-01 + D-11:**
+- D-01 (Discord channels as source) was the right framing.
+- D-11 (MC API as primary) was an overcorrection — MC API enumerates by gateway_agent_id, but fin-acquisition has none.
+- A future channel-scoped MC ingestor could enrich Discord history with MC session metadata by filtering session keys matching `discord:channel:<channelId>` (e.g., `1471307765401129002` for admin-clawdy) — but this is a Phase 92.1 follow-up, not v2.5 scope.
+
+**Operator cutover surface (much smaller than Phase 92's planned scope):**
+1. Edit `~/.openclaw/openclaw.json` `channels.modelByChannel` → swap value from `anthropic-api/claude-sonnet-4-6` to `clawcode/fin-acquisition`
+2. Restart openclaw-gateway user service
+3. Smoke-test by sending a message in fin-acquisition's channels and verifying the response surfaces from ClawCode (which it already was)
+
+**Phase 92 disposition:** infrastructure shipped + tested + deployed (134 cumulative tests, full verify pipeline + IPC + CLI + ledger + rollback). Reusable for any future OpenClaw→ClawCode agent migration where the source agent IS a discrete OpenClaw entity (e.g., migrating `general` or `projects` to a ClawCode replacement). For fin-acquisition specifically, the verifier is moot because there's no source corpus distinct from ClawCode itself — but the v2.5 work isn't wasted; it's the platform for the next agent migration.
+
+### D-11: Mission Control API as primary source corpus (AMENDS D-01 — superseded by D-12 above for fin-acquisition specifically)
 
 **Discovered 2026-04-24 mid-Phase-92-execution:** OpenClaw runs an "OpenClaw Mission Control" Next.js dashboard on host `100.71.14.96:4000` (systemd unit `mission-control.service`) that exposes a bearer-token-protected REST API surface over OpenClaw's internal session and orchestration data.
 
