@@ -836,3 +836,151 @@ export type DestructiveButtonOutcome =
     }
   | { kind: "expired"; customId: string }
   | { kind: "invalid-customId"; customId: string };
+
+// ============================================================================
+// Phase 92 Plan 05 — Dual-entry canary runner (CUT-08, D-08, D-11)
+// ============================================================================
+//
+// Adds:
+//   - CANARY_TIMEOUT_MS / CANARY_CHANNEL_ID / CANARY_TOP_INTENT_LIMIT /
+//     CANARY_API_ENDPOINT constants (D-08 + D-Claude's-Discretion fin-test channel)
+//   - canaryPromptSchema / CanaryPrompt (synthesizer output row)
+//   - canaryInvocationResultSchema / CanaryInvocationResult
+//   - CanarySynthesizeOutcome / CanaryRunOutcome / CanaryReportOutcome unions
+//
+// The canary runner exercises the cutover candidate end-to-end via BOTH
+// production entry points: Discord bot (TurnDispatcher.dispatchStream) AND
+// API (POST /v1/chat/completions). 20 prompts × 2 paths = 40 invocations
+// per run. Each invocation has a 30s timeout (D-08 — timeout = failure).
+
+/**
+ * D-08 — per-path timeout in milliseconds. Any single Discord-bot OR API
+ * invocation that exceeds this limit is recorded as `failed-timeout` and
+ * the runner moves on to the next path/prompt. Pinned by static-grep.
+ */
+export const CANARY_TIMEOUT_MS = 30_000;
+
+/**
+ * D-Claude's-Discretion — canary channel ID for Discord bot path. This is
+ * the recently-freed fin-test channel already bound to fin-acquisition's
+ * channels[] in clawcode.yaml (Phase 90.1 channel remap). Used only in
+ * production wiring; tests DI a synthetic channel ID.
+ */
+export const CANARY_CHANNEL_ID = "1492939095696216307";
+
+/**
+ * D-08 — number of top intents (sorted by count DESC) the synthesizer
+ * uses to derive prompts. Cron-prefixed intents (per D-11 / Plan 92-01)
+ * are preserved in the slice and surface as "manual trigger" prompts in
+ * the canary battery so cron parity is exercised.
+ */
+export const CANARY_TOP_INTENT_LIMIT = 20;
+
+/**
+ * Phase 73 OpenAI-shape endpoint for the API path. Loopback only — the
+ * canary never reaches an external network. Pinned by static-grep
+ * regression rejecting non-localhost https/http URLs in canary-runner.ts.
+ */
+export const CANARY_API_ENDPOINT =
+  "http://localhost:3101/v1/chat/completions";
+
+/**
+ * One synthesized canary prompt row. The synthesizer emits one of these
+ * per top intent — the prompt is a representative user message that
+ * exercises the intent end-to-end.
+ */
+export const canaryPromptSchema = z.object({
+  intent: z.string().min(1),
+  prompt: z.string().min(1),
+});
+export type CanaryPrompt = z.infer<typeof canaryPromptSchema>;
+
+/**
+ * One invocation result — produced by `runCanary` for each (prompt, path)
+ * pair. status="passed" requires HTTP 200 (API) or non-empty Discord
+ * reply (bot path) within `CANARY_TIMEOUT_MS`.
+ */
+export const canaryInvocationResultSchema = z.object({
+  intent: z.string(),
+  prompt: z.string(),
+  path: z.enum(["discord-bot", "api"]),
+  status: z.enum([
+    "passed",
+    "failed-empty",
+    "failed-error",
+    "failed-timeout",
+  ]),
+  responseChars: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  error: z.string().nullable(),
+});
+export type CanaryInvocationResult = z.infer<
+  typeof canaryInvocationResultSchema
+>;
+
+/**
+ * Outcome of the synthesizer (one LLM pass over the topIntents[]).
+ * Discriminated by `kind`. Plan 92-06 report writer + the CLI exit-code
+ * branch in cutover-canary.ts switch exhaustively over this union.
+ */
+export type CanarySynthesizeOutcome =
+  | {
+      kind: "synthesized";
+      agent: string;
+      prompts: readonly CanaryPrompt[];
+      durationMs: number;
+    }
+  | {
+      kind: "no-intents";
+      agent: string;
+    }
+  | {
+      kind: "dispatcher-failed";
+      agent: string;
+      error: string;
+    }
+  | {
+      kind: "schema-validation-failed";
+      agent: string;
+      error: string;
+      rawResponse: string;
+    };
+
+/**
+ * Outcome of one full canary run (synthesize → 40 invocations → report).
+ * passRate is the percentage of invocations with status="passed".
+ */
+export type CanaryRunOutcome =
+  | {
+      kind: "ran";
+      agent: string;
+      results: readonly CanaryInvocationResult[];
+      passRate: number;
+      reportPath: string;
+      durationMs: number;
+    }
+  | {
+      kind: "no-prompts";
+      agent: string;
+    }
+  | {
+      kind: "abort-on-error";
+      agent: string;
+      error: string;
+    };
+
+/**
+ * Outcome of the report writer (atomic temp+rename to CANARY-REPORT.md).
+ */
+export type CanaryReportOutcome =
+  | {
+      kind: "written";
+      agent: string;
+      reportPath: string;
+      passRate: number;
+    }
+  | {
+      kind: "write-failed";
+      agent: string;
+      error: string;
+    };
