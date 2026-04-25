@@ -1,5 +1,24 @@
 # Milestones: ClawCode
 
+## v2.6 v2.6 (Shipped: 2026-04-25)
+
+**Phases completed:** 2 phases, 10 plans, 20 tasks
+
+**Key accomplishments:**
+
+- Per-server MCP capability probe with 5-value status enum, 13-entry registry covering 9 declared + 3 auto-injected MCPs, 10s parallel orchestrator, heartbeat tick wiring, daemon IPC + CLI on-demand trigger — single source of truth that Plans 94-02/03/04/07 will read.
+- `filterToolsByCapabilityProbe(tools, deps) → readonly ToolDef[]` — pure single-source-of-truth filter wired at `session-config.ts` MCP-block assembly. The LLM stable prefix never names a degraded/failed/reconnecting/unknown MCP server. D-12 5-minute flap-stability window with 3-transition sticky-degraded threshold prevents prompt-cache prefix-hash yo-yo when servers hot-flap. Operator-truth (full status incl. verbatim errors) flows through `/clawcode-tools` + `clawcode mcp-status` (Phase 85 Plan 03), not the LLM prompt.
+- Three default RecoveryHandler implementations chained behind a bounded-budget registry — Playwright Chromium-missing auto-installs the binary, op:// auth-error re-resolves through the 1Password CLI, and >5min degraded with no specific match force-restarts the MCP subprocess. 3 attempts/server/hour budget; admin-clawdy alert on the 3rd failure. DI-pure primitives wired into the existing mcp-reconnect heartbeat tick.
+- D-06 ToolCallError discriminated-shape contract for the LLM tool-result slot. Mid-turn MCP tool rejections wrap into a 5-value ErrorClass (transient|auth|quota|permission|unknown) + verbatim message + cross-agent alternatives, so the LLM adapts naturally instead of silently retrying or surfacing a raw exception.
+- Two new auto-injected built-in tools — `clawcode_fetch_discord_messages` (D-08, channel/thread reader, 100-msg max) and `clawcode_share_file` (D-09, file uploader with 25MB cap + allowedRoots security boundary + webhook→bot-direct fallback). Both DI-pure; failures wrap via Plan 94-04 ToolCallError. Auto-injected for every agent in session-config.ts toolDefinitionsStr.
+- TOOL-10 wired: defaults.systemPromptDirectives ships D-09 file-sharing + D-07 cross-agent-routing as default-enabled fleet directives, per-agent partial override merges per-key, assembler prepends the block BEFORE identity in the stable prefix — 8th application of the Phase 83/86/89/90/92 additive-optional schema blueprint.
+- Both operator UIs (`/clawcode-tools` Discord slash + `clawcode mcp-status` CLI) now render the new capability-probe column from a shared pure helper. Status emoji (✅🟡⏳🔴⚪), last-good ISO + relative timestamp, recovery suggestion when degraded (e.g., `auto-recovery: npx playwright install chromium`), and a "Healthy alternatives" line listing other agents whose snapshot has the same MCP server in `capabilityProbe.status === "ready"` (D-07 cross-agent routing). Single-source-of-truth: daemon computes alternatives via `findAlternativeAgents` (94-04 helper) and ships them in the `list-mcp-status` IPC payload; both renderers consume the same payload. Cross-renderer content equivalence pinned by a parity test.
+- Plan 95-02 (cron + auto-apply + log writer):
+- Additive-only auto-apply pipeline (newWikilinks fire via DI'd applyAutoLinks; promotionCandidates + suggestedConsolidations + themedReflection SURFACE via atomic-temp+rename markdown dream log) wired to an opt-in per-agent croner schedule that consults isAgentIdle on every tick — MEMORY.md operator-curated invariant pinned by static-grep, 9th application of the Phase 84/91 atomic-temp+rename pattern.
+- `clawcode dream <agent> [--force] [--model haiku|sonnet|opus] [--idle-bypass]` CLI + admin-only ephemeral `/clawcode-dream` Discord slash sharing one daemon `run-dream-pass` IPC method that wraps Plans 95-01's runDreamPass + 95-02's applyDreamResult — 10th application of the inline-handler-short-circuit-before-CONTROL_COMMANDS pattern + 5th application of the pure-IPC-handler blueprint, closing v2.6 DREAM-07 with zero new npm deps.
+
+---
+
 ## v2.5 v2.5 (Shipped: 2026-04-25)
 
 **Phases completed:** 2 phases, 9 plans, 2 tasks
