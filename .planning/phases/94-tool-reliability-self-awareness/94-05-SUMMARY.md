@@ -167,7 +167,101 @@ None. Plan executed exactly as written. RED gate (11 failing tests) confirmed be
 - FOUND: 804c647 (Task 1 — RED, 11 failing tests)
 - FOUND: 5a1c039 (Task 2 — GREEN, implementation + auto-injection wiring)
 
+## Gap Closure (2026-04-25 — verifier follow-up)
+
+The 94-VERIFICATION.md run flagged the most impactful gap against
+TOOL-08 + TOOL-09: handler functions exist + tested, but neither was
+callable from production. The system prompt advertised the names
+(via `toolDefinitionsStr` in `session-config.ts`) but no SDK tool
+registration with `input_schema` existed; no dispatch routing existed.
+Status was BLOCKER ("tool advertised in prompt but not executable").
+
+Closed in commit `157077f` via three-layer wiring (mirrors the existing
+`read_thread` / `send_attachment` pattern from Phase 86):
+
+### Layer 1 — SDK-callable tool registration
+
+Added `clawcode_fetch_discord_messages` and `clawcode_share_file` as
+MCP tools in `src/mcp/server.ts` (the auto-injected clawcode MCP
+server — already loaded into every agent via
+`config/loader.ts:172`). The two new `server.tool()` registrations
+follow the same shape as the 19 existing tools in this file:
+zod input_schema → `sendIpcRequest(SOCKET_PATH, ...)` → return
+JSON-formatted text content.
+
+This is the integration site for the SDK callability question — the
+clawcode MCP server runs as a stdio subprocess (`clawcode mcp`) that
+the SDK auto-discovers via the agent's `mcpServers` map; tool names
+registered here surface in the LLM's tool list with full input_schema
+contract.
+
+### Layer 2 — Production IPC handlers
+
+Added `fetch-discord-messages` and `share-file` IPC handlers in
+`src/manager/daemon.ts`. Both wire production deps onto the DI-pure
+handler from 94-05:
+
+- **fetch-discord-messages:**
+  - `deps.fetchMessages` → `bridge.discordClient.channels.fetch(id)
+    .messages.fetch({limit, before})` mapped to DiscordMessageOut shape
+    (id, author username, content, ISO timestamp, attachments
+    [{filename, url}])
+  - `ToolCallError` outcomes surfaced as `ManagerError` so the MCP
+    wrapper in server.ts renders `isError:true` verbatim
+
+- **share-file:**
+  - `deps.allowedRoots` → `[agent.workspace, agent.memoryPath].filter(Boolean)`
+  - `deps.stat` → `await access(p); await stat(p) → {size, isFile}`
+  - Bot-direct upload extracts `attachment.url` from the sent
+    `Message.attachments` Collection (Discord-allocated CDN URL)
+  - Webhook→bot-direct fallback specified in 94-05 is reduced here to
+    bot-direct only (both `sendViaWebhook` and `sendViaBot` forward to
+    the same `botUpload` primitive). Acknowledged in 94-05 "Next Phase
+    Readiness" — webhook-manager.sendFile primitive does not yet exist;
+    a future phase should add it for in-character (display-name) file
+    uploads.
+  - `currentChannelId` resolved from explicit `channel_id` IPC param
+    OR the agent's first configured channel — covers both
+    user-mentioned-channel and default-channel UX
+
+### Layer 3 — IPC method registration
+
+Added `fetch-discord-messages` and `share-file` to `IPC_METHODS` in
+`src/ipc/protocol.ts` and to the test fixture in
+`src/ipc/__tests__/protocol.test.ts`.
+
+### Verification
+
+- `npm run build` exits 0 (`dist/cli/index.js` 1.70 MB)
+- `npx vitest run src/manager/__tests__/clawcode-fetch-discord-messages.test.ts
+  src/manager/__tests__/clawcode-share-file.test.ts` — 11/11 passed
+  (no DI-pure handler regressions)
+- `grep -rn "case \"fetch-discord-messages\"\|case \"share-file\"" src/manager/daemon.ts`
+  confirms the IPC handlers are reachable
+- `grep -n "clawcode_fetch_discord_messages\|clawcode_share_file"
+  src/mcp/server.ts` confirms the SDK tool registrations
+- The pre-existing `protocol.test.ts` fixture failure (cutover-* +
+  list-sync-status missing per Phase 92 / 91 deferred items) is
+  unchanged by this closure — net-zero new failure surface
+
+### Truths flipped
+
+- "Tools work end-to-end: clawcode_fetch_discord_messages returns
+  N messages; clawcode_share_file returns CDN URL" — failed → verified
+  (modulo human verification with a live Discord environment)
+- "TOOL-08 + TOOL-09 production wiring" — partial → verified
+
+### Deferred (out of scope for this gap closure)
+
+- WebhookManager.sendFile primitive (in-character file uploads via
+  webhook display name) — webhook→bot-direct fallback collapses to
+  bot-direct only until that primitive lands in a future plan
+- Pre-existing `protocol.test.ts` exact-array equality failures
+  (cutover-* + list-sync-status missing from fixture) — already in
+  `deferred-items.md`
+
 ---
 *Phase: 94-tool-reliability-self-awareness*
 *Plan: 05*
 *Completed: 2026-04-25*
+*Gap closure: 2026-04-25 (commit 157077f)*

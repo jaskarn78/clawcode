@@ -181,7 +181,88 @@ Verified:
 - `git diff package.json` empty (zero new npm deps)
 - Commits `a5cbccc` + `a9e6a66` exist on `master`
 
+## Gap Closure (2026-04-25 — verifier follow-up)
+
+The 94-VERIFICATION.md run flagged two partial gaps against TOOL-01:
+boot-time probe missing and the heartbeat / mcp-probe IPC stub `callTool`
+that threw "not yet wired (Plan 94-03 picks this up)". Both closed in
+this gap-closure pass; capability-probe.ts itself stays DI-pure
+(unchanged) — both fixes are at the daemon edge per plan rule.
+
+### Gap 1 — Boot-time probe (commit `8704eaa`)
+
+Added a fire-and-forget `probeAllMcpCapabilities` call at the end of
+`SessionManager.startAgent()` (after the warm-path gate flips green and
+the handle's MCP state is mirrored). Without this, every server's
+`capabilityProbe` field stayed undefined for the first 60s after agent
+start (until the heartbeat tick); Plan 94-02's filter would treat all
+MCP-backed tools as `unknown` and exclude them — agents started blind
+for a full minute after restart.
+
+Implementation pins:
+- Fire-and-forget (`void (async () => { ... })()`) — boot path stays
+  unaffected by the 10s × N parallel probe budget
+- Errors swallowed via .catch — boot must never fail because the probe
+  threw; the next 60s heartbeat tick reruns with full state-merge
+- Reuses the same heartbeat-edge wiring (default-fallback override via
+  listTools-only) so registry probes stay deferred until each is vetted
+  per-server in a future plan
+
+**Files modified:** `src/manager/session-manager.ts`
+**Truth flipped:** "On agent boot, probeAllMcpCapabilities runs in
+parallel for every configured MCP server" — partial → verified.
+
+### Gap 2 — Real callTool / listTools at the daemon edge (commit `ba33fc6`)
+
+Replaced the stub `callTool` that threw "not yet wired" with a real
+JSON-RPC `tools/call` + `tools/list` primitive
+(`src/mcp/json-rpc-call.ts`). The Claude Agent SDK does NOT expose a
+programmatic `query.callMcpTool(name, args)` surface (verified against
+`@anthropic-ai/claude-agent-sdk@0.2.x sdk.d.ts`) — its MCP client is
+internal to the LLM tool-call dispatch path. So the gap closure
+replicates the JSON-RPC stdio handshake at the daemon edge: spawn →
+initialize → tools/list (or tools/call) → kill. Identical pattern to
+`checkMcpServerHealth` in `src/mcp/health.ts`; only the second
+JSON-RPC call after initialize is new.
+
+Wiring sites:
+- `src/heartbeat/checks/mcp-reconnect.ts` (heartbeat tick — replaces
+  `stubDeps`)
+- `src/manager/daemon.ts` mcp-probe IPC (on-demand operator trigger)
+- `src/manager/session-manager.ts` boot-time probe (Gap 1 path)
+
+`getProbeFor` stays overridden to default-fallback (listTools-only)
+until Plan 94-03 vets each registry probe's representative-call args
+against real production MCP subprocesses (vaults_list,
+SELECT 1, browser_snapshot about:blank, etc).
+
+Net effect: a successful tools/list against the real MCP subprocess
+validates capability; spawn ENOENT, timeout, or JSON-RPC error envelope
+lifts the snapshot to `degraded` with the verbatim error.
+
+Test `mcp-reconnect.test.ts` mocks the new `json-rpc-call` module so
+the existing connect-test-as-capability-proxy fixture (`command:"x"`)
+still passes — capability assertions preserved.
+
+**Files created:** `src/mcp/json-rpc-call.ts` (240 lines — DI-free
+primitive that production wires in)
+**Files modified:** `src/heartbeat/checks/mcp-reconnect.ts`,
+`src/heartbeat/checks/__tests__/mcp-reconnect.test.ts`,
+`src/manager/daemon.ts`, `src/manager/session-manager.ts`
+**Truth flipped:** "callTool is wired for real MCP calls in capability
+probe and mcp-probe IPC" — failed → verified.
+
+### Verification
+
+- `npm run build` exits 0 (`dist/cli/index.js` 1.70 MB, +40KB from
+  json-rpc-call + IPC handlers)
+- `npx vitest run src/manager/__tests__/capability-probe.test.ts
+  src/manager/__tests__/capability-probes.test.ts
+  src/heartbeat/checks/__tests__/mcp-reconnect.test.ts` — 31/31 passed
+- `git diff package.json` empty (zero new npm deps preserved)
+
 ---
 *Phase: 94-tool-reliability-self-awareness*
 *Plan: 01*
 *Completed: 2026-04-25*
+*Gap closure: 2026-04-25 (commits 8704eaa + ba33fc6)*
