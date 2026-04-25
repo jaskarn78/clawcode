@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase complete — ready for verification
-stopped_at: Completed 92-05-PLAN.md
-last_updated: "2026-04-25T00:37:56.867Z"
+status: Ready to plan
+stopped_at: Completed 92-06-PLAN.md (Phase 92 complete — v2.5 capstone)
+last_updated: "2026-04-25T00:53:17.817Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 9
-  completed_plans: 6
+  completed_plans: 8
 ---
 
 # Project State
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 ## Current Position
 
-Phase: 93 (Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience) — EXECUTING
-Plan: 3 of 3
+Phase: 93
+Plan: Not started
 
 ## Performance Metrics
 
@@ -205,6 +205,9 @@ Recent decisions affecting current work:
 - [Phase 92]: Plan 92-05: dispatchStream + fetchApi DI'd via CanaryRunnerDeps; Promise.race + setTimeout sentinel for 30s per-path timeout; sentinel string '__canary_timeout__' for collision-resistant discrimination; clearTimeout in finally for clean event-loop drain
 - [Phase 92]: Plan 92-05: Synthesizer + runner determinism via spread-then-sort; results sorted by (intent ASC, path ASC); CANARY-REPORT.md frontmatter pinned: agent + generated_at + total_prompts + total_paths + total_invocations + passed + failed + canary_pass_rate (rounded to 1dp); Plan 92-06's set-authoritative reads canary_pass_rate
 - [Phase 92]: Plan 92-05: Default fetchApi (Node 22 native fetch + OpenAI choices[0].message.content extraction with raw-body fallback) lives in src/cli/commands/cutover-canary.ts so canary-runner.ts stays purely DI'd. Loopback-only API; only http://localhost:3101 references are JSDoc comments. Zero new npm deps preserved
+- [Phase 92]: Plan 92-06: Capstone wire-up — runVerifyPipeline 7-phase sequential orchestrator (DI'd) + writeCutoverReport atomic temp+rename with literal end-of-doc 'Cutover ready: true|false' line + Phase 91 sync-set-authoritative precondition gate (REPORT_FRESHNESS_MS=24h) + --skip-verify --reason emergency bypass appending action='skip-verify' audit row to cutover-ledger.jsonl
+- [Phase 92]: Plan 92-06: cutover_ready: true REQUIRES (gaps.length === 0 AND canaryResults !== null AND totalInvocations > 0 AND passRate === 100) — clean diff alone NOT cutover-ready (CUT-09 contract); literal end-of-doc line derived from same boolean as frontmatter so they always agree
+- [Phase 92]: Plan 92-06: rollback idempotency via append-only NEW row with reason='rollback-of:<origTimestamp>' marker (ROLLBACK_OF_REASON_PREFIX exported); ledger never mutated/deleted; CLI scaffolds for cutover verify + rollback emit clear daemon-required error today (precedent from cutover-canary), full daemon-IPC wiring deferred to follow-up plan
 
 ### v2.1 closing decisions (for reference)
 
@@ -309,9 +312,10 @@ Recent decisions affecting current work:
 | Phase 92 P04 | 12 | 2 tasks | 11 files |
 | Phase 93-status-detail-parity-clawhub-public-catalog-defaults-plugin-manifest-url-resilience P01 | 33m 40s | 2 tasks tasks | 5 files files |
 | Phase 92 P05 | 6m 34s | 2 (TDD) tasks | 9 files |
+| Phase 92 P06 | 7m | 2 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 92-05-PLAN.md
+Stopped at: Completed 92-06-PLAN.md (Phase 92 complete — v2.5 capstone)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

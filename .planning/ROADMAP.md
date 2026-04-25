@@ -213,13 +213,13 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 
 **Depends on:** Phase 91 (sync direction + set-authoritative command), Phase 90 (memory-scanner for indexing proposed files), Phase 86 (updateAgentModel/Skills/McpServers atomic writers), Phase 85 (list-mcp-status IPC), Phase 80 (memory-translator origin_id idempotency)
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 - [x] 92-01-PLAN.md — Discord history ingestor + source-agent profiler (CUT-01, CUT-02) — Wave 1
 - [x] 92-02-PLAN.md — Target capability probe + diff engine with typed CutoverGap union (CUT-03, CUT-04) — Wave 1
 - [x] 92-03-PLAN.md — Additive fix auto-applier + ledger (CUT-05) — Wave 2 (depends on 92-02)
 - [x] 92-04-PLAN.md — Destructive-fix admin-clawdy embed flow (CUT-06, CUT-07) — Wave 2 (depends on 92-02; checkpoint task)
 - [x] 92-05-PLAN.md — Dual-entry canary runner (CUT-08) — Wave 3 (depends on 92-01, 92-03)
-- [ ] 92-06-PLAN.md — Cutover-ready gate + set-authoritative precondition (CUT-09, CUT-10) — Wave 3 (depends on 92-01..05)
+- [x] 92-06-PLAN.md — Cutover-ready gate + set-authoritative precondition (CUT-09, CUT-10) — Wave 3 (depends on 92-01..05)
 
 **UI hint:** yes — admin-clawdy ephemeral embed with Accept/Reject/Defer buttons (Phase 86-03 ButtonBuilder pattern); cutover-report summary embed.
 
