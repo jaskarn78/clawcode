@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { readFile, access } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve as pathResolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { configSchema } from "./schema.js";
 import { expandHome } from "./defaults.js";
@@ -608,6 +608,37 @@ export function renderSystemPromptDirectiveBlock(
 ): string {
   if (directives.length === 0) return "";
   return directives.map((d) => d.text).join("\n\n");
+}
+
+/**
+ * Phase 96 D-05 — resolve fileAccess paths for an agent.
+ *
+ * Merges defaults + per-agent override (additive — agent paths APPEND to
+ * defaults), expands the literal `{agent}` token to the actual agent name,
+ * canonicalizes via path.resolve (collapses `..`, no leading relative),
+ * and deduplicates.
+ *
+ * NOTE: this helper does NOT perform fs.realpath (no I/O at this layer).
+ * The runFsProbe primitive (src/manager/fs-probe.ts) handles realpath at
+ * probe time; resolveFileAccess only handles syntactic canonicalization.
+ *
+ * @param agentName    Concrete agent name (substituted into `{agent}` token)
+ * @param agentCfg     Per-agent override (may omit `fileAccess`)
+ * @param defaultsCfg  Fleet-wide default (always populated by zod default)
+ * @returns Deduplicated readonly array of canonical absPaths
+ */
+export function resolveFileAccess(
+  agentName: string,
+  agentCfg: { readonly fileAccess?: readonly string[] } | undefined,
+  defaultsCfg: { readonly fileAccess?: readonly string[] } | undefined,
+): readonly string[] {
+  const merged = [
+    ...(defaultsCfg?.fileAccess ?? []),
+    ...(agentCfg?.fileAccess ?? []),
+  ];
+  const expanded = merged.map((p) => p.replace(/\{agent\}/g, agentName));
+  const canonical = expanded.map((p) => pathResolve(p));
+  return Array.from(new Set(canonical));
 }
 
 /**

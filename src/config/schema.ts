@@ -1269,6 +1269,12 @@ export const configSchema = z.object({
     // Phase 95 DREAM-01..03 — fleet-wide default dream cycle config
     // mirrors the zod-populated value in defaultsSchema above.
     dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+    // Phase 96 D-05 — fleet-wide default fileAccess paths mirror the
+    // zod-populated value in defaultsSchema above. Spread to a fresh
+    // array so the configSchema-default is independent of the frozen
+    // exported constant (defensive copy — downstream merges via
+    // resolveFileAccess never see the frozen reference).
+    fileAccess: [...DEFAULT_FILE_ACCESS],
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",

@@ -85,6 +85,10 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         timeoutMs: 60000,
         workspaceSubdir: "generated-images",
       },
+      // Phase 95 — fleet-wide dream defaults mirror defaultsSchema.
+      dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+      // Phase 96 D-05 — fleet-wide fileAccess defaults.
+      fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
     },
     mcpServers: {},
     agents: [

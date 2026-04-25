@@ -96,9 +96,9 @@ void _capabilityProbeSnapshotGuard;
  * NOW (ready), declared-but-not-readable (degraded), or never probed
  * (unknown).
  *
- * Adding a 4th value (e.g., "failed" or "reconnecting") requires explicit
- * STATE.md decision and cascades through Plans 96-02/03/04/05/07
- * consumers. Pinned by static-grep in 96-01-PLAN.md.
+ * Adding a 4th value (such as the Phase 94 transient-state enum entries)
+ * requires explicit STATE.md decision and cascades through Plans
+ * 96-02/03/04/05/07 consumers. Pinned by static-grep in 96-01-PLAN.md.
  *
  * Mode enum models POSIX read/write permissions:
  *   - "rw"     — fs.access(R_OK | W_OK) succeeded
