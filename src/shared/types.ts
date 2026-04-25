@@ -38,6 +38,26 @@ export type ResolvedAgentConfig = {
    */
   readonly greetCoolDownMs: number;
   /**
+   * Phase 96 D-05 — per-agent fileAccess override. UNDEFINED when the agent
+   * does not declare it (loader does not inherit defaults here — defaults
+   * are merged by `resolveFileAccess(agent, cfg, defaults)` at IPC handler
+   * call time). Daemon `probe-fs` / `list-fs-status` IPC handlers read this
+   * via `manager.getAgentConfig(agent).fileAccess`.
+   *
+   * Bug fix 2026-04-25 (deploy): 96-01 added the schema field but missed
+   * propagating it into the resolved type — daemon never saw per-agent
+   * fileAccess, only defaults.fileAccess (zod default).
+   */
+  readonly fileAccess?: readonly string[];
+  /**
+   * Phase 96 D-09 — per-agent outputDir template (LITERAL string with
+   * tokens preserved: {date}, {client_slug}, {channel_name}, {agent}).
+   * UNDEFINED when the agent does not override defaults.outputDir.
+   * Runtime `resolveOutputDir(template, ctx, deps)` expands tokens at
+   * write time with fresh per-call ctx.
+   */
+  readonly outputDir?: string;
+  /**
    * Phase 90 MEM-01 — ALWAYS populated by loader.ts from
    * agent.memoryAutoLoad ?? defaults.memoryAutoLoad. Downstream
    * (session-config.ts MEMORY.md injection) reads unconditionally.

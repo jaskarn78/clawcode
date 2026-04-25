@@ -320,6 +320,18 @@ export function resolveAgentConfig(
     // default), so the falsy-free `??` fallback is safe.
     greetOnRestart: agent.greetOnRestart ?? defaults.greetOnRestart,
     greetCoolDownMs: agent.greetCoolDownMs ?? defaults.greetCoolDownMs,
+    // Phase 96 D-05 — propagate per-agent fileAccess into ResolvedAgentConfig
+    // so daemon IPC handler (probe-fs / list-fs-status) and downstream
+    // consumers see the per-agent override. When the agent omits the field,
+    // we leave it undefined; the daemon's resolveFileAccess(agent, cfg, defaults)
+    // falls back to defaults.fileAccess (always populated by zod default).
+    // Bug fix 2026-04-25: 96-01 added the schema field but never extended the
+    // ResolvedAgentConfig type or this resolver, so per-agent fileAccess
+    // never reached the daemon — only defaults.fileAccess was visible.
+    fileAccess: agent.fileAccess,
+    // Phase 96 D-09 — propagate per-agent outputDir template (LITERAL string,
+    // tokens preserved). Runtime resolveOutputDir expands at write time.
+    outputDir: agent.outputDir,
     // Phase 90 MEM-01 — agent-level memoryAutoLoad beats defaults.memoryAutoLoad;
     // undefined falls back to defaults (zod default = true). Cannot use `??`
     // here: `false ?? true` would (correctly) yield false, but `undefined ??
