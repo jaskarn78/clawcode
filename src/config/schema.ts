@@ -140,6 +140,40 @@ export const systemPromptDirectiveOverrideSchema = z.object({
 });
 
 /**
+ * Phase 95 DREAM-01..03 — Memory dreaming (autonomous reflection) config.
+ *
+ * 9th application of the Phase 83/86/89/90/94 additive-optional schema
+ * blueprint. v2.5/v2.6 migrated configs (no `dream:` block) parse unchanged
+ * because:
+ *   - `agents.*.dream` is fully optional (`agentSchema.dream.optional()`)
+ *   - `defaults.dream` is default-bearing (resolver fills enabled=false /
+ *     idleMinutes=30 / model=haiku when omitted)
+ *
+ * Bounds:
+ *   - `idleMinutes` floor 5 = D-01 hard floor (don't dream more often than
+ *     5 minutes — burns tokens). Ceiling 360 = D-01 6-hour hard ceiling
+ *     bound (the cron-schedule layer respects the same window in 95-02).
+ *   - `model` locked to the modelSchema enum (haiku|sonnet|opus). Default
+ *     `haiku` per D-03 (cheap; dream passes are frequent + low-stakes).
+ *   - `retentionDays` 1..365 — D-05 dream-log archival cadence; default
+ *     applied at the consumer (95-02 dream-log writer), NOT here, to keep
+ *     this schema shape minimal and the resolver responsibilities clean.
+ *
+ * Default `enabled: false` is OPT-IN fleet-wide per D-01 — operators flip
+ * `agents.<name>.dream.enabled: true` (or `defaults.dream.enabled: true`)
+ * to roll the cycle out gradually.
+ */
+export const dreamConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  idleMinutes: z.number().int().min(5).max(360).default(30),
+  model: z.enum(["haiku", "sonnet", "opus"]).default("haiku"),
+  retentionDays: z.number().int().min(1).max(365).optional(),
+});
+
+/** Inferred Phase 95 dream config type. */
+export type DreamConfig = z.infer<typeof dreamConfigSchema>;
+
+/**
  * Heartbeat monitoring configuration schema.
  * Controls the periodic health check system for agents.
  */
@@ -812,6 +846,13 @@ export const agentSchema = z.object({
   systemPromptDirectives: z
     .record(z.string(), systemPromptDirectiveOverrideSchema)
     .optional(),
+  // Phase 95 DREAM-01..03 — per-agent autonomous reflection cycle.
+  // Additive + optional: v2.5/v2.6 migrated configs parse unchanged when
+  // omitted; loader resolver fills from defaults.dream. Per-agent override
+  // wins for any field set; partial overrides inherit unset fields from
+  // defaults. 9th application of the Phase 83/86/89/90/94 additive-
+  // optional schema blueprint.
+  dream: dreamConfigSchema.optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -940,6 +981,17 @@ export const defaultsSchema = z.object({
   systemPromptDirectives: z
     .record(z.string(), systemPromptDirectiveSchema)
     .default(() => ({ ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES })),
+  // Phase 95 DREAM-01..03 — fleet-wide default dream cycle config.
+  // Default-bearing via dreamConfigSchema's own field defaults
+  // (enabled:false / idleMinutes:30 / model:haiku). v2.5/v2.6 migrated
+  // configs parse unchanged when omitted. Reloadable: a YAML edit takes
+  // effect on the NEXT cron tick / NEXT dream-pass invocation; current
+  // in-flight dream passes complete at the previous setting.
+  dream: dreamConfigSchema.default(() => ({
+    enabled: false,
+    idleMinutes: 30,
+    model: "haiku" as const,
+  })),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -1178,6 +1230,9 @@ export const configSchema = z.object({
     // copy — downstream merges via resolveSystemPromptDirectives never
     // see the frozen reference).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
+    // Phase 95 DREAM-01..03 — fleet-wide default dream cycle config
+    // mirrors the zod-populated value in defaultsSchema above.
+    dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",

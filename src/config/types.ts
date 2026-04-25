@@ -106,6 +106,13 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // additive-optional reloadable blueprint.
   "agents.*.systemPromptDirectives",
   "defaults.systemPromptDirectives",
+  // Phase 95 DREAM-01..03 — dream cycle config. Reloadable: a YAML edit
+  // takes effect on the NEXT cron tick / NEXT dream-pass invocation
+  // (95-02 cron reads via the loader resolver each fire). Current in-
+  // flight dream passes complete at the previous setting. 9th application
+  // of the Phase 83/86/89/90/94 additive-optional reloadable blueprint.
+  "agents.*.dream",
+  "defaults.dream",
 ]);
 
 /**

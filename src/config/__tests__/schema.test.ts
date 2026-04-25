@@ -1671,3 +1671,125 @@ describe("configSchema - memoryAutoLoad backward compatibility (Phase 90 MEM-01)
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 95 Plan 01 — DREAM-01..03: agentSchema.dream + defaultsSchema.dream
+// additive-optional rollout. 9th application of the Phase 83/86/89/90/94
+// schema blueprint. v2.5/v2.6 migrated configs (no `dream:` block) parse
+// unchanged because agentSchema.dream is fully optional and defaults.dream
+// is default-bearing (enabled:false / idleMinutes:30 / model:haiku).
+// ---------------------------------------------------------------------------
+
+describe("dreamConfigSchema (Phase 95 DREAM-01..03)", () => {
+  it("DREAM-S1: empty agent (v2.5 fleet) — no `dream` key — parses unchanged via configSchema", () => {
+    const agents = Array.from({ length: 15 }, (_, i) => ({
+      name: `agent-${i}`,
+      channels: [`${1000000000000000 + i}`],
+      model: "sonnet" as const,
+      effort: "low" as const,
+    }));
+    const result = configSchema.safeParse({ version: 1, agents });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Defaults.dream is populated by the resolver default factory.
+      expect(result.data.defaults.dream).toEqual({
+        enabled: false,
+        idleMinutes: 30,
+        model: "haiku",
+      });
+      // Every agent's `dream` is undefined on the raw parse — loader
+      // resolves against defaults downstream.
+      for (const agent of result.data.agents) {
+        expect(agent.dream).toBeUndefined();
+      }
+    }
+  });
+
+  it("DREAM-S2: agent with dream: { enabled: true, idleMinutes: 60 } parses; model defaults to 'haiku'", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      dream: { enabled: true, idleMinutes: 60 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dream).toBeDefined();
+      expect(result.data.dream?.enabled).toBe(true);
+      expect(result.data.dream?.idleMinutes).toBe(60);
+      // model default applied per dreamConfigSchema's z.enum().default('haiku')
+      expect(result.data.dream?.model).toBe("haiku");
+      // retentionDays is optional — undefined when not set
+      expect(result.data.dream?.retentionDays).toBeUndefined();
+    }
+  });
+
+  it("DREAM-S3: agent with dream: { idleMinutes: 4 } REJECTS (below D-01 hard floor 5)", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      dream: { idleMinutes: 4 },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("DREAM-S4: agent with dream: { idleMinutes: 361 } REJECTS (above D-01 hard ceiling 360 = 6h)", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      dream: { idleMinutes: 361 },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("DREAM-S5: agent with dream: { model: 'sonnet-4' } REJECTS (model union locked to haiku|sonnet|opus)", () => {
+    const result = agentSchema.safeParse({
+      name: "x",
+      dream: { model: "sonnet-4" as unknown as "haiku" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("DREAM-S6: defaultsSchema.parse({}) sets fleet-level dream defaults; per-agent overrides win at the loader level (mirror memoryAutoLoad pattern)", () => {
+    // Defaults parse with no input populates the dream block.
+    const defaultsResult = defaultsSchema.safeParse({});
+    expect(defaultsResult.success).toBe(true);
+    if (defaultsResult.success) {
+      expect(defaultsResult.data.dream).toEqual({
+        enabled: false,
+        idleMinutes: 30,
+        model: "haiku",
+      });
+    }
+    // Per-agent override is preserved on agentSchema parse — loader merges.
+    const agentResult = agentSchema.safeParse({
+      name: "content-creator",
+      dream: { enabled: true, idleMinutes: 15, model: "sonnet" },
+    });
+    expect(agentResult.success).toBe(true);
+    if (agentResult.success) {
+      expect(agentResult.data.dream).toEqual({
+        enabled: true,
+        idleMinutes: 15,
+        model: "sonnet",
+      });
+    }
+    // Defaults can be overridden too (e.g. fleet-wide enable).
+    const fleetEnabled = defaultsSchema.safeParse({
+      dream: { enabled: true, idleMinutes: 45, model: "opus" },
+    });
+    expect(fleetEnabled.success).toBe(true);
+    if (fleetEnabled.success) {
+      expect(fleetEnabled.data.dream).toEqual({
+        enabled: true,
+        idleMinutes: 45,
+        model: "opus",
+      });
+    }
+  });
+});
+
+describe("RELOADABLE_FIELDS - DREAM entries (Phase 95 DREAM)", () => {
+  it("DREAM-RELOAD-1: RELOADABLE_FIELDS contains agents.*.dream", () => {
+    expect(RELOADABLE_FIELDS.has("agents.*.dream")).toBe(true);
+  });
+  it("DREAM-RELOAD-2: RELOADABLE_FIELDS contains defaults.dream", () => {
+    expect(RELOADABLE_FIELDS.has("defaults.dream")).toBe(true);
+  });
+});
