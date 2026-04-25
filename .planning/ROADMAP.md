@@ -298,10 +298,14 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Goal:** [To be planned in v2.7] Two related issues surfaced during Phase 96 work that were intentionally deferred to keep Phase 96 scope focused. Both deserve their own phase:
 
-**Sub-scope A — Network capability probe (extends Phase 96 D-01..D-06 model):**
-- Trigger: 2026-04-25 `#finmentum-client-acquisition` Discord screenshot — Clawdy claimed *"DB access is being blocked from this container (172.17.0.1 is Docker bridge)"*. Belief may have been current OR stale; Phase 96's filesystem probe doesn't cover network/DB reachability.
-- Scope: extend Phase 96's capability snapshot model to network endpoints. Probe DB/MCP/HTTP reachability at boot + heartbeat. Surface in `<network_capability>` system-prompt block (sibling to `<filesystem_capability>`). When probe fails, suggest the actual fix (e.g., "add 172.17.0.1 to MySQL `bind-address`") via the existing Phase 94 ToolCallError suggestion field.
-- Phase 96's D-10 directive extension (post-2026-04-25) already kills the OpenClaw-fallback anti-pattern across filesystem AND DB AND MCP — Phase 97 just adds the proactive probe so agents know about gaps before trying.
+**Sub-scope A — Network capability probe + auto-injected MySQL MCP tool (extends Phase 96 D-01..D-06 model):**
+- Trigger 1 (10:18): 2026-04-25 `#finmentum-client-acquisition` Discord — Clawdy claimed *"DB access is being blocked from this container (172.17.0.1 is Docker bridge)"*. Belief may have been current OR stale; Phase 96's filesystem probe doesn't cover network/DB reachability.
+- Trigger 2 (13:31): 2026-04-25 `#finmentum-client-acquisition` Discord — Clawdy explained 60-second DB query latency: *"The DB query has to go through a subagent because the `exec` tool isn't available to me directly... subagent spins up its own process, fetches 1Password credentials, connects to MySQL, runs the query, and returns results. That round trip takes ~60 seconds."* Bot recommended *"MySQL MCP tool in the OpenClaw layer"* — anti-pattern that Phase 96 D-10 directive will silence in chat post-deploy, but the underlying perf gap remains.
+- Scope:
+  - Extend Phase 96's capability snapshot to network endpoints. Probe DB/MCP/HTTP reachability at boot + heartbeat. Surface in `<network_capability>` system-prompt block (sibling to `<filesystem_capability>`). When probe fails, suggest the actual fix (e.g., "add 172.17.0.1 to MySQL `bind-address`") via Phase 94 ToolCallError suggestion field.
+  - Auto-inject `mysql_query` MCP tool DIRECTLY in ClawCode (not OpenClaw). Agent calls inline — no subagent round-trip, no per-query 1Password re-fetch. Connection pool kept warm. Target: <2s p50 vs current 60s.
+  - Optional: cached query endpoint on dashboard API for common pre-computed queries (AUM, pipeline funnel, growth metrics) as fallback for queries too expensive to run inline.
+- Phase 96's D-10 directive extension (post-2026-04-25) already kills the OpenClaw-fallback anti-pattern recommendation IN CHAT — Phase 97 closes the underlying CAPABILITY gap so the recommendation isn't even theoretically needed.
 
 **Sub-scope B — Turn-dispatch one-message-behind lag:**
 - Trigger: 2026-04-25 operator report — *"When I prompt the bot, it responds to the previous message... if I send a follow-up with a period, it responds to the previous prompt."*
