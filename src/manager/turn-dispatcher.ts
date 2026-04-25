@@ -26,6 +26,8 @@ import type { Turn } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { MemoryRetrievalResult } from "../memory/memory-retrieval.js";
 import { detectCue, extractCueContext } from "../memory/memory-cue.js";
+import { wrapMcpToolError, type ErrorClass, type ToolCallError } from "./tool-call-error.js";
+import { findAlternativeAgents, type McpStateProvider } from "./find-alternative-agents.js";
 
 /** Thrown when dispatch is called with invalid arguments. */
 export class TurnDispatcherError extends Error {
@@ -209,7 +211,40 @@ export type TurnDispatcherOptions = {
    * the hook itself (isGsdSubagent).
    */
   readonly subagentCapture?: SubagentCapture;
+  /**
+   * Phase 94 Plan 04 D-06/D-07 — per-agent MCP state provider for
+   * cross-agent alternatives lookup. When wired, `executeMcpTool`'s
+   * wrap path populates `ToolCallError.alternatives` with healthy agent
+   * names whose backing MCP server has `capabilityProbe.status === "ready"`
+   * for the named tool. Absent when not yet wired (Plan 94-04 ships the
+   * primitive; daemon edge wiring lives where SessionManager is constructed).
+   */
+  readonly mcpStateProvider?: McpStateProvider;
+  /**
+   * Phase 94 Plan 04 D-06 — optional per-class suggestion registry.
+   * Daemon edge wires a `Record<ErrorClass, string>` (or callable
+   * equivalent) here so the LLM receives operator-actionable hints in
+   * the `ToolCallError.suggestion` field. Absent when no suggestions
+   * are configured — the LLM still receives the structured wrap with
+   * verbatim message + classification + alternatives.
+   */
+  readonly toolErrorSuggestion?: (errorClass: ErrorClass) => string | undefined;
 };
+
+/**
+ * Phase 94 Plan 04 — return shape from `TurnDispatcher.executeMcpTool`.
+ * Mirrors the SDK tool_result slot conceptually:
+ *   - `content`: the string the LLM sees (raw success result OR JSON-
+ *                stringified ToolCallError on failure)
+ *   - `isError`: `true` when content is a wrapped ToolCallError; `false`
+ *                on success. Maps directly to the SDK's `is_error` flag
+ *                on tool_result blocks so the LLM's tool-result rendering
+ *                renders the failure path correctly.
+ */
+export interface ExecuteMcpToolResult {
+  readonly content: string;
+  readonly isError: boolean;
+}
 
 /**
  * TurnDispatcher — construct once at daemon boot; call dispatch() from
@@ -224,6 +259,8 @@ export class TurnDispatcher {
   private readonly workspaceForAgent: WorkspaceResolver | undefined;
   private readonly discordReact: DiscordReactFn | undefined;
   private readonly subagentCapture: SubagentCapture | undefined;
+  private readonly mcpStateProvider: McpStateProvider | undefined;
+  private readonly toolErrorSuggestion: ((errorClass: ErrorClass) => string | undefined) | undefined;
 
   constructor(options: TurnDispatcherOptions) {
     this.sessionManager = options.sessionManager;
@@ -233,6 +270,60 @@ export class TurnDispatcher {
     this.workspaceForAgent = options.workspaceForAgent;
     this.discordReact = options.discordReact;
     this.subagentCapture = options.subagentCapture;
+    this.mcpStateProvider = options.mcpStateProvider;
+    this.toolErrorSuggestion = options.toolErrorSuggestion;
+  }
+
+  /**
+   * Phase 94 Plan 04 D-06 — single-source-of-truth MCP tool-call wrap site.
+   *
+   * Runs the supplied executor exactly ONCE. On success, returns the
+   * verbatim content the executor resolved. On rejection, routes the
+   * failure through `wrapMcpToolError` (populating alternatives via
+   * `findAlternativeAgents` when a state provider is wired) and returns
+   * the JSON-stringified `ToolCallError` shape with `isError: true`.
+   *
+   * NO SILENT RETRY here. Recovery (Plan 94-03) is heartbeat-driven and
+   * lives at the connection layer; this method's contract is single-
+   * attempt-then-wrap so the LLM sees the structured failure and adapts
+   * naturally (asks the user, switches to an alternative agent, etc.).
+   *
+   * Production tool-call execution paths funnel through this method so
+   * the wrap behavior is uniform across every MCP-backed tool. Direct
+   * invocation of MCP tool calls without this wrap is a regression and
+   * pinned by static-grep against the call site.
+   */
+  async executeMcpTool(
+    toolName: string,
+    executor: () => Promise<string>,
+  ): Promise<ExecuteMcpToolResult> {
+    try {
+      const content = await executor();
+      return { content, isError: false };
+    } catch (err) {
+      const wrapped: ToolCallError = wrapMcpToolError(err as Error, {
+        tool: toolName,
+        findAlternatives: this.mcpStateProvider
+          ? () => findAlternativeAgents(toolName, this.mcpStateProvider!)
+          : undefined,
+        suggestionFor: this.toolErrorSuggestion,
+      });
+      // Best-effort log so operators can correlate the wrap with the
+      // upstream symptom; observational only — never breaks the wrap path.
+      try {
+        this.log.warn(
+          {
+            tool: toolName,
+            errorClass: wrapped.errorClass,
+            alternatives: wrapped.alternatives,
+          },
+          "mcp tool call rejected — wrapped as ToolCallError",
+        );
+      } catch {
+        // observational path — never block the wrap
+      }
+      return { content: JSON.stringify(wrapped), isError: true };
+    }
   }
 
   /**
