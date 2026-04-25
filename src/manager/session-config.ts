@@ -57,6 +57,15 @@ import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
 // built-in helpers, not MCP-backed.
 import { CLAWCODE_FETCH_DISCORD_MESSAGES_DEF } from "./tools/clawcode-fetch-discord-messages.js";
 import { CLAWCODE_SHARE_FILE_DEF } from "./tools/clawcode-share-file.js";
+// Phase 96 Plan 02 — D-02 filesystem-capability block renderer + types.
+// Imported here at session-config (the daemon edge) so the LLM's stable
+// prefix carries the live <filesystem_capability> block alongside the
+// Phase 85 <tool_status> and Phase 95 <dream_log_recent> blocks. The
+// renderer is pure-DI (no fs/SDK reach); the snapshot comes from the
+// fsCapabilitySnapshotProvider deps surface, which SessionManager wires
+// to `this.getFsCapabilitySnapshotForAgent` (parallel to mcpStateProvider).
+import { renderFilesystemCapabilityBlock } from "../prompt/filesystem-capability-block.js";
+import type { FsCapabilitySnapshot } from "./persistent-session-handle.js";
 // Phase 96 Plan 03 — D-07 auto-injected directory listing tool. Same
 // auto-injection site as Phase 94's two helpers; LLMs use this to drill
 // into operator-shared paths the system-prompt block (96-02) advertises
@@ -159,6 +168,26 @@ export type SessionConfigDeps = {
   readonly flapHistoryProvider?: (
     agentName: string,
   ) => Map<string, FlapHistoryEntry>;
+  /**
+   * Phase 96 Plan 02 D-02 — per-agent filesystem-capability snapshot provider.
+   *
+   * When absent (tests, legacy bootstrap paths, first-boot before the
+   * 60s heartbeat tick fires fs-probe), the renderer falls back to an
+   * empty Map and `renderFilesystemCapabilityBlock` returns the empty
+   * string (cache-stability invariant — STRICT no placeholder block per
+   * 96-02 W-4 fix). Production SessionManager wires this to
+   * `this.getFsCapabilitySnapshotForAgent` so the prompt carries the
+   * live capability state.
+   *
+   * Together with the Section 4 mandatory fleet probe in
+   * 96-07-DEPLOY-RUNBOOK.md, this closes the D-01 boot-probe approximation:
+   * (a) operator runs fleet probe immediately after deploy → snapshot
+   * persists → next session-config rebuild reads it; (b) heartbeat tick
+   * (≤60s) refreshes ongoing.
+   */
+  readonly fsCapabilitySnapshotProvider?: (
+    agentName: string,
+  ) => ReadonlyMap<string, FsCapabilitySnapshot>;
 };
 
 /**
@@ -572,6 +601,21 @@ export async function buildSessionConfig(
     }
   }
 
+  // Phase 96 Plan 02 D-02 — render <filesystem_capability> block at the
+  // daemon edge using the live snapshot from the fs-probe heartbeat (96-07)
+  // + boot-approximation fleet probe (96-07-DEPLOY-RUNBOOK Section 4).
+  // Empty snapshot → STRICT empty string (cache-stability invariant for
+  // v2.5 fixtures without fileAccess). The assembler inserts this block
+  // BETWEEN Phase 94 <tool_status> and Phase 95 <dream_log_recent> when
+  // non-empty (verified by grep pin in 96-02 Task 3 acceptance_criteria).
+  const fsSnapshot =
+    deps.fsCapabilitySnapshotProvider?.(config.name) ??
+    new Map<string, FsCapabilitySnapshot>();
+  const filesystemCapabilityBlockStr = renderFilesystemCapabilityBlock(
+    fsSnapshot,
+    config.workspace,
+  );
+
   // --- Assemble with budgets ---
   const budgets = config.contextBudgets ?? DEFAULT_BUDGETS;
 
@@ -626,6 +670,9 @@ export async function buildSessionConfig(
     // Phase 67 — conversation brief threaded into the MUTABLE SUFFIX.
     // Empty string when stores are not wired or gap-skip fired.
     conversationContext: conversationContextStr,
+    // Phase 96 Plan 02 D-02 — <filesystem_capability> block (rendered above).
+    // Empty string when no fs snapshot is available (cache-stability path).
+    filesystemCapabilityBlock: filesystemCapabilityBlockStr,
   };
 
   // Phase 52 Plan 02 — two-block assembly for prompt caching.

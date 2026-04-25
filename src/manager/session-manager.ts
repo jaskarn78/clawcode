@@ -1697,6 +1697,14 @@ export class SessionManager {
       // renderMcpPromptBlock can populate the live status table in the
       // stable prefix (TOOL-02 / TOOL-07).
       mcpStateProvider: (name: string) => this.getMcpStateForAgent(name),
+      // Phase 96 Plan 02 D-02 — thread per-agent filesystem-capability
+      // snapshot so renderFilesystemCapabilityBlock can populate the
+      // <filesystem_capability> block in the LLM stable prefix.
+      // Snapshot is mutated in-place by the fs-probe heartbeat check
+      // (96-07) every 60s; session-config rebuilds on next turn pick up
+      // the latest state automatically.
+      fsCapabilitySnapshotProvider: (name: string) =>
+        this.getSessionHandle(name)?.getFsCapabilitySnapshot() ?? new Map(),
     };
   }
 
