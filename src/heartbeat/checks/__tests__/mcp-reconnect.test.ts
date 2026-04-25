@@ -347,6 +347,71 @@ describe("mcp-reconnect heartbeat check", () => {
     expect(setCalls[0]!.get("a")!.failureCount).toBe(1);
   });
 
+  it("Phase 94 Plan 01 — capabilityProbe field populated after tick (status='ready' for connect-ok server)", async () => {
+    // After the connect-test classifies a server as ready, the heartbeat
+    // also writes a capabilityProbe snapshot. Until Plan 94-03 wires real
+    // callTool, the probe falls through the default-fallback-via-listTools
+    // stub and reports ready (we trust connect-test as a capability proxy).
+    const prior = new Map<string, McpServerState>([
+      ["a", freezeState({ name: "a", status: "ready", lastSuccessAt: 1000, lastFailureAt: null, lastError: null, failureCount: 0 })],
+    ]);
+    mockedProbe.mockResolvedValue(
+      Object.freeze({
+        ready: true,
+        stateByName: new Map([
+          ["a", freezeState({ name: "a", status: "ready", lastSuccessAt: 5000, lastFailureAt: null, lastError: null, failureCount: 0 })],
+        ]),
+        errors: Object.freeze([]),
+        optionalErrors: Object.freeze([]),
+      }),
+    );
+
+    const { ctx, setCalls } = makeStub({
+      agentConfig: agentConfigWithMcps(["a"]),
+      priorState: prior,
+    });
+    await mcpReconnectCheck.execute(ctx);
+
+    const persisted = setCalls[0]!;
+    const sa = persisted.get("a")!;
+    expect(sa.capabilityProbe).toBeDefined();
+    expect(sa.capabilityProbe!.status).toBe("ready");
+    expect(typeof sa.capabilityProbe!.lastRunAt).toBe("string");
+    // ISO8601-ish format check
+    expect(sa.capabilityProbe!.lastRunAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // ready outcome → lastSuccessAt set to now
+    expect(sa.capabilityProbe!.lastSuccessAt).toBeDefined();
+  });
+
+  it("Phase 94 Plan 01 — connect-fail short-circuit: capabilityProbe.status='failed' mirrors connect-test, no probe spawned for failed", async () => {
+    const prior = new Map<string, McpServerState>();
+    mockedProbe.mockResolvedValue(
+      Object.freeze({
+        ready: false,
+        stateByName: new Map([
+          ["a", freezeState({ name: "a", status: "failed", lastSuccessAt: null, lastFailureAt: 5000, lastError: { message: "connection refused" }, failureCount: 1 })],
+        ]),
+        errors: Object.freeze(["mcp: a: connection refused"]),
+        optionalErrors: Object.freeze([]),
+      }),
+    );
+
+    const { ctx, setCalls } = makeStub({
+      agentConfig: agentConfigWithMcps(["a"]),
+      priorState: prior,
+    });
+    await mcpReconnectCheck.execute(ctx);
+
+    const persisted = setCalls[0]!;
+    const sa = persisted.get("a")!;
+    expect(sa.capabilityProbe).toBeDefined();
+    // Connect-fail mirrors directly into capabilityProbe.status="failed"
+    // without running the per-server probe.
+    expect(sa.capabilityProbe!.status).toBe("failed");
+    // Verbatim error pass-through (Phase 85 TOOL-04)
+    expect(sa.capabilityProbe!.error).toBe("connection refused");
+  });
+
   it("Test 5 — optional server failure is classified (still ready OK, optional surfaces)", async () => {
     const prior = new Map<string, McpServerState>([
       ["good", freezeState({ name: "good", status: "ready", lastSuccessAt: 1000, lastFailureAt: null, lastError: null, failureCount: 0 })],

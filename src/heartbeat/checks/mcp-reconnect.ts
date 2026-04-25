@@ -2,7 +2,13 @@ import type { CheckModule, CheckContext, CheckResult } from "../types.js";
 import {
   performMcpReadinessHandshake,
   type McpServerState,
+  type CapabilityProbeSnapshot,
 } from "../../mcp/readiness.js";
+import {
+  probeAllMcpCapabilities,
+  type ProbeOrchestratorDeps,
+} from "../../manager/capability-probe.js";
+import pino from "pino";
 
 /**
  * Phase 85 Plan 01 Task 2 — `mcp-reconnect` heartbeat check.
@@ -146,11 +152,129 @@ const mcpReconnectCheck: CheckModule = {
       );
     }
 
+    // ----------------------------------------------------------------
+    // Phase 94 Plan 01 — capability probe overlay.
+    //
+    // After the connect-test classifies each server, run the per-server
+    // capability probe (`probeAllMcpCapabilities`) and write a
+    // `capabilityProbe` snapshot onto each merged entry. The probe layer
+    // is the orthogonal capability axis (D-02): connect ok BUT real
+    // representative call broken → `degraded`, with verbatim error.
+    //
+    // Until Plan 94-03 wires production callTool/listTools through the
+    // SDK surface, the heartbeat extension uses the connect-test result
+    // as the capability proxy:
+    //   - connect-fail (status: "failed") → capabilityProbe.status="failed",
+    //     short-circuit (no probe spawned — we already know it's down)
+    //   - connect-ok    (status: "ready") → run the registered probe with
+    //     stub callTool/listTools so the default-fallback path treats the
+    //     server as "ready" (we know connect works; nothing to call yet)
+    //
+    // The stub callTool throws so any registry entry that calls it lands
+    // in `degraded`. The stub listTools returns one entry so the default-
+    // fallback (used here as a getProbeFor override) returns ok. Net
+    // result: connect-ok → capabilityProbe.status="ready" until real
+    // callTool wiring lands; connect-fail → "failed" verbatim.
+    //
+    // The lastSuccessAt sticky-preservation across degraded ticks is
+    // already handled inside probeMcpCapability — pass prior snapshots in.
+    // ----------------------------------------------------------------
+    const stubLog = pino({ level: "silent" });
+    const stubDeps: ProbeOrchestratorDeps = {
+      callTool: async () => {
+        throw new Error(
+          "callTool not yet wired in heartbeat layer (Plan 94-03 picks this up)",
+        );
+      },
+      listTools: async (serverName: string) => {
+        // Return one synthetic entry so the default-fallback probe
+        // resolves "ready" — we already know connect-ok via the
+        // performMcpReadinessHandshake above.
+        return [{ name: `${serverName}__connect_ok` }];
+      },
+      // Override getProbeFor so we always run the default-fallback (which
+      // only consults listTools) instead of the registry entries (which
+      // call the throwing callTool). Plan 94-03 will lift this override
+      // once callTool is real.
+      getProbeFor: () => {
+        return async (probeDeps) => {
+          try {
+            const tools = await probeDeps.listTools("__heartbeat_probe__");
+            if (tools.length === 0) {
+              return { kind: "failure", error: "no tools exposed" };
+            }
+            return { kind: "ok" };
+          } catch (err) {
+            return {
+              kind: "failure",
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        };
+      },
+      now: () => new Date(),
+      log: stubLog,
+    };
+
+    // Carry prior capabilityProbe blocks for lastSuccessAt preservation.
+    const prevProbeByName = new Map<string, CapabilityProbeSnapshot>();
+    for (const [name, prior] of priorState) {
+      if (prior.capabilityProbe) {
+        prevProbeByName.set(name, prior.capabilityProbe);
+      }
+    }
+
+    // Probe ONLY the servers whose connect-test classified as anything
+    // other than "failed". For "failed" connect-test we mirror status
+    // directly into capabilityProbe — no need to spawn another probe.
+    const readyOrDegradedNames: string[] = [];
+    for (const [name, state] of merged) {
+      if (state.status !== "failed") readyOrDegradedNames.push(name);
+    }
+
+    const probeResults = readyOrDegradedNames.length > 0
+      ? await probeAllMcpCapabilities(readyOrDegradedNames, stubDeps, prevProbeByName)
+      : new Map<string, CapabilityProbeSnapshot>();
+
+    // Re-merge with capabilityProbe blocks attached. For "failed" servers
+    // we synthesize the snapshot directly from the connect-test result.
+    const probedMerged = new Map<string, McpServerState>();
+    const nowIso = new Date().toISOString();
+    for (const [name, state] of merged) {
+      let probe: CapabilityProbeSnapshot;
+      if (state.status === "failed") {
+        const prior = prevProbeByName.get(name);
+        probe = {
+          lastRunAt: nowIso,
+          status: "failed",
+          ...(state.lastError?.message
+            ? { error: state.lastError.message }
+            : {}),
+          ...(prior?.lastSuccessAt !== undefined
+            ? { lastSuccessAt: prior.lastSuccessAt }
+            : {}),
+        };
+      } else {
+        // probeResults always has an entry for every readyOrDegraded name.
+        probe = probeResults.get(name) ?? {
+          lastRunAt: nowIso,
+          status: "unknown",
+        };
+      }
+      probedMerged.set(
+        name,
+        Object.freeze({
+          ...state,
+          capabilityProbe: probe,
+        }),
+      );
+    }
+
     // Persist merged state through the SessionManager accessor (primary
     // surface — read by IPC `list-mcp-status`, slash commands, and
     // Plan 02's prompt-builder) AND mirror onto the session handle for
     // TurnDispatcher-scope reads.
-    ctx.sessionManager.setMcpStateForAgent(ctx.agentName, merged);
+    ctx.sessionManager.setMcpStateForAgent(ctx.agentName, probedMerged);
 
     // Best-effort handle mirror. The sessions map + setMcpState live on
     // the handle contract introduced alongside this check; tolerate
@@ -160,7 +284,7 @@ const mcpReconnectCheck: CheckModule = {
         readonly sessions: Map<string, HandleWithMcpState>;
       };
       const handle = sm.sessions?.get(ctx.agentName);
-      handle?.setMcpState?.(merged);
+      handle?.setMcpState?.(probedMerged);
     } catch {
       // Observational — never break the heartbeat tick on a handle miss.
     }

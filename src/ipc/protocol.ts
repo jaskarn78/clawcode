@@ -29,6 +29,12 @@ export const IPC_METHODS = [
   // the `mcp-reconnect` heartbeat). Read by Plan 03's `/clawcode-tools`
   // slash command and by operators verifying live tool health.
   "list-mcp-status",
+  // Phase 94 Plan 01 TOOL-01 — on-demand capability probe trigger.
+  // Operators run `clawcode mcp-probe -a <agent>` to force an immediate
+  // probe of all configured MCP servers (boot + heartbeat schedule
+  // continues unaffected). Writes results back via setMcpStateForAgent
+  // and returns the resulting capabilityProbe entries to the caller.
+  "mcp-probe",
   // Phase 91 Plan 05 SYNC-08 — OpenClaw↔ClawCode sync snapshot. Reads
   // ~/.clawcode/manager/sync-state.json (authoritativeSide, open conflicts,
   // perFileHashes) and the last line of ~/.clawcode/manager/sync.jsonl

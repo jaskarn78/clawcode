@@ -4261,6 +4261,12 @@ async function routeMethod(
       // Returns the live state map maintained by the warm-path gate +
       // `mcp-reconnect` heartbeat check. No probe spawn; this is a pure
       // read of the in-memory map.
+      //
+      // Phase 94 Plan 01 — payload extension: each entry now carries
+      // an additional `capabilityProbe` field (additive-optional) sourced
+      // from the per-server CapabilityProbeSnapshot written by the
+      // mcp-reconnect heartbeat. Phase 85 readers that don't consult
+      // capabilityProbe continue to work unchanged.
       const agentName = validateStringParam(params, "agent");
       const state = manager.getMcpStateForAgent(agentName);
       const servers = [...state.values()].map((s) => ({
@@ -4271,6 +4277,140 @@ async function routeMethod(
         failureCount: s.failureCount,
         optional: s.optional,
         lastError: s.lastError?.message ?? null,
+        // Phase 94 Plan 01 — capability probe block (undefined until first
+        // probe runs; serializes through JSON-RPC as null).
+        ...(s.capabilityProbe !== undefined
+          ? { capabilityProbe: s.capabilityProbe }
+          : {}),
+      }));
+      return { agent: agentName, servers };
+    }
+
+    case "mcp-probe": {
+      // Phase 94 Plan 01 TOOL-01 — on-demand capability probe trigger.
+      // Operator runs `clawcode mcp-probe -a <agent>` to force an immediate
+      // probe of all configured MCP servers. The boot + 60s heartbeat
+      // schedule continues unaffected; this just runs an extra cycle now.
+      //
+      // Wiring matches the heartbeat layer: callTool/listTools are the
+      // same stubs used by mcp-reconnect.ts (ready connect-test → ready
+      // probe via default-fallback) until Plan 94-03 wires real callTool
+      // through the SDK surface.
+      const agentName = validateStringParam(params, "agent");
+      const cfg = manager.getAgentConfig(agentName);
+      if (!cfg) {
+        throw new ManagerError(`agent '${agentName}' not configured`);
+      }
+      const mcpServers = cfg.mcpServers ?? [];
+      const priorState = manager.getMcpStateForAgent(agentName);
+
+      // Re-run the connect-test first (same primitive as the warm-path
+      // gate + heartbeat) so we have an authoritative status to mirror
+      // into capabilityProbe for failed servers.
+      const { performMcpReadinessHandshake } = await import(
+        "../mcp/readiness.js"
+      );
+      const { probeAllMcpCapabilities } = await import(
+        "./capability-probe.js"
+      );
+      const rep = await performMcpReadinessHandshake(mcpServers);
+
+      // Carry prior capabilityProbe blocks for lastSuccessAt preservation.
+      const prevProbeByName = new Map<
+        string,
+        import("../mcp/readiness.js").CapabilityProbeSnapshot
+      >();
+      for (const [name, prior] of priorState) {
+        if (prior.capabilityProbe) {
+          prevProbeByName.set(name, prior.capabilityProbe);
+        }
+      }
+
+      const stubLog = (await import("pino")).default({ level: "silent" });
+      const stubDeps = {
+        callTool: async () => {
+          throw new Error(
+            "callTool not yet wired (Plan 94-03 picks this up)",
+          );
+        },
+        listTools: async (serverName: string) => [
+          { name: `${serverName}__connect_ok` },
+        ],
+        getProbeFor: () => async (probeDeps: {
+          listTools: (s: string) => Promise<readonly { readonly name: string }[]>;
+        }) => {
+          try {
+            const tools = await probeDeps.listTools("__on_demand_probe__");
+            if (tools.length === 0) {
+              return { kind: "failure" as const, error: "no tools exposed" };
+            }
+            return { kind: "ok" as const };
+          } catch (err) {
+            return {
+              kind: "failure" as const,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        },
+        now: () => new Date(),
+        log: stubLog,
+      };
+
+      const readyOrDegradedNames: string[] = [];
+      for (const [name, fresh] of rep.stateByName) {
+        if (fresh.status !== "failed") readyOrDegradedNames.push(name);
+      }
+
+      const probeResults = readyOrDegradedNames.length > 0
+        ? await probeAllMcpCapabilities(
+            readyOrDegradedNames,
+            // The orchestrator's getProbeFor signature returns a ProbeFn
+            // so the inline closure above is the right shape; cast the
+            // deps object to the ProbeOrchestratorDeps shape.
+            stubDeps as unknown as Parameters<typeof probeAllMcpCapabilities>[1],
+            prevProbeByName,
+          )
+        : new Map<string, import("../mcp/readiness.js").CapabilityProbeSnapshot>();
+
+      // Build merged state: connect-fail mirrors into capabilityProbe;
+      // connect-ok takes the probe result.
+      type McpState = import("../mcp/readiness.js").McpServerState;
+      type ProbeSnap = import("../mcp/readiness.js").CapabilityProbeSnapshot;
+      const merged = new Map<string, McpState>();
+      const nowIso = new Date().toISOString();
+      for (const [name, fresh] of rep.stateByName) {
+        let probe: ProbeSnap;
+        if (fresh.status === "failed") {
+          const priorProbe = prevProbeByName.get(name);
+          probe = {
+            lastRunAt: nowIso,
+            status: "failed",
+            ...(fresh.lastError?.message
+              ? { error: fresh.lastError.message }
+              : {}),
+            ...(priorProbe?.lastSuccessAt !== undefined
+              ? { lastSuccessAt: priorProbe.lastSuccessAt }
+              : {}),
+          };
+        } else {
+          probe = probeResults.get(name) ?? {
+            lastRunAt: nowIso,
+            status: "unknown",
+          };
+        }
+        merged.set(name, Object.freeze({ ...fresh, capabilityProbe: probe }));
+      }
+
+      manager.setMcpStateForAgent(agentName, merged);
+
+      // Return the capabilityProbe snapshots verbatim so the CLI can
+      // render them directly.
+      const servers = [...merged.values()].map((s) => ({
+        name: s.name,
+        status: s.status,
+        capabilityProbe: s.capabilityProbe,
+        lastError: s.lastError?.message ?? null,
+        optional: s.optional,
       }));
       return { agent: agentName, servers };
     }

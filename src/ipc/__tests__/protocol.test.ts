@@ -29,6 +29,8 @@ describe("IPC_METHODS", () => {
       "mcp-servers",
       // Phase 85 Plan 01 TOOL-01 — per-agent MCP state snapshot
       "list-mcp-status",
+      // Phase 94 Plan 01 TOOL-01 — on-demand capability probe trigger
+      "mcp-probe",
       // Messaging
       "send-message",
       "send-to-agent",

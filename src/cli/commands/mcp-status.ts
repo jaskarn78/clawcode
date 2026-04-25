@@ -34,7 +34,19 @@ import { cliLog, cliError } from "../output.js";
 /**
  * Shape of a single server entry returned by the `list-mcp-status` IPC
  * method (src/manager/daemon.ts case "list-mcp-status" — shipped in Plan 01).
+ *
+ * Phase 94 Plan 01 — additive `capabilityProbe?:` field carries the per-
+ * server capability probe snapshot (set by mcp-reconnect heartbeat). The
+ * full display column is owned by Plan 94-07; this Plan 94-01 just makes
+ * the field reachable through the existing IPC payload.
  */
+export type CapabilityProbeSnapshot = {
+  readonly lastRunAt: string;
+  readonly status: "ready" | "degraded" | "reconnecting" | "failed" | "unknown";
+  readonly error?: string;
+  readonly lastSuccessAt?: string;
+};
+
 export type McpStatusServer = {
   readonly name: string;
   readonly status: "ready" | "degraded" | "failed" | "reconnecting" | "unknown";
@@ -43,6 +55,7 @@ export type McpStatusServer = {
   readonly failureCount: number;
   readonly optional: boolean;
   readonly lastError: string | null;
+  readonly capabilityProbe?: CapabilityProbeSnapshot;
 };
 
 export type McpStatusResponse = {
@@ -88,6 +101,13 @@ export function formatMcpStatusTable(
     readonly lastSuccess: string;
     readonly failures: string;
     readonly lastError: string;
+    /**
+     * Phase 94 Plan 01 — capability probe column. Surfaces the
+     * capabilityProbe.status from the IPC payload (or "unknown" when the
+     * field is absent). Plan 94-07 will swap this minimal column for a
+     * richer display with timestamps + recovery hints.
+     */
+    readonly capability: string;
   };
 
   const rows: readonly Row[] = resp.servers.map((s) => ({
@@ -97,12 +117,17 @@ export function formatMcpStatusTable(
     lastSuccess: formatRelative(s.lastSuccessAt, now),
     failures: String(s.failureCount),
     lastError: s.lastError ?? "",
+    capability: s.capabilityProbe?.status ?? "unknown",
   }));
 
   const widths = {
     agent: Math.max("AGENT".length, ...rows.map((r) => r.agent.length)),
     server: Math.max("SERVER".length, ...rows.map((r) => r.server.length)),
     status: Math.max("STATUS".length, ...rows.map((r) => r.status.length)),
+    capability: Math.max(
+      "CAPABILITY".length,
+      ...rows.map((r) => r.capability.length),
+    ),
     lastSuccess: Math.max(
       "LAST SUCCESS".length,
       ...rows.map((r) => r.lastSuccess.length),
@@ -118,6 +143,7 @@ export function formatMcpStatusTable(
     "AGENT".padEnd(widths.agent),
     "SERVER".padEnd(widths.server),
     "STATUS".padEnd(widths.status),
+    "CAPABILITY".padEnd(widths.capability),
     "LAST SUCCESS".padEnd(widths.lastSuccess),
     "FAILURES".padEnd(widths.failures),
     "LAST ERROR".padEnd(widths.lastError),
@@ -127,10 +153,11 @@ export function formatMcpStatusTable(
     widths.agent +
     widths.server +
     widths.status +
+    widths.capability +
     widths.lastSuccess +
     widths.failures +
     widths.lastError +
-    10; // 5 separators of 2 spaces each
+    12; // 6 separators of 2 spaces each
   const separator = "-".repeat(totalWidth);
 
   const body = rows.map((r) =>
@@ -138,6 +165,7 @@ export function formatMcpStatusTable(
       r.agent.padEnd(widths.agent),
       r.server.padEnd(widths.server),
       r.status.padEnd(widths.status),
+      r.capability.padEnd(widths.capability),
       r.lastSuccess.padEnd(widths.lastSuccess),
       r.failures.padEnd(widths.failures),
       r.lastError.padEnd(widths.lastError),
