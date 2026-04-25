@@ -217,9 +217,11 @@ describe("Phase 96 Plan 07 — fs-probe heartbeat check (FPC-)", () => {
     expect(writeArgs[1]).toBe(snapshot);
     expect(writeArgs[2]).toContain("fs-capability.json");
 
-    // SessionHandle.setFsCapabilitySnapshot called with the new snapshot
+    // SessionHandle.setFsCapabilitySnapshot called with the new snapshot.
+    // Stub defensive-copies (mirroring production setFsCapabilitySnapshot),
+    // so use semantic equality instead of identity equality.
     expect(setSnapshotCalls.length).toBe(1);
-    expect(setSnapshotCalls[0]).toBe(snapshot);
+    expect(setSnapshotCalls[0]).toStrictEqual(snapshot);
 
     // Heartbeat result reports healthy with ready/degraded/unknown counts
     expect(result.status).toBe("healthy");
