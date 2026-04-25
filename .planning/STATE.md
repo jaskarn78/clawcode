@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 94-06-PLAN.md
-last_updated: "2026-04-25T05:48:17.636Z"
+stopped_at: Completed 94-05-PLAN.md
+last_updated: "2026-04-25T05:58:56.109Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 7
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 94 (tool-reliability-self-awareness) — EXECUTING
-Plan: 6 of 7 complete (94-05 + 94-07 still outstanding — Wave 2 parallel; 94-06 ran ahead independently per `wave: 2, depends_on: []` frontmatter)
+Plan: 7 of 7 complete (94-05 + 94-07 still outstanding — Wave 2 parallel; 94-06 ran ahead independently per `wave: 2, depends_on: []` frontmatter)
 
 ## Performance Metrics
 
@@ -234,6 +234,7 @@ Recent decisions affecting current work:
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — resolveSystemPromptDirectives: pure per-key merge (override?.field ?? defaults?.field), filter enabled && text !== ''; alphabetical sort + Object.freeze on output for prompt-cache hash stability + CLAUDE.md immutability invariant.
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — Pre-rendered block in ContextSources (caller computes via resolver+renderer pair); assembler stays config-type-agnostic (no schema imports). Empty string short-circuits — stable prefix byte-identical to no-directives baseline (REG-ASSEMBLER-EMPTY-WHEN-DISABLED).
 - [Phase 94-tool-reliability-self-awareness]: Plan 94-06 — RELOADABLE classification: agents.*.systemPromptDirectives + defaults.systemPromptDirectives both reloadable at next-turn boundary (assembler reads via resolver each turn). No daemon restart for directive edits.
+- [Phase 94-tool-reliability-self-awareness]: Plan 94-05 — clawcode_fetch_discord_messages + clawcode_share_file built-in tools auto-injected for every agent in session-config.ts toolDefinitionsStr; NO mcpServer attribution (Plan 94-02 capability filter sees them as built-in, never removes); 100-msg fetch clamp + 25MB share cap + allowedRoots security boundary + webhook→bot-direct fallback (Phase 90.1); failures wrap via 94-04 ToolCallError; DI-pure (no fs/discord.js imports in tool modules)
 
 ### v2.1 closing decisions (for reference)
 
@@ -346,9 +347,10 @@ Recent decisions affecting current work:
 | Phase 94 P02 | 34min | 2 tasks | 13 files |
 | Phase 94 P03 | 23min | 2 tasks | 14 files |
 | Phase 94-tool-reliability-self-awareness P06 | 7min | 2 tasks | 8 files |
+| Phase 94-tool-reliability-self-awareness P05 | 6min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 94-06-PLAN.md
+Stopped at: Completed 94-05-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
