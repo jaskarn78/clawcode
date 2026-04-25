@@ -471,14 +471,15 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
     expect(agentOpt).toBeDefined();
     expect(agentOpt!.required).toBe(false);
 
-    // Combined count = 21 (10 default + 11 control).
+    // Combined count = 22 (10 default + 12 control).
     // Phase 87 CMD-04 removed clawcode-compact + clawcode-usage from defaults.
     // Phase 88 added skills-browse + skills. Phase 90 Plan 05 added
     // plugins-browse. Phase 90 Plan 06 added clawhub-auth.
     // Phase 91 Plan 05 SYNC-08 added clawcode-sync-status → 9 controls.
     // Phase 92 Plan 04 CUT-06 added clawcode-cutover-verify → 10 controls.
     // Phase 95 Plan 03 DREAM-07 added clawcode-dream → 11 controls.
-    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(21);
+    // Phase 96 Plan 05 D-03 added clawcode-probe-fs → 12 controls.
+    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(22);
 
     // Sanity — makeRootOrigin still accepts 'discord' (used by handleSteerSlash).
     const origin = makeRootOrigin("discord", "chan-xyz");

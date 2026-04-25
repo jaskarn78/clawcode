@@ -137,13 +137,14 @@ describe("slash-types", () => {
   });
 
   describe("CONTROL_COMMANDS", () => {
-    it("contains exactly 11 control commands", () => {
+    it("contains exactly 12 control commands", () => {
       // Quick task 260419-nic — grew from 5 to 7 with clawcode-interrupt +
       // clawcode-steer. Phase 85 Plan 03 added clawcode-tools → 8.
       // Phase 91 Plan 05 added clawcode-sync-status → 9.
       // Phase 92 Plan 04 added clawcode-cutover-verify → 10.
       // Phase 95 Plan 03 added clawcode-dream → 11.
-      expect(CONTROL_COMMANDS).toHaveLength(11);
+      // Phase 96 Plan 05 added clawcode-probe-fs → 12.
+      expect(CONTROL_COMMANDS).toHaveLength(12);
     });
 
     it("all control commands have control: true and a valid ipcMethod", () => {
@@ -167,6 +168,9 @@ describe("slash-types", () => {
         // Phase 95 Plan 03 DREAM-07 — /clawcode-dream operator-driven
         // manual dream-pass trigger via run-dream-pass IPC shipped in 95-03.
         "run-dream-pass",
+        // Phase 96 Plan 05 D-03 — /clawcode-probe-fs operator-driven
+        // filesystem capability probe trigger via probe-fs IPC.
+        "probe-fs",
       ];
       for (const cmd of CONTROL_COMMANDS) {
         expect(cmd.control).toBe(true);

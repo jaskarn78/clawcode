@@ -123,6 +123,10 @@ describe("IPC_METHODS", () => {
       "cutover-rollback",
       // Phase 95 Plan 03 DREAM-07 — operator-driven dream-pass trigger
       "run-dream-pass",
+      // Phase 96 Plan 05 D-03 — operator-driven filesystem capability probe
+      "probe-fs",
+      // Phase 96 Plan 05 D-04 — read-only FS capability snapshot
+      "list-fs-status",
     ]);
   });
 });
