@@ -1,5 +1,5 @@
 /**
- * Phase 91 Plan 04 — `clawcode sync run-once` subcommand.
+ * Phase 91 Plan 04 + Phase 96 Plan 06 — `clawcode sync run-once` subcommand.
  *
  * Synchronously drives ONE sync cycle via syncOnce() and prints the
  * SyncRunOutcome as JSON on stdout. This is the operator-facing manual
@@ -9,11 +9,17 @@
  * Exit codes:
  *   0 — synced | skipped-no-changes | partial-conflicts | paused
  *   1 — failed-ssh | failed-rsync | thrown exception
+ *   2 — deprecated (Phase 96 D-11 — Phase 91 mirror disabled; real refusal,
+ *       NOT a graceful skip; exit 2 prevents systemd's SuccessExitStatus=1
+ *       from masking deprecation as "all clear")
  *
  * Rationale for exit codes: systemd's `SuccessExitStatus=1` (set in
  * scripts/systemd/clawcode-sync.service) means a graceful-SSH-fail exit=1
  * won't pollute journalctl with failed-unit entries. Real rsync bugs
- * (exit 2+) still surface normally.
+ * (exit 2+) still surface normally. Phase 96 D-11 deprecation is treated
+ * as a real refusal (exit 2) so journalctl shows the unit as failed —
+ * forcing operators to notice and run `clawcode sync re-enable-timer`
+ * or accept the deprecation by removing the timer entirely.
  */
 import type { Command } from "commander";
 import pino from "pino";
@@ -77,6 +83,19 @@ export async function runSyncRunOnceAction(
   }
 
   cliLog(JSON.stringify(outcome, null, 2));
+  // Phase 96 D-11: deprecated state is a REAL refusal (exit 2) — distinct
+  // from graceful skips (exit 0) and rsync/ssh failures (exit 1). Exit 2
+  // ensures systemd's SuccessExitStatus=1 doesn't mask the deprecation as
+  // a successful no-op.
+  if (outcome.kind === "deprecated") {
+    cliError(
+      `Phase 91 mirror deprecated; agents read source via ACL. Reason: ${outcome.reason}`,
+    );
+    cliError(
+      "Use `clawcode sync re-enable-timer` to restore (within 7-day window).",
+    );
+    return 2;
+  }
   // Only hard failures bubble to exit 1. Pause/skipped/partial-conflicts are
   // all "normal cycle outcomes" and map to exit 0.
   if (outcome.kind === "failed-ssh" || outcome.kind === "failed-rsync") {

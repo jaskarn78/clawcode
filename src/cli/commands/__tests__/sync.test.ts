@@ -68,16 +68,19 @@ describe("sync command group (Plan 91-04 Task 1)", () => {
   // Registration wiring
   // -------------------------------------------------------------------------
 
-  it("ST-REG: registerSyncCommand wires 8 subcommands to parent", () => {
+  it("ST-REG: registerSyncCommand wires 10 subcommands to parent (Phase 91 + Phase 96 D-11)", () => {
     const parent = new Command();
     registerSyncCommand(parent);
     const syncCmd = parent.commands.find((c) => c.name() === "sync");
     expect(syncCmd).toBeDefined();
     const subcommandNames = syncCmd!.commands.map((c) => c.name()).sort();
-    // status, run-once, translate-sessions, resolve, set-authoritative, start, stop, finalize
+    // Phase 91: status, run-once, translate-sessions, resolve, set-authoritative, start, stop, finalize
+    // Phase 96 D-11: disable-timer, re-enable-timer (Plan 96-06)
     expect(subcommandNames).toEqual(
       [
+        "disable-timer",
         "finalize",
+        "re-enable-timer",
         "resolve",
         "run-once",
         "set-authoritative",

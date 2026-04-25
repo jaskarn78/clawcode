@@ -33,6 +33,7 @@ import {
   DEFAULT_SYNC_STATE_PATH,
   readSyncState,
 } from "../../sync/sync-state-store.js";
+import { DEPRECATION_ROLLBACK_WINDOW_MS } from "../../sync/types.js";
 import { cliLog } from "../output.js";
 
 export type RunSyncStatusArgs = Readonly<{
@@ -41,6 +42,8 @@ export type RunSyncStatusArgs = Readonly<{
   log?: Logger;
   /** DI — override readFile for hermetic tests. */
   readFileImpl?: typeof readFile;
+  /** DI — override the clock for deterministic rollback-window math (Phase 96 D-11). */
+  now?: () => Date;
 }>;
 
 /**
@@ -79,8 +82,44 @@ export async function runSyncStatusAction(
     // ENOENT / read error — first-boot path, silent.
   }
 
+  // Phase 96 D-11 — when authoritativeSide=deprecated, compute rollback
+  // window remaining (or "EXPIRED") for operator visibility. Math.ceil so
+  // 6.x days remaining renders as "7 days" (round up) — matches the
+  // operator-friendly framing.
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  let deprecationBlock: {
+    deprecatedAt: string | null;
+    rollbackWindow: string;
+  } | null = null;
+  if (state.authoritativeSide === "deprecated") {
+    const now = args.now?.() ?? new Date();
+    const deprecatedAt = state.deprecatedAt ?? null;
+    let rollbackWindow = "(unknown — deprecatedAt missing)";
+    if (deprecatedAt !== null) {
+      const elapsedMs = now.getTime() - new Date(deprecatedAt).getTime();
+      const remainingMs = DEPRECATION_ROLLBACK_WINDOW_MS - elapsedMs;
+      if (remainingMs > 0) {
+        const days = Math.ceil(remainingMs / ONE_DAY_MS);
+        rollbackWindow = `${days} days remaining`;
+      } else {
+        rollbackWindow = "EXPIRED";
+      }
+    }
+    deprecationBlock = { deprecatedAt, rollbackWindow };
+  }
+
   const summary = {
     authoritativeSide: state.authoritativeSide,
+    ...(deprecationBlock !== null
+      ? {
+          deprecation: {
+            deprecatedAt: deprecationBlock.deprecatedAt,
+            // Human-readable phrase containing literal "rollback window: N days remaining"
+            // so operators (and tests) see the window math at a glance. Phase 96 D-11.
+            "rollback window": deprecationBlock.rollbackWindow,
+          },
+        }
+      : {}),
     lastSyncedAt: state.lastSyncedAt,
     openClawHost: state.openClawHost,
     openClawWorkspace: state.openClawWorkspace,
