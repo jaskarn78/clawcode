@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 96-02-PLAN.md (Wave 2 parallel executor)
-last_updated: "2026-04-25T19:46:51.055Z"
+stopped_at: Completed 96-03-PLAN.md
+last_updated: "2026-04-25T19:49:05.398Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 17
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 96 (discord-routing-and-file-sharing-hygiene) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 
 ## Performance Metrics
 
@@ -264,6 +264,8 @@ Recent decisions affecting current work:
 - [Phase 96]: Plan 96-02: <tool_status></tool_status> and <dream_log_recent></dream_log_recent> are positioning sentinels with EMPTY bodies — they wrap NO content today; render ONLY when fs block renders, preserving v2.5 cache-stability invariant.
 - [Phase 96]: Plan 96-02: STRICT empty string on empty snapshot (W-4 ambiguity removed). v2.5 fixtures without fileAccess produce byte-identical stable prefix on Phase 96 deploy.
 - [Phase 96]: Plan 96-02: Flap-stability constants reused by NAME from Phase 94 plan 02 (FS_FLAP_WINDOW_MS = 5*60*1000, FS_FLAP_TRANSITION_THRESHOLD = 3) — cross-domain consistency between tools and filesystem capabilities.
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: Phase 94 5-value ErrorClass enum NOT extended in 96-03. clawcode_list_files maps boundary refusal → 'permission'; depth/entries/size/missing → 'unknown' with rich suggestion. Pin established for 96-04 (share-file) which will face the same choice.
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: Auto-injection site verified at src/manager/session-config.ts:421-440 (NOT non-existent agent-bootstrap.ts per RESEARCH.md Pitfall 1). 96-03 wires clawcode_list_files as the third built-in tool alongside Phase 94 plan 05's two.
 
 ### v2.1 closing decisions (for reference)
 
@@ -385,9 +387,10 @@ Recent decisions affecting current work:
 | Phase 96 P06 | 28min | 2 tasks | 13 files |
 | Phase 96 P01 | 25min | 3 tasks | 17 files |
 | Phase 96 P02 | 12min | 3 tasks | 3 files |
+| Phase 96-discord-routing-and-file-sharing-hygiene P03 | 18min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 96-02-PLAN.md (Wave 2 parallel executor)
+Stopped at: Completed 96-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
