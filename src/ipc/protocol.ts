@@ -141,6 +141,26 @@ export const IPC_METHODS = [
   //     marketplace handler pattern in daemon.ts ~line 2185).
   "cutover-verify-summary",
   "cutover-button-action",
+  // Phase 92 Plan 06 GAP CLOSURE — operator-facing CLI ↔ daemon wiring for
+  // CUT-09 + CUT-10. The CLI scaffolds in `src/cli/commands/cutover-verify.ts`
+  // and `cutover-rollback.ts` no longer return exit-1 stubs; they connect to
+  // the daemon via these IPC methods so the full pipeline (ingest → profile
+  // → probe → diff → apply-additive → canary → report) and LIFO ledger
+  // rewind are invocable from the operator CLI.
+  //
+  //   - cutover-verify:   runs runVerifyPipeline with production-wired DI
+  //                       (turnDispatcher / dispatchStream / fetchApi /
+  //                       listMcpStatus) and writes CUTOVER-REPORT.md.
+  //                       Returns {cutoverReady, gapCount, canaryPassRate,
+  //                       reportPath}.
+  //   - cutover-rollback: reads cutover-ledger.jsonl, filters rows newer
+  //                       than ledgerTo, reverses each in LIFO order via
+  //                       Phase 86 atomic YAML writers + filesystem unlink
+  //                       + destructive snapshot restore. Appends NEW
+  //                       rollback rows (append-only invariant preserved).
+  //                       Returns {rewoundCount, errors[]}.
+  "cutover-verify",
+  "cutover-rollback",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
