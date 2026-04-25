@@ -8,7 +8,11 @@ import {
   resolveAllAgents,
   resolveContent,
   resolveEnvVars,
+  resolveSystemPromptDirectives,
+  renderSystemPromptDirectiveBlock,
 } from "../loader.js";
+import { DEFAULT_SYSTEM_PROMPT_DIRECTIVES } from "../schema.js";
+import type { SystemPromptDirective } from "../schema.js";
 import { expandHome } from "../defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../../shared/errors.js";
 import type { AgentConfig, DefaultsConfig, Config } from "../schema.js";
@@ -29,6 +33,8 @@ describe("resolveAgentConfig", () => {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
+    systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: ["default-skill"],
@@ -496,6 +502,8 @@ describe("resolveAgentConfig - mcpServers", () => {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
+    systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: [],
@@ -1132,6 +1140,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
+    systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
     clawhubCacheTtlMs: 600_000,
     skills: [],
@@ -1530,6 +1540,8 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
+    systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,
       skills: [],
@@ -1667,6 +1679,8 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
+    systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,
       skills: [],
@@ -1772,5 +1786,91 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
     const agent = makeAgent({ memoryAutoLoadPath: "/abs/memo.md" });
     const resolved = resolveAgentConfig(agent, defaults);
     expect(resolved.memoryAutoLoadPath).toBe("/abs/memo.md");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 94 Plan 06 TOOL-10 — resolveSystemPromptDirectives
+//
+// Per-key merge resolver tests + render-block tests. The schema-level
+// invariants (back-compat, default presence, override shape) are pinned in
+// src/config/__tests__/schema-system-prompt-directives.test.ts; this file
+// covers loader-side resolver semantics.
+// ---------------------------------------------------------------------------
+
+describe("resolveSystemPromptDirectives (Phase 94 TOOL-10)", () => {
+  const fleetDefaults: Record<string, SystemPromptDirective> = {
+    "file-sharing": {
+      enabled: true,
+      text: "ALWAYS upload via Discord.",
+    },
+    "cross-agent-routing": {
+      enabled: true,
+      text: "Suggest the user ask another agent.",
+    },
+  };
+
+  it("LR-RESOLVE-DEFAULTS-ONLY: undefined override returns both defaults sorted alphabetically", () => {
+    const out = resolveSystemPromptDirectives(undefined, fleetDefaults);
+    expect(out.map((d) => d.key)).toEqual([
+      "cross-agent-routing",
+      "file-sharing",
+    ]);
+  });
+
+  it("LR-RESOLVE-OVERRIDE-DISABLES: override file-sharing.enabled=false drops file-sharing only", () => {
+    const out = resolveSystemPromptDirectives(
+      { "file-sharing": { enabled: false } },
+      fleetDefaults,
+    );
+    const keys = out.map((d) => d.key);
+    expect(keys).toEqual(["cross-agent-routing"]);
+  });
+
+  it("LR-RESOLVE-FROZEN: returned array and entries are immutable (CLAUDE.md immutability)", () => {
+    const out = resolveSystemPromptDirectives(undefined, fleetDefaults);
+    expect(Object.isFrozen(out)).toBe(true);
+    if (out.length > 0) {
+      expect(Object.isFrozen(out[0])).toBe(true);
+    }
+  });
+
+  it("LR-RESOLVE-EMPTY-WHEN-ALL-DISABLED: override disables all defaults → returns []", () => {
+    const out = resolveSystemPromptDirectives(
+      {
+        "file-sharing": { enabled: false },
+        "cross-agent-routing": { enabled: false },
+      },
+      fleetDefaults,
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("LR-RESOLVE-DEFAULT-CONST-MATCHES: against the exported DEFAULT_SYSTEM_PROMPT_DIRECTIVES constant, both directives are enabled by default", () => {
+    const out = resolveSystemPromptDirectives(
+      undefined,
+      DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+    );
+    expect(out.map((d) => d.key)).toEqual([
+      "cross-agent-routing",
+      "file-sharing",
+    ]);
+    // D-09 file-sharing verbatim text reaches the resolver output
+    const fs = out.find((d) => d.key === "file-sharing");
+    expect(fs?.text).toContain("ALWAYS upload via Discord");
+  });
+});
+
+describe("renderSystemPromptDirectiveBlock (Phase 94 TOOL-10)", () => {
+  it("returns empty string when no directives are enabled (REG-ASSEMBLER-EMPTY-WHEN-DISABLED)", () => {
+    expect(renderSystemPromptDirectiveBlock([])).toBe("");
+  });
+
+  it("joins directive texts with double-newline separator (alphabetical order preserved)", () => {
+    const block = renderSystemPromptDirectiveBlock([
+      { key: "a", text: "First." },
+      { key: "b", text: "Second." },
+    ]);
+    expect(block).toBe("First.\n\nSecond.");
   });
 });

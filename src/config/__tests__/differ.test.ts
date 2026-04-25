@@ -22,6 +22,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+      // Phase 94 TOOL-10 — defaults carry the fleet-wide directives.
+      systemPromptDirectives: {
+        "file-sharing": {
+          enabled: true,
+          text: "When you produce a file the user wants to access, ALWAYS upload via Discord (the channel/thread you're answering in) and return the CDN URL. NEVER just tell the user a local file path they can't reach (e.g., '/home/clawcode/...'). If unsure where to send it, ask which channel.",
+        },
+        "cross-agent-routing": {
+          enabled: true,
+          text: "If a user asks you to do something requiring a tool you don't have, check your tool list. If unavailable, suggest the user ask another agent (mention specific channel/agent name) that has the tool ready.",
+        },
+      },
       // Phase 90 Plan 04 HUB-01/HUB-08 — defaults carry the zod-populated values.
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,

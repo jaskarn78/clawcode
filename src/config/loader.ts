@@ -5,7 +5,13 @@ import { parse as parseYaml } from "yaml";
 import { configSchema } from "./schema.js";
 import { expandHome } from "./defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../shared/errors.js";
-import type { Config, AgentConfig, DefaultsConfig, McpServerSchemaConfig } from "./schema.js";
+import type {
+  Config,
+  AgentConfig,
+  DefaultsConfig,
+  McpServerSchemaConfig,
+  SystemPromptDirective,
+} from "./schema.js";
 import type {
   ResolvedAgentConfig,
   ResolvedMarketplaceSource,
@@ -517,6 +523,91 @@ export function resolveMcpEnvValue(
       { cause: err instanceof Error ? err : undefined },
     );
   }
+}
+
+/**
+ * Phase 94 TOOL-10 / D-10 — resolved directive shape.
+ *
+ * Carries only what the prompt assembler needs: the directive's stable key
+ * (used for ordering + downstream telemetry) and its verbatim text. The
+ * `enabled` flag is folded into filtering — disabled directives are
+ * dropped from the resolver output entirely so consumers never see them.
+ */
+export interface ResolvedDirective {
+  readonly key: string;
+  readonly text: string;
+}
+
+/**
+ * Phase 94 TOOL-10 / D-10 — per-key merge of agent override over fleet
+ * defaults, returning the enabled directives in deterministic order.
+ *
+ * Pure function — no I/O, no clock, no SDK. Safe to call per-turn from
+ * the prompt assembler. Returns a frozen array of frozen objects so
+ * downstream code can't mutate either the list or its entries
+ * (CLAUDE.md immutability invariant).
+ *
+ * Merge logic:
+ *   for each key in {keys(defaults) ∪ keys(agentOverride)}:
+ *     enabled = override?.enabled ?? defaults?.enabled ?? false
+ *     text    = override?.text    ?? defaults?.text    ?? ""
+ *     keep iff enabled && text !== ""
+ *   sort by key (alphabetical) for prompt-cache hash stability.
+ *
+ * Per-key merge means an operator can disable the file-sharing directive
+ * for one agent without dropping the cross-agent-routing directive — the
+ * unspecified default flows through. This is the contract pinned by
+ * REG-OVERRIDE-PARTIAL.
+ */
+export function resolveSystemPromptDirectives(
+  agentOverride:
+    | Record<string, { enabled?: boolean; text?: string }>
+    | undefined,
+  defaults: Record<string, SystemPromptDirective>,
+): readonly ResolvedDirective[] {
+  const keys = new Set<string>([
+    ...Object.keys(defaults),
+    ...Object.keys(agentOverride ?? {}),
+  ]);
+
+  const merged: { key: string; text: string }[] = [];
+  for (const key of keys) {
+    const d = defaults[key];
+    const o = agentOverride?.[key];
+    const enabled = o?.enabled ?? d?.enabled ?? false;
+    const text = o?.text ?? d?.text ?? "";
+    if (enabled && text !== "") {
+      merged.push({ key, text });
+    }
+  }
+
+  // Deterministic alphabetical order — required for prompt-cache hash
+  // stability. Same input must produce byte-identical output across
+  // processes (REG-DETERMINISTIC).
+  merged.sort((a, b) => a.key.localeCompare(b.key));
+
+  return Object.freeze(
+    merged.map((m) => Object.freeze({ key: m.key, text: m.text })),
+  );
+}
+
+/**
+ * Phase 94 TOOL-10 — render the resolved directive list into the verbatim
+ * text block prepended to the assembler's stable prefix.
+ *
+ * Returns "" when no directives are enabled (REG-ASSEMBLER-EMPTY-WHEN-
+ * DISABLED — operators who opt out of every default see a clean stable
+ * prefix WITHOUT marker comments, deterministic for prompt-cache hash).
+ *
+ * Block format: directive texts joined by "\n\n" (one blank line between
+ * adjacent directives). No XML wrappers, no marker headings — the LLM
+ * sees plain operator instructions at the start of its context.
+ */
+export function renderSystemPromptDirectiveBlock(
+  directives: readonly ResolvedDirective[],
+): string {
+  if (directives.length === 0) return "";
+  return directives.map((d) => d.text).join("\n\n");
 }
 
 /**

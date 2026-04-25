@@ -79,6 +79,67 @@ export const memorySchema = memoryConfigSchema;
 export type MemoryConfig = z.infer<typeof memorySchema>;
 
 /**
+ * Phase 94 TOOL-10 / D-10 — system-prompt directive shape.
+ *
+ * Each directive carries an enabled flag + the verbatim text the LLM sees
+ * prepended to its stable prefix. Defaults (DEFAULT_SYSTEM_PROMPT_DIRECTIVES
+ * below) ship two entries — file-sharing (D-09) and cross-agent-routing
+ * (D-07) — both default-enabled per operator decision.
+ *
+ * 8th application of the Phase 83/86/89/90/92 additive-optional schema
+ * blueprint: legacy v2.5 migrated configs without this field parse
+ * unchanged because `defaultsSchema.systemPromptDirectives` is default-
+ * bearing and `agentSchema.systemPromptDirectives` is fully optional.
+ */
+export const systemPromptDirectiveSchema = z.object({
+  enabled: z.boolean(),
+  text: z.string(),
+});
+
+/** Inferred Phase 94 directive type (per-key shape). */
+export type SystemPromptDirective = z.infer<typeof systemPromptDirectiveSchema>;
+
+/**
+ * Phase 94 D-09 + D-07 — fleet-wide default directives.
+ *
+ * Verbatim from 94-CONTEXT.md decisions D-09 (file-sharing) and D-07
+ * (cross-agent-routing). The directive TEXT is the LLM-facing instruction;
+ * subtle wording changes can change LLM behavior in unobvious ways. Pinned
+ * by static-grep regression tests:
+ *   - "ALWAYS upload via Discord" (D-09 file-sharing)
+ *   - "NEVER just tell the user a local file path" (D-09 NEVER clause)
+ *   - "suggest the user ask another agent" (D-07 cross-agent-routing)
+ *
+ * Frozen so downstream code can't mutate the global default record.
+ */
+export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
+  Record<string, SystemPromptDirective>
+> = Object.freeze({
+  "file-sharing": Object.freeze({
+    enabled: true,
+    text: "When you produce a file the user wants to access, ALWAYS upload via Discord (the channel/thread you're answering in) and return the CDN URL. NEVER just tell the user a local file path they can't reach (e.g., '/home/clawcode/...'). If unsure where to send it, ask which channel.",
+  }),
+  "cross-agent-routing": Object.freeze({
+    enabled: true,
+    text: "If a user asks you to do something requiring a tool you don't have, check your tool list. If unavailable, suggest the user ask another agent (mention specific channel/agent name) that has the tool ready.",
+  }),
+});
+
+/**
+ * Phase 94 D-10 — per-agent override shape.
+ *
+ * Both fields optional so an operator can flip just `enabled` on a
+ * default directive without re-stating its `text`. The resolver
+ * (`resolveSystemPromptDirectives` in loader.ts) merges per-key:
+ * fields not specified in the override fall back to the matching
+ * default directive's value.
+ */
+export const systemPromptDirectiveOverrideSchema = z.object({
+  enabled: z.boolean().optional(),
+  text: z.string().optional(),
+});
+
+/**
  * Heartbeat monitoring configuration schema.
  * Controls the periodic health check system for agents.
  */
@@ -741,6 +802,16 @@ export const agentSchema = z.object({
   // glyph or short custom emoji name fits). Fallback via
   // defaults.memoryCueEmoji.
   memoryCueEmoji: z.string().min(1).max(8).optional(),
+  // Phase 94 TOOL-10 / D-10 — per-agent override of fleet directives.
+  // Additive + optional: v2.5 migrated configs parse unchanged (loader
+  // resolver fills from DEFAULT_SYSTEM_PROMPT_DIRECTIVES via
+  // defaults.systemPromptDirectives). Per-key partial merge — setting
+  // `agents.foo.systemPromptDirectives["file-sharing"].enabled = false`
+  // disables that directive for foo only; cross-agent-routing still
+  // inherits the default. Reloadable (next-turn boundary).
+  systemPromptDirectives: z
+    .record(z.string(), systemPromptDirectiveOverrideSchema)
+    .optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -856,6 +927,19 @@ export const defaultsSchema = z.object({
   // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
   // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
   memoryCueEmoji: z.string().min(1).max(8).default("✅"),
+  // Phase 94 TOOL-10 / D-10 — fleet-wide default system-prompt directives.
+  //
+  // Default-bearing: when omitted from clawcode.yaml, the loader resolves
+  // to DEFAULT_SYSTEM_PROMPT_DIRECTIVES (D-09 file-sharing + D-07 cross-
+  // agent-routing). v2.5 migrated configs parse unchanged (REG-V25-BACKCOMPAT
+  // — additive-optional, 8th application of the Phase 83/86/89/90/92
+  // schema blueprint).
+  //
+  // Reloadable — next agent prompt assembly picks up edits without daemon
+  // restart (RELOADABLE_FIELDS in src/config/types.ts).
+  systemPromptDirectives: z
+    .record(z.string(), systemPromptDirectiveSchema)
+    .default(() => ({ ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES })),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -1087,6 +1171,13 @@ export const configSchema = z.object({
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
+    // Phase 94 TOOL-10 / D-10 — fleet-wide default directives mirror
+    // DEFAULT_SYSTEM_PROMPT_DIRECTIVES (D-09 file-sharing + D-07 cross-
+    // agent-routing). Spread to a fresh object so the configSchema-default
+    // record is independent of the frozen exported constant (defensive
+    // copy — downstream merges via resolveSystemPromptDirectives never
+    // see the frozen reference).
+    systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",

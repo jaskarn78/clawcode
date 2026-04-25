@@ -52,6 +52,22 @@ export type ContextBudgets = {
 };
 
 export type ContextSources = {
+  /**
+   * Phase 94 TOOL-10 / D-10 — pre-rendered system-prompt directive block.
+   *
+   * Caller (session-config.ts) renders this via
+   * `renderSystemPromptDirectiveBlock(resolveSystemPromptDirectives(...))`
+   * and passes the resulting string. When non-empty, the assembler
+   * prepends it as the FIRST element of stableParts (BEFORE identity →
+   * BEFORE Available Tools). When "" (all directives disabled), no
+   * marker block is prepended — the stable prefix is byte-identical to
+   * the no-directives baseline (REG-ASSEMBLER-EMPTY-WHEN-DISABLED), which
+   * matters for prompt-cache hash stability.
+   *
+   * Optional for back-compat: existing callers without this field see no
+   * behavior change.
+   */
+  readonly systemPromptDirectives?: string;
   readonly identity: string;
   /**
    * Phase 53 Plan 02 — SOUL.md body carved out from identity. When the upstream
@@ -684,6 +700,17 @@ function assembleContextInternal(
   // ── Placement ────────────────────────────────────────────────────────────
   const stableParts: string[] = [];
   const mutableParts: string[] = [];
+
+  // Phase 94 TOOL-10 / D-10 — system-prompt directives are operator-mandated
+  // rules and lead the stable prefix so the LLM sees them BEFORE persona,
+  // tools, and memory. Single integration site (no duplicate prepends).
+  // Empty string short-circuits — no marker, no leading whitespace, byte-
+  // identical to the no-directives baseline (REG-ASSEMBLER-EMPTY-WHEN-
+  // DISABLED — required for prompt-cache hash stability when all
+  // directives are disabled by operator override).
+  if (sources.systemPromptDirectives && sources.systemPromptDirectives.length > 0) {
+    stableParts.push(sources.systemPromptDirectives);
+  }
 
   // Identity stays in stablePrefix (no section header — fingerprint has its own formatting)
   if (identityOut) {

@@ -99,6 +99,13 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // turn.
   "agents.*.memoryCueEmoji",
   "defaults.memoryCueEmoji",
+  // Phase 94 TOOL-10 / D-10 — system-prompt directives. Reloadable: a
+  // YAML edit takes effect on the NEXT prompt assembly (per-turn boundary
+  // — assembler reads via the loader resolver each turn). No socket / DB /
+  // workspace restart required. 8th application of the Phase 83/86/89/90
+  // additive-optional reloadable blueprint.
+  "agents.*.systemPromptDirectives",
+  "defaults.systemPromptDirectives",
 ]);
 
 /**
