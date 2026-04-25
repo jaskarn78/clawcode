@@ -113,6 +113,23 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // of the Phase 83/86/89/90/94 additive-optional reloadable blueprint.
   "agents.*.dream",
   "defaults.dream",
+  // Phase 96 D-03 / D-09 — fileAccess + outputDir reloadable.
+  // Reload semantics:
+  //   - fileAccess: classifying as reloadable signals "no daemon restart
+  //     needed". The next 60s heartbeat tick (src/heartbeat/checks/fs-
+  //     probe.ts — Phase 96 plan 07 task 1) reads the freshly-loaded paths
+  //     via deps.getResolvedConfig(agent) and runs runFsProbe against the
+  //     new declarations. Operators wanting sub-60s response can run
+  //     /clawcode-probe-fs <agent> (Phase 96 plan 05) manually.
+  //   - outputDir: resolveOutputDirTemplate is read lazily on each
+  //     clawcode_share_file call (Phase 96 plan 04) — a YAML edit takes
+  //     effect on the NEXT share invocation. No restart required.
+  // 10th and 11th applications of the Phase 83/86/89/90/94/95 additive-
+  // optional reloadable blueprint.
+  "agents.*.fileAccess",
+  "defaults.fileAccess",
+  "agents.*.outputDir",
+  "defaults.outputDir",
 ]);
 
 /**
