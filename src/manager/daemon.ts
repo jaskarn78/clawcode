@@ -2484,6 +2484,97 @@ export async function startDaemon(
     // primitives (runDreamPass / applyDreamResult / isAgentIdle /
     // getResolvedDreamConfig) to real production sources here; Plans
     // 95-01 + 95-02 own the pure-DI logic.
+    // Phase 96 Plan 05 PFS- — probe-fs + list-fs-status IPC handlers.
+    // Operator-driven on-demand filesystem-capability re-probe + cached
+    // snapshot read. Backs both `clawcode probe-fs <agent>` (CLI) and
+    // `/clawcode-probe-fs` (Discord slash, admin-only) — Discord/CLI parity
+    // invariant per RESEARCH.md Validation Architecture Dim 6. Closure-based
+    // intercept BEFORE routeMethod so the IPC handler signature stays stable.
+    // The daemon edge wires production deps (node:fs/promises.access /
+    // realpath / writeFile / rename / mkdir + os.homedir for the
+    // fs-capability.json path); Plan 96-01 owns the pure-DI runFsProbe +
+    // writeFsSnapshot primitives (NEVER re-implemented here — pinned by
+    // static-grep `grep -q "runFsProbe" src/manager/daemon.ts`).
+    if (method === "probe-fs") {
+      const { handleProbeFsIpc } = await import("./daemon-fs-ipc.js");
+      const {
+        access: fsAccessFn,
+        realpath: fsRealpathFn,
+        writeFile: fsWriteFileFn,
+        rename: fsRenameFn,
+        mkdir: fsMkdirFn,
+        readFile: fsReadFileFn,
+        constants: fsConstants,
+      } = await import("node:fs/promises").then((m) => ({
+        access: m.access,
+        realpath: m.realpath,
+        writeFile: m.writeFile,
+        rename: m.rename,
+        mkdir: m.mkdir,
+        readFile: m.readFile,
+        constants: m.constants,
+      }));
+      const { resolve: pathResolveFn } = await import("node:path");
+      const { writeFsSnapshot } = await import("./fs-snapshot-store.js");
+      const { resolveFileAccess } = await import("../config/loader.js");
+      return handleProbeFsIpc(
+        { agent: validateStringParam(params, "agent") },
+        {
+          resolveFileAccessForAgent: (agent) => {
+            const cfg = manager.getAgentConfig(agent) ?? resolvedAgents.find((a) => a.name === agent);
+            return resolveFileAccess(
+              agent,
+              cfg as unknown as { readonly fileAccess?: readonly string[] },
+              config.defaults as unknown as { readonly fileAccess?: readonly string[] },
+            );
+          },
+          getHandleAccessors: (agent) => {
+            const handle = manager.getSessionHandle(agent);
+            if (!handle) return null;
+            return {
+              getFsCapabilitySnapshot: () => handle.getFsCapabilitySnapshot(),
+              setFsCapabilitySnapshot: (next) => handle.setFsCapabilitySnapshot(next),
+            };
+          },
+          fsAccess: fsAccessFn,
+          fsConstants,
+          realpath: fsRealpathFn,
+          resolve: pathResolveFn,
+          writeFsSnapshot: (agent, snapshot, filePath) =>
+            writeFsSnapshot(agent, snapshot, filePath, {
+              writeFile: (p, data, enc) => fsWriteFileFn(p, data, enc),
+              rename: fsRenameFn,
+              // node:fs/promises.mkdir returns Promise<string | undefined>;
+              // wrap to match our deps Promise<void> signature.
+              mkdir: async (p, options) => {
+                await fsMkdirFn(p, options);
+              },
+              readFile: (p, enc) => fsReadFileFn(p, enc),
+              log,
+            }),
+          getFsCapabilityPath: (agent) =>
+            join(homedir(), ".clawcode", "agents", agent, "fs-capability.json"),
+          now: () => new Date(),
+          log,
+        },
+      );
+    }
+    if (method === "list-fs-status") {
+      const { handleListFsStatusIpc } = await import("./daemon-fs-ipc.js");
+      return handleListFsStatusIpc(
+        { agent: validateStringParam(params, "agent") },
+        {
+          getHandleAccessors: (agent) => {
+            const handle = manager.getSessionHandle(agent);
+            if (!handle) return null;
+            return {
+              getFsCapabilitySnapshot: () => handle.getFsCapabilitySnapshot(),
+              setFsCapabilitySnapshot: (next) => handle.setFsCapabilitySnapshot(next),
+            };
+          },
+        },
+      );
+    }
     if (method === "run-dream-pass") {
       const { runDreamPass: runDreamPassPrim } = await import(
         "./dream-pass.js"

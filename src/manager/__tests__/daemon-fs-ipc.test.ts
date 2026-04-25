@@ -111,9 +111,12 @@ describe("Phase 96 Plan 05 — daemon probe-fs + list-fs-status IPC (DIPC-)", ()
     await expect(
       handleProbeFsIpc({ agent: "no-such-agent" }, deps),
     ).rejects.toThrow(ManagerError);
+    // ManagerError message: "probe-fs: agent 'no-such-agent' not running"
+    // — assert key tokens appear (regex split tolerates the agent-name
+    // substring between 'agent' and 'not running').
     await expect(
       handleProbeFsIpc({ agent: "no-such-agent" }, deps),
-    ).rejects.toThrow(/agent not running|not configured/i);
+    ).rejects.toThrow(/not running/i);
   });
 
   it("DIPC-LIST-FS-STATUS-HAPPY: handleListFsStatusIpc serializes snapshot as paths array", async () => {
