@@ -730,6 +730,119 @@ export class SessionManager {
       handle.setMcpState(mcpReadiness.current.stateByName);
     }
 
+    // Phase 94 Plan 01 Gap-Closure — boot-time capability probe (D-03).
+    //
+    // Without this fire-and-forget kickoff, every server's
+    // capabilityProbe field is undefined for the first 60 seconds after
+    // startup (until the heartbeat tick runs). Plan 94-02's filter would
+    // then treat all MCP-backed tools as `unknown` and exclude them from
+    // the LLM-visible tool list — agents start blind for a full minute.
+    //
+    // The schedule contract (D-03) specifies "boot once + 60s heartbeat
+    // tick + on-demand". This satisfies the boot-once leg.
+    //
+    // Implementation:
+    //   - Fire-and-forget (no await) — the warm-path is already green
+    //     and we don't want to add 10s × N to startup latency.
+    //   - Uses the same heartbeat-edge wiring (stub callTool that throws
+    //     + getProbeFor override forcing default-fallback) until Plan
+    //     94-03's real callTool wiring lifts the override. The
+    //     default-fallback uses listTools, which the heartbeat extension
+    //     stubs to return one synthetic entry — net effect is connect-ok
+    //     servers come up as `capabilityProbe.status="ready"` immediately.
+    //   - Errors swallowed via .catch() — boot must never fail because
+    //     the probe coroutine threw. The next 60s heartbeat tick reruns
+    //     this probe with full state-merge semantics.
+    if (mcpServers.length > 0) {
+      const serverNames = mcpServers.map((s) => s.name);
+      const priorState = this.getMcpStateForAgent(name);
+      const prevProbeByName = new Map<
+        string,
+        import("../mcp/readiness.js").CapabilityProbeSnapshot
+      >();
+      for (const [serverName, prior] of priorState) {
+        if (prior.capabilityProbe) {
+          prevProbeByName.set(serverName, prior.capabilityProbe);
+        }
+      }
+
+      // Fire-and-forget — runs in background, completes within ~10s
+      // wall-clock per server in parallel. Logged on completion.
+      void (async () => {
+        try {
+          const { probeAllMcpCapabilities } = await import("./capability-probe.js");
+          const pino = (await import("pino")).default;
+          const stubLog = pino({ level: "silent" });
+          const stubDeps = {
+            callTool: async () => {
+              throw new Error(
+                "callTool not yet wired in boot-probe layer (Plan 94-03 picks this up)",
+              );
+            },
+            listTools: async (serverName: string) => [
+              { name: `${serverName}__connect_ok` },
+            ],
+            getProbeFor: () => async (probeDeps: {
+              listTools: (s: string) => Promise<readonly { readonly name: string }[]>;
+            }) => {
+              try {
+                const tools = await probeDeps.listTools("__boot_probe__");
+                if (tools.length === 0) {
+                  return { kind: "failure" as const, error: "no tools exposed" };
+                }
+                return { kind: "ok" as const };
+              } catch (err) {
+                return {
+                  kind: "failure" as const,
+                  error: err instanceof Error ? err.message : String(err),
+                };
+              }
+            },
+            now: () => new Date(),
+            log: stubLog,
+          };
+          const probeResults = await probeAllMcpCapabilities(
+            serverNames,
+            stubDeps as unknown as Parameters<typeof probeAllMcpCapabilities>[1],
+            prevProbeByName,
+          );
+
+          // Merge fresh probe snapshots into each server's existing
+          // McpServerState (preserves connect-test status from warm-path).
+          const currentState = this.getMcpStateForAgent(name);
+          const merged = new Map<string, McpServerState>();
+          for (const [serverName, state] of currentState) {
+            const probe = probeResults.get(serverName);
+            if (probe) {
+              merged.set(
+                serverName,
+                Object.freeze({ ...state, capabilityProbe: probe }),
+              );
+            } else {
+              merged.set(serverName, state);
+            }
+          }
+          this.setMcpStateForAgent(name, merged);
+          // Mirror onto the handle so TurnDispatcher-scope reads see fresh probe.
+          try {
+            handle.setMcpState(merged);
+          } catch {
+            // Handle may have been closed (agent stopped) — best-effort.
+          }
+          this.log.info(
+            { agent: name, servers: serverNames.length },
+            "boot-time capability probe complete",
+          );
+        } catch (err) {
+          // Observational — boot must never fail because of probe error.
+          this.log.warn(
+            { agent: name, err: (err as Error).message },
+            "boot-time capability probe failed (non-fatal; next heartbeat tick will retry)",
+          );
+        }
+      })();
+    }
+
     // Gap 3 (memory-persistence-gaps): start mid-session flush timer AFTER
     // warm-path success. Before the gate is green there is no active
     // conversation to flush, and starting the timer earlier would waste a
