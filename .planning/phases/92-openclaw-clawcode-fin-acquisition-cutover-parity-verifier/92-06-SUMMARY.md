@@ -252,3 +252,65 @@ v2.5 milestone (Phase 92) ships when this plan's CUTOVER-REPORT.md emits `cutove
 ## Self-Check: PASSED
 
 All claimed files exist on disk. All claimed commits exist in git log. All static-grep pins resolve as expected.
+
+---
+
+## Gap Closure (post-VERIFICATION)
+
+**Triggered by:** 92-VERIFICATION.md `status: gaps_found` — CUT-09 + CUT-10 CLI scaffolds returning exit 1 unconditionally.
+
+### Fixes Applied
+
+**Fix 1 — CUT-09: Wire `cutover-verify` CLI to daemon IPC**
+
+- `src/cli/commands/cutover-verify.ts` replaced the `cliError("daemon-IPC not yet wired")` stub with a production `sendIpcRequest` call targeting the daemon's `cutover-verify` handler. The CLI forwards operator params (agent, applyAdditive, outputDir, stagingDir, depthMsgs, depthDays) and prints `Cutover ready: true|false` based on the daemon response. Exit 0 when cutoverReady=true, exit 1 otherwise.
+- `src/manager/cutover-ipc-handlers.ts` (NEW): `handleCutoverVerifyIpc` validates params via `ManagerError`, builds `VerifyPipelineDeps` through an injectable `buildPipelineDeps` factory, calls `runVerifyPipeline`, and projects `VerifyOutcome` to the operator-visible `{cutoverReady, gapCount, canaryPassRate, reportPath}` response shape.
+- `src/cutover/rollback-engine.ts` (NEW): `runRollbackEngine` — LIFO ledger rewind engine. Reads ledger, filters by agent + timestamp + already-rewound check, sorts newest-first, reverses each row (additive: unlink/removeSkill/removeAllowedModel; destructive: gunzip+base64 snapshot restore or audit-only row). Appends new rollback rows (append-only invariant preserved). `RollbackEngineResult` exposes `rewoundCount + errors[]` with internal debug counters kept daemon-side.
+- `src/manager/daemon.ts`: `cutover-verify` intercept registered with full production DI (turnDispatcher, manager.getMcpStateForAgent, loadConfig, execFile rsync runner, Phase 86 yaml writers). Discord fetchMessages stubbed — MC API is PRIMARY corpus per D-11.
+
+**Fix 2 — CUT-10: Wire `cutover-rollback` CLI to daemon IPC**
+
+- `src/cli/commands/cutover-rollback.ts` replaced the stub with `sendIpcRequest("cutover-rollback", ...)`. Forwards agent, ledgerTo, ledgerPath, dryRun. Prints rewound count. Exit 0 if errors empty, exit 1 if any row fails.
+- `handleCutoverRollbackIpc` in `cutover-ipc-handlers.ts` validates params, builds `RollbackEngineDeps`, calls `runRollbackEngine`, projects to `{rewoundCount, errors[]}`.
+- `src/manager/daemon.ts`: `cutover-rollback` intercept registered with `removeAgentSkill` (updateAgentSkills op=remove adapter) + `removeAgentAllowedModel` (read/filter/write via updateAgentConfig) + ledger path resolution.
+
+### New Tests Added (6 total)
+
+| File | Tests | IDs |
+|------|-------|-----|
+| `src/cli/commands/__tests__/cutover-verify-cli.test.ts` | 3 | CV1 (IPC method+params forwarded), CV2 (cutoverReady=true → exit 0 + "Cutover ready: true"), CV3 (cutoverReady=false → exit 1) |
+| `src/cli/commands/__tests__/cutover-rollback-cli.test.ts` | 3 | CR1 (IPC method+params forwarded), CR2 (errors=[] → exit 0 + rewoundCount printed), CR3 (errors present → exit 1) |
+| `src/manager/__tests__/cutover-ipc-handlers.test.ts` | 5 | HV1 (verified-ready projected), HV2 (missing agent → ManagerError), HR1 (RollbackEngineResult projected, debug counters dropped), HR2 (missing ledgerTo → ManagerError), IPC regression pin |
+
+### Verification after gap closure
+
+```
+npx vitest run src/cutover/__tests__/ src/cli/commands/__tests__/cutover-*-cli.test.ts src/manager/__tests__/cutover-ipc-handlers.test.ts src/manager/__tests__/daemon-cutover-button.test.ts src/cli/commands/__tests__/sync-set-authoritative.test.ts --reporter=dot
+→ 134 tests, 0 failures (21 test files)
+
+npm run build → exit 0
+
+node dist/cli/index.js cutover verify --help  → shows --agent, --apply-additive, --depth-msgs, --depth-days flags
+node dist/cli/index.js cutover rollback --help → shows --agent, --ledger-to, --dry-run flags
+```
+
+### Commits
+
+| Hash | Description |
+|------|-------------|
+| 8bb5c5f | test(92-gap): add failing CLI<->daemon-IPC tests |
+| c896de0 | feat(92-gap): register cutover-verify + cutover-rollback IPC methods in protocol.ts |
+| d3bd8c0 | feat(92-gap): wire cutover verify+rollback CLIs to daemon IPC |
+| b3066c8 | feat(92-gap): rollback-engine LIFO rewind module + 6 tests |
+| 71dd0a4 | test(92-gap): fix mock.calls tuple type annotations |
+| 3eb0587 | feat(92-gap): cutover-verify + cutover-rollback daemon IPC handlers |
+| 2995ff5 | feat(92-gap): wire cutover-verify + cutover-rollback IPC methods in daemon |
+
+### VERIFICATION flip
+
+After this gap closure, re-running the gsd-verifier should find:
+- `clawcode cutover verify --help` shows real flags (not daemon-error stub)
+- `runCutoverVerifyAction` no longer returns exit 1 unconditionally
+- `runCutoverRollbackAction` no longer returns exit 1 unconditionally  
+- CUT-09 + CUT-10 CLI truths: VERIFIED
+- `status: passed` (was `gaps_found`)
