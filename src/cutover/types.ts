@@ -24,6 +24,8 @@
  */
 
 import { z } from "zod/v4";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Chunking threshold (D-Claude's-Discretion).
@@ -984,3 +986,143 @@ export type CanaryReportOutcome =
       agent: string;
       error: string;
     };
+
+// ============================================================================
+// Phase 92 Plan 06 — CUTOVER-REPORT.md schema, verify pipeline, rollback,
+// and set-authoritative precondition (CUT-09, CUT-10, D-09, D-10)
+// ============================================================================
+//
+// Adds the capstone surfaces consumed by:
+//   - src/cutover/report-writer.ts        (writes CUTOVER-REPORT.md, reads it back
+//                                          for the precondition check)
+//   - src/cutover/verify-pipeline.ts      (orchestrates Plans 92-01..05 end-to-end)
+//   - src/cli/commands/cutover-verify.ts  (CLI wrapper)
+//   - src/cli/commands/cutover-rollback.ts (LIFO ledger-rewind)
+//   - src/cli/commands/sync-set-authoritative.ts (Phase 91 precondition gate)
+
+/**
+ * D-09 — 24h freshness window (in milliseconds) for CUTOVER-REPORT.md to be
+ * accepted by `clawcode sync set-authoritative clawcode --confirm-cutover`.
+ * Pinned at exact arithmetic by static-grep.
+ */
+export const REPORT_FRESHNESS_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * D-09 — root directory for per-agent CUTOVER-REPORT.md files. Each agent gets
+ * a subdirectory; the most recent report is written as `latest.md`.
+ */
+export const DEFAULT_CUTOVER_REPORT_DIR = join(
+  homedir(),
+  ".clawcode",
+  "manager",
+  "cutover-reports",
+);
+
+/**
+ * Default path for the per-agent latest CUTOVER-REPORT.md. Tests pass an
+ * override; production reads from this path.
+ */
+export const defaultCutoverReportPath = (agent: string): string =>
+  join(DEFAULT_CUTOVER_REPORT_DIR, agent, "latest.md");
+
+/**
+ * D-09 — frontmatter schema for CUTOVER-REPORT.md. Validated on read by
+ * `readCutoverReport`; assembled by `writeCutoverReport`. Plan 91 set-
+ * authoritative reads this back to gate on cutover_ready + freshness.
+ */
+export const cutoverReportFrontmatterSchema = z.object({
+  agent: z.string(),
+  cutover_ready: z.boolean(),
+  report_generated_at: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), "must be ISO 8601"),
+  gap_count: z.number().int().nonnegative(),
+  additive_gap_count: z.number().int().nonnegative(),
+  destructive_gap_count: z.number().int().nonnegative(),
+  canary_pass_rate: z.number().nonnegative(),
+  canary_total_invocations: z.number().int().nonnegative(),
+});
+export type CutoverReportFrontmatter = z.infer<
+  typeof cutoverReportFrontmatterSchema
+>;
+
+/**
+ * Outcome of `runVerifyPipeline` — the full ingest → profile → probe → diff
+ * → apply-additive (dry-run unless --apply-additive) → canary (if eligible)
+ * → report cycle. Discriminated by `kind`. The CLI wrapper exhaustively
+ * switches on `outcome.kind` for exit-code policy.
+ *
+ * Per-phase failure variants bubble through verbatim so the operator sees
+ * exactly which step broke. `verified-ready` and `verified-not-ready` both
+ * carry the report path because writeCutoverReport always emits the report
+ * (even on canary failure / not-ready states) — silent abort breaks the
+ * CUT-09 "operator inspects report" contract.
+ */
+export type VerifyOutcome =
+  | {
+      kind: "verified-ready";
+      agent: string;
+      reportPath: string;
+      gapCount: 0;
+      canaryPassRate: number;
+    }
+  | {
+      kind: "verified-not-ready";
+      agent: string;
+      reportPath: string;
+      gapCount: number;
+      destructiveCount: number;
+      canaryPassRate: number;
+      reason: string;
+    }
+  | { kind: "ingest-failed"; agent: string; error: string }
+  | { kind: "profile-failed"; agent: string; error: string }
+  | { kind: "probe-failed"; agent: string; error: string }
+  | { kind: "diff-failed"; agent: string; error: string }
+  | {
+      kind: "additive-apply-failed";
+      agent: string;
+      error: string;
+      identifier: string;
+    }
+  | { kind: "canary-failed"; agent: string; error: string }
+  | { kind: "report-write-failed"; agent: string; error: string };
+
+/**
+ * Outcome of `runCutoverRollback` — LIFO rewind of cutover-ledger.jsonl rows
+ * newer than a target timestamp. Idempotent via "rollback-of:<origTimestamp>"
+ * reason markers; re-running over already-rolled-back rows is a no-op.
+ */
+export type RollbackOutcome =
+  | {
+      kind: "rolled-back";
+      agent: string;
+      rowsReverted: number;
+      rowsSkippedIrreversible: number;
+      rowsAlreadyRolledBack: number;
+    }
+  | { kind: "no-rows-newer-than"; agent: string; targetTs: string }
+  | { kind: "ledger-not-found"; agent: string }
+  | {
+      kind: "rollback-failed";
+      agent: string;
+      error: string;
+      partialRowsReverted: number;
+    };
+
+/**
+ * D-09 — outcome of `checkCutoverReportPrecondition` called inside Phase 91's
+ * executeForwardCutover BEFORE driveDrain. The precondition gate refuses unless
+ * the report exists, parses, is fresh (<24h), and `cutover_ready: true`.
+ *
+ * `precondition-skipped-by-flag` is the ONLY non-passed kind that allows the
+ * caller to proceed (after appending a `skip-verify` audit row to the cutover
+ * ledger per D-09 emergency override). All other non-passed kinds exit 1.
+ */
+export type SetAuthoritativePreconditionResult =
+  | { kind: "precondition-passed"; reportPath: string; ageMs: number }
+  | { kind: "precondition-skipped-by-flag"; reason: string }
+  | { kind: "report-missing"; reportPath: string }
+  | { kind: "report-stale"; reportPath: string; ageMs: number }
+  | { kind: "report-not-ready"; reportPath: string; reason: string }
+  | { kind: "report-invalid"; reportPath: string; error: string };
