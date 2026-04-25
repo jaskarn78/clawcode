@@ -33,7 +33,13 @@ export type SyncConflict = z.infer<typeof syncConflictSchema>;
  * Persisted sync state — atomic temp+rename JSON at
  * `~/.clawcode/manager/sync-state.json` (D-02). Fields:
  *
- *   - authoritativeSide: "openclaw" (default) or "clawcode" (post-cutover)
+ *   - authoritativeSide: "openclaw" (default) | "clawcode" (post-cutover) |
+ *     "deprecated" (Phase 96 D-11 — Phase 91 mirror disabled, agents read
+ *     source via ACL; rollback within DEPRECATION_ROLLBACK_WINDOW_MS).
+ *   - deprecatedAt: ISO timestamp set when authoritativeSide flipped to
+ *     "deprecated" (Phase 96). Optional — absent on v2.4 fixtures (additive
+ *     non-breaking schema migration). Used by `clawcode sync re-enable-timer`
+ *     to enforce the 7-day rollback window.
  *   - perFileHashes: {relpath → sha256 hex} of destination files last written
  *   - conflicts: unresolved conflicts (Plan 91-02 appends, 91-04 clears)
  *   - openClawSessionCursor: Plan 91-03 conversation-turn translator cursor
@@ -41,7 +47,8 @@ export type SyncConflict = z.infer<typeof syncConflictSchema>;
 export const syncStateFileSchema = z.object({
   version: z.literal(1),
   updatedAt: z.string(),
-  authoritativeSide: z.enum(["openclaw", "clawcode"]),
+  authoritativeSide: z.enum(["openclaw", "clawcode", "deprecated"]),
+  deprecatedAt: z.string().datetime().optional(),
   lastSyncedAt: z.string().nullable(),
   openClawHost: z.string(),
   openClawWorkspace: z.string(),
@@ -54,6 +61,21 @@ export const syncStateFileSchema = z.object({
 export type SyncStateFile = z.infer<typeof syncStateFileSchema>;
 
 /**
+ * Phase 96 D-11 — rollback window for the Phase 91 mirror deprecation.
+ *
+ * 7 days in milliseconds (= 604800000 ms). Operator can re-enable the
+ * Phase 91 systemd timer via `clawcode sync re-enable-timer` only within
+ * this window of `state.deprecatedAt`. After expiry, the CLI refuses with
+ * an operator-actionable error directing them to set up sync fresh.
+ *
+ * Mirrors Phase 91 plan 06's ROLLBACK_WINDOW_MS for the forward-cutover —
+ * SAME duration, DIFFERENT preconditions (forward-cutover vs deprecation).
+ * Both windows operate on the same sync-state.json file via different
+ * state transitions (last-writer-wins per atomic temp+rename).
+ */
+export const DEPRECATION_ROLLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * Discriminated union returned by syncOnce(). Callers branch on `kind` to
  * drive observability, Discord alerts, CLI exit codes.
  *
@@ -61,6 +83,9 @@ export type SyncStateFile = z.infer<typeof syncStateFileSchema>;
  * - skipped-no-changes:  rsync succeeded, zero file transfers
  * - partial-conflicts:   rsync succeeded but some files skipped (Plan 91-02)
  * - paused:              authoritativeSide=clawcode w/o reverse opt-in (D-18)
+ * - deprecated:          authoritativeSide=deprecated (Phase 96 D-11) — Phase 91
+ *                        mirror disabled, agents read source via ACL; no rsync,
+ *                        no alert, ledger-only.
  * - failed-ssh:          execa/ssh error before rsync started
  * - failed-rsync:        rsync exited with a non-zero, non-23 code
  */
@@ -95,6 +120,11 @@ export type SyncRunOutcome =
       kind: "paused";
       cycleId: string;
       reason: "authoritative-is-clawcode-no-reverse-opt-in";
+    }
+  | {
+      kind: "deprecated";
+      cycleId: string;
+      reason: string;
     }
   | {
       kind: "failed-ssh";
