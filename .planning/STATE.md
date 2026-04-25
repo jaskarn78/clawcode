@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: v2.6 milestone complete
-stopped_at: Completed 95-03-PLAN.md (Phase 95 SHIP-READY — v2.6 milestone closed)
-last_updated: "2026-04-25T08:55:26.096Z"
+stopped_at: Phase 96 context gathered
+last_updated: "2026-04-25T16:52:27.027Z"
 last_activity: 2026-04-25
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 2
   total_plans: 10
   completed_plans: 10
@@ -292,6 +292,7 @@ Recent decisions affecting current work:
 - 2026-04-24: v2.4 shipped — Phase 91 autonomously executed (6 plans, 6 waves, 10 SYNC reqs, 166/166 sync tests green). Milestone archived to `.planning/milestones/v2.4-ROADMAP.md`. Zero new npm deps preserved via node:child_process.execFile + existing chokidar/yaml/better-sqlite3. Cutover command + 7-day rollback window implemented; `clawcode sync` CLI group with 8 subcommands + /clawcode-sync-status Discord slash. Sync runner + translator ship as systemd user timers with graceful-SSH-fail tolerance.
 - 2026-04-24: v2.5 Cutover Parity Verification opened — Phase 92 added: OpenClaw → ClawCode fin-acquisition cutover parity verifier. Uses Discord message store (not OpenClaw internal sessions, which are absent) as behavior corpus. Emits gap report, auto-applies additive-reversible fixes, gates destructive mutations behind admin-clawdy ephemeral confirmation. `cutover-ready: true` report becomes hard precondition for Phase 91 `sync set-authoritative clawcode --confirm-cutover`. 10 CUT-01..CUT-10 requirements across 6 suggested plans (92-01..92-06). Reuses Phase 85 list-mcp-status IPC, Phase 86 atomic YAML writers, Phase 80 origin_id idempotency. Zero new npm deps expected.
 - 2026-04-24: Phase 93 added — Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience. Bundles three user-reported fixes from fin-acquisition Discord (2026-04-24): (93-01) restore rich `/clawcode-status` output deferred in Phase 83 EFFORT-07 to match OpenClaw /status (version+commit, model+key-source, fallbacks, context/compactions, session/updated, runtime/runner/think/elevated, activation/queue); (93-02) auto-inject `defaults.clawhubBaseUrl` as synthetic ClawHub source in `loadMarketplaceCatalog` when no explicit marketplaceSources[kind:"clawhub"] present so `/clawcode-skills-browse` surfaces public skills (today: local-only); (93-03) distinguish manifest-404 from manifest-invalid in `downloadClawhubPluginManifest` + `mapFetchErrorToOutcome` so hivemind-style "listed without manifest" emits `manifest-unavailable` outcome with actionable UI copy instead of misleading "manifest is invalid". IN: all three + tests + Discord UI strings. OUT: skill-side OAuth (Phase 90-06), publishing hivemind manifest (registry-side).
+- 2026-04-25: Phase 96 added — Discord routing and file-sharing hygiene. Bundles user-reported issues from #research and #finmentum-client-acquisition (2026-04-25): dual-bot pattern (Clawdy red + Clawdy Code green both responding), agent confabulation about "OpenClaw vs ClawCode contexts", file attachment delivery via webhook with single visual identity (must post as "Clawdy" not "OpenClaw Agents"), agent auto-routing through OpenClaw without explicit user instruction every time, and stale "no workspace access from this side" excuses across multiple agents. Inline pre-phase work this session: (a) clawcode.yaml channel bindings stripped for OpenClaw-routed agents (test-agent + Admin Clawdy retain bindings); (b) `/home/clawcode/.claude/settings.json` disabled `discord@claude-plugins-official` plugin; (c) Discord channel ACLs reverted on 8 OpenClaw channels (Clawdy Code role removed); (d) `/etc/clawcode/openclaw-webhooks.json` populated with webhook id+token for 8 channels (3 newly created via legacy bot); (e) `clawcode_share_file` IPC handler in `daemon.ts` modified to use OpenClaw webhook execute when channel not in agent bindings — WIP edits stashed at `git stash@{0}` for fold-in. Open: webhook display name override (post as Clawdy + correct avatar) + agent prompt/memory updates so agents auto-attempt attach without user instruction + workspace access narrative (clawcode user IS in jjagpal group + has ACLs on .openclaw, but agents recite stale "no access" claim).
 
 ### Pending Todos
 
@@ -371,5 +372,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 95-03-PLAN.md (Phase 95 SHIP-READY — v2.6 milestone closed)
+Stopped at: Phase 96 context gathered
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
