@@ -127,6 +127,37 @@ export type ContextSources = {
    */
   readonly conversationContext?: string;
 
+  /**
+   * Phase 96 Plan 02 D-02 — pre-rendered <filesystem_capability> block.
+   *
+   * Caller (session-config.ts at the daemon edge) invokes
+   * `renderFilesystemCapabilityBlock(handle.getFsCapabilitySnapshot(),
+   * agentWorkspaceRoot, {flapHistory, now})` and threads the resulting
+   * string here. context-assembler.ts is PURE (no SessionHandle import,
+   * no fs); the renderer lives in src/prompt/filesystem-capability-block.ts
+   * and is invoked at the boundary — same threading pattern as
+   * Phase 94 D-10 systemPromptDirectives.
+   *
+   * When the snapshot is empty (v2.5 fixtures without fileAccess declared),
+   * the renderer returns "" and this field is "" — no triplet markers
+   * (`<tool_status>` / `<filesystem_capability>` / `<dream_log_recent>`)
+   * appear in the assembled stable prefix. v2.5 stable-prefix hash
+   * UNCHANGED on Phase 96 deploy (CA-FS-2 / CA-FS-4 cache-stability
+   * invariants).
+   *
+   * When non-empty, the assembler wraps the block with literal-string
+   * anchors `<tool_status></tool_status>` (Phase 94 sentinel) and
+   * `<dream_log_recent></dream_log_recent>` (Phase 95 sentinel) so the
+   * static-grep regression pin in 96-02-PLAN.md
+   * (`grep -A 50 '<tool_status>' ... | grep -q '<filesystem_capability>'`)
+   * confirms the byte-position invariant.
+   *
+   * D-04 silent re-render: the block re-renders on snapshot change only;
+   * NO Discord post on capability shift. Operator inspects via
+   * /clawcode-status (96-05) mutable suffix.
+   */
+  readonly filesystemCapabilityBlock?: string;
+
   // ── Phase 53 Plan 03 — lazy-skill compression sources ────────────────────
 
   /**
@@ -746,6 +777,41 @@ function assembleContextInternal(
     stableParts.push(
       "## Available Tools\n\n" +
         truncateToBudget(toolsCombined, budgets.toolDefinitions),
+    );
+  }
+
+  // ── Phase 96 Plan 02 D-02 — <filesystem_capability> block insertion ─────
+  //
+  // Insertion site sits BETWEEN literal-string anchor `<tool_status>` (Phase
+  // 94 sentinel) and literal-string anchor `<dream_log_recent>` (Phase 95
+  // sentinel). The renderer is `renderFilesystemCapabilityBlock` from
+  // src/prompt/filesystem-capability-block.ts — invoked at the daemon edge
+  // (session-config.ts) and threaded through `sources.filesystemCapabilityBlock`.
+  //
+  // When the fs block is empty (v2.5 fixture without fileAccess declared),
+  // NEITHER the triplet markers NOR the block render — the stable prefix
+  // is byte-identical to v2.5 (CA-FS-2 + CA-FS-4 cache-stability invariants).
+  //
+  // When non-empty, the triplet renders in this exact order — pinned by
+  // the static-grep regression test in 96-02-PLAN.md:
+  //   grep -A 50 '<tool_status>' src/manager/context-assembler.ts \
+  //     | grep -q '<filesystem_capability>' \
+  //     && grep -q '<dream_log_recent>' src/manager/context-assembler.ts
+  //
+  // The bookend markers `<tool_status></tool_status>` and
+  // `<dream_log_recent></dream_log_recent>` are positioning sentinels — they
+  // wrap NO content today (Phase 94's MCP block lives inside `toolDefinitions`
+  // above; Phase 95's dream-log writer emits to disk, not the prompt). They
+  // exist so a future plan that wants to inject content can land a string
+  // between them without disturbing the fs block's byte position. Pitfall 4
+  // from RESEARCH.md: any movement of the fs block changes the fleet-wide
+  // stable-prefix hash and triggers fleet-wide Anthropic cache miss on
+  // deploy. Static-grep on this very file pins the byte order.
+  if (sources.filesystemCapabilityBlock && sources.filesystemCapabilityBlock.length > 0) {
+    stableParts.push(
+      "<tool_status></tool_status>\n" +
+        sources.filesystemCapabilityBlock +
+        "\n<dream_log_recent></dream_log_recent>",
     );
   }
 
