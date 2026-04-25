@@ -140,6 +140,35 @@ export class ClawhubManifestInvalidError extends Error {
   }
 }
 
+/**
+ * Phase 93 Plan 03 — registry returned 404 for the requested manifest URL.
+ *
+ * Distinguished from ClawhubManifestInvalidError (which signals a malformed
+ * BODY): the 404 case means the manifest doesn't exist at all — the
+ * registry lists the plugin in /api/v1/plugins but hasn't published a
+ * manifest for it (e.g. hivemind as of 2026-04-24 — every probed URL shape
+ * returns 404; see RESEARCH §Pitfall 5 for the 13-URL probe table).
+ *
+ * Sibling (NOT subclass) of ClawhubManifestInvalidError so the install
+ * pipeline can route 404s to a clearer manifest-unavailable outcome variant
+ * without conflating "registry can't serve this" with "registry served a
+ * malformed payload".
+ *
+ * Carries `manifestUrl` so the Discord renderer can surface the exact URL
+ * that 404'd (operator can probe it manually with curl) and `status` for
+ * future-proofing if other not-found-style status codes need routing here.
+ */
+export class ClawhubManifestNotFoundError extends Error {
+  public readonly manifestUrl: string;
+  public readonly status: number;
+  constructor(manifestUrl: string, status: number, message: string) {
+    super(message);
+    this.name = "ClawhubManifestNotFoundError";
+    this.manifestUrl = manifestUrl;
+    this.status = status;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -545,6 +574,17 @@ export async function downloadClawhubPluginManifest(
   if (res.status === 401 || res.status === 403) {
     throw new ClawhubAuthRequiredError(
       `clawhub plugin manifest: auth required (${res.status})`,
+    );
+  }
+  // Phase 93 Plan 03 — distinguish 404 (registry has not published a
+  // manifest for this listed plugin) from malformed-body errors. Lands
+  // BEFORE the generic !res.ok fallthrough so 404s never surface as
+  // "manifest is invalid" anymore. See RESEARCH §Pitfall 5.
+  if (res.status === 404) {
+    throw new ClawhubManifestNotFoundError(
+      args.manifestUrl,
+      404,
+      `clawhub plugin manifest: 404 Not Found at ${args.manifestUrl}`,
     );
   }
   if (!res.ok) {
