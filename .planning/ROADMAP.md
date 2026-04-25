@@ -236,10 +236,10 @@ Phase 91 delivered: continuous uni-directional sync from OpenClaw fin-acquisitio
 
 **Depends on:** Phase 92 (logical ordering only — no shared code surfaces)
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 - [x] 93-01-PLAN.md — Pure status-render module + /clawcode-status daemon short-circuit rewire — Wave 1
 - [x] 93-02-PLAN.md — loadMarketplaceCatalog auto-inject + /clawcode-skills-browse divider — Wave 1
-- [ ] 93-03-PLAN.md — ClawhubManifestNotFoundError + manifest-unavailable outcome + Discord copy — Wave 1
+- [x] 93-03-PLAN.md — ClawhubManifestNotFoundError + manifest-unavailable outcome + Discord copy — Wave 1
 
 **UI hint:** yes — Discord ephemeral embed parity with OpenClaw `/status` (canonical Unicode emojis, no FE0F variation selectors); StringSelectMenu sentinel-value divider in skills picker; new "manifest unavailable (404)" copy in plugin install error path.
 

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Completed 93-02-PLAN.md
-last_updated: "2026-04-25T00:53:53.413Z"
+status: Ready to execute
+stopped_at: Completed 93-03-PLAN.md
+last_updated: "2026-04-25T01:08:15.835Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 93
-Plan: 2 of 3 complete
+Plan: 3 of 3 complete
 
 ## Performance Metrics
 
@@ -212,6 +212,9 @@ Recent decisions affecting current work:
 - [Phase 93]: Plan 93-02 — auto-inject branch never mutates opts.sources; new sourcesArr clone with frozen synthetic clawhub source pushed when defaultClawhubBaseUrl set AND no explicit kind:'clawhub' present (back-compat byte-identical to today).
 - [Phase 93]: Plan 93-02 — sentinel-value pattern for non-installable Discord StringSelectMenu options (CLAWHUB_DIVIDER_VALUE filter at chosen-equality before marketplace-install IPC). discord.js 14.x has no setDisabled on options; sentinel + filter is the canonical workaround.
 - [Phase 93]: Plan 93-02 — divider gating: clawhubSide.length > 0 AND remainingSlots >= 2 (Pitfall 2/3 closure — divider never renders alone; never the terminal option after 25-cap).
+- [Phase 93]: Plan 93-03 — ClawhubManifestNotFoundError is a sibling (not subclass) of ClawhubManifestInvalidError. Subclassing would defeat the differentiation purpose; instanceof checks must distinguish 404 from malformed-body errors.
+- [Phase 93]: Plan 93-03 — daemon.ts:1116-1118 fallback URL construction deliberately UNCHANGED per RESEARCH §Pitfall 5 (13-URL probe table confirmed every shape returns 404 for unpublished plugins like hivemind; the registry is the source of truth, not the URL shape). Pinned by DPM-93-1 regression test.
+- [Phase 93]: Plan 93-03 — PluginInstallOutcome union grows 10 → 11 variants (manifest-unavailable). Eleventh exhaustive-switch application of the Phase 88 MKT-05 / Phase 90 Plan 05 pattern; TypeScript never branch enforces completeness across PluginInstallOutcome + PluginInstallOutcomeWire + renderPluginInstallOutcome at compile time.
 
 ### v2.1 closing decisions (for reference)
 
@@ -318,9 +321,10 @@ Recent decisions affecting current work:
 | Phase 92 P05 | 6m 34s | 2 (TDD) tasks | 9 files |
 | Phase 92 P06 | 7m | 2 tasks | 11 files |
 | Phase 93 P02 | 21min | 2 tasks | 6 files |
+| Phase 93 P03 | 25min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 93-02-PLAN.md
+Stopped at: Completed 93-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
