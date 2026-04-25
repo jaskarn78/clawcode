@@ -53,6 +53,52 @@ type ReadinessMcpServer = {
  * `failureCount` is the rolling last-N counter the `/clawcode-tools`
  * command reads; `MCP_FAILURE_WINDOW` bounds it. Reset on any success.
  */
+/**
+ * Phase 94 Plan 01 D-02 — extended status vocabulary for the capability probe.
+ *
+ * Phase 85's `McpServerState.status` ("ready"|"degraded"|"failed"|"reconnecting")
+ * describes connect-test health; this is the orthogonal capability-probe axis,
+ * tracking whether a representative tool call against the server actually
+ * succeeds. Filter (Plan 94-02) reads this field to decide which tools to
+ * surface to the LLM; recovery (Plan 94-03) reads it to pick handlers.
+ *
+ * The 5-value enum is locked at the contract layer — adding a 6th value
+ * cascades through 4 downstream consumers (94-02/03/04/07) and requires
+ * an explicit STATE.md decision.
+ *
+ * Status meanings:
+ *   "ready"        — connect ok AND representative call succeeded
+ *   "degraded"     — connect ok BUT representative call failed (we know HOW it's broken)
+ *   "reconnecting" — connect-test currently transient — bridge state, brief
+ *   "failed"       — connect-test itself failed — process down or unreachable
+ *   "unknown"      — not yet probed (boot pre-warm-path)
+ */
+export type CapabilityProbeStatus =
+  | "ready"
+  | "degraded"
+  | "reconnecting"
+  | "failed"
+  | "unknown";
+
+/**
+ * Phase 94 Plan 01 — per-server capability probe snapshot.
+ *
+ * Persisted alongside the connect-test fields on McpServerState. `error`
+ * carries the verbatim transport error (Phase 85 TOOL-04 pass-through);
+ * `lastSuccessAt` is sticky across degraded ticks so operators can read
+ * "last known good" even when the current probe failed.
+ */
+export interface CapabilityProbeSnapshot {
+  /** ISO8601 — when this probe last ran. */
+  readonly lastRunAt: string;
+  /** Current capability status (D-02 5-value enum). */
+  readonly status: CapabilityProbeStatus;
+  /** Verbatim error message from the failed probe (Phase 85 TOOL-04). */
+  readonly error?: string;
+  /** ISO8601 — most recent ready outcome; preserved across degraded ticks. */
+  readonly lastSuccessAt?: string;
+}
+
 export type McpServerState = {
   readonly name: string;
   readonly status: "ready" | "degraded" | "failed" | "reconnecting";
@@ -61,6 +107,14 @@ export type McpServerState = {
   readonly lastError: { readonly code?: number; readonly message: string } | null;
   readonly failureCount: number;
   readonly optional: boolean;
+  /**
+   * Phase 94 Plan 01 — capability probe snapshot. Additive-optional; legacy
+   * Phase 85 callers that read McpServerState without consulting this field
+   * continue to compile + execute unchanged. Populated by the heartbeat
+   * tick's probe orchestrator (src/manager/capability-probe.ts) and on
+   * boot via the warm-path gate.
+   */
+  readonly capabilityProbe?: CapabilityProbeSnapshot;
 };
 
 export type McpReadinessReport = {

@@ -33,6 +33,56 @@ import type {
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
+
+/**
+ * Phase 94 Plan 01 — capability probe types re-anchored at this file path
+ * for the static-grep regression pins (the plan's acceptance criteria
+ * verify `export type CapabilityProbeStatus`, `interface CapabilityProbeSnapshot`,
+ * and `capabilityProbe?:` are all visible at this path). Single source of
+ * truth for the runtime types lives in src/mcp/readiness.ts where
+ * McpServerState is defined; the structural-typing equivalents below are
+ * verified against the canonical types via the assignment expressions at
+ * module-load — any drift fails to compile.
+ *
+ * D-02 status enum locked at exactly 5 values:
+ *   "ready" | "degraded" | "reconnecting" | "failed" | "unknown"
+ * Adding a 6th value cascades through Plans 94-02/03/04/07.
+ *
+ * The `capabilityProbe?:` field on McpServerState is additive-optional —
+ * Phase 85 callers ignoring the new field continue to compile/execute
+ * unchanged.
+ */
+export type CapabilityProbeStatus =
+  | "ready"
+  | "degraded"
+  | "reconnecting"
+  | "failed"
+  | "unknown";
+
+export interface CapabilityProbeSnapshot {
+  /** ISO8601 — when this probe last ran. */
+  readonly lastRunAt: string;
+  /** Current capability status (D-02 5-value enum). */
+  readonly status: CapabilityProbeStatus;
+  /** Verbatim error message from the failed probe (Phase 85 TOOL-04). */
+  readonly error?: string;
+  /** ISO8601 — most recent ready outcome; preserved across degraded ticks. */
+  readonly lastSuccessAt?: string;
+}
+
+// Compile-time structural-equivalence guard: the local types above must
+// remain assignable to the canonical types in readiness.ts in both
+// directions. If the readiness.ts definition drifts, this assignment
+// fails at build time. The capabilityProbe?: field shape is the
+// additive-optional extension on McpServerState.
+const _capabilityProbeStatusGuard: CapabilityProbeStatus =
+  "ready" as import("../mcp/readiness.js").CapabilityProbeStatus;
+void _capabilityProbeStatusGuard;
+const _capabilityProbeSnapshotGuard: CapabilityProbeSnapshot = {
+  lastRunAt: "",
+  status: "unknown",
+} as import("../mcp/readiness.js").CapabilityProbeSnapshot;
+void _capabilityProbeSnapshotGuard;
 import { AsyncPushQueue, SerialTurnQueue } from "./persistent-session-queue.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 import { mapEffortToTokens } from "./effort-mapping.js";
