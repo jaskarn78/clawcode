@@ -75,7 +75,8 @@ describe("Phase 92 gap-closure: cutover-verify CLI <-> daemon IPC", () => {
     });
 
     expect(sendIpc).toHaveBeenCalledTimes(1);
-    const [method, params] = sendIpc.mock.calls[0]!;
+    const call = sendIpc.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    const [method, params] = call;
     expect(method).toBe("cutover-verify");
     expect(params).toMatchObject({
       agent: "fin-acquisition",
