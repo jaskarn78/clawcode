@@ -450,8 +450,11 @@ describe("clawcode_list_files — D-07 listing tool + D-08 alternatives", () => 
   });
 });
 
-// Re-export the input-shape import as a type-level pin — keeps the exported
-// type discoverable for downstream consumers AND makes the file fail to
-// compile if tools/clawcode-list-files.ts drops the export.
-declare const _typeShapePin: ListFilesInput;
-void _typeShapePin;
+// Type-level pin — keeps the exported ListFilesInput discoverable for
+// downstream consumers AND makes the file fail to compile if
+// tools/clawcode-list-files.ts drops the export. (Pure type assertion;
+// `declare const` would emit a runtime ReferenceError, so use a typed
+// undefined instead.)
+type _ListFilesInputPin = ListFilesInput;
+const _listFilesInputPin: _ListFilesInputPin | undefined = undefined;
+void _listFilesInputPin;

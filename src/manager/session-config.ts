@@ -57,6 +57,11 @@ import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
 // built-in helpers, not MCP-backed.
 import { CLAWCODE_FETCH_DISCORD_MESSAGES_DEF } from "./tools/clawcode-fetch-discord-messages.js";
 import { CLAWCODE_SHARE_FILE_DEF } from "./tools/clawcode-share-file.js";
+// Phase 96 Plan 03 — D-07 auto-injected directory listing tool. Same
+// auto-injection site as Phase 94's two helpers; LLMs use this to drill
+// into operator-shared paths the system-prompt block (96-02) advertises
+// at the path-root level. Token-guarded (depth max 3, entries max 500).
+import { CLAWCODE_LIST_FILES_DEF } from "./tools/clawcode-list-files.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -434,6 +439,12 @@ export async function buildSessionConfig(
   toolDefinitionsStr += "## Built-in Discord helpers (auto-injected)\n";
   toolDefinitionsStr += `- **${CLAWCODE_FETCH_DISCORD_MESSAGES_DEF.name}**: ${CLAWCODE_FETCH_DISCORD_MESSAGES_DEF.description}\n`;
   toolDefinitionsStr += `- **${CLAWCODE_SHARE_FILE_DEF.name}**: ${CLAWCODE_SHARE_FILE_DEF.description}\n`;
+  // Phase 96 Plan 03 — D-07 auto-injected directory listing tool. Built-in
+  // (no mcpServer attribution); the Plan 94-02 capability-probe filter
+  // never removes it. Boundary-checked through 96-01 checkFsCapability;
+  // out-of-allowlist refusals carry alternatives via D-08
+  // findAlternativeFsAgents.
+  toolDefinitionsStr += `- **${CLAWCODE_LIST_FILES_DEF.name}**: ${CLAWCODE_LIST_FILES_DEF.description}\n`;
 
   // Admin agent information (per D-11, D-12)
   if (config.admin && deps.allAgentConfigs.length > 0) {
