@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 96-05-PLAN.md (Wave 3 sequential executor — 96-07 follows)
-last_updated: "2026-04-25T20:20:13.181Z"
+stopped_at: Completed 96-07 Tasks 1+2 + deploy-runbook; UAT-95 awaiting operator on clawdy
+last_updated: "2026-04-25T20:35:46.240Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 10
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 96 (discord-routing-and-file-sharing-hygiene) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 
 ## Performance Metrics
 
@@ -273,6 +273,9 @@ Recent decisions affecting current work:
 - [Phase 96]: Plan 96-05: Status emoji palette LOCKED ✓/⚠/? (NOT ✅/❌ from Phase 85) — filesystem has no failed/reconnecting analog so simpler 3-symbol palette suffices and reads cleaner in monospace CLI; pinned across Discord slash, status-render, probe-fs CLI, fs-status CLI
 - [Phase 96]: Plan 96-05: Cap-budget invariant (Phase 85 Pitfall 9 — Discord 100/guild cap) pinned via vitest PFS-CAP-BUDGET assertion replacing fragile runtime grep on compiled JS — TDD-friendly, runs every test pass even when no compiled JS exists
 - [Phase 96]: Plan 96-05: Daemon IPC handlers extracted as pure-DI module (src/manager/daemon-fs-ipc.ts) — handleProbeFsIpc + handleListFsStatusIpc tested in isolation without spawning the full daemon; mirrors Phase 92 daemon-cutover-button-action discipline; closure-based intercept BEFORE routeMethod preserves stable routeMethod signature
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: fs-probe heartbeat check shape = per-agent execute(ctx) (Phase 85 mcp-reconnect mirror, NOT plan example tick(deps))
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: Reload dispatch = simpler heartbeat-tick fallback (RELOADABLE_FIELDS classification + 60s tick); watcher.ts NOT extended for v1
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: D-01 boot probe APPROXIMATED via TWO-STEP coverage (deploy-runbook Section 4 mandatory fleet probe + first 60s heartbeat tick); no separate session-start probe code path
 
 ### v2.1 closing decisions (for reference)
 
@@ -397,9 +400,10 @@ Recent decisions affecting current work:
 | Phase 96-discord-routing-and-file-sharing-hygiene P03 | 18min | 2 tasks | 5 files |
 | Phase 96 P04 | 23min | 3 tasks | 9 files |
 | Phase 96 P05 | 14min | 3 tasks | 12 files |
+| Phase 96-discord-routing-and-file-sharing-hygiene P07 | 9 min | 3 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 96-05-PLAN.md (Wave 3 sequential executor — 96-07 follows)
+Stopped at: Completed 96-07 Tasks 1+2 + deploy-runbook; UAT-95 awaiting operator on clawdy
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
