@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to plan
-stopped_at: Completed 92-06-PLAN.md (Phase 92 complete — v2.5 capstone)
-last_updated: "2026-04-25T00:53:17.817Z"
+stopped_at: Completed 93-02-PLAN.md
+last_updated: "2026-04-25T00:53:53.413Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 8
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 93
-Plan: Not started
+Plan: 2 of 3 complete
 
 ## Performance Metrics
 
@@ -208,6 +208,10 @@ Recent decisions affecting current work:
 - [Phase 92]: Plan 92-06: Capstone wire-up — runVerifyPipeline 7-phase sequential orchestrator (DI'd) + writeCutoverReport atomic temp+rename with literal end-of-doc 'Cutover ready: true|false' line + Phase 91 sync-set-authoritative precondition gate (REPORT_FRESHNESS_MS=24h) + --skip-verify --reason emergency bypass appending action='skip-verify' audit row to cutover-ledger.jsonl
 - [Phase 92]: Plan 92-06: cutover_ready: true REQUIRES (gaps.length === 0 AND canaryResults !== null AND totalInvocations > 0 AND passRate === 100) — clean diff alone NOT cutover-ready (CUT-09 contract); literal end-of-doc line derived from same boolean as frontmatter so they always agree
 - [Phase 92]: Plan 92-06: rollback idempotency via append-only NEW row with reason='rollback-of:<origTimestamp>' marker (ROLLBACK_OF_REASON_PREFIX exported); ledger never mutated/deleted; CLI scaffolds for cutover verify + rollback emit clear daemon-required error today (precedent from cutover-canary), full daemon-IPC wiring deferred to follow-up plan
+- [Phase 93]: Plan 93-02 — eighth additive-optional opt-in field application (defaultClawhubBaseUrl on LoadMarketplaceCatalogOpts + MarketplaceIpcDeps); Pitfall 4 closure preserved zero test fixture cascade.
+- [Phase 93]: Plan 93-02 — auto-inject branch never mutates opts.sources; new sourcesArr clone with frozen synthetic clawhub source pushed when defaultClawhubBaseUrl set AND no explicit kind:'clawhub' present (back-compat byte-identical to today).
+- [Phase 93]: Plan 93-02 — sentinel-value pattern for non-installable Discord StringSelectMenu options (CLAWHUB_DIVIDER_VALUE filter at chosen-equality before marketplace-install IPC). discord.js 14.x has no setDisabled on options; sentinel + filter is the canonical workaround.
+- [Phase 93]: Plan 93-02 — divider gating: clawhubSide.length > 0 AND remainingSlots >= 2 (Pitfall 2/3 closure — divider never renders alone; never the terminal option after 25-cap).
 
 ### v2.1 closing decisions (for reference)
 
@@ -313,9 +317,10 @@ Recent decisions affecting current work:
 | Phase 93-status-detail-parity-clawhub-public-catalog-defaults-plugin-manifest-url-resilience P01 | 33m 40s | 2 tasks tasks | 5 files files |
 | Phase 92 P05 | 6m 34s | 2 (TDD) tasks | 9 files |
 | Phase 92 P06 | 7m | 2 tasks | 11 files |
+| Phase 93 P02 | 21min | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 92-06-PLAN.md (Phase 92 complete — v2.5 capstone)
+Stopped at: Completed 93-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
