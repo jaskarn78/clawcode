@@ -58,7 +58,7 @@ describe("clawcodeShareFile — TOOL-09 D-09", () => {
     const deps = makeDeps();
     const result = await clawcodeShareFile({ path: ALLOWED_PATH }, deps);
 
-    if ("kind" in result && result.kind === "ToolCallError") {
+    if ("kind" in result) {
       throw new Error(`expected success, got error: ${result.message}`);
     }
     expect(result.url).toBe("https://cdn.discord/x");
@@ -142,7 +142,7 @@ describe("clawcodeShareFile — TOOL-09 D-09", () => {
 
     const result = await clawcodeShareFile({ path: ALLOWED_PATH }, deps);
 
-    if ("kind" in result && result.kind === "ToolCallError") {
+    if ("kind" in result) {
       throw new Error(`expected fallback success, got error: ${result.message}`);
     }
     expect(result.url).toBe("https://cdn.discord/via-bot");
@@ -150,7 +150,12 @@ describe("clawcodeShareFile — TOOL-09 D-09", () => {
   });
 
   it("SF-CAPTION: input.caption flows through verbatim to the upload args", async () => {
-    const sendViaWebhook = vi.fn(async () => ({ url: "https://cdn.discord/x" }));
+    const sendViaWebhook = vi.fn(
+      async (
+        _chan: string,
+        _file: { path: string; filename: string; caption?: string },
+      ) => ({ url: "https://cdn.discord/x" }),
+    );
     const deps = makeDeps({ sendViaWebhook });
 
     await clawcodeShareFile(
@@ -159,8 +164,7 @@ describe("clawcodeShareFile — TOOL-09 D-09", () => {
     );
 
     expect(sendViaWebhook).toHaveBeenCalledTimes(1);
-    const args = sendViaWebhook.mock.calls[0];
-    const fileArg = args?.[1] as { caption?: string };
-    expect(fileArg.caption).toBe("my output");
+    const args = sendViaWebhook.mock.calls[0]!;
+    expect(args[1].caption).toBe("my output");
   });
 });

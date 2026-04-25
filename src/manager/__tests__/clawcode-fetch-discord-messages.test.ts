@@ -46,7 +46,7 @@ describe("clawcodeFetchDiscordMessages — TOOL-08 D-08", () => {
       { fetchMessages, log: silentLog },
     );
 
-    if ("kind" in result && result.kind === "ToolCallError") {
+    if ("kind" in result) {
       throw new Error(`expected success, got error: ${result.message}`);
     }
     expect(result.messages.length).toBe(1);
@@ -55,25 +55,35 @@ describe("clawcodeFetchDiscordMessages — TOOL-08 D-08", () => {
   });
 
   it("FDM-LIMIT-DEFAULT: input WITHOUT limit fans out with options.limit === 50", async () => {
-    const fetchMessages = vi.fn(async () => [] as readonly DiscordMessageOut[]);
+    const fetchMessages = vi.fn(
+      async (
+        _id: string,
+        _opts: { limit?: number; before?: string },
+      ): Promise<readonly DiscordMessageOut[]> => [],
+    );
     await clawcodeFetchDiscordMessages(
       { channel_id: "abc" },
       { fetchMessages, log: silentLog },
     );
     expect(fetchMessages).toHaveBeenCalledTimes(1);
-    const callArgs = fetchMessages.mock.calls[0];
-    expect(callArgs?.[0]).toBe("abc");
-    expect((callArgs?.[1] as { limit?: number })?.limit).toBe(50);
+    const callArgs = fetchMessages.mock.calls[0]!;
+    expect(callArgs[0]).toBe("abc");
+    expect(callArgs[1].limit).toBe(50);
   });
 
   it("FDM-LIMIT-MAX: input.limit=500 is clamped to 100 (Discord 100-msg API max)", async () => {
-    const fetchMessages = vi.fn(async () => [] as readonly DiscordMessageOut[]);
+    const fetchMessages = vi.fn(
+      async (
+        _id: string,
+        _opts: { limit?: number; before?: string },
+      ): Promise<readonly DiscordMessageOut[]> => [],
+    );
     await clawcodeFetchDiscordMessages(
       { channel_id: "abc", limit: 500 },
       { fetchMessages, log: silentLog },
     );
-    const callArgs = fetchMessages.mock.calls[0];
-    expect((callArgs?.[1] as { limit?: number })?.limit).toBe(100);
+    const callArgs = fetchMessages.mock.calls[0]!;
+    expect(callArgs[1].limit).toBe(100);
   });
 
   it("FDM-THREAD-ID: same channel_id field accepts a thread snowflake (Discord-treats-threads-as-channels)", async () => {
@@ -88,7 +98,7 @@ describe("clawcodeFetchDiscordMessages — TOOL-08 D-08", () => {
       { channel_id: threadSnowflake },
       { fetchMessages, log: silentLog },
     );
-    if ("kind" in result && result.kind === "ToolCallError") {
+    if ("kind" in result) {
       throw new Error(`expected success on thread snowflake, got error: ${result.message}`);
     }
     expect(result.messages.length).toBe(1);

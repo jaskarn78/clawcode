@@ -50,6 +50,13 @@ import {
 } from "./filter-tools-by-capability-probe.js";
 // Phase 90 MEM-01 — 50KB hard cap on MEMORY.md auto-inject (D-17).
 import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
+// Phase 94 Plan 05 — TOOL-08 / TOOL-09 auto-injected built-in tools.
+// Tool DEFs (no mcpServer attribution) are appended to the LLM-visible
+// tool block in every agent's stable prefix. Plan 94-02's filter sees no
+// mcpServer attribution and lets them through unconditionally — they are
+// built-in helpers, not MCP-backed.
+import { CLAWCODE_FETCH_DISCORD_MESSAGES_DEF } from "./tools/clawcode-fetch-discord-messages.js";
+import { CLAWCODE_SHARE_FILE_DEF } from "./tools/clawcode-share-file.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -410,6 +417,23 @@ export async function buildSessionConfig(
       toolDefinitionsStr += mcpBlock;
     }
   }
+
+  // Phase 94 Plan 05 — TOOL-08 / TOOL-09 auto-injected built-in tools.
+  //
+  // Both tools are advertised to EVERY agent regardless of mcpServers list,
+  // skill assignment, or admin status. They are built-in helpers (no
+  // mcpServer attribution) so the Plan 94-02 capability-probe filter never
+  // removes them. The render shape is intentionally minimal — the LLM
+  // already understands tool defs from input_schema; this block is just a
+  // discoverability hint inside the system prompt.
+  //
+  // Static-grep regression: tool names MUST appear verbatim in the
+  // assembled stable prefix for every agent (clean or configured). Tests
+  // cover the synthetic "clean agent" baseline.
+  toolDefinitionsStr += toolDefinitionsStr.length > 0 ? "\n\n" : "";
+  toolDefinitionsStr += "## Built-in Discord helpers (auto-injected)\n";
+  toolDefinitionsStr += `- **${CLAWCODE_FETCH_DISCORD_MESSAGES_DEF.name}**: ${CLAWCODE_FETCH_DISCORD_MESSAGES_DEF.description}\n`;
+  toolDefinitionsStr += `- **${CLAWCODE_SHARE_FILE_DEF.name}**: ${CLAWCODE_SHARE_FILE_DEF.description}\n`;
 
   // Admin agent information (per D-11, D-12)
   if (config.admin && deps.allAgentConfigs.length > 0) {
