@@ -768,25 +768,43 @@ export class SessionManager {
 
       // Fire-and-forget — runs in background, completes within ~10s
       // wall-clock per server in parallel. Logged on completion.
+      // Uses real JSON-RPC callTool/listTools (Gap 2 closure) to actually
+      // verify each MCP subprocess responds to tools/list at the daemon
+      // edge — capability-probe.ts itself remains DI-pure.
       void (async () => {
         try {
           const { probeAllMcpCapabilities } = await import("./capability-probe.js");
+          const { makeRealCallTool, makeRealListTools } = await import(
+            "../mcp/json-rpc-call.js"
+          );
           const pino = (await import("pino")).default;
-          const stubLog = pino({ level: "silent" });
-          const stubDeps = {
-            callTool: async () => {
-              throw new Error(
-                "callTool not yet wired in boot-probe layer (Plan 94-03 picks this up)",
-              );
-            },
-            listTools: async (serverName: string) => [
-              { name: `${serverName}__connect_ok` },
-            ],
-            getProbeFor: () => async (probeDeps: {
+          const probeLog = pino({ level: "silent" });
+
+          const serversByName = new Map(
+            mcpServers.map((s) => [
+              s.name,
+              {
+                name: s.name,
+                command: s.command,
+                args: s.args,
+                env: s.env,
+              },
+            ]),
+          );
+          const realListTools = makeRealListTools(serversByName);
+          const realCallTool = makeRealCallTool(serversByName);
+
+          const probeDeps = {
+            callTool: realCallTool,
+            listTools: realListTools,
+            // Default-fallback override per heartbeat — verify capability
+            // via tools/list response. Plan 94-03 will lift this per-server
+            // as registry probes are vetted.
+            getProbeFor: () => async (innerDeps: {
               listTools: (s: string) => Promise<readonly { readonly name: string }[]>;
             }) => {
               try {
-                const tools = await probeDeps.listTools("__boot_probe__");
+                const tools = await innerDeps.listTools("__boot_probe__");
                 if (tools.length === 0) {
                   return { kind: "failure" as const, error: "no tools exposed" };
                 }
@@ -799,11 +817,11 @@ export class SessionManager {
               }
             },
             now: () => new Date(),
-            log: stubLog,
+            log: probeLog,
           };
           const probeResults = await probeAllMcpCapabilities(
             serverNames,
-            stubDeps as unknown as Parameters<typeof probeAllMcpCapabilities>[1],
+            probeDeps as unknown as Parameters<typeof probeAllMcpCapabilities>[1],
             prevProbeByName,
           );
 

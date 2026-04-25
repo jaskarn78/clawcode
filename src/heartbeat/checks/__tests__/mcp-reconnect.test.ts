@@ -35,6 +35,19 @@ vi.mock("../../../mcp/readiness.js", async () => {
 import { performMcpReadinessHandshake } from "../../../mcp/readiness.js";
 const mockedProbe = vi.mocked(performMcpReadinessHandshake);
 
+// Phase 94 Plan 01 Gap-Closure 2 — heartbeat now uses real JSON-RPC
+// callTool/listTools at the daemon edge. Tests mock the primitive so the
+// existing connect-test-as-capability-proxy contract is preserved (test
+// fixture servers use command:"x" which can't be spawned in production).
+vi.mock("../../../mcp/json-rpc-call.js", () => ({
+  makeRealListTools: () => async (serverName: string) => {
+    return [{ name: `${serverName}__test_listed` }];
+  },
+  makeRealCallTool: () => async () => {
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+}));
+
 import mcpReconnectCheck from "../mcp-reconnect.js";
 
 // ---------------------------------------------------------------------------

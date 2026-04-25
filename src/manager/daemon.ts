@@ -4325,10 +4325,12 @@ async function routeMethod(
       // probe of all configured MCP servers. The boot + 60s heartbeat
       // schedule continues unaffected; this just runs an extra cycle now.
       //
-      // Wiring matches the heartbeat layer: callTool/listTools are the
-      // same stubs used by mcp-reconnect.ts (ready connect-test → ready
-      // probe via default-fallback) until Plan 94-03 wires real callTool
-      // through the SDK surface.
+      // Phase 94 Plan 01 Gap-Closure 2 — real callTool / listTools wired
+      // at the daemon edge via JSON-RPC stdio (src/mcp/json-rpc-call.ts).
+      // Connect-test runs first; for ready/degraded servers the capability
+      // probe issues a real tools/list against each MCP subprocess.
+      // capability-probe.ts itself stays DI-pure — this is the production
+      // injection site.
       const agentName = validateStringParam(params, "agent");
       const cfg = manager.getAgentConfig(agentName);
       if (!cfg) {
@@ -4346,6 +4348,9 @@ async function routeMethod(
       const { probeAllMcpCapabilities } = await import(
         "./capability-probe.js"
       );
+      const { makeRealCallTool, makeRealListTools } = await import(
+        "../mcp/json-rpc-call.js"
+      );
       const rep = await performMcpReadinessHandshake(mcpServers);
 
       // Carry prior capabilityProbe blocks for lastSuccessAt preservation.
@@ -4359,21 +4364,31 @@ async function routeMethod(
         }
       }
 
-      const stubLog = (await import("pino")).default({ level: "silent" });
-      const stubDeps = {
-        callTool: async () => {
-          throw new Error(
-            "callTool not yet wired (Plan 94-03 picks this up)",
-          );
-        },
-        listTools: async (serverName: string) => [
-          { name: `${serverName}__connect_ok` },
-        ],
-        getProbeFor: () => async (probeDeps: {
+      const probeLog = (await import("pino")).default({ level: "silent" });
+      const serversByName = new Map(
+        mcpServers.map((s) => [
+          s.name,
+          {
+            name: s.name,
+            command: s.command,
+            args: s.args,
+            env: s.env,
+          },
+        ]),
+      );
+      const realListTools = makeRealListTools(serversByName);
+      const realCallTool = makeRealCallTool(serversByName);
+      const probeDeps = {
+        callTool: realCallTool,
+        listTools: realListTools,
+        // Default-fallback override per heartbeat: verify capability via
+        // tools/list response. Plan 94-03 will lift this per-server as
+        // registry probes are vetted to be safe to call in production.
+        getProbeFor: () => async (innerDeps: {
           listTools: (s: string) => Promise<readonly { readonly name: string }[]>;
         }) => {
           try {
-            const tools = await probeDeps.listTools("__on_demand_probe__");
+            const tools = await innerDeps.listTools("__on_demand_probe__");
             if (tools.length === 0) {
               return { kind: "failure" as const, error: "no tools exposed" };
             }
@@ -4386,7 +4401,7 @@ async function routeMethod(
           }
         },
         now: () => new Date(),
-        log: stubLog,
+        log: probeLog,
       };
 
       const readyOrDegradedNames: string[] = [];
@@ -4400,7 +4415,7 @@ async function routeMethod(
             // The orchestrator's getProbeFor signature returns a ProbeFn
             // so the inline closure above is the right shape; cast the
             // deps object to the ProbeOrchestratorDeps shape.
-            stubDeps as unknown as Parameters<typeof probeAllMcpCapabilities>[1],
+            probeDeps as unknown as Parameters<typeof probeAllMcpCapabilities>[1],
             prevProbeByName,
           )
         : new Map<string, import("../mcp/readiness.js").CapabilityProbeSnapshot>();

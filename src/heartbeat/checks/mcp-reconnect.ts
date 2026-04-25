@@ -16,6 +16,11 @@ import type {
   RecoveryDeps,
   AttemptRecord,
 } from "../../manager/recovery/types.js";
+import {
+  makeRealCallTool,
+  makeRealListTools,
+  type McpServerConfig as RpcMcpServerConfig,
+} from "../../mcp/json-rpc-call.js";
 import pino from "pino";
 
 /**
@@ -290,45 +295,56 @@ const mcpReconnectCheck: CheckModule = {
     // is the orthogonal capability axis (D-02): connect ok BUT real
     // representative call broken → `degraded`, with verbatim error.
     //
-    // Until Plan 94-03 wires production callTool/listTools through the
-    // SDK surface, the heartbeat extension uses the connect-test result
-    // as the capability proxy:
+    // Phase 94 Plan 01 Gap-Closure 2 — real callTool / listTools wired at
+    // the heartbeat edge via JSON-RPC stdio (src/mcp/json-rpc-call.ts).
+    // The capability-probe module itself stays DI-pure; this is the
+    // production injection site.
+    //
     //   - connect-fail (status: "failed") → capabilityProbe.status="failed",
     //     short-circuit (no probe spawned — we already know it's down)
     //   - connect-ok    (status: "ready") → run the registered probe with
-    //     stub callTool/listTools so the default-fallback path treats the
-    //     server as "ready" (we know connect works; nothing to call yet)
+    //     real callTool/listTools. A successful tools/list against the
+    //     real MCP subprocess validates capability; failure (spawn ENOENT,
+    //     timeout, error envelope) lifts the snapshot to `degraded` with
+    //     the verbatim error.
     //
-    // The stub callTool throws so any registry entry that calls it lands
-    // in `degraded`. The stub listTools returns one entry so the default-
-    // fallback (used here as a getProbeFor override) returns ok. Net
-    // result: connect-ok → capabilityProbe.status="ready" until real
-    // callTool wiring lands; connect-fail → "failed" verbatim.
+    // getProbeFor stays overridden to default-fallback (listTools-only)
+    // until the registry entries' representative-call args are vetted
+    // against real servers. Plan 94-03 will lift the override per-server
+    // as each probe becomes proven safe to call in production.
     //
     // The lastSuccessAt sticky-preservation across degraded ticks is
     // already handled inside probeMcpCapability — pass prior snapshots in.
     // ----------------------------------------------------------------
-    const stubLog = pino({ level: "silent" });
-    const stubDeps: ProbeOrchestratorDeps = {
-      callTool: async () => {
-        throw new Error(
-          "callTool not yet wired in heartbeat layer (Plan 94-03 picks this up)",
-        );
+    const probeLog = pino({ level: "silent" });
+    const serversByName = new Map<string, RpcMcpServerConfig>();
+    for (const s of servers) {
+      serversByName.set(s.name, {
+        name: s.name,
+        command: s.command,
+        args: s.args,
+        env: s.env,
+      });
+    }
+    const realListTools = makeRealListTools(serversByName);
+    const realCallTool = makeRealCallTool(serversByName);
+    const probeDeps: ProbeOrchestratorDeps = {
+      callTool: async (serverName, toolName, args) => {
+        return await realCallTool(serverName, toolName, args);
       },
       listTools: async (serverName: string) => {
-        // Return one synthetic entry so the default-fallback probe
-        // resolves "ready" — we already know connect-ok via the
-        // performMcpReadinessHandshake above.
-        return [{ name: `${serverName}__connect_ok` }];
+        return await realListTools(serverName);
       },
-      // Override getProbeFor so we always run the default-fallback (which
-      // only consults listTools) instead of the registry entries (which
-      // call the throwing callTool). Plan 94-03 will lift this override
-      // once callTool is real.
+      // Override getProbeFor so we run the default-fallback (which only
+      // consults listTools) for every server. Plan 94-03 will lift this
+      // override per-server as each registry probe is vetted to be safe
+      // to call against real production MCP subprocesses (e.g.
+      // SELECT 1 against the configured DB, vaults_list against
+      // 1Password, browser_snapshot about:blank).
       getProbeFor: () => {
-        return async (probeDeps) => {
+        return async (innerDeps) => {
           try {
-            const tools = await probeDeps.listTools("__heartbeat_probe__");
+            const tools = await innerDeps.listTools("__heartbeat_probe__");
             if (tools.length === 0) {
               return { kind: "failure", error: "no tools exposed" };
             }
@@ -342,7 +358,7 @@ const mcpReconnectCheck: CheckModule = {
         };
       },
       now: () => new Date(),
-      log: stubLog,
+      log: probeLog,
     };
 
     // Carry prior capabilityProbe blocks for lastSuccessAt preservation.
@@ -362,7 +378,7 @@ const mcpReconnectCheck: CheckModule = {
     }
 
     const probeResults = readyOrDegradedNames.length > 0
-      ? await probeAllMcpCapabilities(readyOrDegradedNames, stubDeps, prevProbeByName)
+      ? await probeAllMcpCapabilities(readyOrDegradedNames, probeDeps, prevProbeByName)
       : new Map<string, CapabilityProbeSnapshot>();
 
     // Re-merge with capabilityProbe blocks attached. For "failed" servers
@@ -441,7 +457,7 @@ const mcpReconnectCheck: CheckModule = {
         // stub deps as the initial probe (the heartbeat layer's default-
         // fallback path treats a successful listTools as ready).
         try {
-          const refreshedProbe = await probeMcpCapability(name, stubDeps, probe);
+          const refreshedProbe = await probeMcpCapability(name, probeDeps, probe);
           recoveryAdjusted.set(
             name,
             Object.freeze({
