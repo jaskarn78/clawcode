@@ -181,6 +181,18 @@ export const IPC_METHODS = [
   // returns {outcome: DreamPassOutcome, applied: DreamApplyOutcome,
   // agent, startedAt}. See src/manager/daemon.ts handleRunDreamPassIpc.
   "run-dream-pass",
+  // Phase 96 Plan 05 D-03 — operator-driven filesystem capability probe
+  // refresh. Backs both `clawcode probe-fs <agent>` (CLI) and
+  // `/clawcode-probe-fs` (Discord slash, admin-only). Daemon-side handler
+  // resolves fileAccess for the agent, runs runFsProbe (96-01), persists
+  // snapshot via writeFsSnapshot, and returns FsProbeOutcome to caller.
+  // See src/manager/daemon-fs-ipc.ts handleProbeFsIpc.
+  "probe-fs",
+  // Phase 96 Plan 05 D-04 — read-only FS capability snapshot for operator
+  // inspection. Backs `clawcode fs-status -a <agent>` (CLI) and the
+  // /clawcode-status Capability section render. Reads the persisted
+  // fs-capability.json without re-probing. Mirrors list-mcp-status.
+  "list-fs-status",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
