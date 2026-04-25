@@ -165,11 +165,15 @@ function makeDeps(
     openClawWorkspace,
     openClawSkillsRoot,
     ledgerPath,
-    updateAgentSkills: mocks.updateAgentSkills,
-    updateAgentConfig: mocks.updateAgentConfig,
-    scanSkillForSecrets: mocks.scanSkillForSecrets,
-    normalizeSkillFrontmatter: mocks.normalizeSkillFrontmatter,
-    runRsync: mocks.runRsync,
+    updateAgentSkills:
+      mocks.updateAgentSkills as unknown as AdditiveApplierDeps["updateAgentSkills"],
+    updateAgentConfig:
+      mocks.updateAgentConfig as unknown as AdditiveApplierDeps["updateAgentConfig"],
+    scanSkillForSecrets:
+      mocks.scanSkillForSecrets as unknown as AdditiveApplierDeps["scanSkillForSecrets"],
+    normalizeSkillFrontmatter:
+      mocks.normalizeSkillFrontmatter as unknown as AdditiveApplierDeps["normalizeSkillFrontmatter"],
+    runRsync: mocks.runRsync as unknown as AdditiveApplierDeps["runRsync"],
     log: makeLog(),
   };
 
