@@ -593,6 +593,64 @@ export async function handleSetPermissionModeIpc(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 92 Plan 04 CUT-06 / CUT-07 — cutover-button-action IPC handler.
+//
+// MIRROR Phase 86 Plan 02 handleSetModelIpc blueprint: pure exported helper
+// with DI surface, called from the daemon's closure-based intercept BEFORE
+// routeMethod (per the marketplace handler pattern). Tests inject vi.fn()
+// stubs for gapById + the applierDeps surface.
+//
+// Routes:
+//   IPC params {customId} → parseCutoverButtonCustomId → gapById → dispatch
+//                         → DestructiveButtonOutcome
+//
+// The IPC wrapper does NOT touch Discord — that's the slash-commands.ts
+// inline handler's job. This handler is daemon-side because Plan 92-06's
+// CLI-driven verify pipeline needs to invoke the same destructive-fix path
+// without going through Discord.
+// ---------------------------------------------------------------------------
+
+import {
+  handleCutoverButtonInteraction,
+  type ButtonHandlerDeps,
+} from "../cutover/button-handler.js";
+import type { DestructiveButtonOutcome } from "../cutover/types.js";
+
+/**
+ * DI surface for handleCutoverButtonActionIpc. Mirrors ButtonHandlerDeps
+ * verbatim because the IPC wrapper is a thin pass-through; it parses the
+ * customId from IPC params and dispatches to the pure handler.
+ */
+export type CutoverButtonActionIpcDeps = ButtonHandlerDeps;
+
+/**
+ * Daemon-side IPC handler for `cutover-button-action`. Validates the
+ * `customId` param, dispatches to the pure button-handler, and returns
+ * the typed DestructiveButtonOutcome.
+ *
+ * Throws ManagerError when params.customId is missing or non-string so the
+ * IPC envelope carries a clean JSON-RPC error message.
+ */
+export async function handleCutoverButtonActionIpc(
+  params: { customId?: unknown },
+  deps: CutoverButtonActionIpcDeps,
+): Promise<DestructiveButtonOutcome> {
+  const customId = params.customId;
+  if (typeof customId !== "string" || customId.length === 0) {
+    throw new ManagerError(
+      "cutover-button-action: missing or invalid 'customId' param",
+    );
+  }
+  // user.id is not used by the pure handler today (no per-user gating in
+  // Plan 92-04), but the field is required by ButtonInteractionLike for
+  // future extension. Pass a daemon-side sentinel.
+  return handleCutoverButtonInteraction(
+    { customId, user: { id: "daemon-ipc" } },
+    deps,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Phase 88 Plan 02 MKT-01..07 — marketplace IPC handlers (pure, testable).
 //
 // MIRROR Phase 86 Plan 02 handleSetModelIpc blueprint:
@@ -2245,6 +2303,63 @@ export async function startDaemon(
     }
     if (method === "marketplace-probe-op-items") {
       return handleMarketplaceProbeOpItemsIpc({ log }, params);
+    }
+    // Phase 92 Plan 04 CUT-06 / CUT-07 — cutover-button-action IPC.
+    // Closure-based intercept BEFORE routeMethod (mirrors marketplace +
+    // browser-tool-call patterns above) so the existing routeMethod
+    // signature stays stable. Plan 92-06 will wire cutover-verify-summary;
+    // for Plan 92-04 the button-action handler is the only IPC method.
+    if (method === "cutover-button-action") {
+      // Lazy import of the cutover ledger module's default path so we
+      // don't pay the import cost on every IPC tick. The ledger path
+      // is overridable via params for tests + per-agent customization.
+      const { DEFAULT_CUTOVER_LEDGER_PATH } = await import(
+        "../cutover/ledger.js"
+      );
+      const targetAgent =
+        typeof params.agent === "string"
+          ? (params.agent as string)
+          : "fin-acquisition";
+      const targetAgentConfig = resolvedAgents.find(
+        (a) => a.name === targetAgent,
+      );
+      const memoryRoot =
+        targetAgentConfig?.memoryPath ?? targetAgentConfig?.workspace ?? "";
+      const cutoverDeps = {
+        applierDeps: {
+          agent: targetAgent,
+          clawcodeYamlPath: configPath,
+          memoryRoot,
+          openClawHost:
+            typeof params.openClawHost === "string"
+              ? (params.openClawHost as string)
+              : "",
+          openClawWorkspace:
+            typeof params.openClawWorkspace === "string"
+              ? (params.openClawWorkspace as string)
+              : "",
+          ledgerPath:
+            typeof params.ledgerPath === "string"
+              ? (params.ledgerPath as string)
+              : DEFAULT_CUTOVER_LEDGER_PATH,
+          // Production wires Phase 91 rsync runner here; first-pass returns
+          // a non-zero exit so a stray Accept on outdated-memory-file fails
+          // safely in audit-log mode rather than performing an unconfigured
+          // rsync. Plan 92-06 will inject the real runner.
+          runRsync: async () => ({
+            stdout: "",
+            stderr: "rsync runner not wired in Plan 92-04 first pass",
+            exitCode: 1,
+          }),
+          log,
+        },
+        // First-pass gap resolver: returns null until Plan 92-06 wires the
+        // CUTOVER-GAPS.json reader. The handler treats null as
+        // "invalid-customId" — safe default that surfaces an audit hint.
+        gapById: async () => null,
+        log,
+      };
+      return handleCutoverButtonActionIpc(params, cutoverDeps);
     }
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };

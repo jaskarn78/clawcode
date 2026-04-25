@@ -333,4 +333,29 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
     ipcMethod: "list-sync-status",
     options: [],
   },
+  // Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — daemon-routed cutover verify.
+  // Reads CUTOVER-GAPS.json (Plan 92-02) and renders ONE ephemeral embed per
+  // destructive gap (or batched if > 10) with Accept/Reject/Defer buttons.
+  // The buttons use the `cutover-{agent}-{gapId}:{action}` customId namespace
+  // (collision-safe — see daemon-cutover-button.test.ts D2). Operator clicks
+  // route through ipcMethod "cutover-button-action" → daemon's pure
+  // handleCutoverButtonActionIpc → applyDestructiveFix or audit-only ledger row.
+  // Inline-short-circuit handler in slash-commands.ts mirrors the Phase 85/86/
+  // 87/88/91 pattern. Zero LLM turn cost per invocation (UI-01).
+  {
+    name: "clawcode-cutover-verify",
+    description:
+      "Surface destructive cutover gaps for the bound agent (Accept/Reject/Defer per gap)",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "cutover-verify-summary",
+    options: [
+      {
+        name: "agent",
+        type: 3,
+        description: "Agent name (defaults to the channel's bound agent)",
+        required: false,
+      },
+    ],
+  },
 ] as const;
