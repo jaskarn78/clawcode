@@ -53,6 +53,7 @@ import { registerRegistryCommand } from "./commands/registry.js";
 import { registerMigrateOpenclawCommand } from "./commands/migrate-openclaw.js";
 import { registerSyncCommand } from "./commands/sync.js";
 import { registerCutoverCommand } from "./commands/cutover.js";
+import { registerDreamCommand } from "./commands/dream.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -187,6 +188,7 @@ registerRegistryCommand(program);
 registerMigrateOpenclawCommand(program);
 registerSyncCommand(program);
 registerCutoverCommand(program);
+registerDreamCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,

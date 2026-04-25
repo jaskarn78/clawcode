@@ -12,6 +12,7 @@ import {
   Client,
   ComponentType,
   EmbedBuilder,
+  MessageFlags,
   ModalBuilder,
   REST,
   Routes,
@@ -326,6 +327,14 @@ export type SlashCommandHandlerConfig = {
     string,
     ReadonlySet<string>
   >;
+  /**
+   * Phase 95 Plan 03 DREAM-07 — admin Discord user IDs. Operator-tier
+   * commands (e.g. /clawcode-dream) gate on this set BEFORE invoking IPC
+   * so non-admins receive an instant ephemeral "Admin-only command" reply.
+   * Empty / undefined → admin-only commands refuse all callers (safe
+   * default — fail closed).
+   */
+  readonly adminUserIds?: readonly string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -588,6 +597,139 @@ function renderPluginInstallOutcome(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 95 Plan 03 DREAM-07 — /clawcode-dream helpers (admin gate + embed
+// renderer). Pure exported functions so the slash-commands tests exercise
+// them without spinning up the full SlashCommandHandler.
+// ---------------------------------------------------------------------------
+
+/**
+ * IPC response shape for `run-dream-pass` mirrored from the daemon's
+ * RunDreamPassResponse. Re-declared here so the slash module doesn't pull
+ * in the daemon's internal types (keeps the import graph narrow).
+ */
+type DreamIpcResponse = {
+  readonly agent: string;
+  readonly startedAt: string;
+  readonly outcome:
+    | {
+        readonly kind: "completed";
+        readonly result: {
+          readonly themedReflection: string;
+          readonly newWikilinks: ReadonlyArray<unknown>;
+          readonly promotionCandidates: ReadonlyArray<unknown>;
+          readonly suggestedConsolidations: ReadonlyArray<unknown>;
+        };
+        readonly durationMs: number;
+        readonly tokensIn: number;
+        readonly tokensOut: number;
+        readonly model: string;
+      }
+    | { readonly kind: "skipped"; readonly reason: string }
+    | { readonly kind: "failed"; readonly error: string };
+  readonly applied:
+    | {
+        readonly kind: "applied";
+        readonly appliedWikilinkCount: number;
+        readonly surfacedPromotionCount: number;
+        readonly surfacedConsolidationCount: number;
+        readonly logPath: string;
+      }
+    | { readonly kind: "skipped"; readonly reason: string }
+    | { readonly kind: "failed"; readonly error: string };
+};
+
+/**
+ * Phase 95 Plan 03 DREAM-07 — pure admin gate. Returns true when the
+ * interaction's user.id is in the configured admin allowlist. Empty
+ * allowlist → fail-closed (returns false).
+ */
+export function isAdminClawdyInteraction(
+  interaction: { readonly user: { readonly id: string } },
+  adminUserIds: readonly string[],
+): boolean {
+  if (adminUserIds.length === 0) return false;
+  return adminUserIds.includes(interaction.user.id);
+}
+
+/**
+ * Phase 95 Plan 03 DREAM-07 — themed dream-pass embed.
+ *
+ * Color palette mirrors the Phase 91-05 conflict-color literals:
+ *   completed: 0x2ecc71 (green)
+ *   skipped:   0xf1c40f (yellow)
+ *   failed:    0xe74c3c (red)
+ *
+ * Description for completed = themedReflection truncated at 4000 chars
+ * (Discord embed description hard-cap is 4096; 4000 is the safety margin
+ * preserving the trailing "..." marker if needed). Pinned by DSL3 test.
+ */
+export function renderDreamEmbed(
+  agent: string,
+  response: DreamIpcResponse,
+): EmbedBuilder {
+  const colorByKind = {
+    completed: 0x2ecc71,
+    skipped: 0xf1c40f,
+    failed: 0xe74c3c,
+  } as const;
+  const embed = new EmbedBuilder()
+    .setTitle(`💠 Dream pass — ${agent}`)
+    .setColor(colorByKind[response.outcome.kind])
+    .setTimestamp();
+
+  if (response.outcome.kind === "completed") {
+    const reflection = response.outcome.result.themedReflection ?? "";
+    embed.setDescription(reflection.slice(0, 4000));
+    const applied = response.applied;
+    const appliedWikilinkCount =
+      applied.kind === "applied" ? applied.appliedWikilinkCount : 0;
+    const surfacedPromotionCount =
+      applied.kind === "applied" ? applied.surfacedPromotionCount : 0;
+    const surfacedConsolidationCount =
+      applied.kind === "applied" ? applied.surfacedConsolidationCount : 0;
+    const logPath =
+      applied.kind === "applied" ? applied.logPath : "(no log path)";
+    embed.addFields(
+      { name: "Outcome", value: "completed", inline: true },
+      {
+        name: "Wikilinks",
+        value: `${appliedWikilinkCount} applied`,
+        inline: true,
+      },
+      {
+        name: "Promotion candidates",
+        value: `${surfacedPromotionCount} surfaced for review`,
+        inline: true,
+      },
+      {
+        name: "Consolidations",
+        value: `${surfacedConsolidationCount} surfaced for review`,
+        inline: true,
+      },
+      {
+        name: "Cost",
+        value: `${response.outcome.tokensIn} in / ${response.outcome.tokensOut} out · ${(response.outcome.durationMs / 1000).toFixed(1)}s · ${response.outcome.model}`,
+        inline: false,
+      },
+      { name: "Log", value: `\`${logPath}\``, inline: false },
+    );
+  } else if (response.outcome.kind === "skipped") {
+    embed.setDescription("(no result — see fields below)");
+    embed.addFields({
+      name: "Outcome",
+      value: `skipped: ${response.outcome.reason}`,
+    });
+  } else {
+    embed.setDescription("(no result — see fields below)");
+    embed.addFields({
+      name: "Outcome",
+      value: `failed: ${response.outcome.error}`,
+    });
+  }
+  return embed;
+}
+
 /**
  * Handles Discord slash command registration and interaction dispatch.
  *
@@ -610,6 +752,12 @@ export class SlashCommandHandler {
    * register time.
    */
   private readonly aclDeniedByAgent: ReadonlyMap<string, ReadonlySet<string>> | null;
+  /**
+   * Phase 95 Plan 03 DREAM-07 — admin Discord user IDs (gates /clawcode-dream
+   * and any future admin-tier slash commands). Empty array → fail-closed
+   * (no admins recognized).
+   */
+  private readonly adminUserIds: readonly string[];
   private client: Client | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
 
@@ -634,6 +782,7 @@ export class SlashCommandHandler {
     } else {
       this.aclDeniedByAgent = null;
     }
+    this.adminUserIds = Object.freeze([...(config.adminUserIds ?? [])]);
   }
 
   /**
@@ -944,6 +1093,18 @@ export class SlashCommandHandler {
     // branch in handleControlCommand.
     if (commandName === "clawcode-cutover-verify") {
       await this.handleCutoverVerifyCommand(interaction);
+      return;
+    }
+
+    // Phase 95 Plan 03 DREAM-07 / UI-01 — /clawcode-dream inline handler.
+    // 10th application of the inline-handler-short-circuit-before-
+    // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92). Admin-only
+    // ephemeral: gates BEFORE deferReply so non-admins never see the IPC
+    // call land. Routes through the daemon's `run-dream-pass` IPC method
+    // (Plan 95-03 daemon edge wires runDreamPass + applyDreamResult).
+    // EmbedBuilder render via the pure renderDreamEmbed helper (above).
+    if (commandName === "clawcode-dream") {
+      await this.handleDreamCommand(interaction);
       return;
     }
 
@@ -1354,6 +1515,82 @@ export class SlashCommandHandler {
       this.log.error(
         { command: "clawcode-tools", error: (error as Error).message },
         "failed to send tools embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 95 Plan 03 DREAM-07 / UI-01 — handle /clawcode-dream.
+   *
+   * Admin-only ephemeral. Gates on isAdminClawdyInteraction BEFORE deferring
+   * the reply so non-admins receive an instant "Admin-only command" reply
+   * (zero IPC + zero LLM turn cost). Admin invocations defer ephemerally,
+   * dispatch through the daemon's `run-dream-pass` IPC method, and render
+   * the DreamPassOutcome via the pure renderDreamEmbed helper.
+   *
+   * Slash semantics: --idle-bypass is ALWAYS true for this surface — the
+   * Discord operator-driven manual trigger semantically wants the dream
+   * pass to fire even if the agent has been chatting recently. CLI uses
+   * the opposite default (--idle-bypass=false → must be explicit).
+   */
+  private async handleDreamCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    // Admin gate FIRST — no IPC, no defer for non-admins.
+    if (!isAdminClawdyInteraction(interaction, this.adminUserIds)) {
+      try {
+        await interaction.reply({
+          content: "Admin-only command",
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const agent = interaction.options.getString("agent", true);
+
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-dream", error: (error as Error).message },
+        "failed to defer dream reply",
+      );
+      return;
+    }
+
+    let response: DreamIpcResponse;
+    try {
+      response = (await sendIpcRequest(SOCKET_PATH, "run-dream-pass", {
+        agent,
+        idleBypass: true,
+      })) as DreamIpcResponse;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-dream", agent, error: msg },
+        "run-dream-pass IPC failed",
+      );
+      try {
+        await interaction.editReply({
+          content: `dream pass error: ${msg}`,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.editReply({
+        embeds: [renderDreamEmbed(agent, response)],
+      });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-dream", error: (error as Error).message },
+        "failed to send dream embed",
       );
     }
   }

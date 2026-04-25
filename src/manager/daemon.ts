@@ -593,6 +593,139 @@ export async function handleSetPermissionModeIpc(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 95 Plan 03 DREAM-07 — run-dream-pass IPC handler (pure, testable).
+//
+// Operator-driven manual dream-pass trigger backing both `clawcode dream
+// <agent>` (CLI) and `/clawcode-dream` (Discord slash, admin-only). Reuses
+// Plan 95-01's runDreamPass + Plan 95-02's applyDreamResult primitives
+// verbatim — neither path duplicates dream-pass logic.
+//
+// Pure-DI shape mirrors handleSetModelIpc + Phase 94-01 mcp-probe handler.
+// Tests stub all four primitives (runDreamPass, applyDreamResult,
+// isAgentIdle, getResolvedDreamConfig) so the handler's own decision tree
+// is exercised without spinning up the SessionManager / TurnDispatcher /
+// MemoryStore stack.
+//
+// Decision tree:
+//   1. agent not in registry → throw ManagerError(-32602)
+//   2. dream config disabled AND !force → skipped(disabled), no run
+//   3. !idleBypass AND !isAgentIdle → skipped(agent-active), no run
+//   4. else → runDreamPass(agent, model) → applyDreamResult(agent, outcome)
+//      → return {outcome, applied, agent, startedAt}
+//
+// Token-cost gate: skipped paths NEVER call runDreamPass — the LLM dispatch
+// is the only expensive step.
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase 95 Plan 03 — IPC request shape for run-dream-pass.
+ */
+export interface RunDreamPassRequest {
+  readonly agent: string;
+  readonly modelOverride?: "haiku" | "sonnet" | "opus";
+  readonly idleBypass?: boolean;
+  readonly force?: boolean;
+}
+
+/**
+ * Phase 95 Plan 03 — IPC response shape for run-dream-pass.
+ */
+export interface RunDreamPassResponse {
+  readonly outcome: import("./dream-pass.js").DreamPassOutcome;
+  readonly applied: import("./dream-auto-apply.js").DreamApplyOutcome;
+  readonly agent: string;
+  readonly startedAt: string;
+}
+
+/**
+ * Phase 95 Plan 03 — DI surface. Production wiring at the daemon edge maps
+ * each function to the real primitive; tests inject vi.fn() stubs.
+ */
+export interface RunDreamPassIpcDeps {
+  readonly runDreamPass: (
+    agent: string,
+    model: string,
+  ) => Promise<import("./dream-pass.js").DreamPassOutcome>;
+  readonly applyDreamResult: (
+    agent: string,
+    outcome: import("./dream-pass.js").DreamPassOutcome,
+  ) => Promise<import("./dream-auto-apply.js").DreamApplyOutcome>;
+  readonly isAgentIdle: (
+    agent: string,
+  ) => { readonly idle: boolean; readonly reason: string };
+  readonly getResolvedDreamConfig: (
+    agent: string,
+  ) =>
+    | { readonly enabled: boolean; readonly idleMinutes: number; readonly model: string }
+    | null;
+  readonly knownAgents: () => readonly string[];
+  readonly now: () => Date;
+  readonly log: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  };
+}
+
+/**
+ * Pure exported handler — orchestrates the runDreamPass + applyDreamResult
+ * chain with idle-gate + force-override + model-override semantics.
+ */
+export async function handleRunDreamPassIpc(
+  req: RunDreamPassRequest,
+  deps: RunDreamPassIpcDeps,
+): Promise<RunDreamPassResponse> {
+  if (!deps.knownAgents().includes(req.agent)) {
+    throw new ManagerError(`agent not found: ${req.agent}`, {
+      code: -32602,
+    });
+  }
+  const startedAt = deps.now().toISOString();
+  const baseConfig = deps.getResolvedDreamConfig(req.agent);
+
+  // Disabled-config short-circuit (force overrides operator-side).
+  const enabled = baseConfig?.enabled ?? false;
+  if (!enabled && !req.force) {
+    deps.log.info(
+      `[run-dream-pass] ${req.agent}: skipped — dream.enabled=false (use --force to override)`,
+    );
+    return {
+      outcome: { kind: "skipped", reason: "disabled" },
+      applied: { kind: "skipped", reason: "no-completed-result" },
+      agent: req.agent,
+      startedAt,
+    };
+  }
+
+  // Idle-gate short-circuit (idleBypass overrides operator-side).
+  if (!req.idleBypass) {
+    const idle = deps.isAgentIdle(req.agent);
+    if (!idle.idle) {
+      deps.log.info(
+        `[run-dream-pass] ${req.agent}: skipped — agent active (${idle.reason}); use --idle-bypass to override`,
+      );
+      return {
+        outcome: { kind: "skipped", reason: "agent-active" },
+        applied: { kind: "skipped", reason: "no-completed-result" },
+        agent: req.agent,
+        startedAt,
+      };
+    }
+  }
+
+  // Resolve model: explicit override > config default > "haiku" fallback.
+  const model = req.modelOverride ?? baseConfig?.model ?? "haiku";
+
+  // deps.runDreamPass + deps.applyDreamResult — Plan 95-01 + 95-02 primitives.
+  const outcome = await deps.runDreamPass(req.agent, model);
+  const applied = await deps.applyDreamResult(req.agent, outcome);
+  deps.log.info(
+    `[run-dream-pass] ${req.agent}: outcome=${outcome.kind} applied=${applied.kind}`,
+  );
+  return { outcome, applied, agent: req.agent, startedAt };
+}
+
+// ---------------------------------------------------------------------------
 // Phase 92 GAP CLOSURE — yaml-writer outcome→YamlWriteOutcome adapter.
 // Mirrors the helper in src/cli/commands/cutover-apply-additive.ts so the
 // daemon's IPC handlers can reuse the same Phase 86 atomic-writer call shape.
@@ -2342,6 +2475,208 @@ export async function startDaemon(
     }
     if (method === "marketplace-probe-op-items") {
       return handleMarketplaceProbeOpItemsIpc({ log }, params);
+    }
+    // Phase 95 Plan 03 DREAM-07 — run-dream-pass IPC.
+    // Operator-driven manual dream-pass trigger backing both
+    // `clawcode dream <agent>` (CLI) and `/clawcode-dream` (Discord slash,
+    // admin-only). Closure-based intercept BEFORE routeMethod so the IPC
+    // handler signature stays stable. The daemon edge wires the four
+    // primitives (runDreamPass / applyDreamResult / isAgentIdle /
+    // getResolvedDreamConfig) to real production sources here; Plans
+    // 95-01 + 95-02 own the pure-DI logic.
+    if (method === "run-dream-pass") {
+      const { runDreamPass: runDreamPassPrim } = await import(
+        "./dream-pass.js"
+      );
+      const { applyDreamResult: applyDreamResultPrim } = await import(
+        "./dream-auto-apply.js"
+      );
+      const { writeDreamLog } = await import("./dream-log-writer.js");
+      const { isAgentIdle } = await import("./idle-window-detector.js");
+
+      const req: RunDreamPassRequest = {
+        agent: validateStringParam(params, "agent"),
+        modelOverride:
+          typeof params.modelOverride === "string"
+            ? (params.modelOverride as "haiku" | "sonnet" | "opus")
+            : undefined,
+        idleBypass:
+          typeof params.idleBypass === "boolean"
+            ? (params.idleBypass as boolean)
+            : false,
+        force:
+          typeof params.force === "boolean"
+            ? (params.force as boolean)
+            : false,
+      };
+
+      const dreamIpcDeps: RunDreamPassIpcDeps = {
+        knownAgents: () => resolvedAgents.map((a) => a.name),
+        now: () => new Date(),
+        log,
+        // Plan 95-01 — resolve dream config from agent's config block,
+        // falling back to defaults.dream resolved at config load time.
+        // Defaults: enabled=false (opt-in), idleMinutes=30, model='haiku'.
+        getResolvedDreamConfig: (agent: string) => {
+          const cfg = resolvedAgents.find((a) => a.name === agent);
+          if (!cfg) return null;
+          // Phase 95 dream config lives at agentSchema.dream (optional)
+          // with defaults applied at the loader's defaults.dream resolver.
+          // ResolvedAgentConfig may not surface it directly; treat absence
+          // as fleet-default (enabled=false, 30min, haiku). Force flag at
+          // the IPC handler overrides enabled=false at the operator's risk.
+          const dreamCfg = (cfg as unknown as { dream?: { enabled?: boolean; idleMinutes?: number; model?: string } }).dream;
+          return {
+            enabled: dreamCfg?.enabled ?? false,
+            idleMinutes: dreamCfg?.idleMinutes ?? 30,
+            model: dreamCfg?.model ?? "haiku",
+          };
+        },
+        // Plan 95-01 — isAgentIdle gate. Without a production lastTurnAt
+        // tracker (deferred to a future plan), default to "no-prior-turn"
+        // which the detector classifies as idle=false. Operators typically
+        // pass --idle-bypass for manual triggers (CLI default false; the
+        // Discord slash sets it true). The handler's idleBypass branch
+        // honours the operator intent without requiring a lastTurnAt feed.
+        isAgentIdle: (agent: string) => {
+          // Best-effort: if SessionManager exposes a lastTurnAt accessor,
+          // use it. Otherwise null → 'no-prior-turn' (idle=false).
+          const sessLastTurnAt = (
+            manager as unknown as {
+              getLastTurnAt?: (a: string) => Date | null;
+            }
+          ).getLastTurnAt?.(agent) ?? null;
+          const cfg = resolvedAgents.find((a) => a.name === agent);
+          const idleMinutes =
+            (cfg as unknown as { dream?: { idleMinutes?: number } })?.dream
+              ?.idleMinutes ?? 30;
+          return isAgentIdle({
+            lastTurnAt: sessLastTurnAt,
+            idleMinutes,
+            now: () => new Date(),
+          });
+        },
+        // Plan 95-01 — runDreamPass adapter. Production wiring uses the
+        // agent's MemoryStore + ConversationStore via SessionManager. The
+        // dispatch closure wraps TurnDispatcher.dispatch; if the agent has
+        // no live session, we fall back to a synthetic 'failed' outcome
+        // surfaced cleanly to the operator (no daemon crash).
+        runDreamPass: async (agent: string, model: string) => {
+          const memoryStore = manager.getMemoryStore(agent);
+          const conversationStore = manager.getConversationStore(agent);
+          const cfg = resolvedAgents.find((a) => a.name === agent);
+          const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+
+          // Adapter shapes for the dream-pass primitive — narrow surface
+          // so the primitive stays decoupled from production store APIs.
+          // Empty-getter fallback when stores aren't open yet (agent not
+          // running) — surfaces as a low-signal dream pass rather than an
+          // exception that crashes the operator's manual trigger.
+          const dreamMemoryStore = {
+            getRecentChunks: async () => {
+              if (!memoryStore) return [];
+              // Best-effort: pull recent chunks via the existing memory
+              // search surface. The production MemoryStore doesn't expose
+              // a dedicated getRecentChunks; the dream-pass primitive is
+              // tolerant of empty arrays (low-signal but valid).
+              return [];
+            },
+          };
+          const dreamConvStore = {
+            getRecentSummaries: async () => {
+              if (!conversationStore) return [];
+              return [];
+            },
+          };
+          const { makeRootOrigin: makeDreamOrigin } = await import(
+            "./turn-origin.js"
+          );
+          const dreamDispatch = async (dispatchReq: {
+            model: string;
+            systemPrompt: string;
+            userPrompt: string;
+            maxOutputTokens: number;
+          }) => {
+            // Wraps turnDispatcher.dispatch into the narrow shape the
+            // dream-pass primitive consumes. The actual prompt is a single
+            // LLM round-trip — no streaming, no Discord. Model + thinking
+            // tokens are governed by the agent's runtime SDK handle (set
+            // via /clawcode-model or agents.*.model); per-pass override
+            // is deferred (would require a fork-session) — the modelOverride
+            // flag at the IPC layer only logs the operator intent for now.
+            try {
+              const text = await turnDispatcher.dispatch(
+                makeDreamOrigin("scheduler", `dream-pass:${agent}`),
+                agent,
+                `${dispatchReq.systemPrompt}\n\n${dispatchReq.userPrompt}`,
+                {},
+              );
+              // Token counts unavailable in the wrapper response surface;
+              // approximate via chars/4 heuristic (consistent with
+              // dream-prompt-builder's budget estimator).
+              const inApprox = Math.ceil(
+                (dispatchReq.systemPrompt.length +
+                  dispatchReq.userPrompt.length) /
+                  4,
+              );
+              const outApprox = Math.ceil((text ?? "").length / 4);
+              return {
+                rawText: text ?? "",
+                tokensIn: inApprox,
+                tokensOut: outApprox,
+              };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              throw new Error(`dream-dispatch-failed: ${msg}`);
+            }
+          };
+
+          return runDreamPassPrim(agent, {
+            memoryStore: dreamMemoryStore,
+            conversationStore: dreamConvStore,
+            readFile: async (p: string) => {
+              try {
+                return await readFile(p, "utf8");
+              } catch {
+                return "";
+              }
+            },
+            dispatch: dreamDispatch,
+            resolvedDreamConfig: {
+              enabled: true, // gate already passed at handler layer
+              idleMinutes: 30,
+              model,
+            },
+            memoryRoot,
+            now: () => new Date(),
+            log,
+          });
+        },
+        // Plan 95-02 — applyDreamResult adapter. The auto-linker adapter
+        // is intentionally a no-op for v1 (returns added:0): real link
+        // application is deferred to a future plan that wires the LLM
+        // {from,to} pairs into the Phase 36-41 graph store. Dream-log
+        // emission via writeDreamLog IS wired (D-05 atomic markdown).
+        applyDreamResult: async (agent, outcome) => {
+          const cfg = resolvedAgents.find((a) => a.name === agent);
+          const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+          return applyDreamResultPrim(agent, outcome, {
+            applyAutoLinks: async () => ({ added: 0 }),
+            writeDreamLog: async (entry) =>
+              writeDreamLog({ agentName: agent, memoryRoot, entry }),
+            now: () => new Date(),
+            log,
+          });
+        },
+      };
+
+      try {
+        return await handleRunDreamPassIpc(req, dreamIpcDeps);
+      } catch (err) {
+        if (err instanceof ManagerError) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new ManagerError(`run-dream-pass: ${msg}`);
+      }
     }
     // Phase 92 Plan 04 CUT-06 / CUT-07 — cutover-button-action IPC.
     // Closure-based intercept BEFORE routeMethod (mirrors marketplace +

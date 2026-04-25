@@ -333,6 +333,29 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
     ipcMethod: "list-sync-status",
     options: [],
   },
+  // Phase 95 Plan 03 DREAM-07 / UI-01 — operator-driven manual dream-pass
+  // trigger. Admin-only ephemeral; the inline-short-circuit handler in
+  // slash-commands.ts checks isAdminClawdyInteraction BEFORE routing through
+  // ipcMethod "run-dream-pass" so non-admins get an instant "Admin-only
+  // command" reply (zero IPC + zero LLM turn cost). Renders the
+  // DreamPassOutcome via renderDreamEmbed (themedReflection + counts +
+  // cost + log path). 10th application of the inline-short-circuit pattern.
+  {
+    name: "clawcode-dream",
+    description:
+      "Trigger a dream pass for an agent (admin-only operator-driven reflection)",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "run-dream-pass",
+    options: [
+      {
+        name: "agent",
+        type: 3,
+        description: "Agent name to dream",
+        required: true,
+      },
+    ],
+  },
   // Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — daemon-routed cutover verify.
   // Reads CUTOVER-GAPS.json (Plan 92-02) and renders ONE ephemeral embed per
   // destructive gap (or batched if > 10) with Accept/Reject/Defer buttons.

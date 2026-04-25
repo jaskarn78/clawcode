@@ -174,6 +174,13 @@ export const IPC_METHODS = [
   //                       Returns {rewoundCount, errors[]}.
   "cutover-verify",
   "cutover-rollback",
+  // Phase 95 Plan 03 DREAM-07 — operator-driven dream-pass trigger.
+  // Backs both `clawcode dream <agent>` (CLI) and `/clawcode-dream`
+  // (Discord slash, admin-only). Daemon-side handler builds DI deps
+  // (runDreamPass + applyDreamResult + isAgentIdle) at the edge and
+  // returns {outcome: DreamPassOutcome, applied: DreamApplyOutcome,
+  // agent, startedAt}. See src/manager/daemon.ts handleRunDreamPassIpc.
+  "run-dream-pass",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

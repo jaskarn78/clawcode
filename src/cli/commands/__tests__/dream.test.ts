@@ -148,7 +148,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
     let threw = false;
     try {
       await program.parseAsync(
-        ["node", "test", "dream", "fin-acquisition", "--model", "gpt4"],
+        ["dream", "fin-acquisition", "--model", "gpt4"],
         { from: "user" } as never,
       );
     } catch (err) {
@@ -211,7 +211,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
 
     let threw = false;
     try {
-      await program.parseAsync(["node", "test", "dream"], {
+      await program.parseAsync(["dream"], {
         from: "user",
       } as never);
     } catch (err) {
