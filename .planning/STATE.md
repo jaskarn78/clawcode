@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 96-01-PLAN.md (Wave 1 parallel executor)
-last_updated: "2026-04-25T19:25:07.622Z"
+stopped_at: Completed 96-02-PLAN.md (Wave 2 parallel executor)
+last_updated: "2026-04-25T19:46:51.055Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 17
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -260,6 +260,10 @@ Recent decisions affecting current work:
 - [Phase 96]: Plan 96-01: fileAccess Zod schema is 10th additive-optional application (Phase 83/86/89/90/94 blueprint). Schema preserves literal {agent} token; loader resolveFileAccess(agentName, ...) substitutes at call time. v2.5 fixtures parse unchanged (5 fixtures regression-pinned)
 - [Phase 96]: Plan 96-01: SessionHandle gains FsCapabilitySnapshot lazy-init mirror (getFsCapabilitySnapshot/setFsCapabilitySnapshot) — 6th application of post-construction DI mirror pattern (after McpState/FlapHistory/RecoveryAttemptHistory/SupportedCommands/ModelMirror). Stable Map identity contract matches Phase 85 exactly
 - [Phase 96]: Plan 96-01: TS error count REDUCED net 13 (101 → 88) by sweeping up Phase 95's missing dream field while adding fileAccess to test fixtures (Rule 3 cascade pattern matches Phase 89 GREET-10 + Phase 90 MEM-01 precedent)
+- [Phase 96]: Plan 96-02: Renderer at the daemon edge, NOT inside the assembler. Pre-rendered string threaded through ContextSources.filesystemCapabilityBlock additive optional field — preserves assembler purity (Phase 94 D-10 systemPromptDirectives idiom).
+- [Phase 96]: Plan 96-02: <tool_status></tool_status> and <dream_log_recent></dream_log_recent> are positioning sentinels with EMPTY bodies — they wrap NO content today; render ONLY when fs block renders, preserving v2.5 cache-stability invariant.
+- [Phase 96]: Plan 96-02: STRICT empty string on empty snapshot (W-4 ambiguity removed). v2.5 fixtures without fileAccess produce byte-identical stable prefix on Phase 96 deploy.
+- [Phase 96]: Plan 96-02: Flap-stability constants reused by NAME from Phase 94 plan 02 (FS_FLAP_WINDOW_MS = 5*60*1000, FS_FLAP_TRANSITION_THRESHOLD = 3) — cross-domain consistency between tools and filesystem capabilities.
 
 ### v2.1 closing decisions (for reference)
 
@@ -380,9 +384,10 @@ Recent decisions affecting current work:
 | Phase 95 P03 | 25min | 2 tasks | 12 files |
 | Phase 96 P06 | 28min | 2 tasks | 13 files |
 | Phase 96 P01 | 25min | 3 tasks | 17 files |
+| Phase 96 P02 | 12min | 3 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-25
-Stopped at: Completed 96-01-PLAN.md (Wave 1 parallel executor)
+Stopped at: Completed 96-02-PLAN.md (Wave 2 parallel executor)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
