@@ -604,6 +604,17 @@ export class SdkSessionAdapter implements SessionAdapter {
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set
+      // (subagent recursion guard injects this in
+      // src/discord/subagent-thread-spawner.ts), the LLM physically cannot
+      // invoke the listed tools. Empty/undefined → field omitted from
+      // baseOptions so the existing 15+ agent fleet stays byte-identical
+      // (matches mutableSuffix / settingSources spread-conditional pattern
+      // above). Symmetric edit: resumeSession (below) MUST receive identical
+      // treatment — Rule 3.
+      ...(config.disallowedTools && config.disallowedTools.length > 0
+        ? { disallowedTools: [...config.disallowedTools] }
+        : {}),
     };
 
     // Phase 73 Plan 01 — initial drain establishes the session ID from disk,
@@ -649,6 +660,14 @@ export class SdkSessionAdapter implements SessionAdapter {
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // Phase 99 sub-scope N (2026-04-26) — symmetric mirror of createSession's
+      // disallowedTools wiring above. A resumed session MUST carry the same
+      // SDK deny-list as the original create call so a daemon restart cannot
+      // unlock the recursion tool on a previously-locked subagent. Rule 3
+      // symmetric-edits enforced.
+      ...(config.disallowedTools && config.disallowedTools.length > 0
+        ? { disallowedTools: [...config.disallowedTools] }
+        : {}),
     };
 
     // Phase 73 Plan 01 — persistent handle (no per-turn sdk.query spawn).

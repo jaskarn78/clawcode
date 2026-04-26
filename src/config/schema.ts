@@ -347,7 +347,10 @@ export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
  */
 export const threadsConfigSchema = z.object({
   idleTimeoutMinutes: z.number().int().min(1).default(1440),
-  maxThreadSessions: z.number().int().min(1).default(10),
+  // Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3 to cap
+  // blast-radius if Layer 1 disallowedTools is somehow bypassed. Operator
+  // can override per-agent in clawcode.yaml threads.maxThreadSessions.
+  maxThreadSessions: z.number().int().min(1).default(3),
 });
 
 /** Inferred threads config type. */
@@ -1192,7 +1195,9 @@ export const defaultsSchema = z.object({
   })),
   threads: threadsConfigSchema.default(() => ({
     idleTimeoutMinutes: 1440,
-    maxThreadSessions: 10,
+    // Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3.
+    // See threadsConfigSchema comment above for context.
+    maxThreadSessions: 3,
   })),
   perf: z
     .object({
@@ -1389,7 +1394,8 @@ export const configSchema = z.object({
     },
     threads: {
       idleTimeoutMinutes: 1440,
-      maxThreadSessions: 10,
+      // Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3.
+      maxThreadSessions: 3,
     },
     // Phase 69 — OpenAI-compatible endpoint defaults (OPENAI-01..07).
     openai: {

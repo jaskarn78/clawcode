@@ -32,11 +32,19 @@ export type ThreadConfig = {
 
 /**
  * Default thread configuration values.
- * 24h idle timeout, max 10 concurrent thread sessions per agent.
+ * 24h idle timeout, max 3 concurrent thread sessions per agent.
+ *
+ * Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3 to cap
+ * blast-radius if Layer 1 disallowedTools is somehow bypassed (e.g. SDK
+ * regression, manual config tampering). Operator can override per-agent
+ * in clawcode.yaml `threads.maxThreadSessions`. Real incident: a 5-deep
+ * Admin Clawdy subagent chain spawned by a single operator task — under
+ * the old default of 10, the chain could have grown twice as deep before
+ * the per-agent cap stopped it.
  */
 export const DEFAULT_THREAD_CONFIG: ThreadConfig = {
   idleTimeoutMinutes: 1440,
-  maxThreadSessions: 10,
+  maxThreadSessions: 3,
 } as const;
 
 /**

@@ -228,6 +228,13 @@ export async function buildSessionConfig(
       systemPrompt: systemPrompt.trim(),
       channels,
       contextSummary,
+      // Phase 99 sub-scope N (2026-04-26) — propagate disallowedTools through
+      // the bootstrap-needed path too. Spread-conditional matches the main
+      // return below so the field is OMITTED rather than explicitly undefined
+      // when not set (preserves byte-stable deep-equality regression pins).
+      ...(config.disallowedTools && config.disallowedTools.length > 0
+        ? { disallowedTools: config.disallowedTools }
+        : {}),
     };
   }
 
@@ -729,5 +736,15 @@ export async function buildSessionConfig(
     // deep-equality in regression tests (SA10 cascade).
     ...(config.settingSources ? { settingSources: config.settingSources } : {}),
     ...(config.gsd ? { gsd: config.gsd } : {}),
+    // Phase 99 sub-scope N (2026-04-26) — propagate disallowedTools through
+    // ResolvedAgentConfig → AgentSessionConfig so the SDK adapter receives
+    // the per-agent SDK deny-list. SubagentThreadSpawner injects this on
+    // subagent configs to physically block `mcp__clawcode__spawn_subagent_thread`.
+    // Spread-conditional pattern (matching settingSources/gsd above) keeps
+    // the field OMITTED rather than explicitly undefined when not set so the
+    // existing 15+ agent fleet stays byte-identical (SA10-style cascade).
+    ...(config.disallowedTools && config.disallowedTools.length > 0
+      ? { disallowedTools: config.disallowedTools }
+      : {}),
   };
 }

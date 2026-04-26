@@ -126,6 +126,18 @@ export type AgentSessionConfig = {
    * ResolvedAgentConfig.gsd verbatim.
    */
   readonly gsd?: { readonly projectDir: string };
+  /**
+   * Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set, the
+   * LLM physically cannot invoke any tool whose name matches an entry. Used
+   * for the subagent recursion guard: subagent sessions disallow
+   * `mcp__clawcode__spawn_subagent_thread` so they cannot chain further
+   * subagents (subagents inherit the parent's "delegate, don't execute"
+   * soul and would otherwise loop indefinitely). Forwarded verbatim into
+   * the SDK's `disallowedTools` option in both `createSession` and
+   * `resumeSession` (symmetric-edits Rule 3). Empty/undefined → omitted
+   * from baseOptions so the existing 15+ agent fleet is unaffected.
+   */
+  readonly disallowedTools?: readonly string[];
 };
 
 /**

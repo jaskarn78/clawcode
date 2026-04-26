@@ -102,6 +102,15 @@ export type SdkQueryOptions = {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Phase 59 -- native SDK abort support (sdk.d.ts:957 Options.abortController). */
   readonly abortController?: AbortController;
+  /**
+   * Phase 99 sub-scope N (2026-04-26) — SDK deny-list option. Mirrors
+   * @anthropic-ai/claude-agent-sdk@0.2.97 sdk.d.ts:50,1023,2709
+   * (`Options.disallowedTools?: string[]`). When set, the LLM physically
+   * cannot invoke any tool whose name matches an entry. session-adapter.ts
+   * forwards this from AgentSessionConfig.disallowedTools when present;
+   * absent for the existing fleet so no behavior change ships.
+   */
+  readonly disallowedTools?: readonly string[];
 };
 
 /**

@@ -76,6 +76,18 @@ export type ResolvedAgentConfig = {
    */
   readonly gsd?: { readonly projectDir: string };
   /**
+   * Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set, the
+   * LLM physically cannot invoke any tool whose name matches an entry. Used
+   * for the subagent recursion guard: SubagentThreadSpawner.spawnInThread
+   * injects `["mcp__clawcode__spawn_subagent_thread"]` on the subagent's
+   * config so subagents cannot chain further subagents (they inherit the
+   * parent's "delegate, don't execute" soul and would otherwise loop).
+   * session-config.ts propagates this verbatim into AgentSessionConfig and
+   * session-adapter.ts forwards it into the SDK's disallowedTools option.
+   * UNDEFINED for the existing 15+ agent fleet — no behavior change.
+   */
+  readonly disallowedTools?: readonly string[];
+  /**
    * Phase 90 MEM-01 — ALWAYS populated by loader.ts from
    * agent.memoryAutoLoad ?? defaults.memoryAutoLoad. Downstream
    * (session-config.ts MEMORY.md injection) reads unconditionally.

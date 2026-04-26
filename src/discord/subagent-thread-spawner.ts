@@ -352,6 +352,18 @@ export class SubagentThreadSpawner {
       : undefined;
 
     // 9. Build subagent config
+    //
+    // Phase 99 sub-scope N (2026-04-26) — recursion guard: subagents inherit
+    // the parent's soul which often instructs delegation ("when given a task,
+    // spawn a subagent"). Without a hard block at the SDK level, the
+    // subagent will ALSO call spawn_subagent_thread, recursing N levels
+    // deep before the operator notices (real incident: 5-deep nested Admin
+    // Clawdy chain). Strip the spawn tool at SDK level via disallowedTools
+    // so subagents physically cannot spawn further subagents. Operator can
+    // still spawn subagents from a real agent session (which does not carry
+    // this disallow). Tool name is `mcp__<server-name>__<tool-name>` per
+    // the SDK convention; server name is "clawcode" (src/mcp/server.ts:232)
+    // and tool name is "spawn_subagent_thread" (src/mcp/server.ts:334).
     const subagentConfig: ResolvedAgentConfig = {
       ...parentConfig,
       name: sessionName,
@@ -361,6 +373,7 @@ export class SubagentThreadSpawner {
       schedules: [],
       slashCommands: [],
       webhook,
+      disallowedTools: ["mcp__clawcode__spawn_subagent_thread"],
     };
 
     // 10. Start agent session
