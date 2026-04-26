@@ -536,6 +536,31 @@ Expected reply: `` Unknown agent: `nonexistent-agent`. ``
 - 8.5a still applies effort → check that the new code shipped: `ssh clawdy "grep -c 'restricted to #admin-clawdy' /opt/clawcode/dist/cli/index.js"` should be ≥ 2 (gsd guard + effort guard).
 - 8.5c rejects fin-acquisition → check that fin-acquisition is in clawcode.yaml on clawdy AND that admin-clawdy is correctly bound to the channel you're invoking from.
 
+### 8.5e — Hardening: hide `/clawcode-effort` outside `#admin-clawdy` in the slash menu (manual)
+
+**Why this is manual:** Discord requires a USER OAuth token to set per-channel command permissions. Bots cannot push this themselves (verified at `https://discord.com/developers/docs/interactions/application-commands#permissions`). The `default_member_permissions: "0"` we set in code already hides the command from every non-admin user; this step further hides it from admins (i.e., you) outside `#admin-clawdy`.
+
+**Steps:**
+
+1. Open Discord → your server → **Server Settings** → **Integrations**
+2. Find the **ClawCode** bot → click **Manage**
+3. Locate `/clawcode-effort` in the command list → click it
+4. Toggle **All channels** OFF
+5. Add channel override → select `#admin-clawdy` → toggle ON
+6. Save
+
+**Verification:**
+
+- In `#admin-clawdy`, type `/`. The slash menu shows `/clawcode-effort`. ✓
+- In any other channel (e.g., `#finmentum-client-acquisition`), type `/`. The slash menu does NOT show `/clawcode-effort`. ✓
+- Even attempting `/clawcode-effort level:high` from a non-admin channel by typing it manually: Discord blocks the submission client-side (the command isn't authorized in that channel).
+
+**Acceptance UAT-100-D-hardening (optional):**
+- Slash menu in non-admin channels does not list `/clawcode-effort`.
+- Slash menu in `#admin-clawdy` still lists `/clawcode-effort` with both options.
+
+**Why we ship 8.5e as optional:** the handler-level guard (Section 8.5a) already rejects invocations from non-admin channels with a clear restriction message, AND `default_member_permissions: "0"` already hides the command from anyone other than guild admins. UAT-100-D-hardening is the third defense layer — recommended for muscle memory ("this command literally cannot be invoked outside admin"), but the system is safe without it.
+
 ---
 
 ## Section 9 — Rollback procedure

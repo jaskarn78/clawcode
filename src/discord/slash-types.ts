@@ -86,6 +86,23 @@ export type SlashCommandDef = {
    * entirely on the presence of this field — no name-matching required.
    */
   readonly nativeBehavior?: "control-plane" | "prompt-channel";
+  /**
+   * Phase 100 follow-up — Discord `default_member_permissions` bitmask
+   * (passed verbatim to the REST registration body). Set `"0"` to hide
+   * the command from every non-admin user in the guild; only members
+   * with the `ADMINISTRATOR` role bit (or guild owner) see it in the
+   * slash menu. Combine with the handler-level channel guard at
+   * slash-commands.ts:1443 for defense in depth.
+   *
+   * Discord's per-channel command permissions (the "Integrations →
+   * Bot → /command → Channels" UI override) cannot be set by the bot
+   * itself — that endpoint requires a user OAuth token. Operators
+   * apply per-channel restrictions manually post-deploy (see
+   * SMOKE-TEST.md Section 8.5 hardening note).
+   *
+   * Spec: https://discord.com/developers/docs/interactions/application-commands#permissions
+   */
+  readonly defaultMemberPermissions?: string;
 };
 
 // Phase 87 CMD-04 — clawcode-compact + clawcode-usage REMOVED from
@@ -160,6 +177,13 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     name: "clawcode-effort",
     description: "Set reasoning effort level (admin-clawdy only)",
     claudeCommand: "__effort__{level}",
+    // Phase 100 follow-up — `"0"` hides the command from every non-admin
+    // user. Only the guild owner / admins see it. Even then, the handler
+    // at slash-commands.ts:1443 rejects invocation outside #admin-clawdy.
+    // Truly per-channel hiding (so even the owner doesn't see it outside
+    // #admin-clawdy) requires the operator to set channel overrides
+    // manually in Discord's Server Settings UI — bots can't push that.
+    defaultMemberPermissions: "0",
     options: [
       {
         name: "level",

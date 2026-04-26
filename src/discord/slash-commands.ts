@@ -1115,6 +1115,12 @@ export class SlashCommandHandler {
               }
             : {}),
         })),
+        // Phase 100 follow-up — forward defaultMemberPermissions when defined
+        // so Discord hides the command from non-admin users. Spread-only;
+        // commands without the field stay byte-identical to the prior payload.
+        ...((cmd as { defaultMemberPermissions?: string }).defaultMemberPermissions !== undefined
+          ? { default_member_permissions: (cmd as { defaultMemberPermissions?: string }).defaultMemberPermissions }
+          : {}),
       }));
 
       // Phase 87 CMD-07 — pre-flight cap assertion. Thrown BEFORE rest.put so
