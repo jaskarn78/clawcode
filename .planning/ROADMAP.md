@@ -415,3 +415,47 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Plans:** TBD (run /gsd:plan-phase 99 in v2.7 to break down)
 **Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery, expanded 2026-04-26 with sub-scopes E/F/G/H/I/J as more issues surfaced. None of these block production but all degrade UX or carry security/operational debt. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
+
+### Phase 100: GSD-via-Discord on Admin Clawdy (operator-self-serve dev workflow)
+
+**Goal:** Operator can drive a full GSD workflow (`/gsd:plan-phase`, `/gsd:execute-phase`, `/gsd:autonomous`, `/gsd:debug`, etc.) from the `#admin-clawdy` Discord channel, with long-running phases auto-routed into a subagent thread so the main channel stays free.
+
+**Trigger:** Operator wants to plan/execute new and existing projects from Discord without dropping into a local terminal — the entire GSD framework (discuss → plan → execute → verify) should be available wherever the operator already lives, which is Discord.
+
+**Pre-existing primitives we can reuse:**
+- `~/.claude/get-shit-done/` user-level skills (already installed at the OS level for jjagpal user — needs to be available to the `clawcode` system user too)
+- `spawn_subagent_thread` MCP tool (Phase 99-M auto-relay shipped 2026-04-26)
+- subagent-routing directive (Phase 99-K shipped 2026-04-26 — already tells agents to route >30s work into subthreads)
+- Subagent thread spawner with parent-completion auto-relay
+- Admin Clawdy agent already bound to `#admin-clawdy` channel + has bot identity + has SOUL/IDENTITY
+
+**Sub-scope candidates (refined during discuss-phase):**
+1. **Skills availability** — `/home/clawcode/.claude/get-shit-done/` symlink or copy from `/home/jjagpal/.claude/get-shit-done/` (or install into the clawcode user's skills path). Decide: shared vs. per-user copy.
+2. **Project workspace resolution** — GSD writes to `.planning/` in cwd. Admin Clawdy's current cwd is its own workspace. Need a way to point Admin Clawdy at a project repo (config field, runtime CLI, or per-project agent variant). For smallest-version: Admin Clawdy operates on a single configured `gsd.projectDir` (e.g. the ClawCode repo itself, or a fresh project repo on clawdy).
+3. **Slash command routing** — verify the SDK auto-recognizes `/gsd:*` slash commands from Discord message bodies; if not, add a thin ClawCode-side slash dispatcher that maps `/gsd:plan-phase 5` → Skill invocation.
+4. **Auto-thread for long workflows** — autonomous + execute-phase can run for hours and produce hundreds of tool calls. Per Phase 99-K directive, those MUST route into a subthread. Add a pre-flight that detects `/gsd:autonomous` or `/gsd:execute-phase` and auto-spawns a subagent thread before invoking.
+5. **Artifact relay** — when GSD creates `.planning/phases/<phase>/PLAN.md`, surface a Discord-friendly summary (filename + link to file in workspace) back to the main channel. Subthread is verbose; main channel gets the highlights.
+6. **Smoke test** — operator types `/gsd:autonomous` in `#admin-clawdy`, agent acknowledges + spawns subthread, workflow runs, completes, agent posts summary in main channel + thread URL.
+
+**Requirements:** REQ-100-01..REQ-100-10 (synthesized from CONTEXT.md decision lock-ins — slash dispatch, settingSources flow, auto-thread pre-spawn, gsd.projectDir, symlink delivery, artifact relay, agent-restart classification, sandbox bootstrap, channel guard, UAT smoke).
+
+**Plans:** 8/8 plans drafted (planning complete 2026-04-26)
+- [ ] 100-01-PLAN.md — Schema extensions: agent.settingSources + agent.gsd.projectDir + ResolvedAgentConfig propagation + loader resolver
+- [ ] 100-02-PLAN.md — Session-adapter wiring: replace hardcoded cwd + settingSources with config-driven values (createSession + resumeSession)
+- [ ] 100-03-PLAN.md — Differ classification: settingSources + gsd.projectDir as agent-restart (NON_RELOADABLE) fields
+- [ ] 100-04-PLAN.md — Slash dispatcher: /gsd-* inline handler with auto-thread pre-spawn for long-runners (12th application)
+- [ ] 100-05-PLAN.md — Phase 99-M relay extension: append artifact paths to parent's main-channel summary prompt
+- [ ] 100-06-PLAN.md — Install helper: clawcode gsd install CLI subcommand (symlinks + sandbox git init, local-only)
+- [ ] 100-07-PLAN.md — clawcode.yaml fixture: admin-clawdy agent block with 5 GSD slashCommands + settingSources + gsd.projectDir
+- [ ] 100-08-PLAN.md — Smoke-test runbook: operator-runnable deploy procedure + post-deploy UAT verification
+
+**Wave structure:** 5 waves
+- Wave 1 (parallel): 100-01 (schema foundation)
+- Wave 2 (parallel — both depend on 100-01): 100-02 (session-adapter) + 100-03 (differ classification)
+- Wave 3 (parallel — depend on 100-01/02): 100-04 (slash dispatcher) + 100-05 (relay extension)
+- Wave 4 (parallel — depend on 100-04 + 100-01): 100-06 (install CLI) + 100-07 (yaml fixture)
+- Wave 5 (sequential — depends on all): 100-08 (smoke-test runbook + UAT)
+
+**UI hint:** yes — operator types `/gsd-autonomous`, `/gsd-plan-phase`, `/gsd-execute-phase` in #admin-clawdy → ack message in main channel within 3s + thread URL; subagent works in `gsd:<cmd>:<target>` thread; on completion, parent posts main-channel summary including "Artifacts: .planning/phases/N-*/" line. Short-runners (`/gsd-debug`, `/gsd-quick`) reply inline.
+
+**Status:** Plans drafted 2026-04-26 — ready to execute. Zero new npm deps planned (reuses Claude Agent SDK 0.2.97 settingSources field + Phase 99-M relayCompletionToParent + node:fs/promises symlink primitives + Phase 22 config-watcher). Production deploy to clawdy host is operator-driven per 100-08 SMOKE-TEST.md runbook (autonomous=false on Plan 08).
