@@ -60,6 +60,9 @@ import { registerDreamCommand } from "./commands/dream.js";
 // /clawcode-probe-fs (single source of truth — Discord/CLI parity invariant).
 import { registerProbeFsCommand } from "./commands/probe-fs.js";
 import { registerFsStatusCommand } from "./commands/fs-status.js";
+// Phase 100 Plan 06 — operator-driven GSD install (symlinks + sandbox bootstrap).
+// Local-only; production deploy on clawdy is operator-run per Plan 08 runbook.
+import { registerGsdInstallCommand } from "./commands/gsd-install.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -198,6 +201,8 @@ registerDreamCommand(program);
 // Phase 96 Plan 05 — filesystem capability operator surfaces.
 registerProbeFsCommand(program);
 registerFsStatusCommand(program);
+// Phase 100 Plan 06 — `clawcode gsd install` operator-driven pre-flight.
+registerGsdInstallCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,
