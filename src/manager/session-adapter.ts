@@ -582,14 +582,25 @@ export class SdkSessionAdapter implements SessionAdapter {
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
+    // Phase 100 GSD-02 + GSD-04 (RESEARCH.md Architecture Pattern 5 —
+    // per-agent cwd plumbing): cwd and settingSources are now config-driven.
+    //   - cwd: config.gsd?.projectDir overrides config.workspace when the
+    //     agent has a gsd block (e.g. Admin Clawdy → /opt/clawcode-projects/sandbox).
+    //     The fleet (no gsd) keeps cwd === config.workspace as before.
+    //   - settingSources: config.settingSources overrides ["project"] when
+    //     set (e.g. Admin Clawdy → ["project","user"] to load
+    //     ~/.claude/commands/ + ~/.claude/skills/). The fleet (no
+    //     settingSources) keeps the ["project"] default.
+    // Symmetric edit pattern: resumeSession (below) MUST receive identical
+    // treatment — Rule 3 (RESEARCH.md Pitfall ordering pin).
     const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       model: resolveModelId(config.model),
       effort: config.effort,
-      cwd: config.workspace,
+      cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
       systemPrompt: buildSystemPromptOption(config.systemPrompt),
       permissionMode: "bypassPermissions",
-      settingSources: ["project"],
+      settingSources: config.settingSources ?? ["project"],
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
       ...(mcpServers ? { mcpServers } : {}),
@@ -621,14 +632,19 @@ export class SdkSessionAdapter implements SessionAdapter {
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
+    // Phase 100 GSD-02 + GSD-04 (RESEARCH.md Architecture Pattern 5 —
+    // per-agent cwd plumbing): SAME treatment as createSession. Reading cwd
+    // from config.gsd?.projectDir and settingSources from config.settingSources
+    // ensures a resumed session uses the SAME values the original was created
+    // with — no drift on resume. Rule 3 symmetric-edits enforced.
     const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       model: resolveModelId(config.model),
       effort: config.effort,
-      cwd: config.workspace,
+      cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
       systemPrompt: buildSystemPromptOption(config.systemPrompt),
       permissionMode: "bypassPermissions",
-      settingSources: ["project"],
+      settingSources: config.settingSources ?? ["project"],
       resume: sessionId,
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),

@@ -720,5 +720,14 @@ export async function buildSessionConfig(
     channels,
     contextSummary,
     mcpServers: config.mcpServers ?? [],
+    // Phase 100 GSD-02 / GSD-04 — propagate settingSources + gsd from
+    // ResolvedAgentConfig (Plan 01) into AgentSessionConfig so the SDK
+    // adapter (Plan 02) receives the per-agent values. The spread-conditional
+    // pattern (matching the existing mutableSuffix pattern above) keeps the
+    // AgentSessionConfig field OMITTED rather than explicitly `undefined`
+    // when the resolved config doesn't carry them — preserves byte-stable
+    // deep-equality in regression tests (SA10 cascade).
+    ...(config.settingSources ? { settingSources: config.settingSources } : {}),
+    ...(config.gsd ? { gsd: config.gsd } : {}),
   };
 }

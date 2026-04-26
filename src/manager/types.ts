@@ -109,6 +109,23 @@ export type AgentSessionConfig = {
      */
     readonly optional: boolean;
   }[];
+  /**
+   * Phase 100 GSD-02 — per-agent SDK settingSources passthrough. When omitted
+   * (existing fleet, all 15+ agents), session-adapter applies the
+   * ['project'] default at lines 592/631. When set (Admin Clawdy + future
+   * GSD-enabled agents), passes through verbatim. Mirrors
+   * ResolvedAgentConfig.settingSources but stays optional at this boundary
+   * so existing call sites that build AgentSessionConfig don't need updates
+   * until they choose to opt in. See RESEARCH.md Architecture Pattern 5.
+   */
+  readonly settingSources?: readonly ("project" | "user" | "local")[];
+  /**
+   * Phase 100 GSD-04 — per-agent gsd block. UNDEFINED when not set (existing
+   * fleet). When set, session-adapter uses gsd.projectDir as the SDK cwd
+   * instead of config.workspace at lines 588/627. Mirrors
+   * ResolvedAgentConfig.gsd verbatim.
+   */
+  readonly gsd?: { readonly projectDir: string };
 };
 
 /**
