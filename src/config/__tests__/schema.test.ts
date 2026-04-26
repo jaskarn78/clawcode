@@ -1912,20 +1912,35 @@ describe("Phase 100 — agent.settingSources + agent.gsd.projectDir", () => {
     expect(result.gsd?.projectDir).toBeUndefined();
   });
 
-  it("PR11: parse-regression — in-tree clawcode.yaml parses; all 10 agents have settingSources/gsd undefined (Wave 0 §22-fixture cascade pin)", () => {
+  it("PR11: parse-regression — in-tree clawcode.yaml parses; only admin-clawdy carries settingSources/gsd (Wave 0 §22 + Plan 07 lock-in)", () => {
     // Catch an accidental required-field cascade in the additive-optional
     // schema extension. v2.5/v2.6 migrated configs must parse unchanged.
+    //
+    // Plan 07 cascade: admin-clawdy is the SOLE carrier of settingSources +
+    // gsd in the dev fixture. Per CONTEXT.md decision lock-in, no production
+    // agent receives those fields. This pin guards both the additive-optional
+    // schema invariant (other agents stay implicit-default) AND the Plan 07
+    // lock-in (admin-clawdy is the only opt-in).
     const yamlPath = join(process.cwd(), "clawcode.yaml");
     const raw = readFileSync(yamlPath, "utf-8");
     const parsed = parseYaml(raw);
     const result = configSchema.safeParse(parsed);
     expect(result.success).toBe(true);
     if (result.success) {
-      // 10+ agents currently in clawcode.yaml — none declare the new fields.
+      // 10+ agents currently in clawcode.yaml.
       expect(result.data.agents.length).toBeGreaterThanOrEqual(10);
       for (const agent of result.data.agents) {
-        expect(agent.settingSources).toBeUndefined();
-        expect(agent.gsd).toBeUndefined();
+        if (agent.name === "admin-clawdy") {
+          // Plan 07 cascade — admin-clawdy carries the GSD opt-in fields.
+          expect(agent.settingSources).toEqual(["project", "user"]);
+          expect(agent.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+        } else {
+          // All other production agents stay implicit-default per CONTEXT.md
+          // lock-in — accidental cascade onto fin-* / personal / etc. would
+          // load ~/.claude/commands/ for the wrong agent set.
+          expect(agent.settingSources).toBeUndefined();
+          expect(agent.gsd).toBeUndefined();
+        }
       }
     }
   });

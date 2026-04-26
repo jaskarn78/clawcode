@@ -330,3 +330,80 @@ agents:
     channels:
       - "1480605887247814656"
     mcpServers: []
+
+  # Phase 100 — admin-clawdy: GSD-via-Discord operator self-serve agent.
+  # The production admin-clawdy lives on the clawdy host's
+  # /etc/clawcode/clawcode.yaml; this entry is the dev fixture that mirrors
+  # its production config so vitest can resolve it (Plan 100-04 dispatcher
+  # tests + Plan 100-07 parse tests). settingSources: [project, user] loads
+  # ~/.claude/commands/gsd/ (symlinked by `clawcode gsd install` per Plan
+  # 100-06). gsd.projectDir points at the sandbox project the install
+  # helper bootstraps. channels stays empty in dev — the production yaml on
+  # clawdy populates it with the real #admin-clawdy channel ID per Plan
+  # 100-08 runbook.
+  - name: admin-clawdy
+    model: sonnet
+    workspace: /tmp/admin-clawdy
+    channels: []
+    settingSources: [project, user]
+    gsd:
+      projectDir: /opt/clawcode-projects/sandbox
+    slashCommands:
+      - name: gsd-autonomous
+        description: Run all remaining phases autonomously
+        claudeCommand: "/gsd:autonomous {args}"
+        options:
+          - name: args
+            type: 3
+            description: "Optional flags (e.g. --from 100)"
+            required: false
+      - name: gsd-plan-phase
+        description: Create phase plan with verification loop
+        claudeCommand: "/gsd:plan-phase {phase}"
+        options:
+          - name: phase
+            type: 3
+            description: "Phase number + optional flags"
+            required: false
+      - name: gsd-execute-phase
+        description: Execute all plans in a phase
+        claudeCommand: "/gsd:execute-phase {phase}"
+        options:
+          - name: phase
+            type: 3
+            description: "Phase number + optional flags"
+            required: false
+      - name: gsd-debug
+        description: Systematic debugging with persistent state
+        claudeCommand: "/gsd:debug {issue}"
+        options:
+          - name: issue
+            type: 3
+            description: "Issue description"
+            required: true
+      - name: gsd-quick
+        description: Quick task with GSD guarantees
+        claudeCommand: "/gsd:quick {task}"
+        options:
+          - name: task
+            type: 3
+            description: "Task description"
+            required: true
+    soul: |
+      # Admin Clawdy — GSD operator surface
+
+      You drive ClawCode's own GSD workflow from Discord. Operators type
+      /gsd-* in #admin-clawdy; long-runners (autonomous, plan-phase,
+      execute-phase) auto-spawn a subagent thread (Plan 100-04) and you
+      summarize completion in main channel (Plan 100-05 relay extension).
+
+      Your project root is /opt/clawcode-projects/sandbox/. .planning/ work
+      happens there; commits are local-only (no git push, no gh CLI per
+      Phase 100 lock-in).
+
+      Stay terse. Quote Phase 100 plans verbatim when uncertain.
+    identity: |
+      Name: Admin Clawdy
+      Role: GSD operator surface for ClawCode itself
+      Model: sonnet
+      Vibe: Competent, dry, references Phase 100 plans by ID when useful.
