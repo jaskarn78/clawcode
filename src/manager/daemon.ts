@@ -3488,6 +3488,13 @@ export async function startDaemon(
         registryPath: THREAD_REGISTRY_PATH,
         discordClient: discordBridge.discordClient,
         log,
+        // Phase 99 sub-scope M (2026-04-26) — auto-relay subagent completion
+        // to parent agent. When wired, the spawner fetches the subagent's
+        // last reply on session-end and dispatches a synthetic turn to the
+        // parent ("your subagent finished, summarize for the user"). The
+        // parent's response posts in the main channel via the normal Discord
+        // pipeline, closing the loop without operator intervention.
+        turnDispatcher,
       })
     : null;
   if (subagentThreadSpawner) {
@@ -4780,8 +4787,13 @@ async function routeMethod(
         model,
         task,
       });
-      // Register session end callback for automatic cleanup (SATH-04)
+      // Register session end callback for automatic cleanup (SATH-04).
+      // Phase 99 sub-scope M (2026-04-26) — also auto-relay completion to
+      // parent agent BEFORE cleanup so the binding (parent agent + channel)
+      // is still readable. Relay is fire-and-forget (errors logged, never
+      // thrown) so cleanup always runs.
       manager.registerSessionEndCallback(result.sessionName, async () => {
+        await subagentThreadSpawner.relayCompletionToParent(result.threadId);
         await subagentThreadSpawner.cleanupSubagentThread(result.threadId);
       });
       return { ok: true, ...result };

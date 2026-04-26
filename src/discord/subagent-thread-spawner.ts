@@ -16,6 +16,9 @@ import {
 } from "./thread-registry.js";
 import { logger } from "../shared/logger.js";
 import { ManagerError } from "../shared/errors.js";
+// Phase 99 sub-scope M (2026-04-26) — auto-relay subagent completion to parent.
+import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
+import { makeRootOrigin } from "../manager/turn-origin.js";
 
 /**
  * Configuration for creating a SubagentThreadSpawner.
@@ -25,6 +28,15 @@ export type SubagentThreadSpawnerConfig = {
   readonly registryPath: string;
   readonly discordClient: Client;
   readonly log?: Logger;
+  /**
+   * Phase 99 sub-scope M (2026-04-26) — when set, on subagent session end the
+   * spawner fetches the subagent's last assistant message from the thread
+   * and dispatches a synthetic turn to the parent agent: "your subagent in
+   * <thread> finished, last reply was <text>, summarize for the user". Parent
+   * processes the turn, posts a brief summary to its main channel via the
+   * normal Discord webhook pipeline. Optional — when omitted, no auto-relay.
+   */
+  readonly turnDispatcher?: TurnDispatcher;
 };
 
 /**
@@ -36,12 +48,87 @@ export class SubagentThreadSpawner {
   private readonly registryPath: string;
   private readonly discordClient: Client;
   private readonly log: Logger;
+  private readonly turnDispatcher?: TurnDispatcher;
 
   constructor(config: SubagentThreadSpawnerConfig) {
     this.sessionManager = config.sessionManager;
     this.registryPath = config.registryPath;
     this.discordClient = config.discordClient;
     this.log = config.log ?? logger;
+    this.turnDispatcher = config.turnDispatcher;
+  }
+
+  /**
+   * Phase 99 sub-scope M (2026-04-26) — auto-relay a subagent's completion
+   * to its parent agent. Called from the session-end callback BEFORE the
+   * thread cleanup runs (so the binding is still readable).
+   *
+   * Flow:
+   *   1. Read binding for threadId (parent agent + parent channel).
+   *   2. Fetch the last 1-3 messages from the Discord thread.
+   *   3. Filter to messages from the subagent identity (webhook posts).
+   *   4. Build a relay prompt: "Your subagent in <thread> just finished.
+   *      Last reply: <text>. Briefly summarize for the user in main channel."
+   *   5. Dispatch a turn to the parent agent via TurnDispatcher with origin
+   *      kind="task" sourceId="subagent-completion:<threadId>".
+   *   6. The parent's turn runs through the normal Discord pipeline → reply
+   *      posts to the parent's bound channel via webhook.
+   *
+   * Failures are logged + swallowed (the cleanup must still run regardless).
+   * No-op when turnDispatcher is not wired or when the thread has no
+   * subagent messages worth relaying.
+   */
+  async relayCompletionToParent(threadId: string): Promise<void> {
+    if (!this.turnDispatcher) return;
+    try {
+      const registry = await readThreadRegistry(this.registryPath);
+      const binding = getBindingForThread(registry, threadId);
+      if (!binding) return;
+      const channel = await this.discordClient.channels.fetch(threadId);
+      if (!channel || !("messages" in channel)) return;
+      // Fetch last 10 messages (enough to find the subagent's most recent
+      // assistant reply, skipping the operator's follow-ups). Discord's
+      // `fetch` returns newest-first.
+      const fetched = await (channel as TextChannel).messages.fetch({
+        limit: 10,
+      });
+      // Subagent posts via webhook — its identity differs from the operator's.
+      // We pick the most recent message NOT from the operator. The first
+      // initial-prompt post + any subsequent subagent posts are eligible.
+      const messages = Array.from(fetched.values()); // newest first
+      const subagentMessage = messages.find(
+        (m) => m.author.bot && (m.webhookId !== null || m.author.bot),
+      );
+      if (!subagentMessage || !subagentMessage.content.trim()) return;
+      const lastReply = subagentMessage.content.trim();
+      // Truncate huge replies — the parent's prompt has a budget.
+      const trimmed =
+        lastReply.length > 1500 ? `${lastReply.slice(0, 1500)}…` : lastReply;
+      const threadName = (channel as TextChannel).name ?? threadId;
+      const relayPrompt =
+        `[SUBAGENT_COMPLETION] Your subagent in thread "${threadName}" just finished its work.\n\n` +
+        `**Their final response (last assistant message):**\n${trimmed}\n\n` +
+        `Briefly summarize the outcome for the user in this main channel (1-3 sentences max). ` +
+        `Acknowledge completion and link to the thread if helpful (thread ID: ${threadId}). ` +
+        `If the subagent's reply is too short or unclear to summarize, just acknowledge completion + link. ` +
+        `Do NOT call read_thread again — you already have the relevant content above. End your turn after posting the summary.`;
+      const origin = makeRootOrigin("task", `subagent-completion:${threadId}`);
+      await this.turnDispatcher.dispatch(origin, binding.agentName, relayPrompt);
+      this.log.info(
+        {
+          threadId,
+          parentAgent: binding.agentName,
+          subagentSession: binding.sessionName,
+          relayLen: trimmed.length,
+        },
+        "subagent completion relayed to parent",
+      );
+    } catch (err) {
+      this.log.warn(
+        { threadId, error: (err as Error).message },
+        "subagent completion relay failed (non-fatal — cleanup continues)",
+      );
+    }
   }
 
   /**
