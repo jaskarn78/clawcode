@@ -353,5 +353,55 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - Add SQL filter option: `WHERE turn_count > 0 OR summary_memory_id IS NOT NULL` to push the filtering server-side.
   - Test fixture: synthesize a "5 empty + 1 meaty" scenario and verify Phase 89 picks the meaty one.
 
+**Sub-scope E — Skills migration cross-host limitation (Phase 84 gap):**
+- Trigger: Post-cutover, the user asked whether `finmentum-crm` skill was migrated. Investigation found that 15 finmentum skills' SKILL.md files DID copy to ClawCode side at `/home/clawcode/.clawcode/agents/finmentum/skills/<name>/SKILL.md` but were NOT registered in the agent's `skills:` field in clawcode.yaml AND were not symlinked to the canonical scan path `/home/clawcode/.clawcode/skills/<name>/`. Phase 84's `clawcode migrate openclaw skills` reported zero results when run on clawdy because OpenClaw lives on a separate host (claude-bot, 100.71.14.96).
+- Recovery (manual, this session): scrubbed plaintext MySQL credentials from `finmentum-crm/SKILL.md`, symlinked all 15 skills from agent-workspace path to canonical scan path, added `skills:` field listing all 15 to fin-acquisition's agent block. Config-watcher auto-reloaded.
+- Scope:
+  - Extend `clawcode migrate openclaw skills` to support `--source <ssh-host>` for cross-host OpenClaw → ClawCode migration. Mirror Phase 91 `rsync over SSH` pattern.
+  - OR document Phase 84 as "single-host migration only" + define a manual recipe (essentially what we did): rsync skills, symlink to canonical path, edit yaml `skills:` field, restart agent. Recipe should live in `.planning/runbooks/skills-cross-host-migration.md`.
+  - Either way: the secret-scan must run cross-host (Phase 84 originally refused finmentum-crm BECAUSE it had plaintext MySQL creds — that gate must not be lost in the cross-host path).
+
+**Sub-scope F — `/clawcode-status` data wiring (Phase 93 incomplete implementation):**
+- Trigger: Operator ran `/clawcode-status` post-cutover. The 17-field embed (Phase 93 D-93-02-1) has SHAPE-parity with OpenClaw but most fields show `n/a` or `unknown` — the renderer hardcodes "n/a" for Fallbacks/Compactions/Tokens/Runner/Fast/Harness/Reasoning/Elevated/Queue and `data.X` field props are passed through as `undefined` for sessionId/lastActivityAt/effort/permissionMode.
+- Field-by-field recovery analysis (recoverable vs not):
+  - Recoverable from existing infra: Fallbacks (agent.fallbacks), Context % (Phase 53 zone tracker), Compactions (CompactionManager), Tokens (UsageTracker), Session ID + Last Activity (SessionHandle), Think (Phase 83 EffortStateStore), Reasoning (extended-thinking budget), Permissions (SDK setPermissionMode), Activation (turn trigger source), Queue depth (TurnDispatcher).
+  - May not have ClawCode analog: Fast, Elevated (OpenClaw-specific concepts — design decision: drop the fields OR repurpose for ClawCode equivalents).
+- Scope: extend the daemon's `/clawcode-status` IPC handler to thread per-agent telemetry into the renderer's data object. Add small API surface to existing managers (`CompactionManager.getCount(agent)`, `UsageTracker.getSessionTotals(agent)`, etc.). Update the renderer to drop hardcoded `n/a` and use the wired fields. Test coverage required (status renders into Discord embeds — operators see this constantly).
+
+**Sub-scope G — Plaintext credential rotation batch (security):**
+- Trigger: Multiple plaintext credentials surfaced during Phase 96/98 work. Operator deferred rotation to a Phase 99 batch.
+- Credentials known exposed (each at multiple disk locations + in agent contexts):
+  - Anthropic API key (`/home/jjagpal/.openclaw/openclaw.json` env block)
+  - OpenAI API key (same)
+  - Google API key (same)
+  - MiniMax API key (same)
+  - ElevenLabs API key (`openclaw.json` messages.tts.providers block)
+  - Discord bot token (`openclaw.json` channels.discord.token, ~`MTQ3MDE2MjYzMDY4NDcwNDg4MQ.GLLa1Z.*`)
+  - Discord webhook token for #finmentum-client-acquisition (`webhook ID 1490470938318344194`)
+  - MySQL password (`KME6fka2nuy@cmu@pmj`) — was in finmentum-crm/SKILL.md (now scrubbed) AND in OpenClaw session jsonl files (now translated into ClawCode's conversation_turns) AND likely in heartbeat/audit logs. Scrubbed from active SKILL.md as of 2026-04-26.
+  - SSH password (`686Shanghai`) — used inline in command-line invocations during Phase 96/98 work; now in shell history on multiple hosts.
+- Scope:
+  - Generate fresh credentials for each. Rotate in 1Password vault. Update env files / config refs. Restart affected services.
+  - Set up SSH key auth for jjagpal user across both hosts (claude-bot + clawdy) so passwords never touch the command line.
+  - Audit + redact translated session turns containing the old MySQL password (the conversation_turns table will need a one-shot SQL to redact occurrences in `content` columns).
+  - Document rotation runbook for future credential exposure events.
+
+**Sub-scope H — Cron schedule migration tooling (Phase 47/91 gap):**
+- Trigger: Operator asked whether OpenClaw cron jobs migrated to ClawCode after Phase 98 cutover. Investigation found ZERO of OpenClaw's 44 enabled cron jobs (34 for fin-acquisition: 11 client birthdays, birthday card prep, holiday gift reminder, ADV/Reg S-P compliance reviews, Schwab data sync, etc.) had transferred. Phase 91 sync only covered FILES, not schedules.
+- Recovery (manual, this session): wrote translation script that read `~/.openclaw/cron/jobs.json` (filtered to fin-acquisition + cron-kind + agentTurn-kind), shifted PT cron expressions +7h to UTC (PDT approximation), emitted ClawCode `scheduleEntrySchema` YAML, inserted into fin-acquisition's agent block. 30 of 34 migrated (4 `every`-kind interval schedules skipped). Disabled the 30 corresponding jobs on OpenClaw side to prevent duplicate firings.
+- Scope:
+  - Build first-class `clawcode migrate openclaw schedules` CLI subcommand (mirror of Phase 84 skills migration). Supports `--source <ssh-host>` for cross-host. Translates kind=cron AND kind=every. Writes via Phase 86 atomic-yaml-writer pattern.
+  - Extend `scheduleEntrySchema` with optional `tz` field so the scheduler can do per-job tz resolution instead of the `+7h UTC offset hack` we used (off by 1h during PST winter season; acceptable for birthdays but not for time-sensitive ops jobs).
+  - Add interval (`every`-kind) schedule support to `scheduleEntrySchema` (currently cron-only).
+  - Idempotent — running migration twice doesn't duplicate. Match by name+cron tuple.
+
+**Sub-scope I — Schedule prompts referencing OpenClaw-side paths/scripts:**
+- Trigger: 2 of the migrated schedules (`schwab-sdd-auto-click` + `schwab-data-sync`) reference `python3 /home/jjagpal/.openclaw/workspace-finmentum/scripts/sync_schwab_twr.py` — a Python script that lives on claude-bot, not clawdy. Phase 96 D-05/D-06 fileAccess allows reading, but the script's runtime deps + execution context don't exist on clawdy.
+- Scope (deferred decision):
+  - **Path 1 — copy scripts to clawdy** with deps: cron-job runtime needs Python venv on clawdy with the right packages. Replicate the script + venv. Update path references to clawdy-side.
+  - **Path 2 — invoke remote** (ssh from clawdy → claude-bot → run script): introduces dependency on claude-bot staying available + SSH access from the clawcode user. Risky.
+  - **Path 3 — port to clawcode-native MCP/tool**: rewrite the Schwab sync logic as a ClawCode skill or MCP server. Cleanest long-term.
+- Track which migrated schedules reference OpenClaw paths so they're not silently broken.
+
 **Plans:** TBD (run /gsd:plan-phase 99 in v2.7 to break down)
-**Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery. None of these block production but all degrade UX silently. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
+**Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery, expanded 2026-04-26 with sub-scopes E/F/G/H/I as more issues surfaced. None of these block production but all degrade UX or carry security/operational debt. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
