@@ -2753,8 +2753,12 @@ export async function startDaemon(
           const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
           return applyDreamResultPrim(agent, outcome, {
             applyAutoLinks: async () => ({ added: 0 }),
-            writeDreamLog: async (entry) =>
-              writeDreamLog({ agentName: agent, memoryRoot, entry }),
+            // Phase 99 dream hotfix (2026-04-26): pass writeDreamLog directly.
+            // dream-auto-apply calls deps.writeDreamLog({agentName, memoryRoot, entry}),
+            // not just entry — the previous wrapper signature `(entry) => …` caused
+            // the entry-shape to be the OUTER object so entry.timestamp was undefined.
+            writeDreamLog,
+            memoryRoot,
             now: () => new Date(),
             log,
           });
