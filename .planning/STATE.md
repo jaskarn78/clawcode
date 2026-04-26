@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 100-07-PLAN.md (parallel Wave 4 with Plan 06)
-last_updated: "2026-04-26T19:02:40.330Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 100-08-PLAN.md (smoke-test runbook + structural validation)
+last_updated: "2026-04-26T19:11:34.496Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 12
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 25
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -291,6 +291,8 @@ Recent decisions affecting current work:
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07: admin-clawdy block placed at END of agents list (after research) — coherent grouping; channels: [] in dev fixture (production yaml carries real ID per Plan 08 runbook); workspace: /tmp/admin-clawdy placeholder; gsd.projectDir byte-matches Plan 06 DEFAULTS.sandboxDir.
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07 [Rule 3 - Blocking deviation]: PR11 (schema.test.ts) updated to encode Plan 07 cascade — admin-clawdy is sole settingSources/gsd carrier; production agents stay implicit-default. Preserves additive-optional schema invariant + CONTEXT.md lock-in. Strictly better coverage than pre-Plan-07 PR11 (catches both directions of drift).
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07: 8 YML parse-regression tests cover SHAPE, not BEHAVIOR. Plan 04 dispatcher tests handle dispatch-time behavior; Plan 02 session-adapter tests handle SDK-passthrough behavior. YML1..YML8 are the structural pin between the two consumer-side tests.
+- [Phase 100]: [Phase 100]: Plan 100-08 — SMOKE-TEST.md (562 lines, 9 sections, 10 structural tests) is the canonical Phase 100 deploy + UAT runbook for transitioning to clawdy production. autonomous=false because Sections 6-8 require operator interaction in #admin-clawdy on production Discord.
+- [Phase 100]: [Phase 100]: Plan 100-08 — Established structural runbook test pattern at .planning/phases/<N>-*/_tests__/<doc>-doc.test.ts pinning markdown invariants. Repeatable for any future operator-runnable artifact (deploy/migration/smoke runbook). Vitest discovers .planning/__tests__/ via default include pattern (no config edit needed).
 
 ### v2.1 closing decisions (for reference)
 
@@ -423,9 +425,10 @@ Recent decisions affecting current work:
 | Phase 100 P04 | 9min | 2 tasks | 2 files |
 | Phase 100 P06 | 5min | 2 tasks | 3 files |
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P07 | 6min | 2 tasks | 3 files |
+| Phase 100 P08 | 5min | 1 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-26
-Stopped at: Completed 100-07-PLAN.md (parallel Wave 4 with Plan 06)
+Stopped at: Completed 100-08-PLAN.md (smoke-test runbook + structural validation)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

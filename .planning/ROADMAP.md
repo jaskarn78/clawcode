@@ -439,7 +439,7 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Requirements:** REQ-100-01..REQ-100-10 (synthesized from CONTEXT.md decision lock-ins — slash dispatch, settingSources flow, auto-thread pre-spawn, gsd.projectDir, symlink delivery, artifact relay, agent-restart classification, sandbox bootstrap, channel guard, UAT smoke).
 
-**Plans:** 7/8 plans executed
+**Plans:** 8/8 plans complete
 - [x] 100-01-PLAN.md — Schema extensions: agent.settingSources + agent.gsd.projectDir + ResolvedAgentConfig propagation + loader resolver
 - [x] 100-02-PLAN.md — Session-adapter wiring: replace hardcoded cwd + settingSources with config-driven values (createSession + resumeSession)
 - [x] 100-03-PLAN.md — Differ classification: settingSources + gsd.projectDir as agent-restart (NON_RELOADABLE) fields
@@ -447,7 +447,7 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 - [x] 100-05-PLAN.md — Phase 99-M relay extension: append artifact paths to parent's main-channel summary prompt
 - [x] 100-06-PLAN.md — Install helper: clawcode gsd install CLI subcommand (symlinks + sandbox git init, local-only)
 - [x] 100-07-PLAN.md — clawcode.yaml fixture: admin-clawdy agent block with 5 GSD slashCommands + settingSources + gsd.projectDir
-- [ ] 100-08-PLAN.md — Smoke-test runbook: operator-runnable deploy procedure + post-deploy UAT verification
+- [x] 100-08-PLAN.md — Smoke-test runbook: operator-runnable deploy procedure + post-deploy UAT verification
 
 **Wave structure:** 5 waves
 - Wave 1 (parallel): 100-01 (schema foundation)
