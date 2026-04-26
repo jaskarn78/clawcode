@@ -180,25 +180,50 @@ export async function copySkillDirectory(
   // 1. Ensure target parent exists.
   await copierSkillsFs.mkdir(dirname(targetDir), { recursive: true });
 
+  // Phase 99 sub-scope L (2026-04-26) — destructive self-overwrite guard.
+  // When `sourceDir === targetDir` (e.g., marketplace install where the
+  // catalog scan path equals the install target path because the skill
+  // is already in skillsTargetDir), the rm-then-cp pattern below destroys
+  // the source. Detect and short-circuit: if same realpath, skip rm + cp
+  // entirely and run the post-copy hash-witness directly over the existing
+  // tree. The transform step is also a no-op (we'd be rewriting the same
+  // file we're about to read).
+  let isSelfCopy = false;
+  try {
+    const srcReal = realpathSync(sourceDir);
+    const tgtReal = existsSync(targetDir) ? realpathSync(targetDir) : "";
+    if (srcReal && tgtReal && srcReal === tgtReal) {
+      isSelfCopy = true;
+    }
+  } catch {
+    // realpath errors fall through to normal flow
+  }
+
   // If a stale target exists from a prior failed run, clear it so
   // `cp` starts from a clean state. Defensive; `force: true` handles
   // individual file collisions but a stale file we no longer intend
   // to copy would survive otherwise.
-  if (existsSync(targetDir)) {
+  // SKIP when isSelfCopy — that would destroy the source.
+  if (!isSelfCopy && existsSync(targetDir)) {
     await copierSkillsFs.rm(targetDir, { recursive: true, force: true });
   }
 
   // 2. Bulk copy. `verbatimSymlinks: true` is LOAD-BEARING — without
   // it, the copier follows venv-style self-symlinks and recurses
   // infinitely.
-  await copierSkillsFs.cp(sourceDir, targetDir, {
-    recursive: true,
-    verbatimSymlinks: true,
-    preserveTimestamps: true,
-    errorOnExist: false,
-    force: true,
-    filter: defaultSkillsFilter,
-  });
+  // SKIP when isSelfCopy — cp(X, X) is a no-op at best, destructive at
+  // worst (Phase 99-L). The hash-witness step below verifies whatever's
+  // already at targetDir.
+  if (!isSelfCopy) {
+    await copierSkillsFs.cp(sourceDir, targetDir, {
+      recursive: true,
+      verbatimSymlinks: true,
+      preserveTimestamps: true,
+      errorOnExist: false,
+      force: true,
+      filter: defaultSkillsFilter,
+    });
+  }
 
   // 3. If a transform was supplied and target SKILL.md exists, apply it.
   let transformedSkillMd = false;
