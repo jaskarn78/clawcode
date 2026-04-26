@@ -100,6 +100,18 @@ export type SendRestartGreetingDeps = Readonly<{
   webhookManager: WebhookSender;
   conversationStore: ConversationReader;
   summarize: SummarizeFn;
+  /**
+   * Phase 99 D-fix (2026-04-25 evening): optional fast-path lookup for an
+   * existing session-summary memory entry (Phase 64 SessionSummarizer output,
+   * OR the Phase 99-D recovery summaries). When provided AND the chosen
+   * session has summaryMemoryId set, the resolved content is used directly
+   * — bypassing the Haiku summarize-from-raw-turns step that reliably
+   * times out (10s) on 60+ turn translated OpenClaw sessions.
+   *
+   * Returns the memory entry's content string if found, undefined otherwise.
+   * Wired by SessionManager.restartAgent → memoryStores.get(agent).getById.
+   */
+  getMemoryById?: (id: string) => string | undefined;
   now: () => number;
   log: Logger;
   /**
@@ -402,24 +414,41 @@ export async function sendRestartGreeting(
     return { kind: "skipped-dormant", lastActivityMs };
   }
 
-  // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
-  //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
-  //    explicitly delegates the timer to the caller). On timeout / SDK
-  //    error / abort / empty-string we stay silent — D-11 forbids a
-  //    fallback greeting.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), summaryTimeoutMs);
-  let summary: string;
-  try {
-    summary = await deps.summarize(
-      buildRestartGreetingPrompt(turns, config, restartKind),
-      { signal: controller.signal },
-    );
-  } catch {
-    return { kind: "skipped-empty-state" };
-  } finally {
-    clearTimeout(timer);
+  // Phase 99 D-fix (2026-04-25 evening): fast-path — if the chosen session
+  // already has a summary memory entry (summaryMemoryId set), reuse it
+  // verbatim and skip the Haiku call entirely. Translated OpenClaw sessions
+  // can have 60+ turns; re-summarizing reliably exceeds the 10s Haiku
+  // timeout (D-05) and falls through to skipped-empty-state. The existing
+  // summary IS the correct artifact — one source of truth for "what
+  // happened in this session" matches the design intent of summary_memory_id.
+  let summary: string | undefined;
+  if (lastSession.summaryMemoryId && deps.getMemoryById) {
+    const existing = deps.getMemoryById(lastSession.summaryMemoryId);
+    if (existing && existing.trim().length > 0) {
+      summary = existing;
+    }
   }
+
+  if (summary === undefined) {
+    // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
+    //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
+    //    explicitly delegates the timer to the caller). On timeout / SDK
+    //    error / abort / empty-string we stay silent — D-11 forbids a
+    //    fallback greeting.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), summaryTimeoutMs);
+    try {
+      summary = await deps.summarize(
+        buildRestartGreetingPrompt(turns, config, restartKind),
+        { signal: controller.signal },
+      );
+    } catch {
+      return { kind: "skipped-empty-state" };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   if (summary.trim().length === 0) {
     return { kind: "skipped-empty-state" };
   }

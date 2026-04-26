@@ -1381,11 +1381,26 @@ export class SessionManager {
       "[greeting] restartAgent: evaluating greeting guards",
     );
     if (webhookManager && convStore) {
+      // Phase 99 D-fix (2026-04-25 evening): wire fast-path lookup for
+      // existing summary memory entries so restart-greeting can skip the
+      // 10s Haiku call when summary_memory_id is already populated.
+      const memStoreForGreeting = this.memory.memoryStores.get(name);
+      const getMemoryById = memStoreForGreeting
+        ? (id: string) => {
+            try {
+              const entry = memStoreForGreeting.getById(id);
+              return entry?.content;
+            } catch {
+              return undefined;
+            }
+          }
+        : undefined;
       void sendRestartGreeting(
         {
           webhookManager,
           conversationStore: convStore,
           summarize: this.summarizeFn,
+          getMemoryById,
           now: () => Date.now(),
           log: this.log,
           coolDownState: this.greetCoolDownByAgent,
