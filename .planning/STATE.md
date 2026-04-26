@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 96-07 Tasks 1+2 + deploy-runbook; UAT-95 awaiting operator on clawdy
-last_updated: "2026-04-25T20:35:46.240Z"
-last_activity: 2026-04-25
+stopped_at: Completed 100-01-PLAN.md (RED + GREEN, 20 new tests, 22-fixture cascade fix)
+last_updated: "2026-04-26T18:17:32.612Z"
+last_activity: 2026-04-26
 progress:
-  total_phases: 10
+  total_phases: 12
   completed_phases: 3
-  total_plans: 17
-  completed_plans: 17
+  total_plans: 25
+  completed_plans: 18
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 96 — discord-routing-and-file-sharing-hygiene
+**Current focus:** Phase 100 — gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow
 
 ## Current Position
 
-Phase: 96 (discord-routing-and-file-sharing-hygiene) — EXECUTING
-Plan: 7 of 7
+Phase: 100 (gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow) — EXECUTING
+Plan: 2 of 8
 
 ## Performance Metrics
 
@@ -276,6 +276,9 @@ Recent decisions affecting current work:
 - [Phase 96-discord-routing-and-file-sharing-hygiene]: fs-probe heartbeat check shape = per-agent execute(ctx) (Phase 85 mcp-reconnect mirror, NOT plan example tick(deps))
 - [Phase 96-discord-routing-and-file-sharing-hygiene]: Reload dispatch = simpler heartbeat-tick fallback (RELOADABLE_FIELDS classification + 60s tick); watcher.ts NOT extended for v1
 - [Phase 96-discord-routing-and-file-sharing-hygiene]: D-01 boot probe APPROXIMATED via TWO-STEP coverage (deploy-runbook Section 4 mandatory fleet probe + first 60s heartbeat tick); no separate session-start probe code path
+- [Phase 100-01]: Apply .min(1) on settingSources array (RESEARCH.md Pitfall 3 — empty array silently disables ALL filesystem settings)
+- [Phase 100-01]: settingSources at ResolvedAgentConfig is ALWAYS populated (defaults to ['project']); gsd is conditional (undefined-when-unset)
+- [Phase 100-01]: Cascade fix: 22 test fixtures got settingSources line after memoryCueEmoji (matches Phase 89/90/96 22-fixture pattern)
 
 ### v2.1 closing decisions (for reference)
 
@@ -401,9 +404,10 @@ Recent decisions affecting current work:
 | Phase 96 P04 | 23min | 3 tasks | 9 files |
 | Phase 96 P05 | 14min | 3 tasks | 12 files |
 | Phase 96-discord-routing-and-file-sharing-hygiene P07 | 9 min | 3 tasks | 6 files |
+| Phase 100-01 P01 | 14min | 2 tasks | 27 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-25
-Stopped at: Completed 96-07 Tasks 1+2 + deploy-runbook; UAT-95 awaiting operator on clawdy
+Last activity: 2026-04-26
+Stopped at: Completed 100-01-PLAN.md (RED + GREEN, 20 new tests, 22-fixture cascade fix)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
