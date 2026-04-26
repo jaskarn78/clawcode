@@ -1454,7 +1454,7 @@ export class SlashCommandHandler {
       // effort on a high-volume agent (fin-acquisition's 30 cron schedules)
       // is expensive. Concentrating the dial in one channel makes accidental
       // bumps from miscellaneous channels impossible.
-      if (agentName !== "admin-clawdy") {
+      if (agentName !== "Admin Clawdy") {
         try {
           await interaction.editReply(
             "`/clawcode-effort` is restricted to #admin-clawdy. Invoke from the admin channel and use `agent:` to target other agents.",
@@ -1977,7 +1977,7 @@ export class SlashCommandHandler {
     // Step 2 — admin-clawdy channel guard.
     const channelId = interaction.channelId;
     const agentName = getAgentForChannel(this.routingTable, channelId);
-    if (agentName !== "admin-clawdy") {
+    if (agentName !== "Admin Clawdy") {
       try {
         await interaction.editReply(
           "/gsd-* commands are restricted to #admin-clawdy.",

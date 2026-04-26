@@ -131,7 +131,7 @@ function makeAdminClawdy(
   slashCommands: readonly SlashCommandDef[] = makeGsdSlashCommands(),
 ): ResolvedAgentConfig {
   return {
-    name: "admin-clawdy",
+    name: "Admin Clawdy",
     workspace: "/tmp/admin-clawdy",
     memoryPath: "/tmp/admin-clawdy",
     channels: [ADMIN_CLAWDY_CHANNEL],
@@ -184,7 +184,7 @@ function makeMockSpawner(opts?: {
       opts?.resolveWith ?? {
         threadId: "thread-123",
         sessionName: "admin-clawdy-sub-abc123",
-        parentAgent: "admin-clawdy",
+        parentAgent: "Admin Clawdy",
         channelId: ADMIN_CLAWDY_CHANNEL,
       },
     );
@@ -223,7 +223,7 @@ function makeHandler(opts: {
     opts.routingTable ??
     makeRoutingTable({
       channelToAgent: {
-        [ADMIN_CLAWDY_CHANNEL]: "admin-clawdy",
+        [ADMIN_CLAWDY_CHANNEL]: "Admin Clawdy",
         [NON_ADMIN_CHANNEL]: "fin-acquisition",
       },
     });
@@ -401,9 +401,9 @@ describe("Phase 100 — /gsd-* slash dispatcher", () => {
     const reply = editReply.mock.calls[0]![0] as string;
     expect(typeof reply).toBe("string");
     const replyText = reply.toLowerCase();
-    // Either "restricted" or "admin-clawdy" must appear in the rejection text
+    // Either "restricted" or "Admin Clawdy" must appear in the rejection text
     expect(
-      replyText.includes("restricted") || replyText.includes("admin-clawdy"),
+      replyText.includes("restricted") || replyText.includes("Admin Clawdy"),
     ).toBe(true);
   });
 
@@ -421,7 +421,7 @@ describe("Phase 100 — /gsd-* slash dispatcher", () => {
     const spawnArg = spawner.spawnInThread.mock.calls[0]![0] as {
       parentAgentName: string;
     };
-    expect(spawnArg.parentAgentName).toBe("admin-clawdy");
+    expect(spawnArg.parentAgentName).toBe("Admin Clawdy");
   });
 
   it("GSD-9: spawnInThread called with task = canonical /gsd:autonomous --from 100 string", async () => {

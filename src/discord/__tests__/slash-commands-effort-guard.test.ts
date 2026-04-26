@@ -138,11 +138,11 @@ const FIN_CHANNEL = "fin-channel-id";
 
 const routingTable: RoutingTable = {
   channelToAgent: new Map([
-    [ADMIN_CHANNEL, "admin-clawdy"],
+    [ADMIN_CHANNEL, "Admin Clawdy"],
     [FIN_CHANNEL, "fin-acquisition"],
   ]),
   agentToChannels: new Map([
-    ["admin-clawdy", [ADMIN_CHANNEL]],
+    ["Admin Clawdy", [ADMIN_CHANNEL]],
     ["fin-acquisition", [FIN_CHANNEL]],
   ]),
 };
@@ -153,11 +153,11 @@ describe("Phase 100 follow-up — /clawcode-effort admin-clawdy guard", () => {
 
   beforeEach(() => {
     stub = makeStubSessionManager({
-      knownAgents: ["admin-clawdy", "fin-acquisition"],
+      knownAgents: ["Admin Clawdy", "fin-acquisition"],
     });
     handler = makeHandler({
       routingTable,
-      resolvedAgents: [makeAgent("admin-clawdy"), makeAgent("fin-acquisition")],
+      resolvedAgents: [makeAgent("Admin Clawdy"), makeAgent("fin-acquisition")],
       sessionManager: stub.sessionManager,
     });
   });
@@ -186,7 +186,7 @@ describe("Phase 100 follow-up — /clawcode-effort admin-clawdy guard", () => {
       handleInteraction: (i: unknown) => Promise<void>;
     }).handleInteraction(interaction);
     expect(stub.setEffortForAgent).toHaveBeenCalledTimes(1);
-    expect(stub.setEffortForAgent).toHaveBeenCalledWith("admin-clawdy", "high");
+    expect(stub.setEffortForAgent).toHaveBeenCalledWith("Admin Clawdy", "high");
   });
 
   it("EG3: #admin-clawdy with agent: fin-acquisition → applies to fin-acquisition", async () => {
