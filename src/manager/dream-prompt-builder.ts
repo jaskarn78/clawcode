@@ -85,14 +85,26 @@ function estimateTokens(text: string): number {
 function buildSystemPrompt(agentName: string): string {
   return `You are ${agentName}'s reflection daemon. Your job is to read recent memory chunks, the core MEMORY.md, recent conversation summaries, and the existing wikilink graph, then emit a structured reflection.
 
-Output JSON ONLY (no prose). Schema:
-{newWikilinks, promotionCandidates, themedReflection, suggestedConsolidations}
+CRITICAL OUTPUT RULES:
+1. Your response MUST be valid JSON, parseable by JSON.parse() with no preprocessing.
+2. The FIRST character MUST be '{' (no narrative preamble like "Picking up...", "Here's the reflection...", or "Sure!").
+3. The LAST character MUST be '}' (no trailing commentary, no closing remarks).
+4. NO markdown code fences (no \`\`\`json wrapper).
+5. NO explanation text before or after the JSON object.
+
+Required JSON schema (all 4 fields mandatory; use empty arrays/strings if no content):
+{
+  "newWikilinks": [{"from": "memory/path.md", "to": "memory/other.md", "rationale": "..."}],
+  "promotionCandidates": [{"chunkId": "...", "currentPath": "memory/...", "rationale": "...", "priorityScore": 0-100}],
+  "themedReflection": "1-3 paragraph narrative summary of recent activity",
+  "suggestedConsolidations": [{"sources": ["memory/A.md", "memory/B.md"], "newPath": "memory/consolidations/X.md", "rationale": "..."}]
+}
 
 Focus on:
 - Connections that are NEW (not already in graph-edges.json)
 - Chunks referenced 3+ times in recent memory but NOT in MEMORY.md (promotion candidates)
 - Themes spanning multiple recent chunks (consolidation candidates)
-- 1-3 paragraph narrative on what happened recently`;
+- 1-3 paragraph narrative on what happened recently (placed inside the themedReflection JSON string)`;
 }
 
 /**
