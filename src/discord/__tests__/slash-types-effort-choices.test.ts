@@ -56,7 +56,8 @@ describe("Phase 83 UI-01 — clawcode-effort option carries choices", () => {
       (c) => c.name === "clawcode-effort",
     );
     expect(effortCmd).toBeDefined();
-    expect(effortCmd!.options).toHaveLength(1);
+    // Phase 100 follow-up — added optional `agent` option (length 1 → 2).
+    expect(effortCmd!.options).toHaveLength(2);
     const levelOpt = effortCmd!.options[0];
     expect(levelOpt.name).toBe("level");
     expect(levelOpt.type).toBe(3); // STRING
@@ -68,11 +69,24 @@ describe("Phase 83 UI-01 — clawcode-effort option carries choices", () => {
       expect(levelOpt.choices![i].name).toBe(EFFORT_CHOICES[i].name);
       expect(levelOpt.choices![i].value).toBe(EFFORT_CHOICES[i].value);
     }
+    // Phase 100 follow-up — second option is the optional free-text `agent`.
+    const agentOpt = effortCmd!.options[1];
+    expect(agentOpt.name).toBe("agent");
+    expect(agentOpt.type).toBe(3); // STRING
+    expect(agentOpt.required).toBe(false);
+    expect(agentOpt.choices).toBeUndefined();
   });
 
-  it("no OTHER default command has a choices field (scoped change)", () => {
+  it("no OTHER default command (and no OTHER option of clawcode-effort) has a choices field (scoped change)", () => {
     for (const cmd of DEFAULT_SLASH_COMMANDS) {
-      if (cmd.name === "clawcode-effort") continue;
+      if (cmd.name === "clawcode-effort") {
+        // Phase 100 follow-up — only options[0] (level) carries choices;
+        // options[1] (agent) is free-text by design.
+        for (let i = 1; i < cmd.options.length; i++) {
+          expect(cmd.options[i].choices).toBeUndefined();
+        }
+        continue;
+      }
       for (const opt of cmd.options) {
         expect(opt.choices).toBeUndefined();
       }

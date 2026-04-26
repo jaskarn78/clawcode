@@ -1440,7 +1440,22 @@ export class SlashCommandHandler {
 
     // Handle /effort directly — no need to route through the agent.
     // Phase 83 EFFORT-04 — validates against the full v2.2 level set.
+    // Phase 100 follow-up — restricted to #admin-clawdy + optional agent target.
     if (commandName === "clawcode-effort") {
+      // Channel guard — mirrors the /gsd-* admin-clawdy guard at
+      // handleGsdLongRunner (slash-commands.ts:1942). Effort changes are
+      // privileged: xhigh/max levels add real per-turn cost, and runaway
+      // effort on a high-volume agent (fin-acquisition's 30 cron schedules)
+      // is expensive. Concentrating the dial in one channel makes accidental
+      // bumps from miscellaneous channels impossible.
+      if (agentName !== "admin-clawdy") {
+        try {
+          await interaction.editReply(
+            "`/clawcode-effort` is restricted to #admin-clawdy. Invoke from the admin channel and use `agent:` to target other agents.",
+          );
+        } catch { /* expired */ }
+        return;
+      }
       const level = options.get("level");
       const validLevels = ["low", "medium", "high", "xhigh", "max", "auto", "off"];
       if (typeof level !== "string" || !validLevels.includes(level)) {
@@ -1449,12 +1464,28 @@ export class SlashCommandHandler {
         } catch { /* expired */ }
         return;
       }
+      // Phase 100 follow-up — optional `agent:` lets the operator target any
+      // configured agent from #admin-clawdy. Default: the channel-bound agent
+      // (admin-clawdy itself, given the guard above passed).
+      const rawAgent = options.get("agent");
+      let resolvedTarget: string;
+      if (typeof rawAgent === "string" && rawAgent.length > 0) {
+        if (!this.sessionManager.getAgentConfig(rawAgent)) {
+          try {
+            await interaction.editReply(`Unknown agent: \`${rawAgent}\`.`);
+          } catch { /* expired */ }
+          return;
+        }
+        resolvedTarget = rawAgent;
+      } else {
+        resolvedTarget = agentName;
+      }
       try {
         this.sessionManager.setEffortForAgent(
-          agentName,
+          resolvedTarget,
           level as EffortLevel,
         );
-        await interaction.editReply(`Effort set to **${level}** for ${agentName}`);
+        await interaction.editReply(`Effort set to **${level}** for ${resolvedTarget}`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         await interaction.editReply(`Failed to set effort: ${msg}`);

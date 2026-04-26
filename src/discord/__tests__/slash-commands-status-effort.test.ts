@@ -115,7 +115,10 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
     const payload = putArgs[1];
     const effortCmd = payload.body.find((c) => c.name === "clawcode-effort");
     expect(effortCmd).toBeDefined();
-    expect(effortCmd!.options).toHaveLength(1);
+    // Phase 100 follow-up — clawcode-effort now carries 2 options:
+    //   [0] level   (required, dropdown of 7 EFFORT_CHOICES)
+    //   [1] agent   (optional, free-text — target agent for #admin-clawdy ops)
+    expect(effortCmd!.options).toHaveLength(2);
     const levelOpt = effortCmd!.options[0];
     expect(levelOpt.name).toBe("level");
     expect(levelOpt.choices).toBeDefined();
@@ -131,6 +134,10 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
       "auto",
       "off",
     ]);
+    const agentOpt = effortCmd!.options[1] as { name: string; required?: boolean; choices?: unknown };
+    expect(agentOpt.name).toBe("agent");
+    expect(agentOpt.required).toBe(false);
+    expect(agentOpt.choices).toBeUndefined();
   });
 
   it("does NOT add a `choices` field to options that don't have one (back-compat)", async () => {

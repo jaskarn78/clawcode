@@ -466,6 +466,78 @@ sleep 5
 
 ---
 
+## Section 8.5 — UAT-100-D — `/clawcode-effort` admin-clawdy guard (Phase 100 follow-up)
+
+**Goal:** confirm `/clawcode-effort` is restricted to `#admin-clawdy` AND that the optional `agent:` option correctly targets any configured agent from there.
+
+### 8.5a — Negative case: invoke from a non-admin channel
+
+In any non-admin channel bound to another agent (e.g., `#finmentum-client-acquisition`), type:
+
+```
+/clawcode-effort level:high
+```
+
+Expected reply: `` `/clawcode-effort` is restricted to #admin-clawdy. Invoke from the admin channel and use `agent:` to target other agents. ``
+
+The targeted agent's effort MUST NOT change. Verify:
+
+```bash
+# In admin-clawdy after the negative test:
+/clawcode-status
+# expected: fin-acquisition's "Think:" line is unchanged from its pre-test value
+```
+
+### 8.5b — Positive case (default target): self-target from admin-clawdy
+
+In `#admin-clawdy`, type:
+
+```
+/clawcode-effort level:medium
+```
+
+Expected reply: `Effort set to **medium** for admin-clawdy`
+
+### 8.5c — Positive case (cross-agent target): bump fin-acquisition from admin-clawdy
+
+In `#admin-clawdy`, type:
+
+```
+/clawcode-effort level:high agent:fin-acquisition
+```
+
+Expected reply: `Effort set to **high** for fin-acquisition`
+
+Verify with `/clawcode-status` in `#finmentum-client-acquisition`:
+
+```
+🤖 ... · ⚙️ Think: high
+```
+
+### 8.5d — Negative case: unknown agent name
+
+In `#admin-clawdy`:
+
+```
+/clawcode-effort level:low agent:nonexistent-agent
+```
+
+Expected reply: `` Unknown agent: `nonexistent-agent`. ``
+
+`setEffortForAgent` MUST NOT be called.
+
+**Acceptance UAT-100-D:**
+- 8.5a: invocation from non-admin channel → restriction message; no effort change.
+- 8.5b: invocation from `#admin-clawdy` without `agent:` → applies to admin-clawdy.
+- 8.5c: invocation from `#admin-clawdy` with `agent:fin-acquisition` → applies to fin-acquisition (verify via `/clawcode-status` in fin's bound channel).
+- 8.5d: unknown agent name → clear error reply, no effort change.
+
+**Failure mitigation:**
+- 8.5a still applies effort → check that the new code shipped: `ssh clawdy "grep -c 'restricted to #admin-clawdy' /opt/clawcode/dist/cli/index.js"` should be ≥ 2 (gsd guard + effort guard).
+- 8.5c rejects fin-acquisition → check that fin-acquisition is in clawcode.yaml on clawdy AND that admin-clawdy is correctly bound to the channel you're invoking from.
+
+---
+
 ## Section 9 — Rollback procedure
 
 **Trigger:** any UAT section (6, 7, or 8) fails AND debugging via the per-section "Failure mitigation" lists doesn't resolve it.
@@ -529,6 +601,7 @@ Phase 100 ships when ALL of these are checked:
 - [ ] Section 6 UAT-100-A: short-runner inline reply works (no thread spawn for `/gsd-debug`)
 - [ ] Section 7 UAT-100-B: long-runner subthread spawn works for `/gsd-plan-phase 100` (thread `gsd:plan:100` + main-channel summary with `Artifacts written:` line)
 - [ ] Section 8 UAT-100-C: settingSources NON_RELOADABLE behavior verified (log fires; per-restart effect confirmed; revert restores)
+- [ ] Section 8.5 UAT-100-D: `/clawcode-effort` admin-clawdy guard + agent target option works (negative non-admin reject, default self-target, cross-agent target, unknown-agent reject)
 - [ ] Section 9 rollback procedure confirmed (do NOT actually run unless smoke tests fail)
 
 On sign-off:

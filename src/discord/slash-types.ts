@@ -158,7 +158,7 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     name: "clawcode-effort",
-    description: "Set reasoning effort level",
+    description: "Set reasoning effort level (admin-clawdy only)",
     claudeCommand: "__effort__{level}",
     options: [
       {
@@ -169,6 +169,19 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
         // Phase 83 UI-01 — forces Discord to render a 7-item dropdown instead
         // of a free-text input. No invalid level can be typed.
         choices: EFFORT_CHOICES,
+      },
+      // Phase 100 follow-up — optional target agent. When provided, applies
+      // the effort to that agent (validated against sessionManager.getAgentConfig).
+      // When omitted, applies to the channel-bound agent — which under the
+      // admin-clawdy channel guard at slash-commands.ts:1443 is admin-clawdy
+      // itself. Free-text by design: the choices list would have to enumerate
+      // every configured agent statically and stay in sync via codegen, which
+      // is heavier than just typing the name.
+      {
+        name: "agent",
+        type: 3,
+        description: "Target agent name (default: admin-clawdy)",
+        required: false,
       },
     ],
   },

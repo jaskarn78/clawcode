@@ -97,9 +97,13 @@ describe("Phase 100 — SMOKE-TEST.md runbook structure", () => {
     expect(content).toMatch(/clawdy|clawcode\.service|\/opt\/clawcode/);
   });
 
-  it("SMK10 — runbook size is reasonable (200-600 lines)", () => {
+  it("SMK10 — runbook size is reasonable (200-750 lines)", () => {
+    // Cap raised from 600 → 750 with Section 8.5 (UAT-100-D — admin-clawdy
+    // effort guard) added during the Phase 100 follow-up. Each new UAT
+    // section adds ~70 lines (3-4 step blocks + acceptance + failure mitigation).
+    // Recapping: budget for ~3 more UAT polish sections before re-thinking.
     const lines = content.split("\n").length;
     expect(lines).toBeGreaterThanOrEqual(200);
-    expect(lines).toBeLessThanOrEqual(600);
+    expect(lines).toBeLessThanOrEqual(750);
   });
 });

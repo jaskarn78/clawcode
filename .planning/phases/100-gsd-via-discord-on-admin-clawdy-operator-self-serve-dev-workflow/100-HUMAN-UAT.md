@@ -32,12 +32,16 @@ result: [pending]
 expected: Run `sudo -u clawcode clawcode gsd install` on clawdy. Both symlinks resolve correctly: `~clawcode/.claude/get-shit-done/` → `/home/jjagpal/.claude/get-shit-done/` and `~clawcode/.claude/commands/gsd/` → `/home/jjagpal/.claude/commands/gsd/`. Sandbox project at `/opt/clawcode-projects/sandbox/` exists with `.git/` directory and an initial empty commit. Re-running the command is idempotent (no destructive deltas).
 result: [pending]
 
+### 6. UAT-100-D — `/clawcode-effort` admin-clawdy guard + agent option
+expected: From a non-admin channel (e.g., `#finmentum-client-acquisition`), `/clawcode-effort level:high` replies with the restriction message and does NOT change effort. From `#admin-clawdy`, `/clawcode-effort level:medium` applies to admin-clawdy. From `#admin-clawdy`, `/clawcode-effort level:high agent:fin-acquisition` applies to fin-acquisition (verify via `/clawcode-status` in fin's channel). Unknown agent name → clear error reply, no effort change.
+result: [pending]
+
 ## Summary
 
-total: 5
+total: 6
 passed: 0
 issues: 0
-pending: 5
+pending: 6
 skipped: 0
 blocked: 0
 
