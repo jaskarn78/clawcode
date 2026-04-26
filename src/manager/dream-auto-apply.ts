@@ -88,8 +88,12 @@ export async function applyDreamResult(
 
   // Build the entry that flows into the dream log regardless of outcome
   // path (success or failed-application).
+  // Phase 99 dream hotfix (2026-04-26): writer expects Date object (calls
+  // .toISOString()). deps.now() returns epoch ms (number). Wrap in Date.
+  const nowResult = deps.now();
+  const timestamp = nowResult instanceof Date ? nowResult : new Date(nowResult);
   const entry = {
-    timestamp: deps.now(),
+    timestamp,
     idleMinutes: 0, // caller (cron tick) supplies actual; primitive doesn't recompute
     model: outcome.model,
     result: outcome.result,
