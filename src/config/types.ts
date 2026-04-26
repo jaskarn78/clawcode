@@ -130,6 +130,14 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "defaults.fileAccess",
   "agents.*.outputDir",
   "defaults.outputDir",
+  // Phase 100 GSD-07 — settingSources + gsd.projectDir DELIBERATELY EXCLUDED
+  // from RELOADABLE_FIELDS. See NON_RELOADABLE_FIELDS below + Plan 100-02
+  // session-adapter wiring for rationale: both fields are SDK session-boot
+  // baseOptions (passed to sdk.query at session start, NOT re-read per turn),
+  // so a runtime YAML edit cannot retroactively change a live SDK session.
+  // Operators MUST run `clawcode restart admin-clawdy` for an edit to take
+  // effect. 1st application of an agent-restart classification in Phase 100
+  // (vs. the 11 prior reloadable classifications in 83/86/89/90/94/95/96).
 ]);
 
 /**
@@ -149,6 +157,27 @@ export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // RELOADABLE_FIELDS, so this entry is documentation-of-intent; the
   // differ tests in differ.test.ts assert memoryPath ends up reloadable:false.
   "agents.*.memoryPath",
+  // Phase 100 GSD-07 — settingSources + gsd.projectDir are SDK session-boot
+  // baseOptions (cwd + settingSources at src/manager/session-adapter.ts:585-636
+  // — see Plan 100-02). They are NOT re-read per turn. A clawcode.yaml edit
+  // takes effect ONLY on the NEXT agent restart (`clawcode restart <name>`).
+  // The classifier in differ.ts:144-149 already falls through to false for
+  // unclassified paths; the explicit entries below match the Phase 75
+  // SHARED-01 memoryPath documentation-of-intent pattern (line above).
+  // Architectural rationale (RESEARCH.md Architecture Pattern 5): cwd is
+  // captured into baseOptions when the SDK builds its query handle; mutating
+  // the YAML after that point cannot reach the active session. Same for
+  // settingSources, which controls which skills/commands/CLAUDE.md the SDK
+  // scans at session start. 1st application of an agent-restart classification
+  // in Phase 100 — the 11 prior phases (83/86/89/90/94/95/96) all classified
+  // their additive fields as RELOADABLE. Operators wanting these to take
+  // effect run: clawcode restart admin-clawdy
+  "agents.*.settingSources",
+  "defaults.settingSources",
+  "agents.*.gsd",
+  "agents.*.gsd.projectDir",
+  "defaults.gsd",
+  "defaults.gsd.projectDir",
   "defaults.model",
   "defaults.basePath",
 ]);
