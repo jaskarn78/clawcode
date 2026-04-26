@@ -228,9 +228,28 @@ export async function runDreamPass(
       maxOutputTokens: MAX_OUTPUT_TOKENS,
     });
 
+    // Phase 99 dream hotfix (2026-04-26): Haiku frequently wraps JSON output
+    // in markdown code fences (```json ... ```) despite the system prompt
+    // explicitly asking for raw JSON. Strip a leading ```json (or ```) +
+    // trailing ``` before JSON.parse. Also strip leading/trailing whitespace.
+    // Without this, every dream pass fails with "Unexpected token '`'".
+    const stripCodeFence = (raw: string): string => {
+      let s = raw.trim();
+      // Remove leading ```json or ``` (with optional language tag)
+      const fenceStart = s.match(/^```(?:json|javascript|js)?\s*\n/);
+      if (fenceStart) {
+        s = s.slice(fenceStart[0].length);
+      }
+      // Remove trailing ```
+      if (s.endsWith("```")) {
+        s = s.slice(0, -3).trimEnd();
+      }
+      return s;
+    };
+
     let parsedJson: unknown;
     try {
-      parsedJson = JSON.parse(dispatchResp.rawText);
+      parsedJson = JSON.parse(stripCodeFence(dispatchResp.rawText));
     } catch (parseErr) {
       const msg =
         parseErr instanceof Error ? parseErr.message : String(parseErr);
