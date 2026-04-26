@@ -152,14 +152,18 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
   "subagent-routing": Object.freeze({
     enabled: true,
     text:
-      "When you would spawn a Task tool / call a subagent / delegate to opus / run any operation that takes >30 seconds (deep research, multi-file refactor, large analysis, PDF generation, complex DB queries, web scraping, batch operations), ALWAYS route the work into a Discord subthread using the subagent-thread skill instead of blocking the current channel.\n\n" +
-      "Pattern:\n" +
-      "1. Briefly acknowledge the request in the current channel (1-2 sentences max — \"Spinning up a subagent in a thread to dig into this; I'll keep this channel free for follow-ups\").\n" +
-      "2. Invoke the subagent-thread skill (or spawn-subagent-thread / clawcode-subagent-thread tool) with the full task description.\n" +
-      "3. Return control to the main channel immediately. The subagent will post its results in the subthread.\n" +
-      "4. Stay AVAILABLE in the main channel for new questions while the subagent runs.\n\n" +
+      "When you would delegate work / spawn a subagent / call opus / run any operation that takes >30 seconds (deep research, multi-file refactor, large analysis, PDF generation, complex DB queries, web scraping, batch operations), ALWAYS route the work into a Discord subthread using the `spawn_subagent_thread` MCP tool instead of blocking the current channel.\n\n" +
+      "USE: `spawn_subagent_thread` MCP tool (or `subagent-thread` skill which wraps it). This is FIRE-AND-FORGET — returns the thread URL immediately, the subagent runs in the background and posts directly to the Discord thread.\n\n" +
+      "DO NOT USE: the SDK's built-in `Task` tool for any operator-facing delegation. `Task` is BLOCKING — your turn pauses while the child runs, the typing indicator stays on, and the operator can't reach you in the channel until the child finishes. `Task` is acceptable only for sub-second internal tool composition (e.g., a quick one-shot search the LLM uses inside a single response), never for user-visible work.\n\n" +
+      "Pattern (5 steps, in order):\n" +
+      "1. Briefly acknowledge in the current channel (1-2 sentences max): \"Spinning up a subagent in a thread to dig into this; I'll keep this channel free for follow-ups.\"\n" +
+      "2. Call `spawn_subagent_thread` with `task` set to the FULL work description. The subagent starts on the task automatically — you do NOT need to send a follow-up.\n" +
+      "3. Return the thread URL inline (1 sentence: \"Working in <thread-name> — results post there.\").\n" +
+      "4. END YOUR TURN. Do NOT call `read_thread` to poll the subagent's progress. Do NOT call `Task`. Do NOT loop on tool calls waiting for output. The subagent posts its results in the thread; the operator can read them there.\n" +
+      "5. On the operator's NEXT turn (or at any future point), if they ask \"what did the subagent say\" or similar, THEN call `read_thread` once with the saved thread ID, summarize, return.\n\n" +
+      "Why this matters: Discord shows \"<agent> is typing...\" while your turn is active. If you stay in the turn polling `read_thread` or running `Task`, the operator sees typing-state for minutes — they think you're stuck and can't ask follow-ups. The subthread pattern unblocks the channel immediately.\n\n" +
       "When NOT to use a subthread:\n" +
-      "- Quick lookups (<10s expected — single memory_lookup, single tool call, simple Q&A from already-loaded context).\n" +
+      "- Quick lookups (<10s expected — single memory_lookup, single tool call, simple Q&A from loaded context).\n" +
       "- Conversational replies that need the main thread's flow continuity.\n" +
       "- When the user explicitly says \"do it inline\" or \"don't use a subthread\".\n\n" +
       "Default to subthread when in doubt. Blocking the main channel for a multi-minute task is worse UX than a subthread the operator can collapse if uninterested.",
