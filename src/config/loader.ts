@@ -332,6 +332,17 @@ export function resolveAgentConfig(
     // Phase 96 D-09 — propagate per-agent outputDir template (LITERAL string,
     // tokens preserved). Runtime resolveOutputDir expands at write time.
     outputDir: agent.outputDir,
+    // Phase 100 GSD-02 — default settingSources to ["project"] when omitted.
+    // Pitfall 3 (.min(1)) prevents `[]` from reaching here, so a populated
+    // array always has at least one source. Plan 02 reads this in
+    // session-adapter.ts to replace the hardcoded `settingSources: ["project"]`.
+    settingSources: agent.settingSources ?? ["project"],
+    // Phase 100 GSD-04 — gsd.projectDir undefined → resolved gsd undefined;
+    // gsd.projectDir set → expandHome() applied (handles ~/... paths). Plan
+    // 02 reads `config.gsd?.projectDir ?? config.workspace` for the SDK cwd.
+    gsd: agent.gsd?.projectDir
+      ? { projectDir: expandHome(agent.gsd.projectDir) }
+      : undefined,
     // Phase 90 MEM-01 — agent-level memoryAutoLoad beats defaults.memoryAutoLoad;
     // undefined falls back to defaults (zod default = true). Cannot use `??`
     // here: `false ?? true` would (correctly) yield false, but `undefined ??

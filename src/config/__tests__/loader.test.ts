@@ -1894,3 +1894,208 @@ describe("renderSystemPromptDirectiveBlock (Phase 94 TOOL-10)", () => {
     expect(block).toBe("First.\n\nSecond.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 100 — settingSources + gsd resolution (Plan 100-01 Task 2)
+//
+// Tests resolveAgentConfig's handling of two new additive-optional fields:
+//   - settingSources: ALWAYS populated; defaults to ["project"] when omitted.
+//   - gsd: UNDEFINED when agent.gsd.projectDir is unset; expandHome'd when set.
+//
+// Tests pin:
+//   LR1   omit → settingSources === ["project"]
+//   LR2   ['user','project'] mirror exactly
+//   LR3   omit gsd → gsd === undefined
+//   LR4   absolute projectDir passes through expandHome unchanged
+//   LR5   ~/path projectDir is expanded via expandHome
+//   LR6   gsd: {} (projectDir absent) → gsd === undefined
+//   LR7   resolver does NOT mutate the input agent object (immutability)
+//   LR8   multi-agent integration via resolveAllAgents
+// ---------------------------------------------------------------------------
+
+describe("Phase 100 — settingSources + gsd resolution", () => {
+  function makeDefaults(): DefaultsConfig {
+    return {
+      model: "sonnet",
+      effort: "low" as const,
+      allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
+      memoryAutoLoad: true,
+      memoryRetrievalTokenBudget: 2000,
+      memoryRetrievalTopK: 5,
+      memoryScannerEnabled: true,
+      memoryFlushIntervalMs: 900_000,
+      memoryCueEmoji: "✅",
+      systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
+      clawhubBaseUrl: "https://clawhub.ai",
+      clawhubCacheTtlMs: 600_000,
+      skills: [],
+      basePath: "~/.clawcode/agents",
+      skillsPath: "~/.clawcode/skills",
+      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: {
+          warningThreshold: 0.6,
+          criticalThreshold: 0.75,
+          zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 },
+        },
+      },
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+      openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+      browser: {
+        enabled: true,
+        headless: true,
+        warmOnBoot: true,
+        navigationTimeoutMs: 30000,
+        actionTimeoutMs: 10000,
+        viewport: { width: 1280, height: 720 },
+        userAgent: null,
+        maxScreenshotInlineBytes: 524288,
+      },
+      search: {
+        enabled: true,
+        backend: "brave" as const,
+        brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+        exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+        maxResults: 20,
+        timeoutMs: 10000,
+        fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
+      },
+      image: {
+        enabled: true,
+        backend: "openai" as const,
+        openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+        minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+        fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+        maxImageBytes: 10485760,
+        timeoutMs: 60000,
+        workspaceSubdir: "generated-images",
+      },
+      dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+      fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+    };
+  }
+
+  function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      name: "clawdy",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      ...overrides,
+    } as AgentConfig;
+  }
+
+  it("LR1: omitting settingSources resolves to default ['project']", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.settingSources).toEqual(["project"]);
+  });
+
+  it("LR2: agent.settingSources: ['user','project'] resolves to exactly that array (deep equal)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      settingSources: ["user", "project"] as ("project" | "user" | "local")[],
+    });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.settingSources).toEqual(["user", "project"]);
+  });
+
+  it("LR3: omitting gsd resolves to gsd === undefined", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeUndefined();
+  });
+
+  it("LR4: absolute gsd.projectDir passes through expandHome unchanged", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+    });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeDefined();
+    expect(resolved.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+  });
+
+  it("LR5: gsd.projectDir with ~ is expanded via expandHome", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ gsd: { projectDir: "~/projects/foo" } });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeDefined();
+    // expandHome should replace ~ with the homedir
+    expect(resolved.gsd?.projectDir).toBe(expandHome("~/projects/foo"));
+    expect(resolved.gsd?.projectDir).not.toContain("~");
+    // It should start with the actual homedir
+    expect(resolved.gsd?.projectDir?.startsWith(homedir())).toBe(true);
+  });
+
+  it("LR6: agent.gsd: {} (projectDir absent) → gsd === undefined", () => {
+    const defaults = makeDefaults();
+    // Cast through unknown — agentSchema accepts {} but the typed fixture
+    // builder is stricter. The runtime branch we're verifying triggers when
+    // agent.gsd is set but agent.gsd.projectDir is not.
+    const agent = makeAgent({ gsd: {} } as Partial<AgentConfig>);
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeUndefined();
+  });
+
+  it("LR7: resolveAgentConfig does NOT mutate the input agent object (immutability)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      settingSources: ["project", "user"] as ("project" | "user" | "local")[],
+      gsd: { projectDir: "/opt/x" },
+    });
+    // Snapshot before resolution
+    const before = JSON.parse(JSON.stringify(agent));
+    resolveAgentConfig(agent, defaults);
+    // After resolution, the input agent must be byte-for-byte identical.
+    expect(agent).toEqual(before);
+    // Specifically: settingSources reference is preserved literally on input
+    expect(agent.settingSources).toEqual(["project", "user"]);
+    expect(agent.gsd).toEqual({ projectDir: "/opt/x" });
+  });
+
+  it("LR8: resolveAllAgents over a 3-agent fixture — only one agent carries gsd; the other two carry gsd === undefined", () => {
+    const defaults = makeDefaults();
+    const agents: AgentConfig[] = [
+      makeAgent({ name: "alpha" }),
+      makeAgent({
+        name: "beta",
+        settingSources: ["project", "user"] as ("project" | "user" | "local")[],
+        gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+      }),
+      makeAgent({ name: "gamma" }),
+    ];
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents,
+      mcpServers: {},
+    };
+    const resolved = resolveAllAgents(config);
+    expect(resolved.length).toBe(3);
+    // alpha + gamma omitted gsd → resolved gsd undefined; settingSources default
+    expect(resolved[0]?.name).toBe("alpha");
+    expect(resolved[0]?.gsd).toBeUndefined();
+    expect(resolved[0]?.settingSources).toEqual(["project"]);
+    expect(resolved[2]?.name).toBe("gamma");
+    expect(resolved[2]?.gsd).toBeUndefined();
+    expect(resolved[2]?.settingSources).toEqual(["project"]);
+    // beta carries the explicit override
+    expect(resolved[1]?.name).toBe("beta");
+    expect(resolved[1]?.gsd).toEqual({ projectDir: "/opt/clawcode-projects/sandbox" });
+    expect(resolved[1]?.settingSources).toEqual(["project", "user"]);
+  });
+});

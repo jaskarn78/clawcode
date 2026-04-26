@@ -58,6 +58,24 @@ export type ResolvedAgentConfig = {
    */
   readonly outputDir?: string;
   /**
+   * Phase 100 GSD-02 — per-agent SDK settingSources. ALWAYS populated by
+   * loader.ts (defaults to ["project"]). Plan 02's session-adapter.ts will
+   * read this verbatim to replace the hardcoded `settingSources: ["project"]`
+   * at lines 592 + 631. The SDK loads ~/.claude/skills/, ~/.claude/commands/,
+   * and ~/.claude/CLAUDE.md when 'user' is included; 'project' loads the
+   * cwd's local .claude/ tree; 'local' loads .claude/local/ (gitignored).
+   * Admin Clawdy sets ["project","user"] for GSD support; production agents
+   * stay at ["project"].
+   */
+  readonly settingSources: readonly ("project" | "user" | "local")[];
+  /**
+   * Phase 100 GSD-04 — per-agent gsd block. UNDEFINED when agent.gsd.projectDir
+   * is unset. Plan 02's session-adapter.ts will read `config.gsd?.projectDir
+   * ?? config.workspace` to choose the SDK cwd. expandHome() already applied
+   * by the loader (raw `~/...` paths are resolved before reaching this type).
+   */
+  readonly gsd?: { readonly projectDir: string };
+  /**
    * Phase 90 MEM-01 — ALWAYS populated by loader.ts from
    * agent.memoryAutoLoad ?? defaults.memoryAutoLoad. Downstream
    * (session-config.ts MEMORY.md injection) reads unconditionally.

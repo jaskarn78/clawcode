@@ -946,6 +946,27 @@ export const agentSchema = z.object({
   // v2.5/v2.6 migrated configs parse unchanged when omitted. Path traversal
   // is blocked at runtime (resolveOutputDir refuses leading `/` and `..`).
   outputDir: z.string().optional(),
+  // Phase 100 GSD-02 / RESEARCH.md Pitfall 3 — 12th application of the
+  // additive-optional schema blueprint (Phases 83/86/89/90/94/95/96).
+  // Per-agent SDK settingSources. Default ["project"] applied at the loader
+  // layer (resolveAgentConfig) — this schema field stays optional so v2.5/
+  // v2.6 migrated configs parse unchanged. .min(1) rejects [] explicitly:
+  // an empty array would silently disable all filesystem settings (no skills,
+  // no CLAUDE.md, no commands) per SDK docs — Pitfall 3 in 100-RESEARCH.md.
+  // Admin Clawdy sets ["project","user"] in clawcode.yaml so the SDK loads
+  // ~/.claude/commands/gsd/*.md (the GSD slash command files symlinked by
+  // Plan 06). Production agents (fin-acquisition, etc.) keep ["project"] —
+  // omitting the field falls back to the loader default. Duplicates are
+  // permitted (zod doesn't dedup); the SDK treats redundant entries idempotently.
+  settingSources: z.array(z.enum(["project", "user", "local"])).min(1).optional(),
+  // Phase 100 GSD-04 — per-agent gsd block. Currently only carries projectDir;
+  // future fields (commitsAllowed, autoThreadKey, etc.) land here. Optional —
+  // omission means "use agent.workspace as cwd" per the loader resolver in
+  // Plan 02 (the consumer of this field). Per CONTEXT.md decision: only
+  // Admin Clawdy sets gsd.projectDir; production agents do NOT.
+  gsd: z.object({
+    projectDir: z.string().min(1).optional(),
+  }).optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),

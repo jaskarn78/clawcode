@@ -54,6 +54,7 @@ function makeConfig(name: string): ResolvedAgentConfig {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    settingSources: ["project"], // Phase 100 GSD-02
     skills: [],
     soul: undefined,
     identity: undefined,
