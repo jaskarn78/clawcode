@@ -554,12 +554,26 @@ export class ConversationStore {
       // agents-forget-across-sessions debug (2026-04-19): exclude 'active'
       // so the brief gap-check doesn't collapse to zero against the
       // just-created current session.
+      //
+      // 2026-04-25 evening hotfix (Phase 99 sub-scope D): also exclude
+      // empty sessions (no actual turn rows) so brief restart cycles don't
+      // shadow real prior sessions in the LIMIT 5 default. Use EXISTS
+      // (cheap with the session_id index on conversation_turns). turn_count
+      // field is unreliable post-cutover-translation — use the actual row
+      // count. Phase 89 restart-greeting falls through to "no prior session
+      // to recap" minimalEmbed when this list returns only empty sessions;
+      // the filter prevents that false-negative.
       listRecentTerminatedSessions: this.db.prepare(
         `SELECT id, agent_name, started_at, ended_at, turn_count,
                 total_tokens, summary_memory_id, status
          FROM conversation_sessions
          WHERE agent_name = ?
            AND status IN ('ended', 'crashed', 'summarized')
+           AND EXISTS (
+             SELECT 1 FROM conversation_turns ct
+             WHERE ct.session_id = conversation_sessions.id
+             LIMIT 1
+           )
          ORDER BY started_at DESC, rowid DESC
          LIMIT ?`,
       ),
