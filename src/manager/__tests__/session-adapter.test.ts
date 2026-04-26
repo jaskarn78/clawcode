@@ -1,5 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Phase 100 GSD-02 + GSD-04 — mock the Claude Agent SDK at module load so
+// `SdkSessionAdapter.createSession` / `.resumeSession` can be exercised in
+// unit tests without spawning the real SDK. The mock returns a minimal async
+// iterator yielding a `result` message with a session_id, which is what
+// `drainInitialQuery` consumes. `mockSdkQuery` is captured in a top-level
+// closure so individual tests can spy on the options arg passed to it.
+//
+// IMPORTANT: vi.mock is hoisted to the top of the module by vitest. Existing
+// tests in this file do NOT `await import("@anthropic-ai/claude-agent-sdk")`
+// (they construct their own mockSdk inline and pass it to
+// createTracedSessionHandle), so this mock is invisible to them. Only the
+// Phase 100 describe block below — which constructs `new SdkSessionAdapter()`
+// and calls `.createSession()` / `.resumeSession()` — observes the mock.
+const mockSdkQuery = vi.fn();
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: mockSdkQuery,
+}));
+
 /**
  * Wave 0 RED tests for SdkSessionAdapter tracing integration.
  *
@@ -1095,5 +1113,290 @@ describe("MockSessionHandle — AbortSignal (Phase 59)", () => {
     await expect(
       handle.send("hello", undefined, { signal: controller.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 100 GSD-02 + GSD-04 — settingSources + gsd.projectDir flow into baseOptions
+// ---------------------------------------------------------------------------
+//
+// Verifies that `SdkSessionAdapter.createSession` and `.resumeSession` read
+// `cwd` and `settingSources` from the AgentSessionConfig (with the documented
+// `["project"]` and `config.workspace` fallbacks), instead of hardcoding
+// `cwd: config.workspace` and `settingSources: ["project"]` at lines 588/592
+// (createSession) and 627/631 (resumeSession).
+//
+// The 10 SA1..SA10 tests pin the post-Plan-02 contract:
+//   - SA1..SA4 — createSession behavior across 4 config shapes
+//   - SA5..SA8 — resumeSession parity (symmetric-edits Rule 3)
+//   - SA9     — input AgentSessionConfig is NOT mutated by either method
+//   - SA10    — zero-behavior-change cascade: a config WITHOUT the new
+//               fields produces the EXACT pre-Phase-100 baseOptions shape
+//
+// The mock SDK at the top of this file captures the `options` arg of every
+// `sdk.query` call. `createSession` invokes `sdk.query` TWICE (once for the
+// initial drain, then once inside `createPersistentSessionHandle`); both
+// receive the same baseOptions, so we assert on the FIRST call. `resumeSession`
+// invokes `sdk.query` ONCE (no initial drain — session already exists).
+
+import { SdkSessionAdapter } from "../session-adapter.js";
+import type { AgentSessionConfig } from "../types.js";
+
+/**
+ * Build a minimal AgentSessionConfig fixture with optional overrides for
+ * Phase 100's two new fields. The cast accepts the new fields even before
+ * Task 2 lands (RED-state friendly).
+ */
+function makePhase100Config(
+  overrides: Partial<
+    AgentSessionConfig & {
+      settingSources?: readonly ("project" | "user" | "local")[];
+      gsd?: { readonly projectDir: string };
+    }
+  > = {},
+): AgentSessionConfig {
+  return {
+    name: "test-agent",
+    model: "sonnet",
+    effort: "low",
+    workspace: "/tmp/agent-workspace",
+    systemPrompt: "stable-identity-block",
+    channels: [],
+    ...overrides,
+  } as AgentSessionConfig;
+}
+
+/**
+ * Build an async iterator yielding a single `result` message. This is the
+ * minimum payload `drainInitialQuery` needs to extract a session_id.
+ */
+function makeMockSdkStream(sessionId: string) {
+  async function* gen() {
+    yield {
+      type: "result",
+      subtype: "success",
+      session_id: sessionId,
+      result: "ok",
+    };
+  }
+  const query: any = gen();
+  query.interrupt = vi.fn();
+  query.close = vi.fn();
+  query.streamInput = vi.fn();
+  query.mcpServerStatus = vi.fn();
+  query.setMcpServers = vi.fn();
+  return query;
+}
+
+describe("Phase 100 — settingSources + gsd.projectDir flow into baseOptions", () => {
+  let adapter: SdkSessionAdapter;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSdkQuery.mockReset();
+    adapter = new SdkSessionAdapter();
+  });
+
+  // ---- createSession: SA1..SA4 ----
+
+  it("SA1 (createSession-default): config without settingSources/gsd → baseOptions.settingSources === ['project'] AND baseOptions.cwd === config.workspace", async () => {
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa1"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa1"));
+
+    const config = makePhase100Config({
+      workspace: "/tmp/sa1-workspace",
+    });
+
+    await adapter.createSession(config);
+
+    const firstCallOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(firstCallOptions.settingSources).toEqual(["project"]);
+    expect(firstCallOptions.cwd).toBe("/tmp/sa1-workspace");
+  });
+
+  it("SA2 (createSession-settingSources): config.settingSources = ['project','user'] → baseOptions.settingSources passes through verbatim, no fallback applied", async () => {
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa2"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa2"));
+
+    const config = makePhase100Config({
+      workspace: "/tmp/sa2-workspace",
+      settingSources: ["project", "user"],
+    });
+
+    await adapter.createSession(config);
+
+    const firstCallOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(firstCallOptions.settingSources).toEqual(["project", "user"]);
+    // cwd default still applies (no gsd set)
+    expect(firstCallOptions.cwd).toBe("/tmp/sa2-workspace");
+  });
+
+  it("SA3 (createSession-gsd): config.gsd = { projectDir: '/opt/clawcode-projects/sandbox' } → baseOptions.cwd === '/opt/clawcode-projects/sandbox' (overrides workspace)", async () => {
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa3"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa3"));
+
+    const config = makePhase100Config({
+      workspace: "/home/clawcode/.clawcode/agents/admin-clawdy",
+      gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+    });
+
+    await adapter.createSession(config);
+
+    const firstCallOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(firstCallOptions.cwd).toBe("/opt/clawcode-projects/sandbox");
+    // settingSources default still applies (no settingSources set)
+    expect(firstCallOptions.settingSources).toEqual(["project"]);
+  });
+
+  it("SA4 (createSession-both): both fields set → both flow through; no cross-contamination between cwd and settingSources", async () => {
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa4"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa4"));
+
+    const config = makePhase100Config({
+      workspace: "/home/clawcode/.clawcode/agents/admin-clawdy",
+      settingSources: ["project", "user"],
+      gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+    });
+
+    await adapter.createSession(config);
+
+    const firstCallOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(firstCallOptions.cwd).toBe("/opt/clawcode-projects/sandbox");
+    expect(firstCallOptions.settingSources).toEqual(["project", "user"]);
+  });
+
+  // ---- resumeSession: SA5..SA8 (parity with createSession) ----
+
+  it("SA5 (resumeSession-default): config without settingSources/gsd → baseOptions.settingSources === ['project'] AND baseOptions.cwd === config.workspace", async () => {
+    mockSdkQuery.mockReturnValueOnce(makeMockSdkStream("sess-sa5"));
+
+    const config = makePhase100Config({
+      workspace: "/tmp/sa5-workspace",
+    });
+
+    await adapter.resumeSession("existing-sess-sa5", config);
+
+    const callOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(callOptions.settingSources).toEqual(["project"]);
+    expect(callOptions.cwd).toBe("/tmp/sa5-workspace");
+  });
+
+  it("SA6 (resumeSession-settingSources): config.settingSources = ['project','user'] → baseOptions.settingSources passes through verbatim", async () => {
+    mockSdkQuery.mockReturnValueOnce(makeMockSdkStream("sess-sa6"));
+
+    const config = makePhase100Config({
+      workspace: "/tmp/sa6-workspace",
+      settingSources: ["project", "user"],
+    });
+
+    await adapter.resumeSession("existing-sess-sa6", config);
+
+    const callOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(callOptions.settingSources).toEqual(["project", "user"]);
+    expect(callOptions.cwd).toBe("/tmp/sa6-workspace");
+  });
+
+  it("SA7 (resumeSession-gsd): config.gsd = { projectDir: '/opt/clawcode-projects/sandbox' } → baseOptions.cwd === '/opt/clawcode-projects/sandbox' — proves resume path doesn't drift from create path", async () => {
+    mockSdkQuery.mockReturnValueOnce(makeMockSdkStream("sess-sa7"));
+
+    const config = makePhase100Config({
+      workspace: "/home/clawcode/.clawcode/agents/admin-clawdy",
+      gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+    });
+
+    await adapter.resumeSession("existing-sess-sa7", config);
+
+    const callOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(callOptions.cwd).toBe("/opt/clawcode-projects/sandbox");
+    expect(callOptions.settingSources).toEqual(["project"]);
+  });
+
+  it("SA8 (resumeSession-both): both fields set → both flow through at the resume call site (SA4 parity)", async () => {
+    mockSdkQuery.mockReturnValueOnce(makeMockSdkStream("sess-sa8"));
+
+    const config = makePhase100Config({
+      workspace: "/home/clawcode/.clawcode/agents/admin-clawdy",
+      settingSources: ["project", "user", "local"],
+      gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+    });
+
+    await adapter.resumeSession("existing-sess-sa8", config);
+
+    const callOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(callOptions.cwd).toBe("/opt/clawcode-projects/sandbox");
+    expect(callOptions.settingSources).toEqual(["project", "user", "local"]);
+  });
+
+  // ---- SA9: immutability invariant ----
+
+  it("SA9 (immutability): neither createSession nor resumeSession mutates the input AgentSessionConfig", async () => {
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa9-c"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa9-c"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa9-r"));
+
+    const config = makePhase100Config({
+      workspace: "/tmp/sa9-workspace",
+      settingSources: ["project", "user"],
+      gsd: { projectDir: "/opt/sa9-project" },
+    });
+
+    // Deep-clone the config BEFORE the calls so we can assert byte-equality
+    // afterward. JSON.parse(JSON.stringify(...)) is the standard structural
+    // immutability assertion idiom in this codebase.
+    const beforeCreate = JSON.parse(JSON.stringify(config));
+    await adapter.createSession(config);
+    expect(JSON.parse(JSON.stringify(config))).toEqual(beforeCreate);
+
+    const beforeResume = JSON.parse(JSON.stringify(config));
+    await adapter.resumeSession("existing-sess-sa9", config);
+    expect(JSON.parse(JSON.stringify(config))).toEqual(beforeResume);
+  });
+
+  // ---- SA10: zero-behavior-change cascade ----
+
+  it("SA10 (zero-behavior-change-cascade): a config built EXACTLY like a v2.6 fleet entry (no settingSources, no gsd) → baseOptions has cwd === workspace and settingSources === ['project'] — byte-stable regression pin against accidental behavior change for the 15+ agent fleet", async () => {
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa10-c"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa10-c"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa10-r"));
+
+    // Exact pre-Phase-100 fixture shape: name, model, effort, workspace,
+    // systemPrompt, channels — NO settingSources, NO gsd, NO mutableSuffix,
+    // NO mcpServers. This mirrors how the existing fleet's
+    // buildSessionConfig output looked before Plan 02.
+    const fleetConfig: AgentSessionConfig = {
+      name: "fin-acquisition",
+      model: "sonnet",
+      effort: "medium",
+      workspace: "/home/clawcode/.clawcode/agents/fin-acquisition",
+      systemPrompt: "fleet-stable-prefix",
+      channels: ["fin-acquisition"],
+    };
+
+    // createSession path
+    await adapter.createSession(fleetConfig);
+    const createOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(createOptions.cwd).toBe(
+      "/home/clawcode/.clawcode/agents/fin-acquisition",
+    );
+    expect(createOptions.settingSources).toEqual(["project"]);
+
+    mockSdkQuery.mockClear();
+    mockSdkQuery
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa10-r"))
+      .mockReturnValueOnce(makeMockSdkStream("sess-sa10-r"));
+
+    // resumeSession path — same fleet config, same baseOptions invariant
+    await adapter.resumeSession("existing-sess-sa10", fleetConfig);
+    const resumeOptions = mockSdkQuery.mock.calls[0]![0].options;
+    expect(resumeOptions.cwd).toBe(
+      "/home/clawcode/.clawcode/agents/fin-acquisition",
+    );
+    expect(resumeOptions.settingSources).toEqual(["project"]);
   });
 });
