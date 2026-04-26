@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, securityConfigSchema, streamingConfigSchema, MEMORY_AUTOLOAD_MAX_BYTES } from "../schema.js";
 import { RELOADABLE_FIELDS } from "../types.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
@@ -1791,5 +1794,156 @@ describe("RELOADABLE_FIELDS - DREAM entries (Phase 95 DREAM)", () => {
   });
   it("DREAM-RELOAD-2: RELOADABLE_FIELDS contains defaults.dream", () => {
     expect(RELOADABLE_FIELDS.has("defaults.dream")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 100 — agent.settingSources + agent.gsd.projectDir (Plan 100-01)
+//
+// 12th application of the additive-optional schema blueprint
+// (Phases 83/86/89/90/94/95/96). Tests pin:
+//   - PR1   parse-omit:        omitting both fields yields undefined for each
+//   - PR2   parse-project:     ['project'] singleton parses
+//   - PR3   parse-project-user: ['project','user'] parses
+//   - PR4   parse-all-three:   ['user','project','local'] parses (any order)
+//   - PR5   reject-empty:      [] REJECTS at parse time (.min(1) per Pitfall 3)
+//   - PR6   reject-invalid:    ['invalid'] REJECTS (enum constraint)
+//   - PR7   parse-duplicates:  ['project','project'] parses (zod doesn't dedup)
+//   - PR8   parse-gsd-abs:     gsd.projectDir absolute path parses
+//   - PR9   reject-empty-pd:   gsd.projectDir empty string REJECTS (.min(1))
+//   - PR10  parse-gsd-empty:   gsd: {} parses (projectDir optional inside)
+//   - PR11  parse-regression:  in-tree clawcode.yaml parses with all settingSources/gsd undefined
+//   - PR12  type-narrowing:    parsed shape conforms to ('project'|'user'|'local')[]|undefined
+//
+// RESEARCH.md Pitfall 3: settingSources: [] silently disables ALL filesystem
+// settings. Schema MUST use .min(1) on the array to reject empty at parse time.
+// ---------------------------------------------------------------------------
+
+describe("Phase 100 — agent.settingSources + agent.gsd.projectDir", () => {
+  // Minimal-agent fixture matching the existing test style
+  const minimalAgent = (overrides: Record<string, unknown> = {}) => ({
+    name: "x",
+    channels: [],
+    ...overrides,
+  });
+
+  it("PR1: omitting both fields yields settingSources === undefined AND gsd === undefined", () => {
+    const result = agentSchema.parse(minimalAgent());
+    expect(result.settingSources).toBeUndefined();
+    expect(result.gsd).toBeUndefined();
+  });
+
+  it("PR2: settingSources: ['project'] parses to exactly ['project']", () => {
+    const result = agentSchema.parse(minimalAgent({ settingSources: ["project"] }));
+    expect(result.settingSources).toEqual(["project"]);
+  });
+
+  it("PR3: settingSources: ['project','user'] parses to exactly that array", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ settingSources: ["project", "user"] }),
+    );
+    expect(result.settingSources).toEqual(["project", "user"]);
+  });
+
+  it("PR4: settingSources: ['user','project','local'] parses (any order, any subset)", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ settingSources: ["user", "project", "local"] }),
+    );
+    expect(result.settingSources).toEqual(["user", "project", "local"]);
+  });
+
+  it("PR5: settingSources: [] REJECTS at parse time (.min(1) per Pitfall 3)", () => {
+    const parsed = agentSchema.safeParse(minimalAgent({ settingSources: [] }));
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      // The path[0] should reference the settingSources field
+      const onSettingSources = parsed.error.issues.some((i) =>
+        i.path.includes("settingSources"),
+      );
+      expect(onSettingSources).toBe(true);
+    }
+  });
+
+  it("PR6: settingSources: ['invalid'] REJECTS on enum constraint", () => {
+    const parsed = agentSchema.safeParse(
+      minimalAgent({ settingSources: ["invalid"] }),
+    );
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      const onSettingSources = parsed.error.issues.some((i) =>
+        i.path.includes("settingSources"),
+      );
+      expect(onSettingSources).toBe(true);
+    }
+  });
+
+  it("PR7: settingSources: ['project','project'] parses (duplicates allowed — zod doesn't dedup)", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ settingSources: ["project", "project"] }),
+    );
+    // Zod preserves duplicates; documented in JSDoc on the schema field.
+    expect(result.settingSources).toEqual(["project", "project"]);
+  });
+
+  it("PR8: gsd.projectDir absolute path parses; result.gsd.projectDir mirrors input", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ gsd: { projectDir: "/opt/clawcode-projects/sandbox" } }),
+    );
+    expect(result.gsd).toBeDefined();
+    expect(result.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+  });
+
+  it("PR9: gsd.projectDir empty string REJECTS (.min(1) on inner string)", () => {
+    const parsed = agentSchema.safeParse(
+      minimalAgent({ gsd: { projectDir: "" } }),
+    );
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      const onProjectDir = parsed.error.issues.some(
+        (i) => i.path.includes("gsd") && i.path.includes("projectDir"),
+      );
+      expect(onProjectDir).toBe(true);
+    }
+  });
+
+  it("PR10: gsd: {} parses (projectDir is optional inside)", () => {
+    const result = agentSchema.parse(minimalAgent({ gsd: {} }));
+    expect(result.gsd).toEqual({});
+    expect(result.gsd?.projectDir).toBeUndefined();
+  });
+
+  it("PR11: parse-regression — in-tree clawcode.yaml parses; all 10 agents have settingSources/gsd undefined (Wave 0 §22-fixture cascade pin)", () => {
+    // Catch an accidental required-field cascade in the additive-optional
+    // schema extension. v2.5/v2.6 migrated configs must parse unchanged.
+    const yamlPath = join(process.cwd(), "clawcode.yaml");
+    const raw = readFileSync(yamlPath, "utf-8");
+    const parsed = parseYaml(raw);
+    const result = configSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // 10+ agents currently in clawcode.yaml — none declare the new fields.
+      expect(result.data.agents.length).toBeGreaterThanOrEqual(10);
+      for (const agent of result.data.agents) {
+        expect(agent.settingSources).toBeUndefined();
+        expect(agent.gsd).toBeUndefined();
+      }
+    }
+  });
+
+  it("PR12: type-narrowing — parsed settingSources is ('project'|'user'|'local')[]|undefined", () => {
+    const r = agentSchema.parse(
+      minimalAgent({ settingSources: ["project"] }),
+    );
+    // Compile-time invariant — the assignment fails to type-check if the
+    // schema field's parsed type drifts away from this exact shape.
+    const _check: ("project" | "user" | "local")[] | undefined = r.settingSources;
+    expect(_check).toEqual(["project"]);
+
+    // Same invariant for gsd
+    const r2 = agentSchema.parse(
+      minimalAgent({ gsd: { projectDir: "/abs/path" } }),
+    );
+    const _check2: { projectDir?: string } | undefined = r2.gsd;
+    expect(_check2).toEqual({ projectDir: "/abs/path" });
   });
 });
