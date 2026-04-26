@@ -66,6 +66,10 @@ export const IPC_METHODS = [
   "cleanup-subagent-thread",
   "read-thread",
   "message-history",
+  // Phase 100 follow-up — operator/agent-driven Discord thread archive.
+  // Closes the "no archive tool" capability gap raised 2026-04-26 + auto-prunes
+  // the registry binding so maxThreadSessions accounting stays correct.
+  "archive-discord-thread",
   // Security (Phase 27)
   "approve-command",
   "deny-command",

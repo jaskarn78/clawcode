@@ -478,4 +478,63 @@ export class SubagentThreadSpawner {
     const registry = await readThreadRegistry(this.registryPath);
     return registry.bindings;
   }
+
+  /**
+   * Phase 100 follow-up — archive (and optionally lock) a Discord thread.
+   * Closes operator-facing thread management gap raised 2026-04-26
+   * ("the bot doesn't expose archive through any of my MCP tools").
+   *
+   * Behavior:
+   *   - Validates the thread is a real Discord thread channel the bot
+   *     can fetch (membership/permission check by Discord).
+   *   - Calls thread.setArchived(true). When `lock` is true, ALSO calls
+   *     thread.setLocked(true) — a locked thread cannot have new messages.
+   *   - Does NOT touch the bindings registry — the binding (if any)
+   *     persists so the operator can audit "this thread was driven by
+   *     subagent X". cleanupSubagentThread is the path that removes
+   *     bindings, and it runs independently on session-end.
+   *
+   * Errors:
+   *   - throws ManagerError when the channel can't be fetched or isn't
+   *     a thread (passing a regular channel ID would be a programming
+   *     error worth surfacing loudly).
+   *   - propagates discord.js permission errors verbatim (operator may
+   *     need to grant MANAGE_THREADS to the bot role).
+   */
+  async archiveThread(threadId: string, opts?: { readonly lock?: boolean }): Promise<{ readonly bindingPruned: boolean }> {
+    const channel = await this.discordClient.channels.fetch(threadId);
+    if (!channel) {
+      throw new ManagerError(`Thread '${threadId}' not found`);
+    }
+    if (!("setArchived" in channel) || typeof (channel as { setArchived?: unknown }).setArchived !== "function") {
+      throw new ManagerError(`Channel '${threadId}' is not a thread (no setArchived method)`);
+    }
+    const thread = channel as unknown as {
+      setArchived(archived: boolean, reason?: string): Promise<unknown>;
+      setLocked(locked: boolean, reason?: string): Promise<unknown>;
+      name?: string;
+    };
+    if (opts?.lock === true) {
+      await thread.setLocked(true, "archived via clawcode archive_thread");
+    }
+    await thread.setArchived(true, "archived via clawcode archive_thread");
+    // Phase 100 follow-up — auto-prune the registry binding (if any) so the
+    // maxThreadSessions accounting reflects reality. Without this, fin-acquisition
+    // hit the cap-3 limit even after archiving threads (operator surfaced
+    // 2026-04-26). Mirror cleanupSubagentThread's pattern but DON'T stop the
+    // session — that's a separate concern (the session may already be gone).
+    let bindingPruned = false;
+    const registry = await readThreadRegistry(this.registryPath);
+    const binding = getBindingForThread(registry, threadId);
+    if (binding) {
+      const updatedRegistry = removeBinding(registry, threadId);
+      await writeThreadRegistry(this.registryPath, updatedRegistry);
+      bindingPruned = true;
+    }
+    this.log.info(
+      { threadId, threadName: thread.name, locked: opts?.lock === true, bindingPruned },
+      "discord thread archived",
+    );
+    return { bindingPruned };
+  }
 }

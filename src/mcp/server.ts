@@ -39,6 +39,10 @@ export const TOOL_DEFINITIONS = {
     description: "Read recent messages from a Discord thread (your subagent's work)",
     ipcMethod: "read-thread",
   },
+  archive_thread: {
+    description: "Archive a Discord thread and prune its registry binding",
+    ipcMethod: "archive-discord-thread",
+  },
   memory_lookup: {
     description: "Search your memory for relevant context, past decisions, and knowledge",
     ipcMethod: "memory-lookup",
@@ -407,6 +411,37 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Failed to read thread: ${msg}` }], isError: true };
+      }
+    },
+  );
+
+  // Tool: archive_thread
+  //
+  // Phase 100 follow-up — closes the operator-surfaced gap (2026-04-26):
+  // "I don't have a tool to archive Discord threads." Wraps the daemon's
+  // SubagentThreadSpawner.archiveThread which (a) calls Discord's setArchived
+  // (and optionally setLocked) and (b) auto-prunes the thread-bindings.json
+  // registry entry so maxThreadSessions accounting reflects reality.
+  server.tool(
+    "archive_thread",
+    "Archive a Discord thread (close it without deleting). Use this when a subagent task is complete and the thread is no longer needed. Also auto-prunes the bindings registry so the parent agent can spawn new threads up to its maxThreadSessions cap. Pass `lock: true` to prevent further messages.",
+    {
+      threadId: z.string().describe("Discord thread ID to archive"),
+      lock: z.boolean().optional().describe("Also lock the thread (prevents new messages even from operator). Default: false."),
+    },
+    async ({ threadId, lock }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "archive-discord-thread", {
+          threadId,
+          lock: lock ?? false,
+        })) as { ok: boolean; bindingPruned: boolean };
+        const text = result.bindingPruned
+          ? `Thread ${threadId} archived${lock ? " + locked" : ""}; binding pruned from registry.`
+          : `Thread ${threadId} archived${lock ? " + locked" : ""}; no binding existed in registry (already cleaned).`;
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Failed to archive thread: ${msg}` }], isError: true };
       }
     },
   );

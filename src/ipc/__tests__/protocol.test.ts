@@ -54,6 +54,7 @@ describe("IPC_METHODS", () => {
       "cleanup-subagent-thread",
       "read-thread",
       "message-history",
+      "archive-discord-thread",
       // Security (Phase 27)
       "approve-command",
       "deny-command",

@@ -4899,6 +4899,20 @@ async function routeMethod(
       return { ok: true };
     }
 
+    case "archive-discord-thread": {
+      // Phase 100 follow-up — operator/agent-driven Discord thread archive +
+      // auto-prune the thread-bindings.json registry entry. Closes the
+      // operator-surfaced gap (2026-04-26) where archiving in Discord left
+      // stale registry rows that pegged maxThreadSessions accounting.
+      if (!subagentThreadSpawner) {
+        throw new ManagerError("Discord thread archive requires Discord bridge");
+      }
+      const threadId = validateStringParam(params, "threadId");
+      const lock = params.lock === true;
+      const result = await subagentThreadSpawner.archiveThread(threadId, { lock });
+      return { ok: true, ...result };
+    }
+
     case "approve-command": {
       const agentName = validateStringParam(params, "agent");
       const command = validateStringParam(params, "command");

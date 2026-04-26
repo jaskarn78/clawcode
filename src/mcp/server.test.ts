@@ -33,8 +33,15 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 20 tools defined", () => {
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(20);
+  it("has exactly 21 tools defined", () => {
+    // Phase 100 follow-up — added archive_thread (was 20).
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(21);
+  });
+
+  it("defines archive_thread tool", () => {
+    expect(TOOL_DEFINITIONS.archive_thread).toBeDefined();
+    expect(TOOL_DEFINITIONS.archive_thread.description).toContain("Archive");
+    expect(TOOL_DEFINITIONS.archive_thread.ipcMethod).toBe("archive-discord-thread");
   });
 
   it("defines ask_advisor tool", () => {
