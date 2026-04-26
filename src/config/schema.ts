@@ -144,6 +144,26 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
     enabled: true,
     text: "If a user asks you to do something requiring a tool you don't have, check your tool list. If unavailable, suggest the user ask another agent (mention specific channel/agent name) that has the tool ready.",
   }),
+  // Phase 99 sub-scope K (2026-04-26) — operator observed agents blocking the
+  // main channel while a subagent / opus delegation runs. They had to manually
+  // ask "use a subagent thread" every time. Make it the default behavior:
+  // any long-running / heavy operation routes to a Discord subthread via the
+  // subagent-thread skill, and the main agent stays available for follow-ups.
+  "subagent-routing": Object.freeze({
+    enabled: true,
+    text:
+      "When you would spawn a Task tool / call a subagent / delegate to opus / run any operation that takes >30 seconds (deep research, multi-file refactor, large analysis, PDF generation, complex DB queries, web scraping, batch operations), ALWAYS route the work into a Discord subthread using the subagent-thread skill instead of blocking the current channel.\n\n" +
+      "Pattern:\n" +
+      "1. Briefly acknowledge the request in the current channel (1-2 sentences max — \"Spinning up a subagent in a thread to dig into this; I'll keep this channel free for follow-ups\").\n" +
+      "2. Invoke the subagent-thread skill (or spawn-subagent-thread / clawcode-subagent-thread tool) with the full task description.\n" +
+      "3. Return control to the main channel immediately. The subagent will post its results in the subthread.\n" +
+      "4. Stay AVAILABLE in the main channel for new questions while the subagent runs.\n\n" +
+      "When NOT to use a subthread:\n" +
+      "- Quick lookups (<10s expected — single memory_lookup, single tool call, simple Q&A from already-loaded context).\n" +
+      "- Conversational replies that need the main thread's flow continuity.\n" +
+      "- When the user explicitly says \"do it inline\" or \"don't use a subthread\".\n\n" +
+      "Default to subthread when in doubt. Blocking the main channel for a multi-minute task is worse UX than a subthread the operator can collapse if uninterested.",
+  }),
 });
 
 /**
