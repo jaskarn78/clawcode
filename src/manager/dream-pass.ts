@@ -229,23 +229,44 @@ export async function runDreamPass(
     });
 
     // Phase 99 dream hotfix (2026-04-26): Haiku frequently wraps JSON output
-    // in markdown code fences (```json ... ```) despite the system prompt
-    // explicitly asking for raw JSON. Strip a leading ```json (or ```) +
-    // trailing ``` before JSON.parse. Also strip leading/trailing whitespace.
-    // Without this, every dream pass fails with "Unexpected token '`'".
-    const stripCodeFence = (raw: string): string => {
-      let s = raw.trim();
-      // Remove leading ```json or ``` (with optional language tag)
-      const fenceStart = s.match(/^```(?:json|javascript|js)?\s*\n/);
-      if (fenceStart) {
-        s = s.slice(fenceStart[0].length);
+    // in markdown code fences (```json ... ```) AND/OR adds narrative prose
+    // ("Picking up where we left off, here's the dream pass: {...}") despite
+    // the system prompt explicitly asking for raw JSON.
+    // Strategy: locate the first '{', balance braces to find matching '}',
+    // extract that substring. Handles both fence-wrapped + prose-wrapped cases.
+    // Falls back to original raw text if no balanced object found.
+    const extractJsonObject = (raw: string): string => {
+      const firstBrace = raw.indexOf("{");
+      if (firstBrace === -1) return raw;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let i = firstBrace; i < raw.length; i++) {
+        const ch = raw[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            return raw.slice(firstBrace, i + 1);
+          }
+        }
       }
-      // Remove trailing ```
-      if (s.endsWith("```")) {
-        s = s.slice(0, -3).trimEnd();
-      }
-      return s;
+      return raw.slice(firstBrace); // unbalanced — let JSON.parse fail with clearer error
     };
+    const stripCodeFence = extractJsonObject;
 
     let parsedJson: unknown;
     try {
