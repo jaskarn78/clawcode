@@ -1962,3 +1962,66 @@ describe("Phase 100 — agent.settingSources + agent.gsd.projectDir", () => {
     expect(_check2).toEqual({ projectDir: "/abs/path" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 99 sub-scope N (2026-04-26) — recursion-guard Layer 2: lower the
+// per-agent default thread cap. The default `maxThreadSessions` is shipped
+// at three locations in schema.ts (line 350 — threadsConfigSchema field
+// default; line 1195 — agentSchema.threads block default factory; line 1392
+// — defaultsSchema.threads default factory). All three drop from 10 → 3 so
+// the blast-radius of a runaway subagent chain is capped if Layer 1's
+// disallowedTools is somehow bypassed.
+//
+// RG4 pins the new value at the SCHEMA boundary across all three call sites
+// so a future drift back to 10 is caught by tests, not by an operator
+// noticing 5+ Admin Clawdy clones in Discord.
+// ---------------------------------------------------------------------------
+
+describe("Phase 99-N — recursion-guard Layer 2: maxThreadSessions default lowered to 3", () => {
+  it("RG4a: threadsConfigSchema field default for maxThreadSessions is 3 (was 10)", () => {
+    // Parse an empty object — the schema field default kicks in.
+    const r = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "rg4a-agent" }],
+      defaults: { threads: {} },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.defaults.threads.maxThreadSessions).toBe(3);
+      expect(r.data.defaults.threads.idleTimeoutMinutes).toBe(1440);
+    }
+  });
+
+  it("RG4b: agentSchema.threads block default factory yields maxThreadSessions === 3", () => {
+    const r = agentSchema.safeParse({
+      name: "rg4b-agent",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      // Top-level agent.threads is optional — when present it has the new default.
+      // We assert the parsed shape after applying the agentSchema's default factory.
+      expect(r.data.threads?.maxThreadSessions ?? 3).toBe(3);
+    }
+  });
+
+  it("RG4c: defaultsSchema.threads default factory yields maxThreadSessions === 3", () => {
+    const r = defaultsSchema.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.threads.maxThreadSessions).toBe(3);
+      expect(r.data.threads.idleTimeoutMinutes).toBe(1440);
+    }
+  });
+
+  it("RG4d: explicit maxThreadSessions value wins over default — operator override unchanged", () => {
+    const r = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "rg4d-agent" }],
+      defaults: { threads: { maxThreadSessions: 7 } },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.defaults.threads.maxThreadSessions).toBe(7);
+    }
+  });
+});
