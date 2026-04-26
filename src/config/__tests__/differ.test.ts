@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { diffConfigs } from "../differ.js";
 import type { Config } from "../schema.js";
+import { RELOADABLE_FIELDS, NON_RELOADABLE_FIELDS } from "../types.js";
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -524,5 +525,247 @@ describe("diffConfigs - memoryPath non-reloadable", () => {
     expect(diff.hasNonReloadableChanges).toBe(true);
     // Should NOT also set hasReloadableChanges (memoryPath-only diff).
     expect(diff.hasReloadableChanges).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 100 GSD-07 — settingSources + gsd.projectDir agent-restart classification
+// ---------------------------------------------------------------------------
+//
+// The differ classifies field paths as RELOADABLE (live-mutable) or
+// NON-RELOADABLE (agent-restart-required). Phase 100's settingSources +
+// gsd.projectDir fields are SDK session-boot baseOptions (captured at
+// `sdk.query` start, NOT re-read per turn — see RESEARCH.md Architecture
+// Pattern 5 + Plan 100-02 session-adapter wiring at lines 588/592/627/631).
+// They MUST classify as NON_RELOADABLE so the watcher emits an
+// "agent restart needed" notification rather than silently failing.
+//
+// 1st application of an agent-restart classification in Phase 100 (vs. the
+// 11 prior reloadable classifications in Phases 83/86/89/90/94/95/96).
+// Mirrors the v2.5 memoryPath documentation-of-intent pattern at
+// types.ts:138-154.
+
+describe("Phase 100 — settingSources + gsd.projectDir agent-restart classification", () => {
+  // Helper to build a minimal agent block with the Phase 100 fields available
+  // for inline override. Mirrors the existing inline-fixture pattern from
+  // earlier tests in this file.
+  function makeAgent(
+    overrides: {
+      readonly name?: string;
+      readonly settingSources?: readonly ("project" | "user" | "local")[];
+      readonly gsd?: { readonly projectDir?: string };
+      readonly effort?: "low" | "medium" | "high";
+    } = {},
+  ): Record<string, unknown> {
+    const agent: Record<string, unknown> = {
+      name: overrides.name ?? "admin-clawdy",
+      channels: ["999"],
+      skills: [],
+      effort: overrides.effort ?? "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+    if (overrides.settingSources !== undefined) {
+      agent["settingSources"] = overrides.settingSources;
+    }
+    if (overrides.gsd !== undefined) {
+      agent["gsd"] = overrides.gsd;
+    }
+    return agent;
+  }
+
+  // ---------------------------------------------------------------------
+  // DI1 — settingSources change ['project'] → ['project','user']
+  // ---------------------------------------------------------------------
+  it("DI1 — classifies agent settingSources change as NON-reloadable", () => {
+    const oldConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ settingSources: ["project"] }) as any],
+    });
+    const newConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ settingSources: ["project", "user"] }) as any],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const change = diff.changes.find(
+      (c) => c.fieldPath === "agents.admin-clawdy.settingSources",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(false);
+    expect(diff.hasReloadableChanges).toBe(false);
+    expect(diff.hasNonReloadableChanges).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------
+  // DI2 — gsd.projectDir change '/a' → '/b'
+  // ---------------------------------------------------------------------
+  it("DI2 — classifies agents.X.gsd.projectDir change as NON-reloadable", () => {
+    const oldConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ gsd: { projectDir: "/opt/a" } }) as any],
+    });
+    const newConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ gsd: { projectDir: "/opt/b" } }) as any],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const change = diff.changes.find(
+      (c) => c.fieldPath === "agents.admin-clawdy.gsd.projectDir",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(false);
+    expect(change!.oldValue).toBe("/opt/a");
+    expect(change!.newValue).toBe("/opt/b");
+    expect(diff.hasNonReloadableChanges).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------
+  // DI3 — gsd block added (undefined → { projectDir: '/x' })
+  // The diff path may be 'agents.X.gsd' OR 'agents.X.gsd.projectDir'
+  // depending on how diffObject recurses. Either way reloadable=false.
+  // ---------------------------------------------------------------------
+  it("DI3 — classifies adding gsd block as NON-reloadable (whole-block OR leaf-level)", () => {
+    const oldConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({}) as any],
+    });
+    const newConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ gsd: { projectDir: "/opt/x" } }) as any],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const gsdChange = diff.changes.find(
+      (c) =>
+        c.fieldPath === "agents.admin-clawdy.gsd" ||
+        c.fieldPath === "agents.admin-clawdy.gsd.projectDir",
+    );
+    expect(gsdChange).toBeDefined();
+    expect(gsdChange!.reloadable).toBe(false);
+    expect(diff.hasNonReloadableChanges).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------
+  // DI4 — gsd block removed (inverse of DI3)
+  // ---------------------------------------------------------------------
+  it("DI4 — classifies removing gsd block as NON-reloadable (inverse of DI3)", () => {
+    const oldConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ gsd: { projectDir: "/opt/x" } }) as any],
+    });
+    const newConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({}) as any],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const gsdChange = diff.changes.find(
+      (c) =>
+        c.fieldPath === "agents.admin-clawdy.gsd" ||
+        c.fieldPath === "agents.admin-clawdy.gsd.projectDir",
+    );
+    expect(gsdChange).toBeDefined();
+    expect(gsdChange!.reloadable).toBe(false);
+    expect(diff.hasNonReloadableChanges).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------
+  // DI5 — settingSources unchanged + gsd unchanged → 0 changes (no false-positive)
+  // ---------------------------------------------------------------------
+  it("DI5 — no diff entry when settingSources + gsd are identical (no false-positive)", () => {
+    const agent = makeAgent({
+      settingSources: ["project", "user"],
+      gsd: { projectDir: "/opt/sandbox" },
+    });
+    const oldConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [agent as any],
+    });
+    const newConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [{ ...agent } as any],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const ssChange = diff.changes.find((c) =>
+      c.fieldPath.includes("settingSources"),
+    );
+    const gsdChange = diff.changes.find((c) => c.fieldPath.includes("gsd"));
+    expect(ssChange).toBeUndefined();
+    expect(gsdChange).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------
+  // DI6 — settingSources order change ['project','user'] → ['user','project']
+  // isDeepEqual respects array order (differ.ts:178-181 — element-wise compare),
+  // so reordering produces a change. Still NON-reloadable.
+  // ---------------------------------------------------------------------
+  it("DI6 — classifies settingSources order change as NON-reloadable", () => {
+    const oldConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ settingSources: ["project", "user"] }) as any],
+    });
+    const newConfig = makeConfig({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agents: [makeAgent({ settingSources: ["user", "project"] }) as any],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const change = diff.changes.find(
+      (c) => c.fieldPath === "agents.admin-clawdy.settingSources",
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // DI7 — multi-field-mix: settingSources change AND a reloadable field
+  // (effort) change in the same diff. Both flags asserted true.
+  // ---------------------------------------------------------------------
+  it("DI7 — multi-field-mix surfaces BOTH reloadable + non-reloadable flags", () => {
+    const oldConfig = makeConfig({
+      agents: [
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        makeAgent({ settingSources: ["project"], effort: "low" }) as any,
+      ],
+    });
+    const newConfig = makeConfig({
+      agents: [
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        makeAgent({ settingSources: ["project", "user"], effort: "high" }) as any,
+      ],
+    });
+    const diff = diffConfigs(oldConfig, newConfig);
+    const ssChange = diff.changes.find(
+      (c) => c.fieldPath === "agents.admin-clawdy.settingSources",
+    );
+    const effortChange = diff.changes.find(
+      (c) => c.fieldPath === "agents.admin-clawdy.effort",
+    );
+    expect(ssChange).toBeDefined();
+    expect(ssChange!.reloadable).toBe(false);
+    expect(effortChange).toBeDefined();
+    expect(effortChange!.reloadable).toBe(true);
+    expect(diff.hasReloadableChanges).toBe(true);
+    expect(diff.hasNonReloadableChanges).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------
+  // DI8 — Regression pin: NON_RELOADABLE_FIELDS contains the explicit entries
+  // for documentation-of-intent. The classifier in differ.ts:144-149 already
+  // falls through to false for unclassified paths, so the explicit listing is
+  // documentation (matching the v2.5 SHARED-01 memoryPath pattern). This test
+  // pins against accidental promotion to RELOADABLE_FIELDS in a future edit.
+  // ---------------------------------------------------------------------
+  it("DI8 — settingSources + gsd are explicitly listed in NON_RELOADABLE_FIELDS for documentation-of-intent", () => {
+    expect(NON_RELOADABLE_FIELDS.has("agents.*.settingSources")).toBe(true);
+    expect(NON_RELOADABLE_FIELDS.has("agents.*.gsd")).toBe(true);
+    // Regression pin: must NOT have been accidentally promoted to RELOADABLE.
+    expect(RELOADABLE_FIELDS.has("agents.*.settingSources")).toBe(false);
+    expect(RELOADABLE_FIELDS.has("agents.*.gsd")).toBe(false);
+    expect(RELOADABLE_FIELDS.has("agents.*.gsd.projectDir")).toBe(false);
+    expect(RELOADABLE_FIELDS.has("defaults.settingSources")).toBe(false);
+    expect(RELOADABLE_FIELDS.has("defaults.gsd")).toBe(false);
+    expect(RELOADABLE_FIELDS.has("defaults.gsd.projectDir")).toBe(false);
   });
 });
