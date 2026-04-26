@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 100-02-PLAN.md (parallel Wave 2 with Plan 03)
-last_updated: "2026-04-26T18:37:35.819Z"
+stopped_at: Completed 100-05-PLAN.md (parallel Wave 3 with Plan 04)
+last_updated: "2026-04-26T18:49:37.511Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 12
   completed_phases: 3
   total_plans: 25
-  completed_plans: 20
+  completed_plans: 21
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 100 (gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 
 ## Performance Metrics
 
@@ -283,6 +283,7 @@ Recent decisions affecting current work:
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-03 — Plan 08 SMOKE-TEST runbook hand-off: operator MUST run 'clawcode restart admin-clawdy' after editing settingSources or gsd.projectDir in clawcode.yaml; the watcher emits agent-restart-needed signal but does NOT auto-restart. NOT a daemon restart (would unnecessarily bounce the entire fleet).
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 02 — symmetric-edits Rule 3 enforced for createSession + resumeSession baseOptions; SA5..SA8 parity tests catch any future drift
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 02 — vi.mock @anthropic-ai/claude-agent-sdk at session-adapter test file top establishes the SDK adapter end-to-end test pattern; existing tests unaffected (they don't await import the SDK module)
+- [Phase 100]: Plan 100-05 — Phase 99-M relay extended with optional 'Artifacts written:' line. DI-pure helpers (resolveArtifactRoot + discoverArtifactPaths) preserve failures-swallow contract. Zero behavior change for non-GSD subthreads (parentConfig.gsd === undefined). Relative paths only per RESEARCH Pitfall 8.
 
 ### v2.1 closing decisions (for reference)
 
@@ -411,9 +412,10 @@ Recent decisions affecting current work:
 | Phase 100-01 P01 | 14min | 2 tasks | 27 files |
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P03 | 5min | 1 tasks | 2 files |
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P02 | 16min | 2 tasks | 4 files |
+| Phase 100 P05 | 7min | 1 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-26
-Stopped at: Completed 100-02-PLAN.md (parallel Wave 2 with Plan 03)
+Stopped at: Completed 100-05-PLAN.md (parallel Wave 3 with Plan 04)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
