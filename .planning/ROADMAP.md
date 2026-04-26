@@ -313,3 +313,45 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Plans:** TBD (run /gsd:plan-phase 97 in v2.7 to break down)
 **Status:** Backlog — Phase 96 must ship first. Phase 97 opens after Phase 96 deploys + UAT-95 passes.
+
+### Phase 99: Memory translator + sync hygiene + restart-greeting fallback (deferred to v2.7)
+
+**Goal:** Fix four architectural bugs surfaced during Phase 98 cutover (2026-04-25 evening) when recovering fin-acquisition's pre-cutover conversation history. All four are silent-failure bugs — the system reported success but the data wasn't where the agent looks.
+
+**Trigger:** Operator asked why fin-acquisition (post-cutover ClawCode-owned) had no recollection of Apr 10-24 work that happened on OpenClaw side. Investigation surfaced multiple unrelated gaps in the sync/memory/greeting plumbing.
+
+**Sub-scope A — Translator wrong-DB-path bug (silent corruption-class):**
+- Trigger: `clawcode sync translate-sessions --agent fin-acquisition` reported `turnsInserted: 6087`. The DB the agent reads from showed only 12 turns. Investigation found the translator wrote to `<basePath>/agents/<agent>/memories.db` but the agent's MemoryStore reads from `<basePath>/agents/<agent>/memory/memories.db` (one extra `memory/` segment).
+- Recovery (manual, this session): backup destination DB, ATTACH source DB, `INSERT OR IGNORE` conversation_sessions + conversation_turns. 6099 turns landed in the right DB after merge.
+- Scope:
+  - Fix path resolution in `src/migration/memory-translator.ts` (or wherever Phase 80 plan put it) — single source of truth via `getAgentMemoryDbPath(agentName, agentBasePath)` helper that BOTH the translator and the daemon's MemoryStore consume.
+  - Static-grep regression pin: every SQLite open() that targets a per-agent memories.db must go through `getAgentMemoryDbPath`. CI grep ensures no `path.join('memories.db')` directly.
+  - Backfill check: add a startup invariant that compares row counts in BOTH paths and warns if the wrong-path DB has data (would have caught this immediately).
+  - Tests: add a translation E2E test that runs the translator + reads back via MemoryStore and verifies turn parity.
+
+**Sub-scope B — No automatic sync timer (Phase 91 promise unfulfilled):**
+- Trigger: Phase 91's spec promised "5-min systemd timer + hourly conversation-turn translator via rsync over SSH." `systemctl list-timers` shows neither installed. The `clawcode sync run-once` and `translate-sessions` commands are CLI-only — no cron, no systemd timer. Last manual sync was 2026-04-24 22:02; nothing happened automatically until cutover today.
+- Scope (decision required):
+  - **Path 1 — install the timers** (matches Phase 91 spec): create `clawcode-sync.timer` (5min OnCalendar) + `clawcode-translate-sessions.timer` (hourly OnCalendar) as systemd user units. Wire installer into `clawcode init` or daemon-bootstrap. Update Phase 91 D-11 deprecation to also disable the timers when `authoritativeSide=deprecated`.
+  - **Path 2 — document Phase 91 as manual-only** and finish cutover (Phase 98) for all remaining channels so sync becomes obsolete. Aligns with Phase 96 D-11 deprecation we already landed.
+- Recommend Path 2 — sync becomes vestigial post-cutover; building auto-sync infrastructure for a deprecating subsystem is wasted work.
+
+**Sub-scope C — Auto-summarization on session-end isn't firing for daemon-managed sessions:**
+- Trigger: 308 sessions in conversation_sessions table had `status='ended'` but `summary_memory_id IS NULL` — they finished but were never summarized. Phase 64's SessionSummarizer is supposed to fire at session-boundary; clearly didn't fire here.
+- Recovery (manual, this session): wrote 319 boilerplate session-summary memory entries (first/last user, last agent, turn count, date) via Python script. Phase 67 resume brief now picks them up.
+- Scope:
+  - Audit Phase 64 SessionSummarizer trigger sites — find where status=ended is set and verify summarizer fires there. Add a "summarize-pending" job that picks up any ended-but-not-summarized sessions on heartbeat tick.
+  - Add a metric/dashboard for "ended sessions awaiting summarization > 0" so this gap shows up before it accumulates 308 deep.
+  - Static-grep regression pin: `UPDATE conversation_sessions SET status='ended'` must be co-located with a SessionSummarizer.summarize() call OR a queue-enqueue.
+
+**Sub-scope D — Phase 89 restart-greeting "no prior session to recap" false negative:**
+- Trigger: After Phase 98 cutover, fin-acquisition restarted and posted *"I'm back. Restart complete — no prior session to recap. Ask me anything to get rolling."* — even though we had 326 session-summary entries available. Phase 89's `listRecentTerminatedSessions(agentName, 5)` returned the 5 most recent terminated sessions, all from cutover-day with 0 turns (brief restart cycles). The check `getTurnsForSession(candidate.id, max).length > 0` failed for all 5 → fell through to the minimal-embed fallback.
+- Recovery (manual, this session): deleted 71 empty cutover-day sessions + their orphan summary memories so listRecentTerminatedSessions returns the actually-meaty translated sessions.
+- Scope:
+  - Patch Phase 89 logic: if `candidateTurns.length === 0` BUT `candidate.summary_memory_id` is set, USE THE EXISTING SUMMARY instead of falling through. The Haiku-resummarize step is a nice-to-have when raw turns exist; when only a summary exists, just relay it.
+  - Increase `listRecentTerminatedSessions` default limit from 5 to e.g., 25 so brief empty sessions don't shadow real ones.
+  - Add SQL filter option: `WHERE turn_count > 0 OR summary_memory_id IS NOT NULL` to push the filtering server-side.
+  - Test fixture: synthesize a "5 empty + 1 meaty" scenario and verify Phase 89 picks the meaty one.
+
+**Plans:** TBD (run /gsd:plan-phase 99 in v2.7 to break down)
+**Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery. None of these block production but all degrade UX silently. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
