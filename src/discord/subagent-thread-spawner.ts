@@ -1,6 +1,8 @@
 import { nanoid } from "nanoid";
 import type { Client, TextChannel } from "discord.js";
 import type { Logger } from "pino";
+import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
+import { join } from "node:path";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { ThreadBinding, ThreadBindingRegistry } from "./thread-types.js";
@@ -19,6 +21,119 @@ import { ManagerError } from "../shared/errors.js";
 // Phase 99 sub-scope M (2026-04-26) — auto-relay subagent completion to parent.
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import { makeRootOrigin } from "../manager/turn-origin.js";
+
+/**
+ * Phase 100 GSD-06 — pure helper: extract the parent agent's GSD project
+ * root from a ResolvedAgentConfig.
+ *
+ * Returns the `gsd.projectDir` when set; undefined otherwise (which signals
+ * `relayCompletionToParent` to skip artifact discovery entirely — the relay
+ * still runs with the base Phase 99-M prompt, no behavior change for the
+ * 14+ non-GSD agents in the fleet).
+ *
+ * Plan 100-01 added the `gsd?: { projectDir: string }` field to
+ * ResolvedAgentConfig. This helper centralizes the optional-chain so
+ * downstream consumers don't repeat the lookup.
+ */
+export function resolveArtifactRoot(
+  parentConfig: ResolvedAgentConfig | undefined,
+): string | undefined {
+  return parentConfig?.gsd?.projectDir;
+}
+
+/**
+ * Phase 100 GSD-06 — pure async helper: enumerate phase directories under
+ * `<root>/.planning/phases/` filtered by mtime (last 24h) and prioritized by
+ * phase-number prefix matching the task hint. Returns up to 5 RELATIVE paths
+ * (from `<root>`) to keep Discord embeds compact (RESEARCH.md Pitfall 8 —
+ * long phase slugs truncate Discord embeds).
+ *
+ * **Failures-swallow contract** (per Phase 99-M's existing relay
+ * try/catch + log-and-swallow pattern at line 126-130):
+ *   - root `.planning/phases/` doesn't exist → []
+ *   - readdir errors (EACCES, ENOENT) → []
+ *   - per-entry stat errors → entry skipped
+ *
+ * NEVER throws — caller's `relayCompletionToParent` is already in a
+ * try/catch but this function returns the empty fallback proactively so the
+ * relay extension is a true no-op when artifacts can't be discovered.
+ *
+ * **Filtering & sorting logic:**
+ * 1. List `<root>/.planning/phases/` entries.
+ * 2. Keep only directories (skip files like README.md).
+ * 3. Stat each — keep entries with `mtimeMs` within the last 24h.
+ * 4. If `taskHint` carries a phase number (regex `\b\d+\b`), sort
+ *    matching-prefix dirs first; tiebreak by mtime DESC. Otherwise pure
+ *    mtime DESC.
+ * 5. Return up to 5 entries as relative paths
+ *    (`.planning/phases/<name>/`).
+ *
+ * **DI:** filesystem operations are injected via the `deps` parameter so
+ * tests can mock `readdir`/`stat` without touching the real filesystem.
+ */
+export async function discoverArtifactPaths(
+  deps: {
+    readdir: typeof fsReaddir;
+    stat: typeof fsStat;
+  },
+  root: string,
+  taskHint?: string,
+): Promise<readonly string[]> {
+  const phasesDir = join(root, ".planning", "phases");
+  // Step 1 — root dir must exist
+  try {
+    await deps.stat(phasesDir);
+  } catch {
+    return [];
+  }
+  // Step 2 — list entries; surface readdir failures as []
+  let directoryNames: string[];
+  try {
+    const dirents = (await deps.readdir(phasesDir, {
+      withFileTypes: true,
+    })) as unknown as Array<{
+      name: string;
+      isDirectory: () => boolean;
+    }>;
+    directoryNames = dirents
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+  // Step 3 — mtime filter (24h window)
+  const now = Date.now();
+  const windowMs = 24 * 60 * 60 * 1000;
+  const candidates: { name: string; mtimeMs: number }[] = [];
+  for (const name of directoryNames) {
+    try {
+      const st = await deps.stat(join(phasesDir, name));
+      if (now - st.mtimeMs <= windowMs) {
+        candidates.push({ name, mtimeMs: st.mtimeMs });
+      }
+    } catch {
+      // per-entry stat failure — skip silently
+    }
+  }
+  // Step 4 — phase-prefix priority (if taskHint carries a phase number)
+  const phaseMatch = taskHint?.match(/\b(\d+)\b/);
+  const phaseNum = phaseMatch?.[1];
+  candidates.sort((a, b) => {
+    if (phaseNum) {
+      const aMatches =
+        a.name.startsWith(`${phaseNum}-`) || a.name === phaseNum;
+      const bMatches =
+        b.name.startsWith(`${phaseNum}-`) || b.name === phaseNum;
+      if (aMatches && !bMatches) return -1;
+      if (!aMatches && bMatches) return 1;
+    }
+    return b.mtimeMs - a.mtimeMs; // most recent first
+  });
+  // Step 5 — cap at 5, format as relative paths
+  return candidates
+    .slice(0, 5)
+    .map((c) => `.planning/phases/${c.name}/`);
+}
 
 /**
  * Configuration for creating a SubagentThreadSpawner.
@@ -105,11 +220,40 @@ export class SubagentThreadSpawner {
       const trimmed =
         lastReply.length > 1500 ? `${lastReply.slice(0, 1500)}…` : lastReply;
       const threadName = (channel as TextChannel).name ?? threadId;
+      // Phase 100 GSD-06 — discover artifact paths from the parent's GSD
+      // project root. No-op when the parent has no `gsd.projectDir` set
+      // (the case for 14+ existing agents — Phase 99-M base behavior is
+      // preserved). Failures inside discoverArtifactPaths return [] so
+      // the relay continues with the unchanged Phase 99-M prompt.
+      const parentConfig = this.sessionManager.getAgentConfig(
+        binding.agentName,
+      );
+      const artifactRoot = resolveArtifactRoot(parentConfig);
+      const artifacts = artifactRoot
+        ? await discoverArtifactPaths(
+            { readdir: fsReaddir, stat: fsStat },
+            artifactRoot,
+            // Use the thread name as taskHint — names like 'gsd:plan:100'
+            // carry the phase number, which discoverArtifactPaths uses for
+            // prefix priority.
+            threadName,
+          )
+        : [];
+      const artifactsLine =
+        artifacts.length > 0
+          ? `\n\n**Artifacts written:** ${artifacts.join(", ")}`
+          : "";
+      const includeArtifactsHint = artifacts.length > 0;
       const relayPrompt =
         `[SUBAGENT_COMPLETION] Your subagent in thread "${threadName}" just finished its work.\n\n` +
-        `**Their final response (last assistant message):**\n${trimmed}\n\n` +
+        `**Their final response (last assistant message):**\n${trimmed}` +
+        artifactsLine +
+        `\n\n` +
         `Briefly summarize the outcome for the user in this main channel (1-3 sentences max). ` +
         `Acknowledge completion and link to the thread if helpful (thread ID: ${threadId}). ` +
+        (includeArtifactsHint
+          ? `If artifacts are listed, include them verbatim in your summary so the operator can find them. `
+          : ``) +
         `If the subagent's reply is too short or unclear to summarize, just acknowledge completion + link. ` +
         `Do NOT call read_thread again — you already have the relevant content above. End your turn after posting the summary.`;
       const origin = makeRootOrigin("task", `subagent-completion:${threadId}`);
@@ -120,6 +264,7 @@ export class SubagentThreadSpawner {
           parentAgent: binding.agentName,
           subagentSession: binding.sessionName,
           relayLen: trimmed.length,
+          artifactCount: artifacts.length,
         },
         "subagent completion relayed to parent",
       );

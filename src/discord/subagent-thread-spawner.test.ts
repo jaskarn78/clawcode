@@ -2,11 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { SubagentThreadSpawner } from "./subagent-thread-spawner.js";
+import {
+  SubagentThreadSpawner,
+  resolveArtifactRoot,
+  discoverArtifactPaths,
+} from "./subagent-thread-spawner.js";
 import type { SubagentThreadConfig } from "./subagent-thread-types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
-import { readThreadRegistry } from "./thread-registry.js";
+import { readThreadRegistry, writeThreadRegistry } from "./thread-registry.js";
 
 /**
  * Create a minimal mock ResolvedAgentConfig for testing.
@@ -367,6 +371,398 @@ describe("SubagentThreadSpawner", () => {
 
       const bindings = await spawner.getSubagentBindings();
       expect(bindings).toHaveLength(2);
+    });
+  });
+});
+
+/**
+ * Phase 100 — relay prompt artifact-paths extension (Plan 100-05 / GSD-06).
+ *
+ * Phase 99-M's `relayCompletionToParent` (shipped 2026-04-26) summarizes the
+ * subagent's last assistant message into a parent-agent turn. Phase 100
+ * extends the prompt with discovered artifact paths so the parent's
+ * main-channel summary mentions the `.planning/phases/<phase>/` dirs the
+ * subagent created/touched.
+ *
+ * Two new exported pure helpers:
+ *   - resolveArtifactRoot(parentConfig?) — extracts gsd.projectDir or undefined
+ *   - discoverArtifactPaths({readdir,stat}, root, taskHint?) — lists relative
+ *     paths under <root>/.planning/phases/, filtered by 24h mtime window,
+ *     prioritized by phase-number prefix matching the task hint, capped at 5.
+ *     Failures resolve to []. Pure DI so tests don't touch real filesystem.
+ *
+ * Plus an integration test asserting `relayCompletionToParent` appends an
+ * "Artifacts written: ..." line when the parent has gsd.projectDir set.
+ */
+describe("Phase 100 — relay prompt artifact-paths extension", () => {
+  // Helper — build a Dirent-shaped object with isDirectory()/isFile().
+  function makeDirent(
+    name: string,
+    isDir = true,
+  ): { name: string; isDirectory: () => boolean; isFile: () => boolean } {
+    return {
+      name,
+      isDirectory: () => isDir,
+      isFile: () => !isDir,
+    };
+  }
+
+  describe("resolveArtifactRoot", () => {
+    it("AP7 — returns gsd.projectDir when set on parentConfig", () => {
+      const parent = {
+        gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+      } as ResolvedAgentConfig;
+      expect(resolveArtifactRoot(parent)).toBe("/opt/clawcode-projects/sandbox");
+    });
+
+    it("AP8 — returns undefined when parentConfig.gsd is absent", () => {
+      // Cast minimally — gsd is optional on ResolvedAgentConfig, so {} is allowed
+      // by the type system from the consumer's perspective.
+      const parent = {} as ResolvedAgentConfig;
+      expect(resolveArtifactRoot(parent)).toBeUndefined();
+    });
+
+    it("AP9 — returns undefined when parentConfig itself is undefined", () => {
+      expect(resolveArtifactRoot(undefined)).toBeUndefined();
+    });
+  });
+
+  describe("discoverArtifactPaths", () => {
+    let mockReaddir: ReturnType<typeof vi.fn>;
+    let mockStat: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      mockReaddir = vi.fn();
+      mockStat = vi.fn();
+    });
+
+    it("AP1 — happy path: 3 phase dirs in window returns 3 relative paths", async () => {
+      const now = Date.now();
+      // Root exists
+      mockStat.mockImplementation(async (p: string) => {
+        if (p.endsWith(".planning/phases")) return { mtimeMs: now } as any;
+        // Each phase dir entry — all within 24h window
+        return { mtimeMs: now - 60_000 } as any;
+      });
+      mockReaddir.mockResolvedValue([
+        makeDirent("100-foo"),
+        makeDirent("99-bar"),
+        makeDirent("101-baz"),
+      ] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+        "/gsd:plan-phase 100",
+      );
+      expect(out.length).toBe(3);
+      // All paths are RELATIVE (no leading slash, start with .planning/phases/)
+      for (const p of out) {
+        expect(p.startsWith(".planning/phases/")).toBe(true);
+        expect(p.startsWith("/")).toBe(false);
+      }
+      // Each contains one of the three dir names
+      const joined = out.join("|");
+      expect(joined).toContain("100-foo");
+      expect(joined).toContain("99-bar");
+      expect(joined).toContain("101-baz");
+    });
+
+    it("AP2 — mtime filter: dirs older than 24h excluded", async () => {
+      const now = Date.now();
+      const TWO_DAYS_AGO = now - 2 * 24 * 60 * 60 * 1000;
+      mockStat.mockImplementation(async (p: string) => {
+        if (p.endsWith(".planning/phases")) return { mtimeMs: now } as any;
+        if (p.includes("recent")) return { mtimeMs: now - 60_000 } as any;
+        if (p.includes("stale")) return { mtimeMs: TWO_DAYS_AGO } as any;
+        return { mtimeMs: now - 60_000 } as any;
+      });
+      mockReaddir.mockResolvedValue([
+        makeDirent("recent-1"),
+        makeDirent("stale-1"),
+        makeDirent("recent-2"),
+        makeDirent("stale-2"),
+      ] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+      );
+      expect(out.length).toBe(2);
+      const joined = out.join("|");
+      expect(joined).toContain("recent-1");
+      expect(joined).toContain("recent-2");
+      expect(joined).not.toContain("stale");
+    });
+
+    it("AP3 — max-5 cap: 7 dirs in window returns exactly 5", async () => {
+      const now = Date.now();
+      mockStat.mockImplementation(async (p: string) => {
+        if (p.endsWith(".planning/phases")) return { mtimeMs: now } as any;
+        return { mtimeMs: now - 60_000 } as any;
+      });
+      mockReaddir.mockResolvedValue([
+        makeDirent("a"),
+        makeDirent("b"),
+        makeDirent("c"),
+        makeDirent("d"),
+        makeDirent("e"),
+        makeDirent("f"),
+        makeDirent("g"),
+      ] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+      );
+      expect(out.length).toBe(5);
+    });
+
+    it("AP4 — phase-prefix priority: matching phase number sorts first", async () => {
+      const now = Date.now();
+      // Make NON-matching dirs more recent so default mtime sort would surface them first.
+      // Phase-prefix priority must override the recency sort.
+      mockStat.mockImplementation(async (p: string) => {
+        if (p.endsWith(".planning/phases")) return { mtimeMs: now } as any;
+        if (p.includes("100-bar")) return { mtimeMs: now - 60 * 60 * 1000 } as any; // 1h ago
+        if (p.includes("99-x")) return { mtimeMs: now - 1000 } as any; // very recent
+        if (p.includes("101-y")) return { mtimeMs: now - 2000 } as any;
+        return { mtimeMs: now } as any;
+      });
+      mockReaddir.mockResolvedValue([
+        makeDirent("99-x"),
+        makeDirent("100-bar"),
+        makeDirent("101-y"),
+      ] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+        "/gsd:plan-phase 100",
+      );
+      expect(out.length).toBe(3);
+      // FIRST entry must be the phase-100 match despite being older than 99-x
+      expect(out[0]).toContain("100-bar");
+    });
+
+    it("AP5 — readdir failure returns empty array (failures-swallow contract)", async () => {
+      const now = Date.now();
+      // Root stat succeeds...
+      mockStat.mockResolvedValue({ mtimeMs: now } as any);
+      // ...but readdir blows up.
+      mockReaddir.mockRejectedValue(new Error("ENOENT: no such file"));
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+      );
+      expect(out).toEqual([]);
+    });
+
+    it("AP6 — root .planning/phases doesn't exist returns []", async () => {
+      // Stat on the root throws (ENOENT)
+      mockStat.mockImplementation(async () => {
+        throw new Error("ENOENT");
+      });
+      mockReaddir.mockResolvedValue([] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/nope",
+      );
+      expect(out).toEqual([]);
+      // readdir should NOT have been called when stat fails
+      expect(mockReaddir).not.toHaveBeenCalled();
+    });
+
+    it("AP6b — non-directory entries are filtered out (only isDirectory()==true)", async () => {
+      const now = Date.now();
+      mockStat.mockImplementation(async (p: string) => {
+        if (p.endsWith(".planning/phases")) return { mtimeMs: now } as any;
+        return { mtimeMs: now - 60_000 } as any;
+      });
+      mockReaddir.mockResolvedValue([
+        makeDirent("100-real-dir", true),
+        makeDirent("README.md", false), // file, not dir
+        makeDirent("101-also-real", true),
+      ] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+      );
+      expect(out.length).toBe(2);
+      expect(out.join("|")).not.toContain("README");
+    });
+
+    it("AP6c — per-entry stat failures are silently skipped", async () => {
+      const now = Date.now();
+      mockStat.mockImplementation(async (p: string) => {
+        if (p.endsWith(".planning/phases")) return { mtimeMs: now } as any;
+        if (p.includes("good")) return { mtimeMs: now - 60_000 } as any;
+        if (p.includes("broken")) throw new Error("EACCES");
+        return { mtimeMs: now - 60_000 } as any;
+      });
+      mockReaddir.mockResolvedValue([
+        makeDirent("good-1"),
+        makeDirent("broken-1"),
+        makeDirent("good-2"),
+      ] as any);
+
+      const out = await discoverArtifactPaths(
+        { readdir: mockReaddir as any, stat: mockStat as any },
+        "/proj",
+      );
+      expect(out.length).toBe(2);
+      expect(out.join("|")).not.toContain("broken");
+    });
+  });
+
+  describe("relayCompletionToParent integration", () => {
+    let tmpDir: string;
+    let registryPath: string;
+    let sessionManager: ReturnType<typeof makeMockSessionManager>;
+    let turnDispatcher: { dispatch: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "relay-artifact-test-"));
+      registryPath = join(tmpDir, "thread-bindings.json");
+      sessionManager = makeMockSessionManager();
+      turnDispatcher = { dispatch: vi.fn(async () => undefined) };
+    });
+
+    afterEach(async () => {
+      await rm(tmpDir, { recursive: true, force: true });
+    });
+
+    /**
+     * AP10 — integration test asserting the full relay flow appends an
+     * Artifacts: line when the parent has gsd.projectDir AND the discovery
+     * helper returns non-empty paths.
+     *
+     * We can't easily DI discoverArtifactPaths through the spawner constructor
+     * (it's used directly), so we use a real-on-disk tempDir as gsd.projectDir
+     * and create a recently-mtime'd phase directory under it. That exercises
+     * the live fs path end-to-end.
+     */
+    it("AP10 — appends 'Artifacts written:' line when parent has gsd.projectDir AND a recent phase dir exists", async () => {
+      // Set up a real fake project root with a recent .planning/phases/100-foo/ dir
+      const projectDir = join(tmpDir, "fake-project");
+      const phasesDir = join(projectDir, ".planning", "phases");
+      const recentPhase = join(phasesDir, "100-fake-phase");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(recentPhase, { recursive: true });
+
+      // Bind parent agent to thread-id-A, with gsd.projectDir set
+      const parentConfig = makeAgentConfig({
+        gsd: { projectDir: projectDir },
+      });
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-id-A",
+            parentChannelId: "channel-X",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-abc",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      // Mock Discord client with a thread that has a single subagent message
+      const subagentMessage = {
+        author: { bot: true },
+        webhookId: "webhook-123",
+        content: "All work done.",
+      };
+      const fetched = new Map([["m1", subagentMessage]]);
+      const mockChannel = {
+        id: "thread-id-A",
+        name: "gsd:plan:100",
+        messages: {
+          fetch: vi.fn(async () => fetched),
+        },
+      };
+      const discordClient = {
+        channels: {
+          fetch: vi.fn(async () => mockChannel),
+        },
+      };
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-id-A");
+
+      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const dispatchCall = turnDispatcher.dispatch.mock.calls[0];
+      // dispatch(origin, agentName, prompt)
+      const prompt: string = dispatchCall[2];
+      // Base Phase 99-M shape preserved
+      expect(prompt).toContain("[SUBAGENT_COMPLETION]");
+      expect(prompt).toContain("All work done.");
+      expect(prompt).toContain("thread-id-A");
+      // Phase 100 extension
+      expect(prompt).toContain("Artifacts written:");
+      expect(prompt).toContain(".planning/phases/100-fake-phase/");
+    });
+
+    it("AP10b — no Artifacts line when parent has no gsd.projectDir (Phase 99-M base behavior preserved)", async () => {
+      // Bind parent agent — NO gsd field set
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-id-B",
+            parentChannelId: "channel-X",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-xyz",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      const subagentMessage = {
+        author: { bot: true },
+        webhookId: "webhook-123",
+        content: "Done with the non-GSD task.",
+      };
+      const fetched = new Map([["m1", subagentMessage]]);
+      const mockChannel = {
+        id: "thread-id-B",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-id-B");
+
+      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      // Phase 99-M base shape preserved
+      expect(prompt).toContain("[SUBAGENT_COMPLETION]");
+      expect(prompt).toContain("Done with the non-GSD task.");
+      // Crucially — NO Artifacts line for non-GSD subthreads
+      expect(prompt).not.toContain("Artifacts written:");
     });
   });
 });
