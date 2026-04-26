@@ -403,5 +403,15 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - **Path 3 — port to clawcode-native MCP/tool**: rewrite the Schwab sync logic as a ClawCode skill or MCP server. Cleanest long-term.
 - Track which migrated schedules reference OpenClaw paths so they're not silently broken.
 
+**Sub-scope J — Phase 95 dreaming source-material wiring + production hardening:**
+- Trigger: Operator enabled dreaming for fin-acquisition. Three latent bugs surfaced + were hotfixed inline this session: (1) Haiku wraps JSON output in ```json``` markdown fence — strict JSON.parse rejects (`f38ae00`); (2) Haiku produces narrative prose preamble before JSON ("Picking up where we left off, …") — extract first balanced JSON object (`ca0122b`); (3) tightened system prompt to require strict JSON-only output (`509ff03`); (4) `entry.timestamp.toISOString()` undefined — wrapper lambda in IPC handler was discarding entry shape, dream-auto-apply was passing the FULL `{agentName, memoryRoot, entry}` but the lambda treated it all as `entry` (`c2d68f9`).
+- After all 4 hotfixes: dream pass fires successfully end-to-end, log written to `memory/dreams/YYYY-MM-DD.md`.
+- BUT the dream's `themedReflection` says "No memory chunks, conversation summaries, or wikilink graph data were provided in this reflection cycle." — meaning the dream-prompt-builder isn't pulling from the 6087 conversation_turns + 326 session-summaries we have. Likely related to sub-scope A (wrong-DB-path) — the prompt builder may be reading from the empty single-`memory/` DB instead of the agent's actual `memory/memory/` DB.
+- Scope:
+  - Fix dream-prompt-builder to read from the agent's actual MemoryStore + ConversationStore (single source of truth — same DB the agent + Phase 67 resume brief use).
+  - Test fixture: spawn a dream pass after a synthetic conversation, assert `themedReflection` cites specific session content.
+  - Add a `dream.minSourceContent` config (e.g., min 5 chunks OR min 1 session summary) — skip dream pass when source is too sparse to produce meaningful output.
+  - Consider: Phase 99 sub-scope J could BLOCK on sub-scope A (wrong-DB-path) since the underlying issue is the same.
+
 **Plans:** TBD (run /gsd:plan-phase 99 in v2.7 to break down)
-**Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery, expanded 2026-04-26 with sub-scopes E/F/G/H/I as more issues surfaced. None of these block production but all degrade UX or carry security/operational debt. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
+**Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery, expanded 2026-04-26 with sub-scopes E/F/G/H/I/J as more issues surfaced. None of these block production but all degrade UX or carry security/operational debt. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
