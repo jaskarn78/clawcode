@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 100-05-PLAN.md (parallel Wave 3 with Plan 04)
-last_updated: "2026-04-26T18:49:37.511Z"
+stopped_at: Completed 100-04-PLAN.md (parallel Wave 3 with Plan 05)
+last_updated: "2026-04-26T18:51:44.925Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 12
   completed_phases: 3
   total_plans: 25
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 100 (gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 
 ## Performance Metrics
 
@@ -284,6 +284,9 @@ Recent decisions affecting current work:
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 02 — symmetric-edits Rule 3 enforced for createSession + resumeSession baseOptions; SA5..SA8 parity tests catch any future drift
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 02 — vi.mock @anthropic-ai/claude-agent-sdk at session-adapter test file top establishes the SDK adapter end-to-end test pattern; existing tests unaffected (they don't await import the SDK module)
 - [Phase 100]: Plan 100-05 — Phase 99-M relay extended with optional 'Artifacts written:' line. DI-pure helpers (resolveArtifactRoot + discoverArtifactPaths) preserve failures-swallow contract. Zero behavior change for non-GSD subthreads (parentConfig.gsd === undefined). Relative paths only per RESEARCH Pitfall 8.
+- [Phase 100]: Optional-DI for subagentThreadSpawner (mirrors Phase 87 aclDeniedByAgent + Phase 83 skillsCatalog) — missing spawner emits 'unavailable' reply rather than throwing
+- [Phase 100]: deferReply is FIRST async call in handleGsdLongRunner (RESEARCH.md Pitfall 4) — pinned by GSD-6 invocationCallOrder assertion
+- [Phase 100]: Set-based long-runner detection (GSD_LONG_RUNNERS.has) instead of if-ladder string compares — scales when more long-runners join
 
 ### v2.1 closing decisions (for reference)
 
@@ -413,9 +416,10 @@ Recent decisions affecting current work:
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P03 | 5min | 1 tasks | 2 files |
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P02 | 16min | 2 tasks | 4 files |
 | Phase 100 P05 | 7min | 1 tasks | 2 files |
+| Phase 100 P04 | 9min | 2 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-26
-Stopped at: Completed 100-05-PLAN.md (parallel Wave 3 with Plan 04)
+Stopped at: Completed 100-04-PLAN.md (parallel Wave 3 with Plan 05)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
