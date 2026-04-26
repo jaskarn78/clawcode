@@ -1912,15 +1912,19 @@ describe("Phase 100 — agent.settingSources + agent.gsd.projectDir", () => {
     expect(result.gsd?.projectDir).toBeUndefined();
   });
 
-  it("PR11: parse-regression — in-tree clawcode.yaml parses; only admin-clawdy carries settingSources/gsd (Wave 0 §22 + Plan 07 lock-in)", () => {
+  it("PR11: parse-regression — in-tree clawcode.yaml parses; settingSources/gsd are 1:1 (Phase 100 follow-up cascade)", () => {
     // Catch an accidental required-field cascade in the additive-optional
     // schema extension. v2.5/v2.6 migrated configs must parse unchanged.
     //
-    // Plan 07 cascade: admin-clawdy is the SOLE carrier of settingSources +
-    // gsd in the dev fixture. Per CONTEXT.md decision lock-in, no production
-    // agent receives those fields. This pin guards both the additive-optional
-    // schema invariant (other agents stay implicit-default) AND the Plan 07
-    // lock-in (admin-clawdy is the only opt-in).
+    // Phase 100 follow-up — relaxed from "ONLY admin-clawdy" to a per-agent
+    // 1:1 invariant: an agent has BOTH settingSources [project, user] AND
+    // gsd.projectDir, OR it has NEITHER. The follow-up extends GSD capability
+    // to fin-acquisition (operator-driven self-serve workflow); future GSD-
+    // enabled agents follow the same invariant. Non-GSD production agents
+    // (personal, fin-tax, finmentum-content-creator, etc.) stay implicit-
+    // default — CONTEXT.md lock-in: settingSources triggers ~/.claude/commands/
+    // loading; gsd.projectDir tells the SDK where to cd into. Neither works
+    // without the other.
     const yamlPath = join(process.cwd(), "clawcode.yaml");
     const raw = readFileSync(yamlPath, "utf-8");
     const parsed = parseYaml(raw);
@@ -1929,17 +1933,23 @@ describe("Phase 100 — agent.settingSources + agent.gsd.projectDir", () => {
     if (result.success) {
       // 10+ agents currently in clawcode.yaml.
       expect(result.data.agents.length).toBeGreaterThanOrEqual(10);
+      // Pin: admin-clawdy carries the original Phase 100 GSD config.
+      const adminClawdy = result.data.agents.find((a) => a.name === "admin-clawdy");
+      expect(adminClawdy?.settingSources).toEqual(["project", "user"]);
+      expect(adminClawdy?.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+      // 1:1 invariant — settingSources [project, user] iff gsd.projectDir set.
       for (const agent of result.data.agents) {
-        if (agent.name === "admin-clawdy") {
-          // Plan 07 cascade — admin-clawdy carries the GSD opt-in fields.
-          expect(agent.settingSources).toEqual(["project", "user"]);
-          expect(agent.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+        const hasGsd = agent.gsd?.projectDir !== undefined;
+        if (hasGsd) {
+          expect(
+            agent.settingSources,
+            `GSD-enabled agent ${agent.name} missing settingSources [project, user]`,
+          ).toEqual(["project", "user"]);
         } else {
-          // All other production agents stay implicit-default per CONTEXT.md
-          // lock-in — accidental cascade onto fin-* / personal / etc. would
-          // load ~/.claude/commands/ for the wrong agent set.
-          expect(agent.settingSources).toBeUndefined();
-          expect(agent.gsd).toBeUndefined();
+          expect(
+            agent.settingSources,
+            `non-GSD agent ${agent.name} unexpectedly carries settingSources`,
+          ).toBeUndefined();
         }
       }
     }

@@ -87,26 +87,42 @@ describe("Phase 100 — clawcode.yaml admin-clawdy fixture", () => {
     expect(byName("gsd-quick")?.claudeCommand).toBe("/gsd:quick {task}");
   });
 
-  it("YML6 — only admin-clawdy carries settingSources; other agents stay implicit-default", () => {
-    // CONTEXT.md decision lock-in: settingSources `[project, user]` is
-    // ONLY on admin-clawdy. Production agents (fin-acquisition,
-    // finmentum-content-creator, personal, etc.) keep their schema-default
-    // (undefined → loader resolver substitutes ["project"] in Plan 01).
-    // Accidental cascade onto fin-* agents would load ~/.claude/commands/
-    // for the wrong agents and break the lock-in.
-    const others = config.agents.filter((a) => a.name !== "admin-clawdy");
-    expect(others.length).toBeGreaterThan(0);
-    for (const a of others) {
+  it("YML6 — only GSD-enabled agents carry settingSources [project, user]; non-GSD agents stay implicit-default", () => {
+    // Phase 100 follow-up — relaxed from "ONLY admin-clawdy" to "ONLY agents
+    // with gsd.projectDir". The original Phase 100 lock-in restricted GSD to
+    // admin-clawdy; the follow-up extends GSD capability to fin-acquisition
+    // (and any future agent the operator GSD-enables via `/gsd-set-project`
+    // or yaml edit). The new invariant: settingSources [project, user] tracks
+    // gsd.projectDir 1:1 — neither setting works without the other (per
+    // CONTEXT.md: settingSources triggers ~/.claude/commands/ loading;
+    // gsd.projectDir tells the SDK where to cd into).
+    //
+    // Non-GSD agents keep their schema-default (undefined → loader resolves
+    // to ["project"]) so personal, fin-tax, finmentum-content-creator, etc.
+    // are unaffected. Accidental cascade onto a non-GSD agent would load
+    // ~/.claude/commands/ for the wrong agent and break the boundary.
+    const nonGsdAgents = config.agents.filter((a) => !a.gsd?.projectDir);
+    expect(nonGsdAgents.length).toBeGreaterThan(0);
+    for (const a of nonGsdAgents) {
       // Either undefined (most common — schema-default behavior) OR
-      // explicitly ["project"]. Per CONTEXT.md none of the dev fleet
-      // sets it explicitly today; this assertion stays permissive in
-      // case a future agent adds an explicit `["project"]` for clarity.
+      // explicitly ["project"]. Stays permissive for a future agent that
+      // adds an explicit `["project"]` for clarity.
       const ok =
         a.settingSources === undefined ||
         (Array.isArray(a.settingSources) &&
           a.settingSources.length > 0 &&
           a.settingSources.every((s) => s === "project"));
-      expect(ok, `agent ${a.name} has unexpected settingSources: ${JSON.stringify(a.settingSources)}`).toBe(true);
+      expect(ok, `non-GSD agent ${a.name} has unexpected settingSources: ${JSON.stringify(a.settingSources)}`).toBe(true);
+    }
+    // Conversely: every GSD-enabled agent MUST have settingSources [project,
+    // user] — otherwise the SDK won't load ~/.claude/commands/gsd/*.md and
+    // /gsd-* slashes will fail with "Unknown command" at runtime.
+    const gsdAgents = config.agents.filter((a) => a.gsd?.projectDir);
+    for (const a of gsdAgents) {
+      expect(
+        a.settingSources,
+        `GSD-enabled agent ${a.name} missing settingSources [project, user]`,
+      ).toEqual(["project", "user"]);
     }
   });
 

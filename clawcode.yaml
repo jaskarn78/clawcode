@@ -250,6 +250,19 @@ agents:
       - brave-search
     memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-acquisition
     effort: auto
+    # Phase 100 follow-up — fin-acquisition gets GSD too so the operator can
+    # drive the Finmentum workspace via /gsd-* commands in #fin-acquisition.
+    # settingSources: [project, user] loads ~/.claude/commands/gsd/*.md so
+    # the SDK auto-dispatches /gsd:* slashes (Plan 100-06 symlinks).
+    # gsd.projectDir points at the Finmentum workspace root — distinct from
+    # Admin Clawdy's /opt/clawcode-projects/sandbox so each agent drives its
+    # own GSD project independently. Auto-inherits GSD_SLASH_COMMANDS at
+    # register time (slash-types.ts) — no per-agent yaml duplication needed.
+    settingSources:
+      - project
+      - user
+    gsd:
+      projectDir: /home/jjagpal/.openclaw/workspace-finmentum/
     allowedModels:
       - sonnet
       - opus
