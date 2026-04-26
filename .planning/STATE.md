@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 100-04-PLAN.md (parallel Wave 3 with Plan 05)
-last_updated: "2026-04-26T18:51:44.925Z"
+stopped_at: Completed 100-06-PLAN.md (parallel Wave 4 with Plan 07)
+last_updated: "2026-04-26T19:00:27.587Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 12
   completed_phases: 3
   total_plans: 25
-  completed_plans: 22
+  completed_plans: 23
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 100 (gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 
 ## Performance Metrics
 
@@ -287,6 +287,7 @@ Recent decisions affecting current work:
 - [Phase 100]: Optional-DI for subagentThreadSpawner (mirrors Phase 87 aclDeniedByAgent + Phase 83 skillsCatalog) — missing spawner emits 'unavailable' reply rather than throwing
 - [Phase 100]: deferReply is FIRST async call in handleGsdLongRunner (RESEARCH.md Pitfall 4) — pinned by GSD-6 invocationCallOrder assertion
 - [Phase 100]: Set-based long-runner detection (GSD_LONG_RUNNERS.has) instead of if-ladder string compares — scales when more long-runners join
+- [Phase 100]: Plan 100-06 — clawcode gsd install CLI subcommand: DI-pure runGsdInstallAction + ensureSymlink + ensureSandbox helpers; idempotent (readlink + stat detection of already-present state); source-paths-immutable invariant pinned by INST14 spy assertion; zero new npm deps (node:fs/promises + node:child_process built-ins). Symlinks PARENT directories to sidestep Issue #14836; targets ~/.claude/commands/gsd as SDK-discoverable surface.
 
 ### v2.1 closing decisions (for reference)
 
@@ -417,9 +418,10 @@ Recent decisions affecting current work:
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P02 | 16min | 2 tasks | 4 files |
 | Phase 100 P05 | 7min | 1 tasks | 2 files |
 | Phase 100 P04 | 9min | 2 tasks | 2 files |
+| Phase 100 P06 | 5min | 2 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-26
-Stopped at: Completed 100-04-PLAN.md (parallel Wave 3 with Plan 05)
+Stopped at: Completed 100-06-PLAN.md (parallel Wave 4 with Plan 07)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
