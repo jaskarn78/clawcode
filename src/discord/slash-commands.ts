@@ -87,6 +87,12 @@ import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import type { TurnOrigin } from "../manager/turn-origin.js";
 import { makeRootOrigin } from "../manager/turn-origin.js";
 import type { SkillsCatalog } from "../skills/types.js";
+// Phase 100 Plan 04 GSD-01..03 — long-runner /gsd-* slash dispatch pre-spawns
+// a subagent thread via SubagentThreadSpawner.spawnInThread. The spawner is
+// injected via the SlashCommandHandlerConfig (optional — when absent the
+// handler emits a graceful "unavailable" reply, mirroring Phase 87 CMD-05's
+// optional-DI pattern for ACL deny sets).
+import type { SubagentThreadSpawner } from "./subagent-thread-spawner.js";
 
 /**
  * Maximum Discord message length (API limit).
@@ -134,6 +140,24 @@ const MODEL_CONFIRM_TTL_MS = 30_000;
  * no silent truncation.
  */
 const MAX_COMMANDS_PER_GUILD = 90;
+
+/**
+ * Phase 100 Plan 04 GSD-01..03 — long-runner /gsd-* commands that auto-spawn
+ * a subagent thread when invoked in #admin-clawdy. Short-runners (gsd-debug,
+ * gsd-quick) are intentionally NOT in this set — they fall through to the
+ * existing control-command / agent-routed branch where formatCommandMessage
+ * rewrites their claudeCommand template ("/gsd:debug {issue}" / "/gsd:quick
+ * {task}") to the canonical SDK form for inline dispatch.
+ *
+ * Detection happens BEFORE the generic control-command dispatch in
+ * handleInteraction — see the 12th application of the inline-handler-short-
+ * circuit pattern (Phases 85/86/87/88/90/91/92/95/96).
+ */
+const GSD_LONG_RUNNERS: ReadonlySet<string> = new Set([
+  "gsd-autonomous",
+  "gsd-plan-phase",
+  "gsd-execute-phase",
+]);
 
 /**
  * Phase 93 Plan 01 — version sourced from src/cli/index.ts L118
@@ -335,6 +359,19 @@ export type SlashCommandHandlerConfig = {
    * default — fail closed).
    */
   readonly adminUserIds?: readonly string[];
+  /**
+   * Phase 100 Plan 04 GSD-01..03 — optional subagent thread spawner used by
+   * the 12th inline-handler short-circuit for /gsd-* long-runners. When the
+   * dispatcher detects gsd-autonomous / gsd-plan-phase / gsd-execute-phase in
+   * #admin-clawdy, it pre-spawns a subagent thread via spawnInThread and
+   * passes the canonical /gsd:* slash as the subagent's first user message.
+   *
+   * Optional so tests + non-Discord wiring continue to work — when absent,
+   * the handler emits a "Subagent thread spawning unavailable" editReply and
+   * does NOT throw. Mirrors the optional-DI pattern used by aclDeniedByAgent
+   * (Phase 87 CMD-05) and skillsCatalog (Phase 83 EFFORT-05).
+   */
+  readonly subagentThreadSpawner?: SubagentThreadSpawner;
 };
 
 // ---------------------------------------------------------------------------
@@ -892,6 +929,12 @@ export class SlashCommandHandler {
    * (no admins recognized).
    */
   private readonly adminUserIds: readonly string[];
+  /**
+   * Phase 100 Plan 04 GSD-01..03 — optional subagent thread spawner used by
+   * handleGsdLongRunner. null when not wired (graceful fallback per
+   * SlashCommandHandlerConfig.subagentThreadSpawner JSDoc).
+   */
+  private readonly subagentThreadSpawner: SubagentThreadSpawner | null;
   private client: Client | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
 
@@ -917,6 +960,8 @@ export class SlashCommandHandler {
       this.aclDeniedByAgent = null;
     }
     this.adminUserIds = Object.freeze([...(config.adminUserIds ?? [])]);
+    // Phase 100 Plan 04 GSD-01..03 — wire optional subagent thread spawner.
+    this.subagentThreadSpawner = config.subagentThreadSpawner ?? null;
   }
 
   /**
@@ -1254,6 +1299,22 @@ export class SlashCommandHandler {
     // eliminate the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
     if (commandName === "clawcode-probe-fs") {
       await this.handleProbeFsCommand(interaction);
+      return;
+    }
+
+    // Phase 100 Plan 04 GSD-01..03 / GSD-09 — 12th application of the inline-
+    // handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/
+    // 88/90/91/92/95/96). Long-runner GSD commands pre-spawn a subagent
+    // thread so the main channel stays free; the subagent inherits Admin
+    // Clawdy's settingSources (["project","user"] per Plan 100-02 + Plan
+    // 100-07) and dispatches the canonical /gsd:* slash inline because
+    // settingSources includes "user" (loads ~/.claude/commands/gsd/*.md per
+    // Plan 100-06). Short-runners (gsd-debug, gsd-quick) fall through to the
+    // legacy agent-routed branch below — their claudeCommand template
+    // ("/gsd:debug {issue}" / "/gsd:quick {task}") rewrites to the canonical
+    // SDK form via formatCommandMessage's placeholder substitution.
+    if (GSD_LONG_RUNNERS.has(commandName)) {
+      await this.handleGsdLongRunner(interaction, commandName);
       return;
     }
 
@@ -1826,6 +1887,154 @@ export class SlashCommandHandler {
         { command: "clawcode-probe-fs", error: (error as Error).message },
         "failed to send probe-fs embed",
       );
+    }
+  }
+
+  /**
+   * Phase 100 Plan 04 GSD-01..03 / GSD-09 — handle long-runner /gsd-* slash
+   * commands by pre-spawning a subagent thread.
+   *
+   * Flow:
+   *   1. Defer reply within the 3s Discord interaction-token window
+   *      (RESEARCH.md Pitfall 4 — deferReply MUST be the FIRST async call).
+   *   2. Channel-bound-to-admin-clawdy guard (CONTEXT.md lock-in: only
+   *      Admin Clawdy responds to /gsd-* slashes).
+   *   3. Resolve the cmdDef from admin-clawdy's slashCommands list (Plan 07
+   *      adds the 5 entries; this method trusts that contract).
+   *   4. Build the canonical /gsd:* string via formatCommandMessage (existing
+   *      helper at the bottom of this file). For "/gsd:autonomous {args}"
+   *      with args="--from 100" → produces "/gsd:autonomous --from 100".
+   *   5. Pre-spawn a subagent thread named gsd:<short>:<phaseArg>; the
+   *      canonical /gsd:* string flows into spawnInThread.task as the
+   *      subagent's first user message, which the SDK auto-dispatches
+   *      because settingSources includes "user" (loads ~/.claude/commands/
+   *      gsd/*.md per Plan 100-06 symlinks).
+   *   6. EditReply with thread URL + ack message.
+   *
+   * Phase 99-M auto-relay (Plan 100-05 extension) handles the parent-side
+   * completion summary on subagent session end — out of scope for Plan 04.
+   *
+   * Spawn errors are surfaced verbatim via err.message (Phase 85 TOOL-04
+   * precedent). Missing spawner DI emits a graceful "unavailable" reply.
+   *
+   * @param interaction — the Discord ChatInputCommandInteraction
+   * @param commandName — the slash command name (gsd-autonomous /
+   *                      gsd-plan-phase / gsd-execute-phase per
+   *                      GSD_LONG_RUNNERS)
+   */
+  private async handleGsdLongRunner(
+    interaction: ChatInputCommandInteraction,
+    commandName: string,
+  ): Promise<void> {
+    // Step 1 — defer FIRST (before any other I/O). 3s race-safe.
+    try {
+      await interaction.deferReply({ ephemeral: false });
+    } catch (error) {
+      this.log.error(
+        { command: commandName, error: (error as Error).message },
+        "failed to defer /gsd-* reply",
+      );
+      return;
+    }
+
+    // Step 2 — admin-clawdy channel guard.
+    const channelId = interaction.channelId;
+    const agentName = getAgentForChannel(this.routingTable, channelId);
+    if (agentName !== "admin-clawdy") {
+      try {
+        await interaction.editReply(
+          "/gsd-* commands are restricted to #admin-clawdy.",
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Step 3 — resolve cmdDef from admin-clawdy's slashCommands list.
+    const agentConfig = this.resolvedAgents.find((a) => a.name === agentName);
+    const cmdDef = agentConfig?.slashCommands.find(
+      (c) => c.name === commandName,
+    );
+    if (!cmdDef) {
+      try {
+        await interaction.editReply(`Unknown command: /${commandName}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Step 4 — extract option values + build canonical /gsd:* string.
+    const options = new Map<string, string | number | boolean>();
+    for (const opt of cmdDef.options) {
+      const v = interaction.options.get(opt.name);
+      if (v !== null && v !== undefined && v.value !== null && v.value !== undefined) {
+        options.set(opt.name, v.value);
+      }
+    }
+    const canonicalSlash = formatCommandMessage(cmdDef, options);
+
+    // Step 5 — build thread name: gsd:autonomous:100 / gsd:plan:100 /
+    // gsd:execute:100. shortName maps the Discord-compatible name back to
+    // the short canonical form: gsd-autonomous → autonomous;
+    // gsd-plan-phase → plan; gsd-execute-phase → execute.
+    const phaseArgRaw = String(
+      options.get("phase") ?? options.get("args") ?? "",
+    ).trim();
+    const phaseArg = phaseArgRaw.length > 0 ? phaseArgRaw.split(/\s+/)[0]! : "";
+    const shortName = commandName.replace(/^gsd-/, "").replace(/-phase$/, "");
+    const threadName = phaseArg
+      ? `gsd:${shortName}:${phaseArg}`
+      : `gsd:${shortName}`;
+
+    // Step 6 — graceful fallback when spawner not wired.
+    if (!this.subagentThreadSpawner) {
+      try {
+        await interaction.editReply(
+          "Subagent thread spawning unavailable (no Discord bridge).",
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Step 7 — pre-spawn subagent thread; surface verbatim error on failure.
+    try {
+      const result = await this.subagentThreadSpawner.spawnInThread({
+        parentAgentName: agentName,
+        threadName,
+        task: canonicalSlash,
+      });
+      const threadUrl = `https://discord.com/channels/${interaction.guildId}/${result.threadId}`;
+      try {
+        await interaction.editReply(
+          `🚀 Spawned ${threadName} subthread for ${canonicalSlash}\nThread: ${threadUrl}\n_Working in subthread; main channel summary on completion._`,
+        );
+      } catch {
+        /* expired */
+      }
+      this.log.info(
+        {
+          command: commandName,
+          threadId: result.threadId,
+          threadName,
+          parentAgent: agentName,
+        },
+        "/gsd-* long-runner subthread spawned",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: commandName, error: msg },
+        "/gsd-* long-runner spawn failed",
+      );
+      try {
+        await interaction.editReply(`Failed to spawn /gsd-* subthread: ${msg}`);
+      } catch {
+        /* expired */
+      }
     }
   }
 
