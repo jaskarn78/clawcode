@@ -439,9 +439,9 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Requirements:** REQ-100-01..REQ-100-10 (synthesized from CONTEXT.md decision lock-ins — slash dispatch, settingSources flow, auto-thread pre-spawn, gsd.projectDir, symlink delivery, artifact relay, agent-restart classification, sandbox bootstrap, channel guard, UAT smoke).
 
-**Plans:** 2/8 plans executed
+**Plans:** 3/8 plans executed
 - [x] 100-01-PLAN.md — Schema extensions: agent.settingSources + agent.gsd.projectDir + ResolvedAgentConfig propagation + loader resolver
-- [ ] 100-02-PLAN.md — Session-adapter wiring: replace hardcoded cwd + settingSources with config-driven values (createSession + resumeSession)
+- [x] 100-02-PLAN.md — Session-adapter wiring: replace hardcoded cwd + settingSources with config-driven values (createSession + resumeSession)
 - [x] 100-03-PLAN.md — Differ classification: settingSources + gsd.projectDir as agent-restart (NON_RELOADABLE) fields
 - [ ] 100-04-PLAN.md — Slash dispatcher: /gsd-* inline handler with auto-thread pre-spawn for long-runners (12th application)
 - [ ] 100-05-PLAN.md — Phase 99-M relay extension: append artifact paths to parent's main-channel summary prompt
