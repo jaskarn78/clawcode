@@ -142,6 +142,11 @@ function makeAdminClawdy(
     identity: undefined,
     slashCommands,
     settingSources: ["project", "user"],
+    // Phase 100 follow-up — capability-based GSD dispatch reads
+    // `agent.gsd?.projectDir` instead of hardcoding "Admin Clawdy". Admin
+    // Clawdy's production yaml has this set to /opt/clawcode-projects/sandbox;
+    // the dev fixture mirrors that so handleGsdLongRunner accepts the agent.
+    gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
   } as unknown as ResolvedAgentConfig;
 }
 

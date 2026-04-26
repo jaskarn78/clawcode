@@ -27,13 +27,14 @@ import {
   type StringSelectMenuInteraction,
 } from "discord.js";
 import { execSync } from "node:child_process";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { statSync } from "node:fs";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
-import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
+import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS, GSD_SLASH_COMMANDS } from "./slash-types.js";
 // Phase 93 Plan 01 — pure renderer for /clawcode-status daemon short-circuit.
 import { buildStatusData, renderStatus } from "./status-render.js";
 // Phase 94 Plan 07 — shared pure renderer for the capability-probe column on
@@ -1086,6 +1087,25 @@ export class SlashCommandHandler {
         }
       }
 
+      // Phase 100 follow-up — auto-inherit GSD_SLASH_COMMANDS for any guild
+      // that has at least one agent with `gsd?.projectDir` configured. Single
+      // source of truth (slash-types.ts); no per-agent yaml duplication. The
+      // existing `seenNames` dedup keeps the legacy Phase 100 yaml entries on
+      // Admin Clawdy working unchanged — first-seen wins, so the agent's own
+      // copy lands first (during the resolveAgentCommands loop above) and
+      // GSD_SLASH_COMMANDS only fills in any names the agent didn't define.
+      const hasGsdEnabledAgent = this.resolvedAgents.some(
+        (a) => a.gsd?.projectDir,
+      );
+      if (hasGsdEnabledAgent) {
+        for (const cmd of GSD_SLASH_COMMANDS) {
+          if (!seenNames.has(cmd.name)) {
+            seenNames.add(cmd.name);
+            allCommands.push(cmd);
+          }
+        }
+      }
+
       // Add control commands (daemon-direct, not agent-routed)
       for (const cmd of CONTROL_COMMANDS) {
         if (!seenNames.has(cmd.name)) {
@@ -1305,6 +1325,18 @@ export class SlashCommandHandler {
     // eliminate the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
     if (commandName === "clawcode-probe-fs") {
       await this.handleProbeFsCommand(interaction);
+      return;
+    }
+
+    // Phase 100 follow-up — /gsd-set-project inline handler. Routed BEFORE
+    // GSD_LONG_RUNNERS so the runtime project switcher never falls into the
+    // long-runner subagent-thread path. Validates the path option (absolute,
+    // exists, is-directory) and dispatches `set-gsd-project` IPC to the
+    // daemon, which persists to ~/.clawcode/manager/gsd-project-overrides.json
+    // and triggers an agent restart (gsd.projectDir is non-reloadable per
+    // Phase 100 GSD-07).
+    if (commandName === "gsd-set-project") {
+      await this.handleSetGsdProjectCommand(interaction);
       return;
     }
 
@@ -1974,13 +2006,23 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Step 2 — admin-clawdy channel guard.
+    // Step 2 — capability-based guard. Phase 100 follow-up: replaced the
+    // hardcoded `agentName !== "Admin Clawdy"` check with a check on the
+    // channel-bound agent's `gsd?.projectDir` field. Any agent the operator
+    // has GSD-enabled (Admin Clawdy, fin-acquisition, future agents) passes;
+    // any non-GSD agent (personal, fin-tax, etc.) gets a clear rejection
+    // mentioning what's missing so operators know how to fix it.
     const channelId = interaction.channelId;
     const agentName = getAgentForChannel(this.routingTable, channelId);
-    if (agentName !== "Admin Clawdy") {
+    const agentConfig = agentName
+      ? this.resolvedAgents.find((a) => a.name === agentName)
+      : undefined;
+    if (!agentConfig?.gsd?.projectDir) {
       try {
         await interaction.editReply(
-          "/gsd-* commands are restricted to #admin-clawdy.",
+          `\`/gsd-*\` commands are restricted to GSD-enabled agents. ` +
+            `This channel's agent (\`${agentName ?? "unknown"}\`) has no \`gsd.projectDir\` configured. ` +
+            `Set one via \`/gsd-set-project path:<abs-path>\` or add a \`gsd:\` block to clawcode.yaml.`,
         );
       } catch {
         /* expired */
@@ -1988,11 +2030,14 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Step 3 — resolve cmdDef from admin-clawdy's slashCommands list.
-    const agentConfig = this.resolvedAgents.find((a) => a.name === agentName);
-    const cmdDef = agentConfig?.slashCommands.find(
-      (c) => c.name === commandName,
-    );
+    // Step 3 — resolve cmdDef. First check the agent's own slashCommands
+    // list (legacy yaml-defined entries on Admin Clawdy still win), then fall
+    // back to GSD_SLASH_COMMANDS so any GSD-enabled agent without a yaml
+    // block (e.g. fin-acquisition) finds its cmdDef via the auto-inheritance
+    // path. Mirrors the seenNames dedup at register time — first match wins.
+    const cmdDef =
+      agentConfig.slashCommands.find((c) => c.name === commandName) ??
+      GSD_SLASH_COMMANDS.find((c) => c.name === commandName);
     if (!cmdDef) {
       try {
         await interaction.editReply(`Unknown command: /${commandName}`);
@@ -2038,9 +2083,13 @@ export class SlashCommandHandler {
     }
 
     // Step 7 — pre-spawn subagent thread; surface verbatim error on failure.
+    // `agentConfig.name` is non-null here (we returned early at Step 2 when
+    // agentConfig was undefined). Use it instead of `agentName` so TS narrows
+    // the type without an extra non-null assertion.
+    const parentAgentName = agentConfig.name;
     try {
       const result = await this.subagentThreadSpawner.spawnInThread({
-        parentAgentName: agentName,
+        parentAgentName,
         threadName,
         task: canonicalSlash,
       });
@@ -2057,7 +2106,7 @@ export class SlashCommandHandler {
           command: commandName,
           threadId: result.threadId,
           threadName,
-          parentAgent: agentName,
+          parentAgent: parentAgentName,
         },
         "/gsd-* long-runner subthread spawned",
       );
@@ -2073,6 +2122,136 @@ export class SlashCommandHandler {
         /* expired */
       }
     }
+  }
+
+  /**
+   * Phase 100 follow-up — `/gsd-set-project` runtime project switcher.
+   *
+   * Lets an operator change a GSD-enabled agent's `gsd.projectDir` at runtime
+   * without editing clawcode.yaml or restarting the daemon. The slash handler
+   * does the validation (absolute path, exists, is-directory), then dispatches
+   * `set-gsd-project` IPC to the daemon. The daemon persists the override to
+   * `~/.clawcode/manager/gsd-project-overrides.json` and triggers an agent
+   * restart (gsd.projectDir is non-reloadable per Phase 100 GSD-07).
+   *
+   * Capability gate: any agent with `gsd?.projectDir` configured can switch
+   * its OWN project. No admin-clawdy guard — there's no destructive cross-
+   * agent surface, only a per-agent project root rebind.
+   *
+   * Path validation order (fail-fast):
+   *   1. `path.isAbsolute(p)` — reject relative paths
+   *   2. `statSync(p)` — reject ENOENT (path doesn't exist)
+   *   3. `stats.isDirectory()` — reject regular files / symlinks-to-files
+   *
+   * On success: ephemeral reply confirming the new projectDir + agent restart.
+   * On IPC failure: ephemeral reply with verbatim error (operator-debuggable).
+   */
+  private async handleSetGsdProjectCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      this.log.error(
+        { command: "gsd-set-project", error: (error as Error).message },
+        "failed to defer gsd-set-project reply",
+      );
+      return;
+    }
+
+    const channelId = interaction.channelId;
+    const agentName = getAgentForChannel(this.routingTable, channelId);
+    const agentConfig = agentName
+      ? this.resolvedAgents.find((a) => a.name === agentName)
+      : undefined;
+
+    // Capability gate — only GSD-enabled agents can switch their project.
+    if (!agentConfig?.gsd?.projectDir) {
+      try {
+        await interaction.editReply(
+          `\`/gsd-set-project\` requires a GSD-enabled agent. ` +
+            `This channel's agent (\`${agentName ?? "unknown"}\`) is not a GSD agent ` +
+            `(no \`gsd.projectDir\` configured).`,
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Read the required `path` option.
+    const path = interaction.options.getString("path", true);
+    if (!path || typeof path !== "string") {
+      try {
+        await interaction.editReply(
+          "`/gsd-set-project` requires a `path:` option (absolute directory path).",
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    // Validation step 1 — must be absolute.
+    if (!isAbsolute(path)) {
+      try {
+        await interaction.editReply(
+          `\`${path}\` is not an absolute path. Provide a path that starts with \`/\`.`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    // Validation step 2 + 3 — must exist and be a directory.
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(
+          `Path \`${path}\` does not exist or is not accessible: ${msg}`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+    if (!stats.isDirectory()) {
+      try {
+        await interaction.editReply(
+          `Path \`${path}\` is not a directory. \`gsd.projectDir\` must point at a directory.`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    // Dispatch `set-gsd-project` IPC. The daemon side is in daemon.ts —
+    // persists to gsd-project-overrides.json + restarts the agent.
+    // `agentConfig.name` is non-null here (we returned early at the capability
+    // gate when agentConfig was undefined). Use it instead of `agentName`.
+    const targetAgent = agentConfig.name;
+    try {
+      await sendIpcRequest(SOCKET_PATH, "set-gsd-project", {
+        agent: targetAgent,
+        projectDir: path,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "gsd-set-project", agent: targetAgent, error: msg },
+        "set-gsd-project IPC failed",
+      );
+      try {
+        await interaction.editReply(
+          `Failed to set GSD project for \`${targetAgent}\`: ${msg}`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    try {
+      await interaction.editReply(
+        `GSD project set to \`${path}\` for \`${targetAgent}\`. ` +
+          `Restarting agent — new sessions will use this directory.`,
+      );
+    } catch { /* expired */ }
   }
 
   /**

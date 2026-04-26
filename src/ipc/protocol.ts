@@ -193,6 +193,13 @@ export const IPC_METHODS = [
   // /clawcode-status Capability section render. Reads the persisted
   // fs-capability.json without re-probing. Mirrors list-mcp-status.
   "list-fs-status",
+  // Phase 100 follow-up — runtime gsd.projectDir override. Backs the
+  // /gsd-set-project Discord slash command. Persists to
+  // ~/.clawcode/manager/gsd-project-overrides.json (atomic temp+rename) +
+  // splices a new ResolvedAgentConfig into the daemon's resolvedAgents
+  // array + calls manager.restartAgent so the new SDK session boots with
+  // the new gsd.projectDir as cwd. Returns {ok, agent, projectDir}.
+  "set-gsd-project",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

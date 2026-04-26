@@ -1524,6 +1524,38 @@ export async function startDaemon(
     );
   });
 
+  // Phase 100 follow-up — merge runtime gsd.projectDir overrides into the
+  // resolved configs BEFORE SessionManager spins up. The override file lives
+  // at ~/.clawcode/manager/gsd-project-overrides.json and is written by the
+  // /gsd-set-project Discord slash + set-gsd-project IPC. Overrides survive
+  // daemon restart by being applied here at boot. Missing file / parse error
+  // → readAllGsdProjectOverrides returns an empty Map (silent — fresh boot).
+  // Override only applies to agents that already have gsd.projectDir set in
+  // yaml — never grants GSD capability to a non-GSD agent (operator must
+  // edit yaml first).
+  {
+    const { readAllGsdProjectOverrides, DEFAULT_GSD_PROJECT_OVERRIDES_PATH } =
+      await import("./gsd-project-store.js");
+    const overrides = await readAllGsdProjectOverrides(
+      DEFAULT_GSD_PROJECT_OVERRIDES_PATH,
+      log,
+    );
+    if (overrides.size > 0) {
+      const list = resolvedAgents as ResolvedAgentConfig[];
+      for (let i = 0; i < list.length; i++) {
+        const agent = list[i]!;
+        const overridden = overrides.get(agent.name);
+        if (overridden && agent.gsd?.projectDir) {
+          list[i] = { ...agent, gsd: { projectDir: overridden } };
+          log.info(
+            { agent: agent.name, projectDir: overridden },
+            "applied runtime gsd.projectDir override",
+          );
+        }
+      }
+    }
+  }
+
   // 5c. Validate only one admin agent (per D-14)
   const adminAgents = resolvedAgents.filter(a => a.admin);
   if (adminAgents.length > 1) {
@@ -3302,6 +3334,65 @@ export async function startDaemon(
         },
       });
     }
+    // Phase 100 follow-up — set-gsd-project intercept (BEFORE routeMethod
+    // so the closure can mutate the daemon-scoped resolvedAgents array +
+    // re-publish to manager.setAllAgentConfigs without changing routeMethod's
+    // signature). Persists to gsd-project-overrides.json (atomic temp+rename),
+    // splices a new ResolvedAgentConfig with the new gsd.projectDir into the
+    // resolvedAgents array, calls manager.setAllAgentConfigs to publish the
+    // change, and triggers manager.restartAgent so the new SDK session picks
+    // up the new cwd (gsd.projectDir is non-reloadable per Phase 100 GSD-07).
+    if (method === "set-gsd-project") {
+      const agentName = validateStringParam(params, "agent");
+      const projectDirRaw = validateStringParam(params, "projectDir");
+      const idx = resolvedAgents.findIndex((a) => a.name === agentName);
+      if (idx === -1) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+      const current = resolvedAgents[idx]!;
+      if (!current.gsd?.projectDir) {
+        throw new ManagerError(
+          `Agent '${agentName}' is not GSD-enabled (no gsd.projectDir in config). ` +
+            `Add a \`gsd:\` block to clawcode.yaml first.`,
+        );
+      }
+      const { writeGsdProjectOverride, DEFAULT_GSD_PROJECT_OVERRIDES_PATH } =
+        await import("./gsd-project-store.js");
+      const { expandHome } = await import("../config/defaults.js");
+      const expandedPath = expandHome(projectDirRaw);
+      // Persist the override BEFORE mutating in-memory state. If the write
+      // fails, the daemon stays in a consistent state (yaml + in-memory unchanged).
+      await writeGsdProjectOverride(
+        DEFAULT_GSD_PROJECT_OVERRIDES_PATH,
+        agentName,
+        expandedPath,
+        log,
+      );
+      // Build a new immutable ResolvedAgentConfig with the swapped gsd block.
+      const next: ResolvedAgentConfig = {
+        ...current,
+        gsd: { projectDir: expandedPath },
+      };
+      // Splice in place — both manager.setAllAgentConfigs and the slash
+      // handler hold the SAME array reference, so after this mutation both
+      // see the new entry on subsequent reads.
+      (resolvedAgents as ResolvedAgentConfig[])[idx] = next;
+      manager.setAllAgentConfigs(resolvedAgents);
+      // Restart so the new SDK session boots with the new gsd.projectDir as
+      // cwd. Mirrors the "restart" case fallback for stopped agents.
+      try {
+        await manager.restartAgent(agentName, next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/not running|no such session|requireSession/i.test(msg)) {
+          await manager.startAgent(agentName, next);
+        } else {
+          throw err;
+        }
+      }
+      return { ok: true, agent: agentName, projectDir: expandedPath };
+    }
+
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
   };
 

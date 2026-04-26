@@ -127,6 +127,9 @@ describe("IPC_METHODS", () => {
       "probe-fs",
       // Phase 96 Plan 05 D-04 — read-only FS capability snapshot
       "list-fs-status",
+      // Phase 100 follow-up — runtime gsd.projectDir override (Discord
+      // /gsd-set-project + daemon set-gsd-project IPC handler).
+      "set-gsd-project",
     ]);
   });
 });

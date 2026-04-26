@@ -253,6 +253,188 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
 ] as const;
 
 /**
+ * Phase 100 follow-up — auto-inherited slash commands for any agent with
+ * `gsd.projectDir` configured. Operator-curated subset of the ~57 GSD skills
+ * in ~/.claude/commands/gsd/ — covers the most common paths so operators
+ * don't hit "command not found" friction in the Discord slash menu. The full
+ * 57 remain available via plain-text /gsd:* typing.
+ *
+ * Auto-injected at register time (slash-commands.ts register loop) when at
+ * least one agent has `gsd?.projectDir` set. Per-agent yaml entries with
+ * matching names get deduped via the existing `seenNames` set so the legacy
+ * Phase 100 yaml block on Admin Clawdy keeps working unchanged.
+ *
+ * Dispatch:
+ *   - `/gsd-autonomous`, `/gsd-plan-phase`, `/gsd-execute-phase` route to
+ *     handleGsdLongRunner (subagent thread spawn) when GSD_LONG_RUNNERS
+ *     matches.
+ *   - `/gsd-set-project` is handled inline by handleSetGsdProjectCommand
+ *     (validates path + dispatches IPC `set-gsd-project`); claudeCommand
+ *     intentionally empty so any accidental fallback to formatCommandMessage
+ *     emits a no-op string the inline short-circuit prevents from being sent.
+ *   - All other entries fall through to the legacy agent-routed branch where
+ *     formatCommandMessage rewrites their claudeCommand template into the
+ *     canonical SDK form for inline dispatch via the user's settingSources
+ *     (loads ~/.claude/commands/gsd/*.md per Plan 100-06 symlinks).
+ */
+export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
+  // The 5 originally shipped in Phase 100 Plan 04 (also live in Admin Clawdy's
+  // yaml block — dedup via seenNames keeps both registrations safe).
+  {
+    name: "gsd-autonomous",
+    description: "Run all remaining phases autonomously",
+    claudeCommand: "/gsd:autonomous {args}",
+    options: [
+      { name: "args", type: 3, description: "Optional flags (e.g. --from 100)", required: false },
+    ],
+  },
+  {
+    name: "gsd-plan-phase",
+    description: "Create phase plan with verification loop",
+    claudeCommand: "/gsd:plan-phase {phase}",
+    options: [
+      { name: "phase", type: 3, description: "Phase number + optional flags", required: false },
+    ],
+  },
+  {
+    name: "gsd-execute-phase",
+    description: "Execute all plans in a phase",
+    claudeCommand: "/gsd:execute-phase {phase}",
+    options: [
+      { name: "phase", type: 3, description: "Phase number + optional flags", required: false },
+    ],
+  },
+  {
+    name: "gsd-debug",
+    description: "Systematic debugging with persistent state",
+    claudeCommand: "/gsd:debug {issue}",
+    options: [
+      { name: "issue", type: 3, description: "Issue description", required: true },
+    ],
+  },
+  {
+    name: "gsd-quick",
+    description: "Quick task with GSD guarantees",
+    claudeCommand: "/gsd:quick {task}",
+    options: [
+      { name: "task", type: 3, description: "Task description", required: true },
+    ],
+  },
+
+  // Phase 100 follow-up additions — operator hit friction (these were missing
+  // from the slash menu, forcing them to type /gsd:* manually).
+  {
+    name: "gsd-new-project",
+    description: "Initialize a fresh GSD project (PROJECT.md, REQUIREMENTS.md, ROADMAP.md, codebase maps)",
+    claudeCommand: "/gsd:new-project {args}",
+    options: [
+      { name: "args", type: 3, description: "Optional project description", required: false },
+    ],
+  },
+  {
+    name: "gsd-new-milestone",
+    description: "Create a new milestone in the current project",
+    claudeCommand: "/gsd:new-milestone {args}",
+    options: [
+      { name: "args", type: 3, description: "Milestone description", required: false },
+    ],
+  },
+  {
+    name: "gsd-add-phase",
+    description: "Insert a new phase into the current milestone",
+    claudeCommand: "/gsd:add-phase {args}",
+    options: [
+      { name: "args", type: 3, description: "Phase description", required: false },
+    ],
+  },
+  {
+    name: "gsd-add-tests",
+    description: "Add tests for an existing phase or plan",
+    claudeCommand: "/gsd:add-tests {args}",
+    options: [
+      { name: "args", type: 3, description: "Target (phase/plan id)", required: false },
+    ],
+  },
+  {
+    name: "gsd-audit-milestone",
+    description: "Audit milestone before completion",
+    claudeCommand: "/gsd:audit-milestone",
+    options: [],
+  },
+  {
+    name: "gsd-complete-milestone",
+    description: "Mark current milestone complete + archive",
+    claudeCommand: "/gsd:complete-milestone {args}",
+    options: [
+      { name: "args", type: 3, description: "Milestone version", required: false },
+    ],
+  },
+  {
+    name: "gsd-cleanup",
+    description: "Clean up planning artifacts after milestone",
+    claudeCommand: "/gsd:cleanup",
+    options: [],
+  },
+  {
+    name: "gsd-progress",
+    description: "Show current GSD project progress",
+    claudeCommand: "/gsd:progress",
+    options: [],
+  },
+  {
+    name: "gsd-verify-work",
+    description: "Manually verify a phase or UAT item",
+    claudeCommand: "/gsd:verify-work {args}",
+    options: [
+      { name: "args", type: 3, description: "Phase/UAT id", required: false },
+    ],
+  },
+  {
+    name: "gsd-discuss-phase",
+    description: "Discuss design grey areas before planning",
+    claudeCommand: "/gsd:discuss-phase {phase}",
+    options: [
+      { name: "phase", type: 3, description: "Phase number", required: true },
+    ],
+  },
+  {
+    name: "gsd-do",
+    description: "Quick task wrapper with GSD guarantees",
+    claudeCommand: "/gsd:do {task}",
+    options: [
+      { name: "task", type: 3, description: "Task description", required: true },
+    ],
+  },
+  {
+    name: "gsd-fast",
+    description: "Lightweight GSD without full ceremony",
+    claudeCommand: "/gsd:fast {task}",
+    options: [
+      { name: "task", type: 3, description: "Task description", required: true },
+    ],
+  },
+  {
+    name: "gsd-help",
+    description: "GSD framework help",
+    claudeCommand: "/gsd:help {args}",
+    options: [
+      { name: "args", type: 3, description: "Command name (optional)", required: false },
+    ],
+  },
+
+  // The runtime project switcher — handled inline (not routed to LLM).
+  // claudeCommand "" mirrors /clawcode-model and /clawcode-skills-browse.
+  {
+    name: "gsd-set-project",
+    description: "Switch this agent's gsd.projectDir at runtime (avoids yaml edit + restart)",
+    claudeCommand: "",
+    options: [
+      { name: "path", type: 3, description: "Absolute path to the new project directory", required: true },
+    ],
+  },
+] as const;
+
+/**
  * Control commands that route directly to the daemon via IPC.
  * These bypass agent sessions entirely — the daemon handles start/stop/restart/status.
  */
