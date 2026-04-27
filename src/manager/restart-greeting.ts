@@ -94,6 +94,13 @@ export type ConversationReader = Readonly<{
  */
 export type BotDirectSender = Readonly<{
   sendEmbed(channelId: string, embed: EmbedBuilder): Promise<string>;
+  /**
+   * Phase 100 follow-up — plain-text channel send for non-interaction posts
+   * (scheduled trigger output, alerts, etc.). Used by TriggerEngine's
+   * deliveryFn when the target agent has no per-agent webhook provisioned.
+   * Returns the sent message id.
+   */
+  sendText(channelId: string, content: string): Promise<string>;
 }>;
 
 export type SendRestartGreetingDeps = Readonly<{
