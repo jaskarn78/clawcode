@@ -313,11 +313,121 @@ describe("Phase 95 Plan 03 — /clawcode-dream slash command", () => {
   it("DSL7: isAdminClawdyInteraction recognises configured admin user IDs only", () => {
     const adminInt = {
       user: { id: ADMIN_USER_ID },
+      channelId: "chan-unused",
     } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
     const nonAdminInt = {
       user: { id: NON_ADMIN_USER_ID },
+      channelId: "chan-unused",
     } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
-    expect(isAdminClawdyInteraction(adminInt, [ADMIN_USER_ID])).toBe(true);
-    expect(isAdminClawdyInteraction(nonAdminInt, [ADMIN_USER_ID])).toBe(false);
+    const emptyContext = {
+      adminUserIds: [ADMIN_USER_ID],
+      routingTable: {
+        channelToAgent: new Map<string, string>(),
+        agentToChannels: new Map<string, readonly string[]>(),
+      },
+      resolvedAgents: [],
+    };
+    expect(isAdminClawdyInteraction(adminInt, emptyContext)).toBe(true);
+    expect(isAdminClawdyInteraction(nonAdminInt, emptyContext)).toBe(false);
+  });
+
+  // Phase 100-fu — admin gate also recognises channel-bound admin agents,
+  // so operators don't need to configure adminUserIds explicitly when the
+  // interaction comes from a channel routed to an `admin: true` agent.
+  describe("Phase 100-fu — channel-bound admin gate", () => {
+    const ADMIN_AGENT_CHANNEL = "chan-admin-clawdy";
+    const NON_ADMIN_CHANNEL = "chan-fin-acq";
+    const UNBOUND_CHANNEL = "chan-orphan";
+
+    const routingTable = {
+      channelToAgent: new Map<string, string>([
+        [ADMIN_AGENT_CHANNEL, "admin-clawdy"],
+        [NON_ADMIN_CHANNEL, "fin-acquisition"],
+      ]),
+      agentToChannels: new Map<string, readonly string[]>([
+        ["admin-clawdy", [ADMIN_AGENT_CHANNEL]],
+        ["fin-acquisition", [NON_ADMIN_CHANNEL]],
+      ]),
+    };
+    const resolvedAgents = [
+      { name: "admin-clawdy", admin: true } as unknown as {
+        readonly name: string;
+        readonly admin: boolean;
+      },
+      { name: "fin-acquisition", admin: false } as unknown as {
+        readonly name: string;
+        readonly admin: boolean;
+      },
+    ];
+
+    it("AG-1: explicit user-ID allowlist match → true (back-compat)", () => {
+      const interaction = {
+        user: { id: ADMIN_USER_ID },
+        channelId: UNBOUND_CHANNEL,
+      } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
+      expect(
+        isAdminClawdyInteraction(interaction, {
+          adminUserIds: [ADMIN_USER_ID],
+          routingTable,
+          resolvedAgents,
+        }),
+      ).toBe(true);
+    });
+
+    it("AG-2: empty user-ID allowlist + channel bound to admin agent → true", () => {
+      const interaction = {
+        user: { id: NON_ADMIN_USER_ID },
+        channelId: ADMIN_AGENT_CHANNEL,
+      } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
+      expect(
+        isAdminClawdyInteraction(interaction, {
+          adminUserIds: [],
+          routingTable,
+          resolvedAgents,
+        }),
+      ).toBe(true);
+    });
+
+    it("AG-3: empty user-ID allowlist + channel bound to non-admin agent → false", () => {
+      const interaction = {
+        user: { id: NON_ADMIN_USER_ID },
+        channelId: NON_ADMIN_CHANNEL,
+      } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
+      expect(
+        isAdminClawdyInteraction(interaction, {
+          adminUserIds: [],
+          routingTable,
+          resolvedAgents,
+        }),
+      ).toBe(false);
+    });
+
+    it("AG-4: empty user-ID allowlist + channel not in routingTable → false", () => {
+      const interaction = {
+        user: { id: NON_ADMIN_USER_ID },
+        channelId: UNBOUND_CHANNEL,
+      } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
+      expect(
+        isAdminClawdyInteraction(interaction, {
+          adminUserIds: [],
+          routingTable,
+          resolvedAgents,
+        }),
+      ).toBe(false);
+    });
+
+    it("AG-5: both allowlist match AND admin-bound channel → true (either path works)", () => {
+      const interaction = {
+        user: { id: ADMIN_USER_ID },
+        channelId: ADMIN_AGENT_CHANNEL,
+      } as unknown as Parameters<typeof isAdminClawdyInteraction>[0];
+      expect(
+        isAdminClawdyInteraction(interaction, {
+          adminUserIds: [ADMIN_USER_ID],
+          routingTable,
+          resolvedAgents,
+        }),
+      ).toBe(true);
+    });
   });
 });
