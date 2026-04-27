@@ -4871,15 +4871,21 @@ async function routeMethod(
       const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
       const task = typeof params.task === "string" ? params.task : undefined;
       const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
-      // Phase 100 follow-up — fire-and-forget pattern. When true, the spawner
-      // chains relay→archive→stop after the initial reply posts.
+      // Phase 100 follow-up — post-reply chain.
+      //   autoRelay (default true): parent gets a synthetic turn in main channel
+      //   autoArchive (default false): also archive thread + stop session
+      //   autoArchive implies autoRelay
       const autoArchive = params.autoArchive === true;
+      const autoRelay = params.autoRelay === undefined
+        ? true
+        : params.autoRelay !== false;
       const result = await subagentThreadSpawner.spawnInThread({
         parentAgentName: parentAgent,
         threadName,
         systemPrompt,
         model,
         task,
+        autoRelay,
         autoArchive,
       });
       // Register session end callback for automatic cleanup (SATH-04).

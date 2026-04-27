@@ -407,14 +407,20 @@ export class SubagentThreadSpawner {
     // provided) or a generic intro. Deliberately not awaited so the MCP
     // caller gets the thread URL back immediately; the LLM roundtrip runs
     // in the background and posts directly to the thread. Errors are logged.
-    // Phase 100 follow-up — autoArchive: when set, the post-reply chain
-    // relays content to parent + archives the thread + stops the session.
+    // Phase 100 follow-up — post-reply chain:
+    //   - autoRelay (default true): parent gets a synthetic turn in its
+    //     main channel summarizing the subagent's output
+    //   - autoArchive (default false): also archive thread + stop session
+    //   - autoArchive implies autoRelay
+    const autoArchive = config.autoArchive === true;
+    const autoRelay = autoArchive || config.autoRelay !== false;
     void this.postInitialMessage(
       thread,
       sessionName,
       config.threadName,
       config.task,
-      config.autoArchive === true,
+      autoRelay,
+      autoArchive,
     );
 
     return {
@@ -439,6 +445,7 @@ export class SubagentThreadSpawner {
     sessionName: string,
     threadName: string,
     task: string | undefined,
+    autoRelay: boolean,
     autoArchive: boolean,
   ): Promise<void> {
     try {
@@ -516,19 +523,21 @@ export class SubagentThreadSpawner {
         "subagent initial message failed",
       );
     }
-    // Phase 100 follow-up — auto-archive flow. Runs even if the initial
-    // message failed, because the operator wanted fire-and-forget and a
+    // Phase 100 follow-up — post-reply chain. Runs even if the initial
+    // message failed, because the operator wanted notification and a
     // dangling thread is worse than no summary. Each step has its own
     // try/catch so a failure in one doesn't block the others.
-    if (autoArchive) {
+    if (autoRelay) {
       try {
         await this.relayCompletionToParent(thread.id);
       } catch (err) {
         this.log.warn(
           { threadId: thread.id, sessionName, error: (err as Error).message },
-          "auto-archive: relayCompletionToParent failed (non-fatal)",
+          "auto-relay: relayCompletionToParent failed (non-fatal)",
         );
       }
+    }
+    if (autoArchive) {
       try {
         await this.archiveThread(thread.id);
       } catch (err) {
@@ -548,6 +557,11 @@ export class SubagentThreadSpawner {
       this.log.info(
         { threadId: thread.id, sessionName, threadName },
         "subagent auto-archived (relay + archive + stop)",
+      );
+    } else if (autoRelay) {
+      this.log.info(
+        { threadId: thread.id, sessionName, threadName },
+        "subagent auto-relayed to parent (thread + session stay alive)",
       );
     }
   }
