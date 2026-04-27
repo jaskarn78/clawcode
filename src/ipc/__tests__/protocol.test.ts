@@ -55,6 +55,10 @@ describe("IPC_METHODS", () => {
       "read-thread",
       "message-history",
       "archive-discord-thread",
+      // Phase 100 follow-up — schedule_reminder MCP tool ad-hoc one-off
+      // reminders that fire as standalone turns and post via the
+      // trigger-delivery callback (operator-surfaced 2026-04-27).
+      "schedule-reminder",
       // Security (Phase 27)
       "approve-command",
       "deny-command",

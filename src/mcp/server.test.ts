@@ -33,15 +33,21 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 21 tools defined", () => {
-    // Phase 100 follow-up — added archive_thread (was 20).
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(21);
+  it("has exactly 22 tools defined", () => {
+    // Phase 100 follow-up — added schedule_reminder (was 21 after archive_thread).
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(22);
   });
 
   it("defines archive_thread tool", () => {
     expect(TOOL_DEFINITIONS.archive_thread).toBeDefined();
     expect(TOOL_DEFINITIONS.archive_thread.description).toContain("Archive");
     expect(TOOL_DEFINITIONS.archive_thread.ipcMethod).toBe("archive-discord-thread");
+  });
+
+  it("defines schedule_reminder tool", () => {
+    expect(TOOL_DEFINITIONS.schedule_reminder).toBeDefined();
+    expect(TOOL_DEFINITIONS.schedule_reminder.description).toContain("reminder");
+    expect(TOOL_DEFINITIONS.schedule_reminder.ipcMethod).toBe("schedule-reminder");
   });
 
   it("defines ask_advisor tool", () => {
