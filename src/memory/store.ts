@@ -37,6 +37,13 @@ type PreparedStatements = {
    * the tag as a substring; content is compared literally.
    */
   readonly findByTagAndContent: Statement;
+  /**
+   * Phase 100-fu — single-row access bump for non-search callers
+   * (GraphSearch graph-walked neighbors). Mirrors `updateAccess`
+   * verbatim — kept as a separate prepared statement so usage sites
+   * are easy to grep and so the SemanticSearch path is unaffected.
+   */
+  readonly bumpAccess: Statement;
 };
 
 /**
@@ -442,6 +449,30 @@ export class MemoryStore {
         this.dbPath,
       );
     }
+  }
+
+  /**
+   * Phase 100-fu — bump access_count + accessed_at for a single memory id.
+   *
+   * Surfaced because GraphSearch's graph-walked neighbors were returned to
+   * callers but never bumped — leaving heavily-linked nodes stuck at
+   * access_count=0 forever and unable to qualify for hot-tier promotion
+   * (production evidence: fin-acquisition agent had 1,161 of 1,182
+   * memories at access_count=0 despite 7,338 wikilink edges).
+   *
+   * Mirrors the UPDATE shape that SemanticSearch.search() uses on its KNN
+   * top-K. Non-existent ids are a silent no-op (UPDATE-WHERE-id=missing
+   * affects 0 rows). When `accessedAt` is omitted, defaults to `new Date()`.
+   *
+   * Callers MUST NOT use this to double-bump a row already bumped by
+   * SemanticSearch.search() in the same logical lookup — keep the bump
+   * exactly one-per-search-call per memory id.
+   */
+  bumpAccess(memoryId: string, accessedAt?: string): void {
+    this.stmts.bumpAccess.run(
+      accessedAt ?? new Date().toISOString(),
+      memoryId,
+    );
   }
 
   /**
@@ -1233,6 +1264,13 @@ export class MemoryStore {
       findByTagAndContent: this.db.prepare(
         `SELECT id FROM memories WHERE tags LIKE ? AND content = ? LIMIT 1`,
       ),
+      // Phase 100-fu — public single-row access bump (see `bumpAccess`
+      // method below). Identical UPDATE shape to `updateAccess` — duplicated
+      // intentionally so the semantic-search path stays untouched and the
+      // call sites are easy to audit.
+      bumpAccess: this.db.prepare(`
+        UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?
+      `),
     };
   }
 

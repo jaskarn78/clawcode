@@ -95,6 +95,20 @@ export class GraphSearch {
       .sort((a, b) => b[1].similarity - a[1].similarity)
       .slice(0, this.config.maxNeighbors);
 
+    // Phase 100-fu — bump access_count + accessed_at for graph-walked
+    // neighbors so heavily-linked nodes can qualify for hot-tier promotion.
+    // Without this, nodes that are only ever reached via wikilink traversal
+    // (never as direct KNN hits) sit at access_count=0 forever and never
+    // cross the 7-day promotion threshold. KNN seeds were already bumped
+    // by SemanticSearch.search() at line 51 — DO NOT double-bump them.
+    // Bump runs after the maxNeighbors slice so dropped neighbors stay at 0,
+    // and `neighborMap` already deduplicates linkedFrom.size > 1 cases to a
+    // single entry, so each neighbor is bumped exactly once per search call.
+    const accessedAt = new Date().toISOString();
+    for (const [neighborId] of sortedNeighbors) {
+      this.store.bumpAccess(neighborId, accessedAt);
+    }
+
     // Map KNN results to GraphSearchResult
     const knnGraphResults: readonly GraphSearchResult[] = knnResults.map((r) =>
       Object.freeze({
