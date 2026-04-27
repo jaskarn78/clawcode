@@ -363,6 +363,86 @@ describe("TierManager", () => {
       const hotCount = (db.prepare("SELECT COUNT(*) as cnt FROM memories WHERE tier = 'hot'").get() as { cnt: number }).cnt;
       expect(hotCount).toBe(2);
     });
+
+    // Phase 100-fu — graph-centrality promotion in the TierManager. The
+    // refreshHotTier() loop must consult getBacklinkCount(memory.id) and
+    // pass that into shouldPromoteToHot so a heavily-linked hub node
+    // qualifies even when its direct access_count is below the
+    // access-based threshold.
+
+    // TM-1: TierManager passes backlinkCount to shouldPromoteToHot.
+    // Verified end-to-end: insert a memory with access_count=0 (so the
+    // access-path cannot promote it) and add backlinks at-or-above the
+    // centrality threshold. After refreshHotTier(), the row is hot.
+    it("TM-1: tier-manager passes backlinkCount to shouldPromoteToHot", () => {
+      const tm = createTierManager({
+        tierConfig: {
+          ...DEFAULT_TIER_CONFIG,
+          hotAccessThreshold: 100, // make access-path unreachable
+          centralityPromoteThreshold: 5,
+          hotBudget: 5,
+        },
+      });
+
+      const target = store.insert(
+        { content: "hub node", source: "manual", importance: 0.7 },
+        randomEmbedding(),
+      );
+
+      // Wire 5 backlinks onto `target` — meets the centrality threshold.
+      const stmts = store.getGraphStatements();
+      const linkAt = new Date().toISOString();
+      for (let i = 0; i < 5; i++) {
+        const src = store.insert(
+          { content: `linker ${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+        stmts.insertLink.run(src.id, target.id, target.id, linkAt);
+      }
+
+      // Sanity: target has access_count=0 so the access-based path
+      // cannot reach the threshold of 100.
+      const before = store.getDatabase()
+        .prepare("SELECT access_count, tier FROM memories WHERE id = ?")
+        .get(target.id) as { access_count: number; tier: string };
+      expect(before.access_count).toBe(0);
+      expect(before.tier).toBe("warm");
+
+      tm.refreshHotTier();
+
+      const after = store.getDatabase()
+        .prepare("SELECT tier FROM memories WHERE id = ?")
+        .get(target.id) as { tier: string };
+      expect(after.tier).toBe("hot");
+    });
+
+    // TM-2: realistic production case. 6 backlinks, access_count=0, an
+    // unmodified default config — the memory still ends up hot.
+    it("TM-2: a memory with 6 backlinks and access_count=0 gets promoted to hot", () => {
+      const tm = createTierManager(); // default config
+
+      const target = store.insert(
+        { content: "fin-acquisition style hub", source: "manual", importance: 0.6 },
+        randomEmbedding(),
+      );
+
+      const stmts = store.getGraphStatements();
+      const linkAt = new Date().toISOString();
+      for (let i = 0; i < 6; i++) {
+        const src = store.insert(
+          { content: `turn-summary ${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+        stmts.insertLink.run(src.id, target.id, target.id, linkAt);
+      }
+
+      tm.refreshHotTier();
+
+      const row = store.getDatabase()
+        .prepare("SELECT tier FROM memories WHERE id = ?")
+        .get(target.id) as { tier: string };
+      expect(row.tier).toBe("hot");
+    });
   });
 
   describe("getHotMemories", () => {

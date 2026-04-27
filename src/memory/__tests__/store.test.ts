@@ -1010,4 +1010,54 @@ describe("MemoryStore", () => {
       expect(stampMs).toBeLessThanOrEqual(afterNow);
     });
   });
+
+  // Phase 100-fu — graph-centrality promotion. The TierManager queries
+  // backlink counts to decide whether a memory is a structural hub
+  // (target of many wikilink edges) and should be promoted to hot tier
+  // independent of direct access count.
+  describe("getBacklinkCount (Phase 100-fu)", () => {
+    // GBC-1: returns the exact count for a memory with N inbound links.
+    // Backlinks are inserted via the same memory_links table that
+    // graph-search uses, mirroring the production wiring.
+    it("GBC-1: returns correct count for a memory with N backlinks", () => {
+      store = createTestStore();
+      const target = store.insert(
+        { content: "hub memory", source: "manual" },
+        randomEmbedding(),
+      );
+
+      // Insert 3 source memories, each linking to `target`.
+      const stmts = store.getGraphStatements();
+      const linkAt = "2026-04-27T00:00:00.000Z";
+      for (let i = 0; i < 3; i++) {
+        const src = store.insert(
+          { content: `source ${i} linking to hub`, source: "manual" },
+          randomEmbedding(),
+        );
+        stmts.insertLink.run(src.id, target.id, target.id, linkAt);
+      }
+
+      expect(store.getBacklinkCount(target.id)).toBe(3);
+    });
+
+    // GBC-2: a memory that exists but has no inbound links returns 0
+    // (not undefined, not null, not an exception).
+    it("GBC-2: returns 0 for a memory with no backlinks", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "isolated", source: "manual" },
+        randomEmbedding(),
+      );
+
+      expect(store.getBacklinkCount(entry.id)).toBe(0);
+    });
+
+    // GBC-3: querying a non-existent ID returns 0 — same shape as the
+    // no-backlinks path. The COUNT(*) aggregate naturally yields 0 when
+    // the WHERE clause matches no rows.
+    it("GBC-3: returns 0 for a non-existent memory ID", () => {
+      store = createTestStore();
+      expect(store.getBacklinkCount("does-not-exist")).toBe(0);
+    });
+  });
 });
