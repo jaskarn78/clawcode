@@ -4871,12 +4871,16 @@ async function routeMethod(
       const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
       const task = typeof params.task === "string" ? params.task : undefined;
       const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
+      // Phase 100 follow-up — fire-and-forget pattern. When true, the spawner
+      // chains relay→archive→stop after the initial reply posts.
+      const autoArchive = params.autoArchive === true;
       const result = await subagentThreadSpawner.spawnInThread({
         parentAgentName: parentAgent,
         threadName,
         systemPrompt,
         model,
         task,
+        autoArchive,
       });
       // Register session end callback for automatic cleanup (SATH-04).
       // Phase 99 sub-scope M (2026-04-26) — also auto-relay completion to

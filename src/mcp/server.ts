@@ -343,8 +343,9 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       model: z.enum(["sonnet", "opus", "haiku"]).optional().describe("Model for the subagent"),
       systemPrompt: z.string().optional().describe("Custom system prompt (personality/role override; not the task)"),
       task: z.string().optional().describe("The task for the subagent to perform. When provided, the subagent starts working immediately and posts its response in the thread — no separate prompt needed."),
+      autoArchive: z.boolean().optional().describe("Fire-and-forget pattern. When true, after the subagent posts its initial reply: (1) summary is relayed to the parent agent's main channel, (2) the Discord thread is archived, (3) the subagent session is stopped. Best paired with `task` for short-lived 'do one thing then go away' subagents. Default: false (interactive — operator can keep replying in the thread)."),
     },
-    async ({ agent, threadName, model, systemPrompt, task }) => {
+    async ({ agent, threadName, model, systemPrompt, task, autoArchive }) => {
       try {
         const result = (await sendIpcRequest(SOCKET_PATH, "spawn-subagent-thread", {
           parentAgent: agent,
@@ -352,6 +353,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
           model,
           systemPrompt,
           task,
+          autoArchive: autoArchive ?? false,
         })) as { threadId: string; sessionName: string; parentAgent: string; channelId: string };
 
         const text = [

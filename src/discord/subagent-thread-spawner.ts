@@ -403,7 +403,15 @@ export class SubagentThreadSpawner {
     // provided) or a generic intro. Deliberately not awaited so the MCP
     // caller gets the thread URL back immediately; the LLM roundtrip runs
     // in the background and posts directly to the thread. Errors are logged.
-    void this.postInitialMessage(thread, sessionName, config.threadName, config.task);
+    // Phase 100 follow-up — autoArchive: when set, the post-reply chain
+    // relays content to parent + archives the thread + stops the session.
+    void this.postInitialMessage(
+      thread,
+      sessionName,
+      config.threadName,
+      config.task,
+      config.autoArchive === true,
+    );
 
     return {
       threadId: thread.id,
@@ -420,10 +428,11 @@ export class SubagentThreadSpawner {
    * Failures are logged, never thrown -- the spawn has already succeeded.
    */
   private async postInitialMessage(
-    thread: { send: (content: string) => Promise<unknown> },
+    thread: { send: (content: string) => Promise<unknown>; id: string },
     sessionName: string,
     threadName: string,
     task: string | undefined,
+    autoArchive: boolean,
   ): Promise<void> {
     try {
       const prompt = task
@@ -440,6 +449,40 @@ export class SubagentThreadSpawner {
       this.log.warn(
         { sessionName, error: (err as Error).message, hadTask: Boolean(task) },
         "subagent initial message failed",
+      );
+    }
+    // Phase 100 follow-up — auto-archive flow. Runs even if the initial
+    // message failed, because the operator wanted fire-and-forget and a
+    // dangling thread is worse than no summary. Each step has its own
+    // try/catch so a failure in one doesn't block the others.
+    if (autoArchive) {
+      try {
+        await this.relayCompletionToParent(thread.id);
+      } catch (err) {
+        this.log.warn(
+          { threadId: thread.id, sessionName, error: (err as Error).message },
+          "auto-archive: relayCompletionToParent failed (non-fatal)",
+        );
+      }
+      try {
+        await this.archiveThread(thread.id);
+      } catch (err) {
+        this.log.warn(
+          { threadId: thread.id, sessionName, error: (err as Error).message },
+          "auto-archive: archiveThread failed (non-fatal)",
+        );
+      }
+      try {
+        await this.sessionManager.stopAgent(sessionName);
+      } catch (err) {
+        this.log.warn(
+          { threadId: thread.id, sessionName, error: (err as Error).message },
+          "auto-archive: stopAgent failed (non-fatal)",
+        );
+      }
+      this.log.info(
+        { threadId: thread.id, sessionName, threadName },
+        "subagent auto-archived (relay + archive + stop)",
       );
     }
   }
