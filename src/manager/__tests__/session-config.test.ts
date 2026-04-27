@@ -1431,3 +1431,35 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     }
   });
 });
+
+describe("buildSessionConfig — capability manifest injection (Phase 100 follow-up)", () => {
+  it("CM-INT-1: includes the capability manifest in systemPrompt when agent has notable features", async () => {
+    const config = makeConfig({
+      dream: { enabled: true, idleMinutes: 30, model: "haiku" },
+      schedules: [
+        {
+          name: "tick",
+          cron: "*/5 * * * *",
+          prompt: "tick",
+          enabled: true,
+        },
+      ],
+      skills: ["subagent-thread"],
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("Your ClawCode Capabilities");
+    expect(result.systemPrompt).toContain("Memory dreaming");
+    expect(result.systemPrompt).toContain("Scheduled tasks");
+  });
+
+  it("CM-INT-2: omits the manifest entirely when agent has zero notable features (no bloat)", async () => {
+    const config = makeConfig({
+      dream: undefined,
+      schedules: [],
+      skills: [],
+      gsd: undefined,
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("Your ClawCode Capabilities");
+  });
+});

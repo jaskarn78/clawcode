@@ -488,6 +488,84 @@ describe("resolveAgentConfig", () => {
       join(homedir(), ".clawcode/agents", "fin-acquisition"),
     );
   });
+
+  // Phase 100 follow-up — dream config propagation (DR-A1/A2/A3).
+  // Same root-cause shape as Phase 100 settingSources / gsd.projectDir
+  // and Phase 96 fileAccess: schema parsed `dream` but resolver dropped
+  // it, so daemon's getResolvedDreamConfig saw `undefined` and silently
+  // disabled auto-fire. These tests pin the resolver behavior so the
+  // ResolvedAgentConfig surfaces dream when the agent (or defaults)
+  // declares it, while staying back-compat for opted-out agents.
+  it("DR-A1: propagates per-agent dream config to ResolvedAgentConfig", () => {
+    const agent: AgentConfig = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      dream: { enabled: true, idleMinutes: 30, model: "haiku" as const },
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.dream).toBeDefined();
+    expect(resolved.dream?.enabled).toBe(true);
+    expect(resolved.dream?.idleMinutes).toBe(30);
+    expect(resolved.dream?.model).toBe("haiku");
+  });
+
+  it("DR-A2: agent without dream block AND defaults.dream disabled → resolved dream falls back to defaults (enabled=false)", () => {
+    // Back-compat — defaults.dream is the fleet-wide opt-in baseline.
+    // When neither agent nor defaults enable it, resolved should still
+    // surface the (disabled) default so consumers don't hit an
+    // unexpected `undefined`.
+    const agent: AgentConfig = {
+      name: "writer",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    // defaults.dream is { enabled:false, idleMinutes:30, model:"haiku" }
+    expect(resolved.dream).toBeDefined();
+    expect(resolved.dream?.enabled).toBe(false);
+  });
+
+  it("DR-A3: defaults.dream propagates when agent has no dream block (fleet-wide enable)", () => {
+    const fleetDreamDefaults: DefaultsConfig = {
+      ...defaults,
+      dream: { enabled: true, idleMinutes: 45, model: "sonnet" as const },
+    };
+    const agent: AgentConfig = {
+      name: "fin-research",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, fleetDreamDefaults);
+    expect(resolved.dream).toBeDefined();
+    expect(resolved.dream?.enabled).toBe(true);
+    expect(resolved.dream?.idleMinutes).toBe(45);
+    expect(resolved.dream?.model).toBe("sonnet");
+  });
 });
 
 describe("resolveAgentConfig - mcpServers", () => {
