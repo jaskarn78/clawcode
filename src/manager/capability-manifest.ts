@@ -21,25 +21,44 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
  * zero notable opted-in features (a baseline agent with only
  * memoryAutoLoad shouldn't pay the prompt cost).
  *
- * Notable features (today):
- *   - dream.enabled === true        → "Memory dreaming"
- *   - schedules.length > 0           → "Scheduled tasks"
- *   - skills includes "subagent-thread" → "Subagent threads"
- *   - gsd.projectDir set             → "GSD workflow"
+ * Tier 1 fields (Phase 100-fu, 2026-04-26):
+ *   - MCP servers       — list with operator-curated description+accessPattern
+ *   - Skills            — comma-separated skill names
+ *   - Model + effort    — model={model}, effort={effort}
+ *   - Conversation memory — single sentence about session-summary auto-resume
+ *
+ * Tier 2 fields (Phase 100-fu, 2026-04-26):
+ *   - File access       — fileAccess paths if present
+ *   - Heartbeat         — "{every} {model}" or "disabled"
+ *   - Subagent recursion guard — single sentence about SDK-level disallowedTools
+ *   - autoRelay/autoArchive defaults — note about subagent_thread defaults
  *
  * Each bullet uses ONLY values from the resolved config — no
- * speculation about what the LLM may or may not have. If a feature is
- * disabled, the bullet is omitted entirely (rather than printed with
- * "disabled") to keep minimal-agent prompts tight.
+ * speculation. If a feature is disabled/undefined, the bullet is omitted
+ * entirely (rather than printed empty) to keep prompts tight.
+ *
+ * Render order (alphabetical-by-section is NOT desired — operator-set
+ * order favors the most behavior-shaping fields first):
+ *   1. Memory dreaming
+ *   2. Scheduled tasks
+ *   3. Subagent threads (with auto-relay note)
+ *   4. MCP servers
+ *   5. Skills
+ *   6. Memory system (GSD if present)
+ *   7. File access
+ *   8. Model + effort
+ *   9. Heartbeat
+ *  10. Conversation memory
+ *  11. Recursion guard
  */
 export function buildCapabilityManifest(
   config: ResolvedAgentConfig,
 ): string {
   const bullets: string[] = [];
 
-  // Memory dreaming — only when explicitly enabled. The bullet pulls
-  // idleMinutes + model verbatim from resolved config so the LLM can
-  // tell the operator the actual cadence (no hardcoded "30min").
+  // ---- 1. Memory dreaming ----
+  // Only when explicitly enabled. Pulls idleMinutes + model verbatim from
+  // resolved config so the LLM tells the operator the actual cadence.
   if (config.dream?.enabled === true) {
     const idle = config.dream.idleMinutes;
     const model = config.dream.model;
@@ -48,8 +67,7 @@ export function buildCapabilityManifest(
     );
   }
 
-  // Scheduled tasks — count enabled schedules. Operators see the full
-  // list via /clawcode-schedule, so we just hint at presence + count.
+  // ---- 2. Scheduled tasks ----
   if (config.schedules.length > 0) {
     const count = config.schedules.length;
     bullets.push(
@@ -57,27 +75,114 @@ export function buildCapabilityManifest(
     );
   }
 
-  // Subagent threads — gated on the skill assignment because the
-  // session-config layer already gates the spawn_subagent_thread MCP
-  // tool guidance on the same flag (parity).
+  // ---- 3. Subagent threads (with autoRelay/autoArchive note) ----
+  // Gated on the skill assignment to keep parity with session-config.
   if (config.skills.includes("subagent-thread")) {
     bullets.push(
-      "- **Subagent threads**: spawn_subagent_thread MCP tool ready (autoRelay default true — parent gets summary on completion).",
+      "- **Subagent threads**: spawn_subagent_thread MCP tool ready. Defaults: `autoRelay: true` (parent channel gets a summary on completion); pass `autoArchive: true` for fire-and-forget (no relay).",
     );
   }
 
-  // GSD workflow — only when gsd.projectDir is set (admin agents and
-  // sandbox-bound agents). Production fleet agents have no gsd block.
+  // ---- 4. MCP servers ----
+  // Render: "name (description — pattern), name (description), name"
+  // Skip empty mcpServers list and skip auto-injected entries that lack
+  // operator-curated annotations? No — render everything, but bare names
+  // without description fall back to just the name (no parens).
+  if (config.mcpServers.length > 0) {
+    const items = config.mcpServers.map((s) => {
+      if (!s.description) return s.name;
+      if (s.accessPattern) {
+        return `${s.name} (${s.description} — ${s.accessPattern})`;
+      }
+      return `${s.name} (${s.description})`;
+    });
+    bullets.push(`- **MCP servers**: ${items.join(", ")}.`);
+  }
+
+  // ---- 5. Skills ----
+  // Comma-separated names; skip when empty.
+  if (config.skills.length > 0) {
+    bullets.push(`- **Skills**: ${config.skills.join(", ")}.`);
+  }
+
+  // ---- 6. GSD workflow ----
   if (config.gsd?.projectDir !== undefined) {
     bullets.push(
       `- **GSD workflow**: gsd.projectDir=${config.gsd.projectDir}; /gsd-* slash commands available.`,
     );
   }
 
-  // Bail out cleanly when the agent has zero notable features. Minimal
-  // agents (no dream, no schedules, no subagent-thread skill, no GSD)
-  // should not pay the prompt cost for an empty manifest.
-  if (bullets.length === 0) return "";
+  // ---- 7. File access ----
+  // Render the configured paths. Operator-set fileAccess paths matter for
+  // the LLM to know which areas it can read/write without burning tool
+  // calls on probe-fs.
+  if (config.fileAccess && config.fileAccess.length > 0) {
+    bullets.push(
+      `- **File access**: ${config.fileAccess.join(", ")}.`,
+    );
+  }
+
+  // ---- 8. Model + effort ----
+  // Always rendered when manifest is non-empty (cheap, helps the LLM know
+  // its own runtime knobs — useful for "why are you slow" type questions).
+  bullets.push(
+    `- **Model + effort**: model=${config.model}, effort=${config.effort}.`,
+  );
+
+  // ---- 9. Heartbeat ----
+  // When the agent has the extended `heartbeat: { every, model }` shape,
+  // surface those operator-set values verbatim. Otherwise show "disabled"
+  // when the heartbeat is off, or skip entirely (the agent's default
+  // intervalSeconds-based heartbeat is internal — not behavior-shaping
+  // for the LLM).
+  if (config.heartbeat.enabled === false) {
+    bullets.push("- **Heartbeat**: disabled.");
+  } else if (config.heartbeat.every && config.heartbeat.model) {
+    bullets.push(
+      `- **Heartbeat**: ${config.heartbeat.every} ${config.heartbeat.model}.`,
+    );
+  }
+  // If heartbeat.enabled but no per-agent every/model, omit the bullet —
+  // the global intervalSeconds default isn't useful prompt content.
+
+  // ---- 10. Conversation memory ----
+  // Always rendered when manifest is non-empty. This is the fix for the
+  // root-cause failure: agents not knowing their own session-resume
+  // capability and saying "I don't remember our last conversation".
+  bullets.push(
+    "- **Conversation memory**: Prior session summaries auto-resume on session start (Phase 64). Working memory of recent turns preserved across daemon restarts.",
+  );
+
+  // ---- 11. Recursion guard ----
+  // Only rendered when the agent has the subagent-thread skill — the
+  // guard is informational about how the SDK enforces "subagents cannot
+  // spawn subagents", and is moot for agents that can't spawn subagents
+  // in the first place. Gating it also keeps prompts of non-subagent
+  // agents free of `spawn_subagent_thread` references (parity with
+  // session-config.ts subagent-thread guidance gate).
+  if (config.skills.includes("subagent-thread")) {
+    bullets.push(
+      "- **Subagent recursion guard**: If you are a subagent (sessionName ends with `-sub-XXXXXX`), the `spawn_subagent_thread` MCP tool is disabled at SDK level — recursion is impossible by design (Phase 99-N).",
+    );
+  }
+
+  // Bail out cleanly when the agent has zero notable opt-ins. We test
+  // this against the SAME criteria as before Phase 100-fu (dream /
+  // schedules / subagent-thread skill / GSD), because Tier 1+2 fields
+  // (model+effort, conversation memory, recursion guard) are
+  // unconditional once any opt-in feature is present. A baseline agent
+  // (no dream, no schedules, no skill, no GSD, no fileAccess, no MCP
+  // servers beyond auto-injected ones) gets an empty string.
+  const hasOptIn =
+    config.dream?.enabled === true ||
+    config.schedules.length > 0 ||
+    config.skills.includes("subagent-thread") ||
+    config.gsd?.projectDir !== undefined ||
+    (config.fileAccess !== undefined && config.fileAccess.length > 0) ||
+    config.mcpServers.length > 0 ||
+    config.skills.length > 0;
+
+  if (!hasOptIn) return "";
 
   const header =
     "## Your ClawCode Capabilities\n\nYou are running on ClawCode — a multi-agent orchestration system. The following features are CURRENTLY ENABLED for you (do NOT claim ignorance about these):\n\n";

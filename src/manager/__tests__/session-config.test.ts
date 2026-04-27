@@ -394,8 +394,13 @@ The full context of its creation spans multiple paragraphs of detail.
     const result = await buildSessionConfig(config, makeDeps({ tierManagers, skillsCatalog }));
     // v1.4 equivalent for this config was approximately 1200 chars
     // v1.5 should be equal or smaller due to budget enforcement
-    // Set a generous ceiling to ensure no regression
-    expect(result.systemPrompt.length).toBeLessThanOrEqual(2000);
+    // Phase 100-fu (2026-04-26): comprehensive capability manifest
+    // (Tier 1 + Tier 2 fields) adds ~600 chars of unconditional content
+    // (Model+effort, Conversation memory, Recursion guard, MCP servers,
+    // Skills bullets) when the agent has any opt-in feature. Ceiling
+    // raised from 2000 → 2800 to accommodate the new content while still
+    // catching outsized regressions.
+    expect(result.systemPrompt.length).toBeLessThanOrEqual(2800);
   });
 
   it("bootstrap agents still get bootstrap prompt without fingerprint", async () => {

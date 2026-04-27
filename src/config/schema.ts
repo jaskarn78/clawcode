@@ -193,6 +193,25 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
       "Pattern: (a) reflect on what the operator asked, (b) extract 2-4 noun phrases as search terms, (c) call memory_lookup, (d) ONLY THEN form your response. If memory_lookup returns nothing useful, you may say 'I don't have that in memory'. If it returns something, integrate it.\n\n" +
       "Don't apologize for searching. Don't announce 'let me check' — just search silently and respond with what you found.",
   }),
+  // Phase 100-fu (2026-04-26) — operator-surfaced anti-pattern: agents
+  // hitting a tool-surface gap (read-only DB, no write tool, missing MCP)
+  // would simply say "I can't do that" and stop, leaving the operator to
+  // figure out the alternative path. Force the agent to enumerate concrete
+  // alternatives FIRST — a different tool, a generated payload the operator
+  // can run, a workaround — and only THEN ask which path the operator wants.
+  // Pinned by static-grep: "constraint" + "alternatives" + "Never just 'I can't'".
+  "propose-alternatives": Object.freeze({
+    enabled: true,
+    text:
+      "When a tool you have access to is insufficient for the user's request (e.g., you have read-only DB access but they need a write, or you have a search tool but the data is in a different system), DO NOT simply state 'I can't do that'. Instead:\n\n" +
+      "1. State the constraint specifically (\"the finmentum-db MCP is SELECT-only, so I can't INSERT directly\").\n" +
+      "2. Propose 1-2 concrete alternatives, in order of effort:\n" +
+      "   - Use a different tool that CAN do it (e.g., Playwright to fill an admin form, operator-runnable shell command, send_to_agent to delegate to an agent that has write access)\n" +
+      "   - Generate the SQL/payload + ask the operator to run it themselves (\"here's the INSERT statement — paste this into your DB client\")\n" +
+      "   - Suggest a workaround (e.g., \"I can update the cache file directly — does that meet your need?\")\n" +
+      "3. Only AFTER offering alternatives, ask the operator which path they want.\n\n" +
+      "Pattern: constraint → alternatives → ask. Never just 'I can't'.",
+  }),
 });
 
 /**
@@ -422,6 +441,13 @@ export const mcpServerSchema = z.object({
   // for every currently-configured MCP server; v2.1 migrated configs
   // parse unchanged). See src/mcp/readiness.ts.
   optional: z.boolean().default(false),
+  // Phase 100 follow-up — operator-curated annotations surfaced in the
+  // capability manifest. Helps the agent describe its tool surface
+  // accurately ("the finmentum-db tool is read-only — I can SELECT
+  // but not INSERT/UPDATE/DELETE"). Both fields optional so existing
+  // YAML configs without these annotations parse unchanged.
+  description: z.string().optional(),
+  accessPattern: z.enum(["read-only", "read-write", "write-only"]).optional(),
 });
 
 /** Inferred MCP server config type from schema. */

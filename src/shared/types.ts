@@ -229,6 +229,19 @@ export type ResolvedAgentConfig = {
         readonly red: number;
       };
     };
+    /**
+     * Phase 100 follow-up — operator-specified per-agent heartbeat cadence
+     * (e.g., "50m" for fin-acquisition's context-zone monitor). Populated
+     * by loader.ts when the agent declares the extended `heartbeat: {every,
+     * model, prompt}` shape; undefined when the agent uses the boolean form.
+     * Surfaced verbatim in the capability manifest.
+     */
+    readonly every?: string;
+    /**
+     * Phase 100 follow-up — operator-specified model for the per-agent
+     * heartbeat prompt. Same population rules as `every`.
+     */
+    readonly model?: "haiku" | "sonnet" | "opus";
   };
   readonly skillsPath: string;
   readonly schedules: readonly {
@@ -271,6 +284,13 @@ export type ResolvedAgentConfig = {
      * config/loader.ts from mcpServerSchema.
      */
     readonly optional: boolean;
+    /**
+     * Phase 100 follow-up — operator-curated annotations surfaced in the
+     * capability manifest. UNDEFINED for legacy entries without
+     * description/accessPattern (back-compat).
+     */
+    readonly description?: string;
+    readonly accessPattern?: "read-only" | "read-write" | "write-only";
   }[];
   readonly acceptsTasks?: Readonly<Record<string, readonly string[]>>;  // Phase 59
   readonly escalationBudget?: {

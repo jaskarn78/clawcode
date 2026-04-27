@@ -146,8 +146,14 @@ export function resolveAgentConfig(
   const heartbeatConfig = (() => {
     const h = agent.heartbeat;
     if (h === false) return { ...defaults.heartbeat, enabled: false };
-    if (typeof h === "object" && h !== null && "enabled" in h && h.enabled === false) {
-      return { ...defaults.heartbeat, enabled: false };
+    // Phase 100 follow-up — propagate per-agent extended fields (every,
+    // model) so downstream surfaces (capability manifest) can render the
+    // operator-specified cadence instead of just the global intervalSeconds.
+    if (typeof h === "object" && h !== null) {
+      const enabled = "enabled" in h && h.enabled === false ? false : defaults.heartbeat.enabled;
+      const every = h.every;
+      const model = h.model;
+      return { ...defaults.heartbeat, enabled, ...(every ? { every } : {}), ...(model ? { model } : {}) };
     }
     return defaults.heartbeat;
   })();
@@ -282,6 +288,11 @@ export function resolveAgentConfig(
         // top-level shared definitions that used the old shape). Explicitly
         // configured `optional: true` flows through unchanged.
         optional: s.optional === true,
+        // Phase 100 follow-up — operator-curated annotations propagated so
+        // the capability manifest can render "name (description — pattern)".
+        // Both fields optional; undefined when YAML omitted them.
+        ...(s.description ? { description: s.description } : {}),
+        ...(s.accessPattern ? { accessPattern: s.accessPattern } : {}),
       });
     } catch (err) {
       if (!onMcpResolutionError) throw err;

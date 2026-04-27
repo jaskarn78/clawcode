@@ -359,6 +359,8 @@ describe("buildCapabilityManifest", () => {
         every: "50m",
         model: "haiku",
       } as ResolvedAgentConfig["heartbeat"],
+      // Trigger non-empty manifest so the heartbeat bullet renders.
+      gsd: { projectDir: "/tmp/p" },
     });
 
     const manifest = buildCapabilityManifest(cfg);
