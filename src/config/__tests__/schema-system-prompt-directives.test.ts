@@ -40,9 +40,15 @@ describe("systemPromptDirectiveSchema (Phase 94 TOOL-10)", () => {
 });
 
 describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
-  it("REG-DEFAULTS-PRESENT: ships exactly 2 default keys (file-sharing + cross-agent-routing)", () => {
+  it("REG-DEFAULTS-PRESENT: ships exactly 2 D-09/D-07 default keys plus subagent-routing + memory-recall", () => {
     const keys = Object.keys(DEFAULT_SYSTEM_PROMPT_DIRECTIVES).sort();
-    expect(keys).toEqual(["cross-agent-routing", "file-sharing"]);
+    // Phase 99 added subagent-routing; Phase 100-fu adds memory-recall-before-uncertainty.
+    expect(keys).toEqual([
+      "cross-agent-routing",
+      "file-sharing",
+      "memory-recall-before-uncertainty",
+      "subagent-routing",
+    ]);
     // Both default-enabled per D-10 (operator-locked)
     expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["file-sharing"].enabled).toBe(true);
     expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["cross-agent-routing"].enabled).toBe(true);
@@ -60,6 +66,32 @@ describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
   });
 });
 
+describe("memory-recall-before-uncertainty directive (Phase 100-fu)", () => {
+  it("MEM-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "memory-recall-before-uncertainty",
+      ),
+    ).toBe(true);
+  });
+
+  it("MEM-DIR-2: directive is enabled by default", () => {
+    expect(
+      DEFAULT_SYSTEM_PROMPT_DIRECTIVES["memory-recall-before-uncertainty"]
+        .enabled,
+    ).toBe(true);
+  });
+
+  it("MEM-DIR-3: directive text mentions memory_lookup and 'I don't know'", () => {
+    const text =
+      DEFAULT_SYSTEM_PROMPT_DIRECTIVES["memory-recall-before-uncertainty"]
+        .text;
+    expect(text).toContain("memory_lookup");
+    expect(text).toContain("I don't know");
+  });
+});
+
 describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
   it("REG-V25-BACKCOMPAT: defaultsSchema.parse({}) populates systemPromptDirectives with the defaults (additive-optional, 8th application)", () => {
     const result = defaultsSchema.safeParse({});
@@ -71,7 +103,12 @@ describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
       expect(result.data.systemPromptDirectives).toBeDefined();
       expect(
         Object.keys(result.data.systemPromptDirectives ?? {}).sort(),
-      ).toEqual(["cross-agent-routing", "file-sharing"]);
+      ).toEqual([
+        "cross-agent-routing",
+        "file-sharing",
+        "memory-recall-before-uncertainty",
+        "subagent-routing",
+      ]);
       expect(
         result.data.systemPromptDirectives?.["file-sharing"].text,
       ).toContain("ALWAYS upload via Discord");
