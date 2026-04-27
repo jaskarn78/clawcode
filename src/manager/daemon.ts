@@ -2726,7 +2726,10 @@ export async function startDaemon(
           // ResolvedAgentConfig may not surface it directly; treat absence
           // as fleet-default (enabled=false, 30min, haiku). Force flag at
           // the IPC handler overrides enabled=false at the operator's risk.
-          const dreamCfg = (cfg as unknown as { dream?: { enabled?: boolean; idleMinutes?: number; model?: string } }).dream;
+          // Phase 100 follow-up — ResolvedAgentConfig now carries `dream`
+          // directly (resolver merges agent.dream ?? defaults.dream).
+          // The `as unknown as ...` cast is gone; clean property access.
+          const dreamCfg = cfg.dream;
           return {
             enabled: dreamCfg?.enabled ?? false,
             idleMinutes: dreamCfg?.idleMinutes ?? 30,
@@ -2748,9 +2751,8 @@ export async function startDaemon(
             }
           ).getLastTurnAt?.(agent) ?? null;
           const cfg = resolvedAgents.find((a) => a.name === agent);
-          const idleMinutes =
-            (cfg as unknown as { dream?: { idleMinutes?: number } })?.dream
-              ?.idleMinutes ?? 30;
+          // Phase 100 follow-up — direct property access (see above).
+          const idleMinutes = cfg?.dream?.idleMinutes ?? 30;
           return isAgentIdle({
             lastTurnAt: sessLastTurnAt,
             idleMinutes,

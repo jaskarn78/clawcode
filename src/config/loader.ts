@@ -343,6 +343,18 @@ export function resolveAgentConfig(
     gsd: agent.gsd?.projectDir
       ? { projectDir: expandHome(agent.gsd.projectDir) }
       : undefined,
+    // Phase 100 follow-up — dream config propagation. Same root-cause
+    // shape as the Phase 100 settingSources / gsd.projectDir and Phase
+    // 96 fileAccess fixes: agentSchema parsed `dream` but the resolver
+    // dropped it, so daemon.getResolvedDreamConfig saw `undefined` and
+    // silently disabled auto-fire (and manual /clawcode-dream logged
+    // "skipped — dream.enabled=false" even when the yaml had
+    // enabled: true). Resolution: agent.dream wins when set, otherwise
+    // fall back to defaults.dream (default-bearing zod schema, always
+    // populated). Per-field merge handled by the schema parse layer
+    // (defaults.dream has all three fields with zod defaults filled);
+    // we just thread the resolved object through.
+    dream: agent.dream ?? defaults.dream,
     // Phase 90 MEM-01 — agent-level memoryAutoLoad beats defaults.memoryAutoLoad;
     // undefined falls back to defaults (zod default = true). Cannot use `??`
     // here: `false ?? true` would (correctly) yield false, but `undefined ??

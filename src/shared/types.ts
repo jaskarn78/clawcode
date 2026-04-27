@@ -1,3 +1,8 @@
+// Phase 95 DREAM-01..03 — dream config type lives in the config schema.
+// We import the inferred zod type so ResolvedAgentConfig.dream stays in
+// lockstep with the schema definition (one source of truth).
+import type { DreamConfig } from "../config/schema.js";
+
 /**
  * Resolved agent configuration after defaults merging.
  * All optional fields from the raw config are resolved to concrete values.
@@ -75,6 +80,19 @@ export type ResolvedAgentConfig = {
    * by the loader (raw `~/...` paths are resolved before reaching this type).
    */
   readonly gsd?: { readonly projectDir: string };
+  /**
+   * Phase 100 follow-up — dream config propagated via resolveAgentConfig
+   * (without this field, daemon's getResolvedDreamConfig sees undefined
+   * and silently disables auto-fire). Same root-cause shape as Phase 100
+   * settingSources / gsd.projectDir and Phase 96 fileAccess: schema
+   * parsed `dream` but resolver dropped it before reaching the daemon.
+   *
+   * Populated when the agent declares a `dream:` block OR when
+   * `defaults.dream` is set (resolver merges agent over defaults).
+   * `enabled: false` (the schema default) is preserved verbatim — the
+   * daemon's IPC handler checks `dream?.enabled === true`.
+   */
+  readonly dream?: DreamConfig;
   /**
    * Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set, the
    * LLM physically cannot invoke any tool whose name matches an entry. Used

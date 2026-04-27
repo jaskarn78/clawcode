@@ -12,6 +12,10 @@ import {
 import type { BootstrapStatus } from "../bootstrap/types.js";
 import { buildBootstrapPrompt } from "../bootstrap/prompt-builder.js";
 import { extractFingerprint, formatFingerprint } from "../memory/fingerprint.js";
+// Phase 100 follow-up — capability manifest. Pure read of resolved config;
+// emitted into the stable prefix after identity so the LLM has its enabled
+// features in context (root cause of the "I don't dream" failure mode).
+import { buildCapabilityManifest } from "./capability-manifest.js";
 import { assembleContext, DEFAULT_BUDGETS } from "./context-assembler.js";
 import type {
   ContextSources,
@@ -300,6 +304,19 @@ export async function buildSessionConfig(
 
   // Inject agent name and memory_lookup guidance (LOAD-01)
   identityStr += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
+
+  // Phase 100 follow-up — capability manifest (after identity, before
+  // MEMORY.md auto-load and MCP block). Sits in the cached stable prefix
+  // so the LLM has its enabled-feature list in context every turn
+  // without paying re-render cost. Returns "" for minimal agents (no
+  // dream, no schedules, no subagent-thread skill, no GSD) — we only
+  // pay the prompt cost for agents with notable opt-ins. Root cause:
+  // fin-acquisition claimed it didn't dream while dreams were being
+  // persisted under memory/dreams/ (2026-04-27 operator surface).
+  const capabilityManifest = buildCapabilityManifest(config);
+  if (capabilityManifest.length > 0) {
+    identityStr += "\n" + capabilityManifest;
+  }
 
   // Phase 90 MEM-01 — MEMORY.md auto-load into stable prefix, AFTER
   // SOUL+IDENTITY and BEFORE MCP status (per D-18). 50KB hard cap
