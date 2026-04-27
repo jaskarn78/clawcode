@@ -168,6 +168,31 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
       "- When the user explicitly says \"do it inline\" or \"don't use a subthread\".\n\n" +
       "Default to subthread when in doubt. Blocking the main channel for a multi-minute task is worse UX than a subthread the operator can collapse if uninterested.",
   }),
+  // Phase 100-fu (2026-04-26) — silent-recall problem fix. Pre-100-fu the
+  // pre-turn <memory-context> auto-injection only included the top-K hybrid
+  // RRF chunks from MEMORY.md. The agent's own saved memories
+  // (memory_save → memories table) were ONLY visible if the agent explicitly
+  // invoked memory_lookup. So when an operator asked "what's my favorite
+  // X?" or "what did I tell you about Y?", the agent often said "I don't
+  // know" because (a) the relevant memory was in the memories table not the
+  // chunks table OR (b) auto-retrieval's top-K didn't surface it.
+  //
+  // Fix lives in two parts:
+  //   1. Code-level (memory-retrieval.ts) — fan out to memories table so
+  //      saved memories are auto-injected too.
+  //   2. Prompt-level (this directive) — instruct the agent to invoke
+  //      memory_lookup before saying "I don't know" since auto-retrieval
+  //      can still miss specific facts buried in long memories.
+  //
+  // Pinned by static-grep: "Before saying 'I don't know'" (line 1) and
+  // "memory_lookup" (multiple).
+  "memory-recall-before-uncertainty": Object.freeze({
+    enabled: true,
+    text:
+      "Before saying 'I don't know' or 'I don't remember' or 'I don't have that information', ALWAYS invoke the `memory_lookup` MCP tool with the user's question terms. The `<memory-context>` block at the start of your turn is auto-populated with relevant content but covers only the top-K matches — for specific facts the operator has shared with you, an explicit memory_lookup catches what auto-retrieval missed.\n\n" +
+      "Pattern: (a) reflect on what the operator asked, (b) extract 2-4 noun phrases as search terms, (c) call memory_lookup, (d) ONLY THEN form your response. If memory_lookup returns nothing useful, you may say 'I don't have that in memory'. If it returns something, integrate it.\n\n" +
+      "Don't apologize for searching. Don't announce 'let me check' — just search silently and respond with what you found.",
+  }),
 });
 
 /**

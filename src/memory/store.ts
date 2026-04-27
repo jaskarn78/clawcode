@@ -1182,6 +1182,86 @@ export class MemoryStore {
   }
 
   /**
+   * Phase 100-fu — cosine-similarity top-K over `vec_memories` (the agent's
+   * own saved memories — written by memory_save / memory.insert). Sibling
+   * to searchMemoryChunksVec, used by retrieveMemoryChunks for the
+   * memories-table fan-out so conversational memory is auto-injected into
+   * the pre-turn <memory-context> block instead of waiting for an explicit
+   * memory_lookup tool call.
+   *
+   * Returns memory_id + distance (smaller = more similar). The vec_memories
+   * table is created in initSchema (line ~597) — no new infra needed.
+   */
+  searchMemoriesVec(
+    queryEmbedding: Float32Array,
+    limit: number,
+  ): ReadonlyArray<Readonly<{ memory_id: string; distance: number }>> {
+    try {
+      return this.db
+        .prepare(
+          `SELECT memory_id, distance FROM vec_memories
+           WHERE embedding MATCH ? AND k = ? ORDER BY distance`,
+        )
+        .all(queryEmbedding, limit) as ReadonlyArray<{
+        memory_id: string;
+        distance: number;
+      }>;
+    } catch {
+      // Empty table or no matches — vec0 occasionally throws on empty MATCH.
+      // Treat as zero results so callers (retrieveMemoryChunks) can fall
+      // through to the chunks side without crashing.
+      return [];
+    }
+  }
+
+  /**
+   * Phase 100-fu — hydrate a memory by id for the retrieval pipeline.
+   * Returns the saved content + tags + importance for projection into the
+   * MemoryRetrievalResult shape. Null on miss so the fuser can silently
+   * skip stale ids (matches getMemoryChunk semantics).
+   *
+   * Distinct from getById(): this lookup does NOT bump access_count or
+   * accessed_at — pre-turn auto-retrieval should not pollute the recency
+   * signal that promotion logic depends on.
+   */
+  getMemoryForRetrieval(
+    memoryId: string,
+  ): Readonly<{
+    memory_id: string;
+    content: string;
+    tags: readonly string[];
+    importance: number;
+  }> | null {
+    const row = this.db
+      .prepare(
+        `SELECT id AS memory_id, content, tags, importance
+         FROM memories WHERE id = ?`,
+      )
+      .get(memoryId) as
+      | {
+          memory_id: string;
+          content: string;
+          tags: string;
+          importance: number;
+        }
+      | undefined;
+    if (!row) return null;
+    let parsedTags: readonly string[] = [];
+    try {
+      const t = JSON.parse(row.tags);
+      if (Array.isArray(t)) parsedTags = Object.freeze(t.map(String));
+    } catch {
+      /* malformed tags → empty */
+    }
+    return Object.freeze({
+      memory_id: row.memory_id,
+      content: row.content,
+      tags: parsedTags,
+      importance: row.importance,
+    });
+  }
+
+  /**
    * Phase 90 MEM-03 — hydrate a chunk by id for the retrieval pipeline.
    * Returns null on miss so the fuser can silently skip stale ids.
    */

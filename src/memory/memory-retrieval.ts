@@ -33,6 +33,16 @@ export type MemoryRetrievalResult = Readonly<{
   fusedScore: number;
   /** Path-derived nudge (vault +0.2, procedures +0.1, archive -0.2, else 0). */
   scoreWeight: number;
+  /**
+   * Phase 100-fu — surface the result originated from. "chunk" = file-scanner
+   * memory_chunks (MEMORY.md sections). "memory" = the agent's own saved
+   * memories (memory_save). Additive field — pre-existing callers that
+   * don't read it stay unaffected. The wrapper rendering in
+   * turn-dispatcher.augmentWithMemoryContext uses {heading,path,body} only,
+   * so memory-sourced results render cleanly via path="memory:<id>" and
+   * heading=null fallback.
+   */
+  source: "chunk" | "memory";
 }>;
 
 /**
@@ -122,11 +132,32 @@ export async function retrieveMemoryChunks(
   if (args.query.trim().length === 0) return Object.freeze([]);
 
   const qEmb = await args.embed(args.query);
-  const vecTop = args.store.searchMemoryChunksVec(qEmb, 20);
-  const ftsTop = args.store.searchMemoryChunksFts(args.query, 20);
-  const fused = rrfFuse(vecTop, ftsTop, RRF_K);
 
-  // Hydrate + apply path weighting
+  // Phase 100-fu — fan out chunk-side AND memory-side searches in parallel.
+  // The chunks side is the file-scanner content (MEMORY.md). The memories
+  // side is the agent's own saved memories (memory_save). Pre-100-fu only
+  // chunks were searched, so the agent's saved memory was invisible in the
+  // pre-turn <memory-context> block. After 100-fu both surface together
+  // ranked by RRF — the agent sees relevant content regardless of which
+  // store wrote it.
+  const [vecTop, ftsTop, memoriesTop] = await Promise.all([
+    Promise.resolve(args.store.searchMemoryChunksVec(qEmb, 20)),
+    Promise.resolve(args.store.searchMemoryChunksFts(args.query, 20)),
+    Promise.resolve(args.store.searchMemoriesVec(qEmb, 20)),
+  ]);
+
+  // Chunks side: RRF-fuse vec + FTS as before.
+  const fusedChunks = rrfFuse(vecTop, ftsTop, RRF_K);
+
+  // Memories side: pseudo-RRF score from rank position only (vec is the
+  // sole ranker since memories has no FTS index). 1/(k+rank+1) keeps the
+  // score scale identical to chunk-side fused scores so they sort cleanly
+  // in a single combined list.
+  const memoriesScored = memoriesTop.map((r, i) => ({
+    memory_id: r.memory_id,
+    score: 1 / (RRF_K + i + 1),
+  }));
+
   type Hydrated = {
     chunkId: string;
     path: string;
@@ -135,9 +166,12 @@ export async function retrieveMemoryChunks(
     file_mtime_ms: number;
     fusedScore: number;
     scoreWeight: number;
+    source: "chunk" | "memory";
   };
   const hydrated: Hydrated[] = [];
-  for (const f of fused) {
+
+  // Hydrate chunk-side
+  for (const f of fusedChunks) {
     const meta = args.store.getMemoryChunk(f.chunk_id);
     if (!meta) continue;
     hydrated.push({
@@ -148,6 +182,35 @@ export async function retrieveMemoryChunks(
       file_mtime_ms: meta.file_mtime_ms,
       fusedScore: f.score + meta.score_weight,
       scoreWeight: meta.score_weight,
+      source: "chunk",
+    });
+  }
+
+  // Hydrate memory-side. Memories don't have path/heading/file_mtime_ms,
+  // so we synthesize values that keep downstream rendering and the
+  // time-window filter both happy:
+  //   - path: "memory:<id>" — the time-window filter only excludes paths
+  //     that fail the cutoff AND aren't under /memory/vault/ or
+  //     /memory/procedures/. Synthetic memory: paths trivially fail the
+  //     vault/procedures check, so the file_mtime_ms gate decides. We pass
+  //     `now` as file_mtime_ms (memories are always "fresh" — the agent
+  //     just saved them; mtime is a chunk-file concept) so the cutoff
+  //     comparison ALWAYS passes.
+  //   - heading: null — turn-dispatcher's renderer falls back to path on
+  //     null heading, producing "### memory:<id>\n<body>" in the prompt.
+  //   - score_weight: 0 — no path-derived nudge for memories.
+  for (const m of memoriesScored) {
+    const meta = args.store.getMemoryForRetrieval(m.memory_id);
+    if (!meta) continue;
+    hydrated.push({
+      chunkId: m.memory_id,
+      path: `memory:${m.memory_id}`,
+      heading: null,
+      body: meta.content,
+      file_mtime_ms: now,
+      fusedScore: m.score,
+      scoreWeight: 0,
+      source: "memory",
     });
   }
 
@@ -157,7 +220,8 @@ export async function retrieveMemoryChunks(
   // Token budget truncation. ~4 chars/token — stop accumulating when the
   // next chunk would push cumulative body chars past budget*4. Always emit
   // at least the first chunk (don't leave the caller with an empty block
-  // just because it's a big one).
+  // just because it's a big one). Applied across BOTH surfaces (chunks +
+  // memories) so a flood of large memories can't blow the prompt budget.
   const out: MemoryRetrievalResult[] = [];
   let acc = 0;
   const limited = windowed.slice(0, topK);
@@ -172,6 +236,7 @@ export async function retrieveMemoryChunks(
         body: h.body,
         fusedScore: h.fusedScore,
         scoreWeight: h.scoreWeight,
+        source: h.source,
       }),
     );
     acc += len;
