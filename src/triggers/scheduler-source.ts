@@ -14,12 +14,18 @@
  */
 
 import { Cron } from "croner";
+import { nanoid } from "nanoid";
 import type { Logger } from "pino";
 
 import type { TriggerEvent, TriggerSource } from "./types.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
+import { ManagerError } from "../shared/errors.js";
+
+/** Max horizon for one-shot reminders (30 days). Guards against typos like
+ *  '2099-01-01' that would pin the daemon's process timer. */
+const REMINDER_MAX_HORIZON_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Constructor options for SchedulerSource. The `ingest` callback is
@@ -64,6 +70,8 @@ export class SchedulerSource implements TriggerSource {
   private readonly cronJobs: Cron[] = [];
   private readonly locks = new Map<string, boolean>();
   private readonly triggers = new Map<string, Map<string, TriggerCallback>>();
+  /** Phase 100 follow-up — reminderId → callback for `_triggerReminderForTest`. */
+  private readonly reminderTriggers = new Map<string, TriggerCallback>();
 
   constructor(options: SchedulerSourceOptions) {
     this.ingestFn = options.ingest;
@@ -155,7 +163,99 @@ export class SchedulerSource implements TriggerSource {
     }
     this.cronJobs.length = 0;
     this.triggers.clear();
+    this.reminderTriggers.clear();
     this.locks.clear();
+  }
+
+  // -----------------------------------------------------------------------
+  // addOneShotReminder — Phase 100 follow-up (operator-surfaced 2026-04-27)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Schedule a one-off reminder. At `fireAt`, a TriggerEvent is built with
+   * `sourceId="reminder:<reminderId>"` (per-reminder-scoped to keep the
+   * 3-layer dedup pipeline distinct) and ingested through the engine. The
+   * delivery callback (wired in commit f984008) then routes the agent's
+   * response to its bound delivery surface (typically Discord webhook).
+   *
+   * In-memory only — daemon restart loses pending reminders. The MCP tool
+   * description tells the LLM to caveat accordingly.
+   *
+   * Throws `ManagerError` for invalid / past / too-far-out fireAt values
+   * so the IPC handler surfaces a clean JSON-RPC error instead of a raw
+   * runtime crash.
+   */
+  async addOneShotReminder(opts: {
+    readonly fireAt: Date;
+    readonly agentName: string;
+    readonly prompt: string;
+  }): Promise<{ readonly reminderId: string }> {
+    const now = Date.now();
+    const fireMs = opts.fireAt.getTime();
+    if (isNaN(fireMs)) {
+      throw new ManagerError(`Invalid fireAt: ${opts.fireAt}`);
+    }
+    if (fireMs <= now) {
+      throw new ManagerError(
+        `fireAt must be in the future (got ${opts.fireAt.toISOString()})`,
+      );
+    }
+    if (fireMs > now + REMINDER_MAX_HORIZON_MS) {
+      throw new ManagerError(
+        `fireAt cannot be more than 30 days in the future (got ${opts.fireAt.toISOString()})`,
+      );
+    }
+
+    const reminderId = nanoid(8);
+    const agentName = opts.agentName;
+    const prompt = opts.prompt;
+
+    const reminderCallback: TriggerCallback = async (): Promise<void> => {
+      // Per-agent sequential lock — mirrors the recurring schedule path so a
+      // reminder doesn't race a long-running scheduled prompt for the same
+      // agent. The skip is logged + the watermark intentionally NOT advanced
+      // (in-memory-only reminders have no replay anyway).
+      if (this.locks.get(agentName)) {
+        this.log.info(
+          { agent: agentName, reminderId },
+          "scheduler-source: reminder skipped (agent locked by another schedule)",
+        );
+        return;
+      }
+      this.locks.set(agentName, true);
+      try {
+        const event: TriggerEvent = {
+          sourceId: `reminder:${reminderId}`,
+          idempotencyKey: `reminder:${reminderId}`,
+          targetAgent: agentName,
+          payload: prompt,
+          timestamp: Date.now(),
+        };
+        await this.ingestFn(event);
+      } catch (err) {
+        this.log.error(
+          { agent: agentName, reminderId, error: (err as Error).message },
+          "scheduler-source: reminder ingest failed",
+        );
+      } finally {
+        this.locks.set(agentName, false);
+      }
+    };
+
+    // croner accepts a Date as the first arg for one-shot scheduling. The
+    // job auto-stops after the date passes; we keep the handle in cronJobs
+    // so `stop()` cleanly tears it down on daemon shutdown.
+    const cronJob = new Cron(opts.fireAt, { paused: false }, () => {
+      void reminderCallback();
+    });
+    this.cronJobs.push(cronJob);
+    this.reminderTriggers.set(reminderId, reminderCallback);
+
+    this.log.info(
+      { agent: agentName, reminderId, fireAt: opts.fireAt.toISOString() },
+      "scheduler-source: one-shot reminder scheduled",
+    );
+    return { reminderId };
   }
 
   // -----------------------------------------------------------------------
@@ -234,6 +334,21 @@ export class SchedulerSource implements TriggerSource {
     const trigger = agentTriggers.get(scheduleName);
     if (!trigger) {
       throw new Error(`No trigger for schedule '${scheduleName}' on agent '${agentName}'`);
+    }
+    await trigger();
+  }
+
+  /**
+   * Manually trigger a one-shot reminder's callback (test-only). Mirrors
+   * `_triggerForTest` but keyed by the reminderId returned from
+   * `addOneShotReminder`. Avoids fighting croner's internal setTimeout vs
+   * vitest fake timers.
+   * @internal
+   */
+  async _triggerReminderForTest(reminderId: string): Promise<void> {
+    const trigger = this.reminderTriggers.get(reminderId);
+    if (!trigger) {
+      throw new Error(`No reminder registered for id '${reminderId}'`);
     }
     await trigger();
   }

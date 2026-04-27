@@ -70,6 +70,13 @@ export const IPC_METHODS = [
   // Closes the "no archive tool" capability gap raised 2026-04-26 + auto-prunes
   // the registry binding so maxThreadSessions accounting stays correct.
   "archive-discord-thread",
+  // Phase 100 follow-up — operator-surfaced 2026-04-27. Backs the
+  // `schedule_reminder` MCP tool that lets agents set ad-hoc one-off
+  // reminders firing as standalone turns (delivered via the f984008
+  // trigger-delivery callback). Daemon-side handler invokes
+  // schedulerSource.addOneShotReminder. In-memory only — does not survive
+  // daemon restart.
+  "schedule-reminder",
   // Security (Phase 27)
   "approve-command",
   "deny-command",

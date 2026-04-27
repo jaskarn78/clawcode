@@ -43,6 +43,10 @@ export const TOOL_DEFINITIONS = {
     description: "Archive a Discord thread and prune its registry binding",
     ipcMethod: "archive-discord-thread",
   },
+  schedule_reminder: {
+    description: "Schedule a one-off reminder that fires as a standalone turn",
+    ipcMethod: "schedule-reminder",
+  },
   memory_lookup: {
     description: "Search your memory for relevant context, past decisions, and knowledge",
     ipcMethod: "memory-lookup",
@@ -446,6 +450,39 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Failed to archive thread: ${msg}` }], isError: true };
+      }
+    },
+  );
+
+  // Tool: schedule_reminder
+  //
+  // Phase 100 follow-up — operator-surfaced 2026-04-27. Closes the
+  // "no scheduling primitive" gap where agents promised "ping me at 7:58
+  // PM" but the reminder leaked into context and bled into the next
+  // inbound turn. Routes through SchedulerSource → TriggerEngine → the
+  // f984008 trigger-delivery callback, so the reply posts as a standalone
+  // turn in the agent's bound channel.
+  server.tool(
+    "schedule_reminder",
+    "Schedule a one-off reminder. At the specified time, you'll receive a synthetic turn with the given prompt — your response posts to your bound channel via webhook. Use this for 'ping me in 15 min' / 'check back at 7:58 PM' patterns. The reminder is in-memory only — does not survive daemon restart, so caveat the operator if a restart is imminent.",
+    {
+      agent: z.string().describe("Your agent name (pass your own name)"),
+      at: z.string().describe("When to fire. ISO 8601 (e.g. '2026-04-27T19:58:00-07:00') OR relative ('in 15 min', 'in 2 hours', 'in 30s', 'in 3 days')"),
+      prompt: z.string().describe("Message you'll receive when the reminder fires (becomes the turn payload)"),
+    },
+    async ({ agent, at, prompt }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "schedule-reminder", {
+          agent,
+          at,
+          prompt,
+        })) as { ok: boolean; reminderId: string; fireAt: string };
+        return {
+          content: [{ type: "text" as const, text: `Reminder ${result.reminderId} scheduled for ${result.fireAt}.` }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Failed to schedule reminder: ${msg}` }], isError: true };
       }
     },
   );

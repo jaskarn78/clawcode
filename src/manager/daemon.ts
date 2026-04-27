@@ -3471,7 +3471,7 @@ export async function startDaemon(
       return { ok: true, agent: agentName, projectDir: expandedPath };
     }
 
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource);
   };
 
   // 11. Create IPC server
@@ -3956,6 +3956,7 @@ async function routeMethod(
   agentsBasePath: string,
   taskManager: TaskManager,
   taskStore: TaskStore,
+  schedulerSource: SchedulerSource,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -5019,6 +5020,57 @@ async function routeMethod(
       const lock = params.lock === true;
       const result = await subagentThreadSpawner.archiveThread(threadId, { lock });
       return { ok: true, ...result };
+    }
+
+    case "schedule-reminder": {
+      // Phase 100 follow-up (operator-surfaced 2026-04-27) — backs the
+      // `schedule_reminder` MCP tool. Agents promise "ping me at 7:58 PM"
+      // but had no scheduling primitive — the reminder leaked into context
+      // and bled into the next inbound turn instead of firing as its own
+      // standalone message. This routes through SchedulerSource +
+      // TriggerEngine + the f984008 delivery callback, so the agent's reply
+      // posts to its bound Discord channel.
+      //
+      // Accepts `at` as either ISO 8601 (`2026-04-27T19:58:00-07:00`) or a
+      // relative expression ("in 15 min", "in 2 hours", "in 30s", "in 3
+      // days"). In-memory only — daemon restart loses pending reminders.
+      const agentName = validateStringParam(params, "agent");
+      const prompt = validateStringParam(params, "prompt");
+      const atRaw = validateStringParam(params, "at");
+
+      let fireAt: Date;
+      const relMatch = atRaw.match(
+        /^in\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?)$/i,
+      );
+      if (relMatch) {
+        const n = parseInt(relMatch[1]!, 10);
+        const unit = relMatch[2]!.toLowerCase();
+        let ms: number;
+        if (unit.startsWith("s")) ms = n * 1000;
+        else if (unit.startsWith("m")) ms = n * 60 * 1000;
+        else if (unit.startsWith("h")) ms = n * 60 * 60 * 1000;
+        else if (unit.startsWith("d")) ms = n * 24 * 60 * 60 * 1000;
+        else throw new ManagerError(`Unsupported time unit: ${unit}`);
+        fireAt = new Date(Date.now() + ms);
+      } else {
+        fireAt = new Date(atRaw);
+        if (isNaN(fireAt.getTime())) {
+          throw new ManagerError(
+            `Invalid 'at' format. Use ISO 8601 (e.g. 2026-04-27T19:58:00-07:00) or relative ("in 15 min").`,
+          );
+        }
+      }
+
+      const result = await schedulerSource.addOneShotReminder({
+        fireAt,
+        agentName,
+        prompt,
+      });
+      return {
+        ok: true,
+        reminderId: result.reminderId,
+        fireAt: fireAt.toISOString(),
+      };
     }
 
     case "approve-command": {
