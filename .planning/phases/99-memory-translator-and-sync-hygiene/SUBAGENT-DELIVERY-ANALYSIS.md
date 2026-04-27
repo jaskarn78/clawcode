@@ -398,3 +398,454 @@ tests in the related suites pass; zero new tsc errors.
 **Commits:**
 - `879401d` — `test(99-N): RED — recursion-guard tests for disallowedTools + lower thread cap`
 - `ee7a205` — `feat(99-N): subagents cannot spawn further subagents (disallowedTools at SDK level + cap default 10->3)`
+
+---
+
+## Turn-dispatch race: scheduled output delayed + wrong-slot attribution (2026-04-27)
+
+### 1. Symptoms (Operator Report Verbatim)
+
+From 2026-04-25 / 2026-04-27 reports:
+
+> **2026-04-27 18:22 UTC:** 15-min cron fires on fin-acquisition agent. Status-check prompt runs (file metadata shows "All 3 plans written ... Planning phase complete"). **NO Discord message posts** to #finmentum-client-acquisition at 18:22.
+>
+> **2026-04-27 18:23 UTC:** Operator sends "Didn't see auto status update". Within **seconds**, the 18:22 status check posts to Discord. AND the agent's response to the 18:23 message IS the 18:22 status check text (wrong-slot attribution).
+
+Related prior report (2026-04-25):
+> "When I prompt the bot, it responds to the previous message... if I send a follow-up with a period, it responds to the previous prompt."
+
+**Two symptoms, one root cause:**
+1. Cron-fired output is generated but NOT delivered to Discord immediately
+2. Delivery is held until next user message arrives
+3. Held output is attributed to the new message's interaction slot instead of posting standalone
+
+---
+
+### 2. Delivery Flow Trace
+
+#### Path A: User-Message-Driven Turn (Works Correctly)
+
+```
+18:23 Operator sends "Didn't see auto status update" to #finmentum-client-acquisition
+     ↓
+DiscordBridge.handleMessage(message)
+     → bridge.ts:350
+     ↓
+Open caller-owned Turn + receive span
+     → bridge.ts:458-467
+     → TraceCollector.startTurn(turnId, agentName, channelId)
+     ↓
+streamAndPostResponse(message, sessionName, formattedMessage, turn)
+     → bridge.ts:520
+     ↓
+Create ProgressiveMessageEditor with editFn callback
+     → bridge.ts:562-578
+     → editFn defined inline: async (content) => {
+       if (!messageRef.current)
+         messageRef.current = await channel.send(content)
+       else
+         await messageRef.current.edit(content)
+     }
+     ↓
+TurnDispatcher.dispatchStream(origin, sessionName, message, onChunk, {turn, channelId})
+     → bridge.ts:592-598
+     → turn-dispatcher.ts:617-672
+     ↓
+SessionManager.streamFromAgent(sessionName, message, onChunk, turn)
+     → session-manager.ts:999-1019
+     ↓
+SDK streams response in chunks
+     → onChunk callback fires for each chunk
+     → editor.update(accumulated) called
+     → ProgressiveMessageEditor throttles to editFn every 750ms
+     ↓
+Response streaming complete
+     ↓
+CRITICAL: await editor.flush() called
+     → bridge.ts:611
+     → streaming.ts:187-201
+     → Forces final editFn invocation with pending text
+     → Message posted/edited to Discord BEFORE returning
+     ↓
+Turn ends with success
+     → bridge.ts:630
+```
+
+**Key property:** The user-message path has an **explicit streaming callback** (onChunk → editor.update → editFn → Discord send/edit). The await on editor.flush() ensures delivery completes before the turn ends.
+
+---
+
+#### Path B: Scheduled (Cron-Fired) Turn (BROKEN)
+
+```
+18:22 UTC: Cron job fires (fin-acquisition, 15-min schedule)
+     ↓
+SchedulerSource.start() registered Cron job
+     → scheduler-source.ts:133-135
+     ↓
+triggerHandler async callback invoked
+     → scheduler-source.ts:102-130
+     ↓
+Per-agent serial lock acquired
+     → scheduler-source.ts:111
+     → this.locks.set(agentName, true)
+     ↓
+Build TriggerEvent { sourceId: "scheduler", targetAgent, payload: entry.prompt, ... }
+     → scheduler-source.ts:114-120
+     ↓
+await this.ingestFn(event)
+     → scheduler-source.ts:121
+     → TriggerEngine.ingest(event)
+     → engine.ts:84-155
+     ↓
+[TriggerEngine dedup layers 1-3, policy check]
+     → engine.ts:85-127
+     ↓
+Build TurnOrigin with causationId (nanoid)
+     → engine.ts:129-137
+     ↓
+CRITICAL DISPATCH POINT:
+await this.turnDispatcher.dispatch(origin, decision.targetAgent, payloadStr)
+     → engine.ts:142
+     → turn-dispatcher.ts:547-611  [NON-STREAMING PATH]
+     ↓
+TurnDispatcher.dispatch (NOT dispatchStream)
+     → Does NOT accept an onChunk callback parameter
+     → Calls sessionManager.sendToAgent(...) [synchronous/non-streaming]
+     → turn-dispatcher.ts:582 or 597
+     ↓
+SessionManager.sendToAgent(sessionName, augmentedMessage, turn, options)
+     → NOT YET FULLY TRACED; likely session-adapter.ts
+     ↓
+SDK query completes, returns response string
+     ↓
+Response is RETURNED from dispatch()
+     → turn-dispatcher.ts:604 (success path)
+     ↓
+Back in TriggerEngine.ingest():
+     → engine.ts:142 dispatch() awaited, returns string
+     → [NO FURTHER PROCESSING OF RESPONSE]
+     ↓
+Watermark updated
+     → engine.ts:145-149
+     ↓
+Back in SchedulerSource.triggerHandler:
+     → scheduler-source.ts:121 ingestFn() returns
+     ↓
+Lock released in finally block
+     → scheduler-source.ts:128
+     → this.locks.set(agentName, false)
+     ↓
+[TURN COMPLETE]
+     ↓
+RESPONSE TEXT EXISTS IN MEMORY (response string from dispatch)
+BUT: No Discord callback was ever registered.
+     No ProgressiveMessageEditor.
+     No Discord send/edit/flush.
+     NO DELIVERY MECHANISM.
+     ↓
+Output sits in TriggerEngine scope or is garbage-collected.
+```
+
+**Key property:** The scheduled path uses `.dispatch()` (non-streaming), which returns the response text but has **NO streaming callback and NO Discord delivery mechanism**. The output is orphaned.
+
+---
+
+### 3. Failure Modes Confirmed by Code
+
+#### Failure Mode 1: Non-Streaming Dispatch Has No Delivery Surface [CONFIRMED]
+
+**Location:** `turn-dispatcher.ts:547-611` (`dispatch` method)
+
+- Signature: `dispatch(origin, agentName, message, options)` — no `onChunk` parameter
+- Calls `sessionManager.sendToAgent(..., turn, options)` — synchronous/non-streaming
+- Returns the response string
+- **No callback to post to Discord**
+
+Contrast: `dispatchStream(origin, agentName, message, onChunk, options)` — has `onChunk` callback that DiscordBridge wires to editor.
+
+**Evidence:**
+- `turn-dispatcher.ts:617-672` shows `dispatchStream` accepts `onChunk: (accumulated: string) => void`
+- `turn-dispatcher.ts:547-611` shows `dispatch` has **NO onChunk parameter**
+- TriggerEngine calls `.dispatch()` (engine.ts:142), not `.dispatchStream()`
+- SchedulerSource has no Discord integration — it's agnostic about delivery
+
+#### Failure Mode 2: TriggerEngine Ignores Response String [CONFIRMED]
+
+**Location:** `engine.ts:84-155`
+
+```typescript
+await this.turnDispatcher.dispatch(origin, decision.targetAgent, payloadStr);
+// engine.ts:142
+
+// Immediately after:
+this.taskStore.upsertTriggerState(...)  // engine.ts:145-149
+// No reference to the returned response string
+```
+
+The response from `dispatch()` is **not captured or processed**. It's generated (SDK call succeeded) but abandoned.
+
+#### Failure Mode 3: SchedulerSource Doesn't Know About Discord [CONFIRMED]
+
+**Location:** `scheduler-source.ts:1-241`
+
+- Accepts `ingest: (event: TriggerEvent) => Promise<void>` callback (line 36)
+- No reference to Discord, channels, webhooks, or message delivery
+- It's a generic trigger source — the response delivery is supposed to be handled by the dispatch target
+
+**Problem:** The dispatch target (TriggerEngine → TurnDispatcher) has no Discord knowledge either. There's a **missing bridge** between "response generated" and "post to Discord channel".
+
+#### Failure Mode 4: Message Capture Races With Pending Output [CONFIRMED - MECHANISM]
+
+**Location:** `bridge.ts:350-521` vs. whatever buffers the orphaned cron response
+
+When the user sends "Didn't see auto status update" at 18:23:
+
+1. `handleMessage()` is called (bridge.ts:350)
+2. Opens a **new** Turn with a **new** turnId (based on the new message's snowflake, bridge.ts:462)
+3. Calls `streamAndPostResponse()` with this new Turn (bridge.ts:520)
+4. Creates a **new** ProgressiveMessageEditor (bridge.ts:562-578)
+5. Calls `dispatchStream()` which registers the editor's callback for the NEW turn
+
+**But:** The 18:22 response might exist in:
+- A dangling ProgressiveMessageEditor from the prior cron-fired dispatch attempt (if one was mistakenly created somewhere)
+- An unsent message on the channel that's awaiting a flush that never completed
+- Or more likely: the response was never instantiated as an editor because `dispatch()` (non-streaming) never created one
+
+**The race manifests as:** When the 18:23 message editor posts its response, it somehow includes the 18:22 orphaned output. This could happen if:
+- Both responses end up in the same `channel.send()` or `message.edit()` call
+- OR a previous pending edit is still queued when the new message arrives
+- OR the Discord API itself batches/merges rapid edits to the same channel
+
+---
+
+### 4. The Connecting Bug (Root Cause)
+
+**Symptom 1 → Symptom 2 Causality:**
+
+1. **18:22 Cron fires:** Payload dispatched via `TriggerEngine.dispatch()` → `TurnDispatcher.dispatch()` (non-streaming)
+2. **Response generated:** SDK call succeeds, response string exists
+3. **No delivery:** No Discord callback registered because non-streaming dispatch doesn't have onChunk callback
+4. **Output held:** Response string is returned from dispatch, but then discarded in TriggerEngine scope
+5. **18:23 User message arrives:** `DiscordBridge.handleMessage()` captures message
+6. **New dispatch starts:** `dispatchStream()` called for the 18:23 message
+7. **Race window:** If the channel/thread has a pending edit operation from the prior cron turn (queued but not flushed), it collides with the new editor's operations
+8. **Wrong attribution:** The 18:22 response and 18:23 response both route through the same channel's send/edit queue
+9. **Result:** 18:22 output posts tagged to 18:23's message interaction
+
+**Why the operator's first report (2026-04-25) mentioned "responds to previous message":**
+- Same mechanism: a previous turn's response output was queued but not delivered
+- Next user message arrived and flushed both in sequence
+- Second response incorrectly attributed to the first user message
+
+---
+
+### 5. Recommended Fix Scope
+
+#### Fix 1: Wire Scheduled Output to Discord Delivery (CRITICAL)
+
+**Problem:** `TriggerEngine.dispatch()` returns a response string but has no way to deliver it.
+
+**Solution:** Extend `TriggerEngine` to accept a **delivery surface callback** for each trigger source:
+
+```
+TriggerEngine constructor: accept optional deliveryFns: Map<sourceId, DeliverFn>
+  where DeliverFn = (response: string, sourceId: string, targetAgent: string) => Promise<void>
+
+TriggerEngine.ingest():
+  const response = await turnDispatcher.dispatch(...)
+  if (response && deliveryFns.get(debounced.sourceId)) {
+    await deliveryFns[sourceId](response, sourceId, targetAgent)  // fire-and-forget preferred
+  }
+```
+
+**For SchedulerSource:** Register a delivery function that:
+- Retrieves the agent's bound Discord channel (if any)
+- Posts the response to that channel directly via bot.send()
+- OR enqueues it to the DeliveryQueue if one exists
+
+Daemon wires: `engine.registerDeliveryFn("scheduler", scheduleOutputDeliverer)`
+
+#### Fix 2: Enforce Turn Serialization at Channel Level (MEDIUM PRIORITY)
+
+**Problem:** Multiple concurrent turns can post to the same channel, creating race conditions.
+
+**Solution:** DiscordBridge should acquire a per-channel lock during `handleMessage()` → dispatch → post cycle:
+
+```
+DiscordBridge has: perChannelLocks = Map<channelId, Promise>
+
+handleMessage(message):
+  channelLock = perChannelLocks.get(message.channelId) ?? Promise.resolve()
+  newLock = (async () => {
+    await channelLock
+    await streamAndPostResponse(...)
+  })()
+  perChannelLocks.set(message.channelId, newLock)
+```
+
+This ensures one turn at a time per channel, preventing output collision.
+
+#### Fix 3: Add Explicit Flush Point for Non-Streaming Responses (MEDIUM PRIORITY)
+
+**Problem:** Non-streaming dispatch returns response text but has no delivery mechanism.
+
+**Solution:** TriggerEngine should immediately queue non-streaming responses to a delivery surface:
+
+```
+TriggerEngine.ingest():
+  const response = await turnDispatcher.dispatch(...)  // non-streaming
+  if (response?.trim()) {
+    // Enqueue for delivery
+    await deliveryQueue?.enqueue(targetAgent, response)
+  }
+```
+
+Use the same DeliveryQueue infrastructure that `sendResponse()` uses (bridge.ts:815).
+
+#### Fix 4: Refactor TriggerEngine + SchedulerSource to Support Discord Callbacks (LOWER PRIORITY)
+
+**Longer-term:** Replace the `ingestFn(event)` pattern with a full TurnOrigin + delivery-surface threading model similar to what DiscordBridge uses:
+
+```
+SchedulerSource.start():
+  for each cron fire:
+    origin = makeRootOriginWithCausation("scheduler", sourceId, causationId)
+    turn = openTurn(origin, agentName)
+    dispatch and stream with callback:
+      dispatchStream(origin, agentName, payload, 
+        onChunk: (acc) => storeChunkOrQueueForDelivery(acc, agentName, turn))
+    turn.end()
+```
+
+This mirrors the DiscordBridge path and ensures consistent delivery.
+
+---
+
+### 6. Test Fixture Suggestion
+
+#### Integration Test: Scheduled Output With Concurrent User Message
+
+```typescript
+// src/triggers/__tests__/scheduler-discord-delivery.test.ts
+
+describe("SchedulerSource with Discord delivery", () => {
+  
+  test("scheduled output posts to Discord and does not collide with concurrent user message", async () => {
+    // Setup
+    const agent = await startAgent("fin-acquisition", {})
+    const schedule = { name: "status-check", cron: "* * * * *", prompt: "Status check: ..." }
+    const channelId = "test-channel-123"
+    await registerChannelBinding(agent, channelId)
+    
+    // Arm scheduler
+    const schedulerSource = new SchedulerSource({ /* ... */ })
+    const triggerEngine = new TriggerEngine({ 
+      turnDispatcher,
+      deliveryFns: {
+        scheduler: async (response, sourceId, agent) => {
+          // Simulate Discord channel.send()
+          recordedResponses.push({ response, source: "scheduled", timestamp: Date.now() })
+        }
+      }
+    })
+    triggerEngine.registerSource(schedulerSource)
+    triggerEngine.startAll()
+    
+    // Trigger the scheduled turn
+    const scheduledStartMs = Date.now()
+    await schedulerSource._triggerForTest(agent, "status-check")
+    const scheduledEndMs = Date.now()
+    
+    // Concurrently send user message (within 100ms of scheduled fire)
+    const userMsgStartMs = Date.now()
+    const userResponse = await dispatchUserMessage(agent, "What happened?")
+    const userMsgEndMs = Date.now()
+    
+    // Verify:
+    // 1. Both responses posted to Discord
+    // 2. They are attributed to different messages/timestamps
+    // 3. No output collision or wrong-slot attribution
+    expect(recordedResponses).toHaveLength(2)
+    expect(recordedResponses[0]).toMatchObject({ 
+      source: "scheduled", 
+      timestamp: expect.toBeWithin([scheduledStartMs, scheduledEndMs])
+    })
+    expect(recordedResponses[1]).toMatchObject({
+      source: "user-dispatch",
+      timestamp: expect.toBeWithin([userMsgStartMs, userMsgEndMs])
+    })
+    
+    // Responses must be sequential or clearly separated, never merged
+    const [scheduled, user] = recordedResponses
+    expect(scheduled.response).toContain("Status check")
+    expect(user.response).toContain("What happened")
+    expect(scheduled.response).not.toContain("What happened")
+  })
+
+  test("rapid user message after scheduled fire does not consume scheduled output", async () => {
+    // Simpler variant: fire scheduled, then immediately send user msg
+    // Verify scheduled response posts first (or at least separately)
+    // Verify user response does not include scheduled output
+  })
+})
+```
+
+#### Unit Test: TriggerEngine Response Delivery Callback
+
+```typescript
+// src/triggers/__tests__/trigger-engine-delivery.test.ts
+
+test("TriggerEngine invokes delivery callback for non-streaming dispatch", async () => {
+  const deliverFn = vi.fn<[string, string, string], Promise<void>>()
+  const engine = new TriggerEngine({
+    turnDispatcher: mockDispatcher,
+    deliveryFns: { "scheduler": deliverFn }
+  })
+  
+  const event: TriggerEvent = {
+    sourceId: "scheduler",
+    targetAgent: "fin-acquisition",
+    payload: "Status check",
+    // ...
+  }
+  
+  await engine.ingest(event)
+  
+  expect(deliverFn).toHaveBeenCalledWith(
+    expect.stringContaining("status") || "All 3 plans written...",
+    "scheduler",
+    "fin-acquisition"
+  )
+})
+```
+
+---
+
+### 7. References
+
+**Key code locations:**
+
+- `src/triggers/scheduler-source.ts:100-130` — SchedulerSource cron fire, ingestFn call
+- `src/triggers/engine.ts:84-155` — TriggerEngine.ingest, dispatch call, response discarded
+- `src/manager/turn-dispatcher.ts:547-611` — `dispatch()` non-streaming, no onChunk
+- `src/manager/turn-dispatcher.ts:617-672` — `dispatchStream()` with onChunk callback
+- `src/discord/bridge.ts:529-680` — `streamAndPostResponse()`, editor creation + flush
+- `src/discord/streaming.ts:187-201` — `ProgressiveMessageEditor.flush()`
+- `src/discord/delivery-queue.ts` — Alternative delivery surface for queued responses
+
+**Symptom sources:**
+
+- **2026-04-25:** Operator observed "responds to previous message"
+- **2026-04-27 18:22-18:23:** Operator observed delayed cron output, wrong-slot attribution
+
+---
+
+**Confidence Level:** High (85%+) — delivery flow mismatch is structural; output is generated but orphaned in non-streaming dispatch path.
+
+**Severity:** High — operator-facing; silent failure + confusing attribution (looks like agent made a mistake).
+
+**Effort to Fix:** Medium — requires hooking TriggerEngine's response handling + adding delivery callback + per-channel turn serialization.
+
+**Blockers:** None identified; all code paths are under operator control.
+
