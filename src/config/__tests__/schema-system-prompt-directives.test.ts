@@ -40,13 +40,15 @@ describe("systemPromptDirectiveSchema (Phase 94 TOOL-10)", () => {
 });
 
 describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
-  it("REG-DEFAULTS-PRESENT: ships exactly 2 D-09/D-07 default keys plus subagent-routing + memory-recall", () => {
+  it("REG-DEFAULTS-PRESENT: ships exactly 2 D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives", () => {
     const keys = Object.keys(DEFAULT_SYSTEM_PROMPT_DIRECTIVES).sort();
-    // Phase 99 added subagent-routing; Phase 100-fu adds memory-recall-before-uncertainty.
+    // Phase 99 added subagent-routing; Phase 100-fu adds memory-recall-before-uncertainty
+    // AND propose-alternatives (5 directives total).
     expect(keys).toEqual([
       "cross-agent-routing",
       "file-sharing",
       "memory-recall-before-uncertainty",
+      "propose-alternatives",
       "subagent-routing",
     ]);
     // Both default-enabled per D-10 (operator-locked)
@@ -92,6 +94,29 @@ describe("memory-recall-before-uncertainty directive (Phase 100-fu)", () => {
   });
 });
 
+describe("propose-alternatives directive (Phase 100-fu)", () => {
+  it("ALT-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "propose-alternatives",
+      ),
+    ).toBe(true);
+  });
+
+  it("ALT-DIR-2: directive is enabled by default", () => {
+    expect(
+      DEFAULT_SYSTEM_PROMPT_DIRECTIVES["propose-alternatives"].enabled,
+    ).toBe(true);
+  });
+
+  it("ALT-DIR-3: directive text mentions 'alternatives' and 'constraint'", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["propose-alternatives"].text;
+    expect(text).toContain("alternatives");
+    expect(text).toContain("constraint");
+  });
+});
+
 describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
   it("REG-V25-BACKCOMPAT: defaultsSchema.parse({}) populates systemPromptDirectives with the defaults (additive-optional, 8th application)", () => {
     const result = defaultsSchema.safeParse({});
@@ -107,6 +132,7 @@ describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
         "cross-agent-routing",
         "file-sharing",
         "memory-recall-before-uncertainty",
+        "propose-alternatives",
         "subagent-routing",
       ]);
       expect(

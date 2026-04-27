@@ -212,4 +212,214 @@ describe("buildCapabilityManifest", () => {
     const manifest = buildCapabilityManifest(cfg);
     expect(manifest).not.toContain("GSD workflow");
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 100-fu — Tier 1 + Tier 2 manifest extension (2026-04-26)
+  // ---------------------------------------------------------------------------
+
+  it("CM-MCP-1: agent with mcpServers (description + accessPattern) → MCP servers bullet with annotations", () => {
+    const cfg = makeConfig({
+      mcpServers: [
+        {
+          name: "1password",
+          command: "npx",
+          args: [],
+          env: {},
+          optional: false,
+          description: "secrets retrieval",
+          accessPattern: "read-only",
+        },
+        {
+          name: "finmentum-db",
+          command: "mcporter",
+          args: [],
+          env: {},
+          optional: false,
+          description: "Postgres SELECT",
+          accessPattern: "read-only",
+        },
+        {
+          name: "playwright",
+          command: "npx",
+          args: [],
+          env: {},
+          optional: false,
+          description: "browser automation",
+          // accessPattern omitted on purpose — bullet should still render
+        },
+      ],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("MCP servers");
+    expect(manifest).toContain("1password (secrets retrieval — read-only)");
+    expect(manifest).toContain("finmentum-db (Postgres SELECT — read-only)");
+    expect(manifest).toContain("playwright (browser automation)");
+  });
+
+  it("CM-MCP-2: mcpServer entries without description fall back to just the name", () => {
+    const cfg = makeConfig({
+      mcpServers: [
+        {
+          name: "clawcode",
+          command: "clawcode",
+          args: ["mcp"],
+          env: {},
+          optional: false,
+          // no description, no accessPattern
+        },
+      ],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("MCP servers");
+    expect(manifest).toContain("clawcode");
+    // No qualifier in parens — bare name only.
+    expect(manifest).not.toContain("clawcode (");
+  });
+
+  it("CM-SKILLS-1: agent with skills → manifest includes a Skills bullet", () => {
+    const cfg = makeConfig({
+      skills: ["subagent-thread", "memory-recall", "research", "synthesis"],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Skills");
+    expect(manifest).toContain("subagent-thread");
+    expect(manifest).toContain("memory-recall");
+    expect(manifest).toContain("research");
+    expect(manifest).toContain("synthesis");
+  });
+
+  it("CM-SKILLS-EMPTY: agent with empty skills → no Skills bullet", () => {
+    const cfg = makeConfig({
+      skills: [],
+      // need something else opted-in so the manifest is non-empty
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).not.toMatch(/^- \*\*Skills\*\*:/m);
+  });
+
+  it("CM-MODEL-1: model + effort included", () => {
+    const cfg = makeConfig({
+      model: "opus",
+      effort: "high",
+      // ensure the manifest renders something so we can scan it
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("model=opus");
+    expect(manifest).toContain("effort=high");
+  });
+
+  it("CM-CONV-1: 'Prior session summaries auto-resume' line present", () => {
+    const cfg = makeConfig({
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Prior session summaries auto-resume");
+    expect(manifest).toContain("Working memory of recent turns");
+  });
+
+  it("CM-FILE-1: fileAccess paths rendered when present", () => {
+    const cfg = makeConfig({
+      fileAccess: [
+        "/home/clawcode/.clawcode/agents/test-agent/",
+        "/srv/shared/finmentum/",
+      ],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("File access");
+    expect(manifest).toContain("/home/clawcode/.clawcode/agents/test-agent/");
+    expect(manifest).toContain("/srv/shared/finmentum/");
+  });
+
+  it("CM-FILE-EMPTY: no fileAccess bullet when undefined or empty", () => {
+    const cfg = makeConfig({
+      fileAccess: undefined,
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).not.toMatch(/^- \*\*File access\*\*:/m);
+  });
+
+  it("CM-HEART-1: heartbeat enabled → renders 'every model' summary", () => {
+    const cfg = makeConfig({
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+        every: "50m",
+        model: "haiku",
+      } as ResolvedAgentConfig["heartbeat"],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Heartbeat");
+    expect(manifest).toContain("50m");
+    expect(manifest).toContain("haiku");
+  });
+
+  it("CM-HEART-DISABLED: heartbeat disabled → renders 'disabled'", () => {
+    const cfg = makeConfig({
+      heartbeat: {
+        enabled: false,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+      },
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Heartbeat");
+    expect(manifest).toContain("disabled");
+  });
+
+  it("CM-RECUR-1: recursion guard sentence present", () => {
+    const cfg = makeConfig({
+      skills: ["subagent-thread"],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    // The recursion-guard bullet ALWAYS renders (informational about how the
+    // SDK enforces "subagents cannot spawn subagents").
+    expect(manifest).toContain("recursion is impossible by design");
+    expect(manifest).toContain("-sub-");
+  });
+
+  it("CM-AUTOREALAY-1: subagent-thread bullet mentions autoRelay default", () => {
+    const cfg = makeConfig({
+      skills: ["subagent-thread"],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Subagent threads");
+    expect(manifest).toContain("autoRelay");
+    expect(manifest).toContain("autoArchive");
+  });
+
+  it("CM-EMPTY-FIELDS: empty Tier 2 fields are omitted (no bloat)", () => {
+    // Minimal-ish agent — only one feature opted in. Tier 2 fields should
+    // not produce empty bullets.
+    const cfg = makeConfig({
+      skills: [],
+      mcpServers: [],
+      fileAccess: undefined,
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    // Skills/MCP/FileAccess bullets are absent
+    expect(manifest).not.toMatch(/^- \*\*Skills\*\*:/m);
+    expect(manifest).not.toMatch(/^- \*\*MCP servers\*\*:/m);
+    expect(manifest).not.toMatch(/^- \*\*File access\*\*:/m);
+  });
 });

@@ -64,6 +64,44 @@ describe("mcpServerSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // Phase 100-fu — operator-curated MCP annotations
+  it("MCP-DESC-1: mcpServerSchema accepts description + accessPattern fields", () => {
+    const result = mcpServerSchema.safeParse({
+      name: "finmentum-db",
+      command: "mcporter",
+      description: "Postgres SELECT",
+      accessPattern: "read-only",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBe("Postgres SELECT");
+      expect(result.data.accessPattern).toBe("read-only");
+    }
+  });
+
+  it("MCP-DESC-2: missing description / accessPattern parses fine (back-compat)", () => {
+    const result = mcpServerSchema.safeParse({
+      name: "legacy",
+      command: "node",
+      args: ["server.js"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Both fields are optional — undefined when absent.
+      expect(result.data.description).toBeUndefined();
+      expect(result.data.accessPattern).toBeUndefined();
+    }
+  });
+
+  it("MCP-DESC-3: rejects an invalid accessPattern value", () => {
+    const result = mcpServerSchema.safeParse({
+      name: "bad",
+      command: "node",
+      accessPattern: "delete-everything",
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("configSchema - mcpServers", () => {
