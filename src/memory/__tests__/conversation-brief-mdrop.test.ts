@@ -279,16 +279,26 @@ describe("conversation-brief — 99-mdrop telemetry escalation", () => {
       "2026-04-27T00:00:00Z",
     );
 
-    // Three heavy summaries: budget=2000 will allow 1, drop 2 (after the first
-    // has been accepted, the next addition would exceed budget → stop).
+    // Three heavy LLM summaries (no raw-fallback) — budget=2000 admits 1,
+    // drops 2. Plus ONE raw-turn-tagged entry mixed in. The raw-turn entry
+    // renders as a tiny placeholder so it does not contribute to the budget,
+    // but it still counts as a CONSIDERED candidate the operator must know
+    // about. This mirrors the production scenario: heavy LLM history pushes
+    // the recent raw-turn fallback into the dropped set.
     const heavyBody = "Architecture decisions resolved. ".repeat(250);
+    // Most-recent slot: raw-fallback (would have been useless content
+    // anyway — that is the bug we just downgraded).
+    seedSummary(
+      memStore,
+      "raw-recent",
+      "## Raw Turns\n\n### user (turn 0)\n\nbody",
+      new Date(T - 1 * 3_600_000).toISOString(),
+      ["raw-fallback"],
+    );
+    // Older slots: heavy LLM bodies that DO consume budget.
     for (let i = 0; i < 3; i++) {
-      const iso = new Date(T - (i + 1) * 3_600_000).toISOString();
-      // Make the OLDER summaries raw-turn so the most recent (LLM) is the one
-      // accepted, but raw-turn candidates are still present in the considered
-      // set.
-      const tags = i === 0 ? [] : ["raw-fallback"];
-      seedSummary(memStore, `big-${i}`, heavyBody, iso, tags);
+      const iso = new Date(T - (i + 2) * 3_600_000).toISOString();
+      seedSummary(memStore, `heavy-${i}`, heavyBody, iso, []);
     }
 
     const errorCalls: Array<{ payload: Record<string, unknown>; msg: string }> = [];

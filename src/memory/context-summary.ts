@@ -57,6 +57,13 @@ export type SummaryRegenerator = (
  */
 export type LoggerLike = {
   readonly warn: (obj: Record<string, unknown>, msg?: string) => void;
+  /**
+   * 99-mdrop — optional error level for context-loss-class events that
+   * MUST surface above warn (raw-turn fallback colliding with budget
+   * truncation). Pino loggers always provide this; lighter shims may
+   * omit it and callers fall back to warn.
+   */
+  readonly error?: (obj: Record<string, unknown>, msg?: string) => void;
 };
 
 /**

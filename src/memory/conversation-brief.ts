@@ -69,6 +69,57 @@ const STABLE_HEADING = "## Recent Sessions";
 const HOUR_MS = 3_600_000;
 
 /**
+ * 99-mdrop — tag stamped on session-summary memories whose body is the
+ * raw-turn dump (LLM summarize timed out / errored). conversation-brief
+ * MUST NOT inject the bloated body verbatim because it blows past the
+ * conversation_context budget and silently truncates everything.
+ *
+ * See: src/memory/session-summarizer.ts buildRawTurnFallback +
+ *      .planning/phases/99-memory-translator-and-sync-hygiene/
+ *      ADMIN-CLAWDY-MEMORY-DROP-2026-04-27.md
+ */
+const RAW_FALLBACK_TAG = "raw-fallback";
+
+/**
+ * Detect a raw-turn fallback memory. The summarizer adds `raw-fallback`
+ * (existing convention since Phase 66). The audit doc proposed
+ * `fallback:raw-turn` but we keep the established tag for back-compat.
+ */
+function isRawTurnFallback(entry: MemoryEntry): boolean {
+  return entry.tags.includes(RAW_FALLBACK_TAG);
+}
+
+/**
+ * Best-effort turn count for the placeholder line.
+ *
+ * Prefers `sourceTurnIds` (set by the summarizer at insert time). Falls
+ * back to counting `### user|assistant` headers in the raw-turn dump,
+ * since legacy entries may have been inserted before sourceTurnIds
+ * tracking landed. Returns null if neither signal is available — the
+ * placeholder still renders but omits the count.
+ */
+function rawTurnCount(entry: MemoryEntry): number | null {
+  if (entry.sourceTurnIds && entry.sourceTurnIds.length > 0) {
+    return entry.sourceTurnIds.length;
+  }
+  const headerMatches = entry.content.match(/^### (?:user|assistant) /gm);
+  return headerMatches ? headerMatches.length : null;
+}
+
+/**
+ * Render the 1-line placeholder for a raw-turn-tagged session.
+ *
+ * Operator-facing copy: surfaces context-loss without injecting the
+ * bloated body. Mirrors the warn-style "⚠" prefix used in dashboards
+ * so it visually matches restart-greeting alerts.
+ */
+function renderRawTurnPlaceholder(entry: MemoryEntry): string {
+  const count = rawTurnCount(entry);
+  const turns = count !== null ? `${count} turns` : "unknown length";
+  return `⚠ Prior session ${turns} — summary unavailable (raw-turn fallback).`;
+}
+
+/**
  * Assemble a conversation brief for the given agent.
  *
  * Pure function — all deps + `now` are injected.
@@ -173,19 +224,36 @@ export function assembleConversationBrief(
   }
 
   if (accepted.length < candidates.length) {
+    // 99-mdrop telemetry: distinguish "budget truncation" from "no data"
+    // so operators can monitor the high-impact case (context-loss risk).
+    // truncationReason="budget" means we had more candidates than fit;
+    // hasFallbackTagged=true means at least one CONSIDERED candidate was
+    // a raw-turn fallback. The combination is the smoking-gun pattern
+    // from ADMIN-CLAWDY-MEMORY-DROP-2026-04-27.md:
+    //   requestedCount=3, actualCount=1, raw-turn dump in candidates →
+    //   the agent is about to lose its working memory silently.
+    const hasFallbackTagged = candidates.some(isRawTurnFallback);
+    const payload = {
+      agent: agentName,
+      requestedCount: config.sessionCount,
+      actualCount: accepted.length,
+      tokens: currentTokens,
+      budgetTokens: config.budgetTokens,
+      section: "conversation_context",
+      truncationReason: "budget" as const,
+      hasFallbackTagged,
+    };
+
     // SECURITY: never log brief content — only metadata. Mirrors the
     // `enforceSummaryBudget` warn-log convention.
-    log?.warn(
-      {
-        agent: agentName,
-        requestedCount: config.sessionCount,
-        actualCount: accepted.length,
-        tokens: currentTokens,
-        budgetTokens: config.budgetTokens,
-        section: "conversation_context",
-      },
-      "conversation-brief budget reached",
-    );
+    if (hasFallbackTagged && log?.error) {
+      log.error(
+        payload,
+        "conversation-brief budget reached — context loss likely",
+      );
+    } else {
+      log?.warn(payload, "conversation-brief budget reached");
+    }
   }
 
   return Object.freeze({
@@ -200,6 +268,10 @@ export function assembleConversationBrief(
 /**
  * Render a frozen array of summaries as markdown under the stable heading.
  * Returns `""` for an empty input (no heading, no trailing whitespace).
+ *
+ * 99-mdrop — entries tagged `raw-fallback` render as a 1-line placeholder
+ * instead of injecting the full raw-turn dump (which would blow the
+ * conversation_context budget and truncate the brief silently).
  */
 function renderBrief(summaries: readonly MemoryEntry[], now: number): string {
   if (summaries.length === 0) return "";
@@ -207,7 +279,10 @@ function renderBrief(summaries: readonly MemoryEntry[], now: number): string {
     // `createdAt` is ISO 8601; first 10 chars is `YYYY-MM-DD`.
     const date = mem.createdAt.slice(0, 10);
     const when = formatRelativeTime(mem.createdAt, now);
-    return `### Session from ${date} (${when})\n${mem.content}`;
+    const body = isRawTurnFallback(mem)
+      ? renderRawTurnPlaceholder(mem)
+      : mem.content;
+    return `### Session from ${date} (${when})\n${body}`;
   });
   return `${STABLE_HEADING}\n\n${sections.join("\n\n")}`;
 }
