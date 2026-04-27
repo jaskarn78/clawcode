@@ -21,6 +21,10 @@ import { ManagerError } from "../shared/errors.js";
 // Phase 99 sub-scope M (2026-04-26) — auto-relay subagent completion to parent.
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import { makeRootOrigin } from "../manager/turn-origin.js";
+// Phase 100 follow-up — progressive streaming into subagent threads so
+// operators see "🔄 Working..." → live token stream → final message,
+// instead of a silent thread until the subagent finishes its turn.
+import { ProgressiveMessageEditor } from "./streaming.js";
 
 /**
  * Phase 100 GSD-06 — pure helper: extract the parent agent's GSD project
@@ -428,7 +432,10 @@ export class SubagentThreadSpawner {
    * Failures are logged, never thrown -- the spawn has already succeeded.
    */
   private async postInitialMessage(
-    thread: { send: (content: string) => Promise<unknown>; id: string },
+    thread: {
+      send: (content: string) => Promise<{ edit: (content: string) => Promise<unknown>; id: string } | unknown>;
+      id: string;
+    },
     sessionName: string,
     threadName: string,
     task: string | undefined,
@@ -440,10 +447,68 @@ export class SubagentThreadSpawner {
         : `You've just been spawned in a Discord thread titled "${threadName}". ` +
           `Introduce yourself in 1-2 short sentences based on your soul and state what you're ready to do. ` +
           `No filler, no meta-commentary about being an AI.`;
-      const reply = await this.sessionManager.streamFromAgent(sessionName, prompt, () => {});
-      const text = reply.trim();
-      if (text) {
+
+      // Phase 100 follow-up — progressive streaming into the thread.
+      // Send a single placeholder, then edit it as the SDK streams tokens
+      // back. Final flush captures any tail that didn't trigger an edit
+      // (the editor debounces to 750ms by default to stay under Discord's
+      // 5-edits-per-5-sec rate limit). When streaming produces >2000
+      // chars, the editor truncates the edited message — we follow up
+      // with thread.send() chunks for the overflow after the stream
+      // completes (mirroring the pattern at slash-commands.ts:1550).
+      const placeholder = await thread.send("🔄 Working...");
+      const editable = (placeholder ?? {}) as { edit?: (content: string) => Promise<unknown> };
+      const canEdit = typeof editable.edit === "function";
+
+      // If the surface doesn't support edit (test mocks, old discord.js),
+      // fall back to the prior behavior — single send at the end.
+      let lastSent = "";
+      const editor = canEdit
+        ? new ProgressiveMessageEditor({
+            editFn: async (content: string) => {
+              const truncated = content.length > 2000 ? content.slice(0, 1997) + "..." : content;
+              if (truncated === lastSent) return;
+              lastSent = truncated;
+              await editable.edit!(truncated);
+            },
+            editIntervalMs: 750,
+            log: this.log,
+            agent: sessionName,
+          })
+        : null;
+
+      const reply = await this.sessionManager.streamFromAgent(
+        sessionName,
+        prompt,
+        editor ? (accumulated: string) => editor.update(accumulated) : () => {},
+      );
+      if (editor) await editor.flush();
+
+      // Defensive: streamFromAgent may resolve with undefined under test mocks
+      // or if the SDK returns nothing. Treat undefined as empty.
+      const text = (reply ?? "").trim();
+      if (!canEdit && text) {
+        // Fallback path — send the final reply as a fresh message.
         await thread.send(text.slice(0, 2000));
+      }
+      // Phase 100 follow-up — handle overflow when reply exceeds 2000 chars.
+      // The editor truncated the visible message; send the tail as
+      // additional thread.send() chunks so nothing is lost.
+      if (canEdit && text.length > 2000) {
+        let cursor = 2000;
+        while (cursor < text.length) {
+          const chunk = text.slice(cursor, cursor + 2000);
+          try {
+            await thread.send(chunk);
+          } catch (err) {
+            this.log.warn(
+              { sessionName, error: (err as Error).message, cursor },
+              "subagent overflow chunk send failed (non-fatal)",
+            );
+            break;
+          }
+          cursor += 2000;
+        }
       }
     } catch (err) {
       this.log.warn(
