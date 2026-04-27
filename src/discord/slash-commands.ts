@@ -678,16 +678,56 @@ type DreamIpcResponse = {
 };
 
 /**
- * Phase 95 Plan 03 DREAM-07 — pure admin gate. Returns true when the
- * interaction's user.id is in the configured admin allowlist. Empty
- * allowlist → fail-closed (returns false).
+ * Phase 95 Plan 03 DREAM-07 / Phase 100-fu — pure admin gate.
+ *
+ * Returns true when EITHER:
+ *   1. The interaction's `user.id` is in the explicit `adminUserIds`
+ *      allowlist (back-compat path), OR
+ *   2. The interaction's `channelId` is bound (via `routingTable`) to a
+ *      resolved agent flagged `admin: true` (NEW channel-bound path).
+ *
+ * Both paths are independently sufficient. Empty allowlist + unbound
+ * channel + non-admin agent binding all fail-closed → returns false.
+ *
+ * Rationale: the daemon does not always populate `adminUserIds` at
+ * construction (see manager/daemon.ts SlashCommandHandler init), so an
+ * operator running `/clawcode-dream` from `#admin-clawdy` (a channel
+ * bound to an `admin: true` agent) was being rejected with
+ * "Admin-only command" despite the channel itself being trusted. The
+ * channel-bound path closes that gap without requiring extra config.
  */
 export function isAdminClawdyInteraction(
-  interaction: { readonly user: { readonly id: string } },
-  adminUserIds: readonly string[],
+  interaction: {
+    readonly user: { readonly id: string };
+    readonly channelId: string;
+  },
+  context: {
+    readonly adminUserIds: readonly string[];
+    readonly routingTable: {
+      readonly channelToAgent: ReadonlyMap<string, string>;
+    };
+    readonly resolvedAgents: readonly {
+      readonly name: string;
+      readonly admin: boolean;
+    }[];
+  },
 ): boolean {
-  if (adminUserIds.length === 0) return false;
-  return adminUserIds.includes(interaction.user.id);
+  // Path 1: explicit user-ID allowlist match (back-compat).
+  if (
+    context.adminUserIds.length > 0 &&
+    context.adminUserIds.includes(interaction.user.id)
+  ) {
+    return true;
+  }
+  // Path 2: channel-bound to an admin agent.
+  const agentName = context.routingTable.channelToAgent.get(
+    interaction.channelId,
+  );
+  if (agentName !== undefined) {
+    const agent = context.resolvedAgents.find((a) => a.name === agentName);
+    if (agent?.admin === true) return true;
+  }
+  return false;
 }
 
 /**
@@ -1816,7 +1856,15 @@ export class SlashCommandHandler {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     // Admin gate FIRST — no IPC, no defer for non-admins.
-    if (!isAdminClawdyInteraction(interaction, this.adminUserIds)) {
+    // Phase 100-fu — pass full context so channel-bound admin agents
+    // grant admin access without requiring an explicit user-ID allowlist.
+    if (
+      !isAdminClawdyInteraction(interaction, {
+        adminUserIds: this.adminUserIds,
+        routingTable: this.routingTable,
+        resolvedAgents: this.resolvedAgents,
+      })
+    ) {
       try {
         await interaction.reply({
           content: "Admin-only command",
@@ -1902,7 +1950,15 @@ export class SlashCommandHandler {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     // Admin gate FIRST — no IPC, no defer for non-admins.
-    if (!isAdminClawdyInteraction(interaction, this.adminUserIds)) {
+    // Phase 100-fu — pass full context so channel-bound admin agents
+    // grant admin access without requiring an explicit user-ID allowlist.
+    if (
+      !isAdminClawdyInteraction(interaction, {
+        adminUserIds: this.adminUserIds,
+        routingTable: this.routingTable,
+        resolvedAgents: this.resolvedAgents,
+      })
+    ) {
       try {
         await interaction.reply({
           content: "Admin-only command",
