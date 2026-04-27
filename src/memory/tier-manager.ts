@@ -249,11 +249,23 @@ export class TierManager {
       }
     }
 
-    // Step 2: Get warm candidates that qualify for promotion
+    // Step 2: Get warm candidates that qualify for promotion. Phase
+    // 100-fu adds a graph-centrality signal — we look up each warm
+    // memory's inbound-link count and pass it into shouldPromoteToHot
+    // so heavy-linked hubs (e.g. fin-acquisition style nodes referenced
+    // by many turn summaries) can promote even when their direct
+    // access_count is low.
     const warmMemories = this.store.listByTier("warm", 100);
-    const qualifyingWarm = warmMemories.filter((mem) =>
-      shouldPromoteToHot(mem.accessCount, mem.accessedAt, now, this.tierConfig),
-    );
+    const qualifyingWarm = warmMemories.filter((mem) => {
+      const backlinkCount = this.store.getBacklinkCount(mem.id);
+      return shouldPromoteToHot(
+        mem.accessCount,
+        mem.accessedAt,
+        now,
+        this.tierConfig,
+        backlinkCount,
+      );
+    });
 
     if (qualifyingWarm.length === 0) {
       return { demoted, promoted };

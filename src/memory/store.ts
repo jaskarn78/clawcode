@@ -44,6 +44,12 @@ type PreparedStatements = {
    * are easy to grep and so the SemanticSearch path is unaffected.
    */
   readonly bumpAccess: Statement;
+  /**
+   * Phase 100-fu — count inbound wikilink edges for a memory id. Used
+   * by TierManager.refreshHotTier() to surface graph-centrality as a
+   * hot-tier promotion signal independent of direct access count.
+   */
+  readonly getBacklinkCount: Statement;
 };
 
 /**
@@ -473,6 +479,22 @@ export class MemoryStore {
       accessedAt ?? new Date().toISOString(),
       memoryId,
     );
+  }
+
+  /**
+   * Phase 100-fu — return the number of inbound wikilink edges that
+   * point at `memoryId`. Used by the tier manager to detect hub nodes
+   * (memories with many backlinks) for graph-centrality promotion.
+   *
+   * Returns 0 for memories with no backlinks AND for memory IDs that
+   * do not exist — both cases produce a single COUNT(*) row of `0`
+   * because the WHERE clause matches no rows.
+   */
+  getBacklinkCount(memoryId: string): number {
+    const row = this.stmts.getBacklinkCount.get(memoryId) as
+      | { n: number }
+      | undefined;
+    return row?.n ?? 0;
   }
 
   /**
@@ -1271,6 +1293,13 @@ export class MemoryStore {
       bumpAccess: this.db.prepare(`
         UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?
       `),
+      // Phase 100-fu — graph-centrality signal for tier promotion. Counts
+      // inbound wikilink edges (rows in memory_links targeting this id).
+      // Uses the existing idx_memory_links_target index so the lookup is
+      // O(log n) per call.
+      getBacklinkCount: this.db.prepare(
+        "SELECT COUNT(*) AS n FROM memory_links WHERE target_id = ?",
+      ),
     };
   }
 
