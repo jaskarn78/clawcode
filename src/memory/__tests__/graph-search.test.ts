@@ -261,6 +261,198 @@ describe("GraphSearch", () => {
   });
 });
 
+describe("GraphSearch — graph-walked neighbor access_count bumping (Phase 100-fu)", () => {
+  let store: MemoryStore;
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = join(
+      tmpdir(),
+      `graph-search-bump-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tempDir, { recursive: true });
+    store = new MemoryStore(join(tempDir, "test.db"));
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  /** Insert a memory directly with a known id, embedding, and access_count=0. */
+  function insertMemory(id: string, content: string, embedding: Float32Array): void {
+    const db = store.getDatabase();
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO memories (id, content, source, importance, tags, created_at, updated_at, accessed_at, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(id, content, "manual", 0.5, "[]", now, now, now, "warm");
+    db.prepare(
+      "INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)",
+    ).run(id, embedding);
+  }
+
+  function insertLink(sourceId: string, targetId: string): void {
+    const db = store.getDatabase();
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT OR IGNORE INTO memory_links (source_id, target_id, link_text, created_at) VALUES (?, ?, ?, ?)",
+    ).run(sourceId, targetId, targetId, now);
+  }
+
+  function getAccessCount(id: string): number {
+    const row = store.getDatabase()
+      .prepare("SELECT access_count FROM memories WHERE id = ?")
+      .get(id) as { access_count: number } | undefined;
+    return row?.access_count ?? -1;
+  }
+
+  // GS-A1: After GraphSearch returns N graph-neighbor results, each neighbor's
+  // access_count is incremented by exactly 1.
+  it("GS-A1: bumps access_count by exactly 1 for each graph-walked neighbor returned", () => {
+    const queryEmb = makeEmbedding(1);
+    const knnEmb = makeSimilarEmbedding(queryEmb, 0.95);
+    const neighborEmbA = makeSimilarEmbedding(queryEmb, 0.7);
+    const neighborEmbB = makeSimilarEmbedding(queryEmb, 0.65);
+
+    insertMemory("knn-hit", "knn", knnEmb);
+    insertMemory("neighbor-a", "neighbor a", neighborEmbA);
+    insertMemory("neighbor-b", "neighbor b", neighborEmbB);
+
+    insertLink("knn-hit", "neighbor-a");
+    insertLink("neighbor-b", "knn-hit"); // backlink
+
+    const graphSearch = new GraphSearch(store);
+    const results = graphSearch.search(queryEmb, 1);
+
+    const neighborIds = results
+      .filter((r) => r.source === "graph-neighbor")
+      .map((r) => r.id);
+    expect(neighborIds).toContain("neighbor-a");
+    expect(neighborIds).toContain("neighbor-b");
+
+    expect(getAccessCount("neighbor-a")).toBe(1);
+    expect(getAccessCount("neighbor-b")).toBe(1);
+  });
+
+  // GS-A2: KNN seed nodes are NOT double-bumped — SemanticSearch.search()
+  // already bumps them once at line 102; GraphSearch must not bump them again.
+  it("GS-A2: does NOT double-bump KNN seed nodes (semantic-search bumps once)", () => {
+    const queryEmb = makeEmbedding(1);
+    const knnEmb = makeSimilarEmbedding(queryEmb, 0.95);
+    const neighborEmb = makeSimilarEmbedding(queryEmb, 0.7);
+
+    insertMemory("knn-seed", "knn seed", knnEmb);
+    insertMemory("graph-neighbor", "neighbor", neighborEmb);
+    insertLink("knn-seed", "graph-neighbor");
+
+    const graphSearch = new GraphSearch(store);
+    graphSearch.search(queryEmb, 1);
+
+    // KNN hit was bumped exactly once by SemanticSearch — not twice.
+    expect(getAccessCount("knn-seed")).toBe(1);
+    // Neighbor was bumped once by the new GraphSearch logic.
+    expect(getAccessCount("graph-neighbor")).toBe(1);
+  });
+
+  // GS-A3: Neighbors below the similarity threshold are excluded from the
+  // result set — and must NOT be bumped (they were never returned to the caller).
+  it("GS-A3: does NOT bump neighbors below similarity threshold (excluded from results)", () => {
+    const queryEmb = makeEmbedding(1);
+    const knnEmb = makeSimilarEmbedding(queryEmb, 0.95);
+    const dissimilarEmb = makeEmbedding(500); // very dissimilar to query
+
+    insertMemory("knn-hit", "knn", knnEmb);
+    insertMemory("dissimilar", "dissimilar neighbor", dissimilarEmb);
+    insertLink("knn-hit", "dissimilar");
+
+    // High threshold guarantees exclusion of "dissimilar".
+    const graphSearch = new GraphSearch(store, {
+      neighborSimilarityThreshold: 0.9,
+    });
+    const results = graphSearch.search(queryEmb, 1);
+
+    expect(results.find((r) => r.id === "dissimilar")).toBeUndefined();
+    // Excluded neighbor's access_count must remain at 0.
+    expect(getAccessCount("dissimilar")).toBe(0);
+  });
+
+  // GS-A4: Neighbor linked from multiple KNN seeds is bumped only ONCE per
+  // search call (deduped by neighborMap, not bumped per linkedFrom edge).
+  it("GS-A4: bumps neighbor only once even when linkedFrom.size > 1", () => {
+    const queryEmb = makeEmbedding(1);
+    const knn1Emb = makeSimilarEmbedding(queryEmb, 0.95);
+    const knn2Emb = makeSimilarEmbedding(queryEmb, 0.9);
+    const sharedEmb = makeSimilarEmbedding(queryEmb, 0.7);
+
+    insertMemory("knn-1", "knn 1", knn1Emb);
+    insertMemory("knn-2", "knn 2", knn2Emb);
+    insertMemory("shared", "shared neighbor", sharedEmb);
+
+    insertLink("knn-1", "shared");
+    insertLink("knn-2", "shared");
+
+    const graphSearch = new GraphSearch(store);
+    const results = graphSearch.search(queryEmb, 2);
+
+    const sharedResult = results.find((r) => r.id === "shared");
+    expect(sharedResult).toBeDefined();
+    expect(sharedResult!.linkedFrom).toBeDefined();
+    expect(sharedResult!.linkedFrom!.length).toBe(2); // confirm multi-link
+
+    // Despite being linked from BOTH knn-1 and knn-2, access_count must be
+    // bumped exactly once (not twice).
+    expect(getAccessCount("shared")).toBe(1);
+  });
+
+  // GS-A5: Neighbors that survive similarity gating but get dropped by the
+  // maxNeighbors cap (sortedNeighbors.slice) MUST NOT be bumped — they are
+  // not returned to the caller and have not contributed to any heat signal.
+  it("GS-A5: does NOT bump neighbors dropped by maxNeighbors cap", () => {
+    const queryEmb = makeEmbedding(1);
+    const knnEmb = makeSimilarEmbedding(queryEmb, 0.95);
+
+    insertMemory("knn-hit", "knn", knnEmb);
+
+    // Insert 5 neighbors with descending similarity to the query.
+    // mixFactor 0.85, 0.83, 0.81, 0.79, 0.77 — all above default threshold (0.5)
+    // but ranked by similarity descending.
+    const mixFactors = [0.85, 0.83, 0.81, 0.79, 0.77];
+    const neighborIds: string[] = [];
+    for (let i = 0; i < mixFactors.length; i++) {
+      const id = `neighbor-${i}`;
+      neighborIds.push(id);
+      insertMemory(id, `neighbor ${i}`, makeSimilarEmbedding(queryEmb, mixFactors[i]));
+      insertLink("knn-hit", id);
+    }
+
+    // Cap maxNeighbors at 2 — only the top-2 should be returned & bumped.
+    const graphSearch = new GraphSearch(store, { maxNeighbors: 2, maxTotalResults: 100 });
+    const results = graphSearch.search(queryEmb, 1);
+
+    const returnedNeighborIds = new Set(
+      results.filter((r) => r.source === "graph-neighbor").map((r) => r.id),
+    );
+    expect(returnedNeighborIds.size).toBe(2);
+
+    // Returned neighbors: bumped to 1.
+    // Dropped neighbors: still at 0.
+    let bumpedCount = 0;
+    let unbumpedCount = 0;
+    for (const id of neighborIds) {
+      const ac = getAccessCount(id);
+      if (returnedNeighborIds.has(id)) {
+        expect(ac).toBe(1);
+        bumpedCount++;
+      } else {
+        expect(ac).toBe(0);
+        unbumpedCount++;
+      }
+    }
+    expect(bumpedCount).toBe(2);
+    expect(unbumpedCount).toBe(3);
+  });
+});
+
 describe("cosineSimilarity", () => {
   it("returns 1 for identical normalized vectors", () => {
     const vec = makeEmbedding(42);

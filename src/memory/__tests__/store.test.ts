@@ -933,4 +933,81 @@ describe("MemoryStore", () => {
       expect(results.length).toBeGreaterThan(0);
     });
   });
+
+  describe("bumpAccess (Phase 100-fu)", () => {
+    // MS-B1: bumpAccess increments access_count by 1 and updates accessed_at
+    // to the supplied timestamp. Mirrors the SemanticSearch.updateAccessStmt
+    // semantics so non-search callers (GraphSearch graph walk) can keep heat
+    // metrics flowing on graph-walked neighbors.
+    it("MS-B1: increments access_count by 1 and updates accessed_at", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "bump target", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const before = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(before.access_count).toBe(0);
+
+      const stamp = "2026-04-27T12:34:56.000Z";
+      store.bumpAccess(entry.id, stamp);
+
+      const after = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(after.access_count).toBe(1);
+      expect(after.accessed_at).toBe(stamp);
+
+      // Bump again — confirm increment-by-1 (not set-to-1)
+      const stamp2 = "2026-04-27T13:00:00.000Z";
+      store.bumpAccess(entry.id, stamp2);
+      const after2 = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(after2.access_count).toBe(2);
+      expect(after2.accessed_at).toBe(stamp2);
+    });
+
+    // MS-B2: bumpAccess on a non-existent memory ID is a no-op — no exception,
+    // no row created. Matches the silently-tolerant behavior of the SemanticSearch
+    // UPDATE path (UPDATE...WHERE id=? against a missing row is a 0-row affect).
+    it("MS-B2: no-op on non-existent memory ID (no exception, no row created)", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const beforeCount = (db
+        .prepare("SELECT COUNT(*) AS n FROM memories")
+        .get() as { n: number }).n;
+
+      expect(() =>
+        store.bumpAccess("does-not-exist", "2026-04-27T00:00:00.000Z"),
+      ).not.toThrow();
+
+      const afterCount = (db
+        .prepare("SELECT COUNT(*) AS n FROM memories")
+        .get() as { n: number }).n;
+      expect(afterCount).toBe(beforeCount);
+    });
+
+    it("bumpAccess defaults accessed_at to now() when timestamp omitted", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "default ts", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const beforeNow = Date.now();
+      store.bumpAccess(entry.id);
+      const afterNow = Date.now();
+
+      const row = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(row.access_count).toBe(1);
+      const stampMs = new Date(row.accessed_at).getTime();
+      expect(stampMs).toBeGreaterThanOrEqual(beforeNow);
+      expect(stampMs).toBeLessThanOrEqual(afterNow);
+    });
+  });
 });
