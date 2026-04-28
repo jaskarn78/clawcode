@@ -148,6 +148,19 @@ export type ResolvedAgentConfig = {
    * reaction emoji to post (D-32). Default "✅".
    */
   readonly memoryCueEmoji: string;
+  /**
+   * Phase 100 follow-up — ALWAYS populated by loader.ts from
+   * agent.autoStart ?? defaults.autoStart (both default-bearing in zod, so
+   * the resolved value is always a concrete boolean). Consumed by the
+   * daemon's auto-start IIFE (src/manager/daemon.ts) to filter the array
+   * passed to manager.startAll on boot — autoStart=false agents are NOT
+   * spawned on the daemon's start-all loop, but their config remains in
+   * the routeMethod `configs` array so the operator can manually start
+   * them via `clawcode start <name>` (the IPC handler does
+   * `configs.find((c) => c.name === name)`, NOT a `getAgentConfig` lookup,
+   * so dormant agents are findable on demand).
+   */
+  readonly autoStart: boolean;
   readonly skills: readonly string[];
   readonly soul: string | undefined;
   readonly identity: string | undefined;

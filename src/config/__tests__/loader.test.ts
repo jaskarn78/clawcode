@@ -90,6 +90,7 @@ describe("resolveAgentConfig", () => {
     dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
     // Phase 96 D-05 — fleet-wide fileAccess defaults.
     fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -641,6 +642,7 @@ describe("resolveAgentConfig - mcpServers", () => {
     dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
     // Phase 96 D-05 — fleet-wide fileAccess defaults.
     fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
   };
 
   const sharedMcpServers = {
@@ -1283,6 +1285,7 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
     // Phase 96 D-05 — fleet-wide fileAccess defaults.
     fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
   };
 
   afterEach(() => {
@@ -1687,6 +1690,7 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
       // Phase 96 D-05 — fleet-wide fileAccess defaults.
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
     };
   }
 
@@ -1830,6 +1834,7 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
       // Phase 96 D-05 — fleet-wide fileAccess defaults.
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
     };
   }
 
@@ -2068,6 +2073,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       },
       dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
     };
   }
 
@@ -2098,6 +2104,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
     const defaults = makeDefaults();
     const agent = makeAgent({
       settingSources: ["user", "project"] as ("project" | "user" | "local")[],
+      autoStart: true, // Phase 100 follow-up
     });
     const resolved = resolveAgentConfig(agent, defaults);
     expect(resolved.settingSources).toEqual(["user", "project"]);
@@ -2146,6 +2153,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
     const defaults = makeDefaults();
     const agent = makeAgent({
       settingSources: ["project", "user"] as ("project" | "user" | "local")[],
+      autoStart: true, // Phase 100 follow-up
       gsd: { projectDir: "/opt/x" },
     });
     // Snapshot before resolution
@@ -2165,6 +2173,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       makeAgent({
         name: "beta",
         settingSources: ["project", "user"] as ("project" | "user" | "local")[],
+        autoStart: true, // Phase 100 follow-up
         gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
       }),
       makeAgent({ name: "gamma" }),

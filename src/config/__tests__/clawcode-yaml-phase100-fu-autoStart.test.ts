@@ -46,15 +46,18 @@ describe("Phase 100-fu — clawcode.yaml autoStart curated active fleet", () => 
     "fin-tax",
   ] as const;
 
-  it("AS-YAML-1a: every active agent has autoStart:true OR omits the field (default true)", () => {
+  it("AS-YAML-1a: every active agent has autoStart:true OR omits the field (loader resolves omission via defaults.autoStart=true)", () => {
     for (const name of ACTIVE_AGENTS) {
       const agent = config.agents.find((a) => a.name === name);
       expect(agent, `agent ${name} missing from clawcode.yaml`).toBeDefined();
-      // Schema parse coerces missing → true. Either explicit true or default
-      // satisfies the contract.
+      // The schema is `.optional()` (no default at agent layer) — operator
+      // can omit the field OR set it to true. The loader resolves omission
+      // via defaults.autoStart (zod default true). Both shapes satisfy the
+      // active-fleet contract; only an explicit `false` would break it.
+      const isActive = agent?.autoStart === true || agent?.autoStart === undefined;
       expect(
-        agent?.autoStart,
-        `agent ${name} must autoStart on daemon boot — found ${agent?.autoStart}`,
+        isActive,
+        `agent ${name} must autoStart on daemon boot — found ${JSON.stringify(agent?.autoStart)}. Expected omitted or true.`,
       ).toBe(true);
     }
   });
@@ -73,7 +76,7 @@ describe("Phase 100-fu — clawcode.yaml autoStart curated active fleet", () => 
   it("AS-YAML-1c: the union of ACTIVE + DORMANT covers every agent in clawcode.yaml (no agent is forgotten)", () => {
     // Forces the operator to make an explicit autoStart decision for every
     // agent. Adding a new agent without updating this test is a loud failure.
-    const known = new Set([...ACTIVE_AGENTS, ...DORMANT_AGENTS]);
+    const known = new Set<string>([...ACTIVE_AGENTS, ...DORMANT_AGENTS]);
     const yamlNames = config.agents.map((a) => a.name);
     for (const name of yamlNames) {
       expect(

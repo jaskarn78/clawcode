@@ -35,13 +35,17 @@ describe("agentSchema.autoStart (Phase 100 follow-up)", () => {
     }
   });
 
-  it("AS-SCHEMA-2: missing autoStart parses as true (back-compat — v2.5/2.6 yaml unchanged)", () => {
+  it("AS-SCHEMA-2: missing autoStart parses as undefined at the agent level (loader.ts falls back to defaults.autoStart — same additive-optional pattern as memoryAutoLoad / greetOnRestart)", () => {
+    // Mirrors the established blueprint: agent fields stay .optional() so
+    // the loader can detect operator omission and fall back to defaults.X.
+    // The "default true" lives on defaultsSchema.autoStart — the resolver
+    // composes the two layers (see AS-2 in loader-autoStart.test.ts).
     const result = agentSchema.safeParse({
       name: "test-agent",
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.autoStart).toBe(true);
+      expect(result.data.autoStart).toBeUndefined();
     }
   });
 

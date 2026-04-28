@@ -400,6 +400,17 @@ export function resolveAgentConfig(
     // Phase 90 MEM-05 — per-agent cue emoji beats defaults.memoryCueEmoji
     // (zod-populated default "✅").
     memoryCueEmoji: agent.memoryCueEmoji ?? defaults.memoryCueEmoji,
+    // Phase 100 follow-up — autoStart precedence:
+    //   explicit agent.autoStart (true|false) wins over defaults.autoStart;
+    //   defaults.autoStart is zod-defaulted to true, so the resolved value
+    //   is always a concrete boolean (never undefined).
+    // We use an explicit `!== undefined` check (NOT `??`) because the
+    // operator can set `agent.autoStart: false` and that MUST beat
+    // `defaults.autoStart: true` — `false ?? true` would (correctly) yield
+    // false, but the explicit form mirrors the memoryAutoLoad / greetOnRestart
+    // shape elsewhere in this resolver and reads more clearly.
+    autoStart:
+      agent.autoStart !== undefined ? agent.autoStart : defaults.autoStart,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

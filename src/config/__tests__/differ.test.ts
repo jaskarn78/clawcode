@@ -90,6 +90,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
       // Phase 96 D-05 — fleet-wide fileAccess defaults.
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
     },
     mcpServers: {},
     agents: [

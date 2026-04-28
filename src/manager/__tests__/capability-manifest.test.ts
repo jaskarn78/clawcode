@@ -29,6 +29,7 @@ function makeConfig(
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
     settingSources: ["project"],
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: undefined,
     identity: undefined,

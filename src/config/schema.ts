@@ -1025,6 +1025,30 @@ export const agentSchema = z.object({
   // glyph or short custom emoji name fits). Fallback via
   // defaults.memoryCueEmoji.
   memoryCueEmoji: z.string().min(1).max(8).optional(),
+  /**
+   * Phase 100 follow-up — when true, the agent boots automatically on
+   * daemon start-all. When false, the agent's config is loaded but the SDK
+   * session is NOT created on boot — operator can start it manually via
+   * `clawcode start <name>` or via the IPC `start` method.
+   *
+   * Use case: large fleets where only a subset are in active rotation.
+   * Configured agents that are dormant (rare-use specialists, on-call
+   * agents, archived) skip the warm-path warmup at boot, cutting cold-start
+   * time for the whole fleet from O(N agents × 2-3s) to O(active agents ×
+   * 2-3s).
+   *
+   * Optional + back-compat: when omitted, loader.ts falls back to
+   * defaults.autoStart (zod default true). v2.5/v2.6 yaml configs parse
+   * unchanged. Mirrors the additive-optional schema blueprint used by
+   * memoryAutoLoad / memoryScannerEnabled / greetOnRestart — agent fields
+   * stay `.optional()` so the loader can detect "operator omitted" and
+   * fall back to defaults.X verbatim.
+   *
+   * Reload classification: next-boot only. startAll has already run by the
+   * time a config-watcher reload would fire, so flipping this field
+   * requires a daemon restart to take effect.
+   */
+  autoStart: z.boolean().optional(),
   // Phase 94 TOOL-10 / D-10 — per-agent override of fleet directives.
   // Additive + optional: v2.5 migrated configs parse unchanged (loader
   // resolver fills from DEFAULT_SYSTEM_PROMPT_DIRECTIVES via
@@ -1235,6 +1259,13 @@ export const defaultsSchema = z.object({
   // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
   // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
   memoryCueEmoji: z.string().min(1).max(8).default("✅"),
+  // Phase 100 follow-up — fleet-wide default for the per-agent autoStart
+  // flag. Default true preserves existing behavior (every configured agent
+  // boots on daemon start-all). Operators can flip the polarity to false
+  // here and then opt-in only the agents they want live by setting
+  // `autoStart: true` on those entries — useful when only a small subset of
+  // a large configured fleet is in active rotation.
+  autoStart: z.boolean().default(true),
   // Phase 94 TOOL-10 / D-10 — fleet-wide default system-prompt directives.
   //
   // Default-bearing: when omitted from clawcode.yaml, the loader resolves
@@ -1508,6 +1539,11 @@ export const configSchema = z.object({
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
+    // Phase 100 follow-up — fleet-wide autoStart default mirrors the
+    // zod-populated value in defaultsSchema above. Default true preserves
+    // back-compat: every configured agent boots on daemon start-all unless
+    // it (or the operator's defaults block) explicitly opts out.
+    autoStart: true,
     // Phase 94 TOOL-10 / D-10 — fleet-wide default directives mirror
     // DEFAULT_SYSTEM_PROMPT_DIRECTIVES (D-09 file-sharing + D-07 cross-
     // agent-routing). Spread to a fresh object so the configSchema-default

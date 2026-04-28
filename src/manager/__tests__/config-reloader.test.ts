@@ -24,6 +24,7 @@ function makeAgent(overrides: Partial<ResolvedAgentConfig> & { name: string }): 
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: undefined,
     identity: undefined,

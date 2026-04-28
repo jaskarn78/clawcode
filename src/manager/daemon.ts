@@ -3942,11 +3942,35 @@ export async function startDaemon(
 
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  // Auto-start all configured agents on daemon boot
+  // Auto-start all configured agents on daemon boot.
+  //
+  // Phase 100 follow-up — operator-curated active fleet. The full
+  // `resolvedAgents` array is preserved for routeMethod (so the `start
+  // <name>` IPC handler at line ~3990 can find dormant configs via
+  // `configs.find((c) => c.name === name)` and the operator can manually
+  // boot them later). Only the boot auto-start path filters out
+  // `autoStart=false` agents — they don't get an SDK session on daemon
+  // start, cutting cold-start time from O(N agents × 2-3s) to
+  // O(active agents × 2-3s). Skipped agents are logged at info level so
+  // operators can verify the skip happened (not a silent failure).
+  const autoStartAgents = resolvedAgents.filter((cfg) => {
+    if (cfg.autoStart !== false) return true;
+    log.info(
+      { agent: cfg.name },
+      "skipping boot auto-start — autoStart=false (manually startable via `clawcode start <name>`)",
+    );
+    return false;
+  });
   void (async () => {
     try {
-      await manager.startAll(resolvedAgents);
-      log.info({ agents: resolvedAgents.length }, "all agents auto-started");
+      await manager.startAll(autoStartAgents);
+      log.info(
+        {
+          agents: autoStartAgents.length,
+          skipped: resolvedAgents.length - autoStartAgents.length,
+        },
+        "all agents auto-started",
+      );
     } catch (err) {
       log.error({ error: (err as Error).message }, "failed to auto-start agents");
     }

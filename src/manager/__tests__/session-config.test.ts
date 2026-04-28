@@ -56,6 +56,7 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -1267,6 +1268,7 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       mcpServers: [
         { name: "finmentum-db", command: "x", args: [], env: {}, optional: false },
       ],
@@ -1308,6 +1310,7 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     });
     const result = await buildSessionConfig(config, makeDeps());
     expect(result.systemPrompt).toContain("## Long-term memory");
@@ -1355,6 +1358,7 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       memoryAutoLoadPath: "/override/fixture-memory.md",
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -1383,6 +1387,7 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     });
     const result = await buildSessionConfig(config, makeDeps());
     expect(result.systemPrompt).toBeDefined();
@@ -1405,6 +1410,7 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     });
     const result = await buildSessionConfig(config, makeDeps());
     // The stable prefix contains the firm legal name verbatim.
@@ -1424,6 +1430,7 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
     settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       channels: ["channel-xyz"], // forces a mutableSuffix to exist
     });
     const result = await buildSessionConfig(config, makeDeps());
