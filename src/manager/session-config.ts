@@ -192,6 +192,32 @@ export type SessionConfigDeps = {
   readonly fsCapabilitySnapshotProvider?: (
     agentName: string,
   ) => ReadonlyMap<string, FsCapabilitySnapshot>;
+  /**
+   * Phase 100 follow-up — per-agent MCP env override resolver.
+   *
+   * When the agent declares `mcpEnvOverrides`, buildSessionConfig invokes
+   * this resolver to substitute `op://...` URIs with concrete secret values
+   * BEFORE the resulting AgentSessionConfig.mcpServers[].env is handed to
+   * the SDK adapter. Implementation lives in
+   * src/manager/op-env-resolver.ts (`resolveMcpEnvOverrides`); production
+   * SessionManager wires the daemon's clawdbot-token-aware `op read` shell-
+   * out (`defaultOpReadShellOut`).
+   *
+   * Optional — when absent (tests, bootstrap paths), `mcpEnvOverrides` is
+   * silently skipped: the agent inherits the daemon's clawdbot-scoped token
+   * from the shared mcpServers[].env (back-compat with the existing 15-
+   * agent fleet behavior).
+   *
+   * Throws propagate — a bad op:// reference fails the agent start (loud
+   * signal); SessionManager catches at the boundary and routes through the
+   * MCP-failure path. We intentionally do NOT swallow errors here: the
+   * alternative would silently inherit the daemon's full-fleet token,
+   * defeating the entire vault-scoping objective.
+   */
+  readonly opEnvResolver?: (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ) => Promise<Record<string, Record<string, string>>>;
 };
 
 /**
@@ -733,6 +759,48 @@ export async function buildSessionConfig(
   });
   const trimmedMutable = assembled.mutableSuffix.trim();
 
+  // Phase 100 follow-up — apply per-agent MCP env overrides (op:// resolution)
+  // BEFORE assembling AgentSessionConfig.mcpServers. Resolved values OVERWRITE
+  // the env entries from the shared mcpServers[].env block (loaded with the
+  // daemon's clawdbot full-fleet token). For finmentum agents this swaps
+  // OP_SERVICE_ACCOUNT_TOKEN from the clawdbot-scoped token to the
+  // Finmentum-vault-scoped token before the SDK spawns the MCP subprocess.
+  //
+  // Skipped when:
+  //   - config.mcpEnvOverrides is undefined (existing 15-agent fleet)
+  //   - deps.opEnvResolver is undefined (test paths, bootstrap)
+  //   - config.mcpServers is empty (no servers to override)
+  //
+  // Throws propagate — see SessionConfigDeps.opEnvResolver doc for rationale.
+  const overrideMap = config.mcpEnvOverrides;
+  let resolvedOverrides:
+    | Record<string, Record<string, string>>
+    | undefined;
+  if (overrideMap && deps.opEnvResolver && (config.mcpServers ?? []).length > 0) {
+    // Convert the readonly-Record shape on the resolved config back to a
+    // mutable plain Record for the resolver call (resolver returns a fresh
+    // mutable copy — we never write back to the input).
+    const mutableInput: Record<string, Record<string, string>> = {};
+    for (const [serverName, envMap] of Object.entries(overrideMap)) {
+      mutableInput[serverName] = { ...envMap };
+    }
+    resolvedOverrides = await deps.opEnvResolver(mutableInput, config.name);
+  }
+
+  // Build the effective mcpServers list with per-agent env overrides merged
+  // in last-wins. Each server's env starts from the shared block (which has
+  // the daemon's clawdbot-resolved values via config/loader.ts), then any
+  // per-agent override key replaces it. Servers WITHOUT a matching override
+  // entry pass through unchanged.
+  const baseMcpServers = config.mcpServers ?? [];
+  const effectiveMcpServers = resolvedOverrides
+    ? baseMcpServers.map((s) => {
+        const override = resolvedOverrides![s.name];
+        if (!override) return s;
+        return { ...s, env: { ...s.env, ...override } };
+      })
+    : baseMcpServers;
+
   return {
     name: config.name,
     model: config.model,
@@ -743,7 +811,7 @@ export async function buildSessionConfig(
     hotStableToken: assembled.hotStableToken,
     channels,
     contextSummary,
-    mcpServers: config.mcpServers ?? [],
+    mcpServers: effectiveMcpServers,
     // Phase 100 GSD-02 / GSD-04 — propagate settingSources + gsd from
     // ResolvedAgentConfig (Plan 01) into AgentSessionConfig so the SDK
     // adapter (Plan 02) receives the per-agent values. The spread-conditional

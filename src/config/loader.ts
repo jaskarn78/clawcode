@@ -416,6 +416,15 @@ export function resolveAgentConfig(
     escalationBudget: agent.escalationBudget ?? undefined,
     contextBudgets: agent.contextBudgets ?? undefined,
     mcpServers,
+    // Phase 100 follow-up — propagate per-agent mcpEnvOverrides through to
+    // the resolved config VERBATIM (op:// resolution is deferred to agent-
+    // start in src/manager/op-env-resolver.ts so the daemon's `op read`
+    // happens once, async, with the daemon's clawdbot token in scope).
+    // Loader stays sync-pure — no shell-out here. Undefined when the agent
+    // omitted the field; existing 15-agent fleet behavior unchanged.
+    ...(agent.mcpEnvOverrides
+      ? { mcpEnvOverrides: agent.mcpEnvOverrides }
+      : {}),
     slashCommands: agent.slashCommands,
     perf: agent.perf ?? defaults.perf ?? undefined,
   };

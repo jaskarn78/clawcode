@@ -1633,10 +1633,36 @@ export async function startDaemon(
 
   // 6. Create SessionManager
   const sessionAdapter = adapter ?? new SdkSessionAdapter();
+  // Phase 100 follow-up — wire the vault-scoped MCP env override resolver.
+  // Daemon shells out via `op read <uri>` using the daemon's process-level
+  // OP_SERVICE_ACCOUNT_TOKEN (clawdbot full-fleet scope). Resolved values
+  // (e.g. a Finmentum-only SA token) replace per-server env entries before
+  // the SDK spawns the MCP subprocess. The clawdbot token NEVER appears in
+  // any agent MCP subprocess env, error message, or log line — see
+  // src/manager/op-env-resolver.ts for the security invariants.
+  const { resolveMcpEnvOverrides, defaultOpReadShellOut } = await import(
+    "./op-env-resolver.js"
+  );
+  const opEnvResolver = async (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ): Promise<Record<string, Record<string, string>>> => {
+    return resolveMcpEnvOverrides(overrides, {
+      opRead: defaultOpReadShellOut,
+      log: {
+        warn: (...args: unknown[]) =>
+          (log.warn as (...a: unknown[]) => void)({ agent: agentName }, ...args),
+        info: (...args: unknown[]) =>
+          (log.info as (...a: unknown[]) => void)({ agent: agentName }, ...args),
+      },
+    });
+  };
+
   const manager = new SessionManager({
     adapter: sessionAdapter,
     registryPath: REGISTRY_PATH,
     log,
+    opEnvResolver,
   });
 
   // 6-bis. Create TurnDispatcher singleton (Phase 57 Plan 03).

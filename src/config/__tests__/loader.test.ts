@@ -11,7 +11,11 @@ import {
   resolveSystemPromptDirectives,
   renderSystemPromptDirectiveBlock,
 } from "../loader.js";
-import { DEFAULT_SYSTEM_PROMPT_DIRECTIVES } from "../schema.js";
+import {
+  DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+  defaultsSchema,
+  agentSchema,
+} from "../schema.js";
 import type { SystemPromptDirective } from "../schema.js";
 import { expandHome } from "../defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../../shared/errors.js";
@@ -2192,59 +2196,19 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
  * when the daemon owns the async opRead shell-out).
  */
 describe("resolveAgentConfig - mcpEnvOverrides (Phase 100 follow-up)", () => {
+  // Reuse the production zod defaults for a minimal, schema-true fixture.
+  // Inline fields would need to track every defaults field add (currently
+  // ~25+) and break on the next milestone — defer to the schema's source
+  // of truth.
   function makeDefaults(): DefaultsConfig {
-    return {
-      model: "sonnet",
-      basePath: "/tmp/agents",
-      effort: "low",
-      allowedModels: ["haiku", "sonnet", "opus"],
-      greetOnRestart: true,
-      greetCoolDownMs: 300_000,
-      memoryAutoLoad: true,
-      memoryRetrievalTopK: 5,
-      memoryRetrievalTokenBudget: 2000,
-      memoryScannerEnabled: true,
-      memoryFlushIntervalMs: 900_000,
-      memoryCueEmoji: "✅",
-      skills: [],
-      memory: {
-        compactionThreshold: 0.75,
-        searchTopK: 10,
-        consolidation: {
-          enabled: true,
-          weeklyThreshold: 7,
-          monthlyThreshold: 4,
-          schedule: "0 3 * * *",
-        },
-        decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 },
-        deduplication: { enabled: true, similarityThreshold: 0.85 },
-      },
-      heartbeat: {
-        enabled: true,
-        intervalSeconds: 60,
-        checkTimeoutSeconds: 10,
-        contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
-      },
-      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 3 },
-      systemPromptDirectives: DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
-      dream: { enabled: false, idleMinutes: 30, model: "haiku" },
-    } as DefaultsConfig;
+    return defaultsSchema.parse({});
   }
 
-  function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
-    return {
+  function makeAgent(overrides: Record<string, unknown> = {}): AgentConfig {
+    return agentSchema.parse({
       name: "fin-acquisition",
-      channels: [],
-      skills: [],
-      effort: "low",
-      heartbeat: true,
-      schedules: [],
-      admin: false,
-      slashCommands: [],
-      reactions: true,
-      mcpServers: [],
       ...overrides,
-    } as AgentConfig;
+    });
   }
 
   it("MCP-LOAD-1: agent with mcpEnvOverrides → ResolvedAgentConfig carries the field verbatim (no op:// resolution at load time)", () => {

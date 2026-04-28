@@ -88,13 +88,32 @@ export function buildCapabilityManifest(
   // Skip empty mcpServers list and skip auto-injected entries that lack
   // operator-curated annotations? No — render everything, but bare names
   // without description fall back to just the name (no parens).
+  //
+  // Phase 100 follow-up — when the agent has an mcpEnvOverrides entry for
+  // the server's OP_SERVICE_ACCOUNT_TOKEN env key, append a `vault-scoped`
+  // annotation. This signals to the LLM that the 1Password access surface
+  // is NARROWER than the daemon's clawdbot full-fleet token. Without this,
+  // the agent confidently asserts cross-vault reads it cannot perform
+  // (the same failure mode that motivated the manifest in the first place
+  // — an agent not knowing its own opted-in features).
   if (config.mcpServers.length > 0) {
     const items = config.mcpServers.map((s) => {
-      if (!s.description) return s.name;
-      if (s.accessPattern) {
-        return `${s.name} (${s.description} — ${s.accessPattern})`;
-      }
-      return `${s.name} (${s.description})`;
+      const envOverride = config.mcpEnvOverrides?.[s.name];
+      const isVaultScoped =
+        envOverride?.OP_SERVICE_ACCOUNT_TOKEN !== undefined;
+      const baseAnnotation = (() => {
+        if (!s.description && !s.accessPattern) return null;
+        if (s.description && s.accessPattern) {
+          return `${s.description} — ${s.accessPattern}`;
+        }
+        return s.description ?? s.accessPattern ?? null;
+      })();
+      const vaultNote = isVaultScoped ? "vault-scoped" : null;
+      const parts = [baseAnnotation, vaultNote].filter(
+        (p): p is string => typeof p === "string" && p.length > 0,
+      );
+      if (parts.length === 0) return s.name;
+      return `${s.name} (${parts.join(" — ")})`;
     });
     bullets.push(`- **MCP servers**: ${items.join(", ")}.`);
   }

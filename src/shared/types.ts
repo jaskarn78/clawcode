@@ -292,6 +292,24 @@ export type ResolvedAgentConfig = {
     readonly description?: string;
     readonly accessPattern?: "read-only" | "read-write" | "write-only";
   }[];
+  /**
+   * Phase 100 follow-up — per-agent MCP env override map (vault-scoped
+   * service account distribution). UNDEFINED on the existing 15-agent fleet
+   * (all inherit the daemon's clawdbot full-fleet token via shared
+   * mcpServers[].env). Populated only on agents that explicitly declare
+   * `mcpEnvOverrides` in YAML — currently the 5 finmentum agents (fin-
+   * acquisition, fin-research, fin-tax, fin-playground, finmentum-content-
+   * creator) which scope down to the Finmentum vault SA token.
+   *
+   * Values are stored VERBATIM here (loader does NOT call op read at
+   * config-load time). The daemon resolves op:// URIs at agent-start via
+   * `resolveMcpEnvOverrides` (src/manager/op-env-resolver.ts) before the
+   * MCP subprocess spawns. Resolved tokens NEVER appear in this type — they
+   * land directly in the spawn-time mcpServers[].env passed to the SDK.
+   */
+  readonly mcpEnvOverrides?: Readonly<
+    Record<string, Readonly<Record<string, string>>>
+  >;
   readonly acceptsTasks?: Readonly<Record<string, readonly string[]>>;  // Phase 59
   readonly escalationBudget?: {
     readonly daily?: {

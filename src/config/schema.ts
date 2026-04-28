@@ -1068,6 +1068,43 @@ export const agentSchema = z.object({
   reactions: z.boolean().default(true),
   security: securityConfigSchema.optional(),
   mcpServers: z.array(z.union([mcpServerSchema, z.string()])).default([]),
+  /**
+   * Phase 100 follow-up — per-agent MCP server env overrides. Maps
+   * `serverName → envKey → value`. Values matching `op://...` are resolved
+   * at agent-start time via the daemon's `op read` shell-out (using the
+   * daemon's process-level OP_SERVICE_ACCOUNT_TOKEN, which is the clawdbot
+   * full-fleet service account). The resolved values replace whatever the
+   * shared mcpServers[].env block provides, then get injected into the
+   * spawned MCP subprocess env.
+   *
+   * Use case: vault-scope distribution. The daemon process holds the
+   * clawdbot full-fleet token; this lets finmentum agents get a Finmentum-
+   * vault-scoped token (whose source-of-truth is itself a credential
+   * stored INSIDE the clawdbot vault) WITHOUT the daemon's clawdbot token
+   * ever leaving the daemon process.
+   *
+   * Example:
+   *   mcpEnvOverrides:
+   *     1password:
+   *       OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+   *
+   * Schema: server name + env key + env value all required to be non-empty
+   * strings. Empty server name / key / value rejected at parse — those
+   * shapes either silently no-op (empty server name doesn't match any
+   * configured MCP) or break the env (zero-length token).
+   *
+   * Optional + missing field parses fine (back-compat with the existing
+   * 15-agent fleet — all currently inherit the daemon's clawdbot token).
+   */
+  mcpEnvOverrides: z
+    .record(
+      z.string().min(1), // server name (must match an mcpServers entry)
+      z.record(
+        z.string().min(1), // env key
+        z.string().min(1), // env value (op:// URI or literal)
+      ),
+    )
+    .optional(),
   acceptsTasks: z                      // Phase 59 HAND-04
     .record(z.string().min(1), z.array(z.string().min(1)))
     .optional(),

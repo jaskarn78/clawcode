@@ -81,6 +81,23 @@ export type SessionManagerOptions = {
    * inject a tmpdir-rooted path for isolation.
    */
   readonly effortStatePath?: string;
+  /**
+   * Phase 100 follow-up — per-agent MCP env override resolver wiring.
+   *
+   * When set, SessionManager threads this through SessionConfigDeps so
+   * buildSessionConfig can substitute `op://...` URIs in
+   * `ResolvedAgentConfig.mcpEnvOverrides` with concrete vault-scoped tokens
+   * BEFORE the SDK adapter spawns the MCP subprocess. Production daemon
+   * wires this to `resolveMcpEnvOverrides + defaultOpReadShellOut`. Tests
+   * leave it undefined → mcpEnvOverrides is silently skipped (back-compat).
+   *
+   * The agentName argument is provided for audit-log correlation; the
+   * resolver itself is stateless across calls.
+   */
+  readonly opEnvResolver?: (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ) => Promise<Record<string, Record<string, string>>>;
 };
 
 /**
@@ -161,6 +178,16 @@ export class SessionManager {
    * diverge.
    */
   private readonly effortStatePath: string;
+
+  /**
+   * Phase 100 follow-up — per-agent MCP env override resolver. UNDEFINED in
+   * tests (mcpEnvOverrides silently skipped). Production wires
+   * resolveMcpEnvOverrides + defaultOpReadShellOut at the daemon edge.
+   */
+  private readonly opEnvResolver?: (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ) => Promise<Record<string, Record<string, string>>>;
 
   /**
    * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
@@ -270,6 +297,9 @@ export class SessionManager {
     this.flushIntervalMsOverride = options.flushIntervalMsOverride;
     // Phase 83 Plan 02 EFFORT-03 — persist path resolves via DI or default.
     this.effortStatePath = options.effortStatePath ?? DEFAULT_EFFORT_STATE_PATH;
+    // Phase 100 follow-up — vault-scope override resolver (DI). Undefined in
+    // tests / bootstrap; daemon wires the production opRead at edge.
+    this.opEnvResolver = options.opEnvResolver;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -1720,6 +1750,11 @@ export class SessionManager {
       // the latest state automatically.
       fsCapabilitySnapshotProvider: (name: string) =>
         this.getSessionHandle(name)?.getFsCapabilitySnapshot() ?? new Map(),
+      // Phase 100 follow-up — thread the vault-scope MCP env resolver so
+      // buildSessionConfig can swap clawdbot-scoped tokens for narrower
+      // (e.g. Finmentum-only) tokens before MCP subprocess spawn.
+      // Undefined in tests → buildSessionConfig silently skips (back-compat).
+      opEnvResolver: this.opEnvResolver,
     };
   }
 
