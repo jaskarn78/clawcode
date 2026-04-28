@@ -27,6 +27,7 @@ import {
 } from "./attachments.js";
 import { formatReactionEvent } from "./reactions.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
+import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { WebhookManager } from "./webhook-manager.js";
 import type { DeliveryQueue } from "./delivery-queue.js";
 import { checkChannelAccess } from "../security/acl-parser.js";
@@ -575,12 +576,17 @@ export class DiscordBridge {
       const streamingCfg = agentConfig?.perf?.streaming;
       editor = new ProgressiveMessageEditor({
         editFn: async (content: string) => {
+          // Phase 100 follow-up — wrap raw markdown tables in ```text``` fences
+          // so Discord renders them as monospace (columns visibly align).
+          // Pass-through for content without tables; idempotent for content
+          // already in code fences.
+          const wrapped = wrapMarkdownTablesInCodeFence(content);
           if (!messageRef.current) {
             if ("send" in channel && typeof channel.send === "function") {
-              messageRef.current = await channel.send(content);
+              messageRef.current = await channel.send(wrapped);
             }
           } else {
-            await messageRef.current.edit(content);
+            await messageRef.current.edit(wrapped);
           }
         },
         editIntervalMs: streamingCfg?.editIntervalMs,

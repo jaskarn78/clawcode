@@ -25,6 +25,7 @@ import { makeRootOrigin } from "../manager/turn-origin.js";
 // operators see "🔄 Working..." → live token stream → final message,
 // instead of a silent thread until the subagent finishes its turn.
 import { ProgressiveMessageEditor } from "./streaming.js";
+import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 
 /**
  * Phase 100 GSD-06 — pure helper: extract the parent agent's GSD project
@@ -506,7 +507,10 @@ export class SubagentThreadSpawner {
       const editor = canEdit
         ? new ProgressiveMessageEditor({
             editFn: async (content: string) => {
-              const truncated = content.length > 2000 ? content.slice(0, 1997) + "..." : content;
+              // Phase 100 follow-up — wrap raw markdown tables in ```text```
+              // fences so Discord renders monospaced + columns visibly align.
+              const wrapped = wrapMarkdownTablesInCodeFence(content);
+              const truncated = wrapped.length > 2000 ? wrapped.slice(0, 1997) + "..." : wrapped;
               if (truncated === lastSent) return;
               lastSent = truncated;
               await editable.edit!(truncated);
@@ -526,7 +530,7 @@ export class SubagentThreadSpawner {
 
       // Defensive: streamFromAgent may resolve with undefined under test mocks
       // or if the SDK returns nothing. Treat undefined as empty.
-      const text = (reply ?? "").trim();
+      const text = wrapMarkdownTablesInCodeFence((reply ?? "").trim());
       if (!canEdit && text) {
         // Fallback path — send the final reply as a fresh message.
         await thread.send(text.slice(0, 2000));

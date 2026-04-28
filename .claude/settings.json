@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "1password": {
+      "command": "npx",
+      "args": ["-y", "@1password/mcp-server@latest"]
+    }
+  }
+}

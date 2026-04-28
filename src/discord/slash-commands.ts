@@ -82,6 +82,7 @@ import { SOCKET_PATH } from "../manager/daemon.js";
 import type { RegistryEntry } from "../manager/types.js";
 import { getAgentForChannel } from "./router.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
+import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { Logger } from "pino";
 import { logger } from "../shared/logger.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
@@ -1586,12 +1587,15 @@ export class SlashCommandHandler {
       // Non-fatal: continue even if this edit fails
     }
 
-    // Set up progressive editor for streaming updates
+    // Set up progressive editor for streaming updates.
+    // Phase 100 follow-up — wrap raw markdown tables in ```text``` fences
+    // so Discord renders monospace + column alignment.
     const editor = new ProgressiveMessageEditor({
       editFn: async (content: string) => {
-        const truncated = content.length > DISCORD_MAX_LENGTH
-          ? content.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
-          : content;
+        const wrapped = wrapMarkdownTablesInCodeFence(content);
+        const truncated = wrapped.length > DISCORD_MAX_LENGTH
+          ? wrapped.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+          : wrapped;
         await interaction.editReply(truncated);
       },
       editIntervalMs: 1500,
@@ -4207,10 +4211,12 @@ export class SlashCommandHandler {
 
     const editor = new ProgressiveMessageEditor({
       editFn: async (content: string) => {
+        // Phase 100 follow-up — wrap raw markdown tables in ```text``` fences.
+        const wrapped = wrapMarkdownTablesInCodeFence(content);
         const truncated =
-          content.length > DISCORD_MAX_LENGTH
-            ? content.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
-            : content;
+          wrapped.length > DISCORD_MAX_LENGTH
+            ? wrapped.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+            : wrapped;
         await interaction.editReply(truncated);
       },
       editIntervalMs: 1500,

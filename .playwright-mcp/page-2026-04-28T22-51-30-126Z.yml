@@ -1,0 +1,64 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - link [ref=e4] [cursor=pointer]:
+        - /url: https://1password.com
+        - img [ref=e6]
+      - heading "Someone shared an item with you." [level=2] [ref=e10]
+    - main [ref=e11]:
+      - img "Just a moment" [ref=e13]
+    - contentinfo [ref=e14]:
+      - generic [ref=e16]:
+        - generic [ref=e17]:
+          - generic [ref=e18]:
+            - link "Terms of Service" [ref=e19] [cursor=pointer]:
+              - /url: https://1password.com/legal/terms-of-service/
+            - text: "-"
+            - link "Privacy Policy" [ref=e20] [cursor=pointer]:
+              - /url: https://1password.com/legal/privacy/
+            - text: "-"
+            - link "Cookie Policy" [ref=e21] [cursor=pointer]:
+              - /url: https://1password.com/legal/cookies/
+            - text: "-"
+            - link "Accessibility" [ref=e22] [cursor=pointer]:
+              - /url: https://1password.com/legal/accessibility/
+          - generic [ref=e23]:
+            - text: © 2026 1Password. All rights reserved. 4711 Yonge St, 10th Floor, Toronto, Ontario, M2N 6K8, Canada.
+            - img [ref=e24]
+        - generic [ref=e27]:
+          - paragraph [ref=e28]: Find us on
+          - list [ref=e29]:
+            - listitem [ref=e30]:
+              - link "1Password on Twitter" [ref=e31] [cursor=pointer]:
+                - /url: https://twitter.com/1Password
+                - img [ref=e32]
+            - listitem [ref=e34]:
+              - link "1Password on Facebook" [ref=e35] [cursor=pointer]:
+                - /url: https://www.facebook.com/1Password
+                - img [ref=e36]
+            - listitem [ref=e38]:
+              - link "1Password on Reddit" [ref=e39] [cursor=pointer]:
+                - /url: https://www.reddit.com/r/1Password
+                - img [ref=e40]
+            - listitem [ref=e42]:
+              - link "1Password on YouTube" [ref=e43] [cursor=pointer]:
+                - /url: https://www.youtube.com/1PasswordVideos
+                - img [ref=e44]
+            - listitem [ref=e46]:
+              - link "1Password on GitHub" [ref=e47] [cursor=pointer]:
+                - /url: https://github.com/1Password
+                - img [ref=e48]
+            - listitem [ref=e50]:
+              - link "1Password on LinkedIn" [ref=e51] [cursor=pointer]:
+                - /url: https://www.linkedin.com/company/1password/
+                - img [ref=e52]
+            - listitem [ref=e54]:
+              - link "1Password on Instagram" [ref=e55] [cursor=pointer]:
+                - /url: https://www.instagram.com/1password/
+                - img [ref=e56]
+            - listitem [ref=e58]:
+              - link "1Password RSS" [ref=e59] [cursor=pointer]:
+                - /url: https://blog.1password.com/index.xml
+                - img [ref=e60]
+    - textbox [ref=e62]
+  - status "Notifications"

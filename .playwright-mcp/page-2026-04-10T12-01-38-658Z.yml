@@ -1,0 +1,189 @@
+- generic [ref=e2]:
+  - navigation "Shortcuts menu" [ref=e3]:
+    - heading "Skip to" [level=2] [ref=e4]
+    - list "Skip to" [ref=e5]:
+      - listitem [ref=e6]:
+        - link "main content" [ref=e7] [cursor=pointer]:
+          - /url: "#skippedLink"
+          - text: Main content
+    - separator [ref=e8]
+  - banner [ref=e9]:
+    - navigation "Primary" [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]:
+          - link "Amazon" [ref=e14] [cursor=pointer]:
+            - /url: /ref=nav_logo
+          - button "Delivering to Yuba City 95991 Update location" [ref=e17] [cursor=pointer]:
+            - generic [ref=e19]:
+              - generic [ref=e20]: Delivering to Yuba City 95991
+              - generic [ref=e21]: Update location
+        - search [ref=e24]:
+          - generic [ref=e27]:
+            - generic [ref=e29]: All
+            - combobox "Select the department you want to search in" [ref=e31] [cursor=pointer]:
+              - option "All Departments" [selected]
+              - option "Alexa Skills"
+              - option "Amazon Autos"
+              - option "Amazon Devices"
+              - option "Amazon Global Store"
+              - option "Amazon Haul"
+              - option "Amazon One Medical"
+              - option "Amazon Pharmacy"
+              - option "Amazon Resale"
+              - option "Appliances"
+              - option "Apps & Games"
+              - option "Arts, Crafts & Sewing"
+              - option "Audible Books & Originals"
+              - option "Automotive Parts & Accessories"
+              - option "Baby"
+              - option "Beauty & Personal Care"
+              - option "Books"
+              - option "CDs & Vinyl"
+              - option "Cell Phones & Accessories"
+              - option "Clothing, Shoes & Jewelry"
+              - option "Women's Clothing, Shoes & Jewelry"
+              - option "Men's Clothing, Shoes & Jewelry"
+              - option "Girl's Clothing, Shoes & Jewelry"
+              - option "Boy's Clothing, Shoes & Jewelry"
+              - option "Baby Clothing, Shoes & Jewelry"
+              - option "Collectibles & Fine Art"
+              - option "Computers"
+              - option "Credit and Payment Cards"
+              - option "Digital Music"
+              - option "Electronics"
+              - option "Garden & Outdoor"
+              - option "Gift Cards"
+              - option "Grocery & Gourmet Food"
+              - option "Handmade"
+              - option "Health, Household & Baby Care"
+              - option "Home & Business Services"
+              - option "Home & Kitchen"
+              - option "Industrial & Scientific"
+              - option "Just for Prime"
+              - option "Kindle Store"
+              - option "Luggage & Travel Gear"
+              - option "Luxury Stores"
+              - option "Magazine Subscriptions"
+              - option "Movies & TV"
+              - option "Musical Instruments"
+              - option "Office Products"
+              - option "Pet Supplies"
+              - option "Premium Beauty"
+              - option "Prime Video"
+              - option "Same-Day Store"
+              - option "Smart Home"
+              - option "Software"
+              - option "Sports & Outdoors"
+              - option "Subscribe & Save"
+              - option "Subscription Boxes"
+              - option "Tools & Home Improvement"
+              - option "Toys & Games"
+              - option "Under $10"
+              - option "Video Games"
+              - option "Whole Foods Market"
+          - searchbox "Search Amazon" [ref=e34]: reuzel beard foam
+          - generic [ref=e35]:
+            - generic "Go" [ref=e37] [cursor=pointer]:
+              - button "Go" [ref=e38]
+            - button [ref=e40]: Agent Search
+        - generic [ref=e42]:
+          - link "Choose a language for shopping in Amazon United States. The current selection is English (EN)." [ref=e44] [cursor=pointer]:
+            - /url: /customer-preferences/edit?ie=UTF8&preferencesReturnUrl=%2F&ref_=topnav_lang
+            - generic [ref=e47]:
+              - img "United States" [ref=e48]
+              - generic [ref=e49]: EN
+          - link "Hello, sign in Account & Lists" [ref=e51] [cursor=pointer]:
+            - /url: https://www.amazon.com/ap/signin?openid.return_to=https%3A%2F%2Fwww.amazon.com%2Fs%2Fref%3Dnb_sb_noss_1%2F%3F_encoding%3DUTF8%26crid%3D5HPAFM8CX4U9%26field-keywords%3Dreuzel%2520beard%2520foam%26sprefix%3Dreuzel%2520beard%2520foam%252Caps%252C176%26url%3Dsearch-alias%253Daps%26ref_%3Dnav_ya_signin&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=usflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0
+            - generic [ref=e53]: Hello, sign in
+            - generic [ref=e54]: Account & Lists
+          - link "Returns & Orders" [ref=e55] [cursor=pointer]:
+            - /url: /gp/css/order-history?ref_=nav_orders_first
+            - generic [ref=e56]: Returns
+            - generic [ref=e57]: "& Orders"
+          - link "0 items in cart" [ref=e58] [cursor=pointer]:
+            - /url: /gp/cart/view.html?ref_=nav_cart
+            - generic [ref=e60]: "0"
+      - generic [ref=e62]:
+        - button "Open All Categories Menu" [ref=e64] [cursor=pointer]:
+          - generic [ref=e66]: All
+        - list [ref=e70]:
+          - listitem [ref=e71]:
+            - link "Medical Care" [ref=e73] [cursor=pointer]:
+              - /url: https://health.amazon.com/prime?ref_=nav_cs_all_health_ingress_onem_h
+          - listitem [ref=e74]:
+            - link "Amazon Basics" [ref=e76] [cursor=pointer]:
+              - /url: /Amazon_Basics?channel=discovbar&field-lbr_brands_browse-bin=AmazonBasics&ref_=nav_cs_amazonbasics
+          - listitem [ref=e77]:
+            - link "Best Sellers" [ref=e79] [cursor=pointer]:
+              - /url: /gp/bestsellers/?ref_=nav_cs_bestsellers
+          - listitem [ref=e80]:
+            - link "Books" [ref=e82] [cursor=pointer]:
+              - /url: /books-used-books-textbooks/b/?ie=UTF8&node=283155&ref_=nav_cs_books
+          - listitem [ref=e83]:
+            - link "Today's Deals" [ref=e85] [cursor=pointer]:
+              - /url: /deals?ref_=nav_cs_gb
+          - listitem [ref=e86]:
+            - link "Prime" [ref=e88] [cursor=pointer]:
+              - /url: /prime?ref_=nav_cs_primelink_nonmember
+          - listitem [ref=e89]:
+            - link "Gift Cards" [ref=e91] [cursor=pointer]:
+              - /url: /gift-cards/b/?ie=UTF8&node=2238192011&ref_=nav_cs_gc
+          - listitem [ref=e92]:
+            - link "Sell" [ref=e94] [cursor=pointer]:
+              - /url: /b/?_encoding=UTF8&ld=AZUSSOA-sell&node=12766669011&ref_=nav_cs_sell
+          - listitem [ref=e95]:
+            - link "Groceries" [ref=e97] [cursor=pointer]:
+              - /url: /fmc/learn-more?ref_=nav_cs_groceries
+          - listitem [ref=e98]:
+            - link "New Releases" [ref=e100] [cursor=pointer]:
+              - /url: /gp/new-releases/?ref_=nav_cs_newreleases
+          - listitem [ref=e101]:
+            - link "Registry" [ref=e103] [cursor=pointer]:
+              - /url: /gp/browse.html?node=16115931011&ref_=nav_cs_registry
+          - listitem [ref=e104]:
+            - link "Smart Home" [ref=e106] [cursor=pointer]:
+              - /url: /Smart-Home/b/?ie=UTF8&node=6563140011&ref_=nav_cs_smart_home
+          - listitem [ref=e107]:
+            - link "Music" [ref=e109] [cursor=pointer]:
+              - /url: /music/player?ref_=nav_cs_music
+          - listitem [ref=e110]:
+            - link "Fashion" [ref=e112] [cursor=pointer]:
+              - /url: /amazon-fashion/b/?ie=UTF8&node=7141123011&ref_=nav_cs_fashion
+          - listitem [ref=e113]:
+            - link "Amazon Home" [ref=e115] [cursor=pointer]:
+              - /url: /home-garden-kitchen-furniture-bedding/b/?ie=UTF8&node=1055398&ref_=nav_cs_home
+          - listitem [ref=e116]:
+            - link "Automotive" [ref=e118] [cursor=pointer]:
+              - /url: /automotive-auto-truck-replacements-parts/b/?ie=UTF8&node=15684181&ref_=nav_cs_automotive
+          - listitem [ref=e119]:
+            - link "Sports & Outdoors" [ref=e121] [cursor=pointer]:
+              - /url: /sports-outdoors/b/?ie=UTF8&node=3375251&ref_=nav_cs_sports
+          - listitem [ref=e122]:
+            - link "Toys & Games" [ref=e124] [cursor=pointer]:
+              - /url: /toys/b/?ie=UTF8&node=165793011&ref_=nav_cs_toys
+          - listitem [ref=e125]:
+            - link "Baby" [ref=e127] [cursor=pointer]:
+              - /url: /baby-car-seats-strollers-bedding/b/?ie=UTF8&node=165796011&ref_=nav_cs_baby
+          - listitem [ref=e128]:
+            - link "Home Improvement" [ref=e130] [cursor=pointer]:
+              - /url: /Tools-and-Home-Improvement/b/?ie=UTF8&node=228013&ref_=nav_cs_hi
+          - listitem [ref=e131]:
+            - link "Shop By Interest" [ref=e133] [cursor=pointer]:
+              - /url: /finds?ref_=nav_cs_foundit
+          - listitem [ref=e134]:
+            - link "Pharmacy" [ref=e136] [cursor=pointer]:
+              - /url: https://pharmacy.amazon.com/?nodl=0&ref_=nav_cs_pharmacy
+          - listitem [ref=e137]:
+            - link "Beauty & Personal Care" [ref=e139] [cursor=pointer]:
+              - /url: /Beauty-Makeup-Skin-Hair-Products/b/?ie=UTF8&node=3760911&ref_=nav_cs_beauty
+          - listitem [ref=e140]:
+            - link "Kindle Books" [ref=e142] [cursor=pointer]:
+              - /url: /Kindle-eBooks/b/?ie=UTF8&node=154606011&ref_=nav_cs_kindle_books
+        - generic [ref=e146]:
+          - img "Masters 2026" [ref=e147]
+          - link "Masters 2026" [ref=e148] [cursor=pointer]:
+            - generic [ref=e150]: "04"
+            - generic [ref=e151]: ":"
+            - generic [ref=e153]: "58"
+            - generic [ref=e154]: ":"
+            - generic [ref=e156]: "22"

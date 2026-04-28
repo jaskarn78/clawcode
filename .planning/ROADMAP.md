@@ -487,3 +487,32 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 **Plans:** TBD (run /gsd:plan-phase 101 in v2.7 to break down)
 
 **Status:** Pending — opened 2026-04-28 evening after the Pon tax return debug session. Closely related to Phase 100-fu's long-output-to-file directive (which addresses the Discord-output side); Phase 101 addresses the upstream document-parsing side. Likely the single highest-leverage operator-facing feature in the v2.7 milestone — fin-acquisition's daily workflow is document-heavy, and the current ad-hoc PyMuPDF fallbacks are unreliable.
+
+### Phase 102: Meeting copilot deploy + ClawCode integration (finance-clawdy-coach)
+
+**Goal:** Take the existing finance-clawdy-coach project (https://github.com/jaskarn78/finance-clawdy-coach — built but never deployed/tested) from on-disk to production-running, validate the live coaching pipeline through one real client meeting, then evaluate whether to integrate it with ClawCode's fin-acquisition agent (deeper memory continuity) or leave it standalone.
+
+**Trigger:** Operator (Ramy at Finmentum) needs real-time coaching during client RIA calls. Mac-side BlackHole 2ch capture + Linux-side Deepgram Nova-2 STT + CoachingEngine (rules + Claude Haiku) + Discord webhook delivery + post-call CRM extraction (finance-clawdy FastAPI :9000) + MySQL upsert. Architecture is sound and tested in isolation (104 pytest tests); production validation is the missing piece.
+
+**Pre-existing primitives we can reuse:**
+- finance-clawdy-coach repo (FastAPI server + Mac listener + finance-clawdy CRM service, all complete)
+- Deepgram API key (operator-provisioned, 1Password)
+- Anthropic API key for the Haiku coaching brain (1Password — possibly already shared with ClawCode's daemon)
+- Discord webhook URL for the coaching channel (existing)
+- finmentum MySQL CRM (existing — the database that fin-acquisition's `finmentum-db` MCP server already reads)
+- ClawCode's fin-acquisition agent on clawdy with vault-scoped 1Password (Phase 100-fu, just shipped) — knows clients, has memory, has the right tools
+- ClawCode's `send_to_agent` IPC (Phase 30+) — used by Path C integration option
+
+**Sub-scope candidates (refined during discuss-phase):**
+1. **Path A — bare-bones deploy + smoke test (must-do).** Deploy server + finance-clawdy on clawdy host (or claude-bot), wire env vars (Deepgram + Anthropic + Discord webhook + MySQL), set up Mac client on operator's MacBook with BlackHole + listener.py launched-on-demand. Run ONE real client meeting end-to-end. Capture: did capture work? Was Deepgram latency acceptable? Were coaching prompts useful? Did finance-clawdy upsert correctly? Required for any further integration decisions.
+2. **Path B — light integration: webhook → ClawCode thread.** Coaching webhook posts to a Discord thread bound to fin-acquisition. fin sees the live transcript (read_thread MCP), can answer ad-hoc questions in the same thread without disrupting coaching. Post-call summary same path. Trade-off: coaching stays autonomous (its own Haiku calls); ClawCode gets visibility but doesn't drive.
+3. **Path C — deep integration: replace finance-clawdy LLM calls with `send_to_agent` IPC.** finance-clawdy stops calling Anthropic directly; dispatches turns to fin-acquisition. Pre-call: coaching engine asks fin "what should I know about <client>" → fin queries memory_lookup → returns context → coaching prompts now include client-specific recall. Post-call: transcript → fin processes with full continuity → updates fin's OWN memory (knowledge graph + tier promotion) AND the CRM. Couples the two projects but aligns memory/identity.
+4. **Path-A operations:** systemd unit files for server + finance-clawdy, healthcheck integration with clawdy's existing monitoring, journalctl integration, `setup.sh` runbook adapted for clawdy host (it currently assumes interactive prompts).
+5. **Mac client lifecycle:** how does the client launch? Operator runs `python listener.py` before each meeting? Could add a menu-bar wrapper (BitBar/SwiftBar?) to make it one-click. Or auto-detect via Google Calendar + auto-launch (deferred to v2 per repo's PROJECT.md).
+6. **Cost gate / budget alarm:** Deepgram (~$0.43/hr Nova-2) + Anthropic Haiku coaching (~$0.001/UtteranceEnd × ~50 utterances/call = $0.05/call) + Anthropic for finance-clawdy CRM extraction (~$0.10/call). Per-call budget ~$0.50-0.70. Add a daily-cap circuit breaker to prevent runaway costs from a misconfigured loop.
+7. **Privacy + audit:** "client must never know" constraint (per repo PROJECT.md). Verify no bot joins the meeting, no cloud transcripts persist beyond the JSONL spool retention window (operator-curated), no PII leaks into ClawCode's general-purpose memory if Path C is chosen (need a memory namespace/tag for "from-meeting-coach" content so it's properly access-controlled).
+8. **First-real-call UAT:** the canonical regression artifact. Phase 102 ships when operator runs a real client meeting end-to-end and reports back: capture worked, coaching prompts were useful, finance-clawdy CRM upsert succeeded, summary embed matched reality.
+
+**Plans:** TBD (run /gsd:plan-phase 102 in v2.7 to break down)
+
+**Status:** Pending — opened 2026-04-28 evening after reviewing the finance-clawdy-coach repo (https://github.com/jaskarn78/finance-clawdy-coach). Highest-leverage operator-facing feature in v2.7 IF Path A validates the pipeline. Path B/C decision deferred until post-A.
