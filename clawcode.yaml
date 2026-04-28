@@ -208,6 +208,17 @@ agents:
       - "1481659547985641603"
     mcpServers: []
     memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-playground
+    # Phase 100 follow-up — vault-scoped 1Password access. Operator must:
+    #   1. Create a NEW 1Password service account scoped to vaults: [Finmentum]
+    #   2. Store its token in the clawdbot vault at the path below
+    #      (`Finmentum Service Account` → field `credential`).
+    #   3. Restart the daemon (op:// resolution happens at agent-start).
+    # The daemon's process-level OP_SERVICE_ACCOUNT_TOKEN (clawdbot, full
+    # fleet) is used to fetch this narrower token; the clawdbot token NEVER
+    # passes through to this agent's MCP subprocess.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
   - name: fin-research
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
@@ -217,6 +228,11 @@ agents:
       - "1481659546337411234"
     mcpServers: []
     memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-research
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for setup steps.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
   - name: fin-tax
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
@@ -226,6 +242,11 @@ agents:
       - "1482492797784297683"
     mcpServers: []
     memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-tax
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for setup steps.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
   - name: personal
     workspace: /home/jjagpal/.clawcode/agents/personal
     soulFile: /home/jjagpal/.clawcode/agents/personal/SOUL.md
@@ -263,6 +284,14 @@ agents:
       - user
     gsd:
       projectDir: /home/jjagpal/.openclaw/workspace-finmentum/
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for the operator setup runbook. Without this
+    # override, fin-acquisition would inherit the daemon's clawdbot full-
+    # fleet token (cross-vault read access — too wide for a Finmentum
+    # production agent).
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
     allowedModels:
       - sonnet
       - opus
@@ -320,6 +349,11 @@ agents:
       - "1486348188763029648"
     mcpServers: []
     memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/finmentum-content-creator
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for setup steps.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
   - name: general
     workspace: /home/jjagpal/.clawcode/agents/general
     soulFile: /home/jjagpal/.clawcode/agents/general/SOUL.md
