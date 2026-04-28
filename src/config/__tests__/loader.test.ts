@@ -1954,14 +1954,17 @@ describe("resolveSystemPromptDirectives (Phase 94 TOOL-10)", () => {
       DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
     );
     // Phase 99 added subagent-routing; Phase 100-fu added
-    // memory-recall-before-uncertainty AND propose-alternatives. Sorted
-    // alphabetically by key for prompt-cache hash determinism.
+    // memory-recall-before-uncertainty, propose-alternatives,
+    // long-output-to-file, and verify-file-writes. Sorted alphabetically
+    // by key for prompt-cache hash determinism.
     expect(out.map((d) => d.key)).toEqual([
       "cross-agent-routing",
       "file-sharing",
+      "long-output-to-file",
       "memory-recall-before-uncertainty",
       "propose-alternatives",
       "subagent-routing",
+      "verify-file-writes",
     ]);
     // D-09 file-sharing verbatim text reaches the resolver output
     const fs = out.find((d) => d.key === "file-sharing");

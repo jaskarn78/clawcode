@@ -211,18 +211,42 @@ export class SubagentThreadSpawner {
       const fetched = await (channel as TextChannel).messages.fetch({
         limit: 10,
       });
-      // Subagent posts via webhook — its identity differs from the operator's.
-      // We pick the most recent message NOT from the operator. The first
-      // initial-prompt post + any subsequent subagent posts are eligible.
-      const messages = Array.from(fetched.values()); // newest first
-      const subagentMessage = messages.find(
-        (m) => m.author.bot && (m.webhookId !== null || m.author.bot),
-      );
-      if (!subagentMessage || !subagentMessage.content.trim()) return;
-      const lastReply = subagentMessage.content.trim();
+      // Phase 100-fu (2026-04-28) — multi-chunk concatenation.
+      //
+      // Pre-fu code picked only the SINGLE most-recent bot message. When a
+      // subagent's reply exceeded 2000 chars, postInitialMessage chunked
+      // it across N thread.send() calls — but the relay then summarized
+      // the parent on JUST the LAST chunk, losing chunks 1..N-1. Real
+      // failure 2026-04-28: Opus tax-return analysis silently truncated
+      // to one Discord message, parent built its main-channel summary on
+      // truncated content.
+      //
+      // Fix: walk newest→oldest, gather a continuous run of bot messages,
+      // stop at the first operator (non-bot) message OR the start of
+      // history. Concatenate oldest-first so the parent sees the
+      // chronological order. Skip empty/whitespace-only messages
+      // (embed-only posts, Discord placeholders).
+      //
+      // Subagent posts via webhook OR direct bot send. We treat ALL bot
+      // messages as eligible — the binding's parentChannelId already
+      // scopes to this thread, so cross-bot interleaving is not a concern
+      // for subagent-spawned threads.
+      const messages = Array.from(fetched.values()); // newest first per discord.js
+      const subagentChunks: string[] = [];
+      for (const m of messages) {
+        if (!m.author.bot) break; // hit operator follow-up — stop walking
+        if (!m.content || m.content.trim().length === 0) continue; // skip empty/embed-only
+        subagentChunks.push(m.content);
+      }
+      if (subagentChunks.length === 0) return;
+      // Reverse to oldest-first so the relay reads in chronological order.
+      const fullSubagentReply = subagentChunks.reverse().join("\n").trim();
+      if (!fullSubagentReply) return;
       // Truncate huge replies — the parent's prompt has a budget.
       const trimmed =
-        lastReply.length > 1500 ? `${lastReply.slice(0, 1500)}…` : lastReply;
+        fullSubagentReply.length > 1500
+          ? `${fullSubagentReply.slice(0, 1500)}…`
+          : fullSubagentReply;
       const threadName = (channel as TextChannel).name ?? threadId;
       // Phase 100 GSD-06 — discover artifact paths from the parent's GSD
       // project root. No-op when the parent has no `gsd.projectDir` set
@@ -467,6 +491,15 @@ export class SubagentThreadSpawner {
       const editable = (placeholder ?? {}) as { edit?: (content: string) => Promise<unknown> };
       const canEdit = typeof editable.edit === "function";
 
+      // Phase 100-fu — log streaming startup so the next overflow-related
+      // failure has a breadcrumb (canEdit=true means we'll use the
+      // edit-based progressive path; false means we fall back to single
+      // send at the end).
+      this.log.info(
+        { sessionName, threadId: thread.id, canEdit, hasPlaceholder: Boolean(placeholder) },
+        "subagent thread streaming initialized",
+      );
+
       // If the surface doesn't support edit (test mocks, old discord.js),
       // fall back to the prior behavior — single send at the end.
       let lastSent = "";
@@ -501,21 +534,49 @@ export class SubagentThreadSpawner {
       // Phase 100 follow-up — handle overflow when reply exceeds 2000 chars.
       // The editor truncated the visible message; send the tail as
       // additional thread.send() chunks so nothing is lost.
+      //
+      // Phase 100-fu (2026-04-28) — structured diagnostics. Without an
+      // aggregate "summary" log line, the next time Discord silently
+      // dropped chunks there was no breadcrumb to debug from. Capture
+      // totalLength + chunksSent + fullySent + lastError so the failure
+      // mode is observable in production logs.
       if (canEdit && text.length > 2000) {
         let cursor = 2000;
+        let chunksSent = 0;
+        let lastError: string | null = null;
         while (cursor < text.length) {
           const chunk = text.slice(cursor, cursor + 2000);
           try {
             await thread.send(chunk);
+            chunksSent++;
           } catch (err) {
+            lastError = (err as Error).message;
             this.log.warn(
-              { sessionName, error: (err as Error).message, cursor },
-              "subagent overflow chunk send failed (non-fatal)",
+              {
+                sessionName,
+                threadId: thread.id,
+                chunkIndex: chunksSent,
+                cursor,
+                totalLength: text.length,
+                error: lastError,
+              },
+              "subagent overflow chunk send failed (non-fatal — continuing if possible)",
             );
             break;
           }
           cursor += 2000;
         }
+        this.log.info(
+          {
+            sessionName,
+            threadId: thread.id,
+            totalLength: text.length,
+            chunksSent,
+            lastError,
+            fullySent: cursor >= text.length,
+          },
+          "subagent overflow chunks summary",
+        );
       }
     } catch (err) {
       this.log.warn(

@@ -193,6 +193,64 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
       "Pattern: (a) reflect on what the operator asked, (b) extract 2-4 noun phrases as search terms, (c) call memory_lookup, (d) ONLY THEN form your response. If memory_lookup returns nothing useful, you may say 'I don't have that in memory'. If it returns something, integrate it.\n\n" +
       "Don't apologize for searching. Don't announce 'let me check' — just search silently and respond with what you found.",
   }),
+  // Phase 100-fu (2026-04-28) — long-output-to-file directive.
+  //
+  // Real production failure 2026-04-28: an Opus deep-dive subagent generated
+  // a multi-thousand-character analysis, posted only the first 2000 chars
+  // to the Discord thread (silent truncation), then claimed the full
+  // analysis was "saved to clients/.../tax-return-analysis.md" — the file
+  // didn't exist (hallucinated save). The parent agent's auto-relay built
+  // its main-channel summary on the truncated content, and the operator
+  // had no way to recover the full analysis.
+  //
+  // Fix forces a "save first, summarize+link in Discord" pattern so long
+  // outputs become durable artifacts the operator can open, while Discord
+  // posts stay under the 2000-char cap with deterministic content.
+  //
+  // Pinned by static-grep:
+  //   - "Discord messages are hard-capped" (this directive)
+  //   - "SAVE the full content first" (step 1)
+  //   - "VERIFY the save by Reading the file back" (step 2)
+  //   - "POST to Discord" (step 3)
+  //   - "NEVER paste >2000 chars into a Discord post" (step 4)
+  "long-output-to-file": Object.freeze({
+    enabled: true,
+    text:
+      "Discord messages are hard-capped at 2000 characters. When your reply will exceed ~1500 characters (rough estimate: 250 words, or ~5 short paragraphs of analysis), DO NOT just post the long text and hope it fits. Instead:\n\n" +
+      "1. SAVE the full content first to a file in your workspace. Use a descriptive path like `<your-workspace>/output/<task-slug>-<YYYY-MM-DD>.md` (e.g., `output/pon-tax-return-analysis-2026-04-28.md`). Use the Write tool.\n\n" +
+      "2. VERIFY the save by Reading the file back immediately. If the read fails or returns empty, the save failed — surface the error, do not claim success.\n\n" +
+      "3. POST to Discord (thread or channel) a 1000-1500 character SUMMARY + the absolute file path. Format:\n" +
+      "   ```\n" +
+      "   <2-4 sentence summary of the headline finding>\n" +
+      "   \n" +
+      "   <3-7 bullet points of key data>\n" +
+      "   \n" +
+      "   Full analysis: /absolute/path/to/file.md\n" +
+      "   ```\n\n" +
+      "4. NEVER paste >2000 chars into a Discord post. Discord silently truncates at 2000 and the parent agent's relay sees only the truncated content. Files are durable; Discord posts are ephemeral and bounded.\n\n" +
+      "Exceptions: short replies (under 1500 chars) post directly. Code blocks, tables, lengthy quotes — file. Conversational replies — direct.",
+  }),
+  // Phase 100-fu (2026-04-28) — verify-file-writes directive.
+  //
+  // Companion to long-output-to-file. The same 2026-04-28 incident showed
+  // an agent claiming a save that never happened — a hallucinated file
+  // path with no recoverable artifact. Force a Read-after-Write verify
+  // pattern so 'I saved X' is always backed by proof.
+  //
+  // Pinned by static-grep:
+  //   - "verify it by reading" (this directive)
+  //   - "hallucinated saves" (failure-mode anchor)
+  "verify-file-writes": Object.freeze({
+    enabled: true,
+    text:
+      "Whenever you claim to save, write, or update a file, you MUST immediately verify it by reading the file back. Never report 'saved' or 'written' without proof.\n\n" +
+      "Pattern:\n" +
+      "1. Call Write (or Edit) with the content\n" +
+      "2. Immediately call Read on the same path\n" +
+      "3. If Read returns the expected content → safely report success with the absolute path\n" +
+      "4. If Read fails (file not found, empty, mismatch) → DO NOT report success. Retry the save once. If still failing, surface the failure explicitly: 'I attempted to save to X but verification failed: <error>. The content is below — please save it manually.' Then paste the content (truncated to fit Discord if needed).\n\n" +
+      "Failure mode this prevents: hallucinated saves where the agent says 'analysis saved to /path/file.md' but the file doesn't exist, leaving the operator with no recoverable artifact.",
+  }),
   // Phase 100-fu (2026-04-26) — operator-surfaced anti-pattern: agents
   // hitting a tool-surface gap (read-only DB, no write tool, missing MCP)
   // would simply say "I can't do that" and stop, leaving the operator to
