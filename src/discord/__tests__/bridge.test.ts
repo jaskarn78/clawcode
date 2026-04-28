@@ -621,3 +621,248 @@ describe("streamAndPostResponse streaming cadence wire (Phase 54)", () => {
     expect(mockFirstVisibleSpan.end).toHaveBeenCalled();
   });
 });
+
+/**
+ * Phase 100 follow-up — QUEUE_FULL coalescing (operator's resend friction fix).
+ *
+ * Operator-reported bug 2026-04-28: when the agent is busy and additional
+ * messages arrive in rapid succession, the 3rd+ message hits
+ * `SerialTurnQueue.QUEUE_FULL` (depth-1: one in-flight + one queued) and
+ * the bridge reacts ❌, forcing the operator to track and resend it.
+ *
+ * Fix: per-agent MessageCoalescer at the bridge layer (upstream of
+ * SerialTurnQueue). When QUEUE_FULL fires, append to the buffer and react
+ * with ⏳ instead of ❌. After the in-flight turn completes, drain the
+ * coalescer and dispatch a single combined turn with all pending content.
+ *
+ * CO-1: when QUEUE_FULL throws, coalescer.addMessage is called (not ❌ react)
+ * CO-2: after in-flight turn completes, pending messages dispatch as ONE combined turn
+ * CO-3: combined turn payload contains all pending message contents joined
+ * CO-4: ⏳ reaction added (not ❌) on coalesced messages
+ * CO-5: when perAgentCap is hit, falls back to ❌ react (still rejected, but only after cap of 50)
+ * CO-6: non-QUEUE_FULL errors (e.g. auth fail, agent crash) STILL react ❌ (back-compat)
+ */
+describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
+  const mockStreamFromAgent = vi.fn();
+  const mockForwardToAgent = vi.fn();
+  const mockGetAgentConfig = vi.fn();
+  const mockGetTraceCollector = vi.fn();
+
+  const fakeRoutingTable = {
+    channelToAgent: new Map([["chan-1", "agent-x"]]),
+    agentToChannels: new Map([["agent-x", ["chan-1"]]]),
+  };
+
+  const fakeWebhookManager = {
+    hasWebhook: vi.fn().mockReturnValue(false),
+    send: vi.fn(),
+  };
+
+  const fakeLog = {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  };
+
+  function createBridge(opts: { coalescer?: unknown } = {}) {
+    mockGetTraceCollector.mockReturnValue(undefined); // tracing not relevant here
+    const bridge = new DiscordBridge({
+      routingTable: fakeRoutingTable,
+      sessionManager: {
+        forwardToAgent: mockForwardToAgent,
+        streamFromAgent: mockStreamFromAgent,
+        getAgentConfig: mockGetAgentConfig,
+        getTraceCollector: mockGetTraceCollector,
+      } as any,
+      webhookManager: fakeWebhookManager as any,
+      botToken: "fake-token",
+      log: fakeLog as any,
+    });
+    if (opts.coalescer) {
+      // Inject custom coalescer for inspection
+      (bridge as any).messageCoalescer = opts.coalescer;
+    }
+    return bridge;
+  }
+
+  function makeQueueFullMessage(opts: {
+    content?: string;
+    messageId?: string;
+    react?: ReturnType<typeof vi.fn>;
+  } = {}): import("discord.js").Message {
+    return {
+      content: opts.content ?? "third rapid msg",
+      channelId: "chan-1",
+      id: opts.messageId ?? "msg-3",
+      type: 0,
+      author: {
+        username: "operator",
+        bot: false,
+        id: "user-1",
+      },
+      createdAt: new Date("2026-04-28T00:00:00Z"),
+      attachments: {
+        size: 0,
+        values: () => [].values(),
+        [Symbol.iterator]: () => [].values(),
+        map: () => [],
+      },
+      reference: null,
+      webhookId: null,
+      embeds: [],
+      react: opts.react ?? vi.fn().mockResolvedValue(undefined),
+      channel: {
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+        send: vi.fn().mockResolvedValue({ edit: vi.fn() }),
+        isThread: () => false,
+      },
+    } as unknown as import("discord.js").Message;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAgentConfig.mockReturnValue({ workspace: "/workspace/agent-x" });
+  });
+
+  it("CO-1: when QUEUE_FULL throws, coalescer.addMessage is called (not ❌ react)", async () => {
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      takePending: vi.fn().mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    mockStreamFromAgent.mockRejectedValueOnce(new Error("QUEUE_FULL"));
+
+    const react = vi.fn().mockResolvedValue(undefined);
+    const msg = makeQueueFullMessage({ content: "third msg", messageId: "msg-3", react });
+
+    await (bridge as any).handleMessage(msg);
+
+    expect(fakeCoalescer.addMessage).toHaveBeenCalledWith(
+      "agent-x",
+      expect.stringContaining("third msg"),
+      "msg-3",
+    );
+    // Must NOT have reacted with ❌
+    expect(react).not.toHaveBeenCalledWith("❌");
+  });
+
+  it("CO-2: after in-flight turn completes, pending messages dispatch as ONE combined turn", async () => {
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      // First QUEUE_FULL fills the buffer (one msg). After turn drain, takePending returns it.
+      takePending: vi
+        .fn()
+        .mockReturnValueOnce([
+          { content: "(formatted) third msg", messageId: "msg-3", receivedAt: 1 },
+        ])
+        .mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    // First call rejects QUEUE_FULL (msg-3 hits the wall)
+    // Second call (the drain dispatch) succeeds
+    mockStreamFromAgent
+      .mockRejectedValueOnce(new Error("QUEUE_FULL"))
+      .mockResolvedValueOnce("combined response");
+
+    const msg = makeQueueFullMessage({ messageId: "msg-3", content: "third msg" });
+    await (bridge as any).handleMessage(msg);
+
+    // streamFromAgent called TWICE: once for the QUEUE_FULL'd attempt, once for the drain
+    expect(mockStreamFromAgent).toHaveBeenCalledTimes(2);
+    // takePending was called to drain (after the failed turn)
+    expect(fakeCoalescer.takePending).toHaveBeenCalledWith("agent-x");
+  });
+
+  it("CO-3: combined turn payload contains all pending message contents joined", async () => {
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      takePending: vi
+        .fn()
+        .mockReturnValueOnce([
+          { content: "msg A content", messageId: "id-A", receivedAt: 1 },
+          { content: "msg B content", messageId: "id-B", receivedAt: 2 },
+          { content: "msg C content", messageId: "id-C", receivedAt: 3 },
+        ])
+        .mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    mockStreamFromAgent
+      .mockRejectedValueOnce(new Error("QUEUE_FULL"))
+      .mockResolvedValueOnce("combined response");
+
+    const msg = makeQueueFullMessage({ messageId: "msg-trigger", content: "trigger" });
+    await (bridge as any).handleMessage(msg);
+
+    // The drain dispatch (2nd call) must contain all 3 pending messages joined
+    expect(mockStreamFromAgent).toHaveBeenCalledTimes(2);
+    const drainCall = mockStreamFromAgent.mock.calls[1];
+    const drainPayload = drainCall[1] as string;
+    expect(drainPayload).toContain("msg A content");
+    expect(drainPayload).toContain("msg B content");
+    expect(drainPayload).toContain("msg C content");
+  });
+
+  it("CO-4: ⏳ reaction added (not ❌) on coalesced messages", async () => {
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      takePending: vi.fn().mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    mockStreamFromAgent.mockRejectedValueOnce(new Error("QUEUE_FULL"));
+
+    const react = vi.fn().mockResolvedValue(undefined);
+    const msg = makeQueueFullMessage({ react });
+
+    await (bridge as any).handleMessage(msg);
+
+    // ⏳ hourglass reaction (U+23F3) on coalesced messages
+    expect(react).toHaveBeenCalledWith("⏳");
+    expect(react).not.toHaveBeenCalledWith("❌");
+  });
+
+  it("CO-5: when perAgentCap is hit (addMessage returns false), falls back to ❌ react", async () => {
+    const fakeCoalescer = {
+      // Cap reached — addMessage returns false
+      addMessage: vi.fn().mockReturnValue(false),
+      takePending: vi.fn().mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(50),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    mockStreamFromAgent.mockRejectedValueOnce(new Error("QUEUE_FULL"));
+
+    const react = vi.fn().mockResolvedValue(undefined);
+    const msg = makeQueueFullMessage({ react });
+
+    await (bridge as any).handleMessage(msg);
+
+    // Cap hit — must fall back to ❌
+    expect(fakeCoalescer.addMessage).toHaveBeenCalled();
+    expect(react).toHaveBeenCalledWith("❌");
+  });
+
+  it("CO-6: non-QUEUE_FULL errors STILL react ❌ (back-compat for auth fail, agent crash, etc.)", async () => {
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      takePending: vi.fn().mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    // Real disaster — not QUEUE_FULL
+    mockStreamFromAgent.mockRejectedValueOnce(new Error("auth-failed: bad token"));
+
+    const react = vi.fn().mockResolvedValue(undefined);
+    const msg = makeQueueFullMessage({ react });
+
+    await (bridge as any).handleMessage(msg);
+
+    // Coalescer must NOT have been used
+    expect(fakeCoalescer.addMessage).not.toHaveBeenCalled();
+    // ❌ STILL fires for real errors
+    expect(react).toHaveBeenCalledWith("❌");
+  });
+});
