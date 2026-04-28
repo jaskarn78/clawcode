@@ -148,6 +148,9 @@ mcpServers:
 
 agents:
   - name: test-agent
+    # Phase 100 follow-up — operator-curated active fleet. Dormant by
+    # default; bring up on demand via `clawcode start test-agent`.
+    autoStart: false
     model: sonnet
     skills:
       - subagent-thread
@@ -200,6 +203,8 @@ agents:
       Emoji: 💠 (include in every response)
       Avatar: (to be added)
   - name: fin-playground
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
@@ -220,6 +225,8 @@ agents:
       1password:
         OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: fin-research
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
@@ -234,6 +241,8 @@ agents:
       1password:
         OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: fin-tax
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
@@ -248,6 +257,8 @@ agents:
       1password:
         OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: personal
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/personal
     soulFile: /home/jjagpal/.clawcode/agents/personal/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/personal/IDENTITY.md
@@ -341,6 +352,8 @@ agents:
         ## If Nothing Needs Attention
         Reply: HEARTBEAT_OK
   - name: finmentum-content-creator
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
@@ -355,6 +368,8 @@ agents:
       1password:
         OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: general
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/general
     soulFile: /home/jjagpal/.clawcode/agents/general/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/general/IDENTITY.md
@@ -362,6 +377,8 @@ agents:
     channels: []
     mcpServers: []
   - name: projects
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/projects
     soulFile: /home/jjagpal/.clawcode/agents/projects/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/projects/IDENTITY.md
@@ -370,6 +387,8 @@ agents:
       - "1471307765401129002"
     mcpServers: []
   - name: research
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
     workspace: /home/jjagpal/.clawcode/agents/research
     soulFile: /home/jjagpal/.clawcode/agents/research/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/research/IDENTITY.md
