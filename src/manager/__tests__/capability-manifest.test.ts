@@ -424,4 +424,57 @@ describe("buildCapabilityManifest", () => {
     expect(manifest).not.toMatch(/^- \*\*MCP servers\*\*:/m);
     expect(manifest).not.toMatch(/^- \*\*File access\*\*:/m);
   });
+
+  // Phase 100 follow-up — vault-scope annotation surfaces when the agent
+  // carries an mcpEnvOverrides entry for OP_SERVICE_ACCOUNT_TOKEN. The LLM
+  // needs to know "I have NARROWER access than the daemon's clawdbot
+  // service account" — otherwise it confidently asserts cross-vault reads
+  // it cannot actually perform.
+  it("CM-MCP-VAULT-1: 1password server with mcpEnvOverrides → bullet appends 'vault-scoped' annotation", () => {
+    const cfg = makeConfig({
+      mcpServers: [
+        {
+          name: "1password",
+          command: "npx",
+          args: [],
+          env: {},
+          optional: false,
+          description: "secrets retrieval",
+          accessPattern: "read-only",
+        },
+      ],
+      mcpEnvOverrides: {
+        "1password": {
+          OP_SERVICE_ACCOUNT_TOKEN:
+            "op://clawdbot/Finmentum Service Account/credential",
+        },
+      },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("MCP servers");
+    expect(manifest).toContain("1password");
+    expect(manifest).toMatch(/vault-scoped/);
+  });
+
+  it("CM-MCP-VAULT-2: 1password server without mcpEnvOverrides → no vault-scoped annotation (inherits daemon scope)", () => {
+    const cfg = makeConfig({
+      mcpServers: [
+        {
+          name: "1password",
+          command: "npx",
+          args: [],
+          env: {},
+          optional: false,
+          description: "secrets retrieval",
+          accessPattern: "read-only",
+        },
+      ],
+      // no mcpEnvOverrides
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("1password");
+    expect(manifest).not.toMatch(/vault-scoped/);
+  });
 });

@@ -2073,3 +2073,78 @@ describe("Phase 99-N — recursion-guard Layer 2: maxThreadSessions default lowe
     }
   });
 });
+
+/**
+ * Phase 100 follow-up — per-agent MCP env overrides (vault-scoped 1Password
+ * tokens for the finmentum agent family). Schema must accept the new
+ * `mcpEnvOverrides` field on agentSchema, default to undefined when absent
+ * (back-compat with the existing 15-agent fleet), and reject malformed
+ * shapes (non-string keys / values, non-object entries).
+ */
+describe("agentSchema - mcpEnvOverrides (Phase 100 follow-up)", () => {
+  it("MCP-OVERRIDE-1: agentSchema accepts mcpEnvOverrides field with op:// reference", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": {
+          OP_SERVICE_ACCOUNT_TOKEN:
+            "op://clawdbot/Finmentum Service Account/credential",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(
+        result.data.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN,
+      ).toBe("op://clawdbot/Finmentum Service Account/credential");
+    }
+  });
+
+  it("MCP-OVERRIDE-2: missing field parses fine (back-compat with existing fleet)", () => {
+    const result = agentSchema.safeParse({ name: "test-agent" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mcpEnvOverrides).toBeUndefined();
+    }
+  });
+
+  it("MCP-OVERRIDE-3a: invalid shape (non-string env value) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": { OP_SERVICE_ACCOUNT_TOKEN: 123 },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("MCP-OVERRIDE-3b: invalid shape (empty server name) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "": { OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/SA/credential" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("MCP-OVERRIDE-3c: invalid shape (empty env key) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": { "": "op://clawdbot/SA/credential" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("MCP-OVERRIDE-3d: invalid shape (empty env value) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": { OP_SERVICE_ACCOUNT_TOKEN: "" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});

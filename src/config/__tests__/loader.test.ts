@@ -2183,3 +2183,95 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
     expect(resolved[1]?.settingSources).toEqual(["project", "user"]);
   });
 });
+
+/**
+ * Phase 100 follow-up — per-agent MCP env override propagation through the
+ * resolver. The schema accepts the field; the loader must thread it through
+ * `resolveAgentConfig` into `ResolvedAgentConfig.mcpEnvOverrides` verbatim
+ * (no op:// resolution at config-load time — that's deferred to agent-start
+ * when the daemon owns the async opRead shell-out).
+ */
+describe("resolveAgentConfig - mcpEnvOverrides (Phase 100 follow-up)", () => {
+  function makeDefaults(): DefaultsConfig {
+    return {
+      model: "sonnet",
+      basePath: "/tmp/agents",
+      effort: "low",
+      allowedModels: ["haiku", "sonnet", "opus"],
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
+      memoryAutoLoad: true,
+      memoryRetrievalTopK: 5,
+      memoryRetrievalTokenBudget: 2000,
+      memoryScannerEnabled: true,
+      memoryFlushIntervalMs: 900_000,
+      memoryCueEmoji: "✅",
+      skills: [],
+      memory: {
+        compactionThreshold: 0.75,
+        searchTopK: 10,
+        consolidation: {
+          enabled: true,
+          weeklyThreshold: 7,
+          monthlyThreshold: 4,
+          schedule: "0 3 * * *",
+        },
+        decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 },
+        deduplication: { enabled: true, similarityThreshold: 0.85 },
+      },
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: { warningThreshold: 0.6, criticalThreshold: 0.75 },
+      },
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 3 },
+      systemPromptDirectives: DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+      dream: { enabled: false, idleMinutes: 30, model: "haiku" },
+    } as DefaultsConfig;
+  }
+
+  function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      ...overrides,
+    } as AgentConfig;
+  }
+
+  it("MCP-LOAD-1: agent with mcpEnvOverrides → ResolvedAgentConfig carries the field verbatim (no op:// resolution at load time)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      mcpEnvOverrides: {
+        "1password": {
+          OP_SERVICE_ACCOUNT_TOKEN:
+            "op://clawdbot/Finmentum Service Account/credential",
+        },
+      },
+    });
+    const resolved = resolveAgentConfig(agent, defaults);
+    // The op:// reference passes through verbatim — agent-start path
+    // (op-env-resolver.ts) does the actual `op read` later.
+    expect(resolved.mcpEnvOverrides).toEqual({
+      "1password": {
+        OP_SERVICE_ACCOUNT_TOKEN:
+          "op://clawdbot/Finmentum Service Account/credential",
+      },
+    });
+  });
+
+  it("MCP-LOAD-2: agent without mcpEnvOverrides → ResolvedAgentConfig.mcpEnvOverrides is undefined (back-compat)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent(); // no mcpEnvOverrides
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.mcpEnvOverrides).toBeUndefined();
+  });
+});
