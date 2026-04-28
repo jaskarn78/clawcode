@@ -1061,7 +1061,10 @@ export const agentSchema = z.object({
   schedules: z.array(scheduleEntrySchema).default([]),
   admin: z.boolean().default(false),
   subagentModel: modelSchema.optional(),
-  effort: effortSchema.default("low"),
+  // Phase 100 follow-up — operator-curated default effort raised low → high
+  // (2026-04-28). Agents without an explicit effort field now ship at high
+  // by default. Agents with explicit effort: low keep their override.
+  effort: effortSchema.default("high"),
   slashCommands: z.array(slashCommandEntrySchema).default([]),
   threads: threadsConfigSchema.optional(),
   webhook: webhookConfigSchema.optional(),
@@ -1138,7 +1141,8 @@ export const agentSchema = z.object({
  */
 export const defaultsSchema = z.object({
   model: modelSchema.default("haiku"),
-  effort: effortSchema.default("low"),
+  // Phase 100 follow-up — fleet-wide default effort raised low → high.
+  effort: effortSchema.default("high"),
   // Phase 86 MODEL-01 — fleet-wide allowlist default. When an agent
   // omits `allowedModels`, the resolver substitutes this array. The
   // default ["haiku","sonnet","opus"] matches modelSchema's full set

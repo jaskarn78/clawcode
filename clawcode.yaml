@@ -218,7 +218,7 @@ agents:
     # passes through to this agent's MCP subprocess.
     mcpEnvOverrides:
       1password:
-        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: fin-research
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
@@ -232,7 +232,7 @@ agents:
     # fin-playground above for setup steps.
     mcpEnvOverrides:
       1password:
-        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: fin-tax
     workspace: /home/jjagpal/.clawcode/agents/finmentum
     soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
@@ -246,7 +246,7 @@ agents:
     # fin-playground above for setup steps.
     mcpEnvOverrides:
       1password:
-        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: personal
     workspace: /home/jjagpal/.clawcode/agents/personal
     soulFile: /home/jjagpal/.clawcode/agents/personal/SOUL.md
@@ -291,7 +291,7 @@ agents:
     # production agent).
     mcpEnvOverrides:
       1password:
-        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
     allowedModels:
       - sonnet
       - opus
@@ -353,7 +353,7 @@ agents:
     # fin-playground above for setup steps.
     mcpEnvOverrides:
       1password:
-        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: general
     workspace: /home/jjagpal/.clawcode/agents/general
     soulFile: /home/jjagpal/.clawcode/agents/general/SOUL.md
