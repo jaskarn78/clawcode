@@ -356,6 +356,106 @@ describe("SubagentThreadSpawner", () => {
     });
   });
 
+  /**
+   * Phase 100-fu — overflow chunk diagnostics. The pre-fu code chunked
+   * overflow with no aggregate "summary" log line, so the next time
+   * Discord silently dropped chunks, there was no breadcrumb to debug
+   * from. Add structured logging that captures totalLength + chunksSent
+   * + fullySent so the failure mode is observable in production.
+   */
+  describe("postInitialMessage overflow diagnostics (Phase 100-fu)", () => {
+    it("OF-LOG-1 — emits 'subagent overflow chunks summary' log line with chunksSent + fullySent fields", async () => {
+      // Build a fake logger that records every log call
+      const logCalls: { level: string; obj: any; msg: string }[] = [];
+      const fakeLog = {
+        info: vi.fn((obj: any, msg: string) => {
+          logCalls.push({ level: "info", obj, msg });
+        }),
+        warn: vi.fn((obj: any, msg: string) => {
+          logCalls.push({ level: "warn", obj, msg });
+        }),
+        debug: vi.fn(),
+        error: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(() => fakeLog),
+      };
+
+      // Build a mock thread surface with edit support so canEdit=true.
+      const sentChunks: string[] = [];
+      const placeholder = {
+        id: "msg-placeholder",
+        edit: vi.fn(async (_content: string) => undefined),
+      };
+      const mockThread = {
+        id: "thread-overflow",
+        send: vi.fn(async (content: string) => {
+          sentChunks.push(content);
+          return placeholder;
+        }),
+      };
+
+      // Mock channel + client just enough for the spawner to fetch.
+      const mockChannel = {
+        id: "channel-1",
+        threads: { create: vi.fn(async () => mockThread) },
+        isTextBased: () => true,
+      };
+      const localDiscordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      // Reply text > 2000 chars (5000 chars → 3 chunks of 2000 + tail of <2000)
+      const bigReply = "X".repeat(5000);
+      const localSessionManager = makeMockSessionManager();
+      localSessionManager._setConfig(
+        "agent-a",
+        makeAgentConfig({
+          webhook: {
+            displayName: "Agent A",
+            avatarUrl: "https://example.com/a.png",
+            webhookUrl: "https://discord.com/api/webhooks/123/abc",
+          },
+        }),
+      );
+      vi.mocked(localSessionManager.streamFromAgent).mockResolvedValue(
+        bigReply as any,
+      );
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager: localSessionManager,
+        registryPath,
+        discordClient: localDiscordClient as any,
+        log: fakeLog as any,
+      });
+
+      await spawner.spawnInThread({
+        parentAgentName: "agent-a",
+        threadName: "overflow-test",
+        autoRelay: false, // skip relay path — we're testing overflow logging only
+      });
+
+      // Wait a tick so the deliberately-not-awaited postInitialMessage runs.
+      // It uses placeholder.edit + thread.send for tail chunks.
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Assert: a structured "summary" log captures chunksSent + fullySent.
+      const summaryLog = logCalls.find((c) =>
+        c.msg.includes("subagent overflow chunks summary"),
+      );
+      expect(summaryLog).toBeDefined();
+      expect(summaryLog!.obj).toMatchObject({
+        totalLength: 5000,
+        chunksSent: expect.any(Number),
+        fullySent: expect.any(Boolean),
+      });
+      // For a 5000-char reply: 2000 in placeholder + 2 tail chunks of 2000
+      // + final chunk of 1000 = 3 tail chunks. fullySent must be true.
+      expect(summaryLog!.obj.fullySent).toBe(true);
+      expect(summaryLog!.obj.chunksSent).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe("getSubagentBindings", () => {
     it("returns all bindings from the registry", async () => {
       await spawner.spawnInThread({
@@ -712,6 +812,207 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
       // Phase 100 extension
       expect(prompt).toContain("Artifacts written:");
       expect(prompt).toContain(".planning/phases/100-fake-phase/");
+    });
+
+    /**
+     * Phase 100-fu — relay must walk back through CONSECUTIVE bot messages
+     * (newest→oldest) and concatenate them oldest-first, stopping at the
+     * first operator (non-bot) message OR the start of the thread. This
+     * fixes the silent-truncation bug where a multi-chunk subagent reply
+     * (>2000 chars split across N thread.send() calls) was relayed to the
+     * parent using only the LAST chunk — losing chunks 1..N-1.
+     */
+    it("REL-MULTI-1 — concatenates multiple consecutive bot messages oldest-first", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-multi",
+            parentChannelId: "channel-X",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-multi",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      // Discord fetch returns newest-first. Three consecutive bot messages.
+      const fetched = new Map<string, any>([
+        ["m3", { author: { bot: true }, webhookId: "wh", content: "CHUNK_THREE" }],
+        ["m2", { author: { bot: true }, webhookId: "wh", content: "CHUNK_TWO" }],
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "CHUNK_ONE" }],
+      ]);
+      const mockChannel = {
+        id: "thread-multi",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-multi");
+
+      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      // All three chunks present, oldest→newest order
+      const idxOne = prompt.indexOf("CHUNK_ONE");
+      const idxTwo = prompt.indexOf("CHUNK_TWO");
+      const idxThree = prompt.indexOf("CHUNK_THREE");
+      expect(idxOne).toBeGreaterThan(-1);
+      expect(idxTwo).toBeGreaterThan(idxOne);
+      expect(idxThree).toBeGreaterThan(idxTwo);
+    });
+
+    it("REL-MULTI-2 — stops at first operator (non-bot) message", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-stop",
+            parentChannelId: "channel-X",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-stop",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      // Newest first: bot, bot, OPERATOR, bot. Walk back from newest should
+      // pick up the two recent bot messages then STOP at the operator —
+      // the older bot message must NOT be included.
+      const fetched = new Map<string, any>([
+        ["m4", { author: { bot: true }, webhookId: "wh", content: "AFTER_OP_TWO" }],
+        ["m3", { author: { bot: true }, webhookId: "wh", content: "AFTER_OP_ONE" }],
+        ["m2", { author: { bot: false }, webhookId: null, content: "operator follow-up" }],
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "OLD_BOT_REPLY" }],
+      ]);
+      const mockChannel = {
+        id: "thread-stop",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-stop");
+
+      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(prompt).toContain("AFTER_OP_ONE");
+      expect(prompt).toContain("AFTER_OP_TWO");
+      expect(prompt).not.toContain("OLD_BOT_REPLY");
+      expect(prompt).not.toContain("operator follow-up");
+    });
+
+    it("REL-MULTI-3 — empty bot messages are skipped", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-empty",
+            parentChannelId: "channel-X",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-empty",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      const fetched = new Map<string, any>([
+        ["m3", { author: { bot: true }, webhookId: "wh", content: "REAL_CONTENT" }],
+        ["m2", { author: { bot: true }, webhookId: "wh", content: "   " }], // whitespace only
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "" }], // empty (e.g. embed-only)
+      ]);
+      const mockChannel = {
+        id: "thread-empty",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-empty");
+
+      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(prompt).toContain("REAL_CONTENT");
+    });
+
+    it("REL-MULTI-4 — single bot message: behavior identical to prior single-message logic", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-single",
+            parentChannelId: "channel-X",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-single",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      const fetched = new Map<string, any>([
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "Just one reply." }],
+      ]);
+      const mockChannel = {
+        id: "thread-single",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-single");
+
+      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(prompt).toContain("Just one reply.");
+      expect(prompt).toContain("[SUBAGENT_COMPLETION]");
     });
 
     it("AP10b — no Artifacts line when parent has no gsd.projectDir (Phase 99-M base behavior preserved)", async () => {

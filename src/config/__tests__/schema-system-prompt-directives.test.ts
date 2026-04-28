@@ -40,16 +40,18 @@ describe("systemPromptDirectiveSchema (Phase 94 TOOL-10)", () => {
 });
 
 describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
-  it("REG-DEFAULTS-PRESENT: ships exactly 2 D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives", () => {
+  it("REG-DEFAULTS-PRESENT: ships exactly 2 D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes", () => {
     const keys = Object.keys(DEFAULT_SYSTEM_PROMPT_DIRECTIVES).sort();
-    // Phase 99 added subagent-routing; Phase 100-fu adds memory-recall-before-uncertainty
-    // AND propose-alternatives (5 directives total).
+    // Phase 99 added subagent-routing; Phase 100-fu adds memory-recall-before-uncertainty,
+    // propose-alternatives, long-output-to-file, and verify-file-writes (7 directives total).
     expect(keys).toEqual([
       "cross-agent-routing",
       "file-sharing",
+      "long-output-to-file",
       "memory-recall-before-uncertainty",
       "propose-alternatives",
       "subagent-routing",
+      "verify-file-writes",
     ]);
     // Both default-enabled per D-10 (operator-locked)
     expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["file-sharing"].enabled).toBe(true);
@@ -117,6 +119,54 @@ describe("propose-alternatives directive (Phase 100-fu)", () => {
   });
 });
 
+describe("long-output-to-file directive (Phase 100-fu)", () => {
+  it("LOF-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "long-output-to-file",
+      ),
+    ).toBe(true);
+  });
+
+  it("LOF-DIR-2: directive is enabled by default", () => {
+    expect(
+      DEFAULT_SYSTEM_PROMPT_DIRECTIVES["long-output-to-file"].enabled,
+    ).toBe(true);
+  });
+
+  it("LOF-DIR-3: directive text mentions 'Discord messages are hard-capped' and SAVE/POST flow", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["long-output-to-file"].text;
+    expect(text).toContain("Discord messages are hard-capped");
+    expect(text).toContain("SAVE");
+    expect(text).toContain("POST");
+    expect(text).toContain("VERIFY");
+  });
+});
+
+describe("verify-file-writes directive (Phase 100-fu)", () => {
+  it("VFW-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "verify-file-writes",
+      ),
+    ).toBe(true);
+  });
+
+  it("VFW-DIR-2: directive is enabled by default", () => {
+    expect(
+      DEFAULT_SYSTEM_PROMPT_DIRECTIVES["verify-file-writes"].enabled,
+    ).toBe(true);
+  });
+
+  it("VFW-DIR-3: directive text mentions 'verify it by reading' and hallucinated saves", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["verify-file-writes"].text;
+    expect(text).toContain("verify it by reading");
+    expect(text).toContain("hallucinated");
+  });
+});
+
 describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
   it("REG-V25-BACKCOMPAT: defaultsSchema.parse({}) populates systemPromptDirectives with the defaults (additive-optional, 8th application)", () => {
     const result = defaultsSchema.safeParse({});
@@ -131,9 +181,11 @@ describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
       ).toEqual([
         "cross-agent-routing",
         "file-sharing",
+        "long-output-to-file",
         "memory-recall-before-uncertainty",
         "propose-alternatives",
         "subagent-routing",
+        "verify-file-writes",
       ]);
       expect(
         result.data.systemPromptDirectives?.["file-sharing"].text,
