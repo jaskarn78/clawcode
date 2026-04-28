@@ -37,6 +37,8 @@ import {
   DISCORD_SNOWFLAKE_PREFIX,
 } from "../manager/turn-origin.js";
 import { captureDiscordExchange } from "./capture.js";
+import { MessageCoalescer } from "./message-coalescer.js";
+import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -123,6 +125,18 @@ export class DiscordBridge {
   private readonly log: Logger;
   private running = false;
   private readonly recentlySent: Set<string> = new Set();
+  /**
+   * Phase 100 follow-up — per-agent pending-message coalescer.
+   *
+   * Operator-reported bug 2026-04-28: rapid-fire messages while the agent is
+   * busy hit `SerialTurnQueue.QUEUE_FULL` (depth-1) and used to get ❌-reacted
+   * (forcing the operator to track + manually resend). Coalescer buffers them
+   * upstream of the turn queue so they ride along on the next dispatched turn.
+   *
+   * Mutated only inside `streamAndPostResponse` — not exposed publicly. Tests
+   * inject a fake by direct assignment to `(bridge as any).messageCoalescer`.
+   */
+  private messageCoalescer: MessageCoalescer = new MessageCoalescer();
 
   /**
    * Expose the Discord client for use by SubagentThreadSpawner.
@@ -671,12 +685,74 @@ export class DiscordBridge {
         "failed to route message",
       );
 
-      try {
-        await message.react("\u274C");
-      } catch (err) {
-        this.log.debug({ error: (err as Error).message }, "failed to add error reaction");
+      // Phase 100-fu — QUEUE_FULL coalescing.
+      //
+      // SerialTurnQueue is depth-1 (one in-flight + one queued); a 3rd rapid
+      // message throws QUEUE_FULL. Operator-reported bug 2026-04-28: bridge
+      // used to react U+274C, forcing the operator to track + manually resend.
+      // Now: append to per-agent coalescer + react U+23F3 hourglass instead.
+      // perAgentCap fall-through still reacts U+274C as last resort.
+      const isQueueFull = errorMsg === QUEUE_FULL_ERROR_MESSAGE;
+      let coalesced = false;
+      if (isQueueFull) {
+        coalesced = this.messageCoalescer.addMessage(
+          sessionName,
+          formattedMessage,
+          message.id,
+        );
+      }
+
+      if (coalesced) {
+        try {
+          await message.react("\u23F3");
+        } catch (err) {
+          this.log.debug({ error: (err as Error).message }, "failed to add hourglass reaction");
+        }
+      } else {
+        try {
+          await message.react("\u274C");
+        } catch (err) {
+          this.log.debug({ error: (err as Error).message }, "failed to add error reaction");
+        }
       }
     }
+
+    // Phase 100-fu — drain the per-agent coalescer.
+    //
+    // The in-flight turn (success OR failure above) has now released the
+    // SerialTurnQueue depth-1 slot. Any messages buffered while this turn
+    // was running get joined into ONE follow-up dispatch. SerialTurnQueue
+    // is once again depth-1 (one in-flight + one queued) so this stays
+    // well-behaved.
+    const pending = this.messageCoalescer.takePending(sessionName);
+    if (pending.length > 0) {
+      const combinedPayload = this.formatCoalescedPayload(pending);
+      this.log.info(
+        { agent: sessionName, channel: channelId, count: pending.length },
+        "draining coalesced messages as combined dispatch",
+      );
+      // No new Turn — the original Turn already ended. The drain dispatch
+      // runs untraced (acceptable: this is the rare-path resend friction
+      // fix, and the original turn already captured a failure trace).
+      await this.streamAndPostResponse(message, sessionName, combinedPayload, undefined);
+    }
+  }
+
+  /**
+   * Phase 100-fu — format coalesced messages into a single combined payload.
+   *
+   * Joins each pending entry with `\n\n---\n\n` and prefixes a header so the
+   * agent sees the operator sent multiple thoughts in rapid succession (not
+   * one giant blob). Order is FIFO (insertion order from MessageCoalescer).
+   */
+  private formatCoalescedPayload(
+    pending: ReadonlyArray<{ readonly content: string; readonly messageId: string }>,
+  ): string {
+    const header = `[Combined: ${pending.length} message${pending.length === 1 ? "" : "s"} received during prior turn]`;
+    const body = pending
+      .map((m, i) => `(${i + 1}) ${m.content}`)
+      .join("\n\n---\n\n");
+    return `${header}\n\n${body}`;
   }
 
   /**
