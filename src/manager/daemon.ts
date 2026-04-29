@@ -4162,7 +4162,23 @@ async function routeMethod(
       return { catalog, assignments };
     }
 
+    // Phase 999.2 Plan 02 D-RNI-IPC-01 — canonical name `ask-agent` and the
+    // deprecated alias `send-message` share a single body via stacked-case.
+    // The deprecated branch logs a one-line metric so operators can grep the
+    // daemon journal for `deprecated.*alias.*used` to verify the 30-day
+    // removal trigger (D-RNX-03 / Open Question 2 in RESEARCH.md).
+    case "ask-agent":
     case "send-message": {
+      if (method === "send-message") {
+        // Operator metric for D-RNX-03's 30-day removal trigger. Operator
+        // greps the daemon journal for `deprecated.*alias.*used` after the
+        // horizon; zero hits → safe to remove the alias. Matches the
+        // console-based logging style used elsewhere in routeMethod (the
+        // daemon-scoped pino `log` is not threaded into this function).
+        console.info(
+          `[deprecated IPC alias used] alias=send-message canonical=ask-agent`,
+        );
+      }
       const from = validateStringParam(params, "from");
       const to = validateStringParam(params, "to");
       const content = validateStringParam(params, "content");
@@ -4211,7 +4227,18 @@ async function routeMethod(
       return { ok: true, messageId: message.id };
     }
 
+    // Phase 999.2 Plan 02 D-RNI-IPC-02 — canonical name `post-to-agent` and
+    // the deprecated alias `send-to-agent` share a single body via stacked-
+    // case. Deprecated branch logs a metric mirroring the ask-agent path.
+    case "post-to-agent":
     case "send-to-agent": {
+      if (method === "send-to-agent") {
+        // Operator metric — see the matching block in case "send-message"
+        // above for rationale (D-RNX-03 / RESEARCH.md Open Question 2).
+        console.info(
+          `[deprecated IPC alias used] alias=send-to-agent canonical=post-to-agent`,
+        );
+      }
       const from = validateStringParam(params, "from");
       const to = validateStringParam(params, "to");
       const message = validateStringParam(params, "message");

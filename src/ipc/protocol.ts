@@ -56,8 +56,18 @@ export const IPC_METHODS = [
   // weekly bar suffix (Plan 03).
   "list-rate-limit-snapshots",
   // Messaging
-  "send-message",
-  "send-to-agent",
+  // Phase 999.2 Plan 02 D-RNI-IPC-01 / D-RNI-IPC-02 — canonical IPC names
+  // (ask-agent, post-to-agent) registered FIRST; old names retained as
+  // back-compat aliases so existing CLI tools and external IPC consumers
+  // continue to work. Daemon switch handles both via stacked-case form
+  // (RESEARCH.md §Pattern 2). Soft removal slated ~30 days post-deploy
+  // (D-RNX-03) once operator confirms no agent SOUL/SKILL still references
+  // them — operators grep daemon logs for `deprecated.*alias.*used` to
+  // confirm the trigger.
+  "ask-agent",
+  "send-message", // DEPRECATED — use ask-agent (Phase 999.2 D-RNI-IPC-01); kept for back-compat
+  "post-to-agent",
+  "send-to-agent", // DEPRECATED — use post-to-agent (Phase 999.2 D-RNI-IPC-02); kept for back-compat
   "send-attachment",
   "slash-commands",
   "webhooks",

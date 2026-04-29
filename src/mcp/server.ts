@@ -269,28 +269,71 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     },
   );
 
-  // Tool: send_message
+  // Tools: ask_agent (canonical) + send_message (DEPRECATED alias)
+  //
+  // Phase 999.2 Plan 02 D-RNX-01 / D-RNX-04 — the MCP SDK does not support
+  // tool aliases natively (server.tool throws on duplicate name). The
+  // canonical alias pattern is to extract a shared schema + handler closure
+  // and call server.tool() twice with different names. tools/list iterates
+  // Object.entries(this._registeredTools) in INSERTION ORDER (verified
+  // against node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js:67-69),
+  // so registering ask_agent FIRST controls LLM tool-list ordering — the
+  // LLM sees the new name before the deprecated one.
+  //
+  // Behavior is unchanged from the pre-rename send_message tool. Plan 03
+  // layers v2 sync-reply behavior on top by modifying askAgentHandler.
+  const askAgentSchema = {
+    to: z.string().describe("Target agent name"),
+    content: z.string().describe("Message content"),
+    from: z.string().default("mcp-client").describe("Sender name"),
+    priority: z.enum(["normal", "high", "urgent"]).default("normal").describe("Message priority"),
+  } as const;
+
+  const askAgentHandler = async ({
+    to,
+    content,
+    from,
+    priority,
+  }: {
+    to: string;
+    content: string;
+    from: string;
+    priority: "normal" | "high" | "urgent";
+  }) => {
+    // The wire request uses the canonical IPC name `ask-agent` per
+    // D-RNI-IPC-01. The daemon's stacked-case switch handles both names
+    // (ask-agent + send-message) so the wire format is forward-compatible.
+    const result = (await sendIpcRequest(SOCKET_PATH, "ask-agent", {
+      from,
+      to,
+      content,
+      priority,
+    })) as { ok: boolean; messageId: string };
+
+    return {
+      content: [{ type: "text" as const, text: `Message sent to ${to} (id: ${result.messageId})` }],
+    };
+  };
+
+  // Register canonical name FIRST (D-RNX-04 — controls LLM tool-list order).
+  server.tool(
+    "ask_agent",
+    "Ask another ClawCode agent a question and receive their reply. " +
+      "Use this when you need a response from another agent. " +
+      "This is the synchronous request/response pair (vs post_to_agent for fire-and-forget broadcast).",
+    askAgentSchema,
+    askAgentHandler,
+  );
+
+  // Register deprecated alias SECOND. Same handler closure (object identity)
+  // — calling either tool dispatches to the same code path.
   server.tool(
     "send_message",
-    "Send a message to a ClawCode agent's inbox",
-    {
-      to: z.string().describe("Target agent name"),
-      content: z.string().describe("Message content"),
-      from: z.string().default("mcp-client").describe("Sender name"),
-      priority: z.enum(["normal", "high", "urgent"]).default("normal").describe("Message priority"),
-    },
-    async ({ to, content, from, priority }) => {
-      const result = (await sendIpcRequest(SOCKET_PATH, "send-message", {
-        from,
-        to,
-        content,
-        priority,
-      })) as { ok: boolean; messageId: string };
-
-      return {
-        content: [{ type: "text" as const, text: `Message sent to ${to} (id: ${result.messageId})` }],
-      };
-    },
+    "[DEPRECATED — use ask_agent instead] " +
+      "Backwards-compatibility alias for ask_agent. Identical behavior; " +
+      "scheduled for removal once all agents have migrated (Phase 999.2 D-RNX-03).",
+    askAgentSchema,
+    askAgentHandler,
   );
 
   // Tool: list_schedules
@@ -665,41 +708,72 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     },
   );
 
-  // Tool: send_to_agent
+  // Tools: post_to_agent (canonical) + send_to_agent (DEPRECATED alias)
+  //
+  // Phase 999.2 Plan 02 D-RNX-02 / D-RNX-04 — same shared-handler pattern as
+  // ask_agent above. post_to_agent is the broadcast / fire-and-forget tool
+  // (writes inbox + posts webhook embed in target's channel — no synchronous
+  // reply path). For Q&A, agents should use ask_agent instead.
+  const postToAgentSchema = {
+    from: z.string().describe("Your agent name (pass your own name)"),
+    to: z.string().describe("Target agent name"),
+    message: z.string().describe("Message content to send"),
+  } as const;
+
+  const postToAgentHandler = async ({
+    from,
+    to,
+    message,
+  }: {
+    from: string;
+    to: string;
+    message: string;
+  }) => {
+    try {
+      // Wire request uses canonical IPC name `post-to-agent` per D-RNI-IPC-02.
+      const result = (await sendIpcRequest(SOCKET_PATH, "post-to-agent", {
+        from,
+        to,
+        message,
+      })) as { delivered: boolean; messageId: string };
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result.delivered
+              ? `Message delivered to ${to} (id: ${result.messageId})`
+              : `Message queued for ${to} (id: ${result.messageId})`,
+          },
+        ],
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        content: [
+          { type: "text" as const, text: `Failed to send to ${to}: ${msg}` },
+        ],
+      };
+    }
+  };
+
+  // Register canonical name FIRST (D-RNX-04).
+  server.tool(
+    "post_to_agent",
+    "Broadcast a message to another agent's Discord channel. " +
+      "The agent sees it as a normal message in their channel. " +
+      "Does NOT wait for a reply — for synchronous Q&A use ask_agent.",
+    postToAgentSchema,
+    postToAgentHandler,
+  );
+
+  // Register deprecated alias SECOND.
   server.tool(
     "send_to_agent",
-    "Send a message to another agent via their Discord channel",
-    {
-      from: z.string().describe("Your agent name (pass your own name)"),
-      to: z.string().describe("Target agent name"),
-      message: z.string().describe("Message content to send"),
-    },
-    async ({ from, to, message }) => {
-      try {
-        const result = (await sendIpcRequest(SOCKET_PATH, "send-to-agent", {
-          from,
-          to,
-          message,
-        })) as { delivered: boolean; messageId: string };
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: result.delivered
-                ? `Message delivered to ${to} (id: ${result.messageId})`
-                : `Message queued for ${to} (id: ${result.messageId})`,
-            },
-          ],
-        };
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [
-            { type: "text" as const, text: `Failed to send to ${to}: ${msg}` },
-          ],
-        };
-      }
-    },
+    "[DEPRECATED — use post_to_agent instead] " +
+      "Backwards-compatibility alias for post_to_agent. Identical behavior; " +
+      "scheduled for removal once all agents have migrated (Phase 999.2 D-RNX-03).",
+    postToAgentSchema,
+    postToAgentHandler,
   );
 
   // Tool: ingest_document

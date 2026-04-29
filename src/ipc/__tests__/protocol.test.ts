@@ -42,7 +42,11 @@ describe("IPC_METHODS", () => {
       // Phase 103 OBS-06 — per-agent OAuth Max rate-limit snapshots
       "list-rate-limit-snapshots",
       // Messaging
+      // Phase 999.2 Plan 02 — canonical names registered FIRST; old names
+      // retained as back-compat aliases (D-RNI-IPC-01 / D-RNI-IPC-02).
+      "ask-agent",
       "send-message",
+      "post-to-agent",
       "send-to-agent",
       "send-attachment",
       "slash-commands",
