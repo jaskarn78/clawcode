@@ -540,11 +540,11 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 4. **New `/clawcode-usage` slash command** — dedicated Usage panel matching the Claude app screenshot. Fields: 5-hour session usage with reset countdown, 7-day weekly usage with reset countdown, Opus weekly carve-out, Sonnet weekly carve-out, overage state (allowed/disabled/exceeded), surpassed-threshold warnings. Per-agent (defaults to channel-bound agent) with optional `agent:` arg to query a specific agent. Includes ASCII progress bars + emoji status indicators (🟢 green / 🟡 warning / 🔴 rejected).
 5. **Tests pinning rate-limit snapshot capture + render** — Vitest unit tests: (a) RateLimitTracker correctly merges incoming `rate_limit_event` snapshots, dedupes by type, retains latest. (b) Persistence round-trip (write → restart → read latest). (c) `buildStatusData` includes all 11 newly-wired fields with non-`n/a` values when underlying managers have data. (d) `/clawcode-usage` embed renders all 4 rate-limit types with correct bar widths + reset times + status colors.
 
-**Plans:** 3 plans (Wave 1: Plan 01 — wire 8 live fields + drop 3 OpenClaw fields + compaction counter mirror; Wave 2: Plan 02 — RateLimitTracker primitive + SDK rate_limit_event hook + DI mirror on SessionHandle; Wave 3: Plan 03 — list-rate-limit-snapshots IPC + /clawcode-usage slash command + usage-embed renderer + optional session/weekly bars on /clawcode-status)
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 103-01-PLAN.md — Wire 8 live fields into /clawcode-status (Session ID, Last Activity, Tokens, Permissions, Effort, Reasoning label, Activation, Queue, Context %, Compactions count) + drop 3 OpenClaw fields (Fast/Elevated/Harness) + add compaction counter mirror on SessionManager — completed 2026-04-29
-- [ ] 103-02-PLAN.md — RateLimitTracker (in-memory + per-agent SQLite via UsageTracker DB) + SDK rate_limit_event branch in iterateUntilResult + 7th DI-mirror application on SessionHandle (getRateLimitTracker/setRateLimitTracker)
+- [x] 103-02-PLAN.md — RateLimitTracker (in-memory + per-agent SQLite via UsageTracker DB) + SDK rate_limit_event branch in iterateUntilResult + 7th DI-mirror application on SessionHandle (getRateLimitTracker/setRateLimitTracker)
 - [ ] 103-03-PLAN.md — list-rate-limit-snapshots IPC method (avoiding rate-limit-status collision) + /clawcode-usage CONTROL_COMMAND with EmbedBuilder inline-handler short-circuit (11th application) + buildUsageEmbed pure renderer + optional 5h+7d bars suffix on /clawcode-status (OBS-08) + slash-command-cap regression test
 
 **Status:** Executing — Plan 01 complete 2026-04-29 (8 fields wired live, 3 OpenClaw fields dropped, compaction counter mirror added). Plans 02 + 03 pending. ~1 day estimate end-to-end.

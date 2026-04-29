@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 103 executing — Plan 01 complete
-stopped_at: Completed 103-01-PLAN.md (/clawcode-status live wiring + compaction counter)
-last_updated: "2026-04-29T14:33:00.000Z"
+status: Ready to execute
+stopped_at: Completed 103-02-PLAN.md (RateLimitTracker primitive + SDK rate_limit_event hook)
+last_updated: "2026-04-29T14:59:42.528Z"
 last_activity: 2026-04-29
 progress:
-  total_phases: 13
+  total_phases: 15
   completed_phases: 4
   total_plans: 28
-  completed_plans: 26
+  completed_plans: 27
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 103 (clawcode-status-rich-telemetry-usage-panel-operator-observability) — EXECUTING
-Plan: 2 of 3 (Plan 01 ✓ complete; Plan 02 next)
+Plan: 3 of 3 (Plan 01 ✓ complete; Plan 02 next)
 
 ## Performance Metrics
 
@@ -297,6 +297,11 @@ Recent decisions affecting current work:
 - [Phase 103]: Plan 103-01 — Compaction counter is in-memory only (Open Q4): resets on daemon restart, informational not persistence-worthy. Bumps ONLY on CompactionManager.compact() resolve via canonical compactForAgent wrapper (Pitfall 3 — rejection cannot inflate count). Closure check pins zero direct .compact() callers in production code.
 - [Phase 103]: Plan 103-01 — HeartbeatRunner injected into SessionManager via setHeartbeatRunner DI setter (mirrors setWebhookManager / setMemoryScanner pattern); not a constructor argument. Daemon wires post-runner-start.
 - [Phase 103]: Plan 103-01 — Activation timestamp mirrored in-memory via activationAtByAgent Map at startAgent — registry remains source of truth for restart recovery, but synchronous status renders don't await readRegistry per request. Cleared on stopAgent alongside compactionCounts (matches in-memory-only semantics).
+- [Phase 103]: rate_limit_snapshots table lives in the per-agent UsageTracker DB rather than a separate SQLite file (one DB handle per agent stays clean)
+- [Phase 103]: rateLimitType stored as TEXT (not SDK 5-value union) so a future SDK union expansion does not drop snapshots (Pitfall 10)
+- [Phase 103]: surpassedThreshold typed as number|undefined per SDK shape (Pitfall 9 — NOT a boolean)
+- [Phase 103]: Persistence is best-effort — SQLite write failures inside record() are logged + swallowed; in-memory state remains source of truth
+- [Phase 103]: Hook positioned BEFORE the result branch in iterateUntilResult — ordering documents intent, result-terminator path is preserved
 
 ### v2.1 closing decisions (for reference)
 
@@ -430,9 +435,10 @@ Recent decisions affecting current work:
 | Phase 100 P06 | 5min | 2 tasks | 3 files |
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P07 | 6min | 2 tasks | 3 files |
 | Phase 100 P08 | 5min | 1 tasks | 2 files |
+| Phase 103 P02 | ~22min | 2 tasks | 10 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-26
-Stopped at: Completed 100-08-PLAN.md (smoke-test runbook + structural validation)
+Last activity: 2026-04-29
+Stopped at: Completed 103-02-PLAN.md (RateLimitTracker primitive + SDK rate_limit_event hook)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
