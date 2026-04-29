@@ -690,3 +690,25 @@ Plans:
 **Promotion target:** active milestone, queue after Phase 106. Can also be split into two quick tasks if scope stays narrow.
 
 **Side-finding (informational, not blocking):** Prefix-hash didn't visibly change at the Phase 104 deploy boundary (still `92b7...` from Phase 103). Either Phase 104 directives are in a part of the prefix excluded from the hash computation, or they're landing in a different position than expected. Cache behavior + token telemetry confirm the directives ARE in the prompt, but understanding why the hash is stable across the deploy boundary is worth a quick investigation when this phase opens.
+
+### Phase 999.8: Dashboard knowledge-graph fixes — node cap + tier colors + tier maintenance (BACKLOG)
+
+**Goal:** Three bugs/gaps surfaced 2026-04-29 when operator opened the knowledge-graph dashboard:
+
+1. **Hardcoded 500-node cap** (`src/manager/daemon.ts:5927` — `LIMIT 500` in `memory-graph` IPC handler). fin-acquisition has 1,434 memories; user only sees 500. Admin Clawdy has 534; user sees 500. Cap truncates >65% of one agent's graph. Fix: remove the cap or make it configurable with a sane default (e.g. 5000) and add lazy-load/pagination if perf becomes a concern at high counts.
+
+2. **No color differentiation for warm vs cold tiers** (`src/dashboard/static/graph.html:421-425`). Current `nodeClr` only emits 3 colors: grey (orphan), red (hot), purple (everything else — both warm AND cold lumped together). User can't visually distinguish active-context warm memories from archived cold ones. Fix: emit a distinct color per tier (hot/warm/cold) + add a legend.
+
+3. **Tier maintenance appears broken or never wired** — production data shows almost everything stuck at "warm":
+   - Admin Clawdy: 534 warm, 0 hot, 0 cold
+   - fin-acquisition: 1,433 warm, 1 hot, 0 cold
+   
+   Per Phase 1.1 design: hot = active context (~10-50 memories), warm = searchable, cold = archived (grows over time). Reality: zero archived, virtually no hot. Either (a) the tier-promotion/demotion heartbeat isn't running, (b) it runs but never matches anything, or (c) tier maintenance was never built. Investigation required during planning.
+
+**Trigger:** 2026-04-29 operator dashboard inspection during Phase 106 deploy queue — surfaced both the truncation cap and the missing color tier visualization.
+
+**Requirements:** TBD — likely 6-8 (CAP-01..CAP-02, COLOR-01..COLOR-02, TIER-01..TIER-04). Final count depends on tier-maintenance investigation: small if it's "wire up an existing heartbeat", larger if maintenance must be built from scratch.
+
+**Plans:** 0 plans (TBD — likely 3 plans: cap removal/config, color+legend, tier maintenance fix/build)
+
+**Promotion target:** active milestone, will likely become **Phase 107**. Bundle deploy with Phases 105 + 106 if scope stays small.
