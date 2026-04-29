@@ -301,7 +301,7 @@ function effortToReasoningLabel(effort: string): string {
  *
  * Dropped from Phase 93 line 7: Runner / Fast / Harness / Elevated. The
  * OpenClaw-only fields have no ClawCode analog. Drop is pinned by the
- * "DOES NOT emit Fast:/Elevated:/Harness:" tests in __tests__/.
+ * the OpenClaw-only-substring drop tests in __tests__/.
  */
 export function renderStatus(data: StatusData): string {
   // Line 0 — version + commit sha
