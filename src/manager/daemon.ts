@@ -4083,6 +4083,29 @@ async function routeMethod(
       };
     }
 
+    case "list-rate-limit-snapshots": {
+      // Phase 103 OBS-06 — per-agent OAuth Max usage snapshots. Resolves the
+      // RateLimitTracker via SessionManager (returns undefined when agent is
+      // not running OR when the agent has no UsageTracker DB to share — see
+      // Plan 02 startAgent flow). Empty `snapshots: []` when no data so the
+      // /clawcode-usage embed can render the "No usage data yet" graceful
+      // path (Pitfall 7).
+      //
+      // NOT the same as the existing `rate-limit-status` case above —
+      // that's the Discord outbound rate-limiter token bucket (Pitfall 5).
+      const { handleListRateLimitSnapshotsIpc } = await import(
+        "./daemon-rate-limit-ipc.js"
+      );
+      const agent = validateStringParam(params, "agent");
+      return handleListRateLimitSnapshotsIpc(
+        { agent },
+        {
+          getRateLimitTrackerForAgent: (name) =>
+            manager.getRateLimitTrackerForAgent(name),
+        },
+      );
+    }
+
     case "heartbeat-status": {
       const results = heartbeatRunner.getLatestResults();
       const zoneStatuses = heartbeatRunner.getZoneStatuses();

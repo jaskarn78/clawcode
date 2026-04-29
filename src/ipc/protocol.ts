@@ -48,6 +48,13 @@ export const IPC_METHODS = [
   // (last cycle outcome). Consumed by the /clawcode-sync-status inline
   // slash handler in slash-commands.ts — zero LLM turn cost, daemon-routed.
   "list-sync-status",
+  // Phase 103 OBS-06 — per-agent OAuth Max rate-limit snapshots (NOT the
+  // Discord outbound rate-limiter — that's the existing "rate-limit-status"
+  // IPC at line 17, which is a SEPARATE domain). Reads the per-agent
+  // RateLimitTracker constructed by SessionManager.startAgent. Consumed by
+  // the /clawcode-usage Discord slash command + /clawcode-status session/
+  // weekly bar suffix (Plan 03).
+  "list-rate-limit-snapshots",
   // Messaging
   "send-message",
   "send-to-agent",
