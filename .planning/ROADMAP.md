@@ -548,3 +548,80 @@ Plans:
 - [x] 103-03-PLAN.md — list-rate-limit-snapshots IPC method (avoiding rate-limit-status collision) + /clawcode-usage CONTROL_COMMAND with EmbedBuilder inline-handler short-circuit (11th application) + buildUsageEmbed pure renderer + optional 5h+7d bars suffix on /clawcode-status (OBS-08) + slash-command-cap regression test
 
 **Status:** Executing — Plan 01 complete 2026-04-29 (8 fields wired live, 3 OpenClaw fields dropped, compaction counter mirror added). Plans 02 + 03 pending. ~1 day estimate end-to-end.
+
+---
+
+## Backlog
+
+Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
+
+### Phase 999.1: Time-aware live-websearch default freshness directive (BACKLOG)
+
+**Goal:** Make every agent default to live `web_search` for time-sensitive queries (prices, laws, tax rules, financials, current events) instead of relying on stale training-cutoff knowledge. Inject today's date + freshness rule into the global system context. Per-agent opt-out preserved.
+
+**Trigger:** 2026-04-29 — operator observed agents confidently emitting 2025-anchored answers on time-sensitive lookups.
+
+**Requirements:** TBD — likely 4-5 (FRESH-01..FRESH-05). Touches `context-assembler.ts` and possibly `mcp-prompt-block.ts`. Search MCP is already auto-injected fleetwide so no new tooling.
+
+**Plans:** 0 plans (TBD — promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone, will likely become Phase 104.
+
+### Phase 999.2: a2a refactor — rename + sync-reply + correlation IDs (BACKLOG)
+
+**Goal:** Fix the agent-to-agent comms architectural debt surfaced 2026-04-29 when admin-clawdy → fin-acquisition produced no reply back. Three concerns:
+
+1. **Rename (Option C — full):** `SessionManager.sendToAgent` → `dispatchTurn` (7 internal call sites). MCP tool `send_message` → `ask_agent`. MCP tool `send_to_agent` → `post_to_agent`. IPC methods aligned. Backwards-compat aliases shipped to avoid agent breakage during transition.
+2. **v2 sync-reply:** `ask_agent` returns target's response in tool result so caller's LLM has it in context. New `mirror_to_target_channel` flag posts Q+A as webhook embeds in target's channel for visibility. Stop swallowing `sendToAgent` errors.
+3. **Async correlation IDs (longer-term):** alternative non-blocking path where caller fires-and-forgets, target's reply auto-posts back to caller's channel via correlation-ID lookup. Bigger redesign — needs reply hook in turn-dispatcher and per-message tracking.
+
+**Trigger:** 2026-04-29 — operator's admin-clawdy → fin-acquisition Q&A test surfaced that `send_message` MCP wrapper silently discards target's response. Diagnosed in this session.
+
+**Requirements:** TBD — likely 8-10 (A2A-01..A2A-10).
+
+**Plans:** 0 plans (TBD — likely 3-4 plans when promoted)
+
+**Promotion target:** active milestone, will likely become Phase 105.
+
+### Phase 999.3: Specialist subagent routing via delegateTo (BACKLOG)
+
+**Goal:** Let any agent delegate research/coding work to a dedicated standing specialist agent (`fin-research` for fin-* agents, `research` for non-fin) and have the streamed output land in a Discord thread in the **caller's** channel, with autoRelay summary back to caller's main channel.
+
+**Approach:** extend existing `spawn_subagent_thread` MCP tool with `delegateTo: <agent_name>` param. When set, the spawned subagent inherits the target agent's config (model, soul, identity, skills, mcpServers) instead of the caller's. Thread is created in the caller's channel. Existing autoRelay infrastructure (Phase 99-M) handles the summary.
+
+**Phase 2 extension** (not in scope for first iteration): per-agent `specialists: { research: <name>, coding: <name> }` config in `clawcode.yaml`, plus a `consult_specialist(role)` convenience tool that resolves to the right standing agent automatically.
+
+**Trigger:** 2026-04-29 — operator wants admin-clawdy + fin-acquisition to delegate elevated-thinking research/coding to fin-research / research standing agents with thread streaming.
+
+**Requirements:** TBD — likely 5-7 (SPEC-01..SPEC-07).
+
+**Plans:** 0 plans (TBD — likely 2 plans when promoted)
+
+**Promotion target:** active milestone, will likely become Phase 106.
+
+### Phase 999.4: /clawcode-usage accuracy fixes (BACKLOG)
+
+**Goal:** Fix two bugs in Phase 103 Plan 03's `/clawcode-usage` embed exposed during live test on 2026-04-29:
+
+1. **`resetsAt` unit mismatch.** SDK `SDKRateLimitInfo.resetsAt` is documented as ms epoch but actually arrives as **seconds** epoch from the OAuth Max session. `formatDistanceToNow` treats it as ms, producing wildly wrong reset times (e.g. "in 55 years"). Fix: detect+normalize at the RateLimitTracker boundary OR at the renderer boundary. Tests must pin both seconds-epoch and ms-epoch inputs.
+2. **`utilization` derive when undefined.** SDK sometimes sends `status: "allowed"` + `resetsAt` + overage state without `utilization`. Renderer falls back to `n/a` even when other fields imply state. Investigate whether `utilization` can be derived from `surpassedThreshold` or aggregated `tokens_in/out` against subscription tier.
+
+**Trigger:** 2026-04-29 live test post Phase 103 deploy — `/clawcode-usage` rendered "5-hour session — 🟢 \`──────────  n/a\` · resets in about 1 hour" when SDK had clearly returned a populated rate_limit_event.
+
+**Requirements:** TBD — likely 3-4.
+
+**Plans:** 0 plans (TBD — likely 1-2 plans when promoted)
+
+**Promotion target:** active milestone, will likely become Phase 107 (after the 3 priority items above).
+
+### Phase 999.5: /clawcode-status finish-up — Fallbacks + remaining no-source fields (BACKLOG)
+
+**Goal:** Wire the last honest-`n/a` items in `/clawcode-status` once data sources exist, OR document them permanently as "no source" with an explicit comment. Currently the only `n/a` line is `🔄 Fallbacks: n/a` (Phase 103 Plan 01 left as honest-n/a — Research §11 noted no current source for fallback count). After production runs in for a few days, audit for any other fields that settle into having no source and either wire them or convert them to documented permanent-n/a.
+
+**Trigger:** 2026-04-29 — Phase 103 closure noted Fallbacks as the only honest-n/a remaining; user wants to revisit after production observation period.
+
+**Requirements:** TBD — likely 2-3.
+
+**Plans:** 0 plans (TBD — 1 plan when promoted)
+
+**Promotion target:** active milestone, can wait until production has been observed for ~1 week.
