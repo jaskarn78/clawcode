@@ -581,7 +581,7 @@ Backlog items live outside the active phase sequence. Promote with `/gsd:review-
 
 **Plans:** 0 plans (TBD — likely 3-4 plans when promoted)
 
-**Promotion target:** active milestone, will likely become Phase 105.
+**Promotion target:** active milestone, will likely become **Phase 106** (deprioritized 2026-04-29 in favor of specialist routing — 999.3 → Phase 105 — which has a smaller blast radius and unblocks elevated-thinking delegation sooner).
 
 ### Phase 999.3: Specialist subagent routing via delegateTo (BACKLOG)
 
@@ -597,7 +597,7 @@ Backlog items live outside the active phase sequence. Promote with `/gsd:review-
 
 **Plans:** 0 plans (TBD — likely 2 plans when promoted)
 
-**Promotion target:** active milestone, will likely become Phase 106.
+**Promotion target:** active milestone, will likely become **Phase 105** (promoted 2026-04-29 ahead of 999.2 a2a refactor — smaller blast radius, leverages existing spawn_subagent_thread infra, unblocks elevated-thinking delegation sooner).
 
 ### Phase 999.4: /clawcode-usage accuracy fixes (BACKLOG)
 
