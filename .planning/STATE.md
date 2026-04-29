@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Phase 999.1 context gathered (--auto)
-last_updated: "2026-04-29T18:54:38.272Z"
+stopped_at: "Completed 999.1-01-PLAN.md (TDD: RED 4bbdf68 + GREEN da592a9)"
+last_updated: "2026-04-29T19:23:28.950Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 20
-  completed_phases: 5
-  total_plans: 28
-  completed_plans: 28
+  completed_phases: 6
+  total_plans: 29
+  completed_plans: 29
 ---
 
 # Project State
@@ -306,6 +306,7 @@ Recent decisions affecting current work:
 - [Phase 103]: IPC method named list-rate-limit-snapshots (NOT colliding with existing rate-limit-status for Discord outbound rate-limiter — Pitfall 5 closure)
 - [Phase 103]: Pure-DI handler module pattern — daemon-rate-limit-ipc.ts mirrors Phase 96 daemon-fs-ipc / Phase 92 cutover-ipc-handlers blueprint (3rd application of dedicated-IPC-module pattern)
 - [Phase 103]: Overage rendered as status-line not progress bar (Open Q3) — credit-pool model doesn't translate to a percentage bar
+- [Phase 999.1]: Used D-PLN-01 strict TDD pattern (RED → GREEN as 2 atomic commits) for 4 new agent-output directives
 
 ### v2.1 closing decisions (for reference)
 
@@ -442,9 +443,10 @@ Recent decisions affecting current work:
 | Phase 100 P08 | 5min | 1 tasks | 2 files |
 | Phase 103 P02 | ~22min | 2 tasks | 10 files |
 | Phase 103 P03 | 30min | 2 tasks | 14 files |
+| Phase 999.1 P01 | 4m | 2 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-29
-Stopped at: Phase 999.1 context gathered (--auto)
+Stopped at: Completed 999.1-01-PLAN.md (TDD: RED 4bbdf68 + GREEN da592a9)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
