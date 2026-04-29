@@ -49,6 +49,9 @@ function makeHandle(sessionId = "sess-" + Math.random().toString(36).slice(2)): 
     // Phase 96 D-CONTEXT — required by SessionHandle surface.
     getFsCapabilitySnapshot: vi.fn().mockReturnValue(new Map()) as unknown as SessionHandle["getFsCapabilitySnapshot"],
     setFsCapabilitySnapshot: vi.fn(),
+    // Phase 103 OBS-04 — required by SessionHandle surface.
+    getRateLimitTracker: vi.fn().mockReturnValue(undefined) as unknown as SessionHandle["getRateLimitTracker"],
+    setRateLimitTracker: vi.fn(),
     // Phase 94 Plan 02 TOOL-03 — required by SessionHandle surface.
     getFlapHistory: vi.fn().mockReturnValue(new Map()) as unknown as SessionHandle["getFlapHistory"],
     // Phase 94 Plan 03 — required by SessionHandle surface.

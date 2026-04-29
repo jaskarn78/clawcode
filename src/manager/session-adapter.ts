@@ -7,6 +7,7 @@ import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 import type { AttemptRecord } from "./recovery/types.js";
 import type { FsCapabilitySnapshot } from "./persistent-session-handle.js";
+import type { RateLimitTracker } from "../usage/rate-limit-tracker.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
@@ -158,6 +159,21 @@ export type SessionHandle = {
    */
   getFsCapabilitySnapshot: () => ReadonlyMap<string, FsCapabilitySnapshot>;
   setFsCapabilitySnapshot: (snapshot: ReadonlyMap<string, FsCapabilitySnapshot>) => void;
+  /**
+   * Phase 103 OBS-04 / OBS-05 — per-handle RateLimitTracker mirror (DI'd
+   * post-construction by SessionManager so `iterateUntilResult` can dispatch
+   * rate_limit_event messages without reaching into SessionManager's private
+   * maps). 7th application of the post-construction DI mirror pattern (after
+   * McpState, FlapHistory, RecoveryAttemptHistory, SupportedCommands,
+   * ModelMirror, FsCapability).
+   *
+   * `getRateLimitTracker` returns undefined until `setRateLimitTracker` has
+   * been called. The dispatch path uses optional-chaining so the race window
+   * between handle construction and tracker injection silently drops events
+   * (Pitfall 8 — best-effort capture).
+   */
+  getRateLimitTracker: () => RateLimitTracker | undefined;
+  setRateLimitTracker: (tracker: RateLimitTracker) => void;
   /**
    * Phase 94 Plan 02 TOOL-03 — per-handle flap-history Map for the D-12
    * 5min flap-stability window. Stable Map identity across calls (the
@@ -391,6 +407,19 @@ export class MockSessionHandle implements SessionHandle {
   }
   setFsCapabilitySnapshot(snapshot: ReadonlyMap<string, FsCapabilitySnapshot>): void {
     this.fsCapabilitySnapshot = new Map(snapshot);
+  }
+
+  /**
+   * Phase 103 OBS-04 — test-mock RateLimitTracker accessor. Tests can drive
+   * setRateLimitTracker to exercise downstream consumers (Plan 03 IPC +
+   * /clawcode-status / /clawcode-usage renderers).
+   */
+  private rateLimitTracker: RateLimitTracker | undefined = undefined;
+  getRateLimitTracker(): RateLimitTracker | undefined {
+    return this.rateLimitTracker;
+  }
+  setRateLimitTracker(tracker: RateLimitTracker): void {
+    this.rateLimitTracker = tracker;
   }
 
   /**
@@ -858,6 +887,10 @@ function wrapSdkQuery(
   const legacyFlapHistory: Map<string, FlapHistoryEntry> = new Map();
   // Phase 96 Plan 01 D-CONTEXT — legacy fs-capability snapshot (test-only).
   let legacyFsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> = new Map();
+  // Phase 103 OBS-04 — legacy per-turn-query handle carries the same
+  // RateLimitTracker mirror contract as the persistent handle (test-only
+  // path; production routes through createPersistentSessionHandle).
+  let legacyRateLimitTracker: RateLimitTracker | undefined;
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
@@ -1403,6 +1436,18 @@ function wrapSdkQuery(
     },
     setFsCapabilitySnapshot(snapshot: ReadonlyMap<string, FsCapabilitySnapshot>): void {
       legacyFsCapabilitySnapshot = new Map(snapshot);
+    },
+
+    /**
+     * Phase 103 OBS-04 — legacy RateLimitTracker accessor. Test-only path;
+     * production routes through createPersistentSessionHandle where the SDK
+     * rate_limit_event dispatch lives.
+     */
+    getRateLimitTracker(): RateLimitTracker | undefined {
+      return legacyRateLimitTracker;
+    },
+    setRateLimitTracker(tracker: RateLimitTracker): void {
+      legacyRateLimitTracker = tracker;
     },
 
     /**

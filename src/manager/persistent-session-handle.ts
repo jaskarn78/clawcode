@@ -35,6 +35,8 @@ import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 import type { AttemptRecord } from "./recovery/types.js";
+import type { RateLimitTracker } from "../usage/rate-limit-tracker.js";
+import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
 
 /**
  * Phase 94 Plan 01 — capability probe types re-anchored at this file path
@@ -250,6 +252,17 @@ export function createPersistentSessionHandle(
   // construction DI mirror pattern (after McpState, FlapHistory,
   // RecoveryAttemptHistory, SupportedCommands, and ModelMirror).
   let _fsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> | undefined;
+
+  // Phase 103 OBS-04 / OBS-05 — per-handle RateLimitTracker mirror. Lazy-init:
+  // undefined until SessionManager calls setRateLimitTracker after handle
+  // construction. The iterateUntilResult dispatch branch reads via closure
+  // (`_rateLimitTracker` resolved at branch-eval time) so a late injection is
+  // picked up on the very next message. 7th application of the post-
+  // construction DI mirror pattern (after McpState, FlapHistory,
+  // RecoveryAttemptHistory, SupportedCommands, ModelMirror, FsCapability).
+  // Pitfall 8: messages arriving in the handle-construction → injection race
+  // window are silently dropped — best-effort capture is acceptable.
+  let _rateLimitTracker: RateLimitTracker | undefined;
 
   function notifyError(err: Error): void {
     generatorDead = true;
@@ -557,6 +570,28 @@ export function createPersistentSessionHandle(
                 entry.span.end();
                 activeTools.delete(toolUseId);
               }
+            }
+          }
+
+          // -- rate_limit_event: forward to per-handle tracker (Phase 103 OBS-05) --
+          // Observational like extractUsage — never breaks the message flow.
+          // SDK fires rate_limit_event inline on the same async iterator as
+          // assistant/result/stream_event/user; per Research Pattern 1 the only
+          // correct hook point is here in the per-agent loop. Branch is
+          // positioned BEFORE the `result` branch so result still terminates
+          // the turn (the two are mutually exclusive on `msg.type`, but the
+          // ordering documents intent and keeps the result-terminator path
+          // unchanged). Pitfall 8: tracker may be undefined during the race
+          // window between handle construction and SessionManager's
+          // `setRateLimitTracker` call — silently drop in that case.
+          if ((msg as { type?: string }).type === "rate_limit_event") {
+            try {
+              const event = msg as unknown as { rate_limit_info?: SDKRateLimitInfo };
+              if (event.rate_limit_info) {
+                _rateLimitTracker?.record(event.rate_limit_info);
+              }
+            } catch {
+              // observational — never break message flow (matches extractUsage)
             }
           }
 
@@ -883,6 +918,32 @@ export function createPersistentSessionHandle(
      */
     setFsCapabilitySnapshot(next: ReadonlyMap<string, FsCapabilitySnapshot>): void {
       _fsCapabilitySnapshot = new Map(next);
+    },
+
+    /**
+     * Phase 103 OBS-04 — read the per-handle RateLimitTracker mirror.
+     *
+     * Returns undefined until SessionManager calls setRateLimitTracker.
+     * Downstream consumers (Plan 03 IPC list-rate-limit-snapshots, slash
+     * commands /clawcode-usage and /clawcode-status) read via this accessor
+     * routed through SessionManager.getRateLimitTrackerForAgent.
+     */
+    getRateLimitTracker(): RateLimitTracker | undefined {
+      return _rateLimitTracker;
+    },
+
+    /**
+     * Phase 103 OBS-04 — inject the per-handle RateLimitTracker mirror.
+     *
+     * Called by SessionManager AFTER handle construction (post-construction
+     * DI mirror — Pitfall 8 best-effort race window: rate_limit_event
+     * messages arriving in the gap between construction and injection are
+     * dropped). The dispatch branch in iterateUntilResult reads
+     * `_rateLimitTracker` via closure so a late injection is honored on the
+     * very next message.
+     */
+    setRateLimitTracker(tracker: RateLimitTracker): void {
+      _rateLimitTracker = tracker;
     },
 
     /**

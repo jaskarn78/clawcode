@@ -21,6 +21,7 @@ import type { TierManager } from "../memory/tier-manager.js";
 import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
 import type { UsageTracker } from "../usage/tracker.js";
+import { RateLimitTracker } from "../usage/rate-limit-tracker.js";
 import type { DocumentStore } from "../documents/store.js";
 import type { TraceStore } from "../performance/trace-store.js";
 import type { TraceCollector, Turn } from "../performance/trace-collector.js";
@@ -297,6 +298,24 @@ export class SessionManager {
    * on first compaction or via accessor read (which returns 0 for missing).
    */
   private readonly compactionCounts: Map<string, number> = new Map();
+
+  /**
+   * Phase 103 OBS-04 — per-agent RateLimitTracker map.
+   *
+   * Each tracker shares the agent's UsageTracker SQLite DB handle (one DB per
+   * agent — see `src/usage/tracker.ts` initSchema where the
+   * `rate_limit_snapshots` table lives alongside `usage_events`). Constructed
+   * at agent startAgent (after warm-path success) and injected into the
+   * SessionHandle via `handle.setRateLimitTracker` so the SDK
+   * `rate_limit_event` dispatch hook in persistent-session-handle.ts has a
+   * destination. Cleaned on stopAgent.
+   *
+   * Read by:
+   *   - `getRateLimitTrackerForAgent` (this file) — Plan 03 IPC consumer
+   *   - `/clawcode-status` renderer for session/weekly bars (Plan 03)
+   *   - `/clawcode-usage` Discord slash command (Plan 03)
+   */
+  private readonly rateLimitTrackers: Map<string, RateLimitTracker> = new Map();
 
   /**
    * Phase 103 OBS-01 — per-agent activation timestamp mirror (ms epoch).
@@ -814,6 +833,27 @@ export class SessionManager {
       handle.setMcpState(mcpReadiness.current.stateByName);
     }
 
+    // Phase 103 OBS-04 / OBS-05 — construct + inject per-agent
+    // RateLimitTracker. Shares the agent's UsageTracker DB handle (Research
+    // §Architecture — add table to UsageTracker DB rather than a second
+    // per-agent DB; one DB handle per agent stays clean).
+    //
+    // The tracker is the destination for SDK `rate_limit_event` messages
+    // dispatched by persistent-session-handle.iterateUntilResult. When the
+    // agent has no UsageTracker (e.g. memoryEnabled=false), the block silently
+    // no-ops; the handle's dispatch branch optional-chains
+    // `_rateLimitTracker?.record(...)` so a missing tracker is graceful and
+    // /clawcode-usage shows "no data" (Pitfall 7).
+    //
+    // Pitfall 8: messages arriving in the race window between handle
+    // construction (line ~660 above) and this injection are silently dropped.
+    // Acceptable best-effort capture per Research.
+    if (usageTracker) {
+      const rateLimitTracker = new RateLimitTracker(usageTracker.getDatabase(), this.log);
+      this.rateLimitTrackers.set(name, rateLimitTracker);
+      handle.setRateLimitTracker(rateLimitTracker);
+    }
+
     // Phase 94 Plan 01 Gap-Closure — boot-time capability probe (D-03).
     //
     // Without this fire-and-forget kickoff, every server's
@@ -1303,6 +1343,11 @@ export class SessionManager {
     // mirror cleared so the post-stop accessor read returns undefined.
     this.compactionCounts.delete(name);
     this.activationAtByAgent.delete(name);
+    // Phase 103 OBS-04 — drop the per-agent RateLimitTracker reference. The
+    // underlying SQLite snapshot rows survive (the UsageTracker DB is closed
+    // by AgentMemoryManager.cleanupMemory above) so a subsequent restart
+    // restores them on next RateLimitTracker construction.
+    this.rateLimitTrackers.delete(name);
     // Phase 52 Plan 02 — drop per-agent cache-prefix state so a fresh start
     // records cacheEvictionExpected=false on turn 1 (no prior hash).
     this.lastPrefixHashByAgent.delete(name);
@@ -1761,6 +1806,23 @@ export class SessionManager {
    */
   getActivationAtForAgent(name: string): number | undefined {
     return this.activationAtByAgent.get(name);
+  }
+
+  /**
+   * Phase 103 OBS-04 / OBS-06 — per-agent RateLimitTracker accessor.
+   *
+   * Returns undefined when:
+   *   - the agent is not running (never started, or stopped)
+   *   - the agent's UsageTracker was unavailable at start (no DB handle to
+   *     share — graceful degradation, /clawcode-usage shows "no data")
+   *
+   * Read by:
+   *   - daemon.ts list-rate-limit-snapshots IPC handler (Plan 03)
+   *   - /clawcode-status renderer for session/weekly bars (Plan 03)
+   *   - /clawcode-usage Discord slash command (Plan 03)
+   */
+  getRateLimitTrackerForAgent(name: string): RateLimitTracker | undefined {
+    return this.rateLimitTrackers.get(name);
   }
   getContextFillProvider(agentName: string): CharacterCountFillProvider | undefined { return this.memory.contextFillProviders.get(agentName); }
   getEmbedder(): EmbeddingService { return this.memory.embedder; }
