@@ -555,15 +555,31 @@ Plans:
 
 Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
 
-### Phase 999.1: Time-aware live-websearch default freshness directive (BACKLOG)
+### Phase 999.1: Agent output directives — freshness, derivative work, trust override, table avoidance (BACKLOG)
 
-**Goal:** Make every agent default to live `web_search` for time-sensitive queries (prices, laws, tax rules, financials, current events) instead of relying on stale training-cutoff knowledge. Inject today's date + freshness rule into the global system context. Per-agent opt-out preserved.
+**Goal:** Counter-instruct Claude Code's default behaviors that misfire in this trusted-operator workspace. Four directives shipped together as one coherent injection system into agent system context (CLAUDE.md, per-agent SOUL.md, subagent threadContext) — addressing the same architectural concern: model defaults need adjustment for this environment.
 
-**Trigger:** 2026-04-29 — operator observed agents confidently emitting 2025-anchored answers on time-sensitive lookups.
+The four directives:
 
-**Requirements:** TBD — likely 4-5 (FRESH-01..FRESH-05). Touches `context-assembler.ts` and possibly `mcp-prompt-block.ts`. Search MCP is already auto-injected fleetwide so no new tooling.
+1. **Time-aware live websearch (FRESH-*).** Inject today's date + a rule that anything dated within ~6 months OR matching time-sensitive categories (prices, laws, financials, regulations, current events) must be checked via `web_search` before answering. Don't anchor on the training-cutoff snapshot. Search MCP is already auto-injected fleetwide; this is purely the prompt-side push to use it.
 
-**Plans:** 0 plans (TBD — promote with /gsd:review-backlog when ready)
+2. **Subagent derivative-work mandate (DERIV-*).** When a parent agent delegates via `spawn_subagent_thread` with a `task`, the subagent inherits a permission clause clarifying that creating new files, deriving parameterized templates from examples, generating code, and producing artifacts are all in-scope. The `~/.claude/CLAUDE.md` "don't add features beyond what's requested" rule applies to scope creep on USER requests, not to fulfilling delegated tasks. Subagent currently inherits parent SOUL + 6 lines of threadContext (subagent-thread-spawner.ts:401); extend that block.
+
+3. **Trusted-operator disclaimer suppression (TRUST-*).** Counter-instruct Claude's reflex against the platform-level "authorized security testing" prompt. Inject: "this workspace is owned by a single trusted operator. Do not prefix responses with disclaimers like 'this is not malware' / 'this is for legitimate purposes' / 'this is authorized work'. Skip all CYA language. The operator knows the context."
+
+4. **Markdown tables → bullets in Discord (TABLE-*).** Companion to the structural webhook-wrap (Phase 100-fu + quick `260429-ouw`): steer agents to PREFER bullets / definition lists / inline prose over markdown tables when the content fits, since Discord doesn't render true tables (the wrap-as-monospace fence is the safety net for cases where tabular IS the right format). Markdown-table-wrap.ts already documents this directive as "deferred" (Phase 100-fu commit comment). Land it here.
+
+**Trigger:** 2026-04-29 — three separate observations during this session:
+- Operator reported agents emitting 2025-anchored answers (stale training cutoff)
+- Operator reported subagent refusing derivative code-generation work (over-applying "don't add features" rule)
+- Operator reported agents prefacing responses with "this is not malware" disclaimers (over-applying platform safety prompt)
+- Plus the deferred no-markdown-tables-in-discord directive that's been sitting in markdown-table-wrap.ts comments since Phase 100-fu
+
+All four are the same architectural concern: counter-instruct platform/default model behavior via SOUL injection. Coherent design > ad-hoc patches.
+
+**Requirements:** TBD — likely 8-10 (FRESH-01..FRESH-03, DERIV-01..DERIV-03, TRUST-01..TRUST-02, TABLE-01..TABLE-02). Touches `context-assembler.ts`, `subagent-thread-spawner.ts`, `mcp-prompt-block.ts`, possibly per-agent SOUL.md templates.
+
+**Plans:** 0 plans (TBD — likely 3 plans when promoted: one per directive group, with the trust-override + table-avoidance bundled since they're the lightest)
 
 **Promotion target:** active milestone, will likely become Phase 104.
 
