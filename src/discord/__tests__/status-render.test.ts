@@ -343,3 +343,75 @@ describe("/clawcode-status — Phase 103 OBS-01/02/03 wiring", () => {
     expect(out).not.toContain("🧹 Compactions: n/a");
   });
 });
+
+// Phase 103 OBS-08 — optional 5h+7d bar suffix appended to /clawcode-status
+// when rate-limit snapshots are present. Pure helper, lives alongside
+// renderStatus so the bar vocabulary stays consistent across surfaces.
+import { renderUsageBars } from "../status-render.js";
+import type { RateLimitSnapshot } from "../../usage/rate-limit-tracker.js";
+
+function snapshot(overrides: Partial<RateLimitSnapshot>): RateLimitSnapshot {
+  return Object.freeze({
+    rateLimitType: "five_hour",
+    status: "allowed" as const,
+    utilization: undefined,
+    resetsAt: undefined,
+    surpassedThreshold: undefined,
+    overageStatus: undefined,
+    overageResetsAt: undefined,
+    overageDisabledReason: undefined,
+    isUsingOverage: undefined,
+    recordedAt: Date.now(),
+    ...overrides,
+  });
+}
+
+describe("renderUsageBars (OBS-08)", () => {
+  it("returns empty string when no five_hour or seven_day snapshot", () => {
+    expect(renderUsageBars([])).toBe("");
+    expect(
+      renderUsageBars([
+        snapshot({ rateLimitType: "seven_day_opus", utilization: 0.5 }),
+      ]),
+    ).toBe("");
+  });
+
+  it("renders 5h session line when five_hour snapshot present", () => {
+    const out = renderUsageBars([
+      snapshot({
+        rateLimitType: "five_hour",
+        utilization: 0.5,
+        resetsAt: Date.now() + 3_600_000,
+      }),
+    ]);
+    expect(out).toContain("5h session:");
+    expect(out).toContain("▓▓▓▓▓░░░░░ 50%");
+  });
+
+  it("renders 7-day weekly line when seven_day snapshot present", () => {
+    const out = renderUsageBars([
+      snapshot({
+        rateLimitType: "seven_day",
+        utilization: 0.71,
+        resetsAt: Date.now() + 86_400_000 * 4,
+      }),
+    ]);
+    expect(out).toContain("7-day weekly:");
+    expect(out).toContain("71%");
+  });
+
+  it("renders BOTH lines when both snapshots present", () => {
+    const out = renderUsageBars([
+      snapshot({ rateLimitType: "five_hour", utilization: 0.5 }),
+      snapshot({ rateLimitType: "seven_day", utilization: 0.7 }),
+    ]);
+    expect(out.split("\n").filter((l) => l.length > 0)).toHaveLength(2);
+  });
+
+  it("output begins with newline so it appends cleanly to renderStatus", () => {
+    const out = renderUsageBars([
+      snapshot({ rateLimitType: "five_hour", utilization: 0.5 }),
+    ]);
+    expect(out.startsWith("\n")).toBe(true);
+  });
+});
