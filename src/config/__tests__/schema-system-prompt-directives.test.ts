@@ -40,17 +40,22 @@ describe("systemPromptDirectiveSchema (Phase 94 TOOL-10)", () => {
 });
 
 describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
-  it("REG-DEFAULTS-PRESENT: ships exactly 2 D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes", () => {
+  it("REG-DEFAULTS-PRESENT: ships D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes plus freshness + derivative-work + trusted-operator + discord-format (11 directives total)", () => {
     const keys = Object.keys(DEFAULT_SYSTEM_PROMPT_DIRECTIVES).sort();
-    // Phase 99 added subagent-routing; Phase 100-fu adds memory-recall-before-uncertainty,
-    // propose-alternatives, long-output-to-file, and verify-file-writes (7 directives total).
+    // Phase 99 added subagent-routing; Phase 100-fu added memory-recall-before-uncertainty,
+    // propose-alternatives, long-output-to-file, and verify-file-writes; Phase 999.1 adds
+    // freshness, derivative-work, trusted-operator, discord-format (11 directives total).
     expect(keys).toEqual([
       "cross-agent-routing",
+      "derivative-work",
+      "discord-format",
       "file-sharing",
+      "freshness",
       "long-output-to-file",
       "memory-recall-before-uncertainty",
       "propose-alternatives",
       "subagent-routing",
+      "trusted-operator",
       "verify-file-writes",
     ]);
     // Both default-enabled per D-10 (operator-locked)
@@ -167,6 +172,94 @@ describe("verify-file-writes directive (Phase 100-fu)", () => {
   });
 });
 
+describe("freshness directive (Phase 999.1)", () => {
+  it("FRESH-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "freshness",
+      ),
+    ).toBe(true);
+  });
+
+  it("FRESH-DIR-2: directive is enabled by default", () => {
+    expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["freshness"].enabled).toBe(true);
+  });
+
+  it("FRESH-DIR-3: directive text pins canonical phrase 'Do not anchor on training-cutoff knowledge' (D-FR-04)", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["freshness"].text;
+    expect(text).toContain("Do not anchor on training-cutoff knowledge");
+  });
+});
+
+describe("derivative-work directive (Phase 999.1)", () => {
+  it("DERIV-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "derivative-work",
+      ),
+    ).toBe(true);
+  });
+
+  it("DERIV-DIR-2: directive is enabled by default", () => {
+    expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["derivative-work"].enabled).toBe(
+      true,
+    );
+  });
+
+  it("DERIV-DIR-3: directive text pins canonical phrase 'are all in-scope work product' (D-DR-03)", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["derivative-work"].text;
+    expect(text).toContain("are all in-scope work product");
+  });
+});
+
+describe("trusted-operator directive (Phase 999.1)", () => {
+  it("TRUST-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "trusted-operator",
+      ),
+    ).toBe(true);
+  });
+
+  it("TRUST-DIR-2: directive is enabled by default", () => {
+    expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["trusted-operator"].enabled).toBe(
+      true,
+    );
+  });
+
+  it("TRUST-DIR-3: directive text pins canonical phrase 'Skip all CYA language' (D-TR-03)", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["trusted-operator"].text;
+    expect(text).toContain("Skip all CYA language");
+  });
+});
+
+describe("discord-format directive (Phase 999.1)", () => {
+  it("TABLE-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "discord-format",
+      ),
+    ).toBe(true);
+  });
+
+  it("TABLE-DIR-2: directive is enabled by default", () => {
+    expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["discord-format"].enabled).toBe(
+      true,
+    );
+  });
+
+  it("TABLE-DIR-3: directive text pins canonical phrase 'prefer bullets, numbered lists, or definition-style prose' (D-TB-03)", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["discord-format"].text;
+    expect(text).toContain(
+      "prefer bullets, numbered lists, or definition-style prose",
+    );
+  });
+});
+
 describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
   it("REG-V25-BACKCOMPAT: defaultsSchema.parse({}) populates systemPromptDirectives with the defaults (additive-optional, 8th application)", () => {
     const result = defaultsSchema.safeParse({});
@@ -180,11 +273,15 @@ describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
         Object.keys(result.data.systemPromptDirectives ?? {}).sort(),
       ).toEqual([
         "cross-agent-routing",
+        "derivative-work",
+        "discord-format",
         "file-sharing",
+        "freshness",
         "long-output-to-file",
         "memory-recall-before-uncertainty",
         "propose-alternatives",
         "subagent-routing",
+        "trusted-operator",
         "verify-file-writes",
       ]);
       expect(
