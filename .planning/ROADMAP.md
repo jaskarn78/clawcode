@@ -644,3 +644,24 @@ Plans:
 **Plans:** 0 plans (TBD — 1 plan when promoted)
 
 **Promotion target:** active milestone, can wait until production has been observed for ~1 week.
+
+### Phase 999.6: Auto pre-deploy snapshot + post-deploy restore of running-agent state (BACKLOG)
+
+**Goal:** Make every production deploy preserve the runtime list of running agents and restore them on daemon boot, independent of static `autoStart` config. Currently `autoStart=false` agents that an operator manually started for the day get lost across a `clawcode update --restart` because the daemon honors only the static config on boot.
+
+**Approach (sketch):**
+
+1. New `snapshot-running-agents` IPC method (or auto-fire on `stop-all` IPC) writes `/home/clawcode/.clawcode/manager/pre-deploy-snapshot.json` with `{ snapshotAt, runningAgents: [name, sessionId?, ...] }`.
+2. `clawcode update` calls the snapshot before `stop-all` (or `stop-all` does it implicitly).
+3. Daemon boot reads the snapshot if it exists:
+   - For each name in the snapshot, override the static `autoStart` flag and start the agent
+   - After all listed agents start (or fail), DELETE the snapshot so the next normal restart honors `autoStart` config again
+4. CLI affordance: `clawcode update --restart` becomes a one-shot "save state, deploy, restore state" command.
+
+**Trigger:** 2026-04-29 — operator pain during today's two prod deploys: `autoStart=false` agents that were running (e.g., research-clawdy, fin-research) didn't come back automatically, requiring manual restart.
+
+**Requirements:** TBD — likely 4-5 (SNAP-01..SNAP-05).
+
+**Plans:** 0 plans (TBD — likely 1-2 plans when promoted)
+
+**Promotion target:** active milestone, queue after Phase 106 (a2a refactor) since Phase 105 + 106 are higher operator-pain priorities. Could also be a quick task if scope stays small.
