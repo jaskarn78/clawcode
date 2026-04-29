@@ -577,9 +577,12 @@ The four directives:
 
 All four are the same architectural concern: counter-instruct platform/default model behavior via SOUL injection. Coherent design > ad-hoc patches.
 
-**Requirements:** TBD — likely 8-10 (FRESH-01..FRESH-03, DERIV-01..DERIV-03, TRUST-01..TRUST-02, TABLE-01..TABLE-02). Touches `context-assembler.ts`, `subagent-thread-spawner.ts`, `mcp-prompt-block.ts`, possibly per-agent SOUL.md templates.
+**Requirements:** [FRESH-01, FRESH-02, FRESH-03, DERIV-01, DERIV-02, DERIV-03, TRUST-01, TRUST-02, TABLE-01, TABLE-02] — locked-additive into `src/config/schema.ts` `DEFAULT_SYSTEM_PROMPT_DIRECTIVES` (Phase 94 D-10 rail). Per D-DR-04 the subagent-thread-spawner.ts pathway is NOT modified — fleet-wide directive replaces subagent-only injection.
 
-**Plans:** 0 plans (TBD — likely 3 plans when promoted: one per directive group, with the trust-override + table-avoidance bundled since they're the lightest)
+**Plans:** 1 plan
+
+Plans:
+- [ ] 999.1-01-PLAN.md — TDD landing of all 4 directive entries (Task 1 RED: 4 describe blocks + 11-key membership pin; Task 2 GREEN: 4 Object.freeze entries verbatim from research §Recommended Directive Text)
 
 **Promotion target:** active milestone, will likely become Phase 104.
 
