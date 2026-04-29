@@ -11,7 +11,12 @@ import type { SkillsCatalog } from "../skills/types.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingService } from "../memory/embedder.js";
 import type { SessionLogger } from "../memory/session-log.js";
-import type { CompactionManager, CharacterCountFillProvider } from "../memory/compaction.js";
+import type {
+  CompactionManager,
+  CharacterCountFillProvider,
+  CompactionResult,
+  ConversationTurn,
+} from "../memory/compaction.js";
 import type { TierManager } from "../memory/tier-manager.js";
 import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
@@ -282,6 +287,36 @@ export class SessionManager {
   private readonly memoryFileFlushTimers: Map<string, MemoryFlushTimer> = new Map();
 
   /**
+   * Phase 103 OBS-02 — per-agent compaction counter mirror. In-memory only;
+   * resets on daemon restart (Research Open Q4 — informational counter, not
+   * persistence-worthy). Bumped by SessionManager.compactForAgent on each
+   * successful CompactionManager.compact() resolve. Read by /clawcode-status
+   * via getCompactionCountForAgent.
+   *
+   * Map identity stable for SessionManager lifetime — entries created lazily
+   * on first compaction or via accessor read (which returns 0 for missing).
+   */
+  private readonly compactionCounts: Map<string, number> = new Map();
+
+  /**
+   * Phase 103 OBS-01 — per-agent activation timestamp mirror (ms epoch).
+   * Mirrors the registry.startedAt write in startAgent so /clawcode-status
+   * has a synchronous accessor without awaiting readRegistry. Reset on
+   * stopAgent (entry deleted). Set on each successful warm-path completion
+   * to match the registry semantics ("most recent successful start").
+   */
+  private readonly activationAtByAgent: Map<string, number> = new Map();
+
+  /**
+   * Phase 103 OBS-01 — injected HeartbeatRunner reference for context-zone
+   * fillPercentage lookup. Set once at daemon boot via setHeartbeatRunner
+   * (mirrors the setWebhookManager / setBotDirectSender DI pattern). Left
+   * undefined in tests / SessionManager-only fixtures — the
+   * getContextFillPercentageForAgent accessor returns undefined when unset.
+   */
+  private heartbeatRunner: import("../heartbeat/runner.js").HeartbeatRunner | undefined = undefined;
+
+  /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
    * `streamFromAgent` / `sendToAgent` to reject new work with
    * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
@@ -376,6 +411,21 @@ export class SessionManager {
    */
   setMemoryScanner(agentName: string, scanner: MemoryScanner): void {
     this.memoryScanners.set(agentName, scanner);
+  }
+
+  /**
+   * Phase 103 OBS-01 — inject the HeartbeatRunner reference so
+   * `/clawcode-status` can read context-zone fillPercentage synchronously.
+   * Called once by daemon.ts AFTER both SessionManager and HeartbeatRunner
+   * are constructed (mirrors setWebhookManager / setBotDirectSender DI).
+   * Idempotent: re-calling replaces the reference.
+   *
+   * Tests / SessionManager-only fixtures leave this unset — the
+   * getContextFillPercentageForAgent accessor returns undefined when no
+   * runner is wired (graceful degradation).
+   */
+  setHeartbeatRunner(runner: import("../heartbeat/runner.js").HeartbeatRunner): void {
+    this.heartbeatRunner = runner;
   }
 
   /**
@@ -732,15 +782,19 @@ export class SessionManager {
       return;
     }
 
+    const startedAt = Date.now();
     registry = updateEntry(registry, name, {
       status: "running",
       sessionId: handle.sessionId,
-      startedAt: Date.now(),
+      startedAt,
       warm_path_ready: true,
       warm_path_readiness_ms: warmResult.total_ms,
       lastError: null,
     });
     await writeRegistry(this.registryPath, registry);
+    // Phase 103 OBS-01 — mirror startedAt for synchronous /clawcode-status
+    // reads. Cleared in stopAgent.
+    this.activationAtByAgent.set(name, startedAt);
     this.log.info(
       {
         agent: name,
@@ -1244,6 +1298,11 @@ export class SessionManager {
 
     await handle.close();
     this.sessions.delete(name);
+    // Phase 103 OBS-01/02 — clear synchronous /clawcode-status mirrors. Counter
+    // resets on stop (matches in-memory-only semantics — Open Q4); activation
+    // mirror cleared so the post-stop accessor read returns undefined.
+    this.compactionCounts.delete(name);
+    this.activationAtByAgent.delete(name);
     // Phase 52 Plan 02 — drop per-agent cache-prefix state so a fresh start
     // records cacheEvictionExpected=false on turn 1 (no prior hash).
     this.lastPrefixHashByAgent.delete(name);
@@ -1638,6 +1697,71 @@ export class SessionManager {
   // Memory accessors (delegate to AgentMemoryManager)
   getMemoryStore(agentName: string): MemoryStore | undefined { return this.memory.memoryStores.get(agentName); }
   getCompactionManager(agentName: string): CompactionManager | undefined { return this.memory.compactionManagers.get(agentName); }
+
+  /**
+   * Phase 103 OBS-02 — current compaction count for an agent.
+   * Returns 0 when no compactions have occurred. In-memory only;
+   * resets on daemon restart (Research Open Q4).
+   */
+  getCompactionCountForAgent(name: string): number {
+    return this.compactionCounts.get(name) ?? 0;
+  }
+
+  /**
+   * Phase 103 OBS-02 — internal hook for bumping the counter after a
+   * successful CompactionManager.compact() resolve. Use compactForAgent
+   * in production; this exists for the wrapper itself + future code paths
+   * that need to record a compaction outside the canonical entry point.
+   */
+  private bumpCompactionCount(name: string): void {
+    this.compactionCounts.set(name, (this.compactionCounts.get(name) ?? 0) + 1);
+  }
+
+  /**
+   * Phase 103 OBS-02 — canonical entry point for triggering a compaction.
+   * Wraps CompactionManager.compact so the counter bumps ONLY on resolve.
+   * Reject path leaves the counter unchanged (Pitfall 3 — compactions
+   * must reflect SUCCESSFUL flushes only). Returns the same
+   * CompactionResult so callers see no behavior change.
+   *
+   * Throws SessionError when the agent has no CompactionManager (e.g.
+   * the agent is not initialized).
+   */
+  async compactForAgent(
+    name: string,
+    conversation: readonly ConversationTurn[],
+    extractMemories: (text: string) => Promise<readonly string[]>,
+  ): Promise<CompactionResult> {
+    const cm = this.memory.compactionManagers.get(name);
+    if (!cm) {
+      throw new SessionError(`Agent '${name}' has no CompactionManager`, name);
+    }
+    const result = await cm.compact(conversation, extractMemories);
+    this.bumpCompactionCount(name);
+    return result;
+  }
+
+  /**
+   * Phase 103 OBS-01 — context-zone fillPercentage (0-1) for /clawcode-status.
+   * Returns undefined when:
+   *   - no HeartbeatRunner is wired (tests / minimal fixtures)
+   *   - the runner has no zone data for this agent (agent stopped, or zone
+   *     check has not yet run after warm-path completion)
+   */
+  getContextFillPercentageForAgent(name: string): number | undefined {
+    const zone = this.heartbeatRunner?.getZoneStatuses().get(name);
+    return zone?.fillPercentage;
+  }
+
+  /**
+   * Phase 103 OBS-01 — registry-recorded activation timestamp (ms epoch).
+   * Returns undefined when the agent has no recorded start (never started
+   * since daemon boot, or has been stopped). Mirrors registry.startedAt
+   * synchronously to avoid awaiting readRegistry on every status render.
+   */
+  getActivationAtForAgent(name: string): number | undefined {
+    return this.activationAtByAgent.get(name);
+  }
   getContextFillProvider(agentName: string): CharacterCountFillProvider | undefined { return this.memory.contextFillProviders.get(agentName); }
   getEmbedder(): EmbeddingService { return this.memory.embedder; }
   getAgentConfig(agentName: string): ResolvedAgentConfig | undefined { return this.configs.get(agentName); }
