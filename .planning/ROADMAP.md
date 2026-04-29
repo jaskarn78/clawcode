@@ -668,3 +668,20 @@ Plans:
 **Plans:** 0 plans (TBD — likely 1-2 plans when promoted)
 
 **Promotion target:** active milestone, queue after Phase 106 (a2a refactor) since Phase 105 + 106 are higher operator-pain priorities. Could also be a quick task if scope stays small.
+
+### Phase 999.7: Context-audit telemetry pipeline restoration + tool-call latency audit (BACKLOG)
+
+**Goal:** Two related observability gaps surfaced during the 2026-04-29 health audit:
+
+1. **`clawcode context-audit` returns `sampledTurns: 0`** for all agents on prod — the per-turn per-section token-count telemetry pipe (Phase 1.7 Plan 03 infrastructure) isn't capturing data. The CLI infrastructure works, the data table exists, but no writes are happening. Investigate where the write-side broke.
+2. **Tool-call p95 latency is 216-238s** (Admin Clawdy + fin-acquisition). Not directive-related (Phase 104 cache behavior is healthy at 70-77% hit rate post-deploy). This is MCP/browser/search roundtrip time. Worth profiling per-tool to see whether specific tools dominate the tail.
+
+**Trigger:** 2026-04-29 — operator health audit before Phase 106 deploy. Memory graph linking confirmed healthy (527-1426 memories per agent, 4.6K-9.6K links, auto-linker active). Cache behavior healthy. But context-audit observability is dead and tool latency is slow.
+
+**Requirements:** TBD — likely 4-6.
+
+**Plans:** 0 plans (TBD — likely 1-2 plans when promoted: one for context-audit pipeline, one for tool-call profiling)
+
+**Promotion target:** active milestone, queue after Phase 106. Can also be split into two quick tasks if scope stays narrow.
+
+**Side-finding (informational, not blocking):** Prefix-hash didn't visibly change at the Phase 104 deploy boundary (still `92b7...` from Phase 103). Either Phase 104 directives are in a part of the prefix excluded from the hash computation, or they're landing in a different position than expected. Cache behavior + token telemetry confirm the directives ARE in the prompt, but understanding why the hash is stable across the deploy boundary is worth a quick investigation when this phase opens.
