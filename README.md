@@ -58,6 +58,10 @@ cd clawcode
 npm install
 npm run build
 
+# Bootstrap the runtime config from the example (gitignored — your local
+# edits stay out of the repo)
+cp clawcode.example.yaml clawcode.yaml
+
 # One-time browser install (for the browser MCP)
 npx playwright install chromium --only-shell
 # On fresh Ubuntu/Debian, also install system libs:

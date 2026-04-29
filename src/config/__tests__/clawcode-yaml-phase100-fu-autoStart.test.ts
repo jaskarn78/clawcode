@@ -2,8 +2,8 @@
  * Phase 100 follow-up — clawcode.yaml regression pin for the operator's
  * curated active fleet.
  *
- * Reads the on-disk dev `clawcode.yaml` (NOT a synthetic fixture) and asserts
- * the operator-curated active set:
+ * Reads the on-disk dev `clawcode.example.yaml` (NOT a synthetic fixture) and
+ * asserts the operator-curated active set:
  *   - fin-acquisition + admin-clawdy → autoStart=true OR omit (default true)
  *   - all other agents → autoStart=false (skip on daemon auto-start)
  *
@@ -21,8 +21,8 @@ import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
 import { configSchema } from "../schema.js";
 
-describe("Phase 100-fu — clawcode.yaml autoStart curated active fleet", () => {
-  const yamlPath = join(process.cwd(), "clawcode.yaml");
+describe("Phase 100-fu — clawcode.example.yaml autoStart curated active fleet", () => {
+  const yamlPath = join(process.cwd(), "clawcode.example.yaml");
   const raw = readFileSync(yamlPath, "utf-8");
   const parsed = yamlParse(raw);
   const config = configSchema.parse(parsed);
