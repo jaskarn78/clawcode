@@ -516,3 +516,35 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 **Plans:** TBD (run /gsd:plan-phase 102 in v2.7 to break down)
 
 **Status:** Pending — opened 2026-04-28 evening after reviewing the finance-clawdy-coach repo (https://github.com/jaskarn78/finance-clawdy-coach). Highest-leverage operator-facing feature in v2.7 IF Path A validates the pipeline. Path B/C decision deferred until post-A.
+
+### Phase 103: /clawcode-status rich telemetry + Usage panel (operator-observability)
+
+**Goal:** Replace the 11 hardcoded `n/a` fields in `/clawcode-status` with live telemetry from existing managers, and add a Claude-app-style session/weekly usage panel (`/clawcode-usage`) backed by the SDK's native `rate_limit_event` stream — so operator can see at a glance which agent is healthy, what model/effort it's running, how much context is left, and how close the OAuth Max subscription is to its 5-hour and 7-day windows.
+
+**Trigger:** 2026-04-26 — operator asked whether the `/clawcode-status` data-wiring work was still on the backlog (it was, as Phase 99 sub-scope F). Coupled with the live request to mirror the Claude app's session/weekly usage bars (iOS screenshot reference). Discovery during scoping: ClawCode auths via OAuth Max subscription (not API key), and the Claude Agent SDK 0.2.x exposes `SDKRateLimitInfo` via per-turn `rate_limit_event` messages — which carries exactly the data the Usage panel needs (status, resetsAt, rateLimitType, utilization, overage state). Promoting Phase 99-F to standalone Phase 103 because the Usage panel is a meaningful operator-facing surface, not just a wiring chore.
+
+**Pre-existing primitives we can reuse:**
+- `SDKRateLimitInfo` (claude-agent-sdk 0.2.97 — `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:2553-2563`) — fired as `rate_limit_event` messages per `query()` turn. Carries `status` (allowed/allowed_warning/rejected), `resetsAt`, `rateLimitType` ('five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'overage'), `utilization` (0-1), overage fields.
+- `CompactionManager` (Phase 47) — knows compaction count + last-compaction timestamp per agent.
+- `UsageTracker` — tokens in/out/cache, fallback count, per-turn cost.
+- `SessionHandle` — current SDK session ID, last-activity timestamp.
+- `EffortStateStore` (Phase 53) — current `think` budget per agent.
+- `TurnDispatcher` — queue depth + in-flight turn ID.
+- Phase 53 zone tracker — context-window utilization %.
+- Existing `/clawcode-status` slash command + `buildStatusData()` — the embed scaffolding is already in place; this phase fills in real values and adds new fields.
+
+**Sub-scope candidates (refined during discuss-phase):**
+1. **New `RateLimitTracker` per agent** — listens for `rate_limit_event` messages emitted by the SDK during `query()` execution. Stores latest snapshot per `rateLimitType` (so 5-hour, 7-day, 7-day-opus, 7-day-sonnet, overage are tracked independently). In-memory + persisted to per-agent SQLite for restart resilience. Exposes `getLatest(type)` and `getAllSnapshots()` for the embed builders.
+2. **Wire 11 hardcoded `n/a` fields in `buildStatusData`** to live telemetry: Fallbacks (UsageTracker), Compactions (CompactionManager), Tokens (UsageTracker), Session ID (SessionHandle), Last Activity (SessionHandle), Think effort (EffortStateStore), Reasoning (effort tier label), Permissions (AgentConfig.permissions or settingSources), Activation (boot timestamp from process manager), Queue (TurnDispatcher depth), Context % (Phase 53 zone tracker). Drop the 3 OpenClaw-specific fields (Fast/Elevated/Harness) — they don't apply to ClawCode's OAuth Max model.
+3. **Session/weekly bars on `/clawcode-status` embed** — append two compact bars: "5h session: ▓▓▓░░░ 47% (resets 2:40pm)" and "7-day weekly: ▓▓▓▓▓░ 71% (resets Mon 9am)". Backed by `RateLimitTracker.getLatest('five_hour' | 'seven_day')`. Drop 3 OpenClaw fields to make embed room.
+4. **New `/clawcode-usage` slash command** — dedicated Usage panel matching the Claude app screenshot. Fields: 5-hour session usage with reset countdown, 7-day weekly usage with reset countdown, Opus weekly carve-out, Sonnet weekly carve-out, overage state (allowed/disabled/exceeded), surpassed-threshold warnings. Per-agent (defaults to channel-bound agent) with optional `agent:` arg to query a specific agent. Includes ASCII progress bars + emoji status indicators (🟢 green / 🟡 warning / 🔴 rejected).
+5. **Tests pinning rate-limit snapshot capture + render** — Vitest unit tests: (a) RateLimitTracker correctly merges incoming `rate_limit_event` snapshots, dedupes by type, retains latest. (b) Persistence round-trip (write → restart → read latest). (c) `buildStatusData` includes all 11 newly-wired fields with non-`n/a` values when underlying managers have data. (d) `/clawcode-usage` embed renders all 4 rate-limit types with correct bar widths + reset times + status colors.
+
+**Plans:** 3 plans (Wave 1: Plan 01 — wire 8 live fields + drop 3 OpenClaw fields + compaction counter mirror; Wave 2: Plan 02 — RateLimitTracker primitive + SDK rate_limit_event hook + DI mirror on SessionHandle; Wave 3: Plan 03 — list-rate-limit-snapshots IPC + /clawcode-usage slash command + usage-embed renderer + optional session/weekly bars on /clawcode-status)
+
+Plans:
+- [ ] 103-01-PLAN.md — Wire 8 live fields into /clawcode-status (Session ID, Last Activity, Tokens, Permissions, Effort, Reasoning label, Activation, Queue, Context %, Compactions count) + drop 3 OpenClaw fields (Fast/Elevated/Harness) + add compaction counter mirror on SessionManager
+- [ ] 103-02-PLAN.md — RateLimitTracker (in-memory + per-agent SQLite via UsageTracker DB) + SDK rate_limit_event branch in iterateUntilResult + 7th DI-mirror application on SessionHandle (getRateLimitTracker/setRateLimitTracker)
+- [ ] 103-03-PLAN.md — list-rate-limit-snapshots IPC method (avoiding rate-limit-status collision) + /clawcode-usage CONTROL_COMMAND with EmbedBuilder inline-handler short-circuit (11th application) + buildUsageEmbed pure renderer + optional 5h+7d bars suffix on /clawcode-status (OBS-08) + slash-command-cap regression test
+
+**Status:** Pending — opened 2026-04-26 after operator's `/clawcode-status` improvement question + Claude-app Usage panel request. Promoted from Phase 99 sub-scope F to standalone Phase 103 because the Usage panel justifies its own surface. ~1 day estimate end-to-end. Sequenced ahead of Phase 101 + 102 per operator directive 2026-04-26.
