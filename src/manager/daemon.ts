@@ -2322,6 +2322,9 @@ export async function startDaemon(
   });
   heartbeatRunner.setThreadManager(threadManager);
   heartbeatRunner.setTaskStore(taskStore);
+  // Phase 103 OBS-01 — wire HeartbeatRunner into SessionManager so
+  // /clawcode-status can read context-zone fillPercentage synchronously.
+  manager.setHeartbeatRunner(heartbeatRunner);
   log.info("thread manager initialized");
 
   // 8d. Build manual webhook identities (from config webhookUrl fields)
