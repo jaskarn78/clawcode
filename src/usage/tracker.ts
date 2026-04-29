@@ -183,6 +183,18 @@ export class UsageTracker {
       CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id);
       CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_events(timestamp);
       CREATE INDEX IF NOT EXISTS idx_usage_agent ON usage_events(agent);
+
+      -- Phase 103 OBS-04 — per-agent rate-limit snapshots (one row per
+      -- rateLimitType: five_hour, seven_day, seven_day_opus,
+      -- seven_day_sonnet, overage). Owned + populated by RateLimitTracker
+      -- (src/usage/rate-limit-tracker.ts) which shares this DB handle so
+      -- there is exactly one SQLite file per agent. Additive — never
+      -- destructive to existing usage_events rows.
+      CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+        rate_limit_type TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL
+      );
     `);
 
     // Phase 72 — idempotent column migrations. SQLite throws "duplicate
