@@ -1,6 +1,7 @@
 import { WebhookClient, type EmbedBuilder } from "discord.js";
 import type { WebhookIdentity } from "./webhook-types.js";
 import { logger } from "../shared/logger.js";
+import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { Logger } from "pino";
 
 /** Maximum Discord message length. */
@@ -56,7 +57,15 @@ export class WebhookManager {
     }
 
     const client = this.getOrCreateClient(agentName, identity.webhookUrl);
-    const chunks = splitMessage(content, MAX_MESSAGE_LENGTH);
+    // Wrap raw markdown tables in ```text``` code fences so Discord renders
+    // them as monospace. wrapMarkdownTablesInCodeFence is pure + idempotent
+    // (already-fenced content passes through unchanged), so callers that
+    // pre-wrap or send pure prose are unaffected. Closes the regression
+    // gap left by Phase 100-fu where bridge.ts:917 sendDirect fallback,
+    // daemon.ts:3544, and usage/daily-summary.ts:111 reached webhook
+    // delivery without the wrap.
+    const wrapped = wrapMarkdownTablesInCodeFence(content);
+    const chunks = splitMessage(wrapped, MAX_MESSAGE_LENGTH);
 
     for (const chunk of chunks) {
       await client.send({
