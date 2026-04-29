@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Phase 999.3 context gathered (--auto)
-last_updated: "2026-04-29T20:15:37.550Z"
+stopped_at: Completed 999.3-01-PLAN.md
+last_updated: "2026-04-29T20:48:53.985Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 21
-  completed_phases: 6
-  total_plans: 29
-  completed_plans: 29
+  completed_phases: 7
+  total_plans: 30
+  completed_plans: 30
 ---
 
 # Project State
@@ -307,6 +307,9 @@ Recent decisions affecting current work:
 - [Phase 103]: Pure-DI handler module pattern — daemon-rate-limit-ipc.ts mirrors Phase 96 daemon-fs-ipc / Phase 92 cutover-ipc-handlers blueprint (3rd application of dedicated-IPC-module pattern)
 - [Phase 103]: Overage rendered as status-line not progress bar (Open Q3) — credit-pool model doesn't translate to a percentage bar
 - [Phase 999.1]: Used D-PLN-01 strict TDD pattern (RED → GREEN as 2 atomic commits) for 4 new agent-output directives
+- [Phase 999.3]: Plan 01: delegateTo composition contract — sourceConfig (delegate ?? caller) provides inherited fields via spread; parentConfig overrides channels/threads/webhook AFTER spread; disallowedTools recursion guard UNCONDITIONAL outside both branches per D-TCX-03
+- [Phase 999.3]: Plan 01: delegate validation at IPC boundary (manager.getAgentConfig) so verbatim ManagerError surfaces to MCP caller per Phase 85 TOOL-04 pattern; spawner-level re-check is defense-in-depth (DEL-10)
+- [Phase 999.3]: Plan 01: webhook composition splits identity — caller's webhookUrl (channel-bound) + delegate's displayName/avatar (per-message overrides via discord.js client.send), verified at webhook-manager.ts:71-75
 
 ### v2.1 closing decisions (for reference)
 
@@ -444,9 +447,10 @@ Recent decisions affecting current work:
 | Phase 103 P02 | ~22min | 2 tasks | 10 files |
 | Phase 103 P03 | 30min | 2 tasks | 14 files |
 | Phase 999.1 P01 | 4m | 2 tasks | 2 files |
+| Phase 999.3 P01 | 10 | 4 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-29
-Stopped at: Phase 999.3 context gathered (--auto)
+Stopped at: Completed 999.3-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

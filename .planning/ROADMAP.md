@@ -614,10 +614,10 @@ Plans:
 
 **Requirements:** [SPEC-01, SPEC-02, SPEC-03, SPEC-04, SPEC-05, SPEC-06, SPEC-07] — see 999.3-01-PLAN.md.
 
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 999.3-01-PLAN.md — RED+GREEN delegateTo branch in spawnInThread + 4-surface fan-through (types → spawner → daemon IPC → MCP tool); 10 new tests (DEL-01..DEL-10); recursion-guard invariant preserved.
+- [x] 999.3-01-PLAN.md — RED+GREEN delegateTo branch in spawnInThread + 4-surface fan-through (types → spawner → daemon IPC → MCP tool); 10 new tests (DEL-01..DEL-10); recursion-guard invariant preserved.
 
 **Promotion target:** active milestone, will likely become **Phase 105** (promoted 2026-04-29 ahead of 999.2 a2a refactor — smaller blast radius, leverages existing spawn_subagent_thread infra, unblocks elevated-thinking delegation sooner).
 
