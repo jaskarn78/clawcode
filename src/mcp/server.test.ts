@@ -415,3 +415,50 @@ describe("Phase 999.2 Plan 02 — MCP tool aliases", () => {
     ).toBeLessThan(sendAt);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.2 Plan 03 — ask_agent sync-reply MCP wrapper
+//
+// The pure-DI handler tests in src/manager/__tests__/ask-agent-ipc.test.ts
+// pin the IPC contract (response field populated when target running, error
+// propagation, mirror webhook calls). This block pins the MCP-wrapper-side
+// SHAPE — the exact text templates surfaced to the calling LLM:
+//
+//   1. mirror_to_target_channel: z.boolean().default(false) added to schema
+//   2. `${input.to} replied:` text template rendered when response present
+//      (D-SYN-02 — the 2026-04-29 smoking-gun bug fix)
+//   3. `is not running — no synchronous reply` template when response absent
+//      (D-SYN-03 — explicit offline path)
+//   4. `Failed to ask ${input.to}: ${msg}` template on caught error
+//      (D-SYN-05 — error propagation surface)
+//
+// Static-grep is sufficient because the templates are deterministic strings;
+// the IPC contract is already pinned upstream by the pure-DI handler tests.
+// ---------------------------------------------------------------------------
+describe("Phase 999.2 Plan 03 — ask_agent sync-reply MCP wrapper", () => {
+  const serverSource = readFileSync("src/mcp/server.ts", "utf8");
+
+  it("askAgentSchema includes mirror_to_target_channel: z.boolean().default(false)", () => {
+    expect(serverSource).toContain(
+      "mirror_to_target_channel: z.boolean().default(false)",
+    );
+  });
+
+  it("ask_agent MCP wrapper renders target reply with `${input.to} replied:` template (A2A-09 — fixes 2026-04-29 smoking-gun bug)", () => {
+    // The wrapper used to destructure {ok, messageId} and silently discard
+    // result.response. Plan 03 surfaces the response in the tool-result text.
+    expect(serverSource).toMatch(/\$\{[^}]+\} replied:/);
+    // And the line must reference result.response (not just any random text):
+    expect(serverSource).toMatch(/result\.response/);
+  });
+
+  it("ask_agent MCP wrapper renders offline-explicit text when response is undefined (A2A-12)", () => {
+    expect(serverSource).toContain(
+      "is not running — no synchronous reply",
+    );
+  });
+
+  it("ask_agent MCP wrapper renders `Failed to ask ${input.to}: ${msg}` on dispatch error (A2A-11)", () => {
+    expect(serverSource).toMatch(/Failed to ask \$\{[^}]+\}:/);
+  });
+});
