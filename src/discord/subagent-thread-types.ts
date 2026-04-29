@@ -45,6 +45,19 @@ export type SubagentThreadConfig = {
    * when done. autoArchive=true implies autoRelay=true.
    */
   readonly autoArchive?: boolean;
+  /**
+   * Phase 999.3 — when set to a target agent name, the spawned subagent
+   * inherits the target's config (model/soul/identity/skills/subagentModel/
+   * mcpServers) instead of the caller's. The Discord thread still spawns
+   * in the caller's channel; autoRelay still summarizes back to caller's
+   * main channel — but the work is done with the delegate's identity.
+   *
+   * Empty string is treated as undefined (D-EDG-04). Self-delegation
+   * (delegateTo === parentAgentName) is allowed (D-EDG-03). Unknown
+   * delegate throws ManagerError("Delegate agent 'X' not found in config")
+   * at the IPC boundary (primary) and at the spawner level (defense-in-depth).
+   */
+  readonly delegateTo?: string;
 };
 
 /**

@@ -325,6 +325,27 @@ export class SubagentThreadSpawner {
       );
     }
 
+    // Phase 999.3 — D-INH-01..03: when delegateTo is set, compose subagent
+    // config from the delegate's identity (model/soul/skills/mcpServers/
+    // subagentModel) but keep caller-owned, channel-scoped fields (channels,
+    // threads quota, webhookUrl). D-EDG-04: empty string ≡ undefined.
+    // D-EDG-05: defense-in-depth at spawner level (IPC handler is primary).
+    const normalizedDelegateTo =
+      config.delegateTo && config.delegateTo.length > 0
+        ? config.delegateTo
+        : undefined;
+    const delegateConfig = normalizedDelegateTo
+      ? this.sessionManager.getAgentConfig(normalizedDelegateTo)
+      : undefined;
+    if (normalizedDelegateTo && !delegateConfig) {
+      throw new ManagerError(
+        `Delegate agent '${normalizedDelegateTo}' not found in config`,
+      );
+    }
+    // sourceConfig provides inherited fields (model/soul/skills/mcpServers/...).
+    // parentConfig provides channel-scoped/quota fields (channels, threads, webhookUrl).
+    const sourceConfig = delegateConfig ?? parentConfig;
+
     // 2. Get parent's first channel
     const channelId = parentConfig.channels[0];
     if (!channelId) {
@@ -333,7 +354,7 @@ export class SubagentThreadSpawner {
       );
     }
 
-    // 3. Check maxThreadSessions limit
+    // 3. Check maxThreadSessions limit (caller's quota — D-INH-02)
     const maxSessions =
       parentConfig.threads?.maxThreadSessions ??
       DEFAULT_THREAD_CONFIG.maxThreadSessions;
@@ -354,28 +375,51 @@ export class SubagentThreadSpawner {
       autoArchiveDuration: 1440,
     });
 
-    // 5. Build session name
+    // 5. Build session name (D-NAM-01: -via- infix when delegating; D-NAM-02 otherwise)
     const shortId = nanoid(6);
-    const sessionName = `${config.parentAgentName}-sub-${shortId}`;
+    const sessionName = normalizedDelegateTo
+      ? `${config.parentAgentName}-via-${normalizedDelegateTo}-${shortId}`
+      : `${config.parentAgentName}-sub-${shortId}`;
 
-    // 6. Build thread context for soul
-    const threadContext = [
+    // 6. Build thread context for soul.
+    // D-TCX-01: when delegating, append a 4-line "Delegation Context" block
+    // including the canonical phrase "acting on behalf of" so the subagent
+    // understands it speaks with delegate's identity in caller's channel.
+    const baseContext = [
       "\n\n## Subagent Thread Context",
       `You are a subagent operating in a Discord thread.`,
       `Thread: "${config.threadName}" (ID: ${thread.id})`,
       `Parent channel: ${channelId}`,
       `Parent agent: ${config.parentAgentName}`,
       "Respond to messages in this thread only.",
-    ].join("\n");
+    ];
+    const delegationContext = normalizedDelegateTo
+      ? [
+          "",
+          "## Delegation Context",
+          `You are acting on behalf of \`${config.parentAgentName}\` who delegated this work to you.`,
+          "Use your full identity, skills, and standards. Treat the operator's request",
+          "as one fulfilled THROUGH you, not BY you.",
+        ]
+      : [];
+    const threadContext = [...baseContext, ...delegationContext].join("\n");
 
-    // 7. Determine model
-    const model = config.model ?? parentConfig.subagentModel ?? parentConfig.model;
+    // 7. Determine model — read from sourceConfig so delegate's
+    // subagentModel/model wins when delegating (D-INH-01).
+    const model = config.model ?? sourceConfig.subagentModel ?? sourceConfig.model;
 
-    // 8. Build webhook identity if parent has webhookUrl
+    // 8. Build webhook identity per D-INH-03 — caller's webhookUrl
+    // (channel-bound), delegate's per-message displayName + avatar
+    // (verified at webhook-manager.ts:71-75 — discord.js client.send accepts
+    // username + avatarURL per-call without rebinding the webhook).
     const webhook = parentConfig.webhook?.webhookUrl
       ? {
-          displayName: sessionName,
-          avatarUrl: parentConfig.webhook.avatarUrl,
+          displayName: normalizedDelegateTo
+            ? (delegateConfig!.webhook?.displayName ?? delegateConfig!.name)
+            : sessionName,
+          avatarUrl: normalizedDelegateTo
+            ? delegateConfig!.webhook?.avatarUrl
+            : parentConfig.webhook.avatarUrl,
           webhookUrl: parentConfig.webhook.webhookUrl,
         }
       : undefined;
@@ -393,15 +437,30 @@ export class SubagentThreadSpawner {
     // this disallow). Tool name is `mcp__<server-name>__<tool-name>` per
     // the SDK convention; server name is "clawcode" (src/mcp/server.ts:232)
     // and tool name is "spawn_subagent_thread" (src/mcp/server.ts:334).
+    //
+    // Phase 999.3 D-TCX-03 — disallowedTools stays UNCONDITIONAL: the
+    // recursion guard applies whether or not delegateTo is set. Test DEL-05
+    // pins this; conditional placement would silently bypass the Phase 99-N
+    // regression. The line below MUST be the only set-site, outside any
+    // delegate/non-delegate branch.
+    //
+    // Phase 999.3 D-INH-01..02 — sourceConfig (delegate when delegating,
+    // caller otherwise) carries inherited fields: model/soul/identity/skills/
+    // mcpServers/subagentModel/effortLevel/etc. via spread. parentConfig
+    // contributes channel-scoped overrides AFTER the spread:
+    //   channels: []           — never inherit channels for subagents
+    //   threads: caller's      — D-INH-02, caller's quota wins
+    //   webhook: composed      — caller's URL + delegate's identity
     const subagentConfig: ResolvedAgentConfig = {
-      ...parentConfig,
+      ...sourceConfig,
       name: sessionName,
       model,
       channels: [],
-      soul: (config.systemPrompt ?? parentConfig.soul ?? "") + threadContext,
+      soul: (config.systemPrompt ?? sourceConfig.soul ?? "") + threadContext,
       schedules: [],
       slashCommands: [],
       webhook,
+      threads: parentConfig.threads,
       disallowedTools: ["mcp__clawcode__spawn_subagent_thread"],
     };
 
