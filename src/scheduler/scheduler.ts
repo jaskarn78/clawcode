@@ -28,7 +28,7 @@ type TriggerCallback = () => Promise<void>;
 
 /**
  * TaskScheduler manages cron-based task execution for agents.
- * Each agent can have multiple scheduled tasks that execute via sendToAgent().
+ * Each agent can have multiple scheduled tasks that execute via dispatchTurn().
  * Tasks run one at a time per agent (sequential, not parallel).
  */
 export class TaskScheduler {

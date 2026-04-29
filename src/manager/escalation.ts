@@ -124,7 +124,7 @@ export class EscalationMonitor {
       const fork = await this.sessionManager.forkSession(agentName, {
         modelOverride: this.config.escalationModel,
       });
-      const response = await this.sessionManager.sendToAgent(fork.forkName, message);
+      const response = await this.sessionManager.dispatchTurn(fork.forkName, message);
       await this.sessionManager.stopAgent(fork.forkName);
       this.errorCounts.set(agentName, 0);
 

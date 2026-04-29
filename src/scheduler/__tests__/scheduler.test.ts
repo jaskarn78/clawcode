@@ -5,10 +5,10 @@ import type { ScheduleEntry } from "../types.js";
 
 function createMockSessionManager() {
   return {
-    sendToAgent: vi.fn().mockResolvedValue("Task completed"),
+    dispatchTurn: vi.fn().mockResolvedValue("Task completed"),
     // Phase 57 Plan 03: TurnDispatcher calls getTraceCollector per dispatch.
     // Tests that don't care about tracing get undefined (no collector wired),
-    // so sendToAgent is called with turn=undefined — matches pre-v1.8 shape.
+    // so dispatchTurn is called with turn=undefined — matches pre-v1.8 shape.
     getTraceCollector: vi.fn().mockReturnValue(undefined),
   } as any;
 }
@@ -64,7 +64,7 @@ describe("TaskScheduler", () => {
     expect(statuses).toHaveLength(0);
   });
 
-  it("cron trigger calls sendToAgent with the schedule prompt", async () => {
+  it("cron trigger calls dispatchTurn with the schedule prompt", async () => {
     const schedules: readonly ScheduleEntry[] = [
       { name: "daily", cron: "0 9 * * *", prompt: "Generate daily report", enabled: true },
     ];
@@ -74,16 +74,16 @@ describe("TaskScheduler", () => {
     // Manually trigger the cron callback
     await scheduler._triggerForTest("alice", "daily");
 
-    // Phase 57 Plan 03: TurnDispatcher forwards sendToAgent with 3 args
+    // Phase 57 Plan 03: TurnDispatcher forwards dispatchTurn with 3 args
     // (agentName, message, turn). Turn is undefined here because the mock
     // SessionManager's getTraceCollector returns undefined. Pre-v1.8 this
     // test asserted a 2-arg call; the 3-arg shape is equivalent behavior
     // (turn=undefined ≡ no tracing) — the assertion is rewritten to match.
-    expect(sessionManager.sendToAgent).toHaveBeenCalledWith("alice", "Generate daily report", undefined, { signal: undefined });
+    expect(sessionManager.dispatchTurn).toHaveBeenCalledWith("alice", "Generate daily report", undefined, { signal: undefined });
   });
 
-  it("failed sendToAgent records error status but scheduler continues", async () => {
-    sessionManager.sendToAgent.mockRejectedValueOnce(new Error("Agent unreachable"));
+  it("failed dispatchTurn records error status but scheduler continues", async () => {
+    sessionManager.dispatchTurn.mockRejectedValueOnce(new Error("Agent unreachable"));
 
     const schedules: readonly ScheduleEntry[] = [
       { name: "failing-task", cron: "0 9 * * *", prompt: "Will fail", enabled: true },
@@ -145,7 +145,7 @@ describe("TaskScheduler", () => {
     let concurrentCount = 0;
     let maxConcurrent = 0;
 
-    sessionManager.sendToAgent.mockImplementation(async () => {
+    sessionManager.dispatchTurn.mockImplementation(async () => {
       concurrentCount++;
       maxConcurrent = Math.max(maxConcurrent, concurrentCount);
       // Simulate work
@@ -168,11 +168,11 @@ describe("TaskScheduler", () => {
     await Promise.all([trigger1, trigger2]);
 
     // The second task should have been skipped (lock held)
-    // So sendToAgent should have been called only once
-    expect(sessionManager.sendToAgent).toHaveBeenCalledTimes(1);
+    // So dispatchTurn should have been called only once
+    expect(sessionManager.dispatchTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("handler-based schedule calls handler instead of sendToAgent", async () => {
+  it("handler-based schedule calls handler instead of dispatchTurn", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const schedules: readonly ScheduleEntry[] = [
       { name: "consolidation", cron: "0 3 * * *", handler, enabled: true },
@@ -182,7 +182,7 @@ describe("TaskScheduler", () => {
     await scheduler._triggerForTest("alice", "consolidation");
 
     expect(handler).toHaveBeenCalledOnce();
-    expect(sessionManager.sendToAgent).not.toHaveBeenCalled();
+    expect(sessionManager.dispatchTurn).not.toHaveBeenCalled();
   });
 
   it("handler error records error status", async () => {
@@ -289,7 +289,7 @@ describe("scheduler tracing", () => {
     expect(args[2]).toBeNull();
   });
 
-  it("trace: scheduler turn.end('success') fires when sendToAgent resolves", async () => {
+  it("trace: scheduler turn.end('success') fires when dispatchTurn resolves", async () => {
     const schedules: readonly ScheduleEntry[] = [
       { name: "ok", cron: "0 9 * * *", prompt: "p", enabled: true },
     ];
@@ -299,8 +299,8 @@ describe("scheduler tracing", () => {
     expect(turnEnd).toHaveBeenCalledWith("success");
   });
 
-  it("trace: scheduler turn.end('error') fires when sendToAgent throws", async () => {
-    tracedSessionManager.sendToAgent.mockRejectedValueOnce(new Error("offline"));
+  it("trace: scheduler turn.end('error') fires when dispatchTurn throws", async () => {
+    tracedSessionManager.dispatchTurn.mockRejectedValueOnce(new Error("offline"));
     const schedules: readonly ScheduleEntry[] = [
       { name: "bad", cron: "0 9 * * *", prompt: "p", enabled: true },
     ];

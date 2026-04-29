@@ -10,7 +10,7 @@ function createMockSessionManager() {
       parentAgent: "agent",
       sessionId: "sess-1",
     }),
-    sendToAgent: vi.fn().mockResolvedValue("escalated response"),
+    dispatchTurn: vi.fn().mockResolvedValue("escalated response"),
     stopAgent: vi.fn().mockResolvedValue(undefined),
   } as unknown as SessionManager;
 }
@@ -68,7 +68,7 @@ describe("EscalationMonitor", () => {
 
       // Start escalation (don't await - keeps lock held)
       const slowManager = createMockSessionManager();
-      (slowManager.sendToAgent as ReturnType<typeof vi.fn>).mockImplementation(
+      (slowManager.dispatchTurn as ReturnType<typeof vi.fn>).mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve("done"), 100)),
       );
       const slowMonitor = new EscalationMonitor(slowManager, defaultConfig);
@@ -103,7 +103,7 @@ describe("EscalationMonitor", () => {
         "agent",
         { modelOverride: "sonnet" },
       );
-      expect((mockManager.sendToAgent as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect((mockManager.dispatchTurn as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
         "agent-fork-abc123",
         "complex task",
       );
@@ -160,7 +160,7 @@ describe("EscalationMonitor", () => {
   // is untouched. If a future refactor accidentally stops the parent during
   // escalation, this test catches it before the change ships.
   describe("fork-escalation: parent persistent query survives fork spawn", () => {
-    it("calls forkSession + sendToAgent(fork) + stopAgent(fork) — NEVER stopAgent(parent)", async () => {
+    it("calls forkSession + dispatchTurn(fork) + stopAgent(fork) — NEVER stopAgent(parent)", async () => {
       const parentAgent = "clawdy";
       const forkName = `${parentAgent}-fork-abc123`;
 
@@ -175,7 +175,7 @@ describe("EscalationMonitor", () => {
           parentAgent,
           sessionId: "fork-sess-ephemeral",
         }),
-        sendToAgent: vi.fn().mockResolvedValue("opus fork response"),
+        dispatchTurn: vi.fn().mockResolvedValue("opus fork response"),
         stopAgent: vi.fn().mockResolvedValue(undefined),
         // Parent-state probes that a real SessionManager exposes. The mock
         // implementation asserts that these never observe mutation during
@@ -196,12 +196,12 @@ describe("EscalationMonitor", () => {
 
       await monitor.escalate(parentAgent, "deeply research this");
 
-      // Method-call set: fork + sendToAgent(fork) + stopAgent(fork).
+      // Method-call set: fork + dispatchTurn(fork) + stopAgent(fork).
       expect(manager.forkSession as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
         parentAgent,
         { modelOverride: "sonnet" },
       );
-      expect(manager.sendToAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      expect(manager.dispatchTurn as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
         forkName,
         "deeply research this",
       );
@@ -234,7 +234,7 @@ describe("EscalationMonitor", () => {
       await monitor.escalate("clawdy", "help");
 
       expect(manager.forkSession as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
-      expect(manager.sendToAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      expect(manager.dispatchTurn as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
       expect(manager.stopAgent as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
     });
   });

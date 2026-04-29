@@ -1892,7 +1892,7 @@ export async function startDaemon(
             memoryDir,
             memoryStore,
             embedder,
-            summarize: (prompt: string) => manager.sendToAgent(agentConfig.name, prompt),
+            summarize: (prompt: string) => manager.dispatchTurn(agentConfig.name, prompt),
           };
           await runConsolidation(deps, consolidationConfig);
         },
@@ -3843,7 +3843,7 @@ export async function startDaemon(
     // 260419-q2z Fix B — drain in-flight session summaries BEFORE closing any
     // downstream resource. The 15s ceiling matches summarizeSession's internal
     // 10s timeout + 5s slack for embed + insert + markSummarized. After drain
-    // returns, new turn dispatches via streamFromAgent/sendToAgent reject
+    // returns, new turn dispatches via streamFromAgent/dispatchTurn reject
     // with SessionError('shutting down ...'), so stopAll() below is safe from
     // races with an in-progress turn.
     try {
@@ -4185,7 +4185,7 @@ async function routeMethod(
       const running = manager.getRunningAgents();
       if (running.includes(to)) {
         try {
-          let response = await manager.sendToAgent(to, content);
+          let response = await manager.dispatchTurn(to, content);
 
           // Error detection heuristic: check for common failure indicators
           const ERROR_INDICATORS = [
@@ -4934,7 +4934,7 @@ async function routeMethod(
       // Phase 51: invoked by `clawcode bench` to run a single prompt against a
       // running agent and capture a trace. Not exposed via Discord; CLI /
       // harness only. Caller-owned Turn lifecycle matches the Phase 50
-      // contract: SessionManager.sendToAgent NEVER calls turn.end(); this
+      // contract: SessionManager.dispatchTurn NEVER calls turn.end(); this
       // handler does, in both success and error paths.
       //
       // Phase 54 Plan 03 — response shape extended with rate_limit_errors:
@@ -4964,7 +4964,7 @@ async function routeMethod(
       const turn = collector.startTurn(turnId, agentName, null);
       let rateLimitErrors = 0;
       try {
-        const response = await manager.sendToAgent(agentName, prompt, turn);
+        const response = await manager.dispatchTurn(agentName, prompt, turn);
         turn.end("success");
         return { turnId, response, rate_limit_errors: rateLimitErrors };
       } catch (err) {
@@ -5588,7 +5588,7 @@ async function routeMethod(
 
       let answer: string;
       try {
-        answer = await manager.sendToAgent(fork.forkName, question);
+        answer = await manager.dispatchTurn(fork.forkName, question);
       } finally {
         // Always clean up the fork
         await manager.stopAgent(fork.forkName).catch(() => {});

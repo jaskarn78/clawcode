@@ -21,7 +21,7 @@ describe("Phase 57 Plan 03 — Scheduler turn origin persistence", () => {
       const collector = new TraceCollector(store, silentLog);
 
       const sessionManager = {
-        sendToAgent: vi.fn(async () => "scheduled-reply"),
+        dispatchTurn: vi.fn(async () => "scheduled-reply"),
         streamFromAgent: vi.fn(),
         getTraceCollector: vi.fn(() => collector),
       };
@@ -58,8 +58,8 @@ describe("Phase 57 Plan 03 — Scheduler turn origin persistence", () => {
       expect(parsed.parentTurnId).toBeNull();
       expect(parsed.chain).toEqual([row.id]);
 
-      expect(sessionManager.sendToAgent).toHaveBeenCalledTimes(1);
-      expect(sessionManager.sendToAgent).toHaveBeenCalledWith(
+      expect(sessionManager.dispatchTurn).toHaveBeenCalledTimes(1);
+      expect(sessionManager.dispatchTurn).toHaveBeenCalledWith(
         "alice",
         "Generate report",
         expect.objectContaining({ id: row.id }),

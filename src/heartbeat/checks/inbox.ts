@@ -79,7 +79,7 @@ const inboxCheck: CheckModule = {
       };
     }
 
-    // 6. For each message, deliver to agent via sendToAgent (per D-07)
+    // 6. For each message, deliver to agent via dispatchTurn (per D-07)
     //    Format: "[Message from {from}]: {content}"
     //    After successful delivery, markProcessed (per D-08)
     let delivered = 0;
@@ -87,7 +87,7 @@ const inboxCheck: CheckModule = {
     for (const msg of messages) {
       try {
         const formatted = `[Message from ${msg.from}]: ${msg.content}`;
-        await sessionManager.sendToAgent(agentName, formatted);
+        await sessionManager.dispatchTurn(agentName, formatted);
         await markProcessed(inboxDir, msg.id);
         delivered++;
       } catch {

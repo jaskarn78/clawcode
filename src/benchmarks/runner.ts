@@ -10,7 +10,7 @@
  *   5. Waits for readiness via `awaitDaemonReady`.
  *   6. Best-effort starts the bench-agent (idempotent).
  *   7. For each prompt × each repeat, calls the `bench-run-prompt` IPC
- *      method (which runs `sendToAgent` inside a Turn — see daemon).
+ *      method (which runs `dispatchTurn` inside a Turn — see daemon).
  *   8. For each prompt, snapshots `/latency` to capture percentiles.
  *   9. Snapshots `/latency` once more for `overall_percentiles`, ensuring
  *      all 4 canonical segments are present (count=0 rows included).

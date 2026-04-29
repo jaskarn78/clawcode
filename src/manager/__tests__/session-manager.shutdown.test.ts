@@ -1,7 +1,7 @@
 /**
  * Quick task 260419-q2z Task 4 — shutdown drain tests.
  *
- * Tests SessionManager.drain() semantics + the streamFromAgent/sendToAgent
+ * Tests SessionManager.drain() semantics + the streamFromAgent/dispatchTurn
  * rejection guard that activates after drain. Uses __testTrackSummary to
  * enqueue promises into the same Set that the production stop/crash paths
  * fill, so we don't need to stand up full agent + memory infrastructure to
@@ -109,9 +109,9 @@ describe("SessionManager.drain (260419-q2z Fix B)", () => {
     ).rejects.toThrow(/shutting down/);
   });
 
-  it("drain() flips draining=true so sendToAgent rejects with SessionError('shutting down')", async () => {
+  it("drain() flips draining=true so dispatchTurn rejects with SessionError('shutting down')", async () => {
     await manager.drain(100);
-    await expect(manager.sendToAgent("nonexistent-agent", "hi")).rejects.toThrow(
+    await expect(manager.dispatchTurn("nonexistent-agent", "hi")).rejects.toThrow(
       /shutting down/,
     );
   });

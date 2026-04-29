@@ -98,7 +98,7 @@ function makeMockSessionManager() {
     getAgentConfig: vi.fn((agentName: string) => configs.get(agentName)),
     getRunningAgents: vi.fn(() => [...running]),
     forwardToAgent: vi.fn(),
-    sendToAgent: vi.fn(),
+    dispatchTurn: vi.fn(),
     streamFromAgent: vi.fn(),
     forkSession: vi.fn(),
     restartAgent: vi.fn(),

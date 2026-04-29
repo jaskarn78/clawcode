@@ -220,7 +220,7 @@ describe("Phase 81 FORK-01 — EscalationMonitor.escalate propagates opus overri
           parentAgent: parentName,
           sessionId: `sess-${label}-fork`,
         } as ForkResult),
-        sendToAgent: vi.fn().mockResolvedValue("opus fork response"),
+        dispatchTurn: vi.fn().mockResolvedValue("opus fork response"),
         stopAgent: vi.fn().mockResolvedValue(undefined),
       } as unknown as SessionManager;
 
@@ -248,7 +248,7 @@ describe("Phase 81 FORK-01 — EscalationMonitor.escalate propagates opus overri
         parentAgent: "agent",
         sessionId: "s1",
       } as ForkResult),
-      sendToAgent: vi.fn().mockResolvedValue("ok"),
+      dispatchTurn: vi.fn().mockResolvedValue("ok"),
       stopAgent: vi.fn().mockResolvedValue(undefined),
     } as unknown as SessionManager;
 

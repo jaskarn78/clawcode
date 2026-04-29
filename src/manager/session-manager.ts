@@ -337,7 +337,7 @@ export class SessionManager {
 
   /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
-   * `streamFromAgent` / `sendToAgent` to reject new work with
+   * `streamFromAgent` / `dispatchTurn` to reject new work with
    * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
    * continue to function so the daemon can still clean up cleanly.
    */
@@ -1085,14 +1085,26 @@ export class SessionManager {
   }
 
   /**
-   * @throws SessionError if the agent is not running
+   * Dispatch a turn to the named agent and await the result.
    *
-   * Accepts an OPTIONAL pre-constructed Turn (caller-owned lifecycle, Phase 50).
-   * The caller (DiscordBridge / Scheduler) constructs the Turn via
-   * `getTraceCollector(name).startTurn(...)` and owns `turn.end()`. SessionManager
-   * is pure passthrough — it does NOT create or end Turn objects.
+   * (Renamed from the previous "send-to-agent" framing in Phase 999.2 D-RNI-01 —
+   *  it was misleading; this method dispatches a turn and waits for the
+   *  response, whether the target is the caller's own agent
+   *  (heartbeat/inbox), a fork (escalation), or a true peer (cross-agent IPC).)
+   *
+   * Signature is identical to the prior method (D-RNI-03):
+   * @param name      Target agent name.
+   * @param message   Turn content.
+   * @param turn      Optional pre-constructed Turn (caller-owned lifecycle,
+   *                  Phase 50). The caller (DiscordBridge / Scheduler) constructs
+   *                  the Turn via `getTraceCollector(name).startTurn(...)` and
+   *                  owns `turn.end()`. SessionManager is pure passthrough — it
+   *                  does NOT create or end Turn objects.
+   * @param options   Optional `{ signal }` abort handle (Phase 59).
+   * @returns         Resolves with the agent's response string.
+   * @throws SessionError if the agent is not running.
    */
-  async sendToAgent(
+  async dispatchTurn(
     name: string,
     message: string,
     turn?: Turn,
@@ -1118,7 +1130,7 @@ export class SessionManager {
    * @throws SessionError if the agent is not running
    *
    * Accepts an OPTIONAL pre-constructed Turn (caller-owned lifecycle, Phase 50).
-   * See sendToAgent docstring for the lifecycle contract.
+   * See dispatchTurn docstring for the lifecycle contract.
    */
   async streamFromAgent(
     name: string,
@@ -2005,7 +2017,7 @@ export class SessionManager {
    * mid-flight.
    *
    * After calling drain(), new turn dispatches (streamFromAgent /
-   * sendToAgent) reject with `SessionError('shutting down, agent X is no
+   * dispatchTurn) reject with `SessionError('shutting down, agent X is no
    * longer accepting turns')`. This is the ONE surface that blocks new work;
    * stopAgent / reconcileRegistry continue to function so the daemon can
    * still clean up.

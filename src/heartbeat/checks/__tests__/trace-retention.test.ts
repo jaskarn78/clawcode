@@ -23,7 +23,7 @@ function buildContext(overrides: {
     // Stubs for unused SessionManager surface:
     getRunningAgents: vi.fn().mockReturnValue([agentName]),
     startAgent: vi.fn(),
-    sendToAgent: vi.fn(),
+    dispatchTurn: vi.fn(),
     streamFromAgent: vi.fn(),
     forwardToAgent: vi.fn(),
     forkSession: vi.fn(),

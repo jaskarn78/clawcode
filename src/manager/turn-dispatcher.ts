@@ -1,7 +1,7 @@
 /**
  * TurnDispatcher — the single chokepoint for every agent-turn initiation.
  *
- * Phase 57 foundation. Wraps SessionManager.sendToAgent / streamFromAgent
+ * Phase 57 foundation. Wraps SessionManager.dispatchTurn / streamFromAgent
  * with:
  *   1. origin-prefixed turnId generation (via makeRootOrigin)
  *   2. caller-owned Turn lifecycle (opens + ends the Turn on behalf of the
@@ -199,7 +199,7 @@ export type DispatchOptions = {
    *
    * When set, the dispatcher:
    *   1. Snapshots the agent's current effort via sessionManager.getEffortForAgent.
-   *   2. Calls setEffortForAgent(agentName, skillEffort) BEFORE sendToAgent /
+   *   2. Calls setEffortForAgent(agentName, skillEffort) BEFORE dispatchTurn /
    *      streamFromAgent — the SDK's q.setMaxThinkingTokens fires before
    *      the turn starts (Plan 01 wired the synchronous path).
    *   3. After the send completes (success OR error, via try/finally),
@@ -535,7 +535,7 @@ export class TurnDispatcher {
   }
 
   /**
-   * Dispatch a non-streaming turn. Mirrors SessionManager.sendToAgent's
+   * Dispatch a non-streaming turn. Mirrors SessionManager.dispatchTurn's
    * return shape (the collected response string).
    *
    * Opens a Turn via the agent's TraceCollector (if wired), sets id to
@@ -579,7 +579,7 @@ export class TurnDispatcher {
     if (options.turn) {
       try { options.turn.recordOrigin(origin); } catch { /* non-fatal — trace side-effect */ }
       try {
-        const response = await this.sessionManager.sendToAgent(agentName, augmentedMessage, options.turn, { signal: options.signal });
+        const response = await this.sessionManager.dispatchTurn(agentName, augmentedMessage, options.turn, { signal: options.signal });
         // Phase 96 D-10 — post-turn DUAL detector hook. Non-blocking; runs after
         // SDK send completes, before returning to caller-owned-Turn caller.
         this.firePostTurnDetectors(response);
@@ -594,7 +594,7 @@ export class TurnDispatcher {
       try { turn.recordOrigin(origin); } catch { /* non-fatal */ }
     }
     try {
-      const response = await this.sessionManager.sendToAgent(agentName, augmentedMessage, turn, { signal: options.signal });
+      const response = await this.sessionManager.dispatchTurn(agentName, augmentedMessage, turn, { signal: options.signal });
       try { turn?.end("success"); } catch { /* non-fatal — trace write is best-effort */ }
       // Phase 96 D-10 — post-turn DUAL detector hook (missed-upload +
       // openclaw-fallback). Non-blocking sibling try/catch in
