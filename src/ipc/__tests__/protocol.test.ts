@@ -4,6 +4,8 @@ import {
   ipcResponseSchema,
   IPC_METHODS,
 } from "../protocol.js";
+import { handleListRateLimitSnapshotsIpc } from "../../manager/daemon-rate-limit-ipc.js";
+import type { RateLimitSnapshot } from "../../usage/rate-limit-tracker.js";
 
 describe("IPC_METHODS", () => {
   it("includes all required methods", () => {
@@ -36,6 +38,8 @@ describe("IPC_METHODS", () => {
       "share-file",
       // Phase 91 Plan 05 SYNC-08 — sync snapshot
       "list-sync-status",
+      // Phase 103 OBS-06 — per-agent OAuth Max rate-limit snapshots
+      "list-rate-limit-snapshots",
       // Messaging
       "send-message",
       "send-to-agent",
@@ -337,5 +341,83 @@ describe("ipcRequestSchema tools (Phase 55)", () => {
       expect(result.data.method).toBe("tools");
       expect(result.data.params).toEqual({ all: true, since: "7d" });
     }
+  });
+});
+
+describe("list-rate-limit-snapshots IPC handler (OBS-06)", () => {
+  // Pure-DI handler module mirrors the Phase 96 daemon-fs-ipc + Phase 92
+  // cutover-ipc-handlers blueprint — extract the case-body into a small
+  // module so the IPC contract can be tested without spawning the daemon.
+
+  function buildStubTracker(snapshots: readonly RateLimitSnapshot[]) {
+    return {
+      getAllSnapshots: () => snapshots,
+    };
+  }
+
+  function buildDeps(
+    trackers: Record<string, readonly RateLimitSnapshot[]>,
+  ) {
+    return {
+      getRateLimitTrackerForAgent: (name: string) =>
+        trackers[name] !== undefined
+          ? buildStubTracker(trackers[name])
+          : undefined,
+    };
+  }
+
+  it("returns {agent, snapshots[]} for a running agent", () => {
+    const fixedNow = Date.now();
+    const seeded: RateLimitSnapshot = Object.freeze({
+      rateLimitType: "five_hour",
+      status: "allowed",
+      utilization: 0.42,
+      resetsAt: fixedNow + 3_600_000,
+      surpassedThreshold: undefined,
+      overageStatus: undefined,
+      overageResetsAt: undefined,
+      overageDisabledReason: undefined,
+      isUsingOverage: undefined,
+      recordedAt: fixedNow,
+    });
+    const deps = buildDeps({ "running-agent": [seeded] });
+    const result = handleListRateLimitSnapshotsIpc(
+      { agent: "running-agent" },
+      deps,
+    );
+    expect(result).toMatchObject({ agent: "running-agent" });
+    expect(Array.isArray(result.snapshots)).toBe(true);
+    expect(result.snapshots).toHaveLength(1);
+    expect(result.snapshots[0]).toEqual(seeded);
+  });
+
+  it("returns {agent, snapshots: []} for an unknown agent (does not throw)", () => {
+    const deps = buildDeps({}); // no agents registered
+    const result = handleListRateLimitSnapshotsIpc(
+      { agent: "no-such-agent" },
+      deps,
+    );
+    expect(result).toEqual({ agent: "no-such-agent", snapshots: [] });
+  });
+
+  it("returns empty array when tracker has no snapshots yet", () => {
+    const deps = buildDeps({ "fresh-agent": [] });
+    const result = handleListRateLimitSnapshotsIpc(
+      { agent: "fresh-agent" },
+      deps,
+    );
+    expect(result).toEqual({ agent: "fresh-agent", snapshots: [] });
+  });
+
+  it("includes 'list-rate-limit-snapshots' in IPC_METHODS", () => {
+    expect(IPC_METHODS).toContain("list-rate-limit-snapshots");
+  });
+
+  it("does NOT collide with existing 'rate-limit-status' (Pitfall 5)", () => {
+    // Both must coexist — they are SEPARATE domains:
+    //   - rate-limit-status         → Discord outbound rate-limiter token bucket
+    //   - list-rate-limit-snapshots → per-agent OAuth Max rate-limit snapshots
+    expect(IPC_METHODS).toContain("rate-limit-status");
+    expect(IPC_METHODS).toContain("list-rate-limit-snapshots");
   });
 });
