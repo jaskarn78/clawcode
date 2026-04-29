@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 103-02-PLAN.md (RateLimitTracker primitive + SDK rate_limit_event hook)
-last_updated: "2026-04-29T14:59:42.528Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 103-03-PLAN.md
+last_updated: "2026-04-29T15:35:39.415Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 15
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 28
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -302,6 +302,10 @@ Recent decisions affecting current work:
 - [Phase 103]: surpassedThreshold typed as number|undefined per SDK shape (Pitfall 9 — NOT a boolean)
 - [Phase 103]: Persistence is best-effort — SQLite write failures inside record() are logged + swallowed; in-memory state remains source of truth
 - [Phase 103]: Hook positioned BEFORE the result branch in iterateUntilResult — ordering documents intent, result-terminator path is preserved
+- [Phase 103]: 12th application of inline-handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95/96/100/103-03) — pattern is canonical at 12 applications
+- [Phase 103]: IPC method named list-rate-limit-snapshots (NOT colliding with existing rate-limit-status for Discord outbound rate-limiter — Pitfall 5 closure)
+- [Phase 103]: Pure-DI handler module pattern — daemon-rate-limit-ipc.ts mirrors Phase 96 daemon-fs-ipc / Phase 92 cutover-ipc-handlers blueprint (3rd application of dedicated-IPC-module pattern)
+- [Phase 103]: Overage rendered as status-line not progress bar (Open Q3) — credit-pool model doesn't translate to a percentage bar
 
 ### v2.1 closing decisions (for reference)
 
@@ -436,9 +440,10 @@ Recent decisions affecting current work:
 | Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P07 | 6min | 2 tasks | 3 files |
 | Phase 100 P08 | 5min | 1 tasks | 2 files |
 | Phase 103 P02 | ~22min | 2 tasks | 10 files |
+| Phase 103 P03 | 30min | 2 tasks | 14 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-29
-Stopped at: Completed 103-02-PLAN.md (RateLimitTracker primitive + SDK rate_limit_event hook)
+Stopped at: Completed 103-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
