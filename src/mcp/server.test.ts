@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { TOOL_DEFINITIONS, invokeWithCache } from "./server.js";
 import { TraceCollector, type Turn } from "../performance/trace-collector.js";
 import type { TraceStore } from "../performance/trace-store.js";
@@ -348,5 +349,69 @@ describe("invokeWithCache + acquireToolSlot (v1.7 cleanup)", () => {
     const raw = vi.fn().mockResolvedValue({ ok: true });
     await invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, undefined);
     expect(raw).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Phase 999.2 Plan 02 — MCP tool aliases (D-RNX-01..04)
+//
+// Pins:
+//   1. Canonical names ask_agent / post_to_agent are registered.
+//   2. Old names send_message / send_to_agent remain registered as deprecated
+//      aliases whose description starts with [DEPRECATED — use {new} instead].
+//   3. Canonical name appears BEFORE the alias in the source file (insertion
+//      order = tools/list iteration order — controls LLM picking heuristic
+//      per D-RNX-04 verified against
+//      node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js:67-69).
+describe("Phase 999.2 Plan 02 — MCP tool aliases", () => {
+  const serverSource = readFileSync("src/mcp/server.ts", "utf8");
+
+  it("ask_agent is registered (canonical name)", () => {
+    expect(serverSource).toMatch(/server\.tool\(\s*"ask_agent"/);
+  });
+
+  it("send_message is registered as DEPRECATED alias (description prefix pinned)", () => {
+    const m = serverSource.match(
+      /server\.tool\(\s*"send_message",\s*\n?\s*"\[DEPRECATED — use ask_agent instead\]/,
+    );
+    expect(
+      m,
+      "send_message tool description must start with [DEPRECATED — use ask_agent instead]",
+    ).not.toBeNull();
+  });
+
+  it("ask_agent is registered BEFORE send_message (insertion order = tools/list order)", () => {
+    const askAt = serverSource.search(/server\.tool\(\s*"ask_agent"/);
+    const sendAt = serverSource.search(/server\.tool\(\s*"send_message"/);
+    expect(askAt).toBeGreaterThan(-1);
+    expect(sendAt).toBeGreaterThan(-1);
+    expect(
+      askAt,
+      "ask_agent must be registered before send_message",
+    ).toBeLessThan(sendAt);
+  });
+
+  it("post_to_agent is registered (canonical name)", () => {
+    expect(serverSource).toMatch(/server\.tool\(\s*"post_to_agent"/);
+  });
+
+  it("send_to_agent is registered as DEPRECATED alias (description prefix pinned)", () => {
+    const m = serverSource.match(
+      /server\.tool\(\s*"send_to_agent",\s*\n?\s*"\[DEPRECATED — use post_to_agent instead\]/,
+    );
+    expect(
+      m,
+      "send_to_agent tool description must start with [DEPRECATED — use post_to_agent instead]",
+    ).not.toBeNull();
+  });
+
+  it("post_to_agent is registered BEFORE send_to_agent (insertion order = tools/list order)", () => {
+    const postAt = serverSource.search(/server\.tool\(\s*"post_to_agent"/);
+    const sendAt = serverSource.search(/server\.tool\(\s*"send_to_agent"/);
+    expect(postAt).toBeGreaterThan(-1);
+    expect(sendAt).toBeGreaterThan(-1);
+    expect(
+      postAt,
+      "post_to_agent must be registered before send_to_agent",
+    ).toBeLessThan(sendAt);
   });
 });

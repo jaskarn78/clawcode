@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   ipcRequestSchema,
   ipcResponseSchema,
@@ -419,5 +420,57 @@ describe("list-rate-limit-snapshots IPC handler (OBS-06)", () => {
     //   - list-rate-limit-snapshots → per-agent OAuth Max rate-limit snapshots
     expect(IPC_METHODS).toContain("rate-limit-status");
     expect(IPC_METHODS).toContain("list-rate-limit-snapshots");
+  });
+});
+
+// Phase 999.2 Plan 02 — IPC method aliases (D-RNI-IPC-01..04)
+//
+// Pins:
+//   - IPC_METHODS contains both old AND new names exactly once each
+//     (z.enum(IPC_METHODS) accepts both — back-compat for CLI / external
+//     IPC consumers per D-RNI-IPC-03).
+//   - protocol.ts source contains explicit DEPRECATED annotation comments
+//     (D-RNI-IPC-04 — operator-facing rationale for the duplicate entries).
+//   - daemon.ts case-statement uses stacked-case form to share a body
+//     between old and new method names (RESEARCH.md §Pattern 2).
+describe("Phase 999.2 Plan 02 — IPC method aliases", () => {
+  it("IPC_METHODS contains ask-agent exactly once", () => {
+    const occurrences = IPC_METHODS.filter((m) => m === "ask-agent").length;
+    expect(occurrences).toBe(1);
+  });
+
+  it("IPC_METHODS contains send-message exactly once (deprecated alias retained)", () => {
+    const occurrences = IPC_METHODS.filter((m) => m === "send-message").length;
+    expect(occurrences).toBe(1);
+  });
+
+  it("IPC_METHODS contains post-to-agent exactly once", () => {
+    const occurrences = IPC_METHODS.filter((m) => m === "post-to-agent").length;
+    expect(occurrences).toBe(1);
+  });
+
+  it("IPC_METHODS contains send-to-agent exactly once (deprecated alias retained)", () => {
+    const occurrences = IPC_METHODS.filter((m) => m === "send-to-agent").length;
+    expect(occurrences).toBe(1);
+  });
+
+  it("src/ipc/protocol.ts has `// DEPRECATED — use ask-agent` annotation (D-RNI-IPC-04)", () => {
+    const text = readFileSync("src/ipc/protocol.ts", "utf8");
+    expect(text).toContain("// DEPRECATED — use ask-agent");
+  });
+
+  it("src/ipc/protocol.ts has `// DEPRECATED — use post-to-agent` annotation (D-RNI-IPC-04)", () => {
+    const text = readFileSync("src/ipc/protocol.ts", "utf8");
+    expect(text).toContain("// DEPRECATED — use post-to-agent");
+  });
+
+  it("src/manager/daemon.ts has stacked-case `ask-agent` + `send-message` with shared body", () => {
+    const text = readFileSync("src/manager/daemon.ts", "utf8");
+    expect(text).toMatch(/case "ask-agent":\s*\n\s*case "send-message":/);
+  });
+
+  it("src/manager/daemon.ts has stacked-case `post-to-agent` + `send-to-agent` with shared body", () => {
+    const text = readFileSync("src/manager/daemon.ts", "utf8");
+    expect(text).toMatch(/case "post-to-agent":\s*\n\s*case "send-to-agent":/);
   });
 });
