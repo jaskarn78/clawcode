@@ -442,7 +442,7 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
   // T7 — CONTROL_COMMANDS shape + count invariants
   // -------------------------------------------------------------------------
 
-  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 18 (Phase 90 Plan 06 added clawhub-auth)", () => {
+  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 23 (Phase 103 Plan 03 added clawcode-usage)", () => {
     const interrupt = CONTROL_COMMANDS.find((c) => c.name === "clawcode-interrupt");
     const steer = CONTROL_COMMANDS.find((c) => c.name === "clawcode-steer");
     expect(interrupt).toBeDefined();
@@ -471,7 +471,7 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
     expect(agentOpt).toBeDefined();
     expect(agentOpt!.required).toBe(false);
 
-    // Combined count = 22 (10 default + 12 control).
+    // Combined count = 23 (10 default + 13 control).
     // Phase 87 CMD-04 removed clawcode-compact + clawcode-usage from defaults.
     // Phase 88 added skills-browse + skills. Phase 90 Plan 05 added
     // plugins-browse. Phase 90 Plan 06 added clawhub-auth.
@@ -479,7 +479,8 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
     // Phase 92 Plan 04 CUT-06 added clawcode-cutover-verify → 10 controls.
     // Phase 95 Plan 03 DREAM-07 added clawcode-dream → 11 controls.
     // Phase 96 Plan 05 D-03 added clawcode-probe-fs → 12 controls.
-    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(22);
+    // Phase 103 Plan 03 OBS-07 added clawcode-usage → 13 controls.
+    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(23);
 
     // Sanity — makeRootOrigin still accepts 'discord' (used by handleSteerSlash).
     const origin = makeRootOrigin("discord", "chan-xyz");

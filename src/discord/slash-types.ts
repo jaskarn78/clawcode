@@ -627,4 +627,27 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       },
     ],
   },
+  // Phase 103 OBS-07 / UI-01 — daemon-routed OAuth Max usage panel. Reads
+  // the per-agent RateLimitTracker via ipcMethod "list-rate-limit-snapshots"
+  // (NOT "rate-limit-status" which is the SEPARATE Discord outbound rate-
+  // limiter IPC at protocol.ts:17 — see Pitfall 5). The inline handler in
+  // slash-commands.ts renders an EmbedBuilder (UI-01 compliance — NOT free-
+  // text). Zero LLM turn cost per invocation. 12th application of the
+  // inline-handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases
+  // 85/86/87/88/90/91/92/95/96/100).
+  {
+    name: "clawcode-usage",
+    description: "Show OAuth Max session/weekly usage for the bound agent",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "list-rate-limit-snapshots",
+    options: [
+      {
+        name: "agent",
+        type: 3,
+        description: "Agent name (defaults to the channel's bound agent)",
+        required: false,
+      },
+    ],
+  },
 ] as const;

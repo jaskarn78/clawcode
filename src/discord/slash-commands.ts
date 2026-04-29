@@ -36,7 +36,8 @@ import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
 import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS, GSD_SLASH_COMMANDS } from "./slash-types.js";
 // Phase 93 Plan 01 — pure renderer for /clawcode-status daemon short-circuit.
-import { buildStatusData, renderStatus } from "./status-render.js";
+import { buildStatusData, renderStatus, renderUsageBars } from "./status-render.js";
+import type { RateLimitSnapshot } from "../usage/rate-limit-tracker.js";
 // Phase 94 Plan 07 — shared pure renderer for the capability-probe column on
 // /clawcode-tools (Discord) AND `clawcode mcp-status` (CLI). Reads the
 // list-mcp-status IPC payload (with 94-01 + 94-07 extensions) and produces
@@ -1369,6 +1370,21 @@ export class SlashCommandHandler {
       return;
     }
 
+    // Phase 103 OBS-07 / UI-01 — /clawcode-usage inline handler.
+    // 12th application of the inline-handler-short-circuit-before-
+    // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95/96/100).
+    // Reads per-agent OAuth Max usage snapshots via the daemon-routed
+    // `list-rate-limit-snapshots` IPC method (NOT `rate-limit-status` —
+    // see Pitfall 5). Renders an EmbedBuilder via buildUsageEmbed so the
+    // reply is structured (UI-01 compliance — NOT free-text). Carved out
+    // BEFORE the generic CONTROL_COMMANDS dispatch so the EmbedBuilder
+    // path can't be short-circuited by the text-formatting branch in
+    // handleControlCommand. Zero LLM turn cost per invocation.
+    if (commandName === "clawcode-usage") {
+      await this.handleUsageCommand(interaction);
+      return;
+    }
+
     // Phase 100 follow-up — /gsd-set-project inline handler. Routed BEFORE
     // GSD_LONG_RUNNERS so the runtime project switcher never falls into the
     // long-runner subagent-thread path. Validates the path option (absolute,
@@ -1500,7 +1516,25 @@ export class SlashCommandHandler {
           commitSha: resolveCommitSha(),
           now: Date.now(),
         });
-        await interaction.editReply(renderStatus(data));
+        const baseRender = renderStatus(data);
+
+        // Phase 103 OBS-08 — append optional 5h+7d session/weekly bars
+        // when the per-agent RateLimitTracker has snapshots. Wrapped in
+        // try/catch (and renderUsageBars itself returns "" on no data,
+        // Pitfall 7) so the bar suffix is purely additive — a thrown
+        // accessor or missing tracker NEVER collapses the 9-line block.
+        let usageBarSuffix = "";
+        try {
+          const tracker =
+            this.sessionManager.getRateLimitTrackerForAgent(agentName);
+          if (tracker) {
+            usageBarSuffix = renderUsageBars(tracker.getAllSnapshots());
+          }
+        } catch {
+          // observational — bars are optional, never break status render
+        }
+
+        await interaction.editReply(baseRender + usageBarSuffix);
       } catch (error) {
         // Defense-in-depth: buildStatusData/renderStatus are pure and don't
         // throw under expected conditions (every accessor is try/catch'd
@@ -2395,6 +2429,102 @@ export class SlashCommandHandler {
       this.log.error(
         { command: "clawcode-sync-status", error: (error as Error).message },
         "failed to send sync-status embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 103 OBS-07 / UI-01 — /clawcode-usage inline handler.
+   *
+   * Routes through the daemon-direct `list-rate-limit-snapshots` IPC method
+   * (zero LLM turn cost) and renders a native Discord EmbedBuilder via the
+   * pure buildUsageEmbed function in usage-embed.ts. The 12th application
+   * of the inline-handler-short-circuit-before-CONTROL_COMMANDS pattern.
+   *
+   * Resolves target agent from the optional `agent:` arg, falling back to
+   * the channel's bound agent. Mirrors the /clawcode-tools agent-resolution
+   * idiom verbatim — operators can target any agent from any channel by
+   * passing `agent:`, but the default is the channel's binding (so users
+   * in a per-agent channel just type /clawcode-usage with no args).
+   *
+   * Pitfall 5 closure: this IPC name is `list-rate-limit-snapshots`, NOT
+   * `rate-limit-status` (the latter is the SEPARATE Discord outbound
+   * rate-limiter token-bucket IPC).
+   *
+   * Pitfall 7 closure: empty snapshots render the "No usage data yet"
+   * graceful path inside buildUsageEmbed — never an empty embed.
+   */
+  private async handleUsageCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const explicitAgent = interaction.options.get("agent")?.value;
+    const targetAgent =
+      typeof explicitAgent === "string" && explicitAgent.length > 0
+        ? explicitAgent
+        : getAgentForChannel(this.routingTable, interaction.channelId);
+
+    if (!targetAgent) {
+      try {
+        await interaction.reply({
+          content:
+            "This channel is not bound to an agent and no agent was provided.",
+          ephemeral: true,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: false });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-usage", error: (error as Error).message },
+        "failed to defer usage reply",
+      );
+      return;
+    }
+
+    let snapshots: readonly RateLimitSnapshot[];
+    try {
+      const response = (await sendIpcRequest(
+        SOCKET_PATH,
+        "list-rate-limit-snapshots",
+        { agent: targetAgent },
+      )) as { snapshots?: readonly RateLimitSnapshot[] };
+      snapshots = response.snapshots ?? [];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-usage", error: msg },
+        "list-rate-limit-snapshots IPC failed",
+      );
+      try {
+        await interaction.editReply(`Failed to read usage: ${msg}`);
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    // Dynamic import keeps the slash-commands module graph decoupled from
+    // usage-embed's discord.js EmbedBuilder reach; mirrors the Phase 91
+    // sync-status pattern (lazy-load when the command actually fires).
+    const { buildUsageEmbed } = await import("./usage-embed.js");
+
+    const embed = buildUsageEmbed({
+      agent: targetAgent,
+      snapshots,
+      now: Date.now(),
+    });
+
+    try {
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-usage", error: (error as Error).message },
+        "failed to send usage embed",
       );
     }
   }

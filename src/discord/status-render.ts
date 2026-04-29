@@ -47,6 +47,8 @@ import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { UsageTracker } from "../usage/tracker.js";
 import type { UsageAggregate } from "../usage/types.js";
+import type { RateLimitSnapshot } from "../usage/rate-limit-tracker.js";
+import { renderBar } from "./usage-embed.js";
 // Phase 96 Plan 05 D-04 — single-source-of-truth filesystem capability
 // renderer. The same pure renderer used to assemble the system-prompt
 // <filesystem_capability> block (Phase 96 Plan 02) is reused here for
@@ -456,4 +458,45 @@ export function renderCapabilityBlock(
   // join honors the W-4 invariant from 96-02: an empty `block` does NOT
   // produce a stub header.
   return block.length === 0 ? diagnosticSection.trim() : `${block}${diagnosticSection}`;
+}
+
+/**
+ * Phase 103 OBS-08 — optional 2-line session/weekly usage suffix appended
+ * to /clawcode-status when rate-limit snapshots are present.
+ *
+ * Returns "" (empty string) when neither five_hour nor seven_day snapshot
+ * exists — graceful for non-OAuth-Max sessions or pre-first-turn agents
+ * (Pitfall 7). When snapshots are present, the output begins with a leading
+ * newline so the caller can append it directly to renderStatus output:
+ *
+ *     editReply(renderStatus(data) + renderUsageBars(snapshots))
+ *
+ * Reuses `renderBar` from usage-embed.ts so the bar vocabulary is consistent
+ * across /clawcode-status and /clawcode-usage surfaces.
+ */
+export function renderUsageBars(
+  snapshots: readonly RateLimitSnapshot[],
+): string {
+  const fiveHour = snapshots.find((s) => s.rateLimitType === "five_hour");
+  const sevenDay = snapshots.find((s) => s.rateLimitType === "seven_day");
+  const lines: string[] = [];
+
+  if (fiveHour) {
+    const reset =
+      fiveHour.resetsAt !== undefined
+        ? formatDistanceToNow(fiveHour.resetsAt, { addSuffix: true })
+        : "unknown";
+    lines.push(`5h session: ${renderBar(fiveHour.utilization)} · resets ${reset}`);
+  }
+  if (sevenDay) {
+    const reset =
+      sevenDay.resetsAt !== undefined
+        ? formatDistanceToNow(sevenDay.resetsAt, { addSuffix: true })
+        : "unknown";
+    lines.push(
+      `7-day weekly: ${renderBar(sevenDay.utilization)} · resets ${reset}`,
+    );
+  }
+
+  return lines.length === 0 ? "" : "\n" + lines.join("\n");
 }
