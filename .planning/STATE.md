@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 999.2-02-PLAN.md
-last_updated: "2026-04-29T22:19:51.907Z"
+stopped_at: Completed 999.2-03-PLAN.md (Phase 999.2 ready for verification)
+last_updated: "2026-04-29T22:42:39.069Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 22
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 33
-  completed_plans: 32
+  completed_plans: 33
 ---
 
 # Project State
@@ -312,6 +312,9 @@ Recent decisions affecting current work:
 - [Phase 999.3]: Plan 01: webhook composition splits identity — caller's webhookUrl (channel-bound) + delegate's displayName/avatar (per-message overrides via discord.js client.send), verified at webhook-manager.ts:71-75
 - [Phase 999.2]: Plan 01: Pure rename of SessionManager.sendToAgent → dispatchTurn (D-RNI-01). 7 production call sites + 16 test files + 4 doc-comment files. Static-grep TDD pin via fs.readdirSync walker (no glob dep). DEPRECATED_NAME constructed via array.join() so test file does not self-trigger its own assertion. Zero new typecheck errors (108 baseline preserved).
 - [Phase 999.2]: Plan 02: MCP tool dual-registration via shared-closure pattern (canonical-first registration controls tools/list ordering for LLM picking). IPC stacked-case sharing one body. Deprecated-alias metric via console.info for D-RNX-03 30-day removal trigger.
+- [Phase 999.2]: Plan 03: Pure-DI module daemon-ask-agent-ipc.ts (Phase 103 blueprint) — handleAskAgentIpc owns inbox+dispatch+mirror; escalation kept at daemon edge for SessionManager access (D-SYN-06 unchanged)
+- [Phase 999.2]: Plan 03: Static-grep tests for MCP wrapper text templates instead of McpServer build-and-extract (matches Plan 02 precedent; pure-DI tests pin IPC contract behavior)
+- [Phase 999.2]: Plan 03: post-to-agent per-webhook log+swallow LEFT untouched per Plan Step 3 + Pitfall 7 — broadcast tool, delivered:false IS the structured signal; D-PST-03 satisfied via return shape, not by removing local catch
 
 ### v2.1 closing decisions (for reference)
 
@@ -452,9 +455,10 @@ Recent decisions affecting current work:
 | Phase 999.3 P01 | 10 | 4 tasks | 5 files |
 | Phase 999.2 P01 | 35min | 2 tasks | 24 files |
 | Phase 999.2 P02 | 11min | 2 tasks | 5 files |
+| Phase 999.2 P03 | 15min | 2 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-29
-Stopped at: Completed 999.2-02-PLAN.md
+Stopped at: Completed 999.2-03-PLAN.md (Phase 999.2 ready for verification)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
