@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase complete — ready for verification
-stopped_at: Completed 100-08-PLAN.md (smoke-test runbook + structural validation)
-last_updated: "2026-04-26T19:11:34.496Z"
-last_activity: 2026-04-26
+status: Phase 103 executing — Plan 01 complete
+stopped_at: Completed 103-01-PLAN.md (/clawcode-status live wiring + compaction counter)
+last_updated: "2026-04-29T14:33:00.000Z"
+last_activity: 2026-04-29
 progress:
-  total_phases: 12
+  total_phases: 13
   completed_phases: 4
-  total_plans: 25
-  completed_plans: 25
+  total_plans: 28
+  completed_plans: 26
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 100 — gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow
+**Current focus:** Phase 103 — clawcode-status-rich-telemetry-usage-panel-operator-observability
 
 ## Current Position
 
-Phase: 100 (gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow) — EXECUTING
-Plan: 8 of 8
+Phase: 103 (clawcode-status-rich-telemetry-usage-panel-operator-observability) — EXECUTING
+Plan: 2 of 3 (Plan 01 ✓ complete; Plan 02 next)
 
 ## Performance Metrics
 
@@ -293,6 +293,10 @@ Recent decisions affecting current work:
 - [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07: 8 YML parse-regression tests cover SHAPE, not BEHAVIOR. Plan 04 dispatcher tests handle dispatch-time behavior; Plan 02 session-adapter tests handle SDK-passthrough behavior. YML1..YML8 are the structural pin between the two consumer-side tests.
 - [Phase 100]: [Phase 100]: Plan 100-08 — SMOKE-TEST.md (562 lines, 9 sections, 10 structural tests) is the canonical Phase 100 deploy + UAT runbook for transitioning to clawdy production. autonomous=false because Sections 6-8 require operator interaction in #admin-clawdy on production Discord.
 - [Phase 100]: [Phase 100]: Plan 100-08 — Established structural runbook test pattern at .planning/phases/<N>-*/_tests__/<doc>-doc.test.ts pinning markdown invariants. Repeatable for any future operator-runnable artifact (deploy/migration/smoke runbook). Vitest discovers .planning/__tests__/ via default include pattern (no config edit needed).
+- [Phase 103]: Plan 103-01 — /clawcode-status: 8 hardcoded `n/a` placeholders wired to live telemetry (Compactions, Context %, Tokens, Activation, Queue, Reasoning label, Permissions, lastActivityAt). 3 OpenClaw-only fields dropped (Fast/Elevated/Harness). Substring grep gates pin the absence at file level.
+- [Phase 103]: Plan 103-01 — Compaction counter is in-memory only (Open Q4): resets on daemon restart, informational not persistence-worthy. Bumps ONLY on CompactionManager.compact() resolve via canonical compactForAgent wrapper (Pitfall 3 — rejection cannot inflate count). Closure check pins zero direct .compact() callers in production code.
+- [Phase 103]: Plan 103-01 — HeartbeatRunner injected into SessionManager via setHeartbeatRunner DI setter (mirrors setWebhookManager / setMemoryScanner pattern); not a constructor argument. Daemon wires post-runner-start.
+- [Phase 103]: Plan 103-01 — Activation timestamp mirrored in-memory via activationAtByAgent Map at startAgent — registry remains source of truth for restart recovery, but synchronous status renders don't await readRegistry per request. Cleared on stopAgent alongside compactionCounts (matches in-memory-only semantics).
 
 ### v2.1 closing decisions (for reference)
 

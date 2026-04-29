@@ -543,8 +543,8 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 **Plans:** 3 plans (Wave 1: Plan 01 — wire 8 live fields + drop 3 OpenClaw fields + compaction counter mirror; Wave 2: Plan 02 — RateLimitTracker primitive + SDK rate_limit_event hook + DI mirror on SessionHandle; Wave 3: Plan 03 — list-rate-limit-snapshots IPC + /clawcode-usage slash command + usage-embed renderer + optional session/weekly bars on /clawcode-status)
 
 Plans:
-- [ ] 103-01-PLAN.md — Wire 8 live fields into /clawcode-status (Session ID, Last Activity, Tokens, Permissions, Effort, Reasoning label, Activation, Queue, Context %, Compactions count) + drop 3 OpenClaw fields (Fast/Elevated/Harness) + add compaction counter mirror on SessionManager
+- [x] 103-01-PLAN.md — Wire 8 live fields into /clawcode-status (Session ID, Last Activity, Tokens, Permissions, Effort, Reasoning label, Activation, Queue, Context %, Compactions count) + drop 3 OpenClaw fields (Fast/Elevated/Harness) + add compaction counter mirror on SessionManager — completed 2026-04-29
 - [ ] 103-02-PLAN.md — RateLimitTracker (in-memory + per-agent SQLite via UsageTracker DB) + SDK rate_limit_event branch in iterateUntilResult + 7th DI-mirror application on SessionHandle (getRateLimitTracker/setRateLimitTracker)
 - [ ] 103-03-PLAN.md — list-rate-limit-snapshots IPC method (avoiding rate-limit-status collision) + /clawcode-usage CONTROL_COMMAND with EmbedBuilder inline-handler short-circuit (11th application) + buildUsageEmbed pure renderer + optional 5h+7d bars suffix on /clawcode-status (OBS-08) + slash-command-cap regression test
 
-**Status:** Pending — opened 2026-04-26 after operator's `/clawcode-status` improvement question + Claude-app Usage panel request. Promoted from Phase 99 sub-scope F to standalone Phase 103 because the Usage panel justifies its own surface. ~1 day estimate end-to-end. Sequenced ahead of Phase 101 + 102 per operator directive 2026-04-26.
+**Status:** Executing — Plan 01 complete 2026-04-29 (8 fields wired live, 3 OpenClaw fields dropped, compaction counter mirror added). Plans 02 + 03 pending. ~1 day estimate end-to-end.
