@@ -340,7 +340,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
   // Tool: spawn_subagent_thread
   server.tool(
     "spawn_subagent_thread",
-    "Spawn a subagent in a new Discord thread. If you pass `task`, the subagent starts working on it immediately and posts its response in the thread — you do NOT need to send a follow-up message.",
+    "Spawn a subagent in a new Discord thread. If you pass `task`, the subagent starts working on it immediately and posts its response in the thread — you do NOT need to send a follow-up message. Use `delegateTo` to have a specialist agent (e.g., research-clawdy, fin-research) do the work using their config — useful when you want elevated thinking, opus-level reasoning, or specialist skills you don't have.",
     {
       agent: z.string().describe("Parent agent name"),
       threadName: z.string().describe("Name for the Discord thread"),
@@ -349,8 +349,9 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       task: z.string().optional().describe("The task for the subagent to perform. When provided, the subagent starts working immediately and posts its response in the thread — no separate prompt needed."),
       autoRelay: z.boolean().optional().describe("Default TRUE. When true, after the subagent posts its initial reply, a summary is relayed to your (parent) main channel — you'll see 'subagent done — here's what it found' without polling the thread. Set to false for cheap workflows where you'll read the thread later and don't want to spend tokens on the parent-side summary turn. autoArchive=true implies autoRelay=true."),
       autoArchive: z.boolean().optional().describe("Fire-and-forget pattern. When true, after the subagent posts its initial reply: (1) summary is relayed to your main channel (autoRelay), (2) the Discord thread is archived, (3) the subagent session is stopped. Best paired with `task` for short-lived 'do one thing then go away' subagents. Default: false (interactive — operator can keep replying in the thread)."),
+      delegateTo: z.string().optional().describe("Optional. When set to a target agent name (e.g., 'fin-research', 'research', 'code-clawdy'), the spawned subagent uses the target's config (model, soul, skills) instead of yours. The thread still spawns in your channel, autoRelay still summarizes back to your main channel — but the work is done with the target agent's identity. Use this to delegate elevated-thinking work (research, coding) to a dedicated specialist standing agent."),
     },
-    async ({ agent, threadName, model, systemPrompt, task, autoRelay, autoArchive }) => {
+    async ({ agent, threadName, model, systemPrompt, task, autoRelay, autoArchive, delegateTo }) => {
       try {
         const result = (await sendIpcRequest(SOCKET_PATH, "spawn-subagent-thread", {
           parentAgent: agent,
@@ -360,6 +361,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
           task,
           autoRelay: autoRelay ?? true,
           autoArchive: autoArchive ?? false,
+          delegateTo,
         })) as { threadId: string; sessionName: string; parentAgent: string; channelId: string };
 
         const text = [
