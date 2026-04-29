@@ -5048,6 +5048,17 @@ async function routeMethod(
       const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
       const task = typeof params.task === "string" ? params.task : undefined;
       const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
+      // Phase 999.3 — D-EDG-04: empty string treated as not-set; D-ARC-02:
+      // validate delegate exists at IPC boundary so the verbatim error
+      // surfaces to the MCP caller (per Phase 85 TOOL-04 verbatim-error pattern).
+      const delegateToRaw = typeof params.delegateTo === "string" ? params.delegateTo : undefined;
+      const delegateTo = delegateToRaw && delegateToRaw.length > 0 ? delegateToRaw : undefined;
+      if (delegateTo) {
+        const delegateConfig = manager.getAgentConfig(delegateTo);
+        if (!delegateConfig) {
+          throw new ManagerError(`Delegate agent '${delegateTo}' not found in config`);
+        }
+      }
       // Phase 100 follow-up — post-reply chain.
       //   autoRelay (default true): parent gets a synthetic turn in main channel
       //   autoArchive (default false): also archive thread + stop session
@@ -5064,6 +5075,7 @@ async function routeMethod(
         task,
         autoRelay,
         autoArchive,
+        delegateTo,
       });
       // Register session end callback for automatic cleanup (SATH-04).
       // Phase 99 sub-scope M (2026-04-26) — also auto-relay completion to
