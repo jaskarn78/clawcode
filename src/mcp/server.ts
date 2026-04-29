@@ -282,45 +282,86 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
   //
   // Behavior is unchanged from the pre-rename send_message tool. Plan 03
   // layers v2 sync-reply behavior on top by modifying askAgentHandler.
+  // Phase 999.2 Plan 03 D-SYN-04 — `mirror_to_target_channel` extends the
+  // schema with an optional boolean (default false). Both server.tool()
+  // registrations share this object so the canonical and aliased tools stay
+  // in lockstep automatically.
   const askAgentSchema = {
     to: z.string().describe("Target agent name"),
     content: z.string().describe("Message content"),
     from: z.string().default("mcp-client").describe("Sender name"),
     priority: z.enum(["normal", "high", "urgent"]).default("normal").describe("Message priority"),
+    mirror_to_target_channel: z.boolean().default(false).describe(
+      "When true, post the prompt + response as embeds in target's Discord channel for an audit trail.",
+    ),
   } as const;
 
+  // Phase 999.2 Plan 03 — v2 sync-reply behavior. See D-SYN-01..06:
+  //   - When the target agent is running, surface its reply in the tool-result
+  //     text so the caller's LLM can act on it (D-SYN-02 — fixes the
+  //     2026-04-29 smoking-gun bug where the wrapper destructured
+  //     {ok, messageId} and silently discarded result.response).
+  //   - When the target is offline, render an explicit offline-text response
+  //     so the caller knows the message was queued but not answered (D-SYN-03).
+  //   - On dispatch error, render `Failed to ask {to}: {message}` so the
+  //     caller (and the calling LLM) sees the failure rather than a
+  //     false-success (D-SYN-05).
   const askAgentHandler = async ({
     to,
     content,
     from,
     priority,
+    mirror_to_target_channel,
   }: {
     to: string;
     content: string;
     from: string;
     priority: "normal" | "high" | "urgent";
+    mirror_to_target_channel: boolean;
   }) => {
-    // The wire request uses the canonical IPC name `ask-agent` per
-    // D-RNI-IPC-01. The daemon's stacked-case switch handles both names
-    // (ask-agent + send-message) so the wire format is forward-compatible.
-    const result = (await sendIpcRequest(SOCKET_PATH, "ask-agent", {
-      from,
-      to,
-      content,
-      priority,
-    })) as { ok: boolean; messageId: string };
+    try {
+      // The wire request uses the canonical IPC name `ask-agent` per
+      // D-RNI-IPC-01. The daemon's stacked-case switch handles both names
+      // (ask-agent + send-message) so the wire format is forward-compatible.
+      const result = (await sendIpcRequest(SOCKET_PATH, "ask-agent", {
+        from,
+        to,
+        content,
+        priority,
+        mirror_to_target_channel,
+      })) as { ok: boolean; messageId: string; response?: string };
 
-    return {
-      content: [{ type: "text" as const, text: `Message sent to ${to} (id: ${result.messageId})` }],
-    };
+      if (result.response !== undefined) {
+        // D-SYN-02 — surface the reply in the tool-result text. THE BUG-FIX LINE.
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Message sent to ${to} (id: ${result.messageId})\n\n${to} replied:\n${result.response}`,
+          }],
+        };
+      }
+      // D-SYN-03 — offline target.
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Message queued in ${to}'s inbox. ${to} is not running — no synchronous reply.`,
+        }],
+      };
+    } catch (err) {
+      // D-SYN-05 — error propagation as plain tool-result text.
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text" as const, text: `Failed to ask ${to}: ${msg}` }],
+      };
+    }
   };
 
   // Register canonical name FIRST (D-RNX-04 — controls LLM tool-list order).
   server.tool(
     "ask_agent",
-    "Ask another ClawCode agent a question and receive their reply. " +
-      "Use this when you need a response from another agent. " +
-      "This is the synchronous request/response pair (vs post_to_agent for fire-and-forget broadcast).",
+    "Ask another ClawCode agent a question and receive their reply synchronously. " +
+      "Use this when you need a response — e.g., 'fin-acquisition, what's our LTV target?'. " +
+      "Set mirror_to_target_channel=true to post the Q+A as embeds in the target's channel for visibility.",
     askAgentSchema,
     askAgentHandler,
   );

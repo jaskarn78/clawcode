@@ -4183,6 +4183,7 @@ async function routeMethod(
       const to = validateStringParam(params, "to");
       const content = validateStringParam(params, "content");
       const priority = typeof params.priority === "string" ? params.priority : "normal";
+      const mirror = params.mirror_to_target_channel === true;
 
       // Find target agent config to get workspace path
       const targetConfig = configs.find((c) => c.name === to);
@@ -4190,41 +4191,76 @@ async function routeMethod(
         throw new ManagerError(`Target agent '${to}' not found in config`);
       }
 
-      // Write message to target agent's inbox
       // Phase 75 SHARED-01 — memoryPath (not workspace) so cross-agent
       // sends deliver to the target's private inbox, never a shared one.
       const inboxDir = join(targetConfig.memoryPath, "inbox");
-      const message = createMessage(from, to, content, priority as "normal" | "high" | "urgent");
-      await writeMessage(inboxDir, message);
 
-      // If target agent is running, send directly and check for escalation
-      const running = manager.getRunningAgents();
-      if (running.includes(to)) {
-        try {
-          let response = await manager.dispatchTurn(to, content);
+      // Phase 999.2 Plan 03 — delegate inbox-write + dispatch + mirror to the
+      // pure-DI handler (mirrors the Phase 103 daemon-rate-limit-ipc.ts /
+      // Phase 96 daemon-fs-ipc.ts blueprint). Errors from dispatchTurn now
+      // PROPAGATE to the IPC client (D-SYN-05) — the silent `try {} catch {}`
+      // that lived here pre-Plan-03 (and was masking ALL dispatch errors as
+      // false-success) is GONE.
+      const { handleAskAgentIpc } = await import("./daemon-ask-agent-ipc.js");
+      const askResult = await handleAskAgentIpc(
+        { from, to, content, priority, mirror_to_target_channel: mirror },
+        {
+          runningAgents: manager.getRunningAgents(),
+          dispatchTurn: (toName, msg) => manager.dispatchTurn(toName, msg),
+          writeInbox: async (p) => {
+            const message = createMessage(
+              p.from,
+              p.to,
+              p.content,
+              p.priority as "normal" | "high" | "urgent",
+            );
+            await writeMessage(inboxDir, message);
+            return { messageId: message.id };
+          },
+          webhookManager,
+          configs,
+          // routeMethod has no pino-childed log in scope; console is the
+          // existing tracing surface (matches webhook-failure logging in
+          // post-to-agent at this same case-block).
+          log: {
+            info: (...args: unknown[]) => console.info(...args),
+            warn: (...args: unknown[]) => console.warn(...args),
+            error: (...args: unknown[]) => console.error(...args),
+          },
+        },
+      );
 
-          // Error detection heuristic: check for common failure indicators
-          const ERROR_INDICATORS = [
-            "i can't", "i'm unable", "i don't have the capability",
-            "tool_use_error", "error executing",
-          ];
-          const lowerResponse = response.toLowerCase();
-          const isError = ERROR_INDICATORS.some((indicator) => lowerResponse.includes(indicator));
-
-          // Check if escalation is needed
-          if (escalationMonitor.shouldEscalate(to, response, isError)) {
-            response = await escalationMonitor.escalate(to, content);
-            return { ok: true, messageId: message.id, response, escalated: true };
-          }
-
-          return { ok: true, messageId: message.id, response, escalated: false };
-        } catch {
-          // Direct send failed -- inbox write already succeeded, return ok
-          return { ok: true, messageId: message.id };
+      // Phase 999.2 D-SYN-06 — escalation path UNCHANGED. The handler
+      // returns {ok, messageId, response} without inspecting indicators;
+      // escalation runs HERE at the daemon edge, on the response text the
+      // handler returned, and may overwrite the response by re-dispatching
+      // through escalationMonitor.escalate (which talks to the SessionManager
+      // — a dependency we deliberately don't push into the pure module).
+      if (askResult.response !== undefined) {
+        const ERROR_INDICATORS = [
+          "i can't", "i'm unable", "i don't have the capability",
+          "tool_use_error", "error executing",
+        ];
+        const lowerResponse = askResult.response.toLowerCase();
+        const isError = ERROR_INDICATORS.some((indicator) => lowerResponse.includes(indicator));
+        if (escalationMonitor.shouldEscalate(to, askResult.response, isError)) {
+          const escalatedResponse = await escalationMonitor.escalate(to, content);
+          return {
+            ok: true,
+            messageId: askResult.messageId,
+            response: escalatedResponse,
+            escalated: true,
+          };
         }
+        return {
+          ok: true,
+          messageId: askResult.messageId,
+          response: askResult.response,
+          escalated: false,
+        };
       }
 
-      return { ok: true, messageId: message.id };
+      return { ok: true, messageId: askResult.messageId };
     }
 
     // Phase 999.2 Plan 02 D-RNI-IPC-02 — canonical name `post-to-agent` and
