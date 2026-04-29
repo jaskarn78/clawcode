@@ -1068,3 +1068,210 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
     });
   });
 });
+
+/**
+ * Phase 999.3 — DEL-01..DEL-10 — delegateTo behavior pins.
+ *
+ * When the caller passes `delegateTo: <name>` to spawn_subagent_thread, the
+ * spawned subagent inherits the DELEGATE's identity (model/soul/skills/
+ * subagentModel/mcpServers) but lands in the CALLER's channel. See
+ * .planning/phases/999.3-.../999.3-CONTEXT.md for D-INH-01..03, D-NAM-01..03,
+ * D-TCX-01..03, D-EDG-01..05.
+ */
+describe("spawnInThread with delegateTo", () => {
+  let tmpDir: string;
+  let registryPath: string;
+  let sessionManager: ReturnType<typeof makeMockSessionManager>;
+  let discordMock: ReturnType<typeof makeMockDiscordClient>;
+  let spawner: SubagentThreadSpawner;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "subagent-delegate-"));
+    registryPath = join(tmpDir, "thread-bindings.json");
+    sessionManager = makeMockSessionManager();
+    discordMock = makeMockDiscordClient();
+
+    // Caller "agent-a": haiku model, plain soul, caller-side webhook
+    const callerConfig = makeAgentConfig({
+      name: "agent-a",
+      model: "haiku",
+      soul: "caller soul",
+      skills: [],
+      mcpServers: [],
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 3 },
+      webhook: {
+        displayName: "Agent A",
+        avatarUrl: "https://example.com/agent-a.png",
+        webhookUrl: "https://discord.com/api/webhooks/CALLER_URL",
+      },
+    });
+    sessionManager._setConfig("agent-a", callerConfig);
+
+    // Delegate "research": opus model, research soul, opus skills + mcp
+    const delegateConfig = makeAgentConfig({
+      name: "research",
+      model: "opus",
+      soul: "research soul",
+      identity: "research identity",
+      skills: ["search-first", "market-research"],
+      mcpServers: [
+        { name: "exa", command: "exa", args: [], env: {}, optional: false },
+      ],
+      subagentModel: "sonnet",
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 99 },
+      webhook: {
+        displayName: "Research",
+        avatarUrl: "https://example.com/research.png",
+        webhookUrl: "https://discord.com/api/webhooks/DELEGATE_URL",
+      },
+    });
+    sessionManager._setConfig("research", delegateConfig);
+
+    spawner = new SubagentThreadSpawner({
+      sessionManager,
+      registryPath,
+      discordClient: discordMock.client as any,
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("DEL-01: subagent inherits delegate's model/soul/skills/mcpServers/subagentModel (D-INH-01)", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    // delegate.subagentModel ("sonnet") wins over delegate.model ("opus")
+    expect(startedConfig.model).toBe("sonnet");
+    // soul carries delegate's content (then threadContext is appended)
+    expect(startedConfig.soul).toContain("research soul");
+    // skills and mcpServers come from delegate
+    expect(startedConfig.skills).toEqual(["search-first", "market-research"]);
+    expect(startedConfig.mcpServers).toHaveLength(1);
+    expect(startedConfig.mcpServers[0].name).toBe("exa");
+    // identity carried from delegate via spread
+    expect(startedConfig.identity).toBe("research identity");
+  });
+
+  it("DEL-02: session name uses ${parent}-via-${delegate}-${shortId} (D-NAM-01)", async () => {
+    const result = await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    expect(result.sessionName).toMatch(/^agent-a-via-research-[A-Za-z0-9_-]{6}$/);
+  });
+
+  it("DEL-03: threadContext appends Delegation Context block w/ canonical 'acting on behalf of' phrase (D-TCX-01)", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.soul).toContain("## Delegation Context");
+    expect(startedConfig.soul).toContain("acting on behalf of");
+    // Parent agent name surfaces in the delegation block
+    expect(startedConfig.soul).toContain("agent-a");
+  });
+
+  it("DEL-04: webhook = caller's URL + delegate's displayName + delegate's avatar (D-INH-03)", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.webhook).toBeDefined();
+    // CALLER's webhookUrl (channel-bound)
+    expect(startedConfig.webhook?.webhookUrl).toBe(
+      "https://discord.com/api/webhooks/CALLER_URL",
+    );
+    // DELEGATE's displayName + avatar (per-message overrides)
+    expect(startedConfig.webhook?.displayName).toBe("Research");
+    expect(startedConfig.webhook?.avatarUrl).toBe(
+      "https://example.com/research.png",
+    );
+  });
+
+  it("DEL-05: recursion guard regression — disallowedTools set even when delegateTo is provided (D-TCX-03)", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.disallowedTools).toContain(
+      "mcp__clawcode__spawn_subagent_thread",
+    );
+  });
+
+  it("DEL-06: caller's threads.maxThreadSessions wins over delegate's (D-INH-02)", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    // Caller's quota (3) wins, NOT delegate's (99)
+    expect(startedConfig.threads.maxThreadSessions).toBe(3);
+  });
+
+  it("DEL-07: dormant delegate (autoStart=false) is allowed — config read regardless of running state (D-EDG-02)", async () => {
+    // Replace research with an autoStart=false (dormant) variant.
+    const dormantDelegate = makeAgentConfig({
+      name: "research",
+      model: "opus",
+      soul: "research soul",
+      autoStart: false,
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 99 },
+      webhook: {
+        displayName: "Research",
+        avatarUrl: "https://example.com/research.png",
+        webhookUrl: "https://discord.com/api/webhooks/DELEGATE_URL",
+      },
+    });
+    sessionManager._setConfig("research", dormantDelegate);
+
+    await expect(
+      spawner.spawnInThread({
+        parentAgentName: "agent-a",
+        threadName: "research-task",
+        delegateTo: "research",
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("DEL-08: self-delegation allowed; sessionName retains -via- infix (D-EDG-03)", async () => {
+    const result = await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "self-task",
+      delegateTo: "agent-a",
+    });
+    expect(result.sessionName).toMatch(/^agent-a-via-agent-a-[A-Za-z0-9_-]{6}$/);
+  });
+
+  it("DEL-09: back-compat — no delegateTo → sessionName uses -sub- infix (NOT -via-) (SPEC-07 / D-EDG-04)", async () => {
+    const result = await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "no-delegate-task",
+    });
+    expect(result.sessionName).toMatch(/^agent-a-sub-[A-Za-z0-9_-]{6}$/);
+    expect(result.sessionName).not.toContain("-via-");
+  });
+
+  it("DEL-10: defense-in-depth — delegate not found throws ManagerError verbatim at spawner level (D-EDG-05)", async () => {
+    await expect(
+      spawner.spawnInThread({
+        parentAgentName: "agent-a",
+        threadName: "ghost-task",
+        delegateTo: "ghost-agent",
+      }),
+    ).rejects.toThrow(/Delegate agent 'ghost-agent' not found/);
+  });
+});
