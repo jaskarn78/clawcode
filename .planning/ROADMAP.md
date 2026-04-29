@@ -598,11 +598,11 @@ Plans:
 
 **Requirements:** [A2A-01, A2A-02, A2A-03, A2A-04, A2A-05, A2A-06, A2A-07, A2A-08, A2A-09, A2A-10, A2A-11, A2A-12] — see 999.2-{01,02,03}-PLAN.md.
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 999.2-01-PLAN.md — Rename SessionManager.sendToAgent → dispatchTurn (7 production call sites + ~14 test mocks + 4 doc-comment files; pure rename, no behavior change). Wave 1.
-- [ ] 999.2-02-PLAN.md — Rename MCP tools (send_message → ask_agent, send_to_agent → post_to_agent) and IPC methods (send-message → ask-agent, send-to-agent → post-to-agent) with back-compat aliases (canonical names registered FIRST per D-RNX-04). Wave 2.
+- [x] 999.2-02-PLAN.md — Rename MCP tools (send_message → ask_agent, send_to_agent → post_to_agent) and IPC methods (send-message → ask-agent, send-to-agent → post-to-agent) with back-compat aliases (canonical names registered FIRST per D-RNX-04). Wave 2.
 - [ ] 999.2-03-PLAN.md — v2 sync-reply behavior on ask_agent: surface target's reply in tool-result text (fixes 2026-04-29 smoking-gun bug), mirror_to_target_channel flag for webhook embeds, error propagation (remove silent catch). Wave 3.
 
 **Promotion target:** active milestone, will likely become **Phase 106** (deprioritized 2026-04-29 in favor of specialist routing — 999.3 → Phase 105 — which has a smaller blast radius and unblocks elevated-thinking delegation sooner).

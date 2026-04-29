@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 999.2-01-PLAN.md (sendToAgent → dispatchTurn rename)
-last_updated: "2026-04-29T22:04:31.630Z"
+stopped_at: Completed 999.2-02-PLAN.md
+last_updated: "2026-04-29T22:19:51.907Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 22
   completed_phases: 7
   total_plans: 33
-  completed_plans: 31
+  completed_plans: 32
 ---
 
 # Project State
@@ -311,6 +311,7 @@ Recent decisions affecting current work:
 - [Phase 999.3]: Plan 01: delegate validation at IPC boundary (manager.getAgentConfig) so verbatim ManagerError surfaces to MCP caller per Phase 85 TOOL-04 pattern; spawner-level re-check is defense-in-depth (DEL-10)
 - [Phase 999.3]: Plan 01: webhook composition splits identity — caller's webhookUrl (channel-bound) + delegate's displayName/avatar (per-message overrides via discord.js client.send), verified at webhook-manager.ts:71-75
 - [Phase 999.2]: Plan 01: Pure rename of SessionManager.sendToAgent → dispatchTurn (D-RNI-01). 7 production call sites + 16 test files + 4 doc-comment files. Static-grep TDD pin via fs.readdirSync walker (no glob dep). DEPRECATED_NAME constructed via array.join() so test file does not self-trigger its own assertion. Zero new typecheck errors (108 baseline preserved).
+- [Phase 999.2]: Plan 02: MCP tool dual-registration via shared-closure pattern (canonical-first registration controls tools/list ordering for LLM picking). IPC stacked-case sharing one body. Deprecated-alias metric via console.info for D-RNX-03 30-day removal trigger.
 
 ### v2.1 closing decisions (for reference)
 
@@ -450,9 +451,10 @@ Recent decisions affecting current work:
 | Phase 999.1 P01 | 4m | 2 tasks | 2 files |
 | Phase 999.3 P01 | 10 | 4 tasks | 5 files |
 | Phase 999.2 P01 | 35min | 2 tasks | 24 files |
+| Phase 999.2 P02 | 11min | 2 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-29
-Stopped at: Completed 999.2-01-PLAN.md (sendToAgent → dispatchTurn rename)
+Stopped at: Completed 999.2-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
