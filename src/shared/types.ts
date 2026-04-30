@@ -162,6 +162,19 @@ export type ResolvedAgentConfig = {
    */
   readonly autoStart: boolean;
   readonly skills: readonly string[];
+  /**
+   * Phase 999.13 DELEG-02 — per-agent specialty → target-agent map.
+   * UNDEFINED when the agent does not declare `delegates:` in yaml
+   * (back-compat: existing 15-agent fleet sees no behavior change).
+   * When set, session-config.ts renders this via `renderDelegatesBlock`
+   * and threads the resulting string into `ContextSources.delegatesBlock`,
+   * which the assembler appends to the END of the stable prefix.
+   *
+   * configSchema.superRefine has already validated that every value
+   * points to a configured agent name at config load time — runtime
+   * consumers can trust the data.
+   */
+  readonly delegates?: Readonly<Record<string, string>>;
   readonly soul: string | undefined;
   readonly identity: string | undefined;
   /**

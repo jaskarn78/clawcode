@@ -68,6 +68,24 @@ export type ContextSources = {
    * behavior change.
    */
   readonly systemPromptDirectives?: string;
+  /**
+   * Phase 999.13 DELEG-02 — pre-rendered per-agent "Specialist Delegation"
+   * directive block. Caller (session-config.ts) renders this via
+   * `renderDelegatesBlock(config.delegates)` and threads the resulting
+   * string here.
+   *
+   * When non-empty, the assembler appends it as the LAST element of the
+   * stable prefix's tools-and-capability cluster (after toolDefinitions,
+   * after filesystemCapabilityBlock, BEFORE the mutable suffix). This
+   * positions the "where to delegate" footer at the bottom of the
+   * agent's stable system prompt where CONTEXT.md prescribes.
+   *
+   * Empty/undefined short-circuits — NO header, NO whitespace, byte-
+   * identical to the no-delegates baseline. Critical for prompt-cache
+   * hash stability: agents without delegates see no fleet-wide cache
+   * invalidation on Phase 999.13 deploy.
+   */
+  readonly delegatesBlock?: string;
   readonly identity: string;
   /**
    * Phase 53 Plan 02 — SOUL.md body carved out from identity. When the upstream
@@ -813,6 +831,19 @@ function assembleContextInternal(
         sources.filesystemCapabilityBlock +
         "\n<dream_log_recent></dream_log_recent>",
     );
+  }
+
+  // Phase 999.13 DELEG-02 — per-agent delegates directive lands at the END of
+  // the stable prefix's tools-and-capability cluster (after tools, after fs
+  // capability). Per CONTEXT.md "block goes at the bottom of the agent's
+  // system prompt".
+  //
+  // Empty/undefined short-circuits — byte-identical to no-delegates baseline.
+  // Required for prompt-cache hash stability: agents without delegates see
+  // NO fleet-wide cache invalidation on Phase 999.13 deploy (Pitfall 2 in
+  // 999.13-RESEARCH.md).
+  if (sources.delegatesBlock && sources.delegatesBlock.length > 0) {
+    stableParts.push(sources.delegatesBlock);
   }
 
   // Graph context (Phase 41/52) stable

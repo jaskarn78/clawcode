@@ -2275,29 +2275,24 @@ describe("Phase 999.13 — DELEG renderer + canonical text", () => {
 
   it("delegates-canonical-text: DELEGATES_DIRECTIVE_HEADER + FOOTER constants match canonical text byte-exactly", async () => {
     const mod = await import("../loader.js");
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports these constants
     expect(mod.DELEGATES_DIRECTIVE_HEADER).toBe(EXPECTED_HEADER);
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports these constants
     expect(mod.DELEGATES_DIRECTIVE_FOOTER).toBe(EXPECTED_FOOTER);
   });
 
   it("renderDelegatesBlock-undefined: returns '' exactly", async () => {
     const mod = await import("../loader.js");
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
     const out = mod.renderDelegatesBlock(undefined);
     expect(out).toBe("");
   });
 
   it("renderDelegatesBlock-empty: {} returns '' exactly (no header, no whitespace)", async () => {
     const mod = await import("../loader.js");
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
     const out = mod.renderDelegatesBlock({});
     expect(out).toBe("");
   });
 
   it("renderDelegatesBlock-single: { research: 'fin-research' } produces canonical 3-line block byte-exactly", async () => {
     const mod = await import("../loader.js");
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
     const out = mod.renderDelegatesBlock({ research: "fin-research" });
     const expected = [
       "## Specialist Delegation",
@@ -2310,7 +2305,6 @@ describe("Phase 999.13 — DELEG renderer + canonical text", () => {
 
   it("renderDelegatesBlock-multi-specialty (DELEG-04): bullets sorted alphabetically", async () => {
     const mod = await import("../loader.js");
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
     const out = mod.renderDelegatesBlock({
       research: "r1",
       coding: "c1",
@@ -2339,9 +2333,7 @@ describe("Phase 999.13 — DELEG renderer + canonical text", () => {
       ["a", "A"],
       ["b", "B"],
     ]);
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
     const out1 = mod.renderDelegatesBlock(order1);
-    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
     const out2 = mod.renderDelegatesBlock(order2);
     expect(out1).toBe(out2);
     // Both must contain bullets in alphabetical order (a then b)

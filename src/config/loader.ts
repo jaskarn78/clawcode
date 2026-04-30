@@ -343,6 +343,11 @@ export function resolveAgentConfig(
     // Phase 96 D-09 — propagate per-agent outputDir template (LITERAL string,
     // tokens preserved). Runtime resolveOutputDir expands at write time.
     outputDir: agent.outputDir,
+    // Phase 999.13 DELEG-02 — propagate per-agent delegates map verbatim
+    // (configSchema.superRefine has already validated that every target
+    // points to a known agent name). UNDEFINED when the agent omits the
+    // field — back-compat with the existing 15-agent fleet.
+    delegates: agent.delegates,
     // Phase 100 GSD-02 — default settingSources to ["project"] when omitted.
     // Pitfall 3 (.min(1)) prevents `[]` from reaching here, so a populated
     // array always has at least one source. Plan 02 reads this in
@@ -674,6 +679,57 @@ export function renderSystemPromptDirectiveBlock(
 ): string {
   if (directives.length === 0) return "";
   return directives.map((d) => d.text).join("\n\n");
+}
+
+/**
+ * Phase 999.13 DELEG-02 — canonical text constants for the per-agent
+ * "Specialist Delegation" directive. Constants live here (next to the
+ * Phase 94 directive renderer) so static-grep regression tests pin the
+ * verbatim wording against silent drift.
+ *
+ * Block format when rendered (single specialty example):
+ *   ## Specialist Delegation
+ *   For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:
+ *   - research → fin-research
+ *   Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.
+ *
+ * NEVER paraphrase. The Wave 0 RED test `delegates-canonical-text` pins
+ * these constants byte-exactly.
+ */
+export const DELEGATES_DIRECTIVE_HEADER =
+  "## Specialist Delegation\nFor tasks matching a specialty below, delegate via the spawn-subagent-thread skill:";
+export const DELEGATES_DIRECTIVE_FOOTER =
+  "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.";
+
+/**
+ * Phase 999.13 DELEG-02 / DELEG-04 — render the per-agent specialty →
+ * target-agent map into the canonical "## Specialist Delegation" block
+ * appended at the END of the assembler's stable prefix.
+ *
+ * Returns "" when delegates is undefined OR `{}` — empty short-circuits
+ * with NO header, NO whitespace pollution. This is critical for prompt-
+ * cache hash stability: agents without delegates render byte-identically
+ * to the no-delegates baseline (CA-FS-2 / REG-DETERMINISTIC analog).
+ *
+ * Specialty keys are sorted alphabetically — required for prompt-cache
+ * hash stability across daemon boots (Object.keys insertion order is not
+ * spec-guaranteed for non-integer keys; explicit sort matches the
+ * `resolveSystemPromptDirectives` pattern at line 653).
+ */
+export function renderDelegatesBlock(
+  delegates: Readonly<Record<string, string>> | undefined,
+): string {
+  if (!delegates) return "";
+  const keys = Object.keys(delegates);
+  if (keys.length === 0) return "";
+  // Alphabetical sort — required for prompt-cache hash stability (REG-DETERMINISTIC).
+  keys.sort();
+  const lines = keys.map((k) => `- ${k} → ${delegates[k]}`);
+  return [
+    DELEGATES_DIRECTIVE_HEADER,
+    ...lines,
+    DELEGATES_DIRECTIVE_FOOTER,
+  ].join("\n");
 }
 
 /**

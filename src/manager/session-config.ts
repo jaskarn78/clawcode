@@ -54,6 +54,8 @@ import {
 } from "./filter-tools-by-capability-probe.js";
 // Phase 90 MEM-01 — 50KB hard cap on MEMORY.md auto-inject (D-17).
 import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
+// Phase 999.13 DELEG-02 — per-agent specialist delegate map renderer.
+import { renderDelegatesBlock } from "../config/loader.js";
 // Phase 94 Plan 05 — TOOL-08 / TOOL-09 auto-injected built-in tools.
 // Tool DEFs (no mcpServer attribution) are appended to the LLM-visible
 // tool block in every agent's stable prefix. Plan 94-02's filter sees no
@@ -723,6 +725,9 @@ export async function buildSessionConfig(
     // Phase 96 Plan 02 D-02 — <filesystem_capability> block (rendered above).
     // Empty string when no fs snapshot is available (cache-stability path).
     filesystemCapabilityBlock: filesystemCapabilityBlockStr,
+    // Phase 999.13 DELEG-02 — per-agent delegate directive; empty when
+    // delegates unset OR `{}` (byte-identical to no-delegates baseline).
+    delegatesBlock: renderDelegatesBlock(config.delegates),
   };
 
   // Phase 52 Plan 02 — two-block assembly for prompt caching.
