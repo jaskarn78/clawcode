@@ -717,3 +717,25 @@ Plans:
 - [x] 999.8-03-PLAN.md — Restore heartbeat-check discovery via static `CHECK_REGISTRY` (11 modules); fixes silent `checkCount:0` in production — HB-01..HB-06
 
 **Promotion target:** active milestone, will likely become **Phase 107**. Bundle deploy with Phases 105 + 106 if scope stays small.
+
+### Phase 999.9: Shared 1password-mcp by service-account scope (BACKLOG)
+
+**Goal:** Pool one shared `1password-mcp` subprocess per unique `OP_SERVICE_ACCOUNT_TOKEN` across agents instead of spawning a fresh instance per agent. In current config, this drops 9 instances → 2 (default account + finmentum scope), reducing memory + fd + process count and capping fan-out load against the 1Password read API during boot storms and concurrent tool use.
+
+**Why now:** Surfaced 2026-04-30 during FCC migration — three concurrent `1password-mcp` processes were running against the same service-account quota; combined with a daemon crash-loop that re-resolved every `op://` reference per restart, our service account hit a long-tail rate-limit window that blocked ALL read operations for ~10 minutes. Per-token pooling is the structural fix; daemon-side secret cache (separate phase) is the boot-time fix.
+
+**Requirements:** TBD — to be derived in `/gsd:discuss-phase 999.9`.
+
+**Open questions to settle in discuss-phase:**
+- Does the MCP protocol natively support multi-client over a single stdio transport, or do we need a fan-out proxy that brokers session IDs?
+- Shutdown ordering when the last agent referencing a pool exits — drain immediately or keep warm for a TTL?
+- Blast radius — an MCP crash now affects N agents instead of 1. What's the recovery story (restart pool, fail individual tool calls, both)?
+- Per-tool concurrency limits inside the shared instance to keep one chatty agent from starving the others.
+- Per-agent audit/trace continuity when N agents share one MCP — how do tool-call traces stay attributable to the originating Turn?
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone, sequence after Phase 999 daemon-side secret cache + retry/backoff item (file separately) — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
