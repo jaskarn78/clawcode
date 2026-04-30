@@ -904,13 +904,27 @@ Plans:
 
 **Trigger:** 2026-04-30 incident — MariaDB saturated at 152/151 connections, fin-acquisition reported "DB is saturated". Diagnosed via SSH to clawdy + Unraid host. Root cause confirmed via `ps -ef --forest` showing 15 orphan MCP server pairs (sh+node) with PPID=1. Immediate mitigation applied (max_connections bump + orphan kill); structural fix deferred to this phase.
 
-**Requirements:** [MCP-01 spawn-side process-group wiring, MCP-02 SIGTERM-on-disconnect handler, MCP-03 periodic orphan reaper sweep, MCP-04 graceful daemon-shutdown MCP cleanup, MCP-05 boot-time orphan scan, MCP-06 vitest tests for spawn lifecycle, MCP-07 long-soak verification on clawdy]
+**Second-class incident — `Max thread sessions (3)` cap pin (same day, ~14:47 PT):** fin-acquisition reported "tools failing across the board" — actual error was `Max thread sessions (3) reached for agent 'fin-acquisition'`. Root cause: 3 stale Discord-thread bindings (KYGbsd 22h32m old, DswGzG 22h31m, GPbP2n 17h6m, all idle ≥17h) pinning the cap. Investigation revealed `daemon.ts:4029-4031` shutdown-cleanup AND `archive_thread` MCP tool both wrap Discord's `setArchived` call — when Discord returns 50001 (Missing Access — thread already deleted server-side), the catch swallows the error and the registry entry persists forever. **All three bindings on fin-acquisition were stuck this way for ~22 hours** before the operator noticed. Mitigation applied (manual edit of `thread-bindings.json` + daemon restart). Structural fix folded into this phase.
 
-**Plans:** 3 plans
+**Requirements:** [MCP-01 spawn-side process-group wiring, MCP-02 SIGTERM-on-disconnect handler, MCP-03 periodic orphan reaper sweep, MCP-04 graceful daemon-shutdown MCP cleanup, MCP-05 boot-time orphan scan, MCP-06 vitest tests for spawn lifecycle, MCP-07 long-soak verification on clawdy, MCP-08 prune registry on failed Discord-archive cleanup, MCP-09 periodic stale-binding sweep (idle > N hours), MCP-10 operator CLI for thread inspection + manual archive]
+
+**MCP-08 — prune registry on failed Discord-archive cleanup.** Today's incident: `cleanupSubagentThread` and `archive-discord-thread` IPC handler both call Discord's archive API, then prune the registry only on success. When Discord returns 50001 (or 10003 unknown channel, or any non-recoverable not-found), the thread is already gone — the registry entry has no reason to persist. Wrap the Discord call: on success → archive + prune. On 50001/10003/404-class errors → still prune the registry (the binding is dead). On 5xx / network / rate-limit errors → leave the registry intact (transient). Add structured log line distinguishing the three outcomes.
+
+**MCP-09 — periodic stale-binding sweep.** Belt-and-suspenders against MCP-08 missing edge cases: every 60s (piggyback on the orphan-reaper interval from MCP-03), scan thread-bindings.json for entries where `now() - lastActivity > {idleThresholdMs}` (default: 24h). For each: try the same Discord-archive flow as MCP-08; if it fails with not-found-class errors, prune anyway. Threshold configurable via `defaults.threadIdleArchiveAfter: z.string().optional()` (e.g. `"24h"`, `"6h"`). Default: `"24h"`. Operator can disable by setting to `"0"`.
+
+**MCP-10 — operator CLI for thread inspection + manual archive.** Today the only path to free the cap was direct file edit + daemon restart. Add CLI:
+- `clawcode threads -a <agent>` — already exists, lists bindings
+- `clawcode threads archive <threadId> [--lock]` — calls `archive-discord-thread` IPC method (uses MCP-08 path, prunes on Discord 50001/etc.)
+- `clawcode threads prune --stale-after <duration>` — runs the MCP-09 sweep on demand
+- `clawcode threads prune --agent <name>` — force-prunes ALL bindings for an agent (escape hatch — use after a known stale-state, like today)
+
+These three (MCP-08, MCP-09, MCP-10) collectively ensure the cap doesn't pin again. MCP-08 catches Discord-deleted-then-our-call-fails. MCP-09 catches anything-idle-too-long regardless of Discord state. MCP-10 gives operators a manual escape hatch when both pruning paths somehow miss.
+
+**Plans:** 3 plans (will be re-planned to incorporate MCP-08/09/10; existing plans cover only MCP-01..07)
 
 Plans:
-- [ ] 999.14-00-PLAN.md — Wave 0: process-tracker + orphan-reaper + proc-scan modules + RED tests (MCP-01/02/03/06 substrate)
-- [ ] 999.14-01-PLAN.md — Wave 1: daemon boot wiring (MCP-05 boot scan, MCP-03 reaper interval), per-agent register (MCP-01), persistent-handle disconnect (MCP-02), shutdown cleanup (MCP-04)
-- [ ] 999.14-02-PLAN.md — Wave 2: full-suite gate + operator-approved bundled deploy (with 999.13) + 5× restart soak on clawdy (MCP-06/07)
+- [ ] 999.14-00-PLAN.md — Wave 0: process-tracker + orphan-reaper + proc-scan modules + RED tests (MCP-01/02/03/06 substrate). To extend with: thread-binding sweeper module + MCP-08/09 RED tests.
+- [ ] 999.14-01-PLAN.md — Wave 1: daemon boot wiring (MCP-05 boot scan, MCP-03 reaper interval), per-agent register (MCP-01), persistent-handle disconnect (MCP-02), shutdown cleanup (MCP-04). To extend with: MCP-08 cleanup-failure prune, MCP-09 stale-binding sweep, MCP-10 CLI commands.
+- [ ] 999.14-02-PLAN.md — Wave 2: full-suite gate + operator-approved bundled deploy (with 999.13) + 5× restart soak on clawdy (MCP-06/07). To extend smoke: simulate Discord 50001 → registry pruned; force a stale binding → MCP-09 sweeps it.
 
 **Promotion target:** active milestone — high operator impact (recurring incident, takes down all finmentum agents when MariaDB saturates). Sequence: independent of 999.12 and 999.13. Could ship anytime. Pairs with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle.
