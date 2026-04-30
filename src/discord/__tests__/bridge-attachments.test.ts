@@ -213,7 +213,7 @@ describe("handleMessage attachment integration", () => {
 
   it("resolves agent workspace and downloads attachments to {workspace}/inbox/attachments/", async () => {
     const bridge = new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: fakeSessionManager as any,
       botToken: "fake-token",
       log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as any,
@@ -240,7 +240,7 @@ describe("handleMessage attachment integration", () => {
 
   it("does NOT call attachment module when message has no attachments", async () => {
     const bridge = new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: fakeSessionManager as any,
       botToken: "fake-token",
       log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as any,

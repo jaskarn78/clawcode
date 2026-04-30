@@ -97,7 +97,7 @@ describe("DiscordBridge tracing", () => {
   function createBridgeWithCollector(hasCollector: boolean) {
     mockGetTraceCollector.mockReturnValue(hasCollector ? mockCollector : undefined);
     return new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: {
         forwardToAgent: mockForwardToAgent,
         streamFromAgent: mockStreamFromAgent,
@@ -225,7 +225,7 @@ describe("typing indicator (Phase 54)", () => {
       (opts.hasCollector ?? true) ? mockCollector : undefined,
     );
     return new DiscordBridge({
-      routingTable: opts.routingTable ?? fakeRoutingTable,
+      routingTableRef: { current: opts.routingTable ?? fakeRoutingTable },
       sessionManager: {
         forwardToAgent: mockForwardToAgent,
         streamFromAgent: mockStreamFromAgent,
@@ -493,7 +493,7 @@ describe("streamAndPostResponse streaming cadence wire (Phase 54)", () => {
   function createBridge() {
     mockGetTraceCollector.mockReturnValue(mockCollector);
     return new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: {
         forwardToAgent: vi.fn(),
         streamFromAgent: mockStreamFromAgent,
@@ -668,7 +668,7 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
   function createBridge(opts: { coalescer?: unknown } = {}) {
     mockGetTraceCollector.mockReturnValue(undefined); // tracing not relevant here
     const bridge = new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: {
         forwardToAgent: mockForwardToAgent,
         streamFromAgent: mockStreamFromAgent,

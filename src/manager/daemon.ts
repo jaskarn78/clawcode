@@ -1600,6 +1600,9 @@ export async function startDaemon(
 
   // 5b. Build routing table and rate limiter
   const routingTable = buildRoutingTable(resolvedAgents);
+  // Mutable ref — config hot-reload swaps `current` so bridge + IPC observe
+  // updated channel→agent bindings without needing daemon restart.
+  const routingTableRef = { current: routingTable };
   const rateLimiter = createRateLimiter(DEFAULT_RATE_LIMITER_CONFIG);
   log.info({ routes: routingTable.channelToAgent.size }, "routing table built");
 
@@ -3587,7 +3590,7 @@ export async function startDaemon(
   let discordBridge: DiscordBridge | null = null;
   if (botToken && routingTable.channelToAgent.size > 0) {
     discordBridge = new DiscordBridge({
-      routingTable,
+      routingTableRef,
       sessionManager: manager,
       turnDispatcher,
       threadManager,
@@ -3751,7 +3754,6 @@ export async function startDaemon(
 
   // 11d. Initialize config hot-reload
   const auditTrailPath = join(MANAGER_DIR, "config-audit.jsonl");
-  const routingTableRef = { current: routingTable };
 
   const configReloader = new ConfigReloader({
     sessionManager: manager,

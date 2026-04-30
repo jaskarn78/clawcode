@@ -45,7 +45,7 @@ import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js
  * Configuration for the Discord bridge.
  */
 export type BridgeConfig = {
-  readonly routingTable: RoutingTable;
+  readonly routingTableRef: { readonly current: RoutingTable };
   readonly sessionManager: SessionManager;
   /**
    * Phase 57 Plan 03: optional TurnDispatcher injection.
@@ -110,7 +110,7 @@ export function loadBotToken(): string {
  */
 export class DiscordBridge {
   private readonly client: Client;
-  private readonly routingTable: RoutingTable;
+  private readonly routingTableRef: { readonly current: RoutingTable };
   private readonly sessionManager: SessionManager;
   /**
    * Phase 57 Plan 03: optional TurnDispatcher injected by the daemon path.
@@ -155,7 +155,7 @@ export class DiscordBridge {
   }
 
   constructor(config: BridgeConfig) {
-    this.routingTable = config.routingTable;
+    this.routingTableRef = config.routingTableRef;
     this.sessionManager = config.sessionManager;
     this.turnDispatcher = config.turnDispatcher;
     this.threadManager = config.threadManager;
@@ -242,7 +242,7 @@ export class DiscordBridge {
     this.client.on("ready", () => {
       const guilds = this.client.guilds.cache.map(g => ({ id: g.id, name: g.name }));
       this.log.info(
-        { user: this.client.user?.tag, channels: this.routingTable.channelToAgent.size, guilds },
+        { user: this.client.user?.tag, channels: this.routingTableRef.current.channelToAgent.size, guilds },
         "Discord bridge connected",
       );
     });
@@ -444,7 +444,7 @@ export class DiscordBridge {
     }
 
     const channelId = message.channelId;
-    const agentName = this.routingTable.channelToAgent.get(channelId);
+    const agentName = this.routingTableRef.current.channelToAgent.get(channelId);
 
     if (!agentName) {
       // Channel not bound to any agent — ignore
@@ -780,7 +780,7 @@ export class DiscordBridge {
    */
   private async handleAgentMessage(message: Message, senderAgent: string): Promise<void> {
     const channelId = message.channelId;
-    const agentName = this.routingTable.channelToAgent.get(channelId);
+    const agentName = this.routingTableRef.current.channelToAgent.get(channelId);
     if (!agentName) {
       this.log.debug({ channelId, senderAgent }, "agent webhook message in unbound channel -- ignoring");
       return;
@@ -824,7 +824,7 @@ export class DiscordBridge {
     }
 
     const channelId = reaction.message.channelId;
-    const agentName = this.routingTable.channelToAgent.get(channelId);
+    const agentName = this.routingTableRef.current.channelToAgent.get(channelId);
 
     if (!agentName) {
       return;
@@ -875,7 +875,7 @@ export class DiscordBridge {
    * Resolve the agent name for a channel, checking thread bindings first.
    */
   private resolveAgentForChannel(channelId: string): string | undefined {
-    return this.routingTable.channelToAgent.get(channelId);
+    return this.routingTableRef.current.channelToAgent.get(channelId);
   }
 
   private async sendResponse(

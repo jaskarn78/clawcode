@@ -98,7 +98,7 @@ describe("bridge agent-to-agent message handling", () => {
 
   function createBridge() {
     return new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: fakeSessionManager as any,
       webhookManager: fakeWebhookManager as any,
       botToken: "fake-token",
