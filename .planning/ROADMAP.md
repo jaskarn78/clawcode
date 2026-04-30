@@ -738,4 +738,28 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd:review-backlog when ready)
 
-**Promotion target:** active milestone, sequence after Phase 999 daemon-side secret cache + retry/backoff item (file separately) — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
+**Promotion target:** active milestone, sequence after Phase 999.10 daemon-side secret cache + retry/backoff — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
+
+### Phase 999.10: Daemon-side op:// secret cache + retry/backoff (BACKLOG)
+
+**Goal:** Resolve all `op://` references in clawcode.yaml (`discord.botToken`, `agents.*.mcpEnvOverrides.*`, `mcpServers.*.env.*`) once at daemon boot into an in-memory map, inject literal values into agent envs at spawn so restarts re-use the cache without re-hitting the 1Password API. Add exponential backoff (e.g., 1s/2s/4s, 3 attempts) on `op read` failures so transient rate-limits don't crash-fail an agent.
+
+**Why now:** Root cause of the 2026-04-30 incident — systemd crash-loop × N agents × ~5 secrets each saturated the 1Password service-account read quota into a long-tail throttle, blocking every read operation for ~10 minutes. The bridge stale-routingTable bug surfaced it (deploy → restart → boot storm), but the underlying fragility is structural: every restart re-resolves every secret in parallel, and a single rate-limit response on any one of them kills agent start with no retry. Cache + backoff makes the daemon resilient to bursty op API behavior. Pairs naturally with Phase 999.9 (shared MCP) — cache fixes boot, pool fixes runtime.
+
+**Requirements:** TBD — to be derived in `/gsd:discuss-phase 999.10`.
+
+**Open questions to settle in discuss-phase:**
+- Cache TTL — 1h, until-restart, or live-rotation via signal/IPC? (Default until-restart is simplest; TTL adds rotation support; signal-based gives operator control.)
+- Cache key shape — full `op://` URL or normalized vault/item/field tuple? Affects dedup behavior when the same secret is referenced from multiple paths.
+- Partial-resolution failure at boot — fail closed (refuse to start any agent), fail open (start agents whose secrets resolved, log + alert on the rest), or staged retry with timeout?
+- Where in `daemon.ts` does the cache live — singleton scoped to `startDaemon`, or a dedicated `SecretsResolver` module with its own tests?
+- Cache invalidation hook for live rotation — op-cli signal, config-watcher event, manual `clawcode reload-secrets` IPC, or all three?
+- Backoff calibration — does 1s/2s/4s line up with the observed rate-limit recovery window, or do we need longer (e.g., 30s/60s/120s) given 1P's "Try again in [empty] seconds" sliding window?
+- Telemetry — counters for cache hits/misses, op-read latency histogram, rate-limit hit count per service account; surface in `/clawcode-status`?
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
