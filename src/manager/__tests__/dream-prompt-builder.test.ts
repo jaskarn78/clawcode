@@ -219,12 +219,12 @@ describe("Phase 999.13 — TZ-04: dream prompt TZ-aware timestamps", () => {
       ],
       graphEdges: "",
     };
-    // Plan 02 adds agentTz to DreamPromptInput. On main the field is
-    // ignored — timestamps emit ISO UTC like "2026-04-30T18:32:51.000Z".
-    const { userPrompt } = buildDreamPrompt(
-      // @ts-expect-error Phase 999.13 RED — Plan 02 adds agentTz to DreamPromptInput
-      { ...input, agentTz: "America/Los_Angeles" },
-    );
+    // Phase 999.13 TZ-04 (Q2=YES) — DreamPromptInput.agentTz threads through
+    // renderChunk + renderSummary to produce TZ-aware timestamps.
+    const { userPrompt } = buildDreamPrompt({
+      ...input,
+      agentTz: "America/Los_Angeles",
+    });
     // Canonical TZ-aware timestamp must appear (renderChunk + renderSummary).
     // With agentTz=America/Los_Angeles, 2026-04-30T18:32:51Z → 2026-04-30 11:32:51 PDT
     expect(userPrompt).toContain("2026-04-30 11:32:51 PDT");

@@ -43,6 +43,7 @@ import type {
   AssembleBriefResult,
 } from "./conversation-brief.types.js";
 import { countTokens } from "../performance/token-count.js";
+import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
 import type { MemoryEntry } from "./types.js";
 
 /** Default number of recent summaries rendered in the brief (SESS-02). */
@@ -133,7 +134,7 @@ export function assembleConversationBrief(
   input: AssembleBriefInput,
   deps: AssembleBriefDeps,
 ): AssembleBriefResult {
-  const { agentName, now } = input;
+  const { agentName, now, agentTz } = input;
   const { conversationStore, memoryStore, config, log } = deps;
 
   // --- SESS-03 gap check (BEFORE any MemoryStore read) --------------------
@@ -196,7 +197,7 @@ export function assembleConversationBrief(
   let currentTokens = 0;
 
   for (const entry of candidates) {
-    const candidateBrief = renderBrief([...accepted, entry], now);
+    const candidateBrief = renderBrief([...accepted, entry], now, agentTz);
     const candidateTokens = countTokens(candidateBrief);
 
     if (candidateTokens > config.budgetTokens && accepted.length > 0) {
@@ -273,11 +274,19 @@ export function assembleConversationBrief(
  * instead of injecting the full raw-turn dump (which would blow the
  * conversation_context budget and truncate the brief silently).
  */
-function renderBrief(summaries: readonly MemoryEntry[], now: number): string {
+function renderBrief(
+  summaries: readonly MemoryEntry[],
+  now: number,
+  agentTz?: string,
+): string {
   if (summaries.length === 0) return "";
   const sections = summaries.map((mem) => {
-    // `createdAt` is ISO 8601; first 10 chars is `YYYY-MM-DD`.
-    const date = mem.createdAt.slice(0, 10);
+    // Phase 999.13 TZ-04 (Q1=YES) — operator-local date, NOT UTC date.
+    // A summary persisted at 2026-05-01T02:00Z with agentTz=America/Los_Angeles
+    // renders as "2026-04-30" (operator-perceived) instead of "2026-05-01"
+    // (UTC slice). Internal storage `mem.createdAt` stays UTC ISO; only the
+    // rendered heading uses operator-local time.
+    const date = renderAgentVisibleTimestamp(mem.createdAt, agentTz).slice(0, 10);
     const when = formatRelativeTime(mem.createdAt, now);
     const body = isRawTurnFallback(mem)
       ? renderRawTurnPlaceholder(mem)

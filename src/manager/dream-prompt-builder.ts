@@ -25,6 +25,8 @@
 /** Hard cap on the assembled user-prompt input tokens (D-02). */
 export const DREAM_PROMPT_INPUT_TOKEN_BUDGET = 32_000;
 
+import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
+
 /** chars/4 heuristic — matches v1.7 token-budget tuning. */
 const CHARS_PER_TOKEN = 4;
 
@@ -61,6 +63,15 @@ export interface DreamPromptInput {
   readonly recentSummaries: readonly ConversationSummary[];
   readonly graphEdges: string;
   readonly agentName: string;
+  /**
+   * Phase 999.13 TZ-04 (Q2=YES) — operator-local IANA TZ used for the
+   * `lastModified=…` (chunk header) and `ended …` (summary header)
+   * timestamps. The dream-pass agent reads these prompts as agent-visible
+   * context. When omitted, falls back to host TZ via the helper. Internal
+   * `MemoryChunk.lastModified` and `ConversationSummary.endedAt` Date
+   * objects stay UTC; only the rendered prompt uses operator-local time.
+   */
+  readonly agentTz?: string;
 }
 
 export interface BuildDreamPromptResult {
@@ -110,16 +121,22 @@ Focus on:
 /**
  * Render one memory chunk as a fenced markdown block. Path + lastModified
  * appear so the LLM can cite specific chunks in its output.
+ *
+ * Phase 999.13 TZ-04 (Q2=YES) — `agentTz` (optional) controls operator-
+ * local rendering of `lastModified`. Falls back to host TZ when omitted.
  */
-function renderChunk(c: MemoryChunk): string {
-  return `### ${c.path} (id=${c.id}, lastModified=${c.lastModified.toISOString()})\n\n${c.body}`;
+function renderChunk(c: MemoryChunk, agentTz?: string): string {
+  return `### ${c.path} (id=${c.id}, lastModified=${renderAgentVisibleTimestamp(c.lastModified, agentTz)})\n\n${c.body}`;
 }
 
 /**
  * Render one conversation summary as a fenced markdown block.
+ *
+ * Phase 999.13 TZ-04 (Q2=YES) — `agentTz` (optional) controls operator-
+ * local rendering of `endedAt`. Falls back to host TZ when omitted.
  */
-function renderSummary(s: ConversationSummary): string {
-  return `### Session ${s.sessionId} (ended ${s.endedAt.toISOString()})\n\n${s.summary}`;
+function renderSummary(s: ConversationSummary, agentTz?: string): string {
+  return `### Session ${s.sessionId} (ended ${renderAgentVisibleTimestamp(s.endedAt, agentTz)})\n\n${s.summary}`;
 }
 
 /**
@@ -132,12 +149,17 @@ function buildUserPrompt(
   memoryMd: string,
   summaries: readonly ConversationSummary[],
   graphEdges: string,
+  agentTz?: string,
 ): string {
   const chunkSection =
-    chunks.length === 0 ? "(none)" : chunks.map(renderChunk).join("\n\n");
+    chunks.length === 0
+      ? "(none)"
+      : chunks.map((c) => renderChunk(c, agentTz)).join("\n\n");
   const memorySection = memoryMd.trim().length === 0 ? "(none)" : memoryMd;
   const summarySection =
-    summaries.length === 0 ? "(none)" : summaries.map(renderSummary).join("\n\n");
+    summaries.length === 0
+      ? "(none)"
+      : summaries.map((s) => renderSummary(s, agentTz)).join("\n\n");
   const wikiSection = graphEdges.trim().length === 0 ? "(none)" : graphEdges;
 
   return `## Recent memory chunks
@@ -187,6 +209,7 @@ export function buildDreamPrompt(
     input.memoryMd,
     input.recentSummaries,
     input.graphEdges,
+    input.agentTz,
   );
 
   // Tighten until under budget. The non-chunk sections (MEMORY.md +
@@ -204,6 +227,7 @@ export function buildDreamPrompt(
       input.memoryMd,
       input.recentSummaries,
       input.graphEdges,
+      input.agentTz,
     );
   }
 

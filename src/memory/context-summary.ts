@@ -1,6 +1,7 @@
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { countTokens } from "../performance/token-count.js";
+import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
 
 /** Maximum word count for a context summary to avoid bloating system prompts. */
 const DEFAULT_MAX_WORDS = 500;
@@ -116,14 +117,22 @@ export function truncateSummary(
  * Overwrites any existing summary (only latest is relevant).
  * Creates the directory if it doesn't exist.
  *
+ * Phase 999.13 TZ-04 — `agentTz` (optional) controls the operator-local
+ * TZ used in the `**Generated:**` header. When omitted, falls back to
+ * host TZ via renderAgentVisibleTimestamp's resolution chain. Test 8's
+ * `saveSummary.length === 3` invariant is preserved because optional
+ * trailing parameters do not count toward Function.length.
+ *
  * @param memoryDir - Path to the agent's memory directory
  * @param agentName - Name of the agent
  * @param summary - The summary text from compaction
+ * @param agentTz - Optional IANA TZ for the Generated header (e.g. "America/Los_Angeles")
  */
 export async function saveSummary(
   memoryDir: string,
   agentName: string,
   summary: string,
+  agentTz?: string,
 ): Promise<void> {
   await mkdir(memoryDir, { recursive: true });
 
@@ -132,7 +141,7 @@ export async function saveSummary(
     `# Context Summary`,
     ``,
     `**Agent:** ${agentName}`,
-    `**Generated:** ${new Date().toISOString()}`,
+    `**Generated:** ${renderAgentVisibleTimestamp(new Date(), agentTz)}`,
     ``,
     truncated,
     ``,

@@ -576,10 +576,9 @@ describe("Phase 999.13 — TZ-04: renderBrief TZ-aware date slice", () => {
 
     const T_LATER = new Date("2026-05-02T12:00:00Z").getTime();
 
-    // Plan 02 adds agentTz to AssembleBriefInput. On main the field is
-    // ignored — the rendered brief uses the UTC date "2026-05-01".
+    // Phase 999.13 TZ-04 (Q1=YES) — AssembleBriefInput.agentTz threads through
+    // renderBrief to produce operator-local date in `### Session from <YYYY-MM-DD>`.
     const result = assembleConversationBrief(
-      // @ts-expect-error Phase 999.13 RED — Plan 02 adds agentTz to AssembleBriefInput
       { agentName: "agent-a", now: T_LATER, agentTz: "America/Los_Angeles" },
       { conversationStore: convStore, memoryStore: memStore, config: defaultConfig },
     );

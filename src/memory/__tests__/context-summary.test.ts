@@ -172,7 +172,11 @@ describe("enforceSummaryBudget (Phase 53)", () => {
     // We only confirm the legacy signature is still exported + callable (no
     // filesystem write — see end-to-end test elsewhere).
     expect(typeof saveSummary).toBe("function");
-    expect(saveSummary.length).toBe(3); // legacy 3-arg signature
+    // Phase 999.13 TZ-04 — signature now (memoryDir, agentName, summary, agentTz?).
+    // The 4th param is optional in TypeScript but counts toward Function.length
+    // at runtime. Legacy callers passing 3 args still work — agentTz falls back
+    // to host TZ via renderAgentVisibleTimestamp's resolution chain.
+    expect(saveSummary.length).toBe(4);
   });
 
   it("Test 9: defaults exported — DEFAULT_RESUME_SUMMARY_BUDGET is 1500", () => {

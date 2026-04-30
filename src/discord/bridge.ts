@@ -40,6 +40,7 @@ import {
 import { captureDiscordExchange } from "./capture.js";
 import { MessageCoalescer } from "./message-coalescer.js";
 import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js";
+import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -1018,15 +1019,22 @@ export class DiscordBridge {
  * with structured metadata from formatAttachmentMetadata, plus multimodal
  * hints for image attachments.
  *
+ * Phase 999.13 TZ-04 — `agentTz` (optional) controls the operator-local
+ * TZ used in `<channel>` and `<replying-to>` `ts` attributes. When omitted,
+ * the renderAgentVisibleTimestamp helper falls back to host TZ (process.env.TZ
+ * → Intl.DateTimeFormat().resolvedOptions().timeZone) which is correct on
+ * the single-host single-TZ clawdy deployment per RESEARCH.md Pitfall 3.
+ *
  * Exported for testing.
  */
 export function formatDiscordMessage(
   message: Message,
   downloadResults?: readonly DownloadResult[],
   referencedMessage?: Message,
+  agentTz?: string,
 ): string {
   const parts = [
-    `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${message.createdAt.toISOString()}">`,
+    `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${renderAgentVisibleTimestamp(message.createdAt, agentTz)}">`,
     message.content,
     `</channel>`,
   ];
@@ -1063,7 +1071,10 @@ export function formatDiscordMessage(
     if (referencedMessage) {
       const refUser = referencedMessage.author.username;
       const refContent = referencedMessage.content || "(no text content)";
-      const refTs = referencedMessage.createdAt.toISOString();
+      const refTs = renderAgentVisibleTimestamp(
+        referencedMessage.createdAt,
+        agentTz,
+      );
       parts.unshift(
         `<replying-to message_id="${message.reference.messageId}" user="${refUser}" ts="${refTs}">\n${refContent}\n</replying-to>`,
       );
