@@ -1,20 +1,29 @@
 /**
- * Phase 999.14 — MCP-10 Wave 0 declaration shim for the confirmation prompt
- * helper extracted per coding-style ("prompt logic gets extracted into a
- * tiny helper so tests can mock just that helper rather than wrestling
- * with raw stdin").
+ * Phase 999.14 — MCP-10 GREEN: confirmPrompt helper.
  *
- * Wave 1 Task 3 replaces the body with a real readline-based prompt.
- * Tests mock this module directly, so the stub never runs in tests.
+ * Tiny readline-based yes/no prompt for destructive CLI subcommands.
+ * Extracted into its own module so tests can vi.mock("../../prompts.js")
+ * cleanly without wrestling with raw stdin.
  */
+
+import { createInterface } from "node:readline";
 
 /**
  * Prompt the operator with a yes/no question. Returns true on "y"/"yes"
- * (case-insensitive), false otherwise. Wave 1 implements with
- * node:readline/promises.
+ * (case-insensitive), false otherwise. The readline interface is closed
+ * before the promise resolves so no listeners leak.
  */
-export async function confirmPrompt(_message: string): Promise<boolean> {
-  throw new Error(
-    "confirmPrompt: not implemented in Wave 0 — Wave 1 lands the GREEN code",
-  );
+export async function confirmPrompt(message: string): Promise<boolean> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    const answer = await new Promise<string>((resolve) =>
+      rl.question(`${message} `, resolve),
+    );
+    return answer.trim().toLowerCase().startsWith("y");
+  } finally {
+    rl.close();
+  }
 }
