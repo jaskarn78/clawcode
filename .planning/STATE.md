@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase complete — ready for verification
-stopped_at: Completed 999.8-03-PLAN.md (heartbeat static registry — Phase 999.8 ready for verification)
-last_updated: "2026-04-30T01:26:37.802Z"
+status: Ready to execute
+stopped_at: Completed 999.10-00-PLAN.md (Wave 0 scaffolding)
+last_updated: "2026-04-30T15:12:49.863Z"
 last_activity: 2026-04-30
 progress:
-  total_phases: 23
+  total_phases: 25
   completed_phases: 9
-  total_plans: 36
-  completed_plans: 36
+  total_plans: 41
+  completed_plans: 37
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 103 — clawcode-status-rich-telemetry-usage-panel-operator-observability
+**Current focus:** Phase 999.10 — daemon-op-secret-cache-and-retry-backoff
 
 ## Current Position
 
-Phase: 103 (clawcode-status-rich-telemetry-usage-panel-operator-observability) — EXECUTING
-Plan: 3 of 3 (Plan 01 ✓ complete; Plan 02 next)
+Phase: 999.10 (daemon-op-secret-cache-and-retry-backoff) — EXECUTING
+Plan: 2 of 5
 
 ## Performance Metrics
 
@@ -320,6 +320,8 @@ Recent decisions affecting current work:
 - [Phase 999.8]: Plan 03 — Static heartbeat-check registry replaces dynamic readdir+import scan; bundle now contains all 11 checks (was 0 due to tsup splitting:false). Boot log emits checkCount:11 + checks:[...] + 'heartbeat checks registered'.
 - [Phase 999.8]: Plan 03 — NO try/catch around static imports (Pitfall 7); fail-fast at boot is the contract. The prior silent-skip enabled the bug to live in prod for ~10 weeks.
 - [Phase 999.8]: Plan 03 — Lockstep regression test with hand-maintained EXPECTED_FILENAMES forces 3-place updates (import, array entry, test map) when adding a check; future drift becomes a CI failure.
+- [Phase 999.10-daemon-op-secret-cache-and-retry-backoff]: Wave 0 plants spec-ID-named it.todo scaffolds (vs it.skip or stub it) so vitest reports them as todos rather than failures or false-greens — Wave 1+ replaces each with a real it block
+- [Phase 999.10-daemon-op-secret-cache-and-retry-backoff]: p-retry@8.0.0 chosen over hand-rolled retry loop — jitter, AbortError contract, and onFailedAttempt hook are exactly what is hardest to get right under boot-storm conditions
 
 ### v2.1 closing decisions (for reference)
 
@@ -464,9 +466,10 @@ Recent decisions affecting current work:
 | Phase 999.8 P01 | 14min | 2 tasks | 3 files |
 | Phase 999.8 P02 | 20min | 2 tasks | 4 files |
 | Phase 999.8 P03 | 10min | 2 tasks | 7 files |
+| Phase 999.10-daemon-op-secret-cache-and-retry-backoff P00 | 2min | 3 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.8-03-PLAN.md (heartbeat static registry — Phase 999.8 ready for verification)
+Stopped at: Completed 999.10-00-PLAN.md (Wave 0 scaffolding)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
