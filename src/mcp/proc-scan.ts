@@ -185,6 +185,23 @@ export function procAgeSeconds(args: {
 }
 
 /**
+ * Return the Linux clock-ticks-per-second constant.
+ *
+ * Hardcoded to 100 (the canonical x86_64/aarch64 value of `getconf CLK_TCK`
+ * — verified on clawdy 6.14 + dev 6.8). The kernel exports CLK_TCK at
+ * compile time; in practice every modern Linux ships at 100 (or 250 on
+ * some embedded kernels we don't deploy to). Test override: production
+ * callsites pass this value explicitly to scanForOrphanMcps so tests can
+ * inject any number without poking sysconf.
+ *
+ * Linux-only: not meaningful on non-Linux. Daemon already gates the
+ * tracker construction on Linux at the callsite via /proc presence.
+ */
+export function readClockTicksPerSec(): number {
+  return 100;
+}
+
+/**
  * Read system boot time (Unix seconds) from /proc/stat `btime` line.
  *
  * Called once at daemon start; the result is passed into procAgeSeconds for

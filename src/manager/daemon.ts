@@ -27,14 +27,35 @@ import {
 } from "../tasks/reconciler.js";
 import { loadConfig, resolveAllAgents, defaultOpRefResolver } from "../config/loader.js";
 import type { OpRefResolver } from "../config/loader.js";
-// Phase 999.10 — single SecretsResolver instance threads through every
+// Phase 104 — single SecretsResolver instance threads through every
 // op:// resolution site (Discord botToken, loader sync wrapper, per-agent
 // opEnvResolver). See SUMMARY.md for the three call-site rewrites.
 import { SecretsResolver } from "./secrets-resolver.js";
+// Phase 999.14 — MCP child process lifecycle hardening (boot scan + reaper
+// + shutdown cleanup). Singleton mirrors the SecretsResolver DI pattern.
+import { McpProcessTracker } from "../mcp/process-tracker.js";
+import { reapOrphans, startOrphanReaper } from "../mcp/orphan-reaper.js";
+import {
+  buildMcpCommandRegexes,
+  readBootTimeUnix,
+  readClockTicksPerSec,
+} from "../mcp/proc-scan.js";
+import { cleanupThreadWithClassifier } from "../discord/thread-cleanup.js";
+import {
+  parseIdleDuration,
+  sweepStaleBindings,
+} from "../discord/stale-binding-sweep.js";
+import {
+  readThreadRegistry,
+  writeThreadRegistry,
+  removeBinding,
+  getBindingForThread,
+  getBindingsForAgent,
+} from "../discord/thread-registry.js";
 import { collectAllOpRefs } from "./secrets-collector.js";
 import { applySecretsDiff } from "./secrets-watcher-bridge.js";
 import { defaultOpReadShellOut } from "./op-env-resolver.js";
-// Phase 999.10 Plan 04 — IPC handlers for secrets-status / secrets-invalidate.
+// Phase 104 Plan 04 — IPC handlers for secrets-status / secrets-invalidate.
 // Pure handler module so the case branches in the IPC dispatch closure stay
 // one-liners and the logic is unit-testable without booting the IPC server.
 import {
@@ -1521,7 +1542,7 @@ export async function startDaemon(
   // 4. Load config
   const config = await loadConfig(configPath);
 
-  // 4a. Phase 999.10 SEC-01/SEC-04 — single SecretsResolver instance for the
+  // 4a. Phase 104 SEC-01/SEC-04 — single SecretsResolver instance for the
   // whole daemon lifetime. Pre-resolves every op:// URI in the config in
   // parallel BEFORE the loader's sync resolver runs, so subsequent boot
   // steps (loader sync wrapper below, per-agent opEnvResolver, Discord
@@ -1552,7 +1573,64 @@ export async function startDaemon(
     "secrets: pre-resolve complete",
   );
 
-  // 4b. Phase 999.10 — sync wrapper around the warmed cache. The loader
+  // 4-bis. Phase 999.14 — MCP child process lifecycle hardening. Construct
+  // the per-daemon McpProcessTracker singleton AFTER secretsResolver is
+  // warmed up but BEFORE manager.startAll spawns any new MCP children.
+  // Run a one-shot boot orphan scan (MCP-05) BEFORE startAll so leftover
+  // PPID=1 MCP procs from a prior daemon crash get killed before fresh
+  // children of the same names spawn (otherwise port/connection collisions).
+  //
+  // Skipped entirely when no MCP servers are configured — tracker stays null
+  // and downstream code paths guard with `if (mcpTracker)`. Boot-scan failure
+  // is non-fatal (logged + continue) per RESEARCH.md: a crashed reaper must
+  // never prevent agents from starting; the next 60s tick catches stragglers.
+  const mcpServersConfig = config.mcpServers ?? {};
+  const mcpLog = log.child({ subsystem: "mcp-lifecycle" });
+  let mcpTracker: McpProcessTracker | null = null;
+  let reaperInterval: NodeJS.Timeout | null = null;
+  if (Object.keys(mcpServersConfig).length > 0) {
+    try {
+      const bootTimeUnix = await readBootTimeUnix();
+      const mcpPatterns = buildMcpCommandRegexes(mcpServersConfig);
+      const mcpUid = process.getuid?.() ?? -1;
+      mcpTracker = new McpProcessTracker({
+        uid: mcpUid,
+        patterns: mcpPatterns,
+        log: mcpLog,
+        clockTicksPerSec: readClockTicksPerSec(),
+        bootTimeUnix,
+      });
+      try {
+        await reapOrphans({
+          uid: mcpUid,
+          patterns: mcpPatterns,
+          clockTicksPerSec: readClockTicksPerSec(),
+          bootTimeUnix,
+          reason: "boot-scan",
+          log: mcpLog,
+        });
+      } catch (err) {
+        // Boot-scan failure is non-fatal — daemon continues to startAll.
+        // The next 60s reaper tick will catch any stragglers.
+        mcpLog.error(
+          { err: String(err) },
+          "mcp boot-scan failed; continuing daemon boot",
+        );
+      }
+    } catch (err) {
+      // Tracker construction failed (e.g. /proc unavailable on non-Linux).
+      // Leave tracker null; downstream guards skip MCP lifecycle work.
+      mcpLog.warn(
+        { err: String(err) },
+        "mcp tracker init skipped (likely non-Linux or /proc unavailable)",
+      );
+      mcpTracker = null;
+    }
+  } else {
+    mcpLog.info("no mcp servers configured; skipping lifecycle tracker");
+  }
+
+  // 4b. Phase 104 — sync wrapper around the warmed cache. The loader
   // requires a SYNC resolver (loader.ts is sync by design); the warming was
   // done above by preResolveAll. If a URI was missed (config edited between
   // yaml-parse and now, or a hot-reload added a new ref), throw — the
@@ -1708,7 +1786,7 @@ export async function startDaemon(
   // any agent MCP subprocess env, error message, or log line — see
   // src/manager/op-env-resolver.ts for the security invariants.
   const { resolveMcpEnvOverrides } = await import("./op-env-resolver.js");
-  // Phase 999.10 — per-agent op:// resolution routes through the shared
+  // Phase 104 — per-agent op:// resolution routes through the shared
   // SecretsResolver so cache + retry + telemetry apply uniformly across
   // boot pre-resolve, loader sync wrapper, Discord botToken, and per-agent
   // override paths. Replaces the prior direct-shell-out via
@@ -2034,7 +2112,7 @@ export async function startDaemon(
       // function-form (evaluatePolicy) by leaving bootEvaluator undefined.
       // The engine ternary at engine.ts:130-132 selects evaluatePolicy() when
       // this.evaluator is undefined, which allows any event whose targetAgent
-      // is in configuredAgents (Phase 999.11 POLICY-01..03).
+      // is in configuredAgents (Phase 105 POLICY-01..03).
       // PolicyWatcher.onReload still wires reloadEvaluator(real) once the
       // operator drops a policies.yaml at policyPath — back-compat preserved.
       bootEvaluator = undefined;
@@ -2402,7 +2480,7 @@ export async function startDaemon(
   });
   heartbeatRunner.setThreadManager(threadManager);
   heartbeatRunner.setTaskStore(taskStore);
-  // Phase 999.10 plan 03 (SEC-05) — give the heartbeat checks (specifically
+  // Phase 104 plan 03 (SEC-05) — give the heartbeat checks (specifically
   // mcp-reconnect's RecoveryDeps factory) access to the secrets cache so
   // the op-refresh recovery handler can call deps.invalidate(ref) before
   // re-reading via op CLI. Without this hook, opRead — which is wired
@@ -3589,7 +3667,7 @@ export async function startDaemon(
       return { ok: true, agent: agentName, projectDir: expandedPath };
     }
 
-    // Phase 999.10 Plan 04 — secrets-status / secrets-invalidate intercepts
+    // Phase 104 Plan 04 — secrets-status / secrets-invalidate intercepts
     // BEFORE routeMethod (closure-intercept pattern, mirrors set-gsd-project
     // above + marketplace + browser-tool-call). The handler module consults
     // the daemon-scoped `secretsResolver` singleton via closure so
@@ -3613,7 +3691,7 @@ export async function startDaemon(
 
   // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token).
   //
-  // Phase 999.10 — route through warmed cache + retry shim instead of an
+  // Phase 104 — route through warmed cache + retry shim instead of an
   // inline execSync. preResolveAll above already populated the cache for
   // this URI on the happy path; resolve() here is either a free cache hit
   // OR a one-shot retry if pre-resolve failed for botToken specifically.
@@ -3875,7 +3953,7 @@ export async function startDaemon(
     configPath,
     auditTrailPath,
     onChange: async (diff, newResolvedAgents) => {
-      // Phase 999.10 plan 03 (SEC-05) — reconcile the secrets cache against
+      // Phase 104 plan 03 (SEC-05) — reconcile the secrets cache against
       // the diff BEFORE applyChanges so the reload's downstream agent
       // restarts/spawns hit a hot, fresh cache. Walks the diff for op:// URI
       // changes: invalidates old URIs, warm-resolves new ones. Failures are
@@ -3890,7 +3968,7 @@ export async function startDaemon(
     // mcpServers entry with `op://...` env on a running daemon would still
     // crash the child. Matches the boot-time resolver above.
     //
-    // Phase 999.10 — uses the shared cached sync wrapper so hot-reload
+    // Phase 104 — uses the shared cached sync wrapper so hot-reload
     // hits the warmed cache. The applySecretsDiff call above (SEC-05) pre-
     // resolves new op:// refs so this sync wrapper finds them in the cache.
     opRefResolver: cachedOpRefResolver,
@@ -3957,6 +4035,64 @@ export async function startDaemon(
     log,
   });
   log.info({ pattern: "0 9 * * *" }, "daily summary cron scheduled (09:00 UTC)");
+
+  // 11g. Phase 999.14 — start the periodic MCP orphan reaper. Runs every 60s
+  // AFTER manager.startAll has had time to spawn fresh MCP children (the
+  // first tick fires at t=60s, by which time the npm-wrapper exec handoff
+  // is complete and the 5s-young filter excludes any in-progress spawn).
+  //
+  // The onTickAfter callback runs the MCP-09 stale-binding sweep AFTER the
+  // orphan reap completes — locked decision per CONTEXT.md (sweep observes
+  // post-reap registry state). Disabled when defaults.threadIdleArchiveAfter
+  // === "0" or subagentThreadSpawner is null (Discord disabled).
+  if (mcpTracker) {
+    const idleAfter =
+      (config.defaults as { threadIdleArchiveAfter?: string }).threadIdleArchiveAfter ?? "24h";
+    let idleMs = 0;
+    try {
+      idleMs = parseIdleDuration(idleAfter);
+    } catch (err) {
+      mcpLog.error(
+        { err: String(err), idleAfter },
+        "invalid threadIdleArchiveAfter; sweep disabled",
+      );
+    }
+    const onTickAfter =
+      idleMs > 0 && subagentThreadSpawner != null
+        ? async () => {
+            try {
+              await sweepStaleBindings({
+                spawner: subagentThreadSpawner,
+                registryPath: THREAD_REGISTRY_PATH,
+                now: Date.now(),
+                idleMs,
+                log: mcpLog,
+              });
+            } catch (err) {
+              mcpLog.error(
+                { err: String(err) },
+                "stale-binding sweep failed (non-fatal)",
+              );
+            }
+          }
+        : undefined;
+    const mcpUid = process.getuid?.() ?? -1;
+    const bootTimeUnixForReaper = await readBootTimeUnix();
+    const mcpPatternsForReaper = buildMcpCommandRegexes(mcpServersConfig);
+    reaperInterval = startOrphanReaper({
+      uid: mcpUid,
+      patterns: mcpPatternsForReaper,
+      clockTicksPerSec: readClockTicksPerSec(),
+      bootTimeUnix: bootTimeUnixForReaper,
+      intervalMs: 60_000,
+      log: mcpLog,
+      onTickAfter,
+    });
+    mcpLog.info(
+      { intervalMs: 60_000, sweepEnabled: onTickAfter != null, idleMs },
+      "mcp orphan reaper + stale-binding sweep started",
+    );
+  }
 
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
@@ -4026,16 +4162,55 @@ export async function startDaemon(
         try { await subagentThreadSpawner.cleanupSubagentThread(binding.threadId); } catch { /* best-effort */ }
       }
     }
-    // Clean up all thread sessions before stopping agents
+    // Clean up all thread sessions before stopping agents.
+    // Phase 999.14 MCP-08 — also route every binding through
+    // cleanupThreadWithClassifier so the registry is pruned on Discord
+    // 50001/10003/404 even during shutdown (operator pain regression:
+    // today's incident left 3 stale fin-acquisition bindings because
+    // shutdown's catch swallowed the error path).
     const allBindings = await threadManager.getActiveBindings();
     for (const binding of allBindings) {
-      try { await threadManager.removeThreadSession(binding.threadId); } catch { /* thread cleanup is best-effort during shutdown */ }
+      try { await threadManager.removeThreadSession(binding.threadId); } catch (err) {
+        log.debug({ err: String(err), threadId: binding.threadId }, "removeThreadSession failed during shutdown (non-fatal)");
+      }
+      if (subagentThreadSpawner) {
+        try {
+          await cleanupThreadWithClassifier({
+            spawner: subagentThreadSpawner,
+            registryPath: THREAD_REGISTRY_PATH,
+            threadId: binding.threadId,
+            agentName: binding.agentName ?? "(unknown)",
+            log,
+          });
+        } catch (err) {
+          log.warn({ err: String(err), threadId: binding.threadId }, "cleanupThreadWithClassifier failed during shutdown (non-fatal)");
+        }
+      }
     }
     deliveryQueue.stop();
     deliveryDb.close();
     advisorBudgetDb.close();
     webhookManager.destroy();
     await manager.stopAll();
+    // Phase 999.14 MCP-04 — clear the reaper interval and SIGTERM/SIGKILL
+    // any tracked MCP child PIDs that survived stopAll. Runs AFTER stopAll
+    // (so per-agent killAgentGroup hooks have already fired) and BEFORE
+    // pid-file/socket cleanup. Idempotent on dead PIDs (ESRCH treated as
+    // success). 5s grace before SIGKILL — matches systemd's TimeoutStopSec.
+    if (reaperInterval) {
+      clearInterval(reaperInterval);
+      reaperInterval = null;
+    }
+    if (mcpTracker) {
+      try {
+        await mcpTracker.killAll(5_000);
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "mcp tracker killAll failed during shutdown (non-fatal)",
+        );
+      }
+    }
     // Close TaskStore AFTER manager.stopAll() so any in-flight agent
     // transition that writes to the store completes first (Phase 58 Plan 03).
     try {
@@ -5284,16 +5459,81 @@ async function routeMethod(
 
     case "archive-discord-thread": {
       // Phase 100 follow-up — operator/agent-driven Discord thread archive +
-      // auto-prune the thread-bindings.json registry entry. Closes the
-      // operator-surfaced gap (2026-04-26) where archiving in Discord left
-      // stale registry rows that pegged maxThreadSessions accounting.
+      // auto-prune the thread-bindings.json registry entry.
+      //
+      // Phase 999.14 MCP-08 — now routed through cleanupThreadWithClassifier
+      // so Discord 50001 (Missing Access) and 10003 (Unknown Channel) — both
+      // indicating the thread is gone server-side — prune the registry entry
+      // instead of throwing. Returns success-with-classification on every
+      // path (CLI uses classification to print the right message).
       if (!subagentThreadSpawner) {
         throw new ManagerError("Discord thread archive requires Discord bridge");
       }
       const threadId = validateStringParam(params, "threadId");
       const lock = params.lock === true;
-      const result = await subagentThreadSpawner.archiveThread(threadId, { lock });
+      // Resolve agentName for log triage (operator regression — fin-acq vs fin-test).
+      let agentName = "(unknown)";
+      try {
+        const reg = await readThreadRegistry(THREAD_REGISTRY_PATH);
+        agentName = getBindingForThread(reg, threadId)?.agentName ?? "(unknown)";
+      } catch {
+        /* best-effort — non-fatal if registry read fails */
+      }
+      const result = await cleanupThreadWithClassifier({
+        spawner: subagentThreadSpawner,
+        registryPath: THREAD_REGISTRY_PATH,
+        threadId,
+        agentName,
+        log: logger,
+        lock,
+      });
       return { ok: true, ...result };
+    }
+
+    case "threads-prune-stale": {
+      // Phase 999.14 MCP-10 — operator escape hatch: run the stale-binding
+      // sweep on demand with an operator-supplied threshold (overrides the
+      // daemon-wide defaults.threadIdleArchiveAfter).
+      if (!subagentThreadSpawner) {
+        throw new ManagerError("Stale-binding prune requires Discord bridge");
+      }
+      const staleAfter = validateStringParam(params, "staleAfter");
+      const idleMs = parseIdleDuration(staleAfter);
+      const result = await sweepStaleBindings({
+        spawner: subagentThreadSpawner,
+        registryPath: THREAD_REGISTRY_PATH,
+        now: Date.now(),
+        idleMs,
+        log: logger,
+      });
+      return { ok: true, ...result };
+    }
+
+    case "threads-prune-agent": {
+      // Phase 999.14 MCP-10 — last-resort operator escape hatch. Force-prunes
+      // ALL bindings for the named agent without calling Discord. Used when
+      // the registry has bindings whose Discord state is unknown / unreachable
+      // (today's incident: 3 fin-acquisition bindings, all Discord-50001).
+      const agentName = validateStringParam(params, "agent");
+      const reg = await readThreadRegistry(THREAD_REGISTRY_PATH);
+      const bindings = getBindingsForAgent(reg, agentName);
+      let next = reg;
+      for (const b of bindings) {
+        next = removeBinding(next, b.threadId);
+      }
+      if (next !== reg) {
+        await writeThreadRegistry(THREAD_REGISTRY_PATH, next);
+      }
+      logger.info(
+        {
+          component: "thread-cleanup",
+          action: "force-prune-agent",
+          agent: agentName,
+          prunedCount: bindings.length,
+        },
+        "force-pruned all bindings for agent (no Discord call)",
+      );
+      return { ok: true, prunedCount: bindings.length };
     }
 
     case "schedule-reminder": {

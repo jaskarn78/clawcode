@@ -62,6 +62,12 @@ export interface McpProcessTrackerDeps {
   readonly log: Logger;
   readonly clockTicksPerSec: number;
   readonly bootTimeUnix: number;
+  /**
+   * Phase 999.14 MCP-01 — union regex for configured MCP server cmdlines.
+   * Optional so existing tests that don't exercise MCP-01 PID discovery
+   * can construct a tracker with the original 4-field shape.
+   */
+  readonly patterns?: RegExp;
 }
 
 /** Polling interval for the post-SIGTERM grace loop. */
@@ -78,6 +84,22 @@ export class McpProcessTracker {
 
   constructor(private readonly deps: McpProcessTrackerDeps) {
     this.log = deps.log;
+  }
+
+  /**
+   * Phase 999.14 MCP-01 — read-only accessor for configured cmdline regex.
+   * SessionManager.startAgent passes this to discoverAgentMcpPids without
+   * re-building the regex on every agent start.
+   *
+   * @throws if constructed without patterns (programmer error).
+   */
+  get patterns(): RegExp {
+    if (!this.deps.patterns) {
+      throw new Error(
+        "McpProcessTracker.patterns accessed but not configured (constructor was given no patterns regex)",
+      );
+    }
+    return this.deps.patterns;
   }
 
   /** Register PIDs under agent name; replaces prior set; captures cmdlines. */
