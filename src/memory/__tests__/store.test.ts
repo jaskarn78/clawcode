@@ -1151,4 +1151,51 @@ describe("MemoryStore", () => {
       expect(store.getBacklinkCount("does-not-exist")).toBe(0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 999.13 TZ-05 — DB writes stay UTC ISO (regression)
+  //
+  // Internal storage MUST stay UTC ISO 8601 with millisecond precision and
+  // trailing 'Z' — only agent-visible *rendering* converts to operator-local
+  // TZ via renderAgentVisibleTimestamp. Pillar B's TZ-04 conversions touch
+  // only the prompt-emission boundary (bridge.ts, context-summary.ts,
+  // conversation-brief.ts, dream-prompt-builder.ts) — never the storage
+  // layer. This regression pins the invariant against future drift.
+  // ---------------------------------------------------------------------------
+  describe("Phase 999.13 TZ-05 — DB writes stay UTC", () => {
+    const ISO_UTC_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+    it("createdAt/updatedAt/accessedAt are UTC ISO with millisecond precision and 'Z' suffix", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "tz-05 regression", source: "manual" },
+        randomEmbedding(),
+      );
+
+      // All three timestamps must match the canonical UTC ISO format —
+      // never the agent-visible "YYYY-MM-DD HH:mm:ss ZZZ" format.
+      expect(entry.createdAt).toMatch(ISO_UTC_REGEX);
+      expect(entry.updatedAt).toMatch(ISO_UTC_REGEX);
+      expect(entry.accessedAt).toMatch(ISO_UTC_REGEX);
+
+      // Negative assertion — ensure no agent-visible TZ-aware token slipped
+      // into storage. The TZ-aware format has a SPACE separator and a TZ
+      // abbreviation suffix (PDT/PST/EST/UTC); the UTC ISO format has 'T'
+      // and ends in '.NNN Z'.
+      expect(entry.createdAt).not.toMatch(/ (PDT|PST|EST|UTC)$/);
+      expect(entry.createdAt).toContain("T"); // ISO separator
+    });
+
+    it("re-reading a written entry returns the same UTC ISO format (round-trip)", () => {
+      store = createTestStore();
+      const inserted = store.insert(
+        { content: "round-trip body", source: "manual" },
+        randomEmbedding(),
+      );
+      const read = store.getById(inserted.id);
+      expect(read).not.toBeNull();
+      expect(read!.createdAt).toMatch(ISO_UTC_REGEX);
+      expect(read!.createdAt).toBe(inserted.createdAt);
+    });
+  });
 });
