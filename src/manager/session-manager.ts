@@ -1,5 +1,20 @@
 import { logger } from "../shared/logger.js";
 import { SessionError } from "../shared/errors.js";
+// Phase 999.14 MCP-01 — /proc-walk PID discovery for the daemon-wide tracker.
+import {
+  discoverClaudeSubprocessPid,
+  discoverAgentMcpPids,
+} from "../mcp/proc-scan.js";
+
+/**
+ * Phase 999.14 MCP-01 — settle window between SDK createSession resolving
+ * and our /proc walk. The npm-wrapper grandchildren (sh -c → node) take
+ * ~500-1000ms to fully spawn after the SDK returns; a 1s wait gives them
+ * time to reach steady state before we enumerate. Captured as a constant
+ * with rationale so future maintainers don't tune it down to 0 and
+ * silently break PID discovery.
+ */
+const MCP_SPAWN_SETTLE_MS = 1000;
 import type { SessionAdapter, SessionHandle } from "./session-adapter.js";
 import type { BackoffConfig } from "./types.js";
 import { DEFAULT_BACKOFF_CONFIG } from "./types.js";
@@ -104,6 +119,17 @@ export type SessionManagerOptions = {
     overrides: Record<string, Record<string, string>>,
     agentName: string,
   ) => Promise<Record<string, Record<string, string>>>;
+  /**
+   * Phase 999.14 MCP-01 — daemon-wide MCP child process tracker. When set,
+   * SessionManager.startAgent discovers the agent's claude subprocess PID
+   * via /proc walk (after a settle window), enumerates MCP child PIDs of
+   * that claude PID, and registers them in the tracker. stopAgent unregisters.
+   *
+   * Optional: tests / non-Linux paths leave it undefined; SessionManager
+   * skips MCP lifecycle work entirely (back-compat with pre-Phase-999.14
+   * test fixtures).
+   */
+  readonly mcpTracker?: import("../mcp/process-tracker.js").McpProcessTracker | null;
 };
 
 /**
@@ -194,6 +220,12 @@ export class SessionManager {
     overrides: Record<string, Record<string, string>>,
     agentName: string,
   ) => Promise<Record<string, Record<string, string>>>;
+
+  /**
+   * Phase 999.14 MCP-01 — daemon-wide MCP child process tracker. Optional —
+   * tests/non-Linux leave it undefined and PID discovery is skipped.
+   */
+  private readonly mcpTracker?: import("../mcp/process-tracker.js").McpProcessTracker | null;
 
   /**
    * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
@@ -354,6 +386,8 @@ export class SessionManager {
     // Phase 100 follow-up — vault-scope override resolver (DI). Undefined in
     // tests / bootstrap; daemon wires the production opRead at edge.
     this.opEnvResolver = options.opEnvResolver;
+    // Phase 999.14 MCP-01 — capture optional MCP process tracker.
+    this.mcpTracker = options.mcpTracker;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -683,6 +717,53 @@ export class SessionManager {
     );
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
+
+    // Phase 999.14 MCP-01 — discover this agent's claude subprocess + MCP
+    // child PIDs and register them in the daemon-wide tracker. Settle window
+    // (1s) accounts for the npm-wrapper grandchildren that take ~500-1000ms
+    // to fully spawn after createSession resolves. Wrapped in best-effort
+    // try/catch so a /proc-walk failure NEVER blocks agent startup
+    // (operator pain trumps orphan tracking — the next reaper tick will
+    // catch any leaked PIDs).
+    if (this.mcpTracker) {
+      void (async () => {
+        try {
+          await new Promise((r) => setTimeout(r, MCP_SPAWN_SETTLE_MS));
+          const claudePid = await discoverClaudeSubprocessPid(process.pid);
+          if (claudePid == null) {
+            this.log.warn(
+              { agent: name },
+              "could not locate claude subprocess PID; MCP lifecycle tracking unavailable for this agent",
+            );
+            return;
+          }
+          const tracker = this.mcpTracker;
+          if (!tracker) return; // narrowing
+          let patterns: RegExp;
+          try {
+            patterns = tracker.patterns;
+          } catch {
+            // Tracker constructed without patterns (test fixture); skip.
+            return;
+          }
+          const mcpPids = await discoverAgentMcpPids(claudePid, patterns);
+          await tracker.register(name, mcpPids);
+          this.log.info(
+            {
+              agent: name,
+              claudePid,
+              mcpPidCount: mcpPids.length,
+            },
+            "registered agent MCP PIDs with tracker (Phase 999.14 MCP-01)",
+          );
+        } catch (err) {
+          this.log.warn(
+            { agent: name, err: String(err) },
+            "MCP PID discovery failed (non-fatal — reaper will catch leaks)",
+          );
+        }
+      })();
+    }
 
     // Phase 83 Plan 02 EFFORT-03 — re-apply persisted runtime effort override
     // so `/clawcode-effort` survives `clawcode restart <agent>`. Read happens
@@ -1303,6 +1384,22 @@ export class SessionManager {
     this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
     this.recovery.clearStabilityTimer(name);
     this.recovery.clearRestartTimer(name);
+    // Phase 999.14 MCP-02 — fire process-group SIGTERM at the agent's tracked
+    // MCP PIDs BEFORE handle.close (the SDK teardown). killAgentGroup is
+    // idempotent (ESRCH treated as success), so a second invocation from the
+    // PSH disconnect handler is a safe no-op. Wrapped in try/catch so a
+    // tracker failure NEVER blocks stopAgent — operator-initiated stop must
+    // always complete cleanly even if /proc is misbehaving.
+    if (this.mcpTracker) {
+      try {
+        await this.mcpTracker.killAgentGroup(name, 5_000);
+      } catch (err) {
+        this.log.error(
+          { agent: name, err: String(err) },
+          "tracker.killAgentGroup failed during stopAgent (non-fatal)",
+        );
+      }
+    }
     // Gap 3 (memory-persistence-gaps): stop the flush timer BEFORE
     // summarization so a timer tick cannot race against endSession and
     // try to flush a session that has just transitioned out of 'active'.
@@ -2111,6 +2208,26 @@ export class SessionManager {
       // would likely fail on the corrupted state. Timer is just stopped.
       this.stopMemoryFileFlushTimer(name);
 
+      // Phase 999.14 MCP-02 — fire process-group SIGTERM on crash. The
+      // underlying claude subprocess has died (that's why onError fired);
+      // its MCP grandchildren have reparented to PID 1 by the time we get
+      // here. killAgentGroup signals their pgid, idempotent on dead PIDs.
+      // Fire-and-forget so crash recovery isn't delayed by /proc reads.
+      // See RESEARCH.md Pitfall 5: this is the SESSION-LEVEL teardown trigger,
+      // NOT a per-MCP transport disconnect — reaper-storm safe.
+      if (this.mcpTracker) {
+        const tracker = this.mcpTracker;
+        void (async () => {
+          try {
+            await tracker.killAgentGroup(name, 5_000);
+          } catch (err) {
+            this.log.error(
+              { agent: name, err: String(err) },
+              "tracker.killAgentGroup failed during crash teardown (non-fatal)",
+            );
+          }
+        })();
+      }
       this.recovery.handleCrash(name, config, error, this.sessions);
       // Invoke session end callback on crash (e.g., subagent thread cleanup)
       const endCallback = this.sessionEndCallbacks.get(name);

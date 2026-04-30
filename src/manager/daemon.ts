@@ -1812,6 +1812,9 @@ export async function startDaemon(
     registryPath: REGISTRY_PATH,
     log,
     opEnvResolver,
+    // Phase 999.14 MCP-01 — daemon-wide tracker for per-agent MCP child
+    // PID discovery + cleanup. Null when no MCP servers configured (no-op).
+    mcpTracker,
   });
 
   // 6-bis. Create TurnDispatcher singleton (Phase 57 Plan 03).

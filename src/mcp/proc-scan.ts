@@ -202,6 +202,90 @@ export function readClockTicksPerSec(): number {
 }
 
 /**
+ * Phase 999.14 MCP-01 — discover the agent's `claude` CLI subprocess PID.
+ *
+ * The Claude Agent SDK does not expose the spawned subprocess PID via its
+ * public API (verified against sdk.d.ts), so we walk /proc and find the
+ * most-recently-started process whose ppid === daemonPid AND whose
+ * cmdline[0] ends with /claude OR is exactly "claude".
+ *
+ * Returns the PID with the highest startTimeJiffies (most recent) or null
+ * if no match. Linux-only: returns null on non-Linux (where /proc reads
+ * throw, the catch-and-return-null path is taken).
+ *
+ * Implementation note: scans the full /proc list once. For a daemon
+ * managing 14+ agents, that's a single ~50ms call per startAgent — cheap.
+ * Non-Linux returns null (test-friendly).
+ */
+export async function discoverClaudeSubprocessPid(
+  daemonPid: number,
+): Promise<number | null> {
+  let pids: readonly number[];
+  try {
+    pids = await listAllPids();
+  } catch {
+    return null; // /proc unavailable (non-Linux)
+  }
+  let best: { pid: number; startTimeJiffies: number } | null = null;
+  for (const pid of pids) {
+    let info: ProcInfo | null;
+    try {
+      info = await readProcInfo(pid);
+    } catch {
+      continue;
+    }
+    if (!info) continue;
+    if (info.ppid !== daemonPid) continue;
+    const argv0 = info.cmdline[0] ?? "";
+    // Match "/path/to/claude" OR exact "claude" (npm-bin shim).
+    if (!/(?:^|\/)claude$/.test(argv0)) continue;
+    if (!best || info.startTimeJiffies > best.startTimeJiffies) {
+      best = { pid: info.pid, startTimeJiffies: info.startTimeJiffies };
+    }
+  }
+  return best?.pid ?? null;
+}
+
+/**
+ * Phase 999.14 MCP-01 — enumerate MCP child PIDs spawned by the given
+ * `claude` subprocess.
+ *
+ * Walks /proc, returns PIDs whose ppid === claudePid AND whose cmdline
+ * matches the configured MCP command regex. Excludes the youngest 5s
+ * window (Pitfall 3 — npm-wrapper exec handoff race) is the orphan
+ * reaper's job; here we want EVERY child including freshly-spawned ones
+ * since we're registering them at agent-start.
+ *
+ * Returns readonly array; empty array on non-Linux or zero matches.
+ */
+export async function discoverAgentMcpPids(
+  claudePid: number,
+  patterns: RegExp,
+): Promise<readonly number[]> {
+  let pids: readonly number[];
+  try {
+    pids = await listAllPids();
+  } catch {
+    return [];
+  }
+  const out: number[] = [];
+  for (const pid of pids) {
+    let info: ProcInfo | null;
+    try {
+      info = await readProcInfo(pid);
+    } catch {
+      continue;
+    }
+    if (!info) continue;
+    if (info.ppid !== claudePid) continue;
+    const cmdlineStr = info.cmdline.join(" ");
+    if (!matchesAnyMcpCommand(cmdlineStr, patterns)) continue;
+    out.push(info.pid);
+  }
+  return out;
+}
+
+/**
  * Read system boot time (Unix seconds) from /proc/stat `btime` line.
  *
  * Called once at daemon start; the result is passed into procAgeSeconds for
