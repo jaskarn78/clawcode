@@ -665,8 +665,16 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     debug: vi.fn(),
   };
 
-  function createBridge(opts: { coalescer?: unknown } = {}) {
+  function createBridge(opts: {
+    coalescer?: unknown;
+    hasActiveTurn?: ReturnType<typeof vi.fn>;
+  } = {}) {
     mockGetTraceCollector.mockReturnValue(undefined); // tracing not relevant here
+    // Phase 999.11 Plan 02 will gate the drain block on
+    // `sessionManager.hasActiveTurn(agentName)`. Default the mock to
+    // `() => false` so existing CO-1..CO-6 tests stay green; new CO-9
+    // opts in `() => true` to exercise the gate.
+    const hasActiveTurnMock = opts.hasActiveTurn ?? vi.fn().mockReturnValue(false);
     const bridge = new DiscordBridge({
       routingTableRef: { current: fakeRoutingTable },
       sessionManager: {
@@ -674,6 +682,7 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
         streamFromAgent: mockStreamFromAgent,
         getAgentConfig: mockGetAgentConfig,
         getTraceCollector: mockGetTraceCollector,
+        hasActiveTurn: hasActiveTurnMock,
       } as any,
       webhookManager: fakeWebhookManager as any,
       botToken: "fake-token",
@@ -864,5 +873,242 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     expect(fakeCoalescer.addMessage).not.toHaveBeenCalled();
     // ❌ STILL fires for real errors
     expect(react).toHaveBeenCalledWith("❌");
+  });
+
+  // ---------------------------------------------------------------------
+  // Phase 999.11 Plan 00 — CO-7..CO-11 RED tests for coalescer storm fix.
+  //
+  // Reproducer (clawdy 2026-04-30 09:47–09:58 PT): payload grew +54 chars
+  // per ~150ms iteration as the drain re-queued a previously-coalesced
+  // payload, formatCoalescedPayload re-wrapped it in another
+  // [Combined: 1 message …] header, and the unbounded recursion hit
+  // QUEUE_FULL again. Tests below pin the failure modes Plan 02 will fix.
+  // ---------------------------------------------------------------------
+
+  it("CO-7: idempotent coalesce — single pending entry already wrapped is NOT re-wrapped", () => {
+    // RED — current main always wraps. Plan 02 adds the
+    // `pending.length === 1 && content.startsWith("[Combined:")` guard
+    // in formatCoalescedPayload.
+    const bridge = createBridge();
+    const wrapped =
+      "[Combined: 1 message received during prior turn]\n\n(1) hello";
+    const result = (bridge as any).formatCoalescedPayload([
+      { content: wrapped, messageId: "msg-1" },
+    ]);
+    expect(result).toBe(wrapped);
+    // No double-wrap: only ONE [Combined: header in the output.
+    const matches = result.match(/\[Combined:/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it("CO-8: multi-pending with one wrapped — ONE outer header, inner preserved as body", () => {
+    // GREEN regression lock — current main already does this correctly,
+    // but pin the contract so the Plan 02 idempotent guard doesn't widen
+    // to multi-pending and accidentally strip wrappers.
+    const bridge = createBridge();
+    const result: string = (bridge as any).formatCoalescedPayload([
+      {
+        content: "[Combined: 1 message received during prior turn]\n\n(1) hello",
+        messageId: "msg-1",
+      },
+      { content: "new message", messageId: "msg-2" },
+    ]);
+    // Outer header at offset 0.
+    expect(result.indexOf("[Combined:")).toBe(0);
+    expect(result.startsWith("[Combined: 2 messages received during prior turn]")).toBe(true);
+    // Inner [Combined:] preserved in body — total occurrences === 2.
+    const matches = result.match(/\[Combined:/g) ?? [];
+    expect(matches.length).toBe(2);
+    // New message also present.
+    expect(result).toContain("new message");
+  });
+
+  it("CO-9: drain deferred when sessionManager.hasActiveTurn returns true", async () => {
+    // RED — no hasActiveTurn gate exists on current main; drain runs
+    // unconditionally and recurses into streamFromAgent.
+    //
+    // Plan 02 will add the gate: when an in-flight turn still occupies
+    // the queue, the drain block must (a) NOT call streamFromAgent again
+    // and (b) push pending messages back into the buffer via
+    // MessageCoalescer.requeue() so the next message-arrival drains them.
+    const bufferRef: { current: Array<{ content: string; messageId: string; receivedAt: number }> } = {
+      current: [],
+    };
+    const fakeCoalescer = {
+      addMessage: vi.fn((_a: string, content: string, messageId: string) => {
+        bufferRef.current.push({ content, messageId, receivedAt: Date.now() });
+        return true;
+      }),
+      // First take returns the 2 pre-buffered messages; subsequent takes
+      // would return whatever requeue pushed back.
+      takePending: vi.fn().mockImplementationOnce(() => {
+        const out = bufferRef.current.slice();
+        bufferRef.current = [];
+        return out;
+      }).mockImplementation(() => {
+        const out = bufferRef.current.slice();
+        bufferRef.current = [];
+        return out;
+      }),
+      getPendingCount: vi.fn(() => bufferRef.current.length),
+      // Plan 02 adds requeue — accept it on the mock so the test exercises
+      // the desired semantic (push-back without cap).
+      requeue: vi.fn((_a: string, msgs: Array<{ content: string; messageId: string; receivedAt: number }>) => {
+        bufferRef.current.push(...msgs);
+      }),
+    };
+    // Pre-populate 2 messages.
+    bufferRef.current.push(
+      { content: "buffered A", messageId: "id-A", receivedAt: 1 },
+      { content: "buffered B", messageId: "id-B", receivedAt: 2 },
+    );
+
+    const hasActiveTurn = vi.fn().mockReturnValue(true);
+    const bridge = createBridge({ coalescer: fakeCoalescer, hasActiveTurn });
+
+    // First call rejects QUEUE_FULL; the drain that follows MUST defer
+    // because hasActiveTurn=true.
+    mockStreamFromAgent.mockRejectedValueOnce(new Error("QUEUE_FULL"));
+
+    const msg = makeQueueFullMessage({ messageId: "msg-trigger", content: "trigger" });
+    await (bridge as any).handleMessage(msg);
+
+    // Exactly ONE streamFromAgent call (the failed initial). The drain
+    // recursion must NOT have called it a second time.
+    expect(mockStreamFromAgent).toHaveBeenCalledTimes(1);
+    // Pending messages must remain buffered (via requeue or addMessage push-back).
+    expect(bufferRef.current.length).toBeGreaterThanOrEqual(2);
+    // hasActiveTurn was consulted by the drain block.
+    expect(hasActiveTurn).toHaveBeenCalledWith("agent-x");
+  });
+
+  it("CO-10: drain depth cap — warn log + leave messages buffered after MAX_DRAIN_DEPTH", async () => {
+    // RED — no depth cap exists. Plan 02 will cap recursion at
+    // MAX_DRAIN_DEPTH=3 and emit a single warn log on cap-hit, leaving
+    // pending messages in the coalescer for the next message-arrival.
+    const bufferRef: { current: Array<{ content: string; messageId: string; receivedAt: number }> } = {
+      current: [],
+    };
+    const fakeCoalescer = {
+      addMessage: vi.fn((_a: string, content: string, messageId: string) => {
+        bufferRef.current.push({ content, messageId, receivedAt: Date.now() });
+        return true;
+      }),
+      // Every drain takes ALL pending; recursion will re-buffer them via
+      // the QUEUE_FULL catch path on each iteration.
+      takePending: vi.fn(() => {
+        const out = bufferRef.current.slice();
+        bufferRef.current = [];
+        return out;
+      }),
+      getPendingCount: vi.fn(() => bufferRef.current.length),
+      requeue: vi.fn((_a: string, msgs: Array<{ content: string; messageId: string; receivedAt: number }>) => {
+        bufferRef.current.push(...msgs);
+      }),
+    };
+
+    // hasActiveTurn=false so the gate doesn't fire — only the depth cap
+    // can stop the recursion.
+    const bridge = createBridge({
+      coalescer: fakeCoalescer,
+      hasActiveTurn: vi.fn().mockReturnValue(false),
+    });
+
+    // Every dispatch throws QUEUE_FULL — without a cap, this would spin
+    // forever. With the cap, it must terminate. We harden the mock with
+    // a hard call-count ceiling so the test fails cleanly (assertion)
+    // instead of OOM-ing the worker on current main.
+    let callCount = 0;
+    const HARD_CEILING = 25;
+    mockStreamFromAgent.mockImplementation(async () => {
+      callCount++;
+      if (callCount > HARD_CEILING) {
+        // Switch to success to break the loop — the assertions below will
+        // still fail because callCount > 5.
+        return "force-stop";
+      }
+      throw new Error("QUEUE_FULL");
+    });
+
+    const msg = makeQueueFullMessage({ messageId: "msg-storm", content: "storm-trigger" });
+    await (bridge as any).handleMessage(msg);
+
+    // Cap = 3 means at most a few drain iterations before the warn log fires.
+    // The exact bound depends on Plan 02's implementation but MUST be O(small).
+    expect(mockStreamFromAgent.mock.calls.length).toBeLessThanOrEqual(5);
+    // A warn log must have fired with "depth cap" or similar.
+    const warnCalls = fakeLog.warn.mock.calls;
+    const capWarn = warnCalls.find((c: unknown[]) => {
+      const msg2 = c[1];
+      const ctx = c[0] as Record<string, unknown> | undefined;
+      const msgStr = typeof msg2 === "string" ? msg2 : "";
+      const ctxStr = ctx ? JSON.stringify(ctx) : "";
+      return msgStr.includes("depth cap") || ctxStr.includes("depth cap") || msgStr.includes("drain depth");
+    });
+    expect(capWarn).toBeDefined();
+    // Pending messages remain buffered after cap-hit.
+    expect(bufferRef.current.length).toBeGreaterThan(0);
+  });
+
+  it("CO-11: storm bounded log output — info logs ≤ MAX_DRAIN_DEPTH + 1 warn", async () => {
+    // RED — current main spins ~10 iterations per repro trace, emitting
+    // an info log per iteration. Plan 02 caps the loop, so info-log count
+    // must be bounded by a small constant.
+    const bufferRef: { current: Array<{ content: string; messageId: string; receivedAt: number }> } = {
+      current: [],
+    };
+    const fakeCoalescer = {
+      addMessage: vi.fn((_a: string, content: string, messageId: string) => {
+        bufferRef.current.push({ content, messageId, receivedAt: Date.now() });
+        return true;
+      }),
+      takePending: vi.fn(() => {
+        const out = bufferRef.current.slice();
+        bufferRef.current = [];
+        return out;
+      }),
+      getPendingCount: vi.fn(() => bufferRef.current.length),
+      requeue: vi.fn((_a: string, msgs: Array<{ content: string; messageId: string; receivedAt: number }>) => {
+        bufferRef.current.push(...msgs);
+      }),
+    };
+
+    const bridge = createBridge({
+      coalescer: fakeCoalescer,
+      hasActiveTurn: vi.fn().mockReturnValue(false),
+    });
+
+    // Storm: sustained QUEUE_FULL. Without bounding, the count is
+    // unbounded; with cap=3, info logs are tightly bounded. Hard ceiling
+    // prevents OOM on current main where the loop is unbounded.
+    let callCount2 = 0;
+    const HARD_CEILING_2 = 25;
+    mockStreamFromAgent.mockImplementation(async () => {
+      callCount2++;
+      if (callCount2 > HARD_CEILING_2) return "force-stop";
+      throw new Error("QUEUE_FULL");
+    });
+
+    const msg = makeQueueFullMessage({ messageId: "msg-storm-2", content: "storm" });
+    await (bridge as any).handleMessage(msg);
+
+    // Count "draining coalesced messages" info-log invocations.
+    const drainInfoCalls = fakeLog.info.mock.calls.filter((c: unknown[]) => {
+      const msg2 = c[1];
+      return typeof msg2 === "string" && msg2.includes("draining coalesced messages");
+    });
+    // Plan 02 cap = 3 drains; pin to a small constant. Today this loops
+    // until the queue actually frees, easily exceeding 5.
+    expect(drainInfoCalls.length).toBeLessThanOrEqual(5);
+
+    // Exactly one warn line for the cap-hit (storm scenario must emit it).
+    const capWarnCount = fakeLog.warn.mock.calls.filter((c: unknown[]) => {
+      const msg2 = c[1];
+      const ctx = c[0] as Record<string, unknown> | undefined;
+      const msgStr = typeof msg2 === "string" ? msg2 : "";
+      const ctxStr = ctx ? JSON.stringify(ctx) : "";
+      return msgStr.includes("depth cap") || ctxStr.includes("depth cap") || msgStr.includes("drain depth");
+    }).length;
+    expect(capWarnCount).toBe(1);
   });
 });

@@ -98,4 +98,42 @@ describe("MessageCoalescer", () => {
     expect(coalescer.addMessage("agent-x", "msg-51", "id-51")).toBe(false);
     expect(coalescer.getPendingCount("agent-x")).toBe(50);
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 999.11 Plan 00 — MC-7 RED test for the new requeue API.
+  //
+  // Note: the plan numbered this MC-6 but that label was already taken by the
+  // existing "default perAgentCap is 50" test above, so this is MC-7. Tracked
+  // in 999.11-00-SUMMARY.md as a numbering deviation.
+  //
+  // RED reason: `requeue` does not exist on MessageCoalescer today. The cast
+  // below will compile (any-cast through the indexed access) but the call
+  // throws "requeue is not a function" at runtime. Plan 02 adds the method.
+  // -------------------------------------------------------------------------
+  it("MC-7: requeue bypasses perAgentCap (push-back of already-accepted messages)", () => {
+    // Build with cap=2 so we can verify push-back overflows the cap.
+    const coalescer = new MessageCoalescer({ perAgentCap: 2 });
+    expect(coalescer.addMessage("agent-x", "first", "msg-1")).toBe(true);
+    expect(coalescer.addMessage("agent-x", "second", "msg-2")).toBe(true);
+    // Cap reached.
+    expect(coalescer.addMessage("agent-x", "third", "msg-3")).toBe(false);
+    expect(coalescer.getPendingCount("agent-x")).toBe(2);
+
+    // requeue MUST bypass the cap: these messages were already accepted
+    // once and we're returning them after a deferred drain. Total now 4.
+    (coalescer as unknown as {
+      requeue: (
+        agent: string,
+        msgs: ReadonlyArray<{ content: string; messageId: string; receivedAt: number }>,
+      ) => void;
+    }).requeue("agent-x", [
+      { content: "requeued-A", messageId: "rq-A", receivedAt: 100 },
+      { content: "requeued-B", messageId: "rq-B", receivedAt: 101 },
+    ]);
+
+    // Buffer holds 4 entries — cap was bypassed.
+    expect(coalescer.getPendingCount("agent-x")).toBe(4);
+    const pending = coalescer.takePending("agent-x");
+    expect(pending.length).toBe(4);
+  });
 });
