@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Milestone complete
-stopped_at: Completed 999.10-03-PLAN.md (ConfigWatcher + recovery/op-refresh cache invalidation surfaces)
-last_updated: "2026-04-30T16:02:24.769Z"
+status: Ready to execute
+stopped_at: Completed 999.11-00-PLAN.md
+last_updated: "2026-04-30T17:49:26.639Z"
 last_activity: 2026-04-30
 progress:
-  total_phases: 25
+  total_phases: 27
   completed_phases: 10
-  total_plans: 41
-  completed_plans: 41
+  total_plans: 45
+  completed_plans: 42
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 999.10 — daemon-op-secret-cache-and-retry-backoff
+**Current focus:** Phase 999.11 — trigger-policy-default-allow-and-coalescer-storm-fix
 
 ## Current Position
 
-Phase: 999.10
-Plan: Not started
+Phase: 999.11 (trigger-policy-default-allow-and-coalescer-storm-fix) — EXECUTING
+Plan: 2 of 4
 
 ## Performance Metrics
 
@@ -330,6 +330,9 @@ Recent decisions affecting current work:
 - [Phase 999.10]: Plan 04 IPC handler factored into pure module (secrets-ipc-handler.ts) for unit-testability without booting IPC server; closure-intercept-before-routeMethod pattern preserves the 24-arg routeMethod signature
 - [Phase 999.10]: Plan 03: applySecretsDiff bridge factored into secrets-watcher-bridge.ts (RECOMMENDED) — daemon.ts onChange delegates a single line; tests import production code directly (no shape-drift risk).
 - [Phase 999.10]: Plan 03: Recovery deps invalidate wired at mcp-reconnect.ts construction site (not daemon.ts) — daemon only calls heartbeatRunner.setSecretsResolver. Threading via CheckContext mirrors setThreadManager / setTaskStore pattern; minimal cross-cutting change.
+- [Phase 999.11]: Renamed plan's MC-6 to MC-7 due to existing label clash in message-coalescer.test.ts
+- [Phase 999.11]: POLICY tests are regression locks (pass on main); driver-RED for POLICY lives at daemon boot site verified by build smoke
+- [Phase 999.11]: Added HARD_CEILING to mocked unbounded recursion in CO-10/CO-11 to prevent vitest worker OOM on current main
 
 ### v2.1 closing decisions (for reference)
 
@@ -479,9 +482,10 @@ Recent decisions affecting current work:
 | Phase 999.10 P02 | 6.5min | 3 tasks | 5 files |
 | Phase 999.10 P04 | 5min | 3 tasks | 4 files |
 | Phase 999.10 P03 | 6min | 2 tasks | 8 files |
+| Phase 999.11 P00 | 18 min | 3 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.10-03-PLAN.md (ConfigWatcher + recovery/op-refresh cache invalidation surfaces)
+Stopped at: Completed 999.11-00-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
