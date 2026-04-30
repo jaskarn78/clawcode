@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.11-02-PLAN.md
-last_updated: "2026-04-30T17:59:39.081Z"
+stopped_at: Completed 999.13-00-PLAN.md
+last_updated: "2026-04-30T19:23:29.914Z"
 last_activity: 2026-04-30
 progress:
-  total_phases: 27
+  total_phases: 28
   completed_phases: 10
-  total_plans: 45
-  completed_plans: 44
+  total_plans: 49
+  completed_plans: 45
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 999.11 — trigger-policy-default-allow-and-coalescer-storm-fix
+**Current focus:** Phase 999.13 — extendible-specialist-delegate-map-and-agent-context-timezone-rendering
 
 ## Current Position
 
-Phase: 999.11 (trigger-policy-default-allow-and-coalescer-storm-fix) — EXECUTING
-Plan: 3 of 4
+Phase: 999.13 (extendible-specialist-delegate-map-and-agent-context-timezone-rendering) — EXECUTING
+Plan: 2 of 4
 
 ## Performance Metrics
 
@@ -336,6 +336,11 @@ Recent decisions affecting current work:
 - [Phase 999.11]: Bridge-side idempotent guard placement (formatCoalescedPayload, not coalescer.addMessage) — Keeps MessageCoalescer content-agnostic per RESEARCH.md Pattern 2; wrapper-detection paired with wrapper-emission
 - [Phase 999.11]: Layered defense order: depth cap → hasActiveTurn gate → idempotent format — Cap is cheapest (single integer comparison) and runs first; gate is method call so second; format only on actual drain. If both cap and gate would fire, cap wins
 - [Phase 999.11]: MessageCoalescer.requeue bypasses perAgentCap entirely — Messages were already accepted on initial addMessage; re-checking would silently drop them. Per RESEARCH.md Pitfall 3
+- [Phase 999.13]: Q1 LOCKED YES: conversation-brief date slice → TZ-aware (operator-perceived date)
+- [Phase 999.13]: Q2 LOCKED YES: dream-prompt-builder timestamps → TZ-aware (dream-pass agent reads as agent-visible context)
+- [Phase 999.13]: Q3 LOCKED YES: defaults.timezone gets schema-time IANA TZ pre-validation (5-line zod refinement)
+- [Phase 999.13]: Q4 DEFER: Discord embed timestamps stay UTC — operator-facing tooling, out of scope
+- [Phase 999.13]: DST fixture corrected per RESEARCH.md Pitfall 1: 2026 US fall-back = Nov 1, not Nov 2
 
 ### v2.1 closing decisions (for reference)
 
@@ -488,9 +493,10 @@ Recent decisions affecting current work:
 | Phase 999.11 P00 | 18 min | 3 tasks | 3 files |
 | Phase 999.11 P01 | 5 min | 2 tasks | 1 files |
 | Phase 999.11 P02 | 6 min | 3 tasks | 2 files |
+| Phase 999.13 P00 | 16 min | 3 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.11-02-PLAN.md
+Stopped at: Completed 999.13-00-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
