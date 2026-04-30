@@ -145,6 +145,10 @@ describe("IPC_METHODS", () => {
       // Phase 100 follow-up — runtime gsd.projectDir override (Discord
       // /gsd-set-project + daemon set-gsd-project IPC handler).
       "set-gsd-project",
+      // Phase 999.10 SEC-06 — daemon-side op:// secret cache telemetry +
+      // operator-driven cache invalidation surface.
+      "secrets-status",
+      "secrets-invalidate",
     ]);
   });
 });
