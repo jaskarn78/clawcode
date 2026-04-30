@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Phase 999.8 context gathered (--auto, scope expanded)
-last_updated: "2026-04-29T23:15:44.588Z"
-last_activity: 2026-04-29
+stopped_at: Completed 999.8-01-PLAN.md (CAP-01..CAP-04)
+last_updated: "2026-04-30T00:50:25.257Z"
+last_activity: 2026-04-30
 progress:
   total_phases: 23
   completed_phases: 8
-  total_plans: 33
-  completed_plans: 33
+  total_plans: 36
+  completed_plans: 34
 ---
 
 # Project State
@@ -315,6 +315,7 @@ Recent decisions affecting current work:
 - [Phase 999.2]: Plan 03: Pure-DI module daemon-ask-agent-ipc.ts (Phase 103 blueprint) — handleAskAgentIpc owns inbox+dispatch+mirror; escalation kept at daemon edge for SessionManager access (D-SYN-06 unchanged)
 - [Phase 999.2]: Plan 03: Static-grep tests for MCP wrapper text templates instead of McpServer build-and-extract (matches Plan 02 precedent; pure-DI tests pin IPC contract behavior)
 - [Phase 999.2]: Plan 03: post-to-agent per-webhook log+swallow LEFT untouched per Plan Step 3 + Pitfall 7 — broadcast tool, delivered:false IS the structured signal; D-PST-03 satisfied via return shape, not by removing local catch
+- [Phase 999.8]: Plan 01: extracted memory-graph IPC body into pure handler at src/manager/memory-graph-handler.ts (mirrors handleSetModelIpc); LIMIT 500 → configurable LIMIT ? with default 5000 and inclusive [1, 50000] validation
 
 ### v2.1 closing decisions (for reference)
 
@@ -456,9 +457,10 @@ Recent decisions affecting current work:
 | Phase 999.2 P01 | 35min | 2 tasks | 24 files |
 | Phase 999.2 P02 | 11min | 2 tasks | 5 files |
 | Phase 999.2 P03 | 15min | 2 tasks | 6 files |
+| Phase 999.8 P01 | 14min | 2 tasks | 3 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-29
-Stopped at: Phase 999.8 context gathered (--auto, scope expanded)
+Last activity: 2026-04-30
+Stopped at: Completed 999.8-01-PLAN.md (CAP-01..CAP-04)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
