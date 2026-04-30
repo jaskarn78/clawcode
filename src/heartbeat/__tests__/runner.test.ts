@@ -620,4 +620,43 @@ describe("HeartbeatRunner", () => {
       expect(runner.getZoneStatuses().has("agent-a")).toBe(false);
     });
   });
+
+  describe("initialize() boot log (Phase 999.8 Plan 03 — HB-04)", () => {
+    it("emits checkCount + checks array + 'heartbeat checks registered' message", async () => {
+      const sessionManager = createMockSessionManager();
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        // Static registry ignores this path — we still pass one for back-compat.
+        checksDir: join(tempDir, "checks"),
+        log,
+      });
+
+      await runner.initialize();
+
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          checkCount: 11,
+          checks: expect.arrayContaining([
+            "tier-maintenance",
+            "auto-linker",
+            "inbox",
+            "consolidation",
+            "context-fill",
+            "fs-probe",
+            "mcp-reconnect",
+            "task-retention",
+            "thread-idle",
+            "trace-retention",
+            "attachment-cleanup",
+          ]),
+        }),
+        "heartbeat checks registered",
+      );
+    });
+  });
 });
