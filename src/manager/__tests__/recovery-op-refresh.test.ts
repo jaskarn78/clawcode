@@ -54,6 +54,67 @@ describe("opRefreshHandler", () => {
     expect(opRefreshHandler.matches("500 internal server error", {} as never)).toBe(false);
   });
 
+  it("REC-OP-REFRESH-INV-01: invalidates cache for each op:// ref BEFORE re-reading (SEC-05)", async () => {
+    // Phase 999.10 plan 03 — when an MCP child raises an op:// auth error,
+    // the recovery handler must drop any cached value for that URI from the
+    // SecretsResolver BEFORE shelling out to op read again, otherwise
+    // opRead's underlying resolver could serve back the same stale value
+    // that just triggered the auth-error. This test pins the ordering.
+    const callOrder: string[] = [];
+    const opRead = vi.fn(async (ref: string) => {
+      callOrder.push(`opRead:${ref}`);
+      return `fresh-${ref}`;
+    });
+    const invalidate = vi.fn((ref: string) => {
+      callOrder.push(`invalidate:${ref}`);
+    });
+    const readEnvForServer = vi.fn().mockReturnValue({
+      TOKEN_A: "op://VaultA/ItemA/field",
+      TOKEN_B: "op://VaultB/ItemB/field",
+      LITERAL: "static-value",
+    });
+    const writeEnvForServer = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({ opRead, invalidate, readEnvForServer, writeEnvForServer });
+
+    const outcome = await opRefreshHandler.recover("test-server", deps);
+    expect(outcome.kind).toBe("recovered");
+
+    // Both URIs invalidated.
+    expect(invalidate).toHaveBeenCalledWith("op://VaultA/ItemA/field");
+    expect(invalidate).toHaveBeenCalledWith("op://VaultB/ItemB/field");
+
+    // Per-ref ordering: invalidate(ref) precedes opRead(ref) for the same ref.
+    for (const ref of ["op://VaultA/ItemA/field", "op://VaultB/ItemB/field"]) {
+      const invIdx = callOrder.indexOf(`invalidate:${ref}`);
+      const readIdx = callOrder.indexOf(`opRead:${ref}`);
+      expect(invIdx).toBeGreaterThanOrEqual(0);
+      expect(readIdx).toBeGreaterThanOrEqual(0);
+      expect(invIdx).toBeLessThan(readIdx);
+    }
+
+    // Literal env values do NOT trigger invalidate.
+    expect(invalidate).not.toHaveBeenCalledWith("static-value");
+  });
+
+  it("REC-OP-REFRESH-INV-02: handler still works when deps.invalidate is undefined (back-compat)", async () => {
+    // Existing pre-999.10 tests (and the long-tail of test-deps that don't
+    // know about the new optional field) must still produce a `recovered`
+    // outcome. The optional `?.` chain in op-refresh.ts is the safety net.
+    const opRead = vi.fn().mockResolvedValue("fresh-value");
+    const readEnvForServer = vi.fn().mockReturnValue({
+      TOKEN: "op://Vault/Item/field",
+    });
+    const writeEnvForServer = vi.fn().mockResolvedValue(undefined);
+    // makeDeps sets invalidate omitted-by-default (it's not in the
+    // overrides spread) — confirm the handler still recovers.
+    const deps = makeDeps({ opRead, readEnvForServer, writeEnvForServer });
+    expect(deps.invalidate).toBeUndefined();
+
+    const outcome = await opRefreshHandler.recover("legacy-server", deps);
+    expect(outcome.kind).toBe("recovered");
+    expect(opRead).toHaveBeenCalledWith("op://Vault/Item/field");
+  });
+
   it("REC-OP-RECOVER-OK: opRead resolves + writeEnvForServer succeeds → outcome.kind='recovered'", async () => {
     const opRead = vi.fn().mockImplementation(async (ref: string) => {
       if (ref === "op://prod/api/key") return "fresh-api-key-12345";
