@@ -330,6 +330,47 @@ describe("startOrphanReaper", () => {
     // No further scans (allow for any in-flight)
     expect(listAllPidsMock.mock.calls.length).toBe(callsAfterTwo);
   });
+
+  it("Test 8: onTickAfter callback runs AFTER reapOrphans completes (sequence pinned)", async () => {
+    // Pinned ordering — locks the Wave 1 MCP-09 sweep wiring decision:
+    // "stale-binding sweep runs AFTER orphan reaper on each tick".
+    const callOrder: string[] = [];
+
+    // Wire reapOrphans to log when it finishes via the listAllPids mock
+    // (called inside scanForOrphanMcps, which reapOrphans calls twice).
+    listAllPidsMock.mockImplementation(async () => {
+      callOrder.push("reapOrphans-scan");
+      return [];
+    });
+
+    const onTickAfter = vi.fn(async () => {
+      callOrder.push("onTickAfter");
+    });
+
+    const handle = startOrphanReaper({
+      uid: 999,
+      patterns: TEST_PATTERNS,
+      clockTicksPerSec: CLOCK_TICKS,
+      bootTimeUnix: BOOT_TIME_UNIX,
+      intervalMs: 1000,
+      log: silentLogger(),
+      graceMs: 50,
+      onTickAfter,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    // Stop the interval so the next advance doesn't loop forever, then
+    // drain any in-flight microtasks (the async wrapper inside the tick).
+    clearInterval(handle);
+    await vi.advanceTimersByTimeAsync(100);
+
+    // Reap MUST complete before onTickAfter — sequence pinned.
+    expect(onTickAfter).toHaveBeenCalled();
+    const lastReapIdx = callOrder.lastIndexOf("reapOrphans-scan");
+    const firstAfterIdx = callOrder.indexOf("onTickAfter");
+    expect(lastReapIdx).toBeGreaterThanOrEqual(0);
+    expect(firstAfterIdx).toBeGreaterThan(lastReapIdx);
+  });
 });
 
 describe("Linux real-orphan integration", () => {

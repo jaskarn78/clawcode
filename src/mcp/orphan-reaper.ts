@@ -159,31 +159,56 @@ export interface StartOrphanReaperArgs extends ScanForOrphansArgs {
   readonly intervalMs?: number;
   readonly log: Logger;
   readonly graceMs?: number;
+  /**
+   * Optional callback invoked AFTER the orphan reap completes on each tick.
+   * Wave 1 wires the MCP-09 stale-binding sweep here so the sweep runs
+   * after the orphan reaper (locked decision per CONTEXT.md). Errors from
+   * this callback are logged but never propagate (would crash setInterval).
+   */
+  readonly onTickAfter?: () => Promise<void>;
 }
 
 /**
  * Start the periodic orphan reaper. Returns the timer handle for clearInterval
  * on daemon shutdown. First tick fires AFTER intervalMs (boot-scan covers t=0).
  * Errors caught and logged — never propagate out of setInterval.
+ *
+ * The optional `onTickAfter` callback runs sequentially AFTER reapOrphans
+ * completes — not in parallel — so Wave 1's MCP-09 sweep observes the
+ * post-reap registry state on each tick.
  */
 export function startOrphanReaper(args: StartOrphanReaperArgs): NodeJS.Timeout {
   const intervalMs = args.intervalMs ?? 60_000;
   const handle = setInterval(() => {
-    void reapOrphans({
-      uid: args.uid,
-      patterns: args.patterns,
-      minAgeSeconds: args.minAgeSeconds,
-      clockTicksPerSec: args.clockTicksPerSec,
-      bootTimeUnix: args.bootTimeUnix,
-      reason: "orphan-ppid-1",
-      log: args.log,
-      graceMs: args.graceMs,
-    }).catch((err: unknown) => {
-      args.log.error(
-        { component: "mcp-reaper", err: String(err) },
-        "reaper tick failed",
-      );
-    });
+    void (async () => {
+      try {
+        await reapOrphans({
+          uid: args.uid,
+          patterns: args.patterns,
+          minAgeSeconds: args.minAgeSeconds,
+          clockTicksPerSec: args.clockTicksPerSec,
+          bootTimeUnix: args.bootTimeUnix,
+          reason: "orphan-ppid-1",
+          log: args.log,
+          graceMs: args.graceMs,
+        });
+      } catch (err: unknown) {
+        args.log.error(
+          { component: "mcp-reaper", err: String(err) },
+          "reaper tick failed",
+        );
+      }
+      if (args.onTickAfter) {
+        try {
+          await args.onTickAfter();
+        } catch (err: unknown) {
+          args.log.error(
+            { component: "mcp-reaper", err: String(err) },
+            "onTickAfter callback failed",
+          );
+        }
+      }
+    })();
   }, intervalMs);
   return handle;
 }
