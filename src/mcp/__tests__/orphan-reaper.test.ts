@@ -336,66 +336,59 @@ describe("Linux real-orphan integration", () => {
   it.skipIf(!isLinux)(
     "Test 7: terminates a real orphan via bash double-fork pattern",
     async () => {
-      // Spawn `bash -c 'sleep 30 & disown; exit 0'` — the sleep is reparented
-      // to PID 1 when bash exits.
-      const sleepCmd = `sleep-fixture-${process.pid}-${Date.now()}`;
-      // Use a unique sleep arg so we can match it specifically without
-      // killing other unrelated sleep procs on the host.
-      // Strategy: spawn `bash -c 'exec sleep ${ARG} & disown' (no wait)
+      // Strategy: spawn a node setInterval with a unique arg, disown it from
+      // bash. When bash exits, the node child reparents to PID 1.
+      // node accepts trailing positional args (sleep does not), so this gives
+      // us a unique cmdline we can match against.
+      const tag = `cc-orphan-fixture-${process.pid}-${Date.now()}`;
       const child = spawn("bash", [
         "-c",
-        `sleep 30 ${sleepCmd} & disown`,
+        `node -e "setInterval(()=>{},10000)" ${tag} & disown`,
       ]);
 
-      // Wait for bash to exit — sleep is now an orphan.
+      // Wait for bash to exit — the node child is now an orphan (PPID=1).
       await new Promise<void>((resolve) => {
         child.on("exit", () => resolve());
       });
       // Small settle so /proc reflects the reparent
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 300));
 
       const patterns = buildMcpCommandRegexes({
-        sleepFixture: { command: "sleep", args: ["30", sleepCmd] },
+        nodeFixture: {
+          command: "node",
+          args: ["-e", "setInterval(()=>{},10000)", tag],
+        },
       });
 
       const myUid = (process.getuid as () => number)();
 
-      // Call reapOrphans with minAgeSeconds=0 since the fixture is brand-new.
-      // We need to inject minAgeSeconds via the underlying scanForOrphanMcps,
-      // so use scanForOrphanMcps directly + reapOrphans variant that accepts it.
-      // But reapOrphans uses minAgeSeconds=5 default. Use scanForOrphanMcps
-      // and manually verify; then trust reapOrphans logic.
-      // Restore real proc-scan for this test by un-mocking via vi.doMock
-      // is heavy. Simpler: use scanForOrphanMcps+kill with min=0 directly
-      // by importing fresh — but mocks are already in place.
-      // Workaround: bypass mocks by using the actual readProcInfo via
-      // vi.importActual — already exposed via `actual` in the mock factory,
-      // re-import here.
+      // Bypass the module-level mocks for this test — route to the real
+      // proc-scan helpers so /proc is actually walked.
       const real = await vi.importActual<typeof import("../proc-scan.js")>(
         "../proc-scan.js",
       );
-      const realScan = await import("../orphan-reaper.js");
-
-      // Reset the listAllPids mock to return real /proc enumeration
-      // by routing through actual.listAllPids
       listAllPidsMock.mockImplementation(() => real.listAllPids());
-      readProcInfoMock.mockImplementation((pid: number) => real.readProcInfo(pid));
+      readProcInfoMock.mockImplementation((pid: number) =>
+        real.readProcInfo(pid),
+      );
 
-      const orphans = await realScan.scanForOrphanMcps({
+      const realReaper = await import("../orphan-reaper.js");
+      // Use the REAL boot time — starttime jiffies are measured from real
+      // boot, so the age math must use the matching epoch.
+      const realBootTimeUnix = await real.readBootTimeUnix();
+      const orphans = await realReaper.scanForOrphanMcps({
         uid: myUid,
         patterns,
         minAgeSeconds: 0,
-        clockTicksPerSec: 100, // close enough; not load-bearing for this test
-        bootTimeUnix: NOW_SEC - 100_000,
+        clockTicksPerSec: 100,
+        bootTimeUnix: realBootTimeUnix,
       });
 
-      expect(orphans.length).toBeGreaterThanOrEqual(1);
-      const ours = orphans.find((o) => o.cmdline.join(" ").includes(sleepCmd));
+      const ours = orphans.find((o) => o.cmdline.join(" ").includes(tag));
       expect(ours).toBeDefined();
+      expect(ours!.pid).toBeGreaterThan(0);
 
-      // Now reap — set minAgeSeconds=0 by inlining reap (since reapOrphans uses
-      // its own scan with minAgeSeconds=5). For coverage, just SIGKILL directly
-      // to ensure cleanup.
+      // Cleanup — SIGKILL the orphan so the test host stays clean.
       try {
         process.kill(ours!.pid, "SIGKILL");
       } catch {
