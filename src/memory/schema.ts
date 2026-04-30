@@ -46,6 +46,19 @@ export const tierConfigSchema = z.object({
   hotDemotionDays: z.number().int().min(1).default(7),
   coldRelevanceThreshold: z.number().min(0).max(1).default(0.05),
   hotBudget: z.number().int().min(1).default(20),
+  // Phase 100-fu — centrality-based hot promotion. A warm memory whose
+  // inbound backlink count meets or exceeds this threshold promotes to
+  // hot tier even when its access_count is below hotAccessThreshold.
+  // Targets the "hub" pattern where heavily-linked memories are
+  // structurally important but rarely retrieved directly.
+  //
+  // 2026-04-30 — this field was missing from the zod schema even
+  // though DEFAULT_TIER_CONFIG in tiers.ts had it. Result: zod stripped
+  // the field on parse, runtime tierConfig.centralityPromoteThreshold
+  // was undefined, and shouldPromoteToHot's `backlinkCount >= undefined`
+  // check always returned false — silently breaking centrality-based
+  // promotion since Phase 100-fu shipped.
+  centralityPromoteThreshold: z.number().int().min(1).default(5),
 });
 
 /** Schema for episode input validation. */
@@ -111,6 +124,7 @@ export const memoryConfigSchema = z.object({
     hotDemotionDays: 7,
     coldRelevanceThreshold: 0.05,
     hotBudget: 20,
+    centralityPromoteThreshold: 5,
   })),
   episodes: episodeConfigSchema.default(() => ({
     archivalAgeDays: 90,
