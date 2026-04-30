@@ -709,11 +709,11 @@ Plans:
 
 **Requirements:** 12 — CAP-01, CAP-02, CAP-03, CAP-04, COLOR-01, COLOR-02, HB-01, HB-02, HB-03, HB-04, HB-05, HB-06
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 999.8-01-PLAN.md — Lift 500-node cap on memory-graph IPC (default 5000, optional `limit` clamped [1, 50000]) — CAP-01..CAP-04
-- [ ] 999.8-02-PLAN.md — 4-color tier palette (hot/warm/cold/orphan) + top-right legend with live counts on the dashboard graph — COLOR-01, COLOR-02
+- [x] 999.8-02-PLAN.md — 4-color tier palette (hot/warm/cold/orphan) + top-right legend with live counts on the dashboard graph — COLOR-01, COLOR-02
 - [ ] 999.8-03-PLAN.md — Restore heartbeat-check discovery via static `CHECK_REGISTRY` (11 modules); fixes silent `checkCount:0` in production — HB-01..HB-06
 
 **Promotion target:** active milestone, will likely become **Phase 107**. Bundle deploy with Phases 105 + 106 if scope stays small.
