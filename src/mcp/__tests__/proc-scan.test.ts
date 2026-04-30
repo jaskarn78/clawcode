@@ -13,7 +13,31 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { spawn } from "node:child_process";
-import * as fsPromises from "node:fs/promises";
+
+// Hoisted spy: vi.mock replaces node:fs/promises module-wide so we can assert
+// the security invariant that /proc/{pid}/environ is NEVER read by readProcInfo.
+const { readFileSpy, readdirSpy } = vi.hoisted(() => ({
+  readFileSpy: vi.fn(),
+  readdirSpy: vi.fn(),
+}));
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>(
+    "node:fs/promises",
+  );
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      readFileSpy(...args);
+      return actual.readFile(...args);
+    },
+    readdir: (...args: Parameters<typeof actual.readdir>) => {
+      readdirSpy(...args);
+      return actual.readdir(...args);
+    },
+  };
+});
+
 import {
   parseStatPpid,
   buildMcpCommandRegexes,
@@ -117,14 +141,19 @@ describe("readProcInfo (Linux integration)", () => {
   );
 
   it("Test 9: NEVER reads /proc/{pid}/environ (security)", async () => {
-    const spy = vi.spyOn(fsPromises, "readFile");
-    // Use a likely-nonexistent pid so we exit early; the spy still captures any
-    // read attempts before the ENOENT short-circuit.
+    readFileSpy.mockClear();
+    // Use a likely-nonexistent pid so the actual reads short-circuit on ENOENT.
+    // The mock wrapper still records any attempted path BEFORE the ENOENT.
     await readProcInfo(99_999_998);
-    for (const call of spy.mock.calls) {
+    for (const call of readFileSpy.mock.calls) {
       const path = String(call[0]);
       expect(path).not.toMatch(/environ/);
     }
+    // Also assert proper paths (stat, cmdline, status) WERE attempted.
+    const paths = readFileSpy.mock.calls.map((c) => String(c[0]));
+    expect(paths.some((p) => p.endsWith("/stat"))).toBe(true);
+    expect(paths.some((p) => p.endsWith("/cmdline"))).toBe(true);
+    expect(paths.some((p) => p.endsWith("/status"))).toBe(true);
   });
 });
 
