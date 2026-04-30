@@ -266,8 +266,14 @@ export class TierManager {
     // full warm tier comfortably and the centrality ordering ensures
     // hubs surface first when the cap IS reached.
     const warmMemories = this.store.listWarmCandidatesForPromotion(5000);
+    let firstSampleBl: number | undefined;
+    let firstSampleId: string | undefined;
     const qualifyingWarm = warmMemories.filter((mem) => {
       const backlinkCount = this.store.getBacklinkCount(mem.id);
+      if (firstSampleBl === undefined) {
+        firstSampleBl = backlinkCount;
+        firstSampleId = mem.id;
+      }
       return shouldPromoteToHot(
         mem.accessCount,
         mem.accessedAt,
@@ -276,6 +282,17 @@ export class TierManager {
         backlinkCount,
       );
     });
+
+    this.log.info(
+      {
+        warmScanned: warmMemories.length,
+        qualifying: qualifyingWarm.length,
+        topSample: { id: firstSampleId, backlinks: firstSampleBl },
+        centralityThreshold: this.tierConfig.centralityPromoteThreshold,
+        hotBudget: this.tierConfig.hotBudget,
+      },
+      "[tier-debug] promotion-scan diagnostic",
+    );
 
     if (qualifyingWarm.length === 0) {
       return { demoted, promoted };
