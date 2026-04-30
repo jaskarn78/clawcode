@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -27,6 +26,13 @@ import {
   ORPHAN_THRESHOLD_MS,
 } from "../tasks/reconciler.js";
 import { loadConfig, resolveAllAgents, defaultOpRefResolver } from "../config/loader.js";
+import type { OpRefResolver } from "../config/loader.js";
+// Phase 999.10 — single SecretsResolver instance threads through every
+// op:// resolution site (Discord botToken, loader sync wrapper, per-agent
+// opEnvResolver). See SUMMARY.md for the three call-site rewrites.
+import { SecretsResolver } from "./secrets-resolver.js";
+import { collectAllOpRefs } from "./secrets-collector.js";
+import { defaultOpReadShellOut } from "./op-env-resolver.js";
 import { readRegistry, reconcileRegistry, writeRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
@@ -1492,7 +1498,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; triggerEngine: TriggerEngine; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; policyWatcher: PolicyWatcher; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; triggerEngine: TriggerEngine; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; policyWatcher: PolicyWatcher; routingTableRef: { current: RoutingTable }; secretsResolver: SecretsResolver; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -1507,7 +1513,55 @@ export async function startDaemon(
   // 4. Load config
   const config = await loadConfig(configPath);
 
-  // 5. Resolve all agents — pass the real 1Password resolver so any
+  // 4a. Phase 999.10 SEC-01/SEC-04 — single SecretsResolver instance for the
+  // whole daemon lifetime. Pre-resolves every op:// URI in the config in
+  // parallel BEFORE the loader's sync resolver runs, so subsequent boot
+  // steps (loader sync wrapper below, per-agent opEnvResolver, Discord
+  // botToken) hit a warm cache and never re-shell `op read` for the same
+  // URI. Mirrors the existing graceful-degradation pattern at line ~1545
+  // (resolveAllAgents onMcpError) — partial failures are logged loudly but
+  // do NOT block boot. Critical secrets (Discord botToken) keep their own
+  // fail-closed behavior at the resolution call site.
+  const secretsResolver = new SecretsResolver({
+    opRead: defaultOpReadShellOut,
+    log: log.child({ subsystem: "secrets" }),
+  });
+  const allOpRefs = collectAllOpRefs(config);
+  log.info({ count: allOpRefs.length }, "secrets: pre-resolving op:// references");
+  const preResolveResults = await secretsResolver.preResolveAll(allOpRefs);
+  const failedRefs = preResolveResults.filter((r) => !r.ok);
+  for (const f of failedRefs) {
+    // Fail-open: log loudly and continue. Affected MCPs degrade via the
+    // existing onMcpResolutionError path (loader.ts) when their env value
+    // hits getCached() === undefined and the sync wrapper throws.
+    log.error({ uri: f.uri, reason: f.reason }, "secrets: pre-resolve failed");
+  }
+  log.info(
+    {
+      resolved: preResolveResults.length - failedRefs.length,
+      failed: failedRefs.length,
+    },
+    "secrets: pre-resolve complete",
+  );
+
+  // 4b. Phase 999.10 — sync wrapper around the warmed cache. The loader
+  // requires a SYNC resolver (loader.ts is sync by design); the warming was
+  // done above by preResolveAll. If a URI was missed (config edited between
+  // yaml-parse and now, or a hot-reload added a new ref), throw — the
+  // loader's onMcpResolutionError path will degrade the affected MCP
+  // gracefully (matches existing line ~1545 behavior).
+  const cachedOpRefResolver: OpRefResolver = (uri: string): string => {
+    const cached = secretsResolver.getCached(uri);
+    if (cached === undefined) {
+      throw new Error(
+        `SecretsResolver: ${uri} not pre-resolved (likely added by hot-reload — re-run preResolveAll). `
+          + `If this is a fresh op:// URI, save the config to trigger ConfigWatcher.onChange which auto-resolves new refs.`,
+      );
+    }
+    return cached;
+  };
+
+  // 5. Resolve all agents — pass the cached sync resolver so any
   // `op://vault/item/field` references under mcpServers[].env get
   // substituted with concrete secret values BEFORE the SDK spawns the
   // MCP children. Without this, literal `op://...` strings reach the
@@ -1519,7 +1573,7 @@ export async function startDaemon(
   // agent. The daemon continues booting; other agents that don't
   // reference the broken MCP are unaffected. Operators see exactly
   // which agent + MCP + env var failed in the daemon log.
-  const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver, (info) => {
+  const resolvedAgents = resolveAllAgents(config, cachedOpRefResolver, (info) => {
     log.error(
       { agent: info.agent, server: info.server, reason: info.message },
       "MCP server disabled — env resolution failed",
@@ -1645,15 +1699,19 @@ export async function startDaemon(
   // the SDK spawns the MCP subprocess. The clawdbot token NEVER appears in
   // any agent MCP subprocess env, error message, or log line — see
   // src/manager/op-env-resolver.ts for the security invariants.
-  const { resolveMcpEnvOverrides, defaultOpReadShellOut } = await import(
-    "./op-env-resolver.js"
-  );
+  const { resolveMcpEnvOverrides } = await import("./op-env-resolver.js");
+  // Phase 999.10 — per-agent op:// resolution routes through the shared
+  // SecretsResolver so cache + retry + telemetry apply uniformly across
+  // boot pre-resolve, loader sync wrapper, Discord botToken, and per-agent
+  // override paths. Replaces the prior direct-shell-out via
+  // defaultOpReadShellOut at this site (which is now the resolver's
+  // injected opRead, not the per-agent injection point).
   const opEnvResolver = async (
     overrides: Record<string, Record<string, string>>,
     agentName: string,
   ): Promise<Record<string, Record<string, string>>> => {
     return resolveMcpEnvOverrides(overrides, {
-      opRead: defaultOpReadShellOut,
+      opRead: (uri: string) => secretsResolver.resolve(uri),
       log: {
         warn: (...args: unknown[]) =>
           (log.warn as (...a: unknown[]) => void)({ agent: agentName }, ...args),
@@ -3513,17 +3571,25 @@ export async function startDaemon(
   // 11. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
-  // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token)
+  // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token).
+  //
+  // Phase 999.10 — route through warmed cache + retry shim instead of an
+  // inline execSync. preResolveAll above already populated the cache for
+  // this URI on the happy path; resolve() here is either a free cache hit
+  // OR a one-shot retry if pre-resolve failed for botToken specifically.
+  // Critical-secret fail-closed contract preserved: any resolution failure
+  // throws and refuses to start the Discord bridge.
   let botToken: string;
   if (config.discord?.botToken) {
     const raw = config.discord.botToken;
     if (raw.startsWith("op://")) {
       try {
-        botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000 }).trim();
-      } catch {
+        botToken = await secretsResolver.resolve(raw);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         throw new Error(
-          "Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. " +
-          "Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken"
+          `Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. `
+            + `Reason: ${reason}. Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken`,
         );
       }
     } else {
@@ -3776,7 +3842,12 @@ export async function startDaemon(
     // Hot-reload must resolve op:// refs too — otherwise adding a new
     // mcpServers entry with `op://...` env on a running daemon would still
     // crash the child. Matches the boot-time resolver above.
-    opRefResolver: defaultOpRefResolver,
+    //
+    // Phase 999.10 — uses the shared cached sync wrapper so hot-reload
+    // hits the warmed cache. Wave 3 (plan 03) wires the
+    // ConfigWatcher.onChange diff to nudge secretsResolver.invalidate +
+    // re-resolve for new/changed op:// refs so this throw path is rare.
+    opRefResolver: cachedOpRefResolver,
   });
   await configWatcher.start();
   log.info({ configPath, auditTrail: auditTrailPath }, "config watcher started");
@@ -3985,7 +4056,7 @@ export async function startDaemon(
 
   // TaskManager owns no external resources (inflight timers .unref()'d,
   // db handle owned by TaskStore via PayloadStore). No explicit shutdown needed.
-  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, policyWatcher, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
+  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, policyWatcher, routingTableRef, secretsResolver, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
