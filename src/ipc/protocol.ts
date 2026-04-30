@@ -78,6 +78,12 @@ export const IPC_METHODS = [
   "memory-list",
   "memory-graph",
   "memory-save",
+  // Phase 999.8 follow-up — operator-triggered tier-maintenance backfill.
+  // Runs the same `TierManager.runMaintenance()` the heartbeat runs every
+  // 6h, but on-demand for one agent or all agents at once. Used to seed
+  // hot/cold tier distribution after the Phase 107 heartbeat-discovery
+  // fix without waiting for the next scheduled tick.
+  "tier-maintenance-tick",
   // Subagent threads
   "spawn-subagent-thread",
   "cleanup-subagent-thread",

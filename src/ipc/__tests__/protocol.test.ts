@@ -58,6 +58,7 @@ describe("IPC_METHODS", () => {
       "memory-list",
       "memory-graph",
       "memory-save",
+      "tier-maintenance-tick",
       // Subagent threads
       "spawn-subagent-thread",
       "cleanup-subagent-thread",

@@ -1869,6 +1869,8 @@ export class SessionManager {
   }
   getSessionLogger(agentName: string): SessionLogger | undefined { return this.memory.sessionLoggers.get(agentName); }
   getTierManager(agentName: string): TierManager | undefined { return this.memory.tierManagers.get(agentName); }
+  /** Phase 999.8 follow-up — used by `tier-maintenance-tick` IPC to iterate every agent with a TierManager. */
+  tierManagerNames(): IterableIterator<string> { return this.memory.tierManagers.keys(); }
   getUsageTracker(agentName: string): UsageTracker | undefined { return this.memory.usageTrackers.get(agentName); }
   getEpisodeStore(agentName: string) { return this.memory.episodeStores.get(agentName); }
   getDocumentStore(agentName: string): DocumentStore | undefined { return this.memory.documentStores.get(agentName); }

@@ -5925,6 +5925,33 @@ async function routeMethod(
       return handleMemoryGraphIpc(params, store.getDatabase());
     }
 
+    case "tier-maintenance-tick": {
+      // Phase 999.8 follow-up (2026-04-30) — operator-triggered tier
+      // backfill. When `agent` is set, runs maintenance for that one agent.
+      // When omitted, runs maintenance for every agent that has a
+      // TierManager (the natural set: agents with memory). Returns the
+      // per-agent {promoted, demoted, archived} counts so the CLI can
+      // print a one-line summary. Heartbeat-driven tier-maintenance
+      // (every 6h) still runs unaffected — this is purely an on-demand
+      // shortcut so a fresh deploy doesn't have to wait for the first tick.
+      const agentParam = typeof params.agent === "string" ? params.agent : undefined;
+      const targetNames: readonly string[] = agentParam
+        ? [agentParam]
+        : Array.from(manager.tierManagerNames());
+      const results: Record<string, { promoted: number; demoted: number; archived: number }> = {};
+      const skipped: string[] = [];
+      for (const name of targetNames) {
+        const tm = manager.getTierManager(name);
+        if (!tm) {
+          skipped.push(name);
+          continue;
+        }
+        const r = tm.runMaintenance();
+        results[name] = { promoted: r.promoted, demoted: r.demoted, archived: r.archived };
+      }
+      return { results, skipped };
+    }
+
     case "agent-create": {
       const name = validateStringParam(params, "name");
       const soul = validateStringParam(params, "soul");
