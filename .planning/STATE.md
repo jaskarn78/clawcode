@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.10-04-PLAN.md (secrets-status + secrets-invalidate IPC surface)
-last_updated: "2026-04-30T15:44:01.055Z"
+stopped_at: Completed 999.10-03-PLAN.md (ConfigWatcher + recovery/op-refresh cache invalidation surfaces)
+last_updated: "2026-04-30T15:46:59.526Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 25
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 41
-  completed_plans: 40
+  completed_plans: 41
 ---
 
 # Project State
@@ -328,6 +328,8 @@ Recent decisions affecting current work:
 - [Phase 999.10]: Plan 01 — No fake timers in tests; minTimeout:1/maxTimeout:1 keeps wall-clock <500ms without fighting p-retry's setTimeout-based backoff.
 - [Phase 999.10]: Plan 02: One SecretsResolver instance threads through 3 callsites + boot pre-resolve via Promise.allSettled; sync wrapper around warmed cache keeps loader sync-by-design
 - [Phase 999.10]: Plan 04 IPC handler factored into pure module (secrets-ipc-handler.ts) for unit-testability without booting IPC server; closure-intercept-before-routeMethod pattern preserves the 24-arg routeMethod signature
+- [Phase 999.10]: Plan 03: applySecretsDiff bridge factored into secrets-watcher-bridge.ts (RECOMMENDED) — daemon.ts onChange delegates a single line; tests import production code directly (no shape-drift risk).
+- [Phase 999.10]: Plan 03: Recovery deps invalidate wired at mcp-reconnect.ts construction site (not daemon.ts) — daemon only calls heartbeatRunner.setSecretsResolver. Threading via CheckContext mirrors setThreadManager / setTaskStore pattern; minimal cross-cutting change.
 
 ### v2.1 closing decisions (for reference)
 
@@ -476,9 +478,10 @@ Recent decisions affecting current work:
 | Phase 999.10 P01 | 211s | 2 tasks | 2 files |
 | Phase 999.10 P02 | 6.5min | 3 tasks | 5 files |
 | Phase 999.10 P04 | 5min | 3 tasks | 4 files |
+| Phase 999.10 P03 | 6min | 2 tasks | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.10-04-PLAN.md (secrets-status + secrets-invalidate IPC surface)
+Stopped at: Completed 999.10-03-PLAN.md (ConfigWatcher + recovery/op-refresh cache invalidation surfaces)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

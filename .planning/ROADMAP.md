@@ -764,13 +764,13 @@ Plans:
 - Backoff: 3 attempts × 1s/2s/4s × jitter; AbortError on attempt 2 for rate-limit errors (MEDIUM — calibrate post-deploy)
 - Telemetry: counter struct exposed via new IPC `secrets-status` (MEDIUM — confirm in v1.0)
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [x] 999.10-00-PLAN.md — Wave 0: install p-retry@^8.0.0 + scaffold five vitest test files (RES-01..RES-09, WATCH-01/02, callsites grep, daemon-boot-degraded, secrets-status IPC)
 - [x] 999.10-01-PLAN.md — Wave 1: implement `SecretsResolver` class (resolve/preResolveAll/invalidate/snapshot); turn RES-01..RES-09 green (SEC-02, SEC-03, SEC-07)
 - [x] 999.10-02-PLAN.md — Wave 2: build `collectAllOpRefs` walker + rewrite three call sites in daemon.ts (Discord botToken, per-agent opEnvResolver, loader sync wrapper) + boot pre-resolve (SEC-01, SEC-04)
-- [ ] 999.10-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
+- [x] 999.10-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
 - [x] 999.10-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
 
 **Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
