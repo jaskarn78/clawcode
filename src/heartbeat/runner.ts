@@ -85,12 +85,22 @@ export class HeartbeatRunner {
 
   /**
    * Discover and load check modules from the checks directory.
+   *
+   * Phase 999.8 Plan 03 — discovery is now a static registry (see
+   * check-registry.ts). The boot log surfaces both the count AND the
+   * registered names so production journalctl gives operators an unambiguous
+   * read of which checks are alive after a restart. The message string
+   * changes from "discovered" → "registered" to make the new shape easy to
+   * grep against the prior (broken) deployment's log lines.
    */
   async initialize(): Promise<void> {
     this.checks = await discoverChecks(this.checksDir);
     this.log.info(
-      { checkCount: this.checks.length },
-      "heartbeat checks discovered",
+      {
+        checkCount: this.checks.length,
+        checks: this.checks.map((c) => c.name),
+      },
+      "heartbeat checks registered",
     );
   }
 
