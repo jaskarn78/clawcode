@@ -1128,6 +1128,13 @@ export const agentSchema = z.object({
   systemPromptDirectives: z
     .record(z.string(), systemPromptDirectiveOverrideSchema)
     .optional(),
+  // Phase 999.13 DELEG-01 — per-agent specialty → target-agent map.
+  // Free-form keys (no enum lock-in): operators add `coding`, `legal`,
+  // etc. via yaml without code changes. configSchema.superRefine
+  // (below) rejects unknown target names at config load.
+  // Optional + additive — agents without this field parse byte-
+  // identically to v2.6 (back-compat invariant).
+  delegates: z.record(z.string().min(1), z.string().min(1)).optional(),
   // Phase 95 DREAM-01..03 — per-agent autonomous reflection cycle.
   // Additive + optional: v2.5/v2.6 migrated configs parse unchanged when
   // omitted; loader resolver fills from defaults.dream. Per-agent override
@@ -1749,6 +1756,23 @@ export const configSchema = z.object({
         path: ["agents"],
         message: `agent "${agent.name}": inline "identity" and "identityFile" cannot be used together — pick one (identityFile is preferred for migrated agents).`,
       });
+    }
+  }
+
+  // Phase 999.13 DELEG-03 — every delegates value must point to a known agent.
+  // Fail fast at config load (matches the soul/soulFile mutex pattern above)
+  // so operators don't ship a half-booted fleet with a broken delegate target.
+  const agentNames = new Set(cfg.agents.map((a) => a.name));
+  for (const agent of cfg.agents) {
+    if (!agent.delegates) continue;
+    for (const [specialty, target] of Object.entries(agent.delegates)) {
+      if (!agentNames.has(target)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents"],
+          message: `agent "${agent.name}": delegates["${specialty}"] points to unknown agent "${target}". Configure that agent or remove this delegate entry.`,
+        });
+      }
     }
   }
 });
