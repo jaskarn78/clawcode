@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.14-00-PLAN.md (Wave 0 — substrate GREEN + MCP-08/09/10 RED tests)
-last_updated: "2026-04-30T23:20:04.475Z"
+stopped_at: Completed 999.14-01-PLAN.md (Wave 1 — MCP-01..05 daemon wiring + MCP-08/09/10 GREEN)
+last_updated: "2026-04-30T23:59:11.468Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 29
   completed_phases: 10
   total_plans: 52
-  completed_plans: 48
+  completed_plans: 49
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.14 (mcp-server-child-process-lifecycle-hardening) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -503,9 +503,10 @@ Recent decisions affecting current work:
 | Phase 999.13 P01 | 22 min | 3 tasks | 6 files |
 | Phase 999.13 P02 | 33 min | 3 tasks | 12 files |
 | Phase 999.14 P00 | 13 min | 6 tasks | 8 files |
+| Phase 999.14 P01 | 35 min | 6 tasks | 10 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.14-00-PLAN.md (Wave 0 — substrate GREEN + MCP-08/09/10 RED tests)
+Stopped at: Completed 999.14-01-PLAN.md (Wave 1 — MCP-01..05 daemon wiring + MCP-08/09/10 GREEN)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
