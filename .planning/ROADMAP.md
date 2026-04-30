@@ -746,20 +746,31 @@ Plans:
 
 **Why now:** Root cause of the 2026-04-30 incident — systemd crash-loop × N agents × ~5 secrets each saturated the 1Password service-account read quota into a long-tail throttle, blocking every read operation for ~10 minutes. The bridge stale-routingTable bug surfaced it (deploy → restart → boot storm), but the underlying fragility is structural: every restart re-resolves every secret in parallel, and a single rate-limit response on any one of them kills agent start with no retry. Cache + backoff makes the daemon resilient to bursty op API behavior. Pairs naturally with Phase 999.9 (shared MCP) — cache fixes boot, pool fixes runtime.
 
-**Requirements:** TBD — to be derived in `/gsd:discuss-phase 999.10`.
+**Requirements:** [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07] (derived in 999.10-RESEARCH.md §phase_requirements):
+- SEC-01: All three op:// resolution sites (Discord botToken, shared mcpServers[].env, per-agent mcpEnvOverrides) route through one `SecretsResolver` singleton.
+- SEC-02: Resolved values cached in-memory keyed on the verbatim op:// URI; restart-within-process re-uses cached values.
+- SEC-03: `op read` failures retry with exponential backoff (3 attempts, 1s/2s/4s + jitter); rate-limit errors bail early via AbortError; empty resolution non-retryable.
+- SEC-04: Boot-time pre-resolution runs in parallel via `Promise.allSettled`; partial failures fail-open with structured pino logs (mirror existing MCP-disabled pattern).
+- SEC-05: Cache invalidation wired via ConfigWatcher diff (yaml edit) + recovery/op-refresh (auth-error) + IPC `secrets-invalidate` (manual rotation).
+- SEC-06: New IPC `secrets-status` returns counter snapshot (cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason, lastRefreshedAt) for /clawcode-status renderer.
+- SEC-07: No resolved secret value ever appears in pino logs, error messages, or IPC responses — only op:// URI + structured fields.
 
-**Open questions to settle in discuss-phase:**
-- Cache TTL — 1h, until-restart, or live-rotation via signal/IPC? (Default until-restart is simplest; TTL adds rotation support; signal-based gives operator control.)
-- Cache key shape — full `op://` URL or normalized vault/item/field tuple? Affects dedup behavior when the same secret is referenced from multiple paths.
-- Partial-resolution failure at boot — fail closed (refuse to start any agent), fail open (start agents whose secrets resolved, log + alert on the rest), or staged retry with timeout?
-- Where in `daemon.ts` does the cache live — singleton scoped to `startDaemon`, or a dedicated `SecretsResolver` module with its own tests?
-- Cache invalidation hook for live rotation — op-cli signal, config-watcher event, manual `clawcode reload-secrets` IPC, or all three?
-- Backoff calibration — does 1s/2s/4s line up with the observed rate-limit recovery window, or do we need longer (e.g., 30s/60s/120s) given 1P's "Try again in [empty] seconds" sliding window?
-- Telemetry — counters for cache hits/misses, op-read latency histogram, rate-limit hit count per service account; surface in `/clawcode-status`?
+**Open questions resolved (see 999.10-RESEARCH.md §Open Questions):**
+- TTL: until-restart + explicit invalidation (HIGH confidence)
+- Cache key: full URI verbatim (HIGH)
+- Partial failure: fail open, mirror MCP-disable pattern (HIGH)
+- Module location: dedicated `src/manager/secrets-resolver.ts` (HIGH)
+- Invalidation: ConfigWatcher + recovery/op-refresh + `secrets-invalidate` IPC; skip signals (HIGH)
+- Backoff: 3 attempts × 1s/2s/4s × jitter; AbortError on attempt 2 for rate-limit errors (MEDIUM — calibrate post-deploy)
+- Telemetry: counter struct exposed via new IPC `secrets-status` (MEDIUM — confirm in v1.0)
 
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [ ] 999.10-00-PLAN.md — Wave 0: install p-retry@^8.0.0 + scaffold five vitest test files (RES-01..RES-09, WATCH-01/02, callsites grep, daemon-boot-degraded, secrets-status IPC)
+- [ ] 999.10-01-PLAN.md — Wave 1: implement `SecretsResolver` class (resolve/preResolveAll/invalidate/snapshot); turn RES-01..RES-09 green (SEC-02, SEC-03, SEC-07)
+- [ ] 999.10-02-PLAN.md — Wave 2: build `collectAllOpRefs` walker + rewrite three call sites in daemon.ts (Discord botToken, per-agent opEnvResolver, loader sync wrapper) + boot pre-resolve (SEC-01, SEC-04)
+- [ ] 999.10-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
+- [ ] 999.10-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
 
 **Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
