@@ -32,7 +32,15 @@ import type { OpRefResolver } from "../config/loader.js";
 // opEnvResolver). See SUMMARY.md for the three call-site rewrites.
 import { SecretsResolver } from "./secrets-resolver.js";
 import { collectAllOpRefs } from "./secrets-collector.js";
+import { applySecretsDiff } from "./secrets-watcher-bridge.js";
 import { defaultOpReadShellOut } from "./op-env-resolver.js";
+// Phase 999.10 Plan 04 — IPC handlers for secrets-status / secrets-invalidate.
+// Pure handler module so the case branches in the IPC dispatch closure stay
+// one-liners and the logic is unit-testable without booting the IPC server.
+import {
+  handleSecretsStatus,
+  handleSecretsInvalidate,
+} from "./secrets-ipc-handler.js";
 import { readRegistry, reconcileRegistry, writeRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
@@ -3565,6 +3573,22 @@ export async function startDaemon(
       return { ok: true, agent: agentName, projectDir: expandedPath };
     }
 
+    // Phase 999.10 Plan 04 — secrets-status / secrets-invalidate intercepts
+    // BEFORE routeMethod (closure-intercept pattern, mirrors set-gsd-project
+    // above + marketplace + browser-tool-call). The handler module consults
+    // the daemon-scoped `secretsResolver` singleton via closure so
+    // routeMethod's signature stays stable and the handlers remain unit-
+    // testable in isolation. SEC-06 telemetry surface for /clawcode-status;
+    // closes Pitfall 3 manual-rotation gap.
+    switch (method) {
+      case "secrets-status": {
+        return handleSecretsStatus(secretsResolver);
+      }
+      case "secrets-invalidate": {
+        return handleSecretsInvalidate(secretsResolver, params);
+      }
+    }
+
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource);
   };
 
@@ -3835,6 +3859,13 @@ export async function startDaemon(
     configPath,
     auditTrailPath,
     onChange: async (diff, newResolvedAgents) => {
+      // Phase 999.10 plan 03 (SEC-05) — reconcile the secrets cache against
+      // the diff BEFORE applyChanges so the reload's downstream agent
+      // restarts/spawns hit a hot, fresh cache. Walks the diff for op:// URI
+      // changes: invalidates old URIs, warm-resolves new ones. Failures are
+      // logged inside applySecretsDiff and never propagate (configReloader
+      // must still run for the non-secret parts of the diff).
+      await applySecretsDiff(diff, secretsResolver, log);
       const summary = await configReloader.applyChanges(diff, newResolvedAgents);
       log.info({ subsystems: summary.subsystemsReloaded, agents: summary.agentsAffected }, "config hot-reloaded");
     },
@@ -3844,9 +3875,8 @@ export async function startDaemon(
     // crash the child. Matches the boot-time resolver above.
     //
     // Phase 999.10 — uses the shared cached sync wrapper so hot-reload
-    // hits the warmed cache. Wave 3 (plan 03) wires the
-    // ConfigWatcher.onChange diff to nudge secretsResolver.invalidate +
-    // re-resolve for new/changed op:// refs so this throw path is rare.
+    // hits the warmed cache. The applySecretsDiff call above (SEC-05) pre-
+    // resolves new op:// refs so this sync wrapper finds them in the cache.
     opRefResolver: cachedOpRefResolver,
   });
   await configWatcher.start();
