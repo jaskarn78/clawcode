@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.11-00-PLAN.md
-last_updated: "2026-04-30T17:57:48.878Z"
+stopped_at: Completed 999.11-02-PLAN.md
+last_updated: "2026-04-30T17:59:39.081Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 27
   completed_phases: 10
   total_plans: 45
-  completed_plans: 43
+  completed_plans: 44
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.11 (trigger-policy-default-allow-and-coalescer-storm-fix) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 
 ## Performance Metrics
 
@@ -333,6 +333,9 @@ Recent decisions affecting current work:
 - [Phase 999.11]: Renamed plan's MC-6 to MC-7 due to existing label clash in message-coalescer.test.ts
 - [Phase 999.11]: POLICY tests are regression locks (pass on main); driver-RED for POLICY lives at daemon boot site verified by build smoke
 - [Phase 999.11]: Added HARD_CEILING to mocked unbounded recursion in CO-10/CO-11 to prevent vitest worker OOM on current main
+- [Phase 999.11]: Bridge-side idempotent guard placement (formatCoalescedPayload, not coalescer.addMessage) — Keeps MessageCoalescer content-agnostic per RESEARCH.md Pattern 2; wrapper-detection paired with wrapper-emission
+- [Phase 999.11]: Layered defense order: depth cap → hasActiveTurn gate → idempotent format — Cap is cheapest (single integer comparison) and runs first; gate is method call so second; format only on actual drain. If both cap and gate would fire, cap wins
+- [Phase 999.11]: MessageCoalescer.requeue bypasses perAgentCap entirely — Messages were already accepted on initial addMessage; re-checking would silently drop them. Per RESEARCH.md Pitfall 3
 
 ### v2.1 closing decisions (for reference)
 
@@ -484,9 +487,10 @@ Recent decisions affecting current work:
 | Phase 999.10 P03 | 6min | 2 tasks | 8 files |
 | Phase 999.11 P00 | 18 min | 3 tasks | 3 files |
 | Phase 999.11 P01 | 5 min | 2 tasks | 1 files |
+| Phase 999.11 P02 | 6 min | 3 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.11-00-PLAN.md
+Stopped at: Completed 999.11-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
