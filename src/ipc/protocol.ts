@@ -234,6 +234,14 @@ export const IPC_METHODS = [
   // array + calls manager.restartAgent so the new SDK session boots with
   // the new gsd.projectDir as cwd. Returns {ok, agent, projectDir}.
   "set-gsd-project",
+  // Phase 999.10 — secret cache observability + manual invalidation.
+  // `secrets-status` returns the SecretsResolver counter snapshot
+  // (cacheSize, hits, misses, retries, rateLimitHits, last*) so operators
+  // can render cache health in /clawcode-status. `secrets-invalidate`
+  // flushes one URI (when params.uri provided) or the entire cache,
+  // closing the manual-rotation gap from Phase 999.10 Pitfall 3.
+  "secrets-status",
+  "secrets-invalidate",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
@@ -279,3 +287,55 @@ export const ipcResponseSchema = z
   );
 
 export type IpcResponse = z.infer<typeof ipcResponseSchema>;
+
+/**
+ * Phase 999.10 — `secrets-status` IPC response shape.
+ *
+ * Validates the counter snapshot returned by SecretsResolver.snapshot()
+ * (cacheSize + hit/miss/retry/rateLimitHits counters + optional ISO 8601
+ * lastFailureAt/lastRefreshedAt timestamps + optional lastFailureReason
+ * string). All count fields are non-negative integers.
+ *
+ * SEC-07 invariant: this response shape contains COUNTERS, timestamps, and
+ * a failure-reason string (e.g., "rate-limited", "auth-error", or the
+ * underlying error message — operator-controlled CLI noise). It MUST NOT
+ * contain any resolved secret value. cacheSize is the count of cached
+ * entries, never a list of values.
+ */
+export const SecretsStatusResponseSchema = z.object({
+  ok: z.literal(true),
+  cacheSize: z.number().int().nonnegative(),
+  hits: z.number().int().nonnegative(),
+  misses: z.number().int().nonnegative(),
+  retries: z.number().int().nonnegative(),
+  rateLimitHits: z.number().int().nonnegative(),
+  lastFailureAt: z.string().datetime().optional(),
+  lastFailureReason: z.string().optional(),
+  lastRefreshedAt: z.string().datetime().optional(),
+});
+export type SecretsStatusResponse = z.infer<typeof SecretsStatusResponseSchema>;
+
+/**
+ * Phase 999.10 — `secrets-invalidate` IPC request shape.
+ *
+ * Optional `uri` flushes one cache entry; omit (or pass empty params) to
+ * flush the entire cache. The `op://` prefix guard provides defense-in-
+ * depth against accidental cache poisoning — operators can only target
+ * URIs they could have configured in clawcode.yaml in the first place.
+ */
+export const SecretsInvalidateRequestSchema = z.object({
+  uri: z.string().startsWith("op://").optional(),
+});
+export type SecretsInvalidateRequest = z.infer<typeof SecretsInvalidateRequestSchema>;
+
+/**
+ * Phase 999.10 — `secrets-invalidate` IPC response shape.
+ *
+ * `invalidated` is the literal string `"all"` when the entire cache was
+ * flushed, or the specific URI that was removed.
+ */
+export const SecretsInvalidateResponseSchema = z.object({
+  ok: z.literal(true),
+  invalidated: z.union([z.literal("all"), z.string()]),
+});
+export type SecretsInvalidateResponse = z.infer<typeof SecretsInvalidateResponseSchema>;
