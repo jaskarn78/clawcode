@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.13-00-PLAN.md
-last_updated: "2026-04-30T19:23:29.914Z"
+stopped_at: Completed 999.13-01-PLAN.md (DELEG GREEN)
+last_updated: "2026-04-30T19:56:03.428Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 28
   completed_phases: 10
   total_plans: 49
-  completed_plans: 45
+  completed_plans: 46
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.13 (extendible-specialist-delegate-map-and-agent-context-timezone-rendering) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 
 ## Performance Metrics
 
@@ -341,6 +341,8 @@ Recent decisions affecting current work:
 - [Phase 999.13]: Q3 LOCKED YES: defaults.timezone gets schema-time IANA TZ pre-validation (5-line zod refinement)
 - [Phase 999.13]: Q4 DEFER: Discord embed timestamps stay UTC — operator-facing tooling, out of scope
 - [Phase 999.13]: DST fixture corrected per RESEARCH.md Pitfall 1: 2026 US fall-back = Nov 1, not Nov 2
+- [Phase 999.13]: delegates field uses z.record(string,string).optional() with superRefine validation against known agent names
+- [Phase 999.13]: delegatesBlock appended to END of stable prefix (after fs capability), empty/undefined short-circuits to '' for prompt-cache hash stability
 
 ### v2.1 closing decisions (for reference)
 
@@ -494,9 +496,10 @@ Recent decisions affecting current work:
 | Phase 999.11 P01 | 5 min | 2 tasks | 1 files |
 | Phase 999.11 P02 | 6 min | 3 tasks | 2 files |
 | Phase 999.13 P00 | 16 min | 3 tasks | 12 files |
+| Phase 999.13 P01 | 22 min | 3 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.13-00-PLAN.md
+Stopped at: Completed 999.13-01-PLAN.md (DELEG GREEN)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
