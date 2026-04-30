@@ -2,6 +2,7 @@ import type { SessionManager } from "../manager/session-manager.js";
 import type { Registry } from "../manager/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
 import type { TaskStore } from "../tasks/store.js";
+import type { SecretsResolver } from "../manager/secrets-resolver.js";
 
 /**
  * Health check status values.
@@ -27,6 +28,15 @@ export type CheckContext = {
   readonly config: HeartbeatConfig;
   readonly threadManager?: ThreadManager;
   readonly taskStore?: TaskStore;
+  /**
+   * Phase 999.10 plan 03 (SEC-05) — exposed to checks that build
+   * RecoveryDeps so the op-refresh recovery handler can invalidate the
+   * secrets cache before re-resolving stale auth-error values. Optional
+   * because most checks (auto-linker, fs-probe, etc.) don't need it; only
+   * mcp-reconnect builds RecoveryDeps. Tests for those unrelated checks
+   * leave it undefined and continue working unchanged.
+   */
+  readonly secretsResolver?: SecretsResolver;
 };
 
 /**

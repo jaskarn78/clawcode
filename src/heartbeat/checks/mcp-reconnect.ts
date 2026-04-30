@@ -201,6 +201,20 @@ function buildRecoveryDepsForHeartbeat(
       );
     },
     log,
+    // Phase 999.10 plan 03 (SEC-05) — when the daemon wired a
+    // SecretsResolver into the runner via setSecretsResolver, route
+    // op-refresh's invalidate() through it. Without this hook, opRead
+    // (which production wires through the resolver) would otherwise
+    // return the same stale cached value that triggered the auth-error.
+    // Optional: tests / older deploy paths leave secretsResolver
+    // undefined and the handler degrades to the pre-999.10 behavior.
+    ...(ctx.secretsResolver
+      ? {
+          invalidate: (ref: string) => {
+            ctx.secretsResolver!.invalidate(ref);
+          },
+        }
+      : {}),
   };
 }
 

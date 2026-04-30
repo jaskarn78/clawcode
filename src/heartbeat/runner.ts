@@ -6,6 +6,7 @@ import type { Registry } from "../manager/types.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
 import type { TaskStore } from "../tasks/store.js";
+import type { SecretsResolver } from "../manager/secrets-resolver.js";
 import type {
   CheckModule,
   CheckContext,
@@ -72,6 +73,9 @@ export class HeartbeatRunner {
   private readonly zoneTrackers: Map<string, ContextZoneTracker> = new Map();
   private threadManager: ThreadManager | undefined;
   private taskStore: TaskStore | undefined;
+  // Phase 999.10 plan 03 (SEC-05) — passed into CheckContext so mcp-reconnect's
+  // RecoveryDeps factory can wire `invalidate: (ref) => secretsResolver.invalidate(ref)`.
+  private secretsResolver: SecretsResolver | undefined;
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -126,6 +130,16 @@ export class HeartbeatRunner {
    */
   setTaskStore(store: TaskStore): void {
     this.taskStore = store;
+  }
+
+  /**
+   * Phase 999.10 plan 03 (SEC-05) — inject the SecretsResolver into
+   * CheckContext so the op-refresh recovery handler can call
+   * deps.invalidate(ref) before re-reading via op CLI. Mirrors the
+   * setThreadManager / setTaskStore pattern.
+   */
+  setSecretsResolver(resolver: SecretsResolver): void {
+    this.secretsResolver = resolver;
   }
 
   /**
@@ -203,6 +217,7 @@ export class HeartbeatRunner {
           config: this.config,
           ...(this.threadManager ? { threadManager: this.threadManager } : {}),
           ...(this.taskStore ? { taskStore: this.taskStore } : {}),
+          ...(this.secretsResolver ? { secretsResolver: this.secretsResolver } : {}),
         };
 
         const timeoutMs = (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;

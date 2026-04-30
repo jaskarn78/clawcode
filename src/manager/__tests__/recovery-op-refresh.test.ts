@@ -32,6 +32,10 @@ function makeDeps(overrides: Partial<RecoveryDeps> = {}): RecoveryDeps {
     writeEnvForServer: overrides.writeEnvForServer ?? vi.fn().mockResolvedValue(undefined),
     now: overrides.now ?? (() => new Date("2026-04-25T12:00:00.000Z")),
     log: overrides.log ?? noopLog,
+    // Phase 999.10 plan 03 — propagate the optional invalidate override.
+    // Omitted-by-default preserves the back-compat shape (deps.invalidate
+    // === undefined) that REC-OP-REFRESH-INV-02 pins.
+    ...(overrides.invalidate !== undefined ? { invalidate: overrides.invalidate } : {}),
   };
 }
 

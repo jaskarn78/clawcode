@@ -2393,6 +2393,13 @@ export async function startDaemon(
   });
   heartbeatRunner.setThreadManager(threadManager);
   heartbeatRunner.setTaskStore(taskStore);
+  // Phase 999.10 plan 03 (SEC-05) — give the heartbeat checks (specifically
+  // mcp-reconnect's RecoveryDeps factory) access to the secrets cache so
+  // the op-refresh recovery handler can call deps.invalidate(ref) before
+  // re-reading via op CLI. Without this hook, opRead — which is wired
+  // through SecretsResolver in production — would serve the same stale
+  // value that triggered the original auth-error.
+  heartbeatRunner.setSecretsResolver(secretsResolver);
   // Phase 103 OBS-01 — wire HeartbeatRunner into SessionManager so
   // /clawcode-status can read context-zone fillPercentage synchronously.
   manager.setHeartbeatRunner(heartbeatRunner);
