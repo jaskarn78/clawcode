@@ -1434,7 +1434,7 @@ export const defaultsSchema = z.object({
     consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" },
     decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 },
     deduplication: { enabled: true, similarityThreshold: 0.85 },
-    tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 },
+    tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 },
     episodes: { archivalAgeDays: 90 },
   })),
   heartbeat: heartbeatConfigSchema.default(() => ({
