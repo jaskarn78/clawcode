@@ -733,10 +733,13 @@ Plans:
 - Per-tool concurrency limits inside the shared instance to keep one chatty agent from starving the others.
 - Per-agent audit/trace continuity when N agents share one MCP — how do tool-call traces stay attributable to the originating Turn?
 
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [ ] 999.13-00-PLAN.md — Wave 0 RED tests for both pillars (DELEG + TZ)
+- [ ] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
+- [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
+- [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
 **Promotion target:** active milestone, sequence after Phase 999.10 daemon-side secret cache + retry/backoff — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
 
@@ -806,10 +809,13 @@ Plans:
 
 **Requirements:** [IPC-01 deliveryFn for dispatchTurn, IPC-02 mirror flag, IPC-03 webhook→bot fallback parity with triggerDeliveryFn; HB-01 inbox timeout bump, HB-02 active-turn awareness] — see 999.12-PLAN.md when planned.
 
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [ ] 999.13-00-PLAN.md — Wave 0 RED tests for both pillars (DELEG + TZ)
+- [ ] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
+- [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
+- [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
 **Promotion target:** active milestone — sequence AFTER Phase 999.11. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 999.11 does.
 
@@ -861,9 +867,12 @@ Out of scope: per-user TZ preferences (operator-A in PT, operator-B in ET); hist
 
 **Requirements:** [DELEG-01 schema field with refine, DELEG-02 prompt injection at session boot, DELEG-03 yaml fan-out across channel-bound agents, DELEG-04 specialty extendibility tests; TZ-01 default TZ resolution from host or config knob, TZ-02 ISO UTC → local string at every serialization site, TZ-03 DST round-trip tests, TZ-04 defaults.timezone config knob, TZ-05 deploy smoke verifying agent-visible PT-formatted time string]
 
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [ ] 999.13-00-PLAN.md — Wave 0 RED tests for both pillars (DELEG + TZ)
+- [ ] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
+- [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
+- [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
 **Promotion target:** active milestone — high operator impact. Without (A) Ramy's deep-dive workflow stays inline-only with no fin-research isolation; without (B) every agent burns prompt budget on UTC→PT conversion every turn. Sequence after Phase 999.11 (already complete) and Phase 999.12 (queued) since both pillars touch the same session-prompt-builder + serialization layer.
