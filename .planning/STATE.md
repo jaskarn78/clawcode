@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
 stopped_at: Completed 999.14-01-PLAN.md (Wave 1 — MCP-01..05 daemon wiring + MCP-08/09/10 GREEN)
-last_updated: "2026-04-30T23:59:11.468Z"
+last_updated: "2026-04-30T23:59:27.995Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 29
@@ -347,6 +347,7 @@ Recent decisions affecting current work:
 - [Phase 999.13]: Two-layer bad-IANA defense — schema-time refinement on defaults.timezone (Q3=YES, fail-fast) + runtime try/catch fallback in renderAgentVisibleTimestamp (silent UTC degrade)
 - [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — thrower stubs (real .ts files that throw 'not implemented in Wave 0') chosen over inline declare-module shims for MCP-08/09/10 RED tests. Keeps tsc clean AND tests RED at runtime. Wave 1 replaces stub bodies; types stay byte-stable.
 - [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — startOrphanReaper exposes onTickAfter callback as the seam for MCP-09 sweep wiring; sequence pinned by Test 8 (reap completes BEFORE callback runs). Wave 1 plugs sweepStaleBindings into the seam without re-touching orphan-reaper.
+- [Phase 999.14]: Daemon-wide McpProcessTracker singleton (mirrors SecretsResolver DI) handles per-agent PID register/unregister + boot scan + 60s reaper + shutdown killAll. onTickAfter callback runs MCP-09 sweep AFTER orphan reap (locked sequence).
 
 ### v2.1 closing decisions (for reference)
 
