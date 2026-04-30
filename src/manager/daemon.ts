@@ -2022,7 +2022,7 @@ export async function startDaemon(
   // Invalid policy = daemon refuses to start. Missing file = empty rules.
   const policyPath = join(homedir(), ".clawcode", "policies.yaml");
   const policyAuditPath = join(MANAGER_DIR, "policy-audit.jsonl");
-  let bootEvaluator: PolicyEvaluator;
+  let bootEvaluator: PolicyEvaluator | undefined;
   try {
     const policyContent = await readFile(policyPath, "utf-8");
     const compiledRules = loadPolicies(policyContent);
@@ -2030,9 +2030,18 @@ export async function startDaemon(
     log.info({ path: policyPath, ruleCount: compiledRules.length }, "policies.yaml loaded at boot");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      // No policy file — start with empty rules (deny all non-default events)
-      bootEvaluator = new PolicyEvaluator([], configuredAgentNames);
-      log.info("no policies.yaml found, using default policy");
+      // No policy file — fall through to TriggerEngine's existing default-allow
+      // function-form (evaluatePolicy) by leaving bootEvaluator undefined.
+      // The engine ternary at engine.ts:130-132 selects evaluatePolicy() when
+      // this.evaluator is undefined, which allows any event whose targetAgent
+      // is in configuredAgents (Phase 999.11 POLICY-01..03).
+      // PolicyWatcher.onReload still wires reloadEvaluator(real) once the
+      // operator drops a policies.yaml at policyPath — back-compat preserved.
+      bootEvaluator = undefined;
+      log.info(
+        { policyPath },
+        "no policies.yaml found — using default-allow evaluator: any configured agent can receive events. Drop a policies.yaml at this path to enable rule-based filtering.",
+      );
     } else if (err instanceof PolicyValidationError) {
       // Invalid policy — daemon must refuse to start (POL-01)
       throw new ManagerError(
