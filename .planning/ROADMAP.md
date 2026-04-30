@@ -812,3 +812,58 @@ Plans:
 - [ ] TBD (promote with /gsd:review-backlog when ready)
 
 **Promotion target:** active milestone — sequence AFTER Phase 999.11. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 999.11 does.
+
+### Phase 999.13: Extendible specialist delegate map + agent-context timezone rendering (BACKLOG)
+
+**Goal:** Two "agent context hygiene" pillars in one phase. Both are surface-level prompt formatting that affects how the LLM reasons; same touch points (session-prompt-builder + daemon serialization); ship together.
+
+#### Pillar A — Extendible specialist delegate map
+
+Per-agent typed map of `{ specialty: targetAgentName }` injected as a delegation directive at session boot. Specialty keys are free-form strings — no enum lock-in — so future specialties (coding, legal, tax, devops, etc.) drop in via yaml without code changes.
+
+Schema (`src/config/schema.ts` agentSchema):
+```ts
+delegates: z.record(z.string().min(1), z.string().min(1)).optional()
+```
+`superRefine` validates every value points to a configured agent name.
+
+Prompt injection (session-prompt-builder): when `agent.delegates` is non-empty, inject canonical block:
+```
+## Specialist Delegation
+For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:
+- research → {delegates.research}
+- coding → {delegates.coding}
+- ...
+Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.
+```
+Block omitted when delegates is unset/empty.
+
+Initial yaml fan-out (research only; future specialties added by operator over time):
+- **finmentum group** → `delegates: { research: fin-research }`: fin-acquisition, fin-tax, fin-playground, finmentum-content-creator
+- **non-finmentum group** → `delegates: { research: research }`: test-agent, personal, general, projects
+- **Admin Clawdy:** leave alone — already has hand-rolled SOUL contract; overlapping injection would be noise.
+
+Out of scope: deterministic daemon-side router (intent classifier → forced delegation). Directive is prompt-side; model recognizes and picks. Acceptable tradeoff.
+
+#### Pillar B — Agent-context timezone rendering
+
+ClawCode daemon currently serializes `ts` fields as ISO UTC strings when building agent context (heartbeats, schedules, restart greetings, message history, memory snapshots). Host (clawdy) runs in PDT but agents see `2026-04-30T18:32:51Z` everywhere and have to mentally subtract 7h on every reference. Today's Admin Clawdy session added a `CLAUDE.md` rule "always convert ts UTC to PT before quoting time" as a workaround — that's prompt-tax on every turn. Root fix is daemon-side: emit times in operator-local TZ at the serialization boundary.
+
+Scope:
+- Identify all daemon paths that serialize `ts` into agent-visible context. Likely sites: `restart-greeting.ts`, heartbeat builder, scheduler-source event payload, conversation history compactor, memory snapshot writer.
+- Convert ISO UTC → operator-local TZ at serialization boundary. Format: `"2026-04-30 11:32:51 PDT"` (human-readable + TZ abbreviation — bare local time without TZ is ambiguous on DST boundaries).
+- Add `defaults.timezone: z.string().optional()` config knob (IANA TZ name, e.g. `"America/Los_Angeles"`). Default falls back to host TZ via `Intl.DateTimeFormat().resolvedOptions().timeZone`.
+- Internal storage / DB / structured event keys stay UTC — only agent-visible rendering changes. Presentation-layer only.
+
+Out of scope: per-user TZ preferences (operator-A in PT, operator-B in ET); historical session re-rendering — forward-going only.
+
+**Trigger:** 2026-04-30 — operator's "should fin-acq auto-spawn fin-research subthread when Ramy asks for a deep dive?" question + Admin Clawdy's session today wanting a CLAUDE.md rule for UTC→PT conversion. Both surfaced together; both should ship together.
+
+**Requirements:** [DELEG-01 schema field with refine, DELEG-02 prompt injection at session boot, DELEG-03 yaml fan-out across channel-bound agents, DELEG-04 specialty extendibility tests; TZ-01 default TZ resolution from host or config knob, TZ-02 ISO UTC → local string at every serialization site, TZ-03 DST round-trip tests, TZ-04 defaults.timezone config knob, TZ-05 deploy smoke verifying agent-visible PT-formatted time string]
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — high operator impact. Without (A) Ramy's deep-dive workflow stays inline-only with no fin-research isolation; without (B) every agent burns prompt budget on UTC→PT conversion every turn. Sequence after Phase 999.11 (already complete) and Phase 999.12 (queued) since both pillars touch the same session-prompt-builder + serialization layer.
