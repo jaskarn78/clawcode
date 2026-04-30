@@ -876,3 +876,39 @@ Plans:
 - [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
 **Promotion target:** active milestone — high operator impact. Without (A) Ramy's deep-dive workflow stays inline-only with no fin-research isolation; without (B) every agent burns prompt budget on UTC→PT conversion every turn. Sequence after Phase 999.11 (already complete) and Phase 999.12 (queued) since both pillars touch the same session-prompt-builder + serialization layer.
+
+### Phase 999.14: MCP server child process lifecycle hardening (BACKLOG)
+
+**Goal:** Stop MCP server processes from leaking on agent restart. Today (2026-04-30) MariaDB hit 152 connections (capped at default 151) — root cause was 15 orphan `mcp-server-mysql` processes accumulating across the day's two clawcode restarts (999.11 deploy + quick-260430). Each agent restart spawns a fresh `npm exec mcp-server-mysql`; the npm wrapper exits cleanly but its `sh -c mcp-server-mysql` and `node` children get reparented to PID 1 and keep their MariaDB connections alive forever. Same pattern likely affects `1password-mcp` and any other npm-launched MCP server.
+
+**Diagnosis from incident:**
+- Live `claude` agents → `npm exec mcp-server-mysql` → `sh -c mcp-server-mysql` → `node mcp-server-mysql` (correct chain)
+- After agent restart: npm exits → `sh + node` reparented to init → orphaned with live DB connections
+- Bumped MariaDB `max_connections` 151 → 500 + `extra_max_connections = 10` as immediate mitigation. Killed 15 orphan procs to restore 152 → 3 active connections. But the leak is structural — will recur on every clawcode restart cycle.
+
+**Scope:**
+1. **Spawn-side fix** — when daemon spawns an MCP server child, capture the full process group ID, set up SIGTERM/SIGKILL on the agent's `disconnect` / shutdown signal. Use `detached: false` and explicit `process.kill(-pid)` to kill the whole group, not just the npm wrapper.
+2. **Reaper sweep** — periodic (e.g. every 60s) scan of MCP server procs owned by `clawcode` user with PPID=1. SIGTERM them; SIGKILL after 10s grace. Add to daemon health-check loop.
+3. **Restart hardening** — when daemon shuts down (systemd stop/restart), explicitly kill all known MCP child PIDs before exiting. Today the systemd service file relies on the npm wrappers cascading SIGTERM down — but they don't.
+4. **Sticky orphan detection at boot** — on daemon start, scan for any pre-existing `clawcode`-owned MCP procs with PPID=1 (left over from previous daemon crash or hard-restart) and kill them before spawning fresh ones. Prevents stacking.
+
+**Verification:**
+- Vitest unit tests for the spawn-side wiring (process-group kill on disconnect).
+- Integration test: spawn 5 agents, restart daemon, assert zero PPID=1 MCP procs remain.
+- Deploy smoke: `pgrep -cf "mcp-server-mysql"` matches expected count (= number of finmentum-db-using running agents) before AND after a `systemctl restart clawcode`.
+- Long-soak: after 24h with multiple agent restarts, MariaDB `Threads_connected` stays bounded near (live agent count × ~2 MCP servers per agent × 1 conn each).
+
+**Out of scope:**
+- MCP server connection pooling itself (separate redesign — would be Phase 999.9 territory). This phase is about not leaking the MCP processes, not about how many connections they hold.
+- Cross-agent shared MCP servers (Phase 999.9 backlog item — different goal).
+
+**Trigger:** 2026-04-30 incident — MariaDB saturated at 152/151 connections, fin-acquisition reported "DB is saturated". Diagnosed via SSH to clawdy + Unraid host. Root cause confirmed via `ps -ef --forest` showing 15 orphan MCP server pairs (sh+node) with PPID=1. Immediate mitigation applied (max_connections bump + orphan kill); structural fix deferred to this phase.
+
+**Requirements:** [MCP-01 spawn-side process-group wiring, MCP-02 SIGTERM-on-disconnect handler, MCP-03 periodic orphan reaper sweep, MCP-04 graceful daemon-shutdown MCP cleanup, MCP-05 boot-time orphan scan, MCP-06 vitest tests for spawn lifecycle, MCP-07 long-soak verification on clawdy]
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — high operator impact (recurring incident, takes down all finmentum agents when MariaDB saturates). Sequence: independent of 999.12 and 999.13. Could ship anytime. Pairs with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle.
