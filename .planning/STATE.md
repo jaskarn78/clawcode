@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.13-01-PLAN.md (DELEG GREEN)
-last_updated: "2026-04-30T19:56:03.428Z"
+stopped_at: Completed 999.13-02-PLAN.md (Pillar B GREEN — TZ-01..05)
+last_updated: "2026-04-30T20:31:44.843Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 28
   completed_phases: 10
   total_plans: 49
-  completed_plans: 46
+  completed_plans: 47
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.13 (extendible-specialist-delegate-map-and-agent-context-timezone-rendering) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 
 ## Performance Metrics
 
@@ -343,6 +343,8 @@ Recent decisions affecting current work:
 - [Phase 999.13]: DST fixture corrected per RESEARCH.md Pitfall 1: 2026 US fall-back = Nov 1, not Nov 2
 - [Phase 999.13]: delegates field uses z.record(string,string).optional() with superRefine validation against known agent names
 - [Phase 999.13]: delegatesBlock appended to END of stable prefix (after fs capability), empty/undefined short-circuits to '' for prompt-cache hash stability
+- [Phase 999.13]: Optional agentTz?: string parameter (not required) — production callers stay unchanged with host-TZ fallback (correct on single-host clawdy per RESEARCH.md Pitfall 3); tests pass agentTz explicitly
+- [Phase 999.13]: Two-layer bad-IANA defense — schema-time refinement on defaults.timezone (Q3=YES, fail-fast) + runtime try/catch fallback in renderAgentVisibleTimestamp (silent UTC degrade)
 
 ### v2.1 closing decisions (for reference)
 
@@ -497,9 +499,10 @@ Recent decisions affecting current work:
 | Phase 999.11 P02 | 6 min | 3 tasks | 2 files |
 | Phase 999.13 P00 | 16 min | 3 tasks | 12 files |
 | Phase 999.13 P01 | 22 min | 3 tasks | 6 files |
+| Phase 999.13 P02 | 33 min | 3 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.13-01-PLAN.md (DELEG GREEN)
+Stopped at: Completed 999.13-02-PLAN.md (Pillar B GREEN — TZ-01..05)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
