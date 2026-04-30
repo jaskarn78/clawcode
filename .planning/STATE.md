@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 999.8-02-PLAN.md (4-color tier palette + legend)
-last_updated: "2026-04-30T01:13:08.427Z"
+stopped_at: Completed 999.8-03-PLAN.md (heartbeat static registry — Phase 999.8 ready for verification)
+last_updated: "2026-04-30T01:26:37.802Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 23
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 36
-  completed_plans: 35
+  completed_plans: 36
 ---
 
 # Project State
@@ -317,6 +317,9 @@ Recent decisions affecting current work:
 - [Phase 999.2]: Plan 03: post-to-agent per-webhook log+swallow LEFT untouched per Plan Step 3 + Pitfall 7 — broadcast tool, delivered:false IS the structured signal; D-PST-03 satisfied via return shape, not by removing local catch
 - [Phase 999.8]: Plan 01: extracted memory-graph IPC body into pure handler at src/manager/memory-graph-handler.ts (mirrors handleSetModelIpc); LIMIT 500 → configurable LIMIT ? with default 5000 and inclusive [1, 50000] validation
 - [Phase 999.8]: Plan 02: chose Route A (script→module + ESM import) over Route B (globalThis shim) — no external nodeClr consumers, cleaner dependency graph
+- [Phase 999.8]: Plan 03 — Static heartbeat-check registry replaces dynamic readdir+import scan; bundle now contains all 11 checks (was 0 due to tsup splitting:false). Boot log emits checkCount:11 + checks:[...] + 'heartbeat checks registered'.
+- [Phase 999.8]: Plan 03 — NO try/catch around static imports (Pitfall 7); fail-fast at boot is the contract. The prior silent-skip enabled the bug to live in prod for ~10 weeks.
+- [Phase 999.8]: Plan 03 — Lockstep regression test with hand-maintained EXPECTED_FILENAMES forces 3-place updates (import, array entry, test map) when adding a check; future drift becomes a CI failure.
 
 ### v2.1 closing decisions (for reference)
 
@@ -460,9 +463,10 @@ Recent decisions affecting current work:
 | Phase 999.2 P03 | 15min | 2 tasks | 6 files |
 | Phase 999.8 P01 | 14min | 2 tasks | 3 files |
 | Phase 999.8 P02 | 20min | 2 tasks | 4 files |
+| Phase 999.8 P03 | 10min | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.8-02-PLAN.md (4-color tier palette + legend)
+Stopped at: Completed 999.8-03-PLAN.md (heartbeat static registry — Phase 999.8 ready for verification)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
