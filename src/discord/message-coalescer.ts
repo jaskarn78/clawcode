@@ -10,6 +10,10 @@
  *   - addMessage(agentName, content, messageId) — appends to agent's pending list
  *   - takePending(agentName) — atomically returns ALL pending messages for the
  *     agent + clears the list. Caller dispatches the joined payload as ONE turn.
+ *   - requeue(agentName, messages) — Phase 999.11: prepends messages back into
+ *     the buffer WITHOUT enforcing perAgentCap (these messages were already
+ *     accepted once on initial addMessage; re-checking the cap on push-back
+ *     would silently drop them).
  *
  * No persistence: in-memory only. Daemon restart drops pending messages
  * (acceptable — operator can resend after restart, and restart is rare).
@@ -62,6 +66,31 @@ export class MessageCoalescer {
     const list = this.pending.get(agentName) ?? [];
     this.pending.delete(agentName);
     return list;
+  }
+
+  /**
+   * Phase 999.11 — push messages back into the buffer without enforcing
+   * perAgentCap.
+   *
+   * Used by the bridge's drain block when the hasActiveTurn gate fires or
+   * the depth cap is hit — the messages came OUT of the buffer (via
+   * takePending) and need to go back in for the next drain attempt. The
+   * cap was already enforced on initial addMessage, so re-checking here
+   * would silently drop accepted messages.
+   *
+   * Prepends so re-queued messages drain first on next take (FIFO across
+   * the original arrival order is preserved because the original take
+   * already drained them in order).
+   */
+  requeue(
+    agentName: string,
+    messages: ReadonlyArray<CoalescedMessage>,
+  ): void {
+    if (messages.length === 0) return;
+    const list = this.pending.get(agentName) ?? [];
+    // Immutable concat — create a new array with re-queued messages at the head.
+    const next: CoalescedMessage[] = [...messages, ...list];
+    this.pending.set(agentName, next);
   }
 
   /** Test/debug inspector — does not mutate state. */
