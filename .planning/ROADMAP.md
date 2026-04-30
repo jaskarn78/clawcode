@@ -774,3 +774,24 @@ Plans:
 - [x] 999.10-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
 
 **Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
+
+### Phase 999.11: Trigger-policy default-allow + cross-agent IPC channel delivery + inbox-check timeout (BACKLOG)
+
+**Goal:** Three production failures observed on clawdy 2026-04-30, all in the trigger/IPC layer — fix together since they share log surface and test scaffolding.
+
+1. **Trigger policy fail-closes when `~clawcode/.clawcode/policies.yaml` is absent.** `daemon.ts:2033` falls back to `new PolicyEvaluator([], configuredAgentNames)`; with empty rules every event hits the final `return { allow: false, reason: "no matching rule" }` branch in `policy-evaluator.ts`. Today's journal shows the 09:00 fin-acquisition standup cron and the 08:26 finmentum-content-creator one-shot reminder both rejected this way — every scheduler/reminder/calendar/inbox event is silently dropped. Switch the missing-file fallback from "empty PolicyEvaluator" to the simpler `evaluatePolicy()` default (allow if `targetAgent` is in `configuredAgents`), or ship a `policies.yaml` template with permissive defaults that boot-time auto-installs when absent. The current log line `"no policies.yaml found, using default policy"` is misleading — it's actually deny-all.
+
+2. **Cross-agent IPC `dispatchTurn()` returns response to caller, never posts to target's bound Discord channel.** Phase 999.2 renamed `sendToAgent` → `dispatchTurn` and the Discord-bridge path uses `streamFromAgent` (which DOES post). At 09:14:57 admin-clawdy invoked `dispatchTurn` → fin-acquisition with 971 chars; fin-acq replied 1087 chars at 09:15:55 — visible in caller's tool result, **never posted in #finmentum-client-acquisition**. Mirror the Phase 100 follow-up `triggerDeliveryFn` pattern: add an optional delivery callback that routes the response to the target agent's bound channel via webhook (preferred) → bot-direct fallback. Caller-only (RPC) semantics stay the default; channel delivery is opt-in via flag (`mirror_to_target_channel: true` from Phase 999.2 backlog text).
+
+3. **Heartbeat inbox check 10s timeout is too tight for cross-agent turns.** At 09:15:07 (10s after dispatchTurn started) the inbox check logged `"heartbeat check critical"` while fin-acq was mid-turn; the turn completed normally at 09:15:55. Either bump timeout to ≥60s, gate the check on whether the agent is actively responding, or move to event-driven (subscribe to `agent responded` rather than poll inbox).
+
+**Trigger:** 2026-04-30 — operator reported "scheduled reminders never fire" + "admin-clawdy → fin-acq message didn't land". Diagnosed via SSH journalctl on clawdy in this session.
+
+**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 optional template install; IPC-01 deliveryFn for dispatchTurn, IPC-02 mirror flag, IPC-03 webhook→bot fallback parity with triggerDeliveryFn; HB-01 inbox timeout bump, HB-02 active-turn awareness] — see 999.11-PLAN.md when planned.
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — high operator impact. Without (1) every cron/reminder is invisibly dropped; without (2) admin orchestration patterns are broken; (3) is noise reduction. Sequence after Phase 999.10 (already complete) since 1Password churn fix removes a confounding factor in trigger-source health.
