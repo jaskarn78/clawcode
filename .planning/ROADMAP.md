@@ -775,23 +775,40 @@ Plans:
 
 **Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
 
-### Phase 999.11: Trigger-policy default-allow + cross-agent IPC channel delivery + inbox-check timeout (BACKLOG)
+### Phase 999.11: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix (BACKLOG)
 
-**Goal:** Three production failures observed on clawdy 2026-04-30, all in the trigger/IPC layer — fix together since they share log surface and test scaffolding.
+**Goal:** Two production-impact bugs observed on clawdy 2026-04-30, both in the core dispatch hot path. Ship as a coherent "performance + functionality unblock" patch. (Original 999.11 scope included two more items — cross-agent IPC channel delivery + inbox heartbeat timeout — those are deferred to Phase 999.12 since they have lower operator impact and can ship independently.)
 
-1. **Trigger policy fail-closes when `~clawcode/.clawcode/policies.yaml` is absent.** `daemon.ts:2033` falls back to `new PolicyEvaluator([], configuredAgentNames)`; with empty rules every event hits the final `return { allow: false, reason: "no matching rule" }` branch in `policy-evaluator.ts`. Today's journal shows the 09:00 fin-acquisition standup cron and the 08:26 finmentum-content-creator one-shot reminder both rejected this way — every scheduler/reminder/calendar/inbox event is silently dropped. Switch the missing-file fallback from "empty PolicyEvaluator" to the simpler `evaluatePolicy()` default (allow if `targetAgent` is in `configuredAgents`), or ship a `policies.yaml` template with permissive defaults that boot-time auto-installs when absent. The current log line `"no policies.yaml found, using default policy"` is misleading — it's actually deny-all.
+1. **Trigger policy fail-closes when `~clawcode/.clawcode/policies.yaml` is absent.** `daemon.ts:2033` falls back to `new PolicyEvaluator([], configuredAgentNames)`; with empty rules every event hits the final `return { allow: false, reason: "no matching rule" }` branch in `policy-evaluator.ts`. Today's journal shows the 09:00 fin-acquisition standup cron and the 08:26 finmentum-content-creator one-shot reminder both rejected this way — **every scheduler/reminder/calendar/inbox event silently dropped** for every agent. Switch the missing-file fallback to the default-allow semantic (allow if `targetAgent` is in `configuredAgents`) — `evaluatePolicy()` already implements it at `policy-evaluator.ts:18127`. Replace the misleading `"using default policy"` log line.
 
-2. **Cross-agent IPC `dispatchTurn()` returns response to caller, never posts to target's bound Discord channel.** Phase 999.2 renamed `sendToAgent` → `dispatchTurn` and the Discord-bridge path uses `streamFromAgent` (which DOES post). At 09:14:57 admin-clawdy invoked `dispatchTurn` → fin-acquisition with 971 chars; fin-acq replied 1087 chars at 09:15:55 — visible in caller's tool result, **never posted in #finmentum-client-acquisition**. Mirror the Phase 100 follow-up `triggerDeliveryFn` pattern: add an optional delivery callback that routes the response to the target agent's bound channel via webhook (preferred) → bot-direct fallback. Caller-only (RPC) semantics stay the default; channel delivery is opt-in via flag (`mirror_to_target_channel: true` from Phase 999.2 backlog text).
+2. **QUEUE_FULL coalescer runaway recursive retry storm.** Today 09:47–09:58 PT, fin-acquisition was processing one slow turn while ~10 user messages arrived in burst. The Discord-bridge `streamAndPostResponse` drain block re-tries every ~150ms, hits `QUEUE_FULL` on the depth-2 SerialTurnQueue, throws the payload back into the `messageCoalescer`, and re-enters — each iteration **wraps the prior failed payload in another `[Combined: 1 message received during prior turn]\n\n(1) ...` header** (verified +54 chars/iteration in journal: 9607 → 8454 → 8508 → 8562 → 8616 → ... → 8832). Daemon CPU spikes; the eventual successful turn receives a multiply-wrapped corrupted payload. Fix: idempotent coalesce (skip wrapping if payload already starts with `[Combined:`), wait for in-flight slot via `SerialTurnQueue.hasInFlight()` before recursing, cap drain depth at N to prevent unbounded retry. Preserve the legitimate "user sent 3 messages while agent was working" combine-into-one-payload feature.
 
-3. **Heartbeat inbox check 10s timeout is too tight for cross-agent turns.** At 09:15:07 (10s after dispatchTurn started) the inbox check logged `"heartbeat check critical"` while fin-acq was mid-turn; the turn completed normally at 09:15:55. Either bump timeout to ≥60s, gate the check on whether the agent is actively responding, or move to event-driven (subscribe to `agent responded` rather than poll inbox).
+**Trigger:** 2026-04-30 — operator reported "scheduled reminders never fire" + later "fin-acquisition slowdown / 9-min turn". Diagnosed via SSH journalctl on clawdy in this session. Admin Clawdy mis-attributed the slowdown to Anthropic credits — actually QUEUE_FULL retry storm; "Credit balance is too low" string Admin Clawdy saw is from `restart-greeting.ts:API_ERROR_FINGERPRINTS` regex matching old session content, not live API responses.
 
-**Trigger:** 2026-04-30 — operator reported "scheduled reminders never fire" + "admin-clawdy → fin-acq message didn't land". Diagnosed via SSH journalctl on clawdy in this session.
-
-**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 optional template install; IPC-01 deliveryFn for dispatchTurn, IPC-02 mirror flag, IPC-03 webhook→bot fallback parity with triggerDeliveryFn; HB-01 inbox timeout bump, HB-02 active-turn awareness] — see 999.11-PLAN.md when planned.
+**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 PolicyWatcher hot-reload back-compat; COAL-01 idempotent coalesce wrapper detection, COAL-02 wait-for-in-flight gate, COAL-03 drain depth cap, COAL-04 storm warning log] — see 999.11-PLAN.md when planned.
 
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (promote with /gsd:review-backlog when ready)
 
-**Promotion target:** active milestone — high operator impact. Without (1) every cron/reminder is invisibly dropped; without (2) admin orchestration patterns are broken; (3) is noise reduction. Sequence after Phase 999.10 (already complete) since 1Password churn fix removes a confounding factor in trigger-source health.
+**Promotion target:** active milestone — highest operator impact in the 999.x backlog. Without (1) every cron/reminder is invisibly dropped (every scheduled feature broken across all 11 agents). Without (2) the daemon enters a CPU-burning recursive loop under bursty load and the eventual turn receives corrupted nested-wrapper payload. Both are tiny diffs (~5 lines for POLICY, ~30 for COAL) with massive ROI. Sequence after Phase 999.10 (already complete) since 1P fix removes a confounding factor.
+
+### Phase 999.12: Cross-agent IPC channel delivery + heartbeat inbox timeout (BACKLOG)
+
+**Goal:** Two operator-visible orchestration / observability fixes split out of the original 999.11 scope to keep that phase tightly focused on infrastructure perf.
+
+1. **Cross-agent IPC `dispatchTurn()` returns response to caller, never posts to target's bound Discord channel.** Phase 999.2 renamed `sendToAgent` → `dispatchTurn` and the Discord-bridge path uses `streamFromAgent` (which DOES post). At 2026-04-30 09:14:57 admin-clawdy invoked `dispatchTurn` → fin-acquisition with 971 chars; fin-acq replied 1087 chars at 09:15:55 — visible in caller's tool result, **never posted in #finmentum-client-acquisition**. Mirror the Phase 100 follow-up `triggerDeliveryFn` pattern: add an optional delivery callback that routes the response to the target agent's bound channel via webhook (preferred) → bot-direct fallback. Caller-only (RPC) semantics stay the default; channel delivery is opt-in via flag (`mirror_to_target_channel: true` from Phase 999.2 backlog text).
+
+2. **Heartbeat inbox check 10s timeout is too tight for cross-agent turns.** At 2026-04-30 09:15:07 (10s after dispatchTurn started) the inbox check logged `"heartbeat check critical"` while fin-acq was mid-turn; the turn completed normally at 09:15:55. Either bump timeout to ≥60s, gate the check on whether the agent is actively responding (use `SerialTurnQueue.hasInFlight()`), or move to event-driven (subscribe to `agent responded` rather than poll inbox).
+
+**Trigger:** Split out of original 999.11 during 2026-04-30 prioritization — 999.11 re-scoped to POLICY + coalescer (highest-impact perf/functionality), these two items deferred since they have lower blast radius.
+
+**Requirements:** [IPC-01 deliveryFn for dispatchTurn, IPC-02 mirror flag, IPC-03 webhook→bot fallback parity with triggerDeliveryFn; HB-01 inbox timeout bump, HB-02 active-turn awareness] — see 999.12-PLAN.md when planned.
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — sequence AFTER Phase 999.11. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 999.11 does.
