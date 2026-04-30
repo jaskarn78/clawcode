@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.10-02-PLAN.md (boot pre-resolve + 3-callsite wiring)
-last_updated: "2026-04-30T15:35:02.455Z"
+stopped_at: Completed 999.10-04-PLAN.md (secrets-status + secrets-invalidate IPC surface)
+last_updated: "2026-04-30T15:44:01.055Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 25
   completed_phases: 9
   total_plans: 41
-  completed_plans: 39
+  completed_plans: 40
 ---
 
 # Project State
@@ -327,6 +327,7 @@ Recent decisions affecting current work:
 - [Phase 999.10]: Plan 01 — Default randomize:true (jitter on by default per Pitfall 1); tests pass randomize:false explicitly for deterministic wall-clock.
 - [Phase 999.10]: Plan 01 — No fake timers in tests; minTimeout:1/maxTimeout:1 keeps wall-clock <500ms without fighting p-retry's setTimeout-based backoff.
 - [Phase 999.10]: Plan 02: One SecretsResolver instance threads through 3 callsites + boot pre-resolve via Promise.allSettled; sync wrapper around warmed cache keeps loader sync-by-design
+- [Phase 999.10]: Plan 04 IPC handler factored into pure module (secrets-ipc-handler.ts) for unit-testability without booting IPC server; closure-intercept-before-routeMethod pattern preserves the 24-arg routeMethod signature
 
 ### v2.1 closing decisions (for reference)
 
@@ -474,9 +475,10 @@ Recent decisions affecting current work:
 | Phase 999.10-daemon-op-secret-cache-and-retry-backoff P00 | 2min | 3 tasks | 7 files |
 | Phase 999.10 P01 | 211s | 2 tasks | 2 files |
 | Phase 999.10 P02 | 6.5min | 3 tasks | 5 files |
+| Phase 999.10 P04 | 5min | 3 tasks | 4 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.10-02-PLAN.md (boot pre-resolve + 3-callsite wiring)
+Stopped at: Completed 999.10-04-PLAN.md (secrets-status + secrets-invalidate IPC surface)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
