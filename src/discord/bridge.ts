@@ -109,6 +109,22 @@ export function loadBotToken(): string {
  * routes them to the correct agent session, and sends responses back.
  */
 export class DiscordBridge {
+  /**
+   * Phase 999.11 — coalescer storm fix.
+   *
+   * COMBINED_PREFIX: idempotent guard for formatCoalescedPayload — a single
+   * pending entry that already starts with this prefix is returned unchanged
+   * (no nested wrappers). Defends against the QUEUE_FULL spin-loop case where
+   * a previously-coalesced payload was re-queued and would otherwise gain a
+   * second [Combined: …] header per iteration.
+   *
+   * MAX_DRAIN_DEPTH: hard cap on recursive drain depth in streamAndPostResponse.
+   * On cap-hit: emit one warn, push pending back via messageCoalescer.requeue,
+   * and return — the next message-arrival drain will pick them up.
+   */
+  private static readonly COMBINED_PREFIX = "[Combined:";
+  private static readonly MAX_DRAIN_DEPTH = 3;
+
   private readonly client: Client;
   private readonly routingTableRef: { readonly current: RoutingTable };
   private readonly sessionManager: SessionManager;
@@ -546,6 +562,7 @@ export class DiscordBridge {
     sessionName: string,
     formattedMessage: string,
     turn?: Turn,
+    drainDepth = 0,
   ): Promise<void> {
     const channelId = message.channelId;
 
@@ -730,18 +747,57 @@ export class DiscordBridge {
     // was running get joined into ONE follow-up dispatch. SerialTurnQueue
     // is once again depth-1 (one in-flight + one queued) so this stays
     // well-behaved.
+    //
+    // Phase 999.11 — layered defense against the QUEUE_FULL coalescer storm
+    // (clawdy 2026-04-30 09:47–09:58 PT trace: ~10 spin-loop iterations adding
+    // +54 chars per cycle from nested [Combined:] wrappers). Three guards:
+    //   (a) depth cap   — prevent unbounded recursion regardless of root cause
+    //   (b) in-flight   — defer drain when sessionManager.hasActiveTurn=true
+    //   (c) idempotent  — formatCoalescedPayload skips re-wrap on single-pending
+    //                     pre-wrapped content (see formatCoalescedPayload below)
     const pending = this.messageCoalescer.takePending(sessionName);
-    if (pending.length > 0) {
-      const combinedPayload = this.formatCoalescedPayload(pending);
-      this.log.info(
-        { agent: sessionName, channel: channelId, count: pending.length },
-        "draining coalesced messages as combined dispatch",
+    if (pending.length === 0) return;
+
+    // (a) Depth cap — cheapest check first. On cap-hit: requeue + warn + return.
+    //     The next message-arrival drain (or a real queue-free event) will
+    //     pick the pending messages up at depth=0 again.
+    if (drainDepth >= DiscordBridge.MAX_DRAIN_DEPTH) {
+      this.log.warn(
+        { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+        "coalescer drain depth cap reached — leaving messages buffered for next arrival",
       );
-      // No new Turn — the original Turn already ended. The drain dispatch
-      // runs untraced (acceptable: this is the rare-path resend friction
-      // fix, and the original turn already captured a failure trace).
-      await this.streamAndPostResponse(message, sessionName, combinedPayload, undefined);
+      this.messageCoalescer.requeue(sessionName, pending);
+      return;
     }
+
+    // (b) hasActiveTurn gate — defer drain if a turn is still occupying the
+    //     per-agent queue. The next message-arrival or in-flight settle path
+    //     will re-trigger this block.
+    if (this.sessionManager.hasActiveTurn(sessionName)) {
+      this.log.debug(
+        { agent: sessionName, channel: channelId, count: pending.length },
+        "coalescer drain deferred — turn still in-flight",
+      );
+      this.messageCoalescer.requeue(sessionName, pending);
+      return;
+    }
+
+    // (c) Drain — proceed with combined dispatch.
+    const combinedPayload = this.formatCoalescedPayload(pending);
+    this.log.info(
+      { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+      "draining coalesced messages as combined dispatch",
+    );
+    // No new Turn — the original Turn already ended. The drain dispatch
+    // runs untraced (acceptable: this is the rare-path resend friction
+    // fix, and the original turn already captured a failure trace).
+    await this.streamAndPostResponse(
+      message,
+      sessionName,
+      combinedPayload,
+      undefined,
+      drainDepth + 1,
+    );
   }
 
   /**
@@ -750,10 +806,28 @@ export class DiscordBridge {
    * Joins each pending entry with `\n\n---\n\n` and prefixes a header so the
    * agent sees the operator sent multiple thoughts in rapid succession (not
    * one giant blob). Order is FIFO (insertion order from MessageCoalescer).
+   *
+   * Phase 999.11 — idempotent guard: a single pending entry whose content
+   * already starts with COMBINED_PREFIX is returned unchanged. The storm
+   * trace from clawdy 2026-04-30 09:47–09:58 PT showed +54 chars per spin-
+   * loop iteration from exactly this nesting bug — re-queued coalesced
+   * payloads gaining a second [Combined: …] header per cycle.
+   *
+   * Why `pending.length === 1` specifically: the storm always involves a
+   * single re-queued payload sitting alone in the buffer. Multi-pending
+   * coalesce of (wrapped + new) correctly preserves the inner [Combined:]
+   * as `(1)` body content under a fresh outer header — that's the legitimate
+   * "user sent N messages while agent worked" feature and must keep working.
    */
   private formatCoalescedPayload(
     pending: ReadonlyArray<{ readonly content: string; readonly messageId: string }>,
   ): string {
+    if (
+      pending.length === 1 &&
+      pending[0].content.startsWith(DiscordBridge.COMBINED_PREFIX)
+    ) {
+      return pending[0].content;
+    }
     const header = `[Combined: ${pending.length} message${pending.length === 1 ? "" : "s"} received during prior turn]`;
     const body = pending
       .map((m, i) => `(${i + 1}) ${m.content}`)
