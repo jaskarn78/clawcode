@@ -142,6 +142,17 @@ async function handleRequest(
       return;
     }
 
+    // Phase 999.8 Plan 02 follow-up — graph-color.js is imported as an ES
+    // module by graph.html via `import { nodeClr } from "./graph-color.js"`.
+    // Browsers resolve "./graph-color.js" relative to the URL `/graph` →
+    // `/graph-color.js`. Without this explicit route the request 404s and
+    // the entire `<script type="module">` block fails to execute, leaving
+    // the graph blank and the menu wiring inert. Caught 2026-04-30 in prod.
+    if (method === "GET" && pathname === "/graph-color.js") {
+      await serveStatic(res, "graph-color.js", MIME_TYPES[".js"]!);
+      return;
+    }
+
     if (method === "GET" && pathname === "/graph") {
       await serveStatic(res, "graph.html", MIME_TYPES[".html"]!);
       return;
