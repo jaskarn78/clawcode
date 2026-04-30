@@ -505,8 +505,8 @@ export class MemoryStore {
     try {
       const rows = this.db
         .prepare(
-          `SELECT id, content, source, importance, access_count, tags,
-                  created_at, updated_at, accessed_at, tier, source_turn_ids
+          `SELECT id, content, source, updated_at, accessed_at, importance,
+                  access_count, tags, created_at, tier, source_turn_ids
            FROM memories WHERE tier = ? ORDER BY accessed_at DESC LIMIT ?`,
         )
         .all(tier, limit) as MemoryRow[];
@@ -516,6 +516,48 @@ export class MemoryStore {
         error instanceof Error ? error.message : "Unknown error";
       throw new MemoryError(
         `Failed to list memories by tier ${tier}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 999.8 follow-up (2026-04-30) — promotion-scan-specific list of
+   * warm memories. Orders by inbound backlink count DESC (centrality)
+   * with accessed_at DESC as the secondary sort. The vanilla `listByTier`
+   * orders only by accessed_at, which biases against rarely-accessed-but-
+   * heavily-linked hub memories — exactly the shape Phase 100-fu's
+   * centrality-based promotion path targets. Without this, the LIMIT
+   * window of `refreshHotTier` keeps surfacing recently-touched memories
+   * with low backlink counts and the high-link hubs never get scanned.
+   *
+   * Used by `TierManager.refreshHotTier`. Not used elsewhere; if a future
+   * caller needs hot/cold variants, generalize the orderBy at that point.
+   */
+  listWarmCandidatesForPromotion(limit: number): readonly MemoryEntry[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT m.id, m.content, m.source, m.updated_at, m.accessed_at,
+                  m.importance, m.access_count, m.tags, m.created_at,
+                  m.tier, m.source_turn_ids
+           FROM memories m
+           LEFT JOIN (
+             SELECT target_id, COUNT(*) AS backlink_count
+             FROM memory_links
+             GROUP BY target_id
+           ) lc ON lc.target_id = m.id
+           WHERE m.tier = 'warm'
+           ORDER BY COALESCE(lc.backlink_count, 0) DESC, m.accessed_at DESC
+           LIMIT ?`,
+        )
+        .all(limit) as MemoryRow[];
+      return Object.freeze(rows.map(rowToEntry));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to list warm promotion candidates: ${message}`,
         this.dbPath,
       );
     }

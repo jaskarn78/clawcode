@@ -440,6 +440,97 @@ describe("MemoryStore", () => {
     });
   });
 
+  describe("listWarmCandidatesForPromotion (Phase 999.8 follow-up)", () => {
+    it("orders warm memories by backlink count DESC then accessed_at DESC", () => {
+      store = createTestStore();
+      const lowLink = store.insert(
+        { content: "low-link hub", source: "manual" },
+        randomEmbedding(),
+      );
+      const highLink = store.insert(
+        { content: "high-link hub", source: "manual" },
+        randomEmbedding(),
+      );
+      const noLinks = store.insert(
+        { content: "isolated", source: "manual" },
+        randomEmbedding(),
+      );
+      // Add 6 inbound links → highLink gets 6, lowLink gets 1
+      for (let i = 0; i < 6; i++) {
+        const src = store.insert(
+          { content: `src${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+        store.getGraphStatements().insertLink.run(
+          src.id,
+          highLink.id,
+          "ref",
+          new Date().toISOString(),
+        );
+      }
+      const oneSrc = store.insert(
+        { content: "one-src", source: "manual" },
+        randomEmbedding(),
+      );
+      store.getGraphStatements().insertLink.run(
+        oneSrc.id,
+        lowLink.id,
+        "ref",
+        new Date().toISOString(),
+      );
+
+      const warm = store.listWarmCandidatesForPromotion(100);
+      // highLink (6 backlinks) must come BEFORE lowLink (1) and noLinks (0)
+      const idsInOrder = warm.map((m) => m.id);
+      const highIdx = idsInOrder.indexOf(highLink.id);
+      const lowIdx = idsInOrder.indexOf(lowLink.id);
+      const noIdx = idsInOrder.indexOf(noLinks.id);
+      expect(highIdx).toBeGreaterThanOrEqual(0);
+      expect(highIdx).toBeLessThan(lowIdx);
+      expect(lowIdx).toBeLessThan(noIdx);
+    });
+
+    it("respects limit parameter", () => {
+      store = createTestStore();
+      for (let i = 0; i < 7; i++) {
+        store.insert(
+          { content: `entry${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+      }
+      const result = store.listWarmCandidatesForPromotion(3);
+      expect(result).toHaveLength(3);
+    });
+
+    it("only returns warm-tier memories (excludes hot and cold)", () => {
+      store = createTestStore();
+      const e1 = store.insert(
+        { content: "warm-keeper", source: "manual" },
+        randomEmbedding(),
+      );
+      const e2 = store.insert(
+        { content: "promoted-to-hot", source: "manual" },
+        randomEmbedding(),
+      );
+      const e3 = store.insert(
+        { content: "archived-to-cold", source: "manual" },
+        randomEmbedding(),
+      );
+      store.updateTier(e2.id, "hot");
+      store.updateTier(e3.id, "cold");
+      const warm = store.listWarmCandidatesForPromotion(100);
+      expect(warm).toHaveLength(1);
+      expect(warm[0].id).toBe(e1.id);
+    });
+
+    it("returns frozen array", () => {
+      store = createTestStore();
+      store.insert({ content: "x", source: "manual" }, randomEmbedding());
+      const result = store.listWarmCandidatesForPromotion(10);
+      expect(Object.isFrozen(result)).toBe(true);
+    });
+  });
+
   describe("getEmbedding", () => {
     it("returns Float32Array for existing memory", () => {
       store = createTestStore();

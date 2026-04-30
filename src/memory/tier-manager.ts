@@ -255,7 +255,17 @@ export class TierManager {
     // so heavy-linked hubs (e.g. fin-acquisition style nodes referenced
     // by many turn summaries) can promote even when their direct
     // access_count is low.
-    const warmMemories = this.store.listByTier("warm", 100);
+    //
+    // Phase 999.8 follow-up (2026-04-30) — bumped scan window from 100
+    // to 5000 AND switched to `listWarmCandidatesForPromotion` which
+    // orders by backlink_count DESC. Original 100-cap + accessed_at
+    // ordering surfaced recently-created memories first and pushed
+    // high-centrality hubs out of the scan window — production diagnosis
+    // showed 1029 warm memories with ≥5 backlinks but only 100 ever
+    // scanned, none of them the hubs. The 5000 cap covers any agent's
+    // full warm tier comfortably and the centrality ordering ensures
+    // hubs surface first when the cap IS reached.
+    const warmMemories = this.store.listWarmCandidatesForPromotion(5000);
     const qualifyingWarm = warmMemories.filter((mem) => {
       const backlinkCount = this.store.getBacklinkCount(mem.id);
       return shouldPromoteToHot(
