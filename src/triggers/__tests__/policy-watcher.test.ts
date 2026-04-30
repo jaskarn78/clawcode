@@ -468,4 +468,91 @@ describe("PolicyWatcher", () => {
       expect(() => watcher.getCurrentEvaluator()).toThrow(/not started/i);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 999.13 — DELEG reload regression (Phase 999.11 fix)
+  //
+  // PolicyWatcher's `configuredAgents: Set<string>` is built from the
+  // operator's clawcode.yaml. The new `delegates` agentSchema field MUST
+  // not affect the policy reload path — the Set still contains plain agent
+  // names. This test pins the regression: a configSchema-validated config
+  // with at least one agent declaring `delegates` produces a healthy
+  // configuredAgents Set, and the watcher reloads cleanly through it.
+  //
+  // RED on main because configSchema doesn't accept `delegates` yet
+  // (parse fails → can't build the Set → regression test fails).
+  // -------------------------------------------------------------------------
+  describe("Phase 999.13 — DELEG reload regression", () => {
+    it("reload-with-delegates: a config with agents declaring `delegates` produces a healthy configuredAgents Set and reload succeeds", async () => {
+      // Lazy import so this test file still loads on main even before
+      // Plan 01 ships the schema changes.
+      const { configSchema } = await import("../../config/schema.js");
+
+      const cfgInput = {
+        version: 1,
+        agents: [
+          // Agent with delegates pointing at a real configured agent.
+          // Plain object literal — zod strips unknown keys today; Plan 01
+          // adds the field so the parsed `delegates` survives.
+          {
+            name: "agent-alpha",
+            delegates: { research: "research" },
+          },
+          { name: "agent-beta" },
+          { name: "research" },
+        ],
+      };
+
+      const parseResult = configSchema.safeParse(cfgInput);
+      expect(parseResult.success).toBe(true);
+      if (!parseResult.success) return;
+
+      // Sanity: delegates field is preserved on the resolved data (zod
+      // strips unknown keys by default — so on main this assertion fails).
+      // Plan 01 ships the schema field which makes this pass.
+      const alpha = parseResult.data.agents.find(
+        (a) => a.name === "agent-alpha",
+      );
+      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates field
+      expect(alpha?.delegates).toEqual({ research: "research" });
+
+      // Build the configuredAgents Set the way the daemon does.
+      const configuredAgents = new Set(
+        parseResult.data.agents.map((a) => a.name),
+      );
+      expect(configuredAgents.has("agent-alpha")).toBe(true);
+      expect(configuredAgents.has("research")).toBe(true);
+
+      // Verify the watcher reloads cleanly with this Set.
+      const policyPath = join(tempDir, "policies.yaml");
+      const auditPath = join(tempDir, "policy-audit.jsonl");
+      await writeFile(policyPath, VALID_POLICY_YAML, "utf-8");
+
+      const onReload = vi.fn();
+      const watcher = new PolicyWatcher({
+        policyPath,
+        auditPath,
+        onReload,
+        log: silentLog,
+        debounceMs: 50,
+        configuredAgents,
+      });
+
+      await watcher.start();
+
+      await writeFile(policyPath, VALID_POLICY_YAML_V2, "utf-8");
+
+      await vi.waitFor(
+        () => {
+          expect(onReload).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 3000 },
+      );
+
+      const [newEvaluator] = onReload.mock.calls[0]!;
+      expect(newEvaluator).toBeInstanceOf(PolicyEvaluator);
+
+      await watcher.stop();
+    });
+  });
 });

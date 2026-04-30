@@ -1235,3 +1235,94 @@ describe("assembleContext — Phase 67 conversation_context", () => {
     expect(sectionTokens.conversation_context).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — DELEG (delegatesBlock injection in stable prefix)
+//
+// Wave 0 RED tests. These FAIL on current main because:
+//   - ContextSources has no `delegatesBlock` field yet (Plan 01 adds it)
+//   - assembleContext() does not yet append the block after toolDefinitions
+//
+// We use `as ContextSources` casts (and `// @ts-expect-error` where needed)
+// so this file still compiles via tsc — the tests will fail at runtime
+// because the production assembler ignores the new field today.
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — DELEG: delegatesBlock injection", () => {
+  // Use the canonical render output from <canonical_text> in PLAN.md so
+  // drift is caught in either pillar.
+  const CANONICAL_BLOCK = [
+    "## Specialist Delegation",
+    "For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:",
+    "- research → fin-research",
+    "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.",
+  ].join("\n");
+
+  it("delegates-block-injection: when sources.delegatesBlock is non-empty, stablePrefix contains it AFTER '## Available Tools'", () => {
+    const sources = makeSources({
+      identity: "I am an agent",
+      toolDefinitions: "tool-content-here",
+      // Phase 999.13 RED — Plan 01 adds delegatesBlock to ContextSources.
+      delegatesBlock: CANONICAL_BLOCK,
+    } as Partial<ContextSources> & { delegatesBlock: string });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS);
+    const stablePrefix = (result as { stablePrefix: string }).stablePrefix;
+
+    // Block must appear in the stable prefix at all
+    expect(stablePrefix).toContain("## Specialist Delegation");
+    expect(stablePrefix).toContain("- research → fin-research");
+
+    // Block must appear AFTER the tools section (per CONTEXT.md "block goes
+    // at the bottom of the agent's system prompt").
+    const toolsIdx = stablePrefix.indexOf("## Available Tools");
+    const delegIdx = stablePrefix.indexOf("## Specialist Delegation");
+    expect(toolsIdx).toBeGreaterThan(-1);
+    expect(delegIdx).toBeGreaterThan(toolsIdx);
+  });
+
+  it("delegates-block-injection: arbitrary marker string lands in stablePrefix when threaded as delegatesBlock", () => {
+    // Sentinel marker lets us prove byte-flow from sources.delegatesBlock
+    // through to the assembled stablePrefix without coupling to canonical text.
+    const SENTINEL = "DELEG_BLOCK_SENTINEL_999_13_X";
+    const sources = makeSources({
+      identity: "id",
+      toolDefinitions: "tools",
+      // Phase 999.13 RED — Plan 01 adds delegatesBlock to ContextSources.
+      delegatesBlock: SENTINEL,
+    } as Partial<ContextSources> & { delegatesBlock: string });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS);
+    const stablePrefix = (result as { stablePrefix: string }).stablePrefix;
+    expect(stablePrefix).toContain(SENTINEL);
+  });
+
+  it("delegates-block-empty-baseline: omitting delegatesBlock vs delegatesBlock='' produces byte-identical stablePrefix", () => {
+    // Per Pitfall 2 — empty/unset must short-circuit with NO header, NO
+    // whitespace pollution. Critical for prompt-cache hash stability.
+    const baseline = makeSources({
+      identity: "I am an agent",
+      toolDefinitions: "tool-content-here",
+    });
+    const withEmpty = makeSources({
+      identity: "I am an agent",
+      toolDefinitions: "tool-content-here",
+      // Phase 999.13 RED — Plan 01 adds delegatesBlock to ContextSources.
+      delegatesBlock: "",
+    } as Partial<ContextSources> & { delegatesBlock: string });
+
+    const baselineResult = assembleContext(baseline, DEFAULT_BUDGETS);
+    const emptyResult = assembleContext(withEmpty, DEFAULT_BUDGETS);
+
+    expect((emptyResult as { stablePrefix: string }).stablePrefix).toBe(
+      (baselineResult as { stablePrefix: string }).stablePrefix,
+    );
+    // Pin the hash so any future drift to the no-delegates baseline fails loud.
+    const baselineHash = createHash("sha256")
+      .update((baselineResult as { stablePrefix: string }).stablePrefix)
+      .digest("hex");
+    const emptyHash = createHash("sha256")
+      .update((emptyResult as { stablePrefix: string }).stablePrefix)
+      .digest("hex");
+    expect(emptyHash).toBe(baselineHash);
+  });
+});

@@ -2251,3 +2251,104 @@ describe("resolveAgentConfig - mcpEnvOverrides (Phase 100 follow-up)", () => {
     expect(resolved.mcpEnvOverrides).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — DELEG (renderer + canonical text)
+//
+// Wave 0 RED tests. These FAIL on current main because:
+//   - `renderDelegatesBlock`, `DELEGATES_DIRECTIVE_HEADER`, and
+//     `DELEGATES_DIRECTIVE_FOOTER` do not exist yet (Plan 01 adds them next
+//     to `renderSystemPromptDirectiveBlock` at loader.ts:672).
+//
+// Imports are dynamic via `await import(...)` so this file still parses on
+// main even before the symbols land — the test bodies themselves fail.
+// Plan 01 replaces the dynamic-import scaffolding once the symbols ship.
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — DELEG renderer + canonical text", () => {
+  // Verbatim from PLAN.md <canonical_text>. NEVER paraphrase — these are the
+  // source of truth pinned by the static-grep regression test
+  // `delegates-canonical-text` below.
+  const EXPECTED_HEADER =
+    "## Specialist Delegation\nFor tasks matching a specialty below, delegate via the spawn-subagent-thread skill:";
+  const EXPECTED_FOOTER =
+    "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.";
+
+  it("delegates-canonical-text: DELEGATES_DIRECTIVE_HEADER + FOOTER constants match canonical text byte-exactly", async () => {
+    const mod = await import("../loader.js");
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports these constants
+    expect(mod.DELEGATES_DIRECTIVE_HEADER).toBe(EXPECTED_HEADER);
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports these constants
+    expect(mod.DELEGATES_DIRECTIVE_FOOTER).toBe(EXPECTED_FOOTER);
+  });
+
+  it("renderDelegatesBlock-undefined: returns '' exactly", async () => {
+    const mod = await import("../loader.js");
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
+    const out = mod.renderDelegatesBlock(undefined);
+    expect(out).toBe("");
+  });
+
+  it("renderDelegatesBlock-empty: {} returns '' exactly (no header, no whitespace)", async () => {
+    const mod = await import("../loader.js");
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
+    const out = mod.renderDelegatesBlock({});
+    expect(out).toBe("");
+  });
+
+  it("renderDelegatesBlock-single: { research: 'fin-research' } produces canonical 3-line block byte-exactly", async () => {
+    const mod = await import("../loader.js");
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
+    const out = mod.renderDelegatesBlock({ research: "fin-research" });
+    const expected = [
+      "## Specialist Delegation",
+      "For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:",
+      "- research → fin-research",
+      "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.",
+    ].join("\n");
+    expect(out).toBe(expected);
+  });
+
+  it("renderDelegatesBlock-multi-specialty (DELEG-04): bullets sorted alphabetically", async () => {
+    const mod = await import("../loader.js");
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
+    const out = mod.renderDelegatesBlock({
+      research: "r1",
+      coding: "c1",
+      legal: "l1",
+    });
+    // Alphabetical: coding, legal, research
+    const expected = [
+      "## Specialist Delegation",
+      "For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:",
+      "- coding → c1",
+      "- legal → l1",
+      "- research → r1",
+      "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.",
+    ].join("\n");
+    expect(out).toBe(expected);
+  });
+
+  it("renderDelegatesBlock-deterministic: byte-identical output regardless of insertion order (Pitfall 2)", async () => {
+    const mod = await import("../loader.js");
+    // Build the same logical record via two different insertion orders.
+    const order1 = Object.fromEntries([
+      ["b", "B"],
+      ["a", "A"],
+    ]);
+    const order2 = Object.fromEntries([
+      ["a", "A"],
+      ["b", "B"],
+    ]);
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
+    const out1 = mod.renderDelegatesBlock(order1);
+    // @ts-expect-error Phase 999.13 RED — Plan 01 exports renderDelegatesBlock
+    const out2 = mod.renderDelegatesBlock(order2);
+    expect(out1).toBe(out2);
+    // Both must contain bullets in alphabetical order (a then b)
+    const aIdx = out1.indexOf("- a → A");
+    const bIdx = out1.indexOf("- b → B");
+    expect(aIdx).toBeGreaterThan(-1);
+    expect(bIdx).toBeGreaterThan(-1);
+    expect(aIdx).toBeLessThan(bIdx);
+  });
+});

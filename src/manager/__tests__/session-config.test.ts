@@ -1475,3 +1475,43 @@ describe("buildSessionConfig — capability manifest injection (Phase 100 follow
     expect(result.systemPrompt).not.toContain("Your ClawCode Capabilities");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — back-compat byte-stability across both pillars
+//
+// Wave 0 RED-supportive snapshot test. The snapshot pins the cache-stable
+// prefix for an agent fixture WITHOUT `delegates` and WITHOUT any
+// `defaults.timezone` config — anchoring the no-config baseline so any
+// future drift fails loud (REG-DETERMINISTIC).
+//
+// On main today this test creates the snapshot and passes. After Plans 01
+// and 02 land, the same fixture must still produce the same snapshot —
+// proving back-compat for the existing 15-agent fleet (no yaml change).
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — back-compat byte-stability", () => {
+  it("back-compat-byte-identical: agent without delegates and without timezone produces stable systemPrompt", async () => {
+    // Minimal, deterministic fixture. No delegates, no timezone — the
+    // baseline that all 15 deployed agents currently match.
+    const config = makeConfig({
+      name: "back-compat-fixture-agent",
+      workspace: "/tmp/back-compat-ws",
+      memoryPath: "/tmp/back-compat-ws",
+      channels: [],
+      skills: [],
+      mcpServers: [],
+      schedules: [],
+      slashCommands: [],
+      dream: undefined,
+      // Note: NO `delegates` field — stays undefined (Plan 01 adds the
+      // resolver field on AgentConfig but absence must remain back-compat).
+    });
+
+    const result = await buildSessionConfig(config, makeDeps());
+    // Snapshot the systemPrompt verbatim. On main: snapshot is created.
+    // After Plans 01+02 deploy: same fixture must still match — any drift
+    // to the no-delegates / no-timezone baseline fails loud.
+    expect(result.systemPrompt).toMatchSnapshot(
+      "back-compat-byte-identical-systemPrompt",
+    );
+  });
+});

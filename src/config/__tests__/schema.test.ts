@@ -2148,3 +2148,158 @@ describe("agentSchema - mcpEnvOverrides (Phase 100 follow-up)", () => {
     expect(result.success).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — DELEG (Pillar A: extendible specialist delegate map)
+// Wave 0 RED tests. These FAIL on current main because:
+//   - agentSchema has no `delegates` field yet (Plan 01 adds it)
+//   - configSchema.superRefine has no delegates-target validation yet
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — DELEG", () => {
+  it("delegates-schema: agentSchema accepts delegates: { research: 'research' }", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      delegates: { research: "fin-research" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      expect(result.data.delegates).toEqual({ research: "fin-research" });
+    }
+  });
+
+  it("delegates-schema: empty {} parses (no min-keys constraint)", () => {
+    const result = agentSchema.safeParse({
+      name: "test-agent",
+      delegates: {},
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      expect(result.data.delegates).toEqual({});
+    }
+  });
+
+  it("delegates-schema: omitted field parses (back-compat — undefined)", () => {
+    const result = agentSchema.safeParse({ name: "test-agent" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      expect(result.data.delegates).toBeUndefined();
+    }
+  });
+
+  it("delegates-schema-invalid: rejects empty-string keys", () => {
+    const result = agentSchema.safeParse({
+      name: "test-agent",
+      delegates: { "": "fin-research" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("delegates-schema-invalid: rejects empty-string values", () => {
+    const result = agentSchema.safeParse({
+      name: "test-agent",
+      delegates: { research: "" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("delegates-superRefine-unknown-target: rejects target that doesn't match any agent name", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", delegates: { research: "ghost-agent" } },
+        { name: "fin-research" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const allMessages = result.error.issues.map((i) => i.message).join("\n");
+      // Must mention the offending agent AND the unknown target
+      expect(allMessages).toContain("fin-acquisition");
+      expect(allMessages).toContain("ghost-agent");
+    }
+  });
+
+  it("delegates-superRefine-valid: all-known-targets parse cleanly across N=3 agents", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", delegates: { research: "fin-research" } },
+        { name: "fin-tax", delegates: { research: "fin-research", tax: "fin-tax" } },
+        { name: "fin-research" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("delegates-back-compat: existing fixture with no delegates parses byte-identically (success path)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "test-agent" },
+        { name: "research" },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      expect(result.data.agents[0].delegates).toBeUndefined();
+      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      expect(result.data.agents[1].delegates).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ (Pillar B: agent-context timezone rendering — schema bits)
+// Wave 0 RED tests. These FAIL on current main because:
+//   - defaultsSchema has no `timezone` field yet (Plan 02 adds it)
+//   - defaultsSchema has no IANA-TZ pre-validation yet (Plan 02 adds it)
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ", () => {
+  it("defaults-timezone-schema: defaultsSchema accepts timezone: 'America/Los_Angeles'", () => {
+    const result = defaultsSchema.safeParse({
+      timezone: "America/Los_Angeles",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // @ts-expect-error Phase 999.13 RED — Plan 02 adds timezone to DefaultsConfig
+      expect(result.data.timezone).toBe("America/Los_Angeles");
+    }
+  });
+
+  it("defaults-timezone-schema: timezone is optional (absence parses cleanly)", () => {
+    const result = defaultsSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // @ts-expect-error Phase 999.13 RED — Plan 02 adds timezone to DefaultsConfig
+      expect(result.data.timezone).toBeUndefined();
+    }
+  });
+
+  it("defaults-timezone-iana-validation: rejects 'Pacific/LosAngeles' (typo, invalid IANA)", () => {
+    // Open Question 3 LOCKED YES — Plan 02 must add a try/catch refinement
+    // around new Intl.DateTimeFormat(undefined, { timeZone: tz }).
+    const result = defaultsSchema.safeParse({
+      timezone: "Pacific/LosAngeles",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join("\n");
+      // Operator-friendly error message must call out the bad value
+      expect(messages.toLowerCase()).toMatch(/timezone|iana|invalid/);
+    }
+  });
+
+  it("defaults-timezone-iana-validation: accepts canonical IANA TZs (UTC, America/New_York)", () => {
+    expect(defaultsSchema.safeParse({ timezone: "UTC" }).success).toBe(true);
+    expect(
+      defaultsSchema.safeParse({ timezone: "America/New_York" }).success,
+    ).toBe(true);
+    expect(
+      defaultsSchema.safeParse({ timezone: "Europe/London" }).success,
+    ).toBe(true);
+  });
+});

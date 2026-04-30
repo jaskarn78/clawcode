@@ -190,3 +190,45 @@ describe("buildDreamPrompt — D-02 context assembler", () => {
     expect(estimatedInputTokens).toBeLessThanOrEqual(DREAM_PROMPT_INPUT_TOKEN_BUDGET);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ-04: dream prompt timestamps (chunk lastModified + summary endedAt)
+//
+// Open Question 2 LOCKED YES — Plan 02 must convert renderChunk (line 115)
+// and renderSummary (line 122) to TZ-aware timestamps when threaded an
+// agentTz. The dream-pass agent reads these prompts as agent-visible
+// context.
+//
+// Wave 0 RED: on main, both lines emit ISO UTC via toISOString(). After
+// Plan 02, threading agentTz produces "YYYY-MM-DD HH:mm:ss ZZZ".
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ-04: dream prompt TZ-aware timestamps", () => {
+  it("dream-prompt-tz-timestamps: chunk lastModified + summary endedAt render in canonical TZ-aware format when agentTz threaded", () => {
+    const input: DreamPromptInput = {
+      agentName: "fin-acquisition",
+      recentChunks: [
+        chunk("c1", "chunk body", "2026-04-30T18:32:51.000Z"),
+      ],
+      memoryMd: "",
+      recentSummaries: [
+        {
+          sessionId: "s1",
+          summary: "summary body",
+          endedAt: new Date("2026-04-30T18:32:51.000Z"),
+        },
+      ],
+      graphEdges: "",
+    };
+    // Plan 02 adds agentTz to DreamPromptInput. On main the field is
+    // ignored — timestamps emit ISO UTC like "2026-04-30T18:32:51.000Z".
+    const { userPrompt } = buildDreamPrompt(
+      // @ts-expect-error Phase 999.13 RED — Plan 02 adds agentTz to DreamPromptInput
+      { ...input, agentTz: "America/Los_Angeles" },
+    );
+    // Canonical TZ-aware timestamp must appear (renderChunk + renderSummary).
+    // With agentTz=America/Los_Angeles, 2026-04-30T18:32:51Z → 2026-04-30 11:32:51 PDT
+    expect(userPrompt).toContain("2026-04-30 11:32:51 PDT");
+    // Negative assertion: ISO UTC literal must NOT appear.
+    expect(userPrompt).not.toContain("2026-04-30T18:32:51.000Z");
+  });
+});

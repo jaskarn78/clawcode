@@ -180,3 +180,50 @@ describe("enforceSummaryBudget (Phase 53)", () => {
     expect(MIN_RESUME_SUMMARY_BUDGET).toBe(500);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ-04: saveSummary writes TZ-aware Generated header
+//
+// Wave 0 RED test. FAILS on current main because:
+//   - saveSummary signature does not yet accept agentTz parameter
+//     (Plan 02 adds it)
+//   - on main, **Generated:** uses new Date().toISOString() (UTC ISO)
+//   - after Plan 02, **Generated:** should use renderAgentVisibleTimestamp
+//     producing "YYYY-MM-DD HH:mm:ss ZZZ"
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ-04: saveSummary TZ-aware Generated header", () => {
+  it("saveSummary-generated-tz: writes **Generated:** header in canonical YYYY-MM-DD HH:mm:ss ZZZ format", async () => {
+    const { mkdtemp, rm, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const memoryDir = await mkdtemp(join(tmpdir(), "999-13-context-summary-"));
+    try {
+      // Plan 02 adds the 4th agentTz parameter. On main the extra arg is
+      // ignored — the file ends up with an ISO UTC Generated line which
+      // fails the regex below.
+      await (saveSummary as unknown as (
+        memoryDir: string,
+        agentName: string,
+        summary: string,
+        agentTz?: string,
+      ) => Promise<void>)(memoryDir, "test-agent", "Body content here", "America/Los_Angeles");
+
+      const written = await readFile(join(memoryDir, "context-summary.md"), "utf-8");
+      // Locate the Generated header line.
+      const genLine = written
+        .split("\n")
+        .find((l) => l.startsWith("**Generated:**"));
+      expect(genLine).toBeDefined();
+      // Canonical TZ-aware format — NOT ISO UTC.
+      expect(genLine).toMatch(
+        /^\*\*Generated:\*\* \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [A-Z]{2,5}$/,
+      );
+      // Negative assertion: must NOT carry an ISO UTC timestamp anymore.
+      expect(genLine).not.toMatch(/Z$/); // ISO ends with 'Z'
+      expect(genLine).not.toMatch(/T\d{2}:/); // ISO has 'T' separator
+    } finally {
+      await rm(memoryDir, { recursive: true, force: true });
+    }
+  });
+});

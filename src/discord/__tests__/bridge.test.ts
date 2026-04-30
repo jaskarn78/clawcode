@@ -1112,3 +1112,86 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     expect(capWarnCount).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ-04: formatDiscordMessage emits TZ-aware ts
+//
+// Wave 0 RED tests. These FAIL on current main because:
+//   - formatDiscordMessage signature does not yet accept agentTz parameter
+//     (Plan 02 adds it)
+//   - on main, the ts attribute uses message.createdAt.toISOString() (UTC ISO)
+//   - after Plan 02, ts should use renderAgentVisibleTimestamp(date, agentTz)
+//     producing "YYYY-MM-DD HH:mm:ss ZZZ"
+//
+// We pass agentTz via `as any` so this file still compiles via tsc.
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ-04: formatDiscordMessage TZ-aware ts", () => {
+  function makeBridgeMessage(overrides: {
+    content?: string;
+    channelId?: string;
+    messageId?: string;
+    username?: string;
+    createdAt?: Date;
+    reference?: { messageId: string } | null;
+  } = {}): Message {
+    const attMap = new Map<string, Attachment>();
+    const collection = {
+      size: 0,
+      values: () => attMap.values(),
+      [Symbol.iterator]: () => attMap.values(),
+      map: <T>(_fn: (att: Attachment) => T): T[] => [],
+    } as unknown as Collection<string, Attachment>;
+    return {
+      content: overrides.content ?? "hello",
+      channelId: overrides.channelId ?? "chan-1",
+      id: overrides.messageId ?? "msg-1",
+      author: { username: overrides.username ?? "human-user", bot: false, id: "user-1" },
+      createdAt: overrides.createdAt ?? new Date("2026-04-30T18:32:51.000Z"),
+      attachments: collection,
+      reference: overrides.reference ?? null,
+      webhookId: null,
+      embeds: [] as Embed[],
+    } as unknown as Message;
+  }
+
+  it("formatDiscordMessage-channel-ts-tz: <channel> tag carries TZ-aware ts when agentTz is America/Los_Angeles", async () => {
+    const { formatDiscordMessage } = await import("../bridge.js");
+    const message = makeBridgeMessage({
+      createdAt: new Date("2026-04-30T18:32:51.000Z"),
+    });
+    // Plan 02 adds the 4th `agentTz` parameter. On main, the extra arg is
+    // ignored and the ts emits ISO UTC — RED.
+    const out = (formatDiscordMessage as unknown as (
+      m: Message,
+      d?: unknown,
+      r?: Message,
+      tz?: string,
+    ) => string)(message, undefined, undefined, "America/Los_Angeles");
+    expect(out).toContain('ts="2026-04-30 11:32:51 PDT"');
+    // Negative assertion: must NOT carry the legacy ISO UTC format anymore.
+    expect(out).not.toContain('ts="2026-04-30T18:32:51.000Z"');
+  });
+
+  it("formatDiscordMessage-replyingTo-ts-tz: <replying-to> tag also carries TZ-aware ts", async () => {
+    const { formatDiscordMessage } = await import("../bridge.js");
+    const referenced = makeBridgeMessage({
+      messageId: "ref-msg-1",
+      content: "earlier message",
+      createdAt: new Date("2026-04-30T17:00:00.000Z"),
+      username: "ref-user",
+    });
+    const message = makeBridgeMessage({
+      createdAt: new Date("2026-04-30T18:32:51.000Z"),
+      reference: { messageId: "ref-msg-1" },
+    });
+    const out = (formatDiscordMessage as unknown as (
+      m: Message,
+      d?: unknown,
+      r?: Message,
+      tz?: string,
+    ) => string)(message, undefined, referenced, "America/Los_Angeles");
+    // <replying-to> ts is the referenced message's createdAt, also TZ-aware.
+    expect(out).toContain('<replying-to');
+    expect(out).toContain('ts="2026-04-30 10:00:00 PDT"');
+  });
+});
