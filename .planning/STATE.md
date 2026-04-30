@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 999.14
-stopped_at: Completed 999.13-02-PLAN.md (Pillar B GREEN — TZ-01..05)
-last_updated: "2026-04-30T21:42:37.665Z"
+status: Ready to execute
+stopped_at: Completed 999.14-00-PLAN.md (Wave 0 — substrate GREEN + MCP-08/09/10 RED tests)
+last_updated: "2026-04-30T23:20:04.475Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 29
   completed_phases: 10
   total_plans: 52
-  completed_plans: 47
+  completed_plans: 48
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.14 (mcp-server-child-process-lifecycle-hardening) — EXECUTING
-Plan: 1 of 3
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -345,6 +345,8 @@ Recent decisions affecting current work:
 - [Phase 999.13]: delegatesBlock appended to END of stable prefix (after fs capability), empty/undefined short-circuits to '' for prompt-cache hash stability
 - [Phase 999.13]: Optional agentTz?: string parameter (not required) — production callers stay unchanged with host-TZ fallback (correct on single-host clawdy per RESEARCH.md Pitfall 3); tests pass agentTz explicitly
 - [Phase 999.13]: Two-layer bad-IANA defense — schema-time refinement on defaults.timezone (Q3=YES, fail-fast) + runtime try/catch fallback in renderAgentVisibleTimestamp (silent UTC degrade)
+- [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — thrower stubs (real .ts files that throw 'not implemented in Wave 0') chosen over inline declare-module shims for MCP-08/09/10 RED tests. Keeps tsc clean AND tests RED at runtime. Wave 1 replaces stub bodies; types stay byte-stable.
+- [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — startOrphanReaper exposes onTickAfter callback as the seam for MCP-09 sweep wiring; sequence pinned by Test 8 (reap completes BEFORE callback runs). Wave 1 plugs sweepStaleBindings into the seam without re-touching orphan-reaper.
 
 ### v2.1 closing decisions (for reference)
 
@@ -500,9 +502,10 @@ Recent decisions affecting current work:
 | Phase 999.13 P00 | 16 min | 3 tasks | 12 files |
 | Phase 999.13 P01 | 22 min | 3 tasks | 6 files |
 | Phase 999.13 P02 | 33 min | 3 tasks | 12 files |
+| Phase 999.14 P00 | 13 min | 6 tasks | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.13-02-PLAN.md (Pillar B GREEN — TZ-01..05)
+Stopped at: Completed 999.14-00-PLAN.md (Wave 0 — substrate GREEN + MCP-08/09/10 RED tests)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals

@@ -920,10 +920,10 @@ Plans:
 
 These three (MCP-08, MCP-09, MCP-10) collectively ensure the cap doesn't pin again. MCP-08 catches Discord-deleted-then-our-call-fails. MCP-09 catches anything-idle-too-long regardless of Discord state. MCP-10 gives operators a manual escape hatch when both pruning paths somehow miss.
 
-**Plans:** 3 plans (will be re-planned to incorporate MCP-08/09/10; existing plans cover only MCP-01..07)
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 999.14-00-PLAN.md — Wave 0: process-tracker + orphan-reaper + proc-scan modules + RED tests (MCP-01/02/03/06 substrate). To extend with: thread-binding sweeper module + MCP-08/09 RED tests.
+- [x] 999.14-00-PLAN.md — Wave 0: process-tracker + orphan-reaper + proc-scan modules + RED tests (MCP-01/02/03/06 substrate). To extend with: thread-binding sweeper module + MCP-08/09 RED tests.
 - [ ] 999.14-01-PLAN.md — Wave 1: daemon boot wiring (MCP-05 boot scan, MCP-03 reaper interval), per-agent register (MCP-01), persistent-handle disconnect (MCP-02), shutdown cleanup (MCP-04). To extend with: MCP-08 cleanup-failure prune, MCP-09 stale-binding sweep, MCP-10 CLI commands.
 - [ ] 999.14-02-PLAN.md — Wave 2: full-suite gate + operator-approved bundled deploy (with 999.13) + 5× restart soak on clawdy (MCP-06/07). To extend smoke: simulate Discord 50001 → registry pruned; force a stale binding → MCP-09 sweeps it.
 
