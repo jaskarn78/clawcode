@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.10-01-PLAN.md (SecretsResolver implementation + RES-01..RES-09 tests)
-last_updated: "2026-04-30T15:22:46.492Z"
+stopped_at: Completed 999.10-02-PLAN.md (boot pre-resolve + 3-callsite wiring)
+last_updated: "2026-04-30T15:35:02.455Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 25
   completed_phases: 9
   total_plans: 41
-  completed_plans: 38
+  completed_plans: 39
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.10 (daemon-op-secret-cache-and-retry-backoff) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 
 ## Performance Metrics
 
@@ -326,6 +326,7 @@ Recent decisions affecting current work:
 - [Phase 999.10]: Plan 01 — Rate-limit early bail at attemptNumber>=2 (first retry fires; subsequent rate-limit hits abort via AbortError); trades retry budget against compounding throttle window.
 - [Phase 999.10]: Plan 01 — Default randomize:true (jitter on by default per Pitfall 1); tests pass randomize:false explicitly for deterministic wall-clock.
 - [Phase 999.10]: Plan 01 — No fake timers in tests; minTimeout:1/maxTimeout:1 keeps wall-clock <500ms without fighting p-retry's setTimeout-based backoff.
+- [Phase 999.10]: Plan 02: One SecretsResolver instance threads through 3 callsites + boot pre-resolve via Promise.allSettled; sync wrapper around warmed cache keeps loader sync-by-design
 
 ### v2.1 closing decisions (for reference)
 
@@ -472,9 +473,10 @@ Recent decisions affecting current work:
 | Phase 999.8 P03 | 10min | 2 tasks | 7 files |
 | Phase 999.10-daemon-op-secret-cache-and-retry-backoff P00 | 2min | 3 tasks | 7 files |
 | Phase 999.10 P01 | 211s | 2 tasks | 2 files |
+| Phase 999.10 P02 | 6.5min | 3 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-04-30
-Stopped at: Completed 999.10-01-PLAN.md (SecretsResolver implementation + RES-01..RES-09 tests)
+Stopped at: Completed 999.10-02-PLAN.md (boot pre-resolve + 3-callsite wiring)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
