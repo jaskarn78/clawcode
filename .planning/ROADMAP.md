@@ -707,8 +707,13 @@ Plans:
 
 **Trigger:** 2026-04-29 operator dashboard inspection during Phase 106 deploy queue — surfaced both the truncation cap and the missing color tier visualization.
 
-**Requirements:** TBD — likely 6-8 (CAP-01..CAP-02, COLOR-01..COLOR-02, TIER-01..TIER-04). Final count depends on tier-maintenance investigation: small if it's "wire up an existing heartbeat", larger if maintenance must be built from scratch.
+**Requirements:** 12 — CAP-01, CAP-02, CAP-03, CAP-04, COLOR-01, COLOR-02, HB-01, HB-02, HB-03, HB-04, HB-05, HB-06
 
-**Plans:** 0 plans (TBD — likely 3 plans: cap removal/config, color+legend, tier maintenance fix/build)
+**Plans:** 3 plans
+
+Plans:
+- [ ] 999.8-01-PLAN.md — Lift 500-node cap on memory-graph IPC (default 5000, optional `limit` clamped [1, 50000]) — CAP-01..CAP-04
+- [ ] 999.8-02-PLAN.md — 4-color tier palette (hot/warm/cold/orphan) + top-right legend with live counts on the dashboard graph — COLOR-01, COLOR-02
+- [ ] 999.8-03-PLAN.md — Restore heartbeat-check discovery via static `CHECK_REGISTRY` (11 modules); fixes silent `checkCount:0` in production — HB-01..HB-06
 
 **Promotion target:** active milestone, will likely become **Phase 107**. Bundle deploy with Phases 105 + 106 if scope stays small.
