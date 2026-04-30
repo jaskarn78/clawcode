@@ -89,10 +89,7 @@ describe("handleMemoryGraphIpc — limit param contract (Phase 999.8 Plan 01)", 
     // place this would return 500 rather than 5000.
     seedMemories(db, 5500);
 
-    const result = handleMemoryGraphIpc({ agent: "fin-acquisition" }, db) as {
-      nodes: Array<{ id: string }>;
-      links: Array<unknown>;
-    };
+    const result = handleMemoryGraphIpc({ agent: "fin-acquisition" }, db);
 
     expect(result.nodes).toHaveLength(5000);
   });
@@ -100,9 +97,7 @@ describe("handleMemoryGraphIpc — limit param contract (Phase 999.8 Plan 01)", 
   it("CAP-02: when DB has fewer rows than the default 5000, returns the actual row count (Pitfall 5)", () => {
     seedMemories(db, 47);
 
-    const result = handleMemoryGraphIpc({ agent: "fin-acquisition" }, db) as {
-      nodes: Array<{ id: string }>;
-    };
+    const result = handleMemoryGraphIpc({ agent: "fin-acquisition" }, db);
 
     // Must NOT be padded to 5000; must equal actual row count.
     expect(result.nodes).toHaveLength(47);
@@ -117,7 +112,7 @@ describe("handleMemoryGraphIpc — limit param contract (Phase 999.8 Plan 01)", 
     const result = handleMemoryGraphIpc(
       { agent: "fin-acquisition", limit: 100 },
       db,
-    ) as { nodes: Array<{ id: string }> };
+    );
 
     expect(result.nodes).toHaveLength(100);
   });
@@ -131,7 +126,7 @@ describe("handleMemoryGraphIpc — limit param contract (Phase 999.8 Plan 01)", 
     const result = handleMemoryGraphIpc(
       { agent: "fin-acquisition", limit: 1 },
       db,
-    ) as { nodes: Array<{ id: string }> };
+    );
 
     expect(result.nodes).toHaveLength(1);
   });
@@ -207,7 +202,7 @@ describe("handleMemoryGraphIpc — limit param contract (Phase 999.8 Plan 01)", 
     const result = handleMemoryGraphIpc(
       { agent: "fin-acquisition", limit: "100" as unknown as number },
       db,
-    ) as { nodes: Array<{ id: string }> };
+    );
 
     // 10 rows present; default cap of 5000 means we just get all 10.
     expect(result.nodes).toHaveLength(10);

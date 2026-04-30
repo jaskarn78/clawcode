@@ -68,6 +68,8 @@ import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.
 import { chunkText, chunkPdf } from "../documents/chunker.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
+// Phase 999.8 Plan 01 — pure handler for memory-graph IPC with configurable LIMIT.
+import { handleMemoryGraphIpc } from "./memory-graph-handler.js";
 import { startOfWeek } from "date-fns";
 import { ConfigWatcher } from "../config/watcher.js";
 import { ConfigReloader } from "./config-reloader.js";
@@ -5911,53 +5913,16 @@ async function routeMethod(
     }
 
     case "memory-graph": {
+      // Phase 999.8 Plan 01 — body extracted into a pure helper so the
+      // optional `limit` param contract (default 5000, range [1, 50000])
+      // is unit-testable without standing up a full MemoryStore. Mirrors
+      // the handleSetModelIpc / invokeMemoryLookup extraction pattern.
       const agentName = validateStringParam(params, "agent");
       const store = manager.getMemoryStore(agentName);
       if (!store) {
         return { nodes: [], links: [] };
       }
-
-      const db = store.getDatabase();
-
-      const memories = db.prepare(`
-        SELECT id, content, source, importance, access_count, tags,
-               created_at, tier
-        FROM memories
-        ORDER BY created_at DESC
-        LIMIT 500
-      `).all() as Array<{
-        id: string; content: string; source: string; importance: number;
-        access_count: number; tags: string; created_at: string; tier: string;
-      }>;
-
-      const nodeIds = [...new Set(memories.map(m => m.id))];
-      const placeholders = nodeIds.map(() => "?").join(",") || "NULL";
-      const allLinks = db.prepare(`
-        SELECT source_id, target_id, link_text
-        FROM memory_links
-        WHERE source_id IN (${placeholders})
-          AND target_id IN (${placeholders})
-      `).all(...nodeIds, ...nodeIds) as Array<{
-        source_id: string; target_id: string; link_text: string;
-      }>;
-
-      return {
-        nodes: memories.map(m => ({
-          id: m.id,
-          content: m.content,
-          source: m.source,
-          importance: m.importance,
-          accessCount: m.access_count,
-          tags: JSON.parse(m.tags) as string[],
-          createdAt: m.created_at,
-          tier: m.tier ?? "warm",
-        })),
-        links: allLinks.map(l => ({
-          source: l.source_id,
-          target: l.target_id,
-          text: l.link_text,
-        })),
-      };
+      return handleMemoryGraphIpc(params, store.getDatabase());
     }
 
     case "agent-create": {
