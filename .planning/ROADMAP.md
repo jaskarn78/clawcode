@@ -906,9 +906,11 @@ Plans:
 
 **Requirements:** [MCP-01 spawn-side process-group wiring, MCP-02 SIGTERM-on-disconnect handler, MCP-03 periodic orphan reaper sweep, MCP-04 graceful daemon-shutdown MCP cleanup, MCP-05 boot-time orphan scan, MCP-06 vitest tests for spawn lifecycle, MCP-07 long-soak verification on clawdy]
 
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [ ] 999.14-00-PLAN.md — Wave 0: process-tracker + orphan-reaper + proc-scan modules + RED tests (MCP-01/02/03/06 substrate)
+- [ ] 999.14-01-PLAN.md — Wave 1: daemon boot wiring (MCP-05 boot scan, MCP-03 reaper interval), per-agent register (MCP-01), persistent-handle disconnect (MCP-02), shutdown cleanup (MCP-04)
+- [ ] 999.14-02-PLAN.md — Wave 2: full-suite gate + operator-approved bundled deploy (with 999.13) + 5× restart soak on clawdy (MCP-06/07)
 
 **Promotion target:** active milestone — high operator impact (recurring incident, takes down all finmentum agents when MariaDB saturates). Sequence: independent of 999.12 and 999.13. Could ship anytime. Pairs with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle.
