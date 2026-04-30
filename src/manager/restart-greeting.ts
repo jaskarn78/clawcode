@@ -227,6 +227,57 @@ export function classifyRestart(prevConsecutiveFailures: number): RestartKind {
 // ---------------------------------------------------------------------------
 
 /**
+ * 2026-04-30 fix — detect when the prior session was dominated by API errors
+ * (auth failures, rate-limit rejections, platform 5xx) so we skip the Haiku
+ * summarization and use a verbatim recovery message instead.
+ *
+ * Background: when Anthropic's platform has an incident or the org's quota is
+ * tight, agents' `query()` calls fail mid-turn. The Discord bridge surfaces
+ * these failures as bot-authored messages in the agent's channel (e.g.
+ * "Failed to authenticate. API Error: 403 ..."). On restart, the
+ * conversation history handed to Haiku for summarization is dominated by
+ * those error strings, and Haiku reliably produces a misleading one-liner
+ * like "Credit balance is too low" — even on OAuth/Max accounts where
+ * "credit balance" is not a real concept.
+ *
+ * Pattern set is intentionally generous: any one of these in a turn's
+ * content marks the turn as an "error turn." When ≥50% of turns are error
+ * turns, the session is treated as API-error-dominated.
+ *
+ * Pure function — no I/O, no logging.
+ */
+const API_ERROR_FINGERPRINTS: readonly RegExp[] = [
+  /\bAPI Error:\s*\d{3}\b/i,
+  /\bFailed to authenticate\b/i,
+  /\bpermission_error\b/i,
+  /\brate_limit_error\b/i,
+  /\boverloaded_error\b/i,
+  /\bauthentication_error\b/i,
+  /\bCredit balance is too low\b/i,
+  /\bnot a member of the organization\b/i,
+  /\b(401|403|429|500|502|503|529)\s+error\b/i,
+];
+
+export function isApiErrorDominatedSession(
+  turns: readonly ConversationTurn[],
+): boolean {
+  if (turns.length === 0) return false;
+  const errorTurnCount = turns.filter((t) =>
+    API_ERROR_FINGERPRINTS.some((re) => re.test(t.content)),
+  ).length;
+  return errorTurnCount * 2 >= turns.length;
+}
+
+/**
+ * Verbatim recovery message used when the prior session was API-error-
+ * dominated. Stays under DESCRIPTION_MAX_CHARS, OAuth/Max-friendly (no
+ * "credit balance" phrasing), and tells the operator clearly that nothing
+ * useful happened in the prior session.
+ */
+export const PLATFORM_ERROR_RECOVERY_MESSAGE =
+  "I'm back. My prior session ran into platform errors (API auth/rate/load) and didn't make progress — nothing to recap. Ready to continue.";
+
+/**
  * Assemble the Haiku prompt for a Discord-tuned prior-session summary.
  * Enforces the <500-char target through explicit instruction; the embed
  * builder truncates as a belt-and-suspenders safeguard.
@@ -437,22 +488,35 @@ export async function sendRestartGreeting(
   }
 
   if (summary === undefined) {
-    // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
-    //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
-    //    explicitly delegates the timer to the caller). On timeout / SDK
-    //    error / abort / empty-string we stay silent — D-11 forbids a
-    //    fallback greeting.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), summaryTimeoutMs);
-    try {
-      summary = await deps.summarize(
-        buildRestartGreetingPrompt(turns, config, restartKind),
-        { signal: controller.signal },
+    // 2026-04-30 fix — bypass Haiku summarization when the prior session is
+    // dominated by API errors (auth/rate-limit/platform 5xx). Without this,
+    // Haiku gets a transcript full of error strings and produces misleading
+    // summaries like "Credit balance is too low" — confusing on OAuth/Max
+    // where the operator doesn't even have a literal credit balance.
+    if (isApiErrorDominatedSession(turns)) {
+      deps.log.info(
+        { agent: agentName, turnCount: turns.length },
+        "[greeting] prior session was API-error-dominated; using verbatim platform-error recovery message",
       );
-    } catch {
-      return { kind: "skipped-empty-state" };
-    } finally {
-      clearTimeout(timer);
+      summary = PLATFORM_ERROR_RECOVERY_MESSAGE;
+    } else {
+      // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
+      //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
+      //    explicitly delegates the timer to the caller). On timeout / SDK
+      //    error / abort / empty-string we stay silent — D-11 forbids a
+      //    fallback greeting.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), summaryTimeoutMs);
+      try {
+        summary = await deps.summarize(
+          buildRestartGreetingPrompt(turns, config, restartKind),
+          { signal: controller.signal },
+        );
+      } catch {
+        return { kind: "skipped-empty-state" };
+      } finally {
+        clearTimeout(timer);
+      }
     }
   }
 

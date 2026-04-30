@@ -26,6 +26,8 @@ import {
   classifyRestart,
   isForkAgent,
   isSubagentThread,
+  isApiErrorDominatedSession,
+  PLATFORM_ERROR_RECOVERY_MESSAGE,
   buildRestartGreetingPrompt,
   buildCleanRestartEmbed,
   buildCrashRecoveryEmbed,
@@ -527,5 +529,122 @@ describe("buildRestartGreetingPrompt", () => {
       "crash-suspected",
     );
     expect(prompt).toContain("unexpected shutdown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-04-30 fix — API-error-dominated session detector + bypass
+// ---------------------------------------------------------------------------
+
+describe("isApiErrorDominatedSession", () => {
+  it("returns false for empty turn list", () => {
+    expect(isApiErrorDominatedSession([])).toBe(false);
+  });
+
+  it("returns false when all turns are normal content", () => {
+    const turns = [
+      makeTurn({ role: "user", content: "Hello, can you help me?" }),
+      makeTurn({ role: "assistant", content: "Sure, what's up?" }),
+      makeTurn({ role: "user", content: "Build me a thing." }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(false);
+  });
+
+  it("returns true when ≥50% of turns match an API-error fingerprint", () => {
+    const turns = [
+      makeTurn({ role: "assistant", content: "Failed to authenticate. API Error: 403" }),
+      makeTurn({ role: "assistant", content: "API Error: 529 overloaded_error" }),
+      makeTurn({ role: "user", content: "Hello?" }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(true);
+  });
+
+  it("detects 'Credit balance is too low' (the operator-observed false positive)", () => {
+    const turns = [
+      makeTurn({ role: "assistant", content: "Credit balance is too low" }),
+      makeTurn({ role: "assistant", content: "Credit balance is too low" }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(true);
+  });
+
+  it("detects permission_error verbatim Anthropic phrasing", () => {
+    const turns = [
+      makeTurn({
+        role: "assistant",
+        content: '{"type":"error","error":{"type":"permission_error","message":"not a member of the organization"}}',
+      }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(true);
+  });
+
+  it("returns false when only 1 of 3 turns is an error (below 50% threshold)", () => {
+    const turns = [
+      makeTurn({ role: "user", content: "Hello" }),
+      makeTurn({ role: "assistant", content: "Working on it..." }),
+      makeTurn({ role: "assistant", content: "Failed to authenticate. API Error: 403" }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(false);
+  });
+});
+
+describe("sendRestartGreeting — API-error-dominated session bypass", () => {
+  it("uses verbatim PLATFORM_ERROR_RECOVERY_MESSAGE and skips Haiku when prior session is dominated by API errors", async () => {
+    const errorTurns = [
+      makeTurn({ role: "assistant", content: "Failed to authenticate. API Error: 403" }),
+      makeTurn({ role: "assistant", content: "API Error: 529 overloaded_error" }),
+      makeTurn({ role: "assistant", content: "Credit balance is too low" }),
+    ];
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([makeSession()], { "sess-abc": errorTurns }),
+      summarize: summarizeSpy,
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "crash-suspected",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    // Webhook send was called with an embed whose description is the verbatim recovery message
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+
+  it("verbatim recovery message does NOT contain 'Credit balance' (OAuth/Max-friendly)", () => {
+    expect(PLATFORM_ERROR_RECOVERY_MESSAGE).not.toContain("Credit balance");
+    expect(PLATFORM_ERROR_RECOVERY_MESSAGE).not.toContain("credit balance");
+    expect(PLATFORM_ERROR_RECOVERY_MESSAGE.length).toBeLessThanOrEqual(DESCRIPTION_MAX_CHARS);
+  });
+
+  it("normal session summarization is unchanged when turns are NOT error-dominated", async () => {
+    const normalTurns = [
+      makeTurn({ role: "user", content: "Build me a thing." }),
+      makeTurn({ role: "assistant", content: "Working on it. Here's the plan." }),
+    ];
+    const summarizeSpy = vi.fn().mockResolvedValue("I was building a thing.");
+    const deps = makeDeps({
+      conversationStore: stubStore([makeSession()], { "sess-abc": normalTurns }),
+      summarize: summarizeSpy,
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "crash-suspected",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).toHaveBeenCalledTimes(1);
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe("I was building a thing.");
   });
 });
