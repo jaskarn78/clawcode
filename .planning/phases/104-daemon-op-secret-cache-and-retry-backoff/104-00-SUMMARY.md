@@ -1,5 +1,5 @@
 ---
-phase: 999.10-daemon-op-secret-cache-and-retry-backoff
+phase: 104-daemon-op-secret-cache-and-retry-backoff
 plan: "00"
 subsystem: infra
 tags: [secrets, 1password, retry, caching, p-retry, vitest, scaffolding]
@@ -13,10 +13,10 @@ provides:
   - vitest scaffold for daemon-boot graceful degradation (BOOT-DEGRADED-01)
   - vitest scaffold for secrets-status IPC handler (IPC-SECSTATUS-01..03)
 affects:
-  - 999.10-01 (Wave 1 — SecretsResolver class + retry/backoff)
-  - 999.10-02 (Wave 2 — daemon boot pre-resolve + callsite migration)
-  - 999.10-03 (Wave 3 — ConfigWatcher invalidation + recovery wiring)
-  - 999.10-04 (Wave 3 — secrets-status IPC handler)
+  - 104-01 (Wave 1 — SecretsResolver class + retry/backoff)
+  - 104-02 (Wave 2 — daemon boot pre-resolve + callsite migration)
+  - 104-03 (Wave 3 — ConfigWatcher invalidation + recovery wiring)
+  - 104-04 (Wave 3 — secrets-status IPC handler)
 
 tech-stack:
   added: ["p-retry@8.0.0"]
@@ -50,7 +50,7 @@ duration: ~2min
 completed: 2026-04-30
 ---
 
-# Phase 999.10 Plan 00: Wave 0 Scaffolding Summary
+# Phase 104 Plan 00: Wave 0 Scaffolding Summary
 
 **p-retry@8.0.0 installed and 5 vitest test files planted with 16 spec-ID-named it.todo scaffolds covering RES-01..RES-09, WATCH-01/02, CALL-01, BOOT-DEGRADED-01, and IPC-SECSTATUS-01..03 — Wave 1+ now has automated verify command targets without re-bootstrapping tests.**
 
@@ -123,7 +123,7 @@ None — no external service configuration required. p-retry is a pure-JS librar
 
 - **Wave 1 (Plan 01) ready:** All 5 test files exist with the spec IDs Wave 1 needs to turn green. Wave 1's executor only writes the production `src/manager/secrets-resolver.ts` module + replaces `it.todo` with real `it` blocks.
 - **No blockers.** p-retry resolves; vitest sees the new files; no premature imports.
-- **Validation chain intact:** Per `999.10-VALIDATION.md`, every requirement (SEC-01..SEC-07) now has at least one automated verify command pointing at a real test file (todo today, real assertion in Wave 1+).
+- **Validation chain intact:** Per `104-VALIDATION.md`, every requirement (SEC-01..SEC-07) now has at least one automated verify command pointing at a real test file (todo today, real assertion in Wave 1+).
 
 ## Self-Check
 
@@ -144,5 +144,5 @@ Commits exist:
 ## Self-Check: PASSED
 
 ---
-*Phase: 999.10-daemon-op-secret-cache-and-retry-backoff*
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
 *Completed: 2026-04-30*

@@ -1,11 +1,11 @@
 ---
-phase: 999.10-daemon-op-secret-cache-and-retry-backoff
+phase: 104-daemon-op-secret-cache-and-retry-backoff
 plan: "02"
 subsystem: secrets
 tags: [secrets, 1password, daemon-boot, di-pure, fail-open, sec-01, sec-04]
 
 requires:
-  - 999.10-01 (SecretsResolver class — public API consumed by all 3 callsites)
+  - 104-01 (SecretsResolver class — public API consumed by all 3 callsites)
   - p-retry@^8.0.0 (already installed in Wave 0)
 provides:
   - One SecretsResolver instance constructed at startDaemon step 4a, threaded through 3 callsites + ConfigWatcher
@@ -15,8 +15,8 @@ provides:
   - secretsResolver exposed in startDaemon return value + Promise<...> type — Wave 3 hook surface
   - CALL-01 + BOOT-DEGRADED-01 + COLL-01..COLL-07 all green (10 new tests)
 affects:
-  - 999.10-03 (Wave 3 — ConfigWatcher invalidation hook will call secretsResolver.invalidate via the exposed return-value field)
-  - 999.10-04 (Wave 3 — secrets-status IPC handler will call secretsResolver.snapshot())
+  - 104-03 (Wave 3 — ConfigWatcher invalidation hook will call secretsResolver.invalidate via the exposed return-value field)
+  - 104-04 (Wave 3 — secrets-status IPC handler will call secretsResolver.snapshot())
 
 tech-stack:
   added: []
@@ -50,7 +50,7 @@ duration: ~6.5min
 completed: 2026-04-30
 ---
 
-# Phase 999.10 Plan 02: Boot pre-resolve + 3-callsite SecretsResolver wiring Summary
+# Phase 104 Plan 02: Boot pre-resolve + 3-callsite SecretsResolver wiring Summary
 
 **Wired one SecretsResolver instance through all three op:// resolution call sites (Discord botToken, loader sync resolver, per-agent mcpEnvOverrides) plus a boot-time Promise.allSettled pre-resolve fed by collectAllOpRefs(config) — daemon.ts now constructs exactly one resolver, contains zero stray `op read` execSync calls, and exposes secretsResolver in startDaemon's return value for Wave 3 to wire ConfigWatcher invalidation + IPC against.**
 
@@ -214,6 +214,6 @@ Commits exist:
 ## Self-Check: PASSED
 
 ---
-*Phase: 999.10-daemon-op-secret-cache-and-retry-backoff*
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
 *Plan: 02 — boot pre-resolve + 3-callsite SecretsResolver wiring*
 *Completed: 2026-04-30*

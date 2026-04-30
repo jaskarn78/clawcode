@@ -1,5 +1,5 @@
 ---
-phase: 999.10-daemon-op-secret-cache-and-retry-backoff
+phase: 104-daemon-op-secret-cache-and-retry-backoff
 plan: "01"
 subsystem: secrets
 tags: [secrets, 1password, cache, retry, p-retry, di-pure, vitest]
@@ -13,9 +13,9 @@ provides:
   - Public method surface for Wave 2 callsite migration: resolve / getCached / preResolveAll / invalidate / invalidateAll / snapshot
   - 9/9 RES-XX tests green (SEC-02/03/06/07 unit-verified)
 affects:
-  - 999.10-02 (Wave 2 — daemon boot pre-resolve + 3 callsite swaps now have a stable target)
-  - 999.10-03 (Wave 3 — ConfigWatcher invalidation hook + recovery wiring will call invalidate / invalidateAll)
-  - 999.10-04 (Wave 3 — secrets-status IPC handler will call snapshot())
+  - 104-02 (Wave 2 — daemon boot pre-resolve + 3 callsite swaps now have a stable target)
+  - 104-03 (Wave 3 — ConfigWatcher invalidation hook + recovery wiring will call invalidate / invalidateAll)
+  - 104-04 (Wave 3 — secrets-status IPC handler will call snapshot())
 
 tech-stack:
   added: []
@@ -45,7 +45,7 @@ duration: ~3.5min
 completed: 2026-04-30
 ---
 
-# Phase 999.10 Plan 01: SecretsResolver class + RES-01..RES-09 tests Summary
+# Phase 104 Plan 01: SecretsResolver class + RES-01..RES-09 tests Summary
 
 **Built the in-memory `SecretsResolver` class — URI-keyed `Map` cache + inflight Promise dedup + p-retry@8 retry with rate-limit early-bail and empty-string AbortError; 9/9 RES-XX behavior tests green in <500ms wall-clock.**
 
@@ -128,7 +128,7 @@ Each task was committed atomically:
 
 ## Files Created/Modified
 
-- `src/manager/secrets-resolver.ts` — NEW, 243 lines. SecretsResolver class + 4 type/interface exports. JSDoc framing references Phase 999.10 + DI-pure-test contract; per-method JSDoc covers resolve/getCached/preResolveAll/invalidate/invalidateAll/snapshot.
+- `src/manager/secrets-resolver.ts` — NEW, 243 lines. SecretsResolver class + 4 type/interface exports. JSDoc framing references Phase 104 + DI-pure-test contract; per-method JSDoc covers resolve/getCached/preResolveAll/invalidate/invalidateAll/snapshot.
 - `src/manager/__tests__/secrets-resolver.test.ts` — MODIFIED, 16 → 301 lines. 9 `it.todo` placeholders replaced with real DI-pure tests using vi.fn-mocked opRead and a pino-on-Writable test transport for SEC-07 leak detection.
 
 ## Decisions Made
@@ -201,5 +201,5 @@ Commits exist:
 ## Self-Check: PASSED
 
 ---
-*Phase: 999.10-daemon-op-secret-cache-and-retry-backoff*
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
 *Completed: 2026-04-30*

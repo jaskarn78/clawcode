@@ -1,5 +1,5 @@
 ---
-phase: 999.11
+phase: 105
 slug: trigger-policy-default-allow-and-coalescer-storm-fix
 status: draft
 nyquist_compliant: false
@@ -7,7 +7,7 @@ wave_0_complete: false
 created: 2026-04-30
 ---
 
-# Phase 999.11 — Validation Strategy
+# Phase 105 — Validation Strategy
 
 > Per-phase validation contract for feedback sampling during execution.
 
@@ -21,7 +21,7 @@ created: 2026-04-30
 | **Config file** | {path or "none — Wave 0 installs"} |
 | **Quick run command** | `{quick command}` |
 | **Full suite command** | `{full command}` |
-| **Estimated runtime** | ~999.11 seconds |
+| **Estimated runtime** | ~105 seconds |
 
 ---
 
@@ -30,7 +30,7 @@ created: 2026-04-30
 - **After every task commit:** Run `{quick run command}`
 - **After every plan wave:** Run `{full suite command}`
 - **Before `/gsd:verify-work`:** Full suite must be green
-- **Max feedback latency:** 999.11 seconds
+- **Max feedback latency:** 105 seconds
 
 ---
 
@@ -38,7 +38,7 @@ created: 2026-04-30
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 999.11-01-01 | 01 | 1 | REQ-{XX} | unit | `{command}` | ✅ / ❌ W0 | ⬜ pending |
+| 105-01-01 | 01 | 1 | REQ-{XX} | unit | `{command}` | ✅ / ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -70,7 +70,7 @@ created: 2026-04-30
 - [ ] Sampling continuity: no 3 consecutive tasks without automated verify
 - [ ] Wave 0 covers all MISSING references
 - [ ] No watch-mode flags
-- [ ] Feedback latency < 999.11s
+- [ ] Feedback latency < 105s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** {pending / approved YYYY-MM-DD}

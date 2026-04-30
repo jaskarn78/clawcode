@@ -1,5 +1,5 @@
 ---
-phase: 999.11-trigger-policy-default-allow-and-coalescer-storm-fix
+phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix
 plan: 01
 subsystem: triggers
 tags: [policy, default-allow, daemon-boot, trigger-engine, infrastructure]
@@ -10,13 +10,13 @@ requires:
     provides: TriggerEngine.ingest() ternary that selects evaluatePolicy() default-allow when this.evaluator is undefined (engine.ts:130-132)
   - phase: 62-trigger-policies
     provides: PolicyEvaluator class + reloadEvaluator hot-reload swap; evaluatePolicy() function-form default-allow at policy-evaluator.ts:169-188
-  - phase: 999.11-00
+  - phase: 105-00
     provides: POLICY-01 + POLICY-02 regression-lock tests (engine.test.ts) that pin the ternary's default-allow path Plan 01 exploits
 provides:
   - "Daemon boot fallback to default-allow when ~/.clawcode/policies.yaml is missing (POLICY-01)"
   - "Hot-reload back-compat: PolicyWatcher.onReload still swaps undefined → real evaluator via reloadEvaluator (POLICY-02)"
   - "Replacement boot log line that is explicit about default-allow semantic + points to policies.yaml path (POLICY-03)"
-affects: [999.11-03]
+affects: [105-03]
 
 # Tech tracking
 tech-stack:
@@ -43,7 +43,7 @@ duration: 5 min
 completed: 2026-04-30
 ---
 
-# Phase 999.11 Plan 01: POLICY GREEN — daemon boot default-allow fallback
+# Phase 105 Plan 01: POLICY GREEN — daemon boot default-allow fallback
 
 **Single 13-line surgical edit to `src/manager/daemon.ts` ENOENT branch — set `bootEvaluator = undefined` and replace the misleading "using default policy" log line with explicit default-allow semantic, unblocking every scheduler/reminder/calendar/inbox event that has been silently dropped since `~/.clawcode/policies.yaml` went missing.**
 
@@ -96,7 +96,7 @@ completed: 2026-04-30
 +      // function-form (evaluatePolicy) by leaving bootEvaluator undefined.
 +      // The engine ternary at engine.ts:130-132 selects evaluatePolicy() when
 +      // this.evaluator is undefined, which allows any event whose targetAgent
-+      // is in configuredAgents (Phase 999.11 POLICY-01..03).
++      // is in configuredAgents (Phase 105 POLICY-01..03).
 +      // PolicyWatcher.onReload still wires reloadEvaluator(real) once the
 +      // operator drops a policies.yaml at policyPath — back-compat preserved.
 +      bootEvaluator = undefined;
@@ -177,5 +177,5 @@ Verified plan asserts:
 - Three plan verification greps all pass (`default-allow evaluator` present, type widened, empty-rules construction removed)
 
 ---
-*Phase: 999.11-trigger-policy-default-allow-and-coalescer-storm-fix*
+*Phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix*
 *Completed: 2026-04-30*

@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
+status: Executing Phase 999.14
 stopped_at: Completed 999.13-02-PLAN.md (Pillar B GREEN — TZ-01..05)
-last_updated: "2026-04-30T20:31:44.843Z"
+last_updated: "2026-04-30T21:42:37.665Z"
 last_activity: 2026-04-30
 progress:
-  total_phases: 28
+  total_phases: 29
   completed_phases: 10
-  total_plans: 49
+  total_plans: 52
   completed_plans: 47
 ---
 
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 999.13 — extendible-specialist-delegate-map-and-agent-context-timezone-rendering
+**Current focus:** Phase 999.14 — mcp-server-child-process-lifecycle-hardening
 
 ## Current Position
 
-Phase: 999.13 (extendible-specialist-delegate-map-and-agent-context-timezone-rendering) — EXECUTING
-Plan: 4 of 4
+Phase: 999.14 (mcp-server-child-process-lifecycle-hardening) — EXECUTING
+Plan: 1 of 3
 
 ## Performance Metrics
 
@@ -320,22 +320,22 @@ Recent decisions affecting current work:
 - [Phase 999.8]: Plan 03 — Static heartbeat-check registry replaces dynamic readdir+import scan; bundle now contains all 11 checks (was 0 due to tsup splitting:false). Boot log emits checkCount:11 + checks:[...] + 'heartbeat checks registered'.
 - [Phase 999.8]: Plan 03 — NO try/catch around static imports (Pitfall 7); fail-fast at boot is the contract. The prior silent-skip enabled the bug to live in prod for ~10 weeks.
 - [Phase 999.8]: Plan 03 — Lockstep regression test with hand-maintained EXPECTED_FILENAMES forces 3-place updates (import, array entry, test map) when adding a check; future drift becomes a CI failure.
-- [Phase 999.10-daemon-op-secret-cache-and-retry-backoff]: Wave 0 plants spec-ID-named it.todo scaffolds (vs it.skip or stub it) so vitest reports them as todos rather than failures or false-greens — Wave 1+ replaces each with a real it block
-- [Phase 999.10-daemon-op-secret-cache-and-retry-backoff]: p-retry@8.0.0 chosen over hand-rolled retry loop — jitter, AbortError contract, and onFailedAttempt hook are exactly what is hardest to get right under boot-storm conditions
-- [Phase 999.10]: Plan 01 — p-retry v8 RetryContext shape (ctx.error.message + ctx.attemptNumber, NOT err.message); plan's older p-retry signature drift fixed during impl.
-- [Phase 999.10]: Plan 01 — Rate-limit early bail at attemptNumber>=2 (first retry fires; subsequent rate-limit hits abort via AbortError); trades retry budget against compounding throttle window.
-- [Phase 999.10]: Plan 01 — Default randomize:true (jitter on by default per Pitfall 1); tests pass randomize:false explicitly for deterministic wall-clock.
-- [Phase 999.10]: Plan 01 — No fake timers in tests; minTimeout:1/maxTimeout:1 keeps wall-clock <500ms without fighting p-retry's setTimeout-based backoff.
-- [Phase 999.10]: Plan 02: One SecretsResolver instance threads through 3 callsites + boot pre-resolve via Promise.allSettled; sync wrapper around warmed cache keeps loader sync-by-design
-- [Phase 999.10]: Plan 04 IPC handler factored into pure module (secrets-ipc-handler.ts) for unit-testability without booting IPC server; closure-intercept-before-routeMethod pattern preserves the 24-arg routeMethod signature
-- [Phase 999.10]: Plan 03: applySecretsDiff bridge factored into secrets-watcher-bridge.ts (RECOMMENDED) — daemon.ts onChange delegates a single line; tests import production code directly (no shape-drift risk).
-- [Phase 999.10]: Plan 03: Recovery deps invalidate wired at mcp-reconnect.ts construction site (not daemon.ts) — daemon only calls heartbeatRunner.setSecretsResolver. Threading via CheckContext mirrors setThreadManager / setTaskStore pattern; minimal cross-cutting change.
-- [Phase 999.11]: Renamed plan's MC-6 to MC-7 due to existing label clash in message-coalescer.test.ts
-- [Phase 999.11]: POLICY tests are regression locks (pass on main); driver-RED for POLICY lives at daemon boot site verified by build smoke
-- [Phase 999.11]: Added HARD_CEILING to mocked unbounded recursion in CO-10/CO-11 to prevent vitest worker OOM on current main
-- [Phase 999.11]: Bridge-side idempotent guard placement (formatCoalescedPayload, not coalescer.addMessage) — Keeps MessageCoalescer content-agnostic per RESEARCH.md Pattern 2; wrapper-detection paired with wrapper-emission
-- [Phase 999.11]: Layered defense order: depth cap → hasActiveTurn gate → idempotent format — Cap is cheapest (single integer comparison) and runs first; gate is method call so second; format only on actual drain. If both cap and gate would fire, cap wins
-- [Phase 999.11]: MessageCoalescer.requeue bypasses perAgentCap entirely — Messages were already accepted on initial addMessage; re-checking would silently drop them. Per RESEARCH.md Pitfall 3
+- [Phase 104-daemon-op-secret-cache-and-retry-backoff]: Wave 0 plants spec-ID-named it.todo scaffolds (vs it.skip or stub it) so vitest reports them as todos rather than failures or false-greens — Wave 1+ replaces each with a real it block
+- [Phase 104-daemon-op-secret-cache-and-retry-backoff]: p-retry@8.0.0 chosen over hand-rolled retry loop — jitter, AbortError contract, and onFailedAttempt hook are exactly what is hardest to get right under boot-storm conditions
+- [Phase 104]: Plan 01 — p-retry v8 RetryContext shape (ctx.error.message + ctx.attemptNumber, NOT err.message); plan's older p-retry signature drift fixed during impl.
+- [Phase 104]: Plan 01 — Rate-limit early bail at attemptNumber>=2 (first retry fires; subsequent rate-limit hits abort via AbortError); trades retry budget against compounding throttle window.
+- [Phase 104]: Plan 01 — Default randomize:true (jitter on by default per Pitfall 1); tests pass randomize:false explicitly for deterministic wall-clock.
+- [Phase 104]: Plan 01 — No fake timers in tests; minTimeout:1/maxTimeout:1 keeps wall-clock <500ms without fighting p-retry's setTimeout-based backoff.
+- [Phase 104]: Plan 02: One SecretsResolver instance threads through 3 callsites + boot pre-resolve via Promise.allSettled; sync wrapper around warmed cache keeps loader sync-by-design
+- [Phase 104]: Plan 04 IPC handler factored into pure module (secrets-ipc-handler.ts) for unit-testability without booting IPC server; closure-intercept-before-routeMethod pattern preserves the 24-arg routeMethod signature
+- [Phase 104]: Plan 03: applySecretsDiff bridge factored into secrets-watcher-bridge.ts (RECOMMENDED) — daemon.ts onChange delegates a single line; tests import production code directly (no shape-drift risk).
+- [Phase 104]: Plan 03: Recovery deps invalidate wired at mcp-reconnect.ts construction site (not daemon.ts) — daemon only calls heartbeatRunner.setSecretsResolver. Threading via CheckContext mirrors setThreadManager / setTaskStore pattern; minimal cross-cutting change.
+- [Phase 105]: Renamed plan's MC-6 to MC-7 due to existing label clash in message-coalescer.test.ts
+- [Phase 105]: POLICY tests are regression locks (pass on main); driver-RED for POLICY lives at daemon boot site verified by build smoke
+- [Phase 105]: Added HARD_CEILING to mocked unbounded recursion in CO-10/CO-11 to prevent vitest worker OOM on current main
+- [Phase 105]: Bridge-side idempotent guard placement (formatCoalescedPayload, not coalescer.addMessage) — Keeps MessageCoalescer content-agnostic per RESEARCH.md Pattern 2; wrapper-detection paired with wrapper-emission
+- [Phase 105]: Layered defense order: depth cap → hasActiveTurn gate → idempotent format — Cap is cheapest (single integer comparison) and runs first; gate is method call so second; format only on actual drain. If both cap and gate would fire, cap wins
+- [Phase 105]: MessageCoalescer.requeue bypasses perAgentCap entirely — Messages were already accepted on initial addMessage; re-checking would silently drop them. Per RESEARCH.md Pitfall 3
 - [Phase 999.13]: Q1 LOCKED YES: conversation-brief date slice → TZ-aware (operator-perceived date)
 - [Phase 999.13]: Q2 LOCKED YES: dream-prompt-builder timestamps → TZ-aware (dream-pass agent reads as agent-visible context)
 - [Phase 999.13]: Q3 LOCKED YES: defaults.timezone gets schema-time IANA TZ pre-validation (5-line zod refinement)
@@ -489,14 +489,14 @@ Recent decisions affecting current work:
 | Phase 999.8 P01 | 14min | 2 tasks | 3 files |
 | Phase 999.8 P02 | 20min | 2 tasks | 4 files |
 | Phase 999.8 P03 | 10min | 2 tasks | 7 files |
-| Phase 999.10-daemon-op-secret-cache-and-retry-backoff P00 | 2min | 3 tasks | 7 files |
-| Phase 999.10 P01 | 211s | 2 tasks | 2 files |
-| Phase 999.10 P02 | 6.5min | 3 tasks | 5 files |
-| Phase 999.10 P04 | 5min | 3 tasks | 4 files |
-| Phase 999.10 P03 | 6min | 2 tasks | 8 files |
-| Phase 999.11 P00 | 18 min | 3 tasks | 3 files |
-| Phase 999.11 P01 | 5 min | 2 tasks | 1 files |
-| Phase 999.11 P02 | 6 min | 3 tasks | 2 files |
+| Phase 104-daemon-op-secret-cache-and-retry-backoff P00 | 2min | 3 tasks | 7 files |
+| Phase 104 P01 | 211s | 2 tasks | 2 files |
+| Phase 104 P02 | 6.5min | 3 tasks | 5 files |
+| Phase 104 P04 | 5min | 3 tasks | 4 files |
+| Phase 104 P03 | 6min | 2 tasks | 8 files |
+| Phase 105 P00 | 18 min | 3 tasks | 3 files |
+| Phase 105 P01 | 5 min | 2 tasks | 1 files |
+| Phase 105 P02 | 6 min | 3 tasks | 2 files |
 | Phase 999.13 P00 | 16 min | 3 tasks | 12 files |
 | Phase 999.13 P01 | 22 min | 3 tasks | 6 files |
 | Phase 999.13 P02 | 33 min | 3 tasks | 12 files |

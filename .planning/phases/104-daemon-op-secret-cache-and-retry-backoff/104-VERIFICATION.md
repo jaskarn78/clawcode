@@ -1,12 +1,12 @@
 ---
-phase: 999.10-daemon-op-secret-cache-and-retry-backoff
+phase: 104-daemon-op-secret-cache-and-retry-backoff
 verified: 2026-04-30T16:00:00Z
 status: passed
 score: 7/7 must-haves (SEC-01..SEC-07 all satisfied)
 re_verification: false
 ---
 
-# Phase 999.10: Daemon op:// Secret Cache + Retry/Backoff — Verification Report
+# Phase 104: Daemon op:// Secret Cache + Retry/Backoff — Verification Report
 
 **Phase Goal:** Resolve all `op://` references in clawcode.yaml once at daemon boot into an in-memory map, inject literal values into agent envs at spawn so restarts re-use the cache without re-hitting the 1Password API. Add exponential backoff (1s/2s/4s, 3 attempts) on `op read` failures so transient rate-limits do not crash-fail an agent.
 

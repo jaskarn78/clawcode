@@ -1,4 +1,4 @@
-# Phase 999.11: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix — Research
+# Phase 105: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix — Research
 
 **Researched:** 2026-04-30
 **Domain:** Daemon hot-path infrastructure — trigger policy boot fallback + Discord bridge coalescer recursion
@@ -28,7 +28,7 @@
 - Heartbeat inbox 10s timeout → **Phase 999.12**
 - Per-turn API latency telemetry → backlog
 - Async correlation-ID-based reply path → Phase 999.2 longer-term
-- 1Password rate limiting → fixed in Phase 999.10
+- 1Password rate limiting → fixed in Phase 104
 - Reminder-poller MySQL "too many connections" → separate openclaw cron, not clawcode
 - `policies.yaml` template auto-install → superseded by default-allow fallback
 - Policy DSL changes — schema unchanged
@@ -561,7 +561,7 @@ This phase is purely internal refactor of existing code; no new tools, services,
   - `src/discord/__tests__/message-coalescer.test.ts` — existing MC-1..MC-5 fixtures
   - `src/triggers/__tests__/policy-evaluator.test.ts:240-345` — existing class + function tests
   - `src/manager/__tests__/persistent-session-queue.test.ts:140-175` — existing QUEUE_FULL throw tests
-- `.planning/phases/999.11-trigger-policy-default-allow-and-coalescer-storm-fix/999.11-CONTEXT.md` — phase scope, decisions, repro traces (2026-04-30)
+- `.planning/phases/105-trigger-policy-default-allow-and-coalescer-storm-fix/105-CONTEXT.md` — phase scope, decisions, repro traces (2026-04-30)
 - `.planning/config.json` — `workflow.nyquist_validation: true`, `commit_docs: true`
 
 ### Secondary (MEDIUM confidence)

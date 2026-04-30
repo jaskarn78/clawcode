@@ -1,12 +1,12 @@
 ---
-phase: 999.11-trigger-policy-default-allow-and-coalescer-storm-fix
+phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix
 plan: 02
 subsystem: discord-bridge
 tags: [coalescer, queue-full, recursion-cap, idempotent, hot-path, storm-fix]
 
 # Dependency graph
 requires:
-  - phase: 999.11-00
+  - phase: 105-00
     provides: CO-7, CO-9, CO-10, CO-11, MC-7 RED tests + createBridge sessionManager.hasActiveTurn mock
   - phase: 100-fu-message-coalescer
     provides: MessageCoalescer + DiscordBridge.streamAndPostResponse drain block (the storm site)
@@ -18,7 +18,7 @@ provides:
   - "hasActiveTurn drain-deferral gate — defer drain when in-flight turn occupies the queue"
   - "MessageCoalescer.requeue(name, msgs) — push-back without perAgentCap re-check"
   - "Bounded log output during QUEUE_FULL storm scenarios (≤MAX_DRAIN_DEPTH info + 1 warn)"
-affects: [999.11-03]
+affects: [105-03]
 
 # Tech tracking
 tech-stack:
@@ -53,7 +53,7 @@ duration: 6 min
 completed: 2026-04-30
 ---
 
-# Phase 999.11 Plan 02: COAL GREEN — Coalescer Storm Fix Summary
+# Phase 105 Plan 02: COAL GREEN — Coalescer Storm Fix Summary
 
 **Layered defense against the QUEUE_FULL coalescer recursive storm: idempotent wrapper guard, hasActiveTurn drain-deferral gate, MAX_DRAIN_DEPTH=3 cap, and MessageCoalescer.requeue API — Wave 0 RED tests CO-7/CO-9/CO-10/CO-11/MC-7 all flip GREEN, no regressions in CO-1..CO-8 or MC-1..MC-6**
 
@@ -76,8 +76,8 @@ completed: 2026-04-30
 
 ## Task Commits
 
-1. **Task 1: requeue method** — `cabcd9d` (`feat(999.11-02): add MessageCoalescer.requeue bypassing perAgentCap`)
-2. **Task 2: bridge layered defense** — `fb2a98e` (`fix(999.11-02): coalescer storm — idempotent wrapper + drain gate + depth cap`)
+1. **Task 1: requeue method** — `cabcd9d` (`feat(105-02): add MessageCoalescer.requeue bypassing perAgentCap`)
+2. **Task 2: bridge layered defense** — `fb2a98e` (`fix(105-02): coalescer storm — idempotent wrapper + drain gate + depth cap`)
 3. **Task 3: verification only** — no commit (test sweep + build pass)
 
 ## Diff Hunks
@@ -90,7 +90,7 @@ completed: 2026-04-30
   *   - addMessage(agentName, content, messageId) — appends to agent's pending list
   *   - takePending(agentName) — atomically returns ALL pending messages for the
   *     agent + clears the list. Caller dispatches the joined payload as ONE turn.
-+ *   - requeue(agentName, messages) — Phase 999.11: prepends messages back into
++ *   - requeue(agentName, messages) — Phase 105: prepends messages back into
 + *     the buffer WITHOUT enforcing perAgentCap (these messages were already
 + *     accepted once on initial addMessage; re-checking the cap on push-back
 + *     would silently drop them).
@@ -101,7 +101,7 @@ completed: 2026-04-30
    }
 
 +  /**
-+   * Phase 999.11 — push messages back into the buffer without enforcing
++   * Phase 105 — push messages back into the buffer without enforcing
 +   * perAgentCap.
 +   * ...
 +   */
@@ -321,5 +321,5 @@ Verified build:
 - `MAX_DRAIN_DEPTH`, `COMBINED_PREFIX`, "coalescer drain depth cap", "coalescer drain deferred" all present in `dist/cli/index.js`
 
 ---
-*Phase: 999.11-trigger-policy-default-allow-and-coalescer-storm-fix*
+*Phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix*
 *Completed: 2026-04-30*

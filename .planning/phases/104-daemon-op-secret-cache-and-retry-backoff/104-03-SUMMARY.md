@@ -1,12 +1,12 @@
 ---
-phase: 999.10-daemon-op-secret-cache-and-retry-backoff
+phase: 104-daemon-op-secret-cache-and-retry-backoff
 plan: "03"
 subsystem: secrets
 tags: [secrets, 1password, config-watcher, recovery, op-refresh, sec-05]
 
 requires:
-  - 999.10-01 (SecretsResolver class — invalidate / resolve / getCached methods)
-  - 999.10-02 (SecretsResolver singleton constructed in startDaemon, exposed in return value)
+  - 104-01 (SecretsResolver class — invalidate / resolve / getCached methods)
+  - 104-02 (SecretsResolver singleton constructed in startDaemon, exposed in return value)
 provides:
   - applySecretsDiff bridge: walks ConfigDiff for op:// URI changes, invalidate-FIRST + warm-resolve
   - ConfigWatcher.onChange now calls applySecretsDiff before configReloader.applyChanges
@@ -17,7 +17,7 @@ provides:
   - mcp-reconnect's RecoveryDeps factory wires invalidate when ctx.secretsResolver is present
   - 5 watcher tests + 2 new recovery tests + back-compat preserved
 affects:
-  - 999.10-04 (Wave 3 plan B — secrets-status / secrets-invalidate IPC surface; orthogonal, no conflict)
+  - 104-04 (Wave 3 plan B — secrets-status / secrets-invalidate IPC surface; orthogonal, no conflict)
 
 tech-stack:
   added: []
@@ -45,7 +45,7 @@ key-decisions:
   - "ConfigDiff field name is `fieldPath` (not `path` as the plan's pseudocode hinted). Plan-research already flagged this risk; types.ts:9 confirms `fieldPath: string`. Bridge code + tests use the actual field name."
   - "Recovery deps not wired directly inside daemon.ts — it's wired through CheckContext via setSecretsResolver, then consumed by mcp-reconnect's buildRecoveryDepsForHeartbeat (the actual RecoveryDeps construction site). Daemon.ts only holds the setter call. This minimizes cross-cutting changes to daemon.ts and keeps the wiring at the natural recovery-deps construction edge — exactly where the existing opRead, readEnvForServer, writeEnvForServer factories live."
   - "Optional invalidate field uses `?.` chain at call site for runtime safety AND `readonly invalidate?:` on the type for compile-time back-compat. Existing recovery-op-refresh tests that don't pass invalidate continue to work — REC-OP-REFRESH-INV-02 pins this."
-  - "makeDeps test helper propagates invalidate via conditional spread `...(overrides.invalidate !== undefined ? { invalidate: overrides.invalidate } : {})`. Default behavior (no override) keeps deps.invalidate === undefined — preserves the back-compat shape that pre-999.10 tests assume."
+  - "makeDeps test helper propagates invalidate via conditional spread `...(overrides.invalidate !== undefined ? { invalidate: overrides.invalidate } : {})`. Default behavior (no override) keeps deps.invalidate === undefined — preserves the back-compat shape that pre-104 tests assume."
   - "WATCH-03/04/05 added beyond plan's spec — covers the op://→literal swap path (RESEARCH.md SEC-05 invariant 2), non-secret diff entries (no-op invariant), and warm-resolve failure swallowing (the 'never throws' invariant). All three are pinned in the must-haves.truths list at the top of PLAN.md."
 
 requirements-completed: [SEC-05]
@@ -54,7 +54,7 @@ duration: ~6min
 completed: 2026-04-30
 ---
 
-# Phase 999.10 Plan 03: Cache invalidation surfaces (ConfigWatcher + recovery/op-refresh) Summary
+# Phase 104 Plan 03: Cache invalidation surfaces (ConfigWatcher + recovery/op-refresh) Summary
 
 **Wired SecretsResolver cache invalidation into the two operator-driven surfaces — ConfigWatcher.onChange auto-invalidates op:// URIs that changed in clawcode.yaml (with warm-resolve of new ones), and the existing recovery/op-refresh handler now drops cached values BEFORE re-resolving via op CLI — closing the Pitfall 3 staleness gap (a rotated 1Password token would otherwise cause SecretsResolver to keep serving the same stale value forever).**
 
@@ -136,7 +136,7 @@ Task 2:
 - **Bridge factoring vs inline:** Chose RECOMMENDED bridge approach (`secrets-watcher-bridge.ts`). Tests now import production code directly — no shape-drift risk, daemon.ts stays smaller.
 - **Recovery deps wiring location:** Wired at `mcp-reconnect.ts:206-215` (where RecoveryDeps is actually constructed) rather than inside daemon.ts directly. Daemon.ts only holds `heartbeatRunner.setSecretsResolver(secretsResolver)`. This keeps the wiring at the natural construction edge alongside the existing opRead, readEnvForServer, writeEnvForServer factories.
 - **CheckContext propagation:** Added `secretsResolver?: SecretsResolver` to CheckContext so any future heartbeat check needing cache-flush has the same path. Optional — no existing tests break.
-- **Optional `invalidate` chain at call site:** Both compile-time (`readonly invalidate?:` interface field) and runtime (`deps.invalidate?.(ref)` optional call). Existing pre-999.10 tests / deps work unchanged. Pinned by REC-OP-REFRESH-INV-02.
+- **Optional `invalidate` chain at call site:** Both compile-time (`readonly invalidate?:` interface field) and runtime (`deps.invalidate?.(ref)` optional call). Existing pre-104 tests / deps work unchanged. Pinned by REC-OP-REFRESH-INV-02.
 - **3 extra watcher tests beyond plan minimum:** WATCH-03 (op://→literal swap), WATCH-04 (non-secret diffs are ignored), WATCH-05 (warm-resolve failure is swallowed). The plan's must-haves.truths list explicitly enumerates these as invariants — adding tests for them is the discipline. They were almost-free given the bridge factoring.
 
 ## Deviations from plan
@@ -213,6 +213,6 @@ Commits exist:
 ## Self-Check: PASSED
 
 ---
-*Phase: 999.10-daemon-op-secret-cache-and-retry-backoff*
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
 *Plan: 03 — ConfigWatcher + recovery/op-refresh cache invalidation surfaces (SEC-05)*
 *Completed: 2026-04-30*

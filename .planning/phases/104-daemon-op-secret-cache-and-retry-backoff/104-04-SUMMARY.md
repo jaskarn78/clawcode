@@ -1,12 +1,12 @@
 ---
-phase: 999.10-daemon-op-secret-cache-and-retry-backoff
+phase: 104-daemon-op-secret-cache-and-retry-backoff
 plan: "04"
 subsystem: ipc-secrets
 tags: [secrets, ipc, observability, zod, sec-06, di-pure, telemetry]
 
 requires:
-  - 999.10-01 (SecretsResolver class — public API: snapshot/invalidate/invalidateAll)
-  - 999.10-02 (secretsResolver singleton exposed in startDaemon return + closure scope at IPC dispatch site)
+  - 104-01 (SecretsResolver class — public API: snapshot/invalidate/invalidateAll)
+  - 104-02 (secretsResolver singleton exposed in startDaemon return + closure scope at IPC dispatch site)
 provides:
   - Two new IPC methods registered: `secrets-status`, `secrets-invalidate`
   - Three zod schemas: SecretsStatusResponseSchema, SecretsInvalidateRequestSchema, SecretsInvalidateResponseSchema
@@ -47,9 +47,9 @@ duration: ~5min (~298s)
 completed: 2026-04-30
 ---
 
-# Phase 999.10 Plan 04: secrets-status + secrets-invalidate IPC surface Summary
+# Phase 104 Plan 04: secrets-status + secrets-invalidate IPC surface Summary
 
-**Wired the SecretsResolver counter snapshot + manual-rotation flush into two new IPC methods (`secrets-status` returns the zod-validated `{cacheSize, hits, misses, retries, rateLimitHits, last*}` snapshot; `secrets-invalidate` flushes one URI or the whole cache) via a pure handler module factored out of daemon.ts so the case branches stay one-liners and the handlers are unit-testable without booting the IPC server — closes Phase 999.10's SEC-06 telemetry gap and Pitfall 3 manual-rotation gap.**
+**Wired the SecretsResolver counter snapshot + manual-rotation flush into two new IPC methods (`secrets-status` returns the zod-validated `{cacheSize, hits, misses, retries, rateLimitHits, last*}` snapshot; `secrets-invalidate` flushes one URI or the whole cache) via a pure handler module factored out of daemon.ts so the case branches stay one-liners and the handlers are unit-testable without booting the IPC server — closes Phase 104's SEC-06 telemetry gap and Pitfall 3 manual-rotation gap.**
 
 ## Performance
 
@@ -187,7 +187,7 @@ None.
 The `secrets-status` IPC method is now callable but no Discord/CLI renderer consumes it yet. Suggested follow-up for the v1.0 milestone:
 
 - Extend the `/clawcode-status` Phase 103 Discord embed with a "Secrets cache" section rendering: `cacheSize`, hit/miss ratio, retry count, rate-limit count, last-refresh timestamp (relative — e.g., "2m ago"), and last-failure reason (when present, in red).
-- The CLI bridge (`clawcode secrets-status` or whatever the operator-facing command surface is) should pretty-print the same snapshot. This closes the operator-observability loop documented in Phase 999.10's SEC-06 motivation.
+- The CLI bridge (`clawcode secrets-status` or whatever the operator-facing command surface is) should pretty-print the same snapshot. This closes the operator-observability loop documented in Phase 104's SEC-06 motivation.
 
 Tracked as: v1.0 backlog item — `/clawcode-status` Secrets-cache section.
 
@@ -209,6 +209,6 @@ Commits exist:
 ## Self-Check: PASSED
 
 ---
-*Phase: 999.10-daemon-op-secret-cache-and-retry-backoff*
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
 *Plan: 04 — secrets-status + secrets-invalidate IPC surface*
 *Completed: 2026-04-30*

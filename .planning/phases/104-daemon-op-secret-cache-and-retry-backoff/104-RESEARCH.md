@@ -1,4 +1,4 @@
-# Phase 999.10: Daemon-side op:// secret cache + retry/backoff — Research
+# Phase 104: Daemon-side op:// secret cache + retry/backoff — Research
 
 **Researched:** 2026-04-30
 **Domain:** Daemon boot resilience, secret-resolution caching, transient-error retry against the 1Password CLI
@@ -15,7 +15,7 @@ The fix is structurally small (~2 new modules, ~3 call-site swaps). The interest
 <user_constraints>
 ## User Constraints (from CONTEXT.md)
 
-CONTEXT.md does not exist for this phase — this research is the upstream source of decisions. CONTEXT.md will be authored next via `/gsd:discuss-phase 999.10`.
+CONTEXT.md does not exist for this phase — this research is the upstream source of decisions. CONTEXT.md will be authored next via `/gsd:discuss-phase 104`.
 
 The roadmap entry pins these as **hard scope**:
 - Resolve at boot, inject into agent envs at spawn (no per-agent re-resolution).
@@ -32,7 +32,7 @@ The roadmap entry pins these as **out of scope (deferred)**:
 <phase_requirements>
 ## Phase Requirements
 
-The roadmap lists requirements as TBD — to be derived in `/gsd:discuss-phase 999.10`. Based on the goal + open questions, here are the requirements this research supports. The planner should re-confirm these IDs in CONTEXT.md.
+The roadmap lists requirements as TBD — to be derived in `/gsd:discuss-phase 104`. Based on the goal + open questions, here are the requirements this research supports. The planner should re-confirm these IDs in CONTEXT.md.
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
@@ -478,7 +478,7 @@ const configWatcher = new ConfigWatcher({
   configPath,
   auditTrailPath,
   onChange: async (diff, newResolvedAgents) => {
-    // Phase 999.10 — invalidate any op:// refs that changed in this diff.
+    // Phase 104 — invalidate any op:// refs that changed in this diff.
     for (const change of diff.changes) {
       const oldVal = change.oldValue;
       const newVal = change.newValue;

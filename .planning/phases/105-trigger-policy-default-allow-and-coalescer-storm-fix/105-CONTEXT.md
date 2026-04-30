@@ -1,4 +1,4 @@
-# Phase 999.11: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix — Context
+# Phase 105: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix — Context
 
 **Gathered:** 2026-04-30
 **Status:** Ready for planning
@@ -7,7 +7,7 @@
 <domain>
 ## Phase Boundary
 
-Two production-impact bugs observed on clawdy 2026-04-30, both in core dispatch infrastructure. Fix together — they share the daemon hot path and ship as a coherent "performance/functionality unblock" patch. The remaining items from the original 999.11 scope (cross-agent IPC channel delivery, inbox heartbeat timeout) are deferred to **Phase 999.12** since they have lower operator impact and can ship independently.
+Two production-impact bugs observed on clawdy 2026-04-30, both in core dispatch infrastructure. Fix together — they share the daemon hot path and ship as a coherent "performance/functionality unblock" patch. The remaining items from the original 105 scope (cross-agent IPC channel delivery, inbox heartbeat timeout) are deferred to **Phase 999.12** since they have lower operator impact and can ship independently.
 
 ### 1. Trigger-policy default-allow fallback (POLICY-01..03)
 
@@ -68,7 +68,7 @@ Three concerns stack:
 - Cross-agent IPC channel delivery (`dispatchTurn` → target's bound channel) → **deferred to Phase 999.12**
 - Heartbeat inbox 10s timeout → **deferred to Phase 999.12**
 - Per-turn API latency telemetry → backlog (would help diagnose slow turns but not blocking)
-- 1Password rate limiting → fixed in Phase 999.10
+- 1Password rate limiting → fixed in Phase 104
 - Reminder-poller MySQL "too many connections" → separate openclaw cron, not clawcode
 - Async correlation-ID-based reply path (Phase 999.2 longer-term) — already deferred
 - Policy DSL changes — schema unchanged

@@ -1,5 +1,5 @@
 ---
-phase: 999.11-trigger-policy-default-allow-and-coalescer-storm-fix
+phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix
 plan: 00
 subsystem: testing
 tags: [vitest, tdd, red-tests, trigger-policy, message-coalescer, discord-bridge]
@@ -12,7 +12,7 @@ requires:
     provides: PolicyEvaluator class + reloadEvaluator hot-reload swap
   - phase: 100-fu-message-coalescer
     provides: MessageCoalescer + DiscordBridge.streamAndPostResponse drain block (the storm site)
-  - phase: 999.10
+  - phase: 104
     provides: SecretsResolver invalidation surface (separate but completed in same milestone)
 provides:
   - "POLICY-01 + POLICY-02 regression-lock tests for the engine ternary's default-allow path"
@@ -23,7 +23,7 @@ provides:
   - "CO-11 RED test pinning storm bounded log output"
   - "MC-7 RED test for new MessageCoalescer.requeue() API (renamed from plan's MC-6 due to label clash)"
   - "createBridge() helper extended with sessionManager.hasActiveTurn mock (default false)"
-affects: [999.11-01, 999.11-02, 999.11-03]
+affects: [105-01, 105-02, 105-03]
 
 # Tech tracking
 tech-stack:
@@ -57,7 +57,7 @@ duration: 18min
 completed: 2026-04-30
 ---
 
-# Phase 999.11 Plan 00: Wave 0 RED Tests Summary
+# Phase 105 Plan 00: Wave 0 RED Tests Summary
 
 **Eight new vitest tests pinning the failure modes for trigger-policy default-allow and the QUEUE_FULL coalescer storm — five of them RED on current main and reproducing the +54-chars-per-iteration nesting trace from clawdy 2026-04-30**
 
@@ -205,5 +205,5 @@ Verified commits:
 Verified RED states (per failure-mode table above): all 5 driver-RED tests fail with the expected reasons; no infrastructure errors.
 
 ---
-*Phase: 999.11-trigger-policy-default-allow-and-coalescer-storm-fix*
+*Phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix*
 *Completed: 2026-04-30*

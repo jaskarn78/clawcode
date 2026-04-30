@@ -741,15 +741,15 @@ Plans:
 - [x] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
 - [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
-**Promotion target:** active milestone, sequence after Phase 999.10 daemon-side secret cache + retry/backoff — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
+**Promotion target:** active milestone, sequence after Phase 104 daemon-side secret cache + retry/backoff — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
 
-### Phase 999.10: Daemon-side op:// secret cache + retry/backoff (BACKLOG)
+### Phase 104: Daemon-side op:// secret cache + retry/backoff (BACKLOG)
 
 **Goal:** Resolve all `op://` references in clawcode.yaml (`discord.botToken`, `agents.*.mcpEnvOverrides.*`, `mcpServers.*.env.*`) once at daemon boot into an in-memory map, inject literal values into agent envs at spawn so restarts re-use the cache without re-hitting the 1Password API. Add exponential backoff (e.g., 1s/2s/4s, 3 attempts) on `op read` failures so transient rate-limits don't crash-fail an agent.
 
 **Why now:** Root cause of the 2026-04-30 incident — systemd crash-loop × N agents × ~5 secrets each saturated the 1Password service-account read quota into a long-tail throttle, blocking every read operation for ~10 minutes. The bridge stale-routingTable bug surfaced it (deploy → restart → boot storm), but the underlying fragility is structural: every restart re-resolves every secret in parallel, and a single rate-limit response on any one of them kills agent start with no retry. Cache + backoff makes the daemon resilient to bursty op API behavior. Pairs naturally with Phase 999.9 (shared MCP) — cache fixes boot, pool fixes runtime.
 
-**Requirements:** [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07] (derived in 999.10-RESEARCH.md §phase_requirements):
+**Requirements:** [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07] (derived in 104-RESEARCH.md §phase_requirements):
 - SEC-01: All three op:// resolution sites (Discord botToken, shared mcpServers[].env, per-agent mcpEnvOverrides) route through one `SecretsResolver` singleton.
 - SEC-02: Resolved values cached in-memory keyed on the verbatim op:// URI; restart-within-process re-uses cached values.
 - SEC-03: `op read` failures retry with exponential backoff (3 attempts, 1s/2s/4s + jitter); rate-limit errors bail early via AbortError; empty resolution non-retryable.
@@ -758,7 +758,7 @@ Plans:
 - SEC-06: New IPC `secrets-status` returns counter snapshot (cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason, lastRefreshedAt) for /clawcode-status renderer.
 - SEC-07: No resolved secret value ever appears in pino logs, error messages, or IPC responses — only op:// URI + structured fields.
 
-**Open questions resolved (see 999.10-RESEARCH.md §Open Questions):**
+**Open questions resolved (see 104-RESEARCH.md §Open Questions):**
 - TTL: until-restart + explicit invalidation (HIGH confidence)
 - Cache key: full URI verbatim (HIGH)
 - Partial failure: fail open, mirror MCP-disable pattern (HIGH)
@@ -770,17 +770,17 @@ Plans:
 **Plans:** 5/5 plans complete
 
 Plans:
-- [x] 999.10-00-PLAN.md — Wave 0: install p-retry@^8.0.0 + scaffold five vitest test files (RES-01..RES-09, WATCH-01/02, callsites grep, daemon-boot-degraded, secrets-status IPC)
-- [x] 999.10-01-PLAN.md — Wave 1: implement `SecretsResolver` class (resolve/preResolveAll/invalidate/snapshot); turn RES-01..RES-09 green (SEC-02, SEC-03, SEC-07)
-- [x] 999.10-02-PLAN.md — Wave 2: build `collectAllOpRefs` walker + rewrite three call sites in daemon.ts (Discord botToken, per-agent opEnvResolver, loader sync wrapper) + boot pre-resolve (SEC-01, SEC-04)
-- [x] 999.10-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
-- [x] 999.10-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
+- [x] 104-00-PLAN.md — Wave 0: install p-retry@^8.0.0 + scaffold five vitest test files (RES-01..RES-09, WATCH-01/02, callsites grep, daemon-boot-degraded, secrets-status IPC)
+- [x] 104-01-PLAN.md — Wave 1: implement `SecretsResolver` class (resolve/preResolveAll/invalidate/snapshot); turn RES-01..RES-09 green (SEC-02, SEC-03, SEC-07)
+- [x] 104-02-PLAN.md — Wave 2: build `collectAllOpRefs` walker + rewrite three call sites in daemon.ts (Discord botToken, per-agent opEnvResolver, loader sync wrapper) + boot pre-resolve (SEC-01, SEC-04)
+- [x] 104-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
+- [x] 104-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
 
 **Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
 
-### Phase 999.11: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix (BACKLOG)
+### Phase 105: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix (BACKLOG)
 
-**Goal:** Two production-impact bugs observed on clawdy 2026-04-30, both in the core dispatch hot path. Ship as a coherent "performance + functionality unblock" patch. (Original 999.11 scope included two more items — cross-agent IPC channel delivery + inbox heartbeat timeout — those are deferred to Phase 999.12 since they have lower operator impact and can ship independently.)
+**Goal:** Two production-impact bugs observed on clawdy 2026-04-30, both in the core dispatch hot path. Ship as a coherent "performance + functionality unblock" patch. (Original 105 scope included two more items — cross-agent IPC channel delivery + inbox heartbeat timeout — those are deferred to Phase 999.12 since they have lower operator impact and can ship independently.)
 
 1. **Trigger policy fail-closes when `~clawcode/.clawcode/policies.yaml` is absent.** `daemon.ts:2033` falls back to `new PolicyEvaluator([], configuredAgentNames)`; with empty rules every event hits the final `return { allow: false, reason: "no matching rule" }` branch in `policy-evaluator.ts`. Today's journal shows the 09:00 fin-acquisition standup cron and the 08:26 finmentum-content-creator one-shot reminder both rejected this way — **every scheduler/reminder/calendar/inbox event silently dropped** for every agent. Switch the missing-file fallback to the default-allow semantic (allow if `targetAgent` is in `configuredAgents`) — `evaluatePolicy()` already implements it at `policy-evaluator.ts:18127`. Replace the misleading `"using default policy"` log line.
 
@@ -788,24 +788,24 @@ Plans:
 
 **Trigger:** 2026-04-30 — operator reported "scheduled reminders never fire" + later "fin-acquisition slowdown / 9-min turn". Diagnosed via SSH journalctl on clawdy in this session. Admin Clawdy mis-attributed the slowdown to Anthropic credits — actually QUEUE_FULL retry storm; "Credit balance is too low" string Admin Clawdy saw is from `restart-greeting.ts:API_ERROR_FINGERPRINTS` regex matching old session content, not live API responses.
 
-**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 PolicyWatcher hot-reload back-compat; COAL-01 idempotent coalesce wrapper detection, COAL-02 wait-for-in-flight gate, COAL-03 drain depth cap, COAL-04 storm warning log] — see 999.11-PLAN.md when planned.
+**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 PolicyWatcher hot-reload back-compat; COAL-01 idempotent coalesce wrapper detection, COAL-02 wait-for-in-flight gate, COAL-03 drain depth cap, COAL-04 storm warning log] — see 105-PLAN.md when planned.
 
 **Plans:** 3/4 plans executed
 
 Plans:
 - [ ] TBD (promote with /gsd:review-backlog when ready)
 
-**Promotion target:** active milestone — highest operator impact in the 999.x backlog. Without (1) every cron/reminder is invisibly dropped (every scheduled feature broken across all 11 agents). Without (2) the daemon enters a CPU-burning recursive loop under bursty load and the eventual turn receives corrupted nested-wrapper payload. Both are tiny diffs (~5 lines for POLICY, ~30 for COAL) with massive ROI. Sequence after Phase 999.10 (already complete) since 1P fix removes a confounding factor.
+**Promotion target:** active milestone — highest operator impact in the 999.x backlog. Without (1) every cron/reminder is invisibly dropped (every scheduled feature broken across all 11 agents). Without (2) the daemon enters a CPU-burning recursive loop under bursty load and the eventual turn receives corrupted nested-wrapper payload. Both are tiny diffs (~5 lines for POLICY, ~30 for COAL) with massive ROI. Sequence after Phase 104 (already complete) since 1P fix removes a confounding factor.
 
 ### Phase 999.12: Cross-agent IPC channel delivery + heartbeat inbox timeout (BACKLOG)
 
-**Goal:** Two operator-visible orchestration / observability fixes split out of the original 999.11 scope to keep that phase tightly focused on infrastructure perf.
+**Goal:** Two operator-visible orchestration / observability fixes split out of the original 105 scope to keep that phase tightly focused on infrastructure perf.
 
 1. **Cross-agent IPC `dispatchTurn()` returns response to caller, never posts to target's bound Discord channel.** Phase 999.2 renamed `sendToAgent` → `dispatchTurn` and the Discord-bridge path uses `streamFromAgent` (which DOES post). At 2026-04-30 09:14:57 admin-clawdy invoked `dispatchTurn` → fin-acquisition with 971 chars; fin-acq replied 1087 chars at 09:15:55 — visible in caller's tool result, **never posted in #finmentum-client-acquisition**. Mirror the Phase 100 follow-up `triggerDeliveryFn` pattern: add an optional delivery callback that routes the response to the target agent's bound channel via webhook (preferred) → bot-direct fallback. Caller-only (RPC) semantics stay the default; channel delivery is opt-in via flag (`mirror_to_target_channel: true` from Phase 999.2 backlog text).
 
 2. **Heartbeat inbox check 10s timeout is too tight for cross-agent turns.** At 2026-04-30 09:15:07 (10s after dispatchTurn started) the inbox check logged `"heartbeat check critical"` while fin-acq was mid-turn; the turn completed normally at 09:15:55. Either bump timeout to ≥60s, gate the check on whether the agent is actively responding (use `SerialTurnQueue.hasInFlight()`), or move to event-driven (subscribe to `agent responded` rather than poll inbox).
 
-**Trigger:** Split out of original 999.11 during 2026-04-30 prioritization — 999.11 re-scoped to POLICY + coalescer (highest-impact perf/functionality), these two items deferred since they have lower blast radius.
+**Trigger:** Split out of original 105 during 2026-04-30 prioritization — 105 re-scoped to POLICY + coalescer (highest-impact perf/functionality), these two items deferred since they have lower blast radius.
 
 **Requirements:** [IPC-01 deliveryFn for dispatchTurn, IPC-02 mirror flag, IPC-03 webhook→bot fallback parity with triggerDeliveryFn; HB-01 inbox timeout bump, HB-02 active-turn awareness] — see 999.12-PLAN.md when planned.
 
@@ -817,7 +817,7 @@ Plans:
 - [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
 - [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
-**Promotion target:** active milestone — sequence AFTER Phase 999.11. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 999.11 does.
+**Promotion target:** active milestone — sequence AFTER Phase 105. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 105 does.
 
 ### Phase 999.13: Extendible specialist delegate map + agent-context timezone rendering (BACKLOG)
 
@@ -875,11 +875,11 @@ Plans:
 - [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
 - [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
 
-**Promotion target:** active milestone — high operator impact. Without (A) Ramy's deep-dive workflow stays inline-only with no fin-research isolation; without (B) every agent burns prompt budget on UTC→PT conversion every turn. Sequence after Phase 999.11 (already complete) and Phase 999.12 (queued) since both pillars touch the same session-prompt-builder + serialization layer.
+**Promotion target:** active milestone — high operator impact. Without (A) Ramy's deep-dive workflow stays inline-only with no fin-research isolation; without (B) every agent burns prompt budget on UTC→PT conversion every turn. Sequence after Phase 105 (already complete) and Phase 999.12 (queued) since both pillars touch the same session-prompt-builder + serialization layer.
 
 ### Phase 999.14: MCP server child process lifecycle hardening (BACKLOG)
 
-**Goal:** Stop MCP server processes from leaking on agent restart. Today (2026-04-30) MariaDB hit 152 connections (capped at default 151) — root cause was 15 orphan `mcp-server-mysql` processes accumulating across the day's two clawcode restarts (999.11 deploy + quick-260430). Each agent restart spawns a fresh `npm exec mcp-server-mysql`; the npm wrapper exits cleanly but its `sh -c mcp-server-mysql` and `node` children get reparented to PID 1 and keep their MariaDB connections alive forever. Same pattern likely affects `1password-mcp` and any other npm-launched MCP server.
+**Goal:** Stop MCP server processes from leaking on agent restart. Today (2026-04-30) MariaDB hit 152 connections (capped at default 151) — root cause was 15 orphan `mcp-server-mysql` processes accumulating across the day's two clawcode restarts (105 deploy + quick-260430). Each agent restart spawns a fresh `npm exec mcp-server-mysql`; the npm wrapper exits cleanly but its `sh -c mcp-server-mysql` and `node` children get reparented to PID 1 and keep their MariaDB connections alive forever. Same pattern likely affects `1password-mcp` and any other npm-launched MCP server.
 
 **Diagnosis from incident:**
 - Live `claude` agents → `npm exec mcp-server-mysql` → `sh -c mcp-server-mysql` → `node mcp-server-mysql` (correct chain)
