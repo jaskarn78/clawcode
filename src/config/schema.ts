@@ -1382,6 +1382,33 @@ export const defaultsSchema = z.object({
   // time keeps {date} fresh per call (loader-time expansion would freeze
   // the date at config-load time — wrong on the second day).
   outputDir: z.string().default(DEFAULT_OUTPUT_DIR),
+  // Phase 999.13 TZ-02 — operator-local TZ for agent-visible timestamps.
+  // IANA name (e.g. "America/Los_Angeles"). When unset, the runtime helper
+  // resolveAgentTimezone() falls back to process.env.TZ → host TZ via
+  // Intl.DateTimeFormat resolution (captured once at module load).
+  // Pre-validation here catches typos like "Pacific/LosAngeles" at config
+  // load (Q3=YES) — fail-fast vs. discovering the bad TZ at first prompt
+  // assembly (where the helper would silently fall back to UTC).
+  // Internal storage / DB / structured event keys stay UTC ISO; this knob
+  // only affects agent-visible *rendering* at the prompt-emission boundary.
+  timezone: z
+    .string()
+    .optional()
+    .refine(
+      (tz) => {
+        if (tz === undefined) return true;
+        try {
+          new Intl.DateTimeFormat(undefined, { timeZone: tz });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      {
+        message:
+          "invalid IANA timezone name (e.g. use 'America/Los_Angeles' not 'Pacific/LosAngeles')",
+      },
+    ),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),

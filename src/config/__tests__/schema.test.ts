@@ -2265,7 +2265,6 @@ describe("Phase 999.13 — TZ", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error Phase 999.13 RED — Plan 02 adds timezone to DefaultsConfig
       expect(result.data.timezone).toBe("America/Los_Angeles");
     }
   });
@@ -2274,7 +2273,6 @@ describe("Phase 999.13 — TZ", () => {
     const result = defaultsSchema.safeParse({});
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error Phase 999.13 RED — Plan 02 adds timezone to DefaultsConfig
       expect(result.data.timezone).toBeUndefined();
     }
   });
