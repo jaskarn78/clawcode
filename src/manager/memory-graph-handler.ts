@@ -7,7 +7,7 @@
  * Design notes:
  *   - Mirrors the inline `typeof params.x === "number"` coercion pattern
  *     established at `daemon.ts:4724` (memory-lookup). The project has
- *     no shared `validateNumberParam` helper today and the plan
+ *     no shared number-validator helper today and the plan
  *     explicitly forbids introducing one.
  *   - Uses parameterized `LIMIT ?` binding — better-sqlite3 binds JS
  *     numbers as integers, so there is no SQL-injection risk and the
