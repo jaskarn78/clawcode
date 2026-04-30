@@ -1,27 +1,34 @@
 /**
- * Phase 999.14 — MCP-08 Wave 0 declaration shim.
+ * Phase 999.14 — MCP-08 GREEN: Discord thread cleanup with classified-error
+ * registry pruning.
  *
- * This module's runtime is a stub that throws — Wave 1 replaces every
- * function below with a real implementation. The TYPES and CONTRACTS here
- * are load-bearing: they are the exact signatures Wave 1 must conform to.
+ * Wraps `subagentThreadSpawner.archiveThread` so that when Discord returns
+ * 50001 (Missing Access) or 10003 (Unknown Channel) — both indicating the
+ * thread is gone server-side — the registry binding is pruned manually.
+ * Transient errors (5xx, 429, network) leave the registry intact for the
+ * next sweep to retry.
  *
- * Why a thrower stub instead of a missing module?
- *   - Keeps `tsc --noEmit` clean (RED tests can import these symbols
- *     without "Cannot find module" errors).
- *   - Tests still RED at runtime — every test that exercises the helper
- *     hits the "not implemented in Wave 0" throw and fails.
- *   - Wave 1 deletes this file's body and writes the real implementation,
- *     turning the RED tests green.
- *
- * Contract pinned by `src/discord/__tests__/thread-cleanup.test.ts` —
- * see those tests for the canonical truth table.
+ * Contract pinned by `src/discord/__tests__/thread-cleanup.test.ts` (17 tests).
  */
 
 import type { Logger } from "pino";
 import type { ThreadBindingRegistry } from "./thread-types.js";
+import {
+  readThreadRegistry,
+  writeThreadRegistry,
+  removeBinding,
+} from "./thread-registry.js";
+
+/** Network error codes — treated as transient (retain) per MCP-08 truth table. */
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
 
 /**
- * Classification of a Discord cleanup error.
+ * Classification of a Discord cleanup error (error path only).
  *   - "prune"   — Discord says the thread is gone server-side. Safe to
  *                 prune the registry binding.
  *   - "retain"  — Transient error (5xx, 429, network). Leave registry
@@ -42,24 +49,33 @@ export type CleanupClassification =
  * Pure function — given an error from a Discord setArchived attempt,
  * classify whether the binding should be pruned, retained, or unknown.
  *
- * @returns "prune" for Discord codes 50001 / 10003 / HTTP 404.
- * @returns "retain" for HTTP 5xx / 429 / network codes (ECONNRESET,
- *          ETIMEDOUT, ENOTFOUND, EAI_AGAIN).
- * @returns "unknown" for everything else (caller treats as retain).
+ * Truth table (MCP-08):
+ *   - 50001 / 10003 / HTTP 404 → "prune"
+ *   - HTTP 5xx / 429 / network codes (ECONNRESET, ETIMEDOUT, ENOTFOUND,
+ *     EAI_AGAIN) → "retain"
+ *   - everything else → "unknown" (caller treats as retain)
  */
 export function classifyDiscordCleanupError(
-  _err: unknown,
+  err: unknown,
 ): DiscordCleanupClassification {
-  throw new Error(
-    "classifyDiscordCleanupError: not implemented in Wave 0 — Wave 1 lands the GREEN code",
-  );
+  if (err == null || typeof err !== "object") return "unknown";
+  const e = err as { code?: number | string; status?: number };
+  if (e.code === 50001 || e.code === 10003) return "prune";
+  if (typeof e.status === "number") {
+    if (e.status === 404) return "prune";
+    if (e.status === 429) return "retain";
+    if (e.status >= 500 && e.status < 600) return "retain";
+  }
+  if (typeof e.code === "string" && NETWORK_ERROR_CODES.has(e.code)) {
+    return "retain";
+  }
+  return "unknown";
 }
 
 /**
- * Minimal spawner surface needed by the cleanup helper (the existing
- * SubagentThreadSpawner.archiveThread signature). Defined here as a
+ * Minimal spawner surface needed by the cleanup helper. Defined as a
  * structural type so tests can pass `vi.fn()` without instantiating the
- * full class.
+ * full SubagentThreadSpawner class.
  */
 export interface ThreadCleanupSpawner {
   archiveThread(
@@ -88,7 +104,7 @@ export interface CleanupThreadResult {
  *
  * Behavior contract (pinned by thread-cleanup.test.ts):
  *   - Happy path: spawner.archiveThread resolves → returns
- *     { archived:true, bindingPruned:true, classification:"success" }.
+ *     { archived:true, bindingPruned, classification:"success" }.
  *     No warn log emitted.
  *   - Discord 50001 / 10003 / 404 → registry pruned via removeBinding +
  *     writeThreadRegistry, returns
@@ -102,15 +118,83 @@ export interface CleanupThreadResult {
  *     { archived:false, bindingPruned:false, classification:"unknown" }.
  */
 export async function cleanupThreadWithClassifier(
-  _args: CleanupThreadArgs,
+  args: CleanupThreadArgs,
 ): Promise<CleanupThreadResult> {
-  throw new Error(
-    "cleanupThreadWithClassifier: not implemented in Wave 0 — Wave 1 lands the GREEN code",
-  );
+  try {
+    const result = await args.spawner.archiveThread(args.threadId, {
+      lock: args.lock,
+    });
+    return {
+      archived: true,
+      bindingPruned: result.bindingPruned,
+      classification: "success",
+    };
+  } catch (err) {
+    const cls = classifyDiscordCleanupError(err);
+    const discordCode = (err as { code?: number | string }).code;
+    if (cls === "prune") {
+      // Manually prune the registry binding — Discord side is already gone.
+      let pruned = false;
+      try {
+        const reg: ThreadBindingRegistry = await readThreadRegistry(
+          args.registryPath,
+        );
+        const next = removeBinding(reg, args.threadId);
+        // Always write — Discord-side is gone, so we want the on-disk
+        // state to reflect that even if removeBinding returns the same
+        // reference (e.g., binding wasn't there). Idempotent on disk.
+        await writeThreadRegistry(args.registryPath, next);
+        pruned = true;
+      } catch (writeErr) {
+        args.log.error(
+          {
+            component: "thread-cleanup",
+            action: "prune-write-failed",
+            err: String(writeErr),
+            threadId: args.threadId,
+            agentName: args.agentName,
+          },
+          "registry prune write failed (binding may persist)",
+        );
+      }
+      args.log.warn(
+        {
+          component: "thread-cleanup",
+          action: "prune-after-discord-error",
+          discordCode,
+          threadId: args.threadId,
+          agentName: args.agentName,
+        },
+        "discord thread gone server-side; pruned registry binding",
+      );
+      return {
+        archived: false,
+        bindingPruned: pruned,
+        classification: "prune",
+      };
+    }
+    // retain / unknown — info log only, leave registry intact.
+    args.log.info(
+      {
+        component: "thread-cleanup",
+        action: "retain-on-transient-error",
+        discordCode,
+        threadId: args.threadId,
+        agentName: args.agentName,
+        classification: cls,
+      },
+      "transient discord error; retained registry binding for next sweep",
+    );
+    return {
+      archived: false,
+      bindingPruned: false,
+      classification: cls,
+    };
+  }
 }
 
 /**
  * Re-export so the sweep helper (MCP-09) and the IPC handler (MCP-10)
- * can use a single ThreadBindingRegistry symbol when wired in Wave 1.
+ * can use a single ThreadBindingRegistry symbol.
  */
 export type { ThreadBindingRegistry };

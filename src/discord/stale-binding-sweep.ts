@@ -1,16 +1,21 @@
 /**
- * Phase 999.14 — MCP-09 Wave 0 declaration shim.
+ * Phase 999.14 — MCP-09 GREEN: stale thread-binding sweep.
  *
- * This module's runtime is a stub that throws — Wave 1 replaces every
- * function below with a real implementation. The TYPES and CONTRACTS here
- * are load-bearing: they are the exact signatures Wave 1 must conform to.
+ * Periodic sweep that detects bindings whose `lastActivity` is older than a
+ * configurable idle threshold (`defaults.threadIdleArchiveAfter`) and routes
+ * each through `cleanupThreadWithClassifier`. Belt-and-suspenders against
+ * MCP-08 missing edge cases.
  *
  * Contract pinned by `src/discord/__tests__/stale-binding-sweep.test.ts`.
  */
 
 import type { Logger } from "pino";
 import type { ThreadBinding, ThreadBindingRegistry } from "./thread-types.js";
-import type { ThreadCleanupSpawner } from "./thread-cleanup.js";
+import { readThreadRegistry } from "./thread-registry.js";
+import {
+  cleanupThreadWithClassifier,
+  type ThreadCleanupSpawner,
+} from "./thread-cleanup.js";
 
 export interface ScanStaleBindingsArgs {
   readonly registry: ThreadBindingRegistry;
@@ -21,26 +26,39 @@ export interface ScanStaleBindingsArgs {
 
 /**
  * Pure function — return entries where `now - lastActivity > idleMs`.
- * Sorted by oldest first (deterministic for log output).
+ * Sorted oldest-first (deterministic for log output).
  * If idleMs <= 0, returns [] (sweep disabled).
  */
 export function scanStaleBindings(
-  _args: ScanStaleBindingsArgs,
+  args: ScanStaleBindingsArgs,
 ): readonly ThreadBinding[] {
-  throw new Error(
-    "scanStaleBindings: not implemented in Wave 0 — Wave 1 lands the GREEN code",
+  if (args.idleMs <= 0) return [];
+  const stale = args.registry.bindings.filter(
+    (b) => args.now - b.lastActivity > args.idleMs,
   );
+  // Sort by lastActivity ascending (oldest first) for deterministic logs.
+  return [...stale].sort((a, b) => a.lastActivity - b.lastActivity);
 }
 
 /**
- * Parse an idle-duration string like "24h" / "6h" / "30m" / "0".
- * Returns the duration in milliseconds. "0" maps to 0 (sweep disabled).
- * Throws on unparseable input.
+ * Parse an idle-duration string like "24h" / "6h" / "30m" / "30s" / "0".
+ * Returns the duration in milliseconds. "0" → 0 (sweep disabled).
+ *
+ * @throws on unparseable input.
  */
-export function parseIdleDuration(_input: string): number {
-  throw new Error(
-    "parseIdleDuration: not implemented in Wave 0 — Wave 1 lands the GREEN code",
-  );
+export function parseIdleDuration(input: string): number {
+  if (input === "0") return 0;
+  const m = input.match(/^(\d+)(h|m|s)$/i);
+  if (!m) {
+    throw new Error(
+      `parseIdleDuration: unparseable input '${input}' (expected e.g. '24h', '30m', '15s', or '0')`,
+    );
+  }
+  const n = Number(m[1]);
+  const unit = m[2]!.toLowerCase();
+  if (unit === "h") return n * 60 * 60 * 1000;
+  if (unit === "m") return n * 60 * 1000;
+  return n * 1000; // "s"
 }
 
 export interface SweepStaleBindingsArgs {
@@ -72,9 +90,87 @@ export interface SweepStaleBindingsResult {
  *     and the failed entry is excluded from prunedCount.
  */
 export async function sweepStaleBindings(
-  _args: SweepStaleBindingsArgs,
+  args: SweepStaleBindingsArgs,
 ): Promise<SweepStaleBindingsResult> {
-  throw new Error(
-    "sweepStaleBindings: not implemented in Wave 0 — Wave 1 lands the GREEN code",
+  if (args.idleMs <= 0) {
+    return { staleCount: 0, prunedCount: 0, agents: {} };
+  }
+
+  const registry = await readThreadRegistry(args.registryPath);
+  const stale = scanStaleBindings({
+    registry,
+    now: args.now,
+    idleMs: args.idleMs,
+  });
+
+  if (stale.length === 0) {
+    args.log.debug(
+      {
+        component: "thread-cleanup",
+        action: "stale-sweep",
+        staleCount: 0,
+        idleMs: args.idleMs,
+      },
+      "stale-binding sweep: nothing to prune",
+    );
+    return { staleCount: 0, prunedCount: 0, agents: {} };
+  }
+
+  let prunedCount = 0;
+  const agentCounts = new Map<string, number>();
+
+  for (const binding of stale) {
+    try {
+      const result = await cleanupThreadWithClassifier({
+        spawner: args.spawner,
+        registryPath: args.registryPath,
+        threadId: binding.threadId,
+        agentName: binding.agentName,
+        log: args.log,
+      });
+      if (result.bindingPruned) {
+        prunedCount += 1;
+        agentCounts.set(
+          binding.agentName,
+          (agentCounts.get(binding.agentName) ?? 0) + 1,
+        );
+      }
+    } catch (err) {
+      // Per-entry failure must NOT abort the sweep — log and continue.
+      args.log.error(
+        {
+          component: "thread-cleanup",
+          action: "sweep-entry-failed",
+          err: String(err),
+          threadId: binding.threadId,
+          agentName: binding.agentName,
+        },
+        "stale-binding sweep entry failed; continuing",
+      );
+    }
+  }
+
+  // Alphabetically-sorted agent counts for deterministic log readability.
+  const agents: Record<string, number> = {};
+  for (const name of Array.from(agentCounts.keys()).sort()) {
+    agents[name] = agentCounts.get(name)!;
+  }
+
+  args.log.warn(
+    {
+      component: "thread-cleanup",
+      action: "stale-sweep",
+      staleCount: stale.length,
+      prunedCount,
+      agents,
+      idleMs: args.idleMs,
+    },
+    "stale-binding sweep complete",
   );
+
+  return {
+    staleCount: stale.length,
+    prunedCount,
+    agents,
+  };
 }

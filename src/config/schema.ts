@@ -1483,6 +1483,17 @@ export const defaultsSchema = z.object({
     // See threadsConfigSchema comment above for context.
     maxThreadSessions: 3,
   })),
+  // Phase 999.14 MCP-09 — idle threshold for the periodic stale-binding
+  // sweep. Format: "24h" / "6h" / "30m" / "0" ("0" disables sweep entirely).
+  // Default "24h" surfaces today's incident pattern (fin-acquisition's 22h+
+  // bindings) without surprising operators. The sweep runs on the same 60s
+  // tick as the MCP-03 orphan reaper, AFTER the orphan reap completes.
+  threadIdleArchiveAfter: z
+    .string()
+    .optional()
+    .describe(
+      "Idle duration after which stale Discord thread bindings get auto-archived (e.g. '24h', '6h', '30m'); '0' disables. Default '24h'.",
+    ),
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
