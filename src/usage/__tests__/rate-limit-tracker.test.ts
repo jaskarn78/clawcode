@@ -127,4 +127,85 @@ describe("RateLimitTracker (OBS-04)", () => {
     expect(got.overageDisabledReason).toBe("out_of_credits");
     expect(got.isUsingOverage).toBe(true);
   });
+
+  // Phase 999.4 — resetsAt unit normalization + utilization derivation.
+
+  it("999.4: seconds-epoch resetsAt is normalized to ms", () => {
+    const t = new RateLimitTracker(makeDb());
+    // 1735000000 = seconds-epoch (10 digits) — what OAuth Max session emits.
+    t.record({
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1735000000,
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.resetsAt).toBe(1735000000000);
+  });
+
+  it("999.4: ms-epoch resetsAt passes through (no double-conversion)", () => {
+    const t = new RateLimitTracker(makeDb());
+    // 1735000000000 = ms-epoch (13 digits) — documented SDK shape.
+    t.record({
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1735000000000,
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.resetsAt).toBe(1735000000000);
+  });
+
+  it("999.4: overageResetsAt is normalized too", () => {
+    const t = new RateLimitTracker(makeDb());
+    t.record({
+      status: "allowed",
+      rateLimitType: "overage",
+      overageResetsAt: 1735000000,
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("overage")?.overageResetsAt).toBe(1735000000000);
+  });
+
+  it("999.4: undefined resetsAt stays undefined", () => {
+    const t = new RateLimitTracker(makeDb());
+    t.record({
+      status: "allowed",
+      rateLimitType: "five_hour",
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.resetsAt).toBeUndefined();
+  });
+
+  it("999.4: utilization=undefined + status=rejected derives 1.0", () => {
+    const t = new RateLimitTracker(makeDb());
+    t.record({
+      status: "rejected",
+      rateLimitType: "five_hour",
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.utilization).toBe(1.0);
+  });
+
+  it("999.4: utilization=undefined + status=allowed_warning + surpassedThreshold derives threshold", () => {
+    const t = new RateLimitTracker(makeDb());
+    t.record({
+      status: "allowed_warning",
+      rateLimitType: "five_hour",
+      surpassedThreshold: 0.8,
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.utilization).toBe(0.8);
+  });
+
+  it("999.4: utilization=undefined + status=allowed stays undefined", () => {
+    const t = new RateLimitTracker(makeDb());
+    t.record({
+      status: "allowed",
+      rateLimitType: "five_hour",
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.utilization).toBeUndefined();
+  });
+
+  it("999.4: explicit utilization is never overridden", () => {
+    const t = new RateLimitTracker(makeDb());
+    t.record({
+      status: "rejected",
+      rateLimitType: "five_hour",
+      utilization: 0.5,
+    } as SDKRateLimitInfo);
+    expect(t.getLatest("five_hour")?.utilization).toBe(0.5);
+  });
 });

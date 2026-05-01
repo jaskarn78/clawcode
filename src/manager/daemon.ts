@@ -4691,6 +4691,22 @@ export async function startDaemon(
     void shutdown().then(() => process.exit(0));
   });
 
+  // Phase 999.23 — SIGHUP handler. Without this, an agent inside the daemon
+  // that runs `kill -HUP <pid>` (or systemctl reload, which sends SIGHUP by
+  // default) terminates the daemon silently because Node's default SIGHUP
+  // disposition is to exit. Combined with `Restart=on-failure`, systemd
+  // does NOT restart on a SIGHUP-induced exit (treated as clean). Outage
+  // 2026-05-01 06:07: Admin Clawdy fell back to `kill -HUP` after sudo
+  // refused systemctl reload; daemon died silently and stayed down.
+  //
+  // Behavior: graceful shutdown then exit with code 129 (128 + signal 1).
+  // The systemd unit declares RestartForceExitStatus=129 so that exit code
+  // is treated as a failure trigger, restoring the restart loop.
+  process.on("SIGHUP", () => {
+    log.info("received SIGHUP — initiating clean shutdown (will systemd-restart)");
+    void shutdown().then(() => process.exit(129));
+  });
+
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
   // Auto-start all configured agents on daemon boot.

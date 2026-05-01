@@ -40,6 +40,53 @@ export type RateLimitSnapshot = Readonly<{
 
 type LoggerLike = { warn: (obj: unknown, msg?: string) => void };
 
+/**
+ * Phase 999.4 — normalize epoch values from the SDK.
+ *
+ * SDK `SDKRateLimitInfo.resetsAt` is documented as ms-epoch but the OAuth
+ * Max session emits seconds-epoch (~1.78e9) instead of ms (~1.78e12). The
+ * downstream `formatDistanceToNow(resetsAt)` treats whatever it gets as ms,
+ * so a seconds value renders as "in 55 years."
+ *
+ * Heuristic: ms-epoch values from 2001+ are >= 1e12; seconds-epoch values
+ * for any plausible reset window are << 1e12. Anything below 1e12 is
+ * treated as seconds and multiplied by 1000. Values >= 1e12 pass through
+ * unchanged so a future SDK fix that emits ms isn't double-converted.
+ *
+ * Returns undefined when input is undefined.
+ */
+function normalizeEpochToMs(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  return value < 1e12 ? value * 1000 : value;
+}
+
+/**
+ * Phase 999.4 — derive utilization when SDK omits it.
+ *
+ * Some rate_limit_event payloads ship `status` + `resetsAt` + overage state
+ * but no `utilization`. The status field is enough to bound utilization:
+ *  - rejected           → 1.0   (limit hit, overage exhausted)
+ *  - allowed_warning    → fall back to surpassedThreshold (lower bound)
+ *  - allowed            → undefined (no signal — leave as-is)
+ *
+ * surpassedThreshold is the highest threshold last crossed (0.5, 0.8…), so
+ * using it as utilization is a conservative lower bound when the SDK
+ * doesn't provide a precise value. When neither status nor threshold gives
+ * a signal, returns the original value (undefined).
+ */
+function deriveUtilization(
+  utilization: number | undefined,
+  status: SDKRateLimitInfo["status"],
+  surpassedThreshold: number | undefined,
+): number | undefined {
+  if (utilization !== undefined) return utilization;
+  if (status === "rejected") return 1.0;
+  if (status === "allowed_warning" && surpassedThreshold !== undefined) {
+    return surpassedThreshold;
+  }
+  return undefined;
+}
+
 export class RateLimitTracker {
   private readonly latest = new Map<string, RateLimitSnapshot>();
   private readonly upsertStmt: Statement;
@@ -99,11 +146,15 @@ export class RateLimitTracker {
     const snapshot: RateLimitSnapshot = Object.freeze({
       rateLimitType: type,
       status: info.status,
-      utilization: info.utilization,
-      resetsAt: info.resetsAt,
+      utilization: deriveUtilization(
+        info.utilization,
+        info.status,
+        info.surpassedThreshold,
+      ),
+      resetsAt: normalizeEpochToMs(info.resetsAt),
       surpassedThreshold: info.surpassedThreshold,
       overageStatus: info.overageStatus,
-      overageResetsAt: info.overageResetsAt,
+      overageResetsAt: normalizeEpochToMs(info.overageResetsAt),
       overageDisabledReason: info.overageDisabledReason,
       isUsingOverage: info.isUsingOverage,
       recordedAt: Date.now(),

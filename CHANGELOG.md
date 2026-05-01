@@ -14,7 +14,11 @@ summary. Newest first.
 
 ## [Unreleased]
 
-_No changes pending. Open the next phase to begin tracking._
+Three small bundled fixes (local repo only, deploy held):
+
+- **Phase 999.4 — `/clawcode-usage` accuracy fixes** (2026-05-01). RateLimitTracker now normalizes `resetsAt` + `overageResetsAt` from seconds-epoch (~1.78e9) to ms-epoch (~1.78e12) at the boundary, and derives `utilization` from `status` (`rejected` → 1.0) + `surpassedThreshold` (`allowed_warning` → threshold) when SDK omits it. Heuristic: `value < 1e12 ? value*1000 : value` — safe both ways since ms-epoch values from 2001+ are >= 1e12. 8 new tests, 19/19 pass total.
+- **Phase 999.7 — context-audit telemetry restored** (2026-05-01, partial). Root cause: `session-config.ts` called the untraced `assembleContext` instead of `assembleContextTraced`. Fix: thread `traceCollector` through `SessionConfigDeps`, open a synthetic `bootstrap:<agent>:<ts>` Turn around `assembleContextTraced`, end with status `success`/`error`. One trace row per session start with full `section_tokens` populated, unblocking `clawcode context-audit`. Tool-call p95 profiling (item 2) still open.
+- **Phase 999.23 — daemon SIGHUP handler + systemd hardening** (2026-05-01). Added `process.on("SIGHUP", ...)` in daemon (graceful shutdown then exit 129) + `RestartForceExitStatus=129` in systemd unit template. Pairs with shipped Phase 999.24 (sudoers expansion) to close the 2026-05-01 outage loop: `kill -HUP` now triggers graceful drain + auto-restart instead of silent death.
 
 ---
 

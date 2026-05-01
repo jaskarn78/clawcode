@@ -16,7 +16,15 @@ import { extractFingerprint, formatFingerprint } from "../memory/fingerprint.js"
 // emitted into the stable prefix after identity so the LLM has its enabled
 // features in context (root cause of the "I don't dream" failure mode).
 import { buildCapabilityManifest } from "./capability-manifest.js";
-import { assembleContext, DEFAULT_BUDGETS } from "./context-assembler.js";
+import {
+  assembleContext,
+  assembleContextTraced,
+  DEFAULT_BUDGETS,
+} from "./context-assembler.js";
+// Phase 999.7 — TraceCollector wired through deps for context-audit pipeline
+// restoration. Without it, the per-section section_tokens metadata is never
+// written to traces.db and `clawcode context-audit` reports sampledTurns: 0.
+import type { TraceCollector } from "../performance/trace-collector.js";
 import type {
   ContextSources,
   BudgetWarningEvent,
@@ -220,6 +228,24 @@ export type SessionConfigDeps = {
     overrides: Record<string, Record<string, string>>,
     agentName: string,
   ) => Promise<Record<string, Record<string, string>>>;
+  /**
+   * Phase 999.7 — per-agent TraceCollector for context-audit telemetry.
+   *
+   * When supplied, buildSessionConfig opens a synthetic `bootstrap:<id>` Turn
+   * around `assembleContextTraced` so the per-section `section_tokens`
+   * metadata lands in traces.db. Without this, the wrapper is a no-op (no
+   * Turn → no span → no metadata write) and `clawcode context-audit`
+   * reports `sampledTurns: 0` for every agent.
+   *
+   * Captures per session-start (NOT per-turn — buildSessionConfig only runs
+   * at agent start + hot-reload). One row per agent restart is enough to
+   * surface the tail-of-context-budget hot spots; per-turn context refresh
+   * is a separate phase.
+   *
+   * Optional — when absent (tests, legacy paths), behavior is unchanged
+   * and `assembleContext` is called with no tracing.
+   */
+  readonly traceCollector?: TraceCollector;
 };
 
 /**
@@ -757,11 +783,47 @@ export async function buildSessionConfig(
       }
     : undefined;
 
-  const assembled = assembleContext(sources, budgets, {
-    priorHotStableToken: deps.priorHotStableToken,
-    memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
-    onBudgetWarning,
-  });
+  // Phase 999.7 — when a TraceCollector is wired, capture per-section token
+  // counts via a synthetic bootstrap Turn. The Turn is opened, the assembler
+  // emits metadata onto its `context_assemble` span, and the Turn is ended
+  // immediately so the row commits to traces.db. Status is "ok" on success,
+  // "error" if assembly throws. Best-effort — failures here are observability,
+  // never block agent startup.
+  const traceCollector = deps.traceCollector;
+  let bootstrapTurn:
+    | ReturnType<TraceCollector["startTurn"]>
+    | undefined;
+  if (traceCollector) {
+    try {
+      const bootstrapId = `bootstrap:${config.name}:${Date.now()}`;
+      bootstrapTurn = traceCollector.startTurn(bootstrapId, config.name, null);
+    } catch {
+      bootstrapTurn = undefined; /* never let tracing block startup */
+    }
+  }
+  let assembled;
+  try {
+    assembled = bootstrapTurn
+      ? assembleContextTraced(
+          sources,
+          budgets,
+          {
+            priorHotStableToken: deps.priorHotStableToken,
+            memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
+            onBudgetWarning,
+          },
+          bootstrapTurn,
+        )
+      : assembleContext(sources, budgets, {
+          priorHotStableToken: deps.priorHotStableToken,
+          memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
+          onBudgetWarning,
+        });
+    bootstrapTurn?.end("success");
+  } catch (err) {
+    bootstrapTurn?.end("error");
+    throw err;
+  }
   const trimmedMutable = assembled.mutableSuffix.trim();
 
   // Phase 100 follow-up — apply per-agent MCP env overrides (op:// resolution)

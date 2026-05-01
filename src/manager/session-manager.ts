@@ -2207,6 +2207,14 @@ export class SessionManager {
       // (e.g. Finmentum-only) tokens before MCP subprocess spawn.
       // Undefined in tests → buildSessionConfig silently skips (back-compat).
       opEnvResolver: this.opEnvResolver,
+      // Phase 999.7 — per-agent TraceCollector for context-audit telemetry.
+      // Wired here so buildSessionConfig can capture section_tokens metadata
+      // on a synthetic bootstrap Turn at every session start. Without this,
+      // `clawcode context-audit` reports `sampledTurns: 0` for every agent.
+      traceCollector:
+        agentName !== undefined
+          ? this.memory.traceCollectors.get(agentName)
+          : undefined,
     };
   }
 

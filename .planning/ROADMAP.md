@@ -901,7 +901,7 @@ Plans:
 
 **Status:** Shipped 2026-04-29. `delegateTo` parameter live on `spawn_subagent_thread` MCP tool, IPC handler, and spawnInThread; 4-surface fan-through complete with 10 DEL-01..DEL-10 tests. See 999.3-VERIFICATION.md. Note: original "promotion target Phase 105" plan was superseded — Phase 105 was used for trigger-policy default-allow + QUEUE_FULL coalescer storm fix. Follow-up gaps captured in 999.18 (relay reliability), 999.19 (cleanup + memory consolidation + delegate-channel routing), 999.22 (soul guard).
 
-### Phase 999.4: /clawcode-usage accuracy fixes (BACKLOG)
+### Phase 999.4: /clawcode-usage accuracy fixes (SHIPPED 2026-05-01)
 
 **Goal:** Fix two bugs in Phase 103 Plan 03's `/clawcode-usage` embed exposed during live test on 2026-04-29:
 
@@ -910,11 +910,7 @@ Plans:
 
 **Trigger:** 2026-04-29 live test post Phase 103 deploy — `/clawcode-usage` rendered "5-hour session — 🟢 \`──────────  n/a\` · resets in about 1 hour" when SDK had clearly returned a populated rate_limit_event.
 
-**Requirements:** TBD — likely 3-4.
-
-**Plans:** 0 plans (TBD — likely 1-2 plans when promoted)
-
-**Promotion target:** active milestone, will likely become Phase 107 (after the 3 priority items above).
+**Status:** Shipped 2026-05-01 (local repo, deploy held). RateLimitTracker boundary normalization: `normalizeEpochToMs(value < 1e12 ? value*1000 : value)` applied to `resetsAt` + `overageResetsAt` in `record()`. Heuristic safe both ways — ms-epoch values from 2001+ are >= 1e12 so they pass through unchanged. Utilization derivation: when SDK omits `utilization`, derive from `status` (`rejected` → 1.0) + `surpassedThreshold` (`allowed_warning` → threshold as lower bound). Tests: 8 new (3 epoch normalization + 1 undefined passthrough + 4 utilization derivation), 19/19 pass total.
 
 ### Phase 999.5: /clawcode-status finish-up — Fallbacks + remaining no-source fields (BACKLOG)
 
@@ -954,7 +950,7 @@ Plans:
 
 **Status:** Shipped 2026-05-01. Snapshot manager implemented, daemon wired (shutdown writer + boot reader), schema field added, validated end-to-end in production.
 
-### Phase 999.7: Context-audit telemetry pipeline restoration + tool-call latency audit (BACKLOG)
+### Phase 999.7: Context-audit telemetry pipeline restoration + tool-call latency audit (PARTIAL — context-audit shipped 2026-05-01, tool-call profiling still open)
 
 **Goal:** Two related observability gaps surfaced during the 2026-04-29 health audit:
 
@@ -963,11 +959,9 @@ Plans:
 
 **Trigger:** 2026-04-29 — operator health audit before Phase 106 deploy. Memory graph linking confirmed healthy (527-1426 memories per agent, 4.6K-9.6K links, auto-linker active). Cache behavior healthy. But context-audit observability is dead and tool latency is slow.
 
-**Requirements:** TBD — likely 4-6.
+**Status (2026-05-01):** Item 1 SHIPPED (local repo, deploy held). Root cause: `session-config.ts` called `assembleContext` (untraced) instead of `assembleContextTraced`. The traced wrapper is a no-op without a Turn — buildSessionConfig had no Turn to thread, so per-section `section_tokens` metadata was never written. Fix: added `traceCollector` to SessionConfigDeps; wired from session-manager.ts via `this.memory.traceCollectors.get(agentName)`; buildSessionConfig now opens a synthetic `bootstrap:<agent>:<ts>` Turn around `assembleContextTraced` and ends it with status `success`/`error`. Result: one trace row per session start (not per-turn — that's a separate refactor) with full section_tokens populated, unblocking `clawcode context-audit` reporting. Item 2 (tool-call p95 profiling) still open — needs a separate quick task once item 1's data is in production.
 
-**Plans:** 0 plans (TBD — likely 1-2 plans when promoted: one for context-audit pipeline, one for tool-call profiling)
-
-**Promotion target:** active milestone, queue after Phase 106. Can also be split into two quick tasks if scope stays narrow.
+**Plans:** 0 plans (item 1 shipped via direct edit; item 2 TBD when promoted)
 
 **Side-finding (informational, not blocking):** Prefix-hash didn't visibly change at the Phase 104 deploy boundary (still `92b7...` from Phase 103). Either Phase 104 directives are in a part of the prefix excluded from the hash computation, or they're landing in a different position than expected. Cache behavior + token telemetry confirm the directives ARE in the prompt, but understanding why the hash is stable across the deploy boundary is worth a quick investigation when this phase opens.
 
@@ -1326,7 +1320,7 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 
 **Status:** Shipped 2026-05-01 via quick task `260501-k5s` (executor commits fd3aa10, 9486ad5, 67a1f03). Added new `mutate-verify` directive to fleet-wide `DEFAULT_SYSTEM_PROMPT_DIRECTIVES` rail in `src/config/schema.ts` (Phase 94 D-10 substrate, Phase 999.1 locked-additive convention). Key count: 11 → 12, locked-additive verified via static-grep + git-diff (existing 11 keys byte-identical). Directive covers the 4 brief requirements: read-back rule, passive-success-framing ban (Set./Done./Live./Saved./Updated.), failure-by-default on uncertainty, evidence-quoting format. Fleet scope (matches FRESH-/TRUST-/TABLE-* pattern, NOT subagent-only DERIV-* pattern). Tests: 38/38 pass (was 33+5 RED → all GREEN). Operational note: directive read at agent session boot; NEW agent sessions pick it up automatically; existing live sessions will not have it until next session start (no daemon restart required for the directive itself — only for refreshing live agents). **Local repo only — deploy held per Ramy-active rule + explicit operator instruction "Wait for me to give deploy order".**
 
-### Phase 999.23: Daemon SIGHUP handler + systemd restart-on-SIGHUP hardening (BACKLOG)
+### Phase 999.23: Daemon SIGHUP handler + systemd restart-on-SIGHUP hardening (SHIPPED 2026-05-01)
 
 **Goal:** Stop SIGHUP from killing the daemon silently. Two layered fixes:
 
@@ -1342,11 +1336,13 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 3. Update `/etc/systemd/system/clawcode.service` template (and the deploy/install path that writes it) with `RestartForceExitStatus=SIGHUP` under `[Service]`.
 4. Smoke test: kill -HUP the daemon, confirm it survives (or restarts within ~10s if handler not installed).
 
-**Requirements:** TBD — likely 4-6.
+**Status:** Shipped 2026-05-01 (local repo, deploy held). Two-layer fix:
+1. **Daemon SIGHUP handler** (`src/manager/daemon.ts:4694-4708`) — added alongside SIGTERM/SIGINT. Logs the signal, runs the existing `shutdown()` cleanup (close MCP children, unlink socket + PID), then exits with code 129 (128 + signal 1 = SIGHUP). Goes through the SAME shutdown path so MCP children + agents drain cleanly.
+2. **systemd `RestartForceExitStatus=129`** (`scripts/install.sh:228`) — added under `[Service]` so the existing `Restart=on-failure` policy treats exit code 129 as a restart trigger. Without this, code 129 looks like a clean exit and systemd leaves the daemon dead.
 
-**Plans:** 0 plans (TBD — likely 2 plans: handler + tests, then systemd unit + deploy gate).
+Together these close the 2026-05-01 outage loop: a `kill -HUP` (from any source — agent bash, manual operator, future SIGHUP-from-systemctl-reload) now triggers a graceful drain + automatic systemd restart within ~10s instead of silent death.
 
-**Promotion target:** active milestone — directly prevents recurrence of 2026-05-01 outage.
+Tests: signal handling is integration-level (no unit test). Will be validated at next deploy via deliberate `kill -HUP <pid>` smoke. Pairs with shipped 999.24 (sudoers expansion) — together they remove the agent's incentive to fall back to `kill -HUP` AND the consequence of doing so.
 
 ### Phase 999.24: Sudoers expansion for clawcode user — systemctl reload/restart (SHIPPED 2026-05-01)
 
