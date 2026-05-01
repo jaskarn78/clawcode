@@ -999,12 +999,12 @@ Operators grep for `action: "reconcile"` to audit tracker drift.
 
 **Requirements:** [TRACK-01..08 as scoped above]
 
-**Plans:** 2/5 plans executed
+**Plans:** 3/5 plans executed
 
 Plans:
 - [x] 999.15-00-PLAN.md — Wave 0 RED tests across 6 test files (TRACK-01..06+08)
 - [x] 999.15-01-PLAN.md — Tracker API extensions + isPidAlive (TRACK-03 + TRACK-04 substrate)
-- [ ] 999.15-02-PLAN.md — Reconciler + polled discovery + reconcile-before-kill (TRACK-01/02/04/06)
+- [x] 999.15-02-PLAN.md — Reconciler + polled discovery + reconcile-before-kill (TRACK-01/02/04/06)
 - [ ] 999.15-03-PLAN.md — mcp-tracker IPC + CLI (TRACK-05)
 - [ ] 999.15-04-PLAN.md — Local gate + operator deploy + 3 long-soak smokes on clawdy (TRACK-07)
 
