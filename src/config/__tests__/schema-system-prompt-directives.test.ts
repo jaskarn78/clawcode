@@ -40,11 +40,12 @@ describe("systemPromptDirectiveSchema (Phase 94 TOOL-10)", () => {
 });
 
 describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
-  it("REG-DEFAULTS-PRESENT: ships D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes plus freshness + derivative-work + trusted-operator + discord-format (11 directives total)", () => {
+  it("REG-DEFAULTS-PRESENT: ships D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes plus freshness + derivative-work + trusted-operator + discord-format plus mutate-verify (12 directives total)", () => {
     const keys = Object.keys(DEFAULT_SYSTEM_PROMPT_DIRECTIVES).sort();
     // Phase 99 added subagent-routing; Phase 100-fu added memory-recall-before-uncertainty,
-    // propose-alternatives, long-output-to-file, and verify-file-writes; Phase 999.1 adds
-    // freshness, derivative-work, trusted-operator, discord-format (11 directives total).
+    // propose-alternatives, long-output-to-file, and verify-file-writes; Phase 999.1 added
+    // freshness, derivative-work, trusted-operator, discord-format; Phase 999.22 adds mutate-verify
+    // (12 directives total).
     expect(keys).toEqual([
       "cross-agent-routing",
       "derivative-work",
@@ -53,6 +54,7 @@ describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
       "freshness",
       "long-output-to-file",
       "memory-recall-before-uncertainty",
+      "mutate-verify",
       "propose-alternatives",
       "subagent-routing",
       "trusted-operator",
@@ -260,6 +262,28 @@ describe("discord-format directive (Phase 999.1)", () => {
   });
 });
 
+describe("mutate-verify directive (Phase 999.22)", () => {
+  it("MUTATE-DIR-1: directive key is present in DEFAULT_SYSTEM_PROMPT_DIRECTIVES", () => {
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+        "mutate-verify",
+      ),
+    ).toBe(true);
+  });
+
+  it("MUTATE-DIR-2: directive is enabled by default", () => {
+    expect(DEFAULT_SYSTEM_PROMPT_DIRECTIVES["mutate-verify"].enabled).toBe(
+      true,
+    );
+  });
+
+  it("MUTATE-DIR-3: directive text pins canonical phrase 'Quote the post-mutation evidence' (Phase 999.22 hallucinated-success failure mode)", () => {
+    const text = DEFAULT_SYSTEM_PROMPT_DIRECTIVES["mutate-verify"].text;
+    expect(text).toContain("Quote the post-mutation evidence");
+  });
+});
+
 describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
   it("REG-V25-BACKCOMPAT: defaultsSchema.parse({}) populates systemPromptDirectives with the defaults (additive-optional, 8th application)", () => {
     const result = defaultsSchema.safeParse({});
@@ -279,6 +303,7 @@ describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
         "freshness",
         "long-output-to-file",
         "memory-recall-before-uncertainty",
+        "mutate-verify",
         "propose-alternatives",
         "subagent-routing",
         "trusted-operator",
