@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.6-01-PLAN.md (Wave 1 GREEN)
-last_updated: "2026-05-01T04:18:42.563Z"
+stopped_at: Completed 999.12-00 + 999.12-01 (Wave 0 RED + Wave 1 GREEN bundle)
+last_updated: "2026-05-01T05:07:57.468Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 30
   completed_phases: 10
-  total_plans: 60
-  completed_plans: 55
+  total_plans: 63
+  completed_plans: 57
 ---
 
 # Project State
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 999.6 — auto-pre-deploy-snapshot-and-restore-running-state
+**Current focus:** Phase 999.12 — cross-agent-ipc-channel-delivery-heartbeat-inbox-timeout
 
 ## Current Position
 
-Phase: 999.6 (auto-pre-deploy-snapshot-and-restore-running-state) — EXECUTING
+Phase: 999.12 (cross-agent-ipc-channel-delivery-heartbeat-inbox-timeout) — EXECUTING
 Plan: 2 of 3
 
 ## Performance Metrics
@@ -513,11 +513,13 @@ Recent decisions affecting current work:
 | Phase 999.15 P02 | 33 min | 5 tasks | 5 files |
 | Phase 999.15 P03 | 15 min | 3 tasks | 6 files |
 | Phase 999.6 P01 | 12 min | 3 tasks | 3 files |
+| Phase 999.12 P00 | 18 min | 2 tasks | 4 files |
+| Phase 999.12 P01 | 12 min | 3 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 999.6-01-PLAN.md (Wave 1 GREEN)
+Stopped at: Completed 999.12-00 + 999.12-01 (Wave 0 RED + Wave 1 GREEN bundle)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)

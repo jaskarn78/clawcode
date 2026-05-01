@@ -814,13 +814,12 @@ Plans:
 
 **Requirements:** [IPC-01 deliveryFn for dispatchTurn, IPC-02 mirror flag, IPC-03 webhook→bot fallback parity with triggerDeliveryFn; HB-01 inbox timeout bump, HB-02 active-turn awareness] — see 999.12-PLAN.md when planned.
 
-**Plans:** 4 plans
+**Plans:** 2/3 plans executed
 
 Plans:
-- [x] 999.13-00-PLAN.md — Wave 0 RED tests for both pillars (DELEG + TZ)
-- [x] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
-- [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
-- [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
+- [x] 999.12-00-PLAN.md — Wave 0 RED tests: bot-direct fallback (IPC-02), inbox skip + timeout override (HB-01/02)
+- [x] 999.12-01-PLAN.md — Wave 1 GREEN: extend handleAskAgentIpc with bot-direct fallback; HeartbeatConfig.inboxTimeoutMs + active-turn skip (IPC-01..03, HB-01, HB-02)
+- [ ] 999.12-02-PLAN.md — Wave 2 deploy gate + clawdy ship + journalctl smoke for both pillars
 
 **Promotion target:** active milestone — sequence AFTER Phase 105. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 105 does.
 
