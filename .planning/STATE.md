@@ -436,6 +436,7 @@ Recent decisions affecting current work:
 | 260419-q2z | Registry atomic write + recovery + `clawcode registry repair` CLI + always-summarize short sessions + graceful shutdown drain (FIX A+B+C) | 2026-04-19 | fa34ef3 | [260419-q2z-registry-atomic-write-graceful-shutdown-](./quick/260419-q2z-registry-atomic-write-graceful-shutdown-/) |
 | 260429-ouw | Webhook table-wrap regression — wrap markdown tables inside webhookManager.send (covers 3 missed Phase 100-fu call sites) | 2026-04-29 | 696bc39 | [260429-ouw-webhook-path-table-wrap-regression-add-w](./quick/260429-ouw-webhook-path-table-wrap-regression-add-w/) |
 | 260501-i3r | Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points | 2026-05-01 | 61292ed | [260501-i3r-add-structured-relay-skipped-diagnostic-](./quick/260501-i3r-add-structured-relay-skipped-diagnostic-/) |
+| 260501-j7x | Phase 999.24 — expand /etc/sudoers.d/clawcode on clawdy with CLAWCODE_SERVICE alias (systemctl reload/restart NOPASSWD for clawcode user) | 2026-05-01 | c3dc129 | [260501-j7x-phase-999-24-sudoers-expansion-for-clawc](./quick/260501-j7x-phase-999-24-sudoers-expansion-for-clawc/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
@@ -543,7 +544,7 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-01
+Last activity: 2026-05-01 - Completed quick task 260501-j7x: Phase 999.24 sudoers expansion on clawdy (systemctl reload/restart NOPASSWD for clawcode user) + Phase 108 work in parallel
 Stopped at: Completed 108-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 

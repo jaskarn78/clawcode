@@ -1264,7 +1264,7 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 
 **Promotion target:** active milestone — directly prevents recurrence of 2026-05-01 outage.
 
-### Phase 999.24: Sudoers expansion for clawcode user — systemctl reload/restart (BACKLOG)
+### Phase 999.24: Sudoers expansion for clawcode user — systemctl reload/restart (SHIPPED 2026-05-01)
 
 **Goal:** Whitelist the exact `systemctl` invocations that Admin Clawdy needs to legitimately reload or restart the daemon, so the agent doesn't fall back to `kill -HUP` when sudo rejects its requests. Currently `/etc/sudoers.d/clawcode` (328 bytes) doesn't allow `systemctl reload clawcode.service`, `systemctl restart clawcode.service`, or `systemctl kill --signal=SIGHUP clawcode.service`.
 
@@ -1282,6 +1282,6 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 
 **Requirements:** TBD — likely 2-3.
 
-**Plans:** 0 plans (TBD — likely 1 plan: sudoers diff + validation + deploy gate).
+**Plans:** 0 plans — shipped via quick task 260501-j7x (atomic sudoers swap on clawdy, no repo code changes).
 
-**Promotion target:** active milestone — pairs naturally with 999.23. Together they close the "agent kills its own daemon" loop: 999.23 makes SIGHUP non-fatal, 999.24 makes sudo'd reload actually work.
+**Status:** Shipped 2026-05-01 via quick task `260501-j7x` (commit `c3dc129`). Added new `CLAWCODE_SERVICE` Cmnd_Alias to `/etc/sudoers.d/clawcode` covering exact-match `systemctl reload clawcode.service` and `systemctl restart clawcode.service`. Original `CLAWCODE_INSTALL` block preserved byte-equal. Atomic install via `install -m 0440 -o root -g root` (mandatory mode for sudoers.d). Validated via `visudo -cf` pre-install. Daemon left running; no live reload/restart smoke test (would have killed daemon — Phase 999.23 SIGHUP handler still pending). Pairs with future 999.23: together they close the "agent kills its own daemon" loop. Future hardening: install/update flow does NOT currently template sudoers.d entries — a later phase should add this so the grant survives reinstalls (out of scope for 260501-j7x).
