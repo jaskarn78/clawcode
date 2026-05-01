@@ -239,6 +239,30 @@ export class McpProcessTracker {
   }
 
   /**
+   * Phase 999.15 Plan 03 (TRACK-05) — read-only accessor for the per-agent
+   * cmdline cache populated at register / replaceMcpPids time. Returns the
+   * cmdlines (one per MCP PID, in registration order, with redaction
+   * already applied by the proc-scan layer).
+   *
+   * Used by `buildMcpTrackerSnapshot` (mcp-tracker-snapshot.ts) to surface
+   * cmdlines to operators via `clawcode mcp-tracker`. Returns an empty
+   * array when:
+   *   - the agent is unknown,
+   *   - the cmdline cache enrichment hasn't completed yet (race-safe),
+   *   - or every cached cmdline has been evicted.
+   */
+  getCmdlinesForAgent(agentName: string): readonly string[] {
+    const entry = this.entries.get(agentName);
+    if (!entry) return [];
+    const out: string[] = [];
+    for (const pid of entry.mcpPids) {
+      const cmd = this.cmdlines.get(pid);
+      if (cmd !== undefined) out.push(cmd);
+    }
+    return out;
+  }
+
+  /**
    * Phase 999.15 — partition the agent's mcpPids into pruned (dead) + alive.
    *
    * Walks the agent's MCP PID list, calls isPidAlive(pid) for each, and

@@ -34,6 +34,7 @@ import { SecretsResolver } from "./secrets-resolver.js";
 // Phase 999.14 — MCP child process lifecycle hardening (boot scan + reaper
 // + shutdown cleanup). Singleton mirrors the SecretsResolver DI pattern.
 import { McpProcessTracker } from "../mcp/process-tracker.js";
+import { buildMcpTrackerSnapshot } from "./mcp-tracker-snapshot.js";
 import { reapOrphans, startOrphanReaper } from "../mcp/orphan-reaper.js";
 import {
   buildMcpCommandRegexes,
@@ -3718,6 +3719,23 @@ export async function startDaemon(
       }
       case "secrets-invalidate": {
         return handleSecretsInvalidate(secretsResolver, params);
+      }
+      // Phase 999.15 TRACK-05 — mcp-tracker-snapshot intercept BEFORE
+      // routeMethod (closure-intercept pattern, mirrors secrets-status
+      // above). Pure handler in mcp-tracker-snapshot.ts builds the
+      // response from the daemon-scoped mcpTracker singleton via closure.
+      // Returns { agents: [] } when tracker is unset (Linux-only feature
+      // not available on this platform). Optional `agent` param filters
+      // to one entry — consumed by `clawcode mcp-tracker -a <name>`.
+      case "mcp-tracker-snapshot": {
+        if (!mcpTracker) {
+          return { agents: [] };
+        }
+        const filter =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? ((params as { agent: string }).agent)
+            : undefined;
+        return buildMcpTrackerSnapshot(mcpTracker, filter);
       }
     }
 
