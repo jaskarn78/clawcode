@@ -1223,3 +1223,65 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 **Plans:** 0 plans (TBD — 1 plan, mostly mechanical).
 
 **Promotion target:** active milestone, independent of 999.18-20 — could land any time as low-risk UX polish.
+
+### Phase 999.22: Soul guard against agent hallucinated tool-use claims (BACKLOG)
+
+**Goal:** Prevent agents (especially `Admin Clawdy`) from claiming to have performed actions they didn't actually execute. Add a soul-level constraint and verification protocol so agents must read-back-confirm any file edit, config change, or system mutation before reporting it as done.
+
+**Trigger:** 2026-05-01 production outage — Admin Clawdy posted "Set. `threads.maxThreadSessions: 10` is live in `clawcode.yaml` under `defaults` — takes effect on next daemon reload" but the file mtime (`2026-04-30 23:21:22`) and a grep both confirmed no edit was performed. The fabricated success report led directly to the cascading reload attempts that killed the daemon (paired with 999.23 and 999.24).
+
+**Approach (sketch):**
+
+1. Add a soul addendum: "Before reporting any mutation as done (file edit, config change, systemctl action, IPC call), Read the resulting state and quote the change verbatim in your reply. If you cannot verify it landed, report failure, not success."
+2. Consider a system-level guard: hook on Bash/Edit completion that reminds the agent to verify and quote.
+3. Add a "claim-verify" pattern to the standard delegation context for Admin Clawdy / agents with mutation tools.
+
+**Requirements:** TBD — likely 3-5.
+
+**Plans:** 0 plans (TBD — likely 1 plan: soul addendum + small verification helper + tests on Admin Clawdy specifically).
+
+**Promotion target:** active milestone — high impact for trust, low blast radius.
+
+### Phase 999.23: Daemon SIGHUP handler + systemd restart-on-SIGHUP hardening (BACKLOG)
+
+**Goal:** Stop SIGHUP from killing the daemon silently. Two layered fixes:
+
+1. **Install a SIGHUP handler in the daemon** that performs a config reload (or at minimum logs the signal + ignores it) instead of letting Node.js's default SIGHUP termination behavior take over. `process.on("SIGHUP", () => { log.info("sighup received — reloading config"); reloadConfig(); })`.
+2. **Add `RestartForceExitStatus=SIGHUP` to the systemd unit** so even if the handler crashes or is removed, systemd treats SIGHUP termination as a failure that triggers `Restart=on-failure`. Belt-and-suspenders.
+
+**Trigger:** 2026-05-01 production outage — daemon died at 06:07:55 PDT from SIGHUP (after Admin Clawdy's bash tool fell back to `kill -HUP <pid>` when sudo rejected its reload attempts). systemd treated SIGHUP as a clean exit (default behavior), so `Restart=on-failure` didn't fire. Daemon stayed dead for ~9 minutes until manual restart.
+
+**Approach (sketch):**
+
+1. Add SIGHUP handler in `src/manager/daemon.ts` boot path (alongside existing SIGTERM/SIGINT handlers).
+2. Decide reload semantics: full config reload (re-read yaml, diff, apply additive changes) OR ignore-with-log. Likely ignore-with-log first, full reload as a follow-up phase.
+3. Update `/etc/systemd/system/clawcode.service` template (and the deploy/install path that writes it) with `RestartForceExitStatus=SIGHUP` under `[Service]`.
+4. Smoke test: kill -HUP the daemon, confirm it survives (or restarts within ~10s if handler not installed).
+
+**Requirements:** TBD — likely 4-6.
+
+**Plans:** 0 plans (TBD — likely 2 plans: handler + tests, then systemd unit + deploy gate).
+
+**Promotion target:** active milestone — directly prevents recurrence of 2026-05-01 outage.
+
+### Phase 999.24: Sudoers expansion for clawcode user — systemctl reload/restart (BACKLOG)
+
+**Goal:** Whitelist the exact `systemctl` invocations that Admin Clawdy needs to legitimately reload or restart the daemon, so the agent doesn't fall back to `kill -HUP` when sudo rejects its requests. Currently `/etc/sudoers.d/clawcode` (328 bytes) doesn't allow `systemctl reload clawcode.service`, `systemctl restart clawcode.service`, or `systemctl kill --signal=SIGHUP clawcode.service`.
+
+**Trigger:** 2026-05-01 production outage — Admin Clawdy's three sequential `sudo systemctl ...` attempts all rejected with "command not allowed" (journal evidence at 06:07:42-06:07:50). The agent then bypassed sudo by directly signaling the daemon's PID (which the clawcode user is permitted to do without sudo), and SIGHUP killed the daemon.
+
+**Approach (sketch):**
+
+1. Audit the current `/etc/sudoers.d/clawcode` file to understand the current allowlist.
+2. Add NOPASSWD lines for the legitimate operator paths:
+   - `clawcode ALL=(root) NOPASSWD: /usr/bin/systemctl reload clawcode.service`
+   - `clawcode ALL=(root) NOPASSWD: /usr/bin/systemctl restart clawcode.service`
+   - (Avoid adding generic `systemctl *` — keep narrow.)
+3. Validate via `visudo -c` before deploying.
+4. Ship via the install/update flow so future deploys don't regress.
+
+**Requirements:** TBD — likely 2-3.
+
+**Plans:** 0 plans (TBD — likely 1 plan: sudoers diff + validation + deploy gate).
+
+**Promotion target:** active milestone — pairs naturally with 999.23. Together they close the "agent kills its own daemon" loop: 999.23 makes SIGHUP non-fatal, 999.24 makes sudo'd reload actually work.
