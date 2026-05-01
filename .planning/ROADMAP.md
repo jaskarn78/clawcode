@@ -602,7 +602,61 @@ Plans:
 - [x] 106-03-PLAN.md — Wave 1 GREEN TRACK-CLI: append `mcp-tracker-snapshot` to IPC_METHODS enum (1 LOC + comment, mirrors commit a9c39c7)
 - [ ] 106-04-PLAN.md — Wave 2: pre-deploy validation, deploy gate poll (channels silent ≥30 min, 6h cap), ssh deploy on clawdy, smoke (TRACK-CLI table + STALL repro classify A/B/C), restore yaml fan-out (8 agents), SUMMARY
 
-**Status:** Planning complete 2026-05-01 overnight via `/gsd:autonomous`. Deploy gate: all channels (incl. fin-acquisition, finmentum-content-creator, Admin Clawdy) silent ≥30 min on non-bot `messageCreate` events. Plan 04 enforces gate with 5-min poll, 6-hour cap, hold-and-report on cap-hit.
+**Status:** Shipped 2026-05-01 overnight via `/gsd:autonomous`. Deploy gate satisfied (31 min silence at 23:20 PT). All 3 fixes live: DSCOPE, STALL-02, TRACK-CLI. yaml fan-out restored across 8 agents.
+
+---
+
+### Phase 107: Memory pipeline integrity — dream JSON output enforcement + vec_memories orphan cleanup
+
+**Goal:** Bundle two memory-pipeline integrity bugs reported by Admin Clawdy 2026-05-01. Both daemon-side data integrity issues; same memory subsystem; one ship.
+
+#### Pillar A — Dream pass JSON output enforcement (DREAM-OUT-01..04)
+
+**Symptom:** Dream pass schema validation failed with:
+```
+dream-result-schema-validation-failed:
+  JSON parse failed (Unexpected token 'N', "Noted — co"... is not valid JSON)
+```
+Haiku (the dream model) returned chat-style prose instead of the structured JSON the pipeline expects. Phase 95's prompt was already tightened in commit `509ff03` (rules like "FIRST character MUST be `{`", "NO markdown fences"); model is ignoring them.
+
+**Fix path:**
+1. **DREAM-OUT-01:** Audit `src/manager/dream-prompt-builder.ts` — strengthen rules. Add explicit fallback contract: "If you cannot produce valid JSON for any reason, output `{\"newWikilinks\":[],\"promotionCandidates\":[],\"summary\":\"\",\"errors\":[\"<reason>\"]}` — never plain prose."
+2. **DREAM-OUT-02:** Switch to SDK structured-output mode if available (`response_format: { type: "json_schema", schema: <zod-derived> }`). Stronger than prompt-side rules. Confirm SDK v0.2.x supports it.
+3. **DREAM-OUT-03:** Validation-failure recovery: when LLM returns invalid JSON, fall back to no-op result instead of throwing. Log warn with offending response prefix. Don't crash the pipeline.
+4. **DREAM-OUT-04:** Vitest tests pinning: synthetic LLM returning prose → no-op result, no throw, warn logged. Synthetic LLM returning valid JSON → parsed correctly.
+
+#### Pillar B — vec_memories orphan cleanup on memory delete (VEC-CLEAN-01..04)
+
+**Symptom:** `memories` row deletes don't cascade to `vec_memories` (sqlite-vec virtual table). Orphan embeddings accumulate, bloat the index, can return phantom matches in semantic search. sqlite-vec virtual tables don't support FK constraints (vtab interface limitation), so `memories` and `vec_memories` are decoupled.
+
+**Fix path:**
+1. **VEC-CLEAN-01:** Audit all `memories` delete paths (`MemoryStore.deleteById`, `deleteByTag`, `deleteOlderThan`, etc. — find via grep). Each must issue paired `vec_memories` delete in same transaction.
+2. **VEC-CLEAN-02:** Transaction wrapper if not already present. Both deletes must be atomic.
+3. **VEC-CLEAN-03:** `clawcode memory cleanup-orphans` CLI subcommand: scan `vec_memories` for rowids not in `memories`, delete them. Operator-runnable + auto-callable for one-time recovery + future hygiene.
+4. **VEC-CLEAN-04:** Tests: unit test that delete-from-memories also clears vec_memories; integration test that semantic search post-delete doesn't return the deleted memory.
+
+#### Trigger
+
+2026-05-01 — Admin Clawdy report after manual DB cleanup verified DB fix worked but dream pass still failed for separate reason. vec_memories orphans manually patched but root cause persists.
+
+#### Requirements
+
+[DREAM-OUT-01..04, VEC-CLEAN-01..04]
+
+#### Plans
+
+TBD by planner — likely 4-5 plans:
+- 107-00: Wave 0 RED tests for both pillars
+- 107-01: GREEN A — dream prompt strengthening + structured-output mode + recovery
+- 107-02: GREEN B — vec_memories cascade delete in MemoryStore + transaction wrapper
+- 107-03: GREEN — CLI subcommand for one-time + recurring cleanup
+- 107-04: deploy gate + smoke
+
+**Status:** Planning underway 2026-05-01 via `/gsd:autonomous`. Deploy gate: same as Phase 106 (all channels silent ≥30 min on non-bot `messageCreate`).
+
+#### Replaces
+
+- Was Phase 999.16 (dream JSON enforcement) and Phase 999.17 (vec_memories orphan cleanup) in backlog. Bundled and promoted to active sequential because of related subsystem + small individual scope.
 
 ---
 
