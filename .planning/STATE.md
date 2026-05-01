@@ -518,3 +518,7 @@ Recent decisions affecting current work:
 Last activity: 2026-05-01
 Stopped at: Completed 999.15-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
+
+## Open Bugs (post-999.15 deploy)
+
+- **mcp-tracker CLI: "Invalid Request"** — `clawcode mcp-tracker` IPC call returns Invalid Request from daemon. Likely IPC schema mismatch between client request shape and `daemon.ts:5285+` handler registration. Plan 03 tests passed (mocked IPC), but real production wiring has a gap. Hot-fix: small (probably 1-2 lines schema or method-name correction). Track as 999.15 post-deploy follow-up.
