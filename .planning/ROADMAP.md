@@ -668,9 +668,14 @@ Plans:
 
 **Trigger:** 2026-04-29 — operator pain during today's two prod deploys: `autoStart=false` agents that were running (e.g., research-clawdy, fin-research) didn't come back automatically, requiring manual restart.
 
-**Requirements:** TBD — likely 4-5 (SNAP-01..SNAP-05).
+**Requirements:** [SNAP-01, SNAP-02, SNAP-03, SNAP-04, SNAP-05]
 
-**Plans:** 0 plans (TBD — likely 1-2 plans when promoted)
+**Plans:** 2/3 plans executed
+
+Plans:
+- [x] 999.6-00-PLAN.md — Wave 0 RED tests: snapshot-manager unit + daemon source-grep wiring + schema field
+- [x] 999.6-01-PLAN.md — Wave 1 GREEN: implement src/manager/snapshot-manager.ts, wire daemon shutdown writer + boot reader, add preDeploySnapshotMaxAgeHours to defaultsSchema
+- [ ] 999.6-02-PLAN.md — Wave 2 deploy gate (operator-authorized): build, deploy to clawdy, run canonical reproducer (stop fin-tax + start personal + restart → personal restored, fin-tax stays stopped)
 
 **Promotion target:** active milestone, queue after Phase 106 (a2a refactor) since Phase 105 + 106 are higher operator-pain priorities. Could also be a quick task if scope stays small.
 
