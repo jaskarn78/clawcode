@@ -3754,7 +3754,7 @@ export async function startDaemon(
       }
     }
 
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);
   };
 
   // 11. Create IPC server
@@ -4442,6 +4442,10 @@ async function routeMethod(
   taskManager: TaskManager,
   taskStore: TaskStore,
   schedulerSource: SchedulerSource,
+  // Phase 999.12 IPC-02 — bot-direct sender ref for ask-agent's no-webhook
+  // fallback path. Mutable ref so the closure reads `.current` at call time
+  // (Pitfall 7: pre-bridge boot leaves .current null).
+  botDirectSenderRef: { current: import("./restart-greeting.js").BotDirectSender | null },
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -4657,6 +4661,17 @@ async function routeMethod(
             warn: (...args: unknown[]) => console.warn(...args),
             error: (...args: unknown[]) => console.error(...args),
           },
+          // Phase 999.12 IPC-02 — bot-direct fallback for response mirror
+          // when target lacks a webhook. Late-bound ref read so pre-bridge
+          // boot windows (Pitfall 7) silently skip the mirror without throwing.
+          botDirectSender: {
+            sendText: async (channelId: string, text: string) => {
+              const sender = botDirectSenderRef.current;
+              if (!sender) return;
+              await sender.sendText(channelId, text);
+            },
+          },
+          agentChannels: routingTableRef.current.agentToChannels,
         },
       );
 

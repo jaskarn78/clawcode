@@ -244,7 +244,6 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
           warn: () => {},
           error: () => {},
         } as never,
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         botDirectSender: { sendText },
         agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
       });
@@ -329,7 +328,6 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
           warn: () => {},
           error: () => {},
         } as never,
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         botDirectSender: { sendText },
         agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
       });
@@ -362,7 +360,6 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
           sendAsAgent: vi.fn(),
         },
         configs: [{ name: "fin-acquisition" }],
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         botDirectSender: { sendText },
         agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
       });

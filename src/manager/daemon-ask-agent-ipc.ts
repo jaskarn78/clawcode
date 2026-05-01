@@ -45,6 +45,12 @@ export type AskAgentAgentConfigLike = Readonly<{
     avatarUrl?: string;
     webhookUrl?: string;
   }>;
+  /**
+   * Phase 999.12 IPC-02 — bound channel IDs. Used by the bot-direct fallback
+   * when `agentChannels` (routing-table snapshot) doesn't have a binding,
+   * matching the `triggerDeliveryFn` channel-resolution path at daemon.ts:2212.
+   */
+  channels?: readonly string[];
 }>;
 
 /** Minimal pino-like logger surface. */
@@ -87,6 +93,22 @@ export type AskAgentDeps = Readonly<{
   configs: readonly AskAgentAgentConfigLike[];
   /** Logger for best-effort mirror-failure warnings. */
   log: AskAgentLogger;
+  /**
+   * Phase 999.12 IPC-02 — optional bot-direct sender for the no-webhook
+   * fallback path. When the target agent has no webhook configured,
+   * `mirror_to_target_channel: true` falls back to plain-text via this
+   * sender (matches `triggerDeliveryFn` shape at daemon.ts:2200-2248).
+   * Optional: pre-bridge boot leaves the sender unwired, in which case the
+   * mirror is silently skipped and the ask still returns successfully.
+   */
+  botDirectSender?: { sendText(channelId: string, text: string): Promise<void> };
+  /**
+   * Phase 999.12 IPC-02 — agent → channel-IDs map (routingTable.agentToChannels).
+   * Used to resolve the target's bound channel for the bot-direct fallback.
+   * Falls through to `configs.find(c => c.name === to).channels?.[0]` when
+   * the routing table doesn't have a binding (test-only path).
+   */
+  agentChannels?: ReadonlyMap<string, readonly string[]>;
 }>;
 
 /** Wire param shape accepted by the handler. */
@@ -132,6 +154,15 @@ export function buildAskAgentDeps(
     webhookManager: overrides.webhookManager ?? noopWebhookManager,
     configs: overrides.configs ?? [],
     log: overrides.log ?? noopLog,
+    // Phase 999.12 IPC-02 — pass through when set; undefined means
+    // "skip bot-direct fallback" (production wires real values; tests that
+    // don't care leave them out).
+    ...(overrides.botDirectSender !== undefined
+      ? { botDirectSender: overrides.botDirectSender }
+      : {}),
+    ...(overrides.agentChannels !== undefined
+      ? { agentChannels: overrides.agentChannels }
+      : {}),
   };
 }
 
@@ -222,6 +253,48 @@ export async function handleAskAgentIpc(
         { from, to, err: errMsg },
         "[ask-agent] mirror response webhook failed (best-effort, ask continues)",
       );
+    }
+  }
+
+  // 5. Phase 999.12 IPC-02 — bot-direct fallback for the response mirror when
+  //    the target has NO webhook. Plain text (matches triggerDeliveryFn at
+  //    daemon.ts:2239-2242). Best-effort — never aborts the ask.
+  if (
+    mirror &&
+    response &&
+    !deps.webhookManager.hasWebhook(to) &&
+    deps.botDirectSender
+  ) {
+    const channelId =
+      deps.agentChannels?.get(to)?.[0] ??
+      deps.configs.find((c) => c.name === to)?.channels?.[0];
+    if (!channelId) {
+      deps.log.warn(
+        { from, to },
+        "[ask-agent] mirror response: no channel resolved for target (best-effort, ask continues)",
+      );
+    } else {
+      try {
+        // Discord hard limit is 2000 chars per message. Truncate + ellipsis —
+        // verbatim shape from triggerDeliveryFn (daemon.ts:2224-2229).
+        const MAX = 2000;
+        const ELLIPSIS = "...";
+        const truncated =
+          response.length > MAX
+            ? response.slice(0, MAX - ELLIPSIS.length) + ELLIPSIS
+            : response;
+        await deps.botDirectSender.sendText(channelId, truncated);
+        deps.log.info(
+          { to, channel: channelId, responseLength: response.length },
+          "agent response sent to Discord",
+        );
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        deps.log.warn(
+          { from, to, channelId, err: errMsg },
+          "[ask-agent] mirror response bot-direct failed (best-effort, ask continues)",
+        );
+      }
     }
   }
 
