@@ -645,10 +645,10 @@ Haiku (the dream model) returned chat-style prose instead of the structured JSON
 
 #### Plans
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 107-01-PLAN.md — Pillar A: Dream JSON enforcement (DREAM-OUT-01 fallback envelope + DREAM-OUT-03 warn-level recovery + DREAM-OUT-04 vitest; DREAM-OUT-02 deferred with anchors)
+- [x] 107-01-PLAN.md — Pillar A: Dream JSON enforcement (DREAM-OUT-01 fallback envelope + DREAM-OUT-03 warn-level recovery + DREAM-OUT-04 vitest; DREAM-OUT-02 deferred with anchors)
 - [ ] 107-02-PLAN.md — Pillar B: vec_memories orphan cleanup (VEC-CLEAN-01..04: audit, atomicity, cleanupOrphans method + IPC + CLI subcommand, vitest)
 - [ ] 107-03-PLAN.md — Wave 2 deploy gate + smoke (pre-deploy gauntlet, 30-min channel silence gate, ssh deploy, post-deploy DREAM warn smoke + VEC cascade verification + cleanupOrphans CLI run with idempotency check, SUMMARY)
 
