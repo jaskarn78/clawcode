@@ -240,22 +240,18 @@ scripts/
   *-smoke.mjs   End-to-end smoke tests per milestone
 ```
 
-## Milestone History
+## Milestone History & Changelog
 
-Full roadmaps + requirements + verification reports archived under `.planning/milestones/`:
+See [`CHANGELOG.md`](./CHANGELOG.md) for the full version-by-version + phase-by-phase changelog.
 
-- **v2.1 OpenClaw Agent Migration** (2026-04-21) — one-shot migration CLI; 15-agent fleet port
-- **v2.0 Open Endpoint + Eyes & Hands** (2026-04-20) — OpenAI-compatible endpoint, browser/search/image MCPs
-- **v1.9 Persistent Conversation Memory** (2026-04-18) — ConversationStore + session summaries + resume injection
-- **v1.8 Proactive Agents + Handoffs** (2026-04-17) — durable tasks, triggers, policy DSL, cross-agent trace
-- **v1.7 Performance & Latency** (2026-04-14) — SLOs, prompt caching, streaming, warm-path optimizations
-- **v1.6 Platform Operations & RAG** (2026-04-12) — systemd, auto-start, agent-to-agent Discord, RAG
-- **v1.5 Smart Memory & Model Tiering** (2026-04-10) — knowledge graph, fork escalation, context assembly
-- **v1.4 Agent Runtime** (2026-04-10) — global skills, standalone runner, OpenClaw coexistence
-- **v1.3 Agent Integrations** (2026-04-09) — subagent thread skill, per-agent MCP clients
-- **v1.2 Production Hardening** (2026-04-09) — hot-reload, zones, episodes, dashboard
-- **v1.1 Advanced Intelligence** (2026-04-09) — consolidation, decay, dedup, tiered storage, skills registry
-- **v1.0 Core Multi-Agent System** (2026-04-09) — config, lifecycle, Discord routing, per-agent memory
+Recent milestones:
+- **v2.6 Tool Reliability & Memory Dreaming** (2026-04-25) — capability probes, dynamic tool advertising, idle-time memory dreaming
+- **v2.5 Cutover Parity Verification** (2026-04-25) — verifier infrastructure, status/marketplace/manifest UX fixes
+- **v2.4 OpenClaw ↔ ClawCode Continuous Sync** (2026-04-24) — pull-model rsync sync + cutover semantics
+- **v2.3 Marketplace & Memory Activation** (2026-04-24) — ClawHub Marketplace, workspace-memory activation
+- **v2.2 OpenClaw Parity & Polish** (2026-04-23) — effort mapping, skills migration, model picker, restart greeting
+
+Full roadmaps + requirements + verification reports: [`.planning/milestones/`](./.planning/milestones/)
 
 ## License
 
