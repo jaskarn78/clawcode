@@ -330,12 +330,12 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - Backfill check: add a startup invariant that compares row counts in BOTH paths and warns if the wrong-path DB has data (would have caught this immediately).
   - Tests: add a translation E2E test that runs the translator + reads back via MemoryStore and verifies turn parity.
 
-**Sub-scope B — No automatic sync timer (Phase 91 promise unfulfilled):**
+**Sub-scope B — No automatic sync timer (Phase 91 promise unfulfilled): ~~CLOSED 2026-05-01~~**
 - Trigger: Phase 91's spec promised "5-min systemd timer + hourly conversation-turn translator via rsync over SSH." `systemctl list-timers` shows neither installed. The `clawcode sync run-once` and `translate-sessions` commands are CLI-only — no cron, no systemd timer. Last manual sync was 2026-04-24 22:02; nothing happened automatically until cutover today.
 - Scope (decision required):
   - **Path 1 — install the timers** (matches Phase 91 spec): create `clawcode-sync.timer` (5min OnCalendar) + `clawcode-translate-sessions.timer` (hourly OnCalendar) as systemd user units. Wire installer into `clawcode init` or daemon-bootstrap. Update Phase 91 D-11 deprecation to also disable the timers when `authoritativeSide=deprecated`.
   - **Path 2 — document Phase 91 as manual-only** and finish cutover (Phase 98) for all remaining channels so sync becomes obsolete. Aligns with Phase 96 D-11 deprecation we already landed.
-- Recommend Path 2 — sync becomes vestigial post-cutover; building auto-sync infrastructure for a deprecating subsystem is wasted work.
+- ~~Recommend Path 2~~ → **Path 2 chosen and complete.** Phase 96/98 cutover is done; all channels are ClawCode-native; Phase 91 sync is deprecated (D-11 landed). Building the timers would be infrastructure for a dead subsystem. No code work required.
 
 **Sub-scope C — Auto-summarization on session-end isn't firing for daemon-managed sessions:**
 - Trigger: 308 sessions in conversation_sessions table had `status='ended'` but `summary_memory_id IS NULL` — they finished but were never summarized. Phase 64's SessionSummarizer is supposed to fire at session-boundary; clearly didn't fire here.
@@ -362,12 +362,12 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - OR document Phase 84 as "single-host migration only" + define a manual recipe (essentially what we did): rsync skills, symlink to canonical path, edit yaml `skills:` field, restart agent. Recipe should live in `.planning/runbooks/skills-cross-host-migration.md`.
   - Either way: the secret-scan must run cross-host (Phase 84 originally refused finmentum-crm BECAUSE it had plaintext MySQL creds — that gate must not be lost in the cross-host path).
 
-**Sub-scope F — `/clawcode-status` data wiring (Phase 93 incomplete implementation):**
+**Sub-scope F — `/clawcode-status` data wiring (Phase 93 incomplete implementation): ~~CLOSED — promoted to Phase 103, SHIPPED 2026-04-29~~**
 - Trigger: Operator ran `/clawcode-status` post-cutover. The 17-field embed (Phase 93 D-93-02-1) has SHAPE-parity with OpenClaw but most fields show `n/a` or `unknown` — the renderer hardcodes "n/a" for Fallbacks/Compactions/Tokens/Runner/Fast/Harness/Reasoning/Elevated/Queue and `data.X` field props are passed through as `undefined` for sessionId/lastActivityAt/effort/permissionMode.
 - Field-by-field recovery analysis (recoverable vs not):
   - Recoverable from existing infra: Fallbacks (agent.fallbacks), Context % (Phase 53 zone tracker), Compactions (CompactionManager), Tokens (UsageTracker), Session ID + Last Activity (SessionHandle), Think (Phase 83 EffortStateStore), Reasoning (extended-thinking budget), Permissions (SDK setPermissionMode), Activation (turn trigger source), Queue depth (TurnDispatcher).
   - May not have ClawCode analog: Fast, Elevated (OpenClaw-specific concepts — design decision: drop the fields OR repurpose for ClawCode equivalents).
-- Scope: extend the daemon's `/clawcode-status` IPC handler to thread per-agent telemetry into the renderer's data object. Add small API surface to existing managers (`CompactionManager.getCount(agent)`, `UsageTracker.getSessionTotals(agent)`, etc.). Update the renderer to drop hardcoded `n/a` and use the wired fields. Test coverage required (status renders into Discord embeds — operators see this constantly).
+- **Resolution:** Promoted to standalone Phase 103 (rich telemetry + Usage panel) and shipped 2026-04-29. Rate-limit event wiring, Usage embed, and most n/a fields wired. Remaining honest-n/a: `Fallbacks` — tracked as Phase 999.5 (no source currently exists). See Phase 103 VERIFICATION.md.
 
 **Sub-scope G — Plaintext credential rotation batch (security):**
 - Trigger: Multiple plaintext credentials surfaced during Phase 96/98 work. Operator deferred rotation to a Phase 99 batch.
@@ -404,18 +404,23 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - **Path 3 — port to clawcode-native MCP/tool**: rewrite the Schwab sync logic as a ClawCode skill or MCP server. Cleanest long-term.
 - Track which migrated schedules reference OpenClaw paths so they're not silently broken.
 
-**Sub-scope J — Phase 95 dreaming source-material wiring + production hardening:**
+**Sub-scope J — Phase 95 dreaming source-material wiring + production hardening (partial):**
 - Trigger: Operator enabled dreaming for fin-acquisition. Three latent bugs surfaced + were hotfixed inline this session: (1) Haiku wraps JSON output in ```json``` markdown fence — strict JSON.parse rejects (`f38ae00`); (2) Haiku produces narrative prose preamble before JSON ("Picking up where we left off, …") — extract first balanced JSON object (`ca0122b`); (3) tightened system prompt to require strict JSON-only output (`509ff03`); (4) `entry.timestamp.toISOString()` undefined — wrapper lambda in IPC handler was discarding entry shape, dream-auto-apply was passing the FULL `{agentName, memoryRoot, entry}` but the lambda treated it all as `entry` (`c2d68f9`).
-- After all 4 hotfixes: dream pass fires successfully end-to-end, log written to `memory/dreams/YYYY-MM-DD.md`.
+- **Bugs 1-4 above: ~~CLOSED~~** — promoted to Phase 107 (dream JSON enforcement + vec_memories orphan cleanup), SHIPPED 2026-04-30. Dream pass fires end-to-end; JSON output reliable; `memory/dreams/YYYY-MM-DD.md` written correctly.
 - BUT the dream's `themedReflection` says "No memory chunks, conversation summaries, or wikilink graph data were provided in this reflection cycle." — meaning the dream-prompt-builder isn't pulling from the 6087 conversation_turns + 326 session-summaries we have. Likely related to sub-scope A (wrong-DB-path) — the prompt builder may be reading from the empty single-`memory/` DB instead of the agent's actual `memory/memory/` DB.
-- Scope:
+- **Remaining scope (still open — blocked on Sub-scope A DB-path fix):**
   - Fix dream-prompt-builder to read from the agent's actual MemoryStore + ConversationStore (single source of truth — same DB the agent + Phase 67 resume brief use).
   - Test fixture: spawn a dream pass after a synthetic conversation, assert `themedReflection` cites specific session content.
   - Add a `dream.minSourceContent` config (e.g., min 5 chunks OR min 1 session summary) — skip dream pass when source is too sparse to produce meaningful output.
-  - Consider: Phase 99 sub-scope J could BLOCK on sub-scope A (wrong-DB-path) since the underlying issue is the same.
 
 **Plans:** TBD (run /gsd:plan-phase 99 in v2.7 to break down)
 **Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery, expanded 2026-04-26 with sub-scopes E/F/G/H/I/J as more issues surfaced. None of these block production but all degrade UX or carry security/operational debt. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
+
+**Sub-scope resolution summary (2026-05-01 triage):**
+- ~~B~~ — CLOSED: Path 2 chosen, cutover complete, sync deprecated.
+- ~~F~~ — CLOSED: Promoted to Phase 103, shipped 2026-04-29.
+- J (partial) — JSON bugs 1-4 CLOSED via Phase 107 (shipped 2026-04-30); source-material wiring still open, blocked on Sub-scope A.
+- **Remaining open:** A (translator DB path), C (auto-summarization), D (restart-greeting lookback + summaryMemoryId fallback), E (skills CLI — data recovered manually), G (credential rotation), H (schedule migration CLI — data migrated manually), I (schedule prompts referencing OpenClaw paths), J (dream source-material).
 
 ### Phase 100: GSD-via-Discord on Admin Clawdy (operator-self-serve dev workflow)
 
