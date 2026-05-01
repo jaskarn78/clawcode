@@ -482,6 +482,47 @@ export class MemoryStore {
   }
 
   /**
+   * Phase 107 VEC-CLEAN-03 — remove orphan vec_memories entries.
+   *
+   * Detects rows in `vec_memories` whose `memory_id` is NOT in `memories`
+   * (orphans accumulated from historical CHECK-constraint table-recreation
+   * migrations at store.ts migrateSchema/migrateEpisodeSource, or any future
+   * delete path that bypasses `MemoryStore.delete`). Returns
+   * `{ removed, totalAfter }` so the operator sees both the patch count
+   * and the post-cleanup `vec_memories` total.
+   *
+   * Atomicity: DELETE + COUNT run inside a single `db.transaction()`. A
+   * mid-transaction throw rolls back the DELETE (regression-tested in
+   * `src/memory/__tests__/store-orphan-cleanup.test.ts`).
+   *
+   * Idempotent: running twice removes 0 the second time.
+   *
+   * **Directional invariant (CRITICAL — RESEARCH.md pitfall 3):** the
+   * SQL only deletes from `vec_memories`, NEVER from `memories`. The
+   * cold-archive flow (`episode-archival.ts:53-66`) intentionally leaves
+   * `memories` rows present after deleting their `vec_memories` row —
+   * that's the OPPOSITE of an orphan (memory present + vec absent), and
+   * must be preserved. Reversing the SQL direction would erase
+   * cold-archived memories.
+   */
+  cleanupOrphans(): { removed: number; totalAfter: number } {
+    return this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          "DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories)",
+        )
+        .run();
+      const afterRow = this.db
+        .prepare("SELECT COUNT(*) AS n FROM vec_memories")
+        .get() as { n: number };
+      return {
+        removed: result.changes as number,
+        totalAfter: afterRow.n,
+      };
+    })();
+  }
+
+  /**
    * Phase 100-fu — return the number of inbound wikilink edges that
    * point at `memoryId`. Used by the tier manager to detect hub nodes
    * (memories with many backlinks) for graph-centrality promotion.
