@@ -723,14 +723,48 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
     let tmpDir: string;
     let registryPath: string;
     let sessionManager: ReturnType<typeof makeMockSessionManager>;
-    let turnDispatcher: { dispatch: ReturnType<typeof vi.fn> };
+    // Quick task 260501-nfe — relay now uses dispatchStream + ProgressiveMessageEditor
+    // posting to the parent's main channel via channel.send. Mock returns a non-empty
+    // string so the post happens (mirrors bridge.ts:585-665 user-message path).
+    let turnDispatcher: { dispatchStream: ReturnType<typeof vi.fn> };
+    // Spy for the parent channel's `send` — the assertion that proves the bug fix:
+    // before quick task 260501-nfe this was never invoked.
+    let parentChannelSendSpy: ReturnType<typeof vi.fn>;
 
     beforeEach(async () => {
       tmpDir = await mkdtemp(join(tmpdir(), "relay-artifact-test-"));
       registryPath = join(tmpDir, "thread-bindings.json");
       sessionManager = makeMockSessionManager();
-      turnDispatcher = { dispatch: vi.fn(async () => undefined) };
+      turnDispatcher = {
+        dispatchStream: vi.fn(async (_origin, _agent, _prompt, onChunk) => {
+          onChunk?.("OK summary");
+          return "OK summary";
+        }),
+      };
+      parentChannelSendSpy = vi.fn(async () => ({
+        edit: vi.fn(async () => {}),
+        id: "msg-1",
+      }));
     });
+
+    /**
+     * Build a discordClient mock that routes channels.fetch:
+     *   - parentChannelId → fake parent channel exposing `send` spy
+     *   - any other id (the threadId) → the supplied thread channel
+     */
+    function buildDiscordClient(
+      threadChannel: unknown,
+      parentChannelId: string,
+    ) {
+      const parentChannel = { send: parentChannelSendSpy };
+      return {
+        channels: {
+          fetch: vi.fn(async (id: string) =>
+            id === parentChannelId ? parentChannel : threadChannel,
+          ),
+        },
+      };
+    }
 
     afterEach(async () => {
       await rm(tmpDir, { recursive: true, force: true });
@@ -787,11 +821,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
           fetch: vi.fn(async () => fetched),
         },
       };
-      const discordClient = {
-        channels: {
-          fetch: vi.fn(async () => mockChannel),
-        },
-      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-X");
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
@@ -802,9 +832,9 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       await spawner.relayCompletionToParent("thread-id-A");
 
-      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
-      const dispatchCall = turnDispatcher.dispatch.mock.calls[0];
-      // dispatch(origin, agentName, prompt)
+      expect(turnDispatcher.dispatchStream).toHaveBeenCalledTimes(1);
+      const dispatchCall = turnDispatcher.dispatchStream.mock.calls[0];
+      // dispatchStream(origin, agentName, prompt, onChunk, options)
       const prompt: string = dispatchCall[2];
       // Base Phase 99-M shape preserved
       expect(prompt).toContain("[SUBAGENT_COMPLETION]");
@@ -851,9 +881,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
         name: "research-task",
         messages: { fetch: vi.fn(async () => fetched) },
       };
-      const discordClient = {
-        channels: { fetch: vi.fn(async () => mockChannel) },
-      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-X");
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
@@ -864,8 +892,8 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       await spawner.relayCompletionToParent("thread-multi");
 
-      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
-      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(turnDispatcher.dispatchStream).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatchStream.mock.calls[0][2];
       // All three chunks present, oldest→newest order
       const idxOne = prompt.indexOf("CHUNK_ONE");
       const idxTwo = prompt.indexOf("CHUNK_TWO");
@@ -906,9 +934,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
         name: "research-task",
         messages: { fetch: vi.fn(async () => fetched) },
       };
-      const discordClient = {
-        channels: { fetch: vi.fn(async () => mockChannel) },
-      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-X");
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
@@ -919,8 +945,8 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       await spawner.relayCompletionToParent("thread-stop");
 
-      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
-      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(turnDispatcher.dispatchStream).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatchStream.mock.calls[0][2];
       expect(prompt).toContain("AFTER_OP_ONE");
       expect(prompt).toContain("AFTER_OP_TWO");
       expect(prompt).not.toContain("OLD_BOT_REPLY");
@@ -954,9 +980,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
         name: "research-task",
         messages: { fetch: vi.fn(async () => fetched) },
       };
-      const discordClient = {
-        channels: { fetch: vi.fn(async () => mockChannel) },
-      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-X");
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
@@ -967,8 +991,8 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       await spawner.relayCompletionToParent("thread-empty");
 
-      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
-      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(turnDispatcher.dispatchStream).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatchStream.mock.calls[0][2];
       expect(prompt).toContain("REAL_CONTENT");
     });
 
@@ -997,9 +1021,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
         name: "research-task",
         messages: { fetch: vi.fn(async () => fetched) },
       };
-      const discordClient = {
-        channels: { fetch: vi.fn(async () => mockChannel) },
-      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-X");
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
@@ -1010,8 +1032,8 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       await spawner.relayCompletionToParent("thread-single");
 
-      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
-      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(turnDispatcher.dispatchStream).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatchStream.mock.calls[0][2];
       expect(prompt).toContain("Just one reply.");
       expect(prompt).toContain("[SUBAGENT_COMPLETION]");
     });
@@ -1045,9 +1067,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
         name: "research-task",
         messages: { fetch: vi.fn(async () => fetched) },
       };
-      const discordClient = {
-        channels: { fetch: vi.fn(async () => mockChannel) },
-      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-X");
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
@@ -1058,13 +1078,223 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       await spawner.relayCompletionToParent("thread-id-B");
 
-      expect(turnDispatcher.dispatch).toHaveBeenCalledTimes(1);
-      const prompt: string = turnDispatcher.dispatch.mock.calls[0][2];
+      expect(turnDispatcher.dispatchStream).toHaveBeenCalledTimes(1);
+      const prompt: string = turnDispatcher.dispatchStream.mock.calls[0][2];
       // Phase 99-M base shape preserved
       expect(prompt).toContain("[SUBAGENT_COMPLETION]");
       expect(prompt).toContain("Done with the non-GSD task.");
       // Crucially — NO Artifacts line for non-GSD subthreads
       expect(prompt).not.toContain("Artifacts written:");
+    });
+
+    /**
+     * Quick task 260501-nfe — REGRESSION TEST FOR THE ROOT-CAUSE BUG.
+     *
+     * Before the fix, `relayCompletionToParent` called `turnDispatcher.dispatch(...)`
+     * and discarded the returned response. The parent generated a summary but
+     * it never reached Discord. This test pins the fix: a successful relay
+     * MUST invoke `parentChannel.send(...)` with the streamed content.
+     */
+    it("posts the parent's summary to the parent's main channel via channel.send", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-id-relay",
+            parentChannelId: "parent-chan-1",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-relay",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      const fetched = new Map<string, any>([
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "Subagent finished work." }],
+      ]);
+      const mockThreadChannel = {
+        id: "thread-id-relay",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = buildDiscordClient(mockThreadChannel, "parent-chan-1");
+
+      // Override default mock so dispatchStream emits a distinctive token via onChunk.
+      turnDispatcher.dispatchStream = vi.fn(async (_origin, _agent, _prompt, onChunk) => {
+        onChunk?.("Brief summary");
+        return "Brief summary";
+      });
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+      });
+
+      await spawner.relayCompletionToParent("thread-id-relay");
+
+      // The bug was: dispatch returned, value discarded, no send. The fix
+      // streams onChunk into a ProgressiveMessageEditor that calls channel.send
+      // for the first chunk. Assertion: send invoked with content containing
+      // the summary string.
+      expect(parentChannelSendSpy).toHaveBeenCalled();
+      const sendArgs = parentChannelSendSpy.mock.calls.flat();
+      const anyContainsSummary = sendArgs.some(
+        (arg) => typeof arg === "string" && arg.includes("Brief summary"),
+      );
+      expect(anyContainsSummary).toBe(true);
+    });
+
+    /**
+     * Quick task 260501-nfe — failure-mode regression: when channels.fetch
+     * returns null for the parent channel, relay must log a structured
+     * relay-skipped reason and return without dispatching.
+     */
+    it("logs relay-skipped reason=parent-channel-fetch-failed when channels.fetch returns null", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-id-fetchfail",
+            parentChannelId: "parent-chan-missing",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-fetchfail",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      // Thread fetch returns a normal channel; parent fetch returns null.
+      const fetched = new Map<string, any>([
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "Work done." }],
+      ]);
+      const mockThreadChannel = {
+        id: "thread-id-fetchfail",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = {
+        channels: {
+          fetch: vi.fn(async (id: string) =>
+            id === "parent-chan-missing" ? null : mockThreadChannel,
+          ),
+        },
+      };
+
+      const logInfo = vi.fn();
+      const log = {
+        info: logInfo,
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(() => log),
+      } as any;
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+        log,
+      });
+
+      await spawner.relayCompletionToParent("thread-id-fetchfail");
+
+      // Structured log line emitted with the new reason tag
+      const skippedCalls = logInfo.mock.calls.filter(
+        (c) =>
+          typeof c[1] === "string" && c[1].includes("subagent relay skipped"),
+      );
+      const fetchFailedCall = skippedCalls.find(
+        (c) =>
+          c[0] &&
+          typeof c[0] === "object" &&
+          c[0].reason === "parent-channel-fetch-failed",
+      );
+      expect(fetchFailedCall).toBeDefined();
+      // Dispatch was NOT called — short-circuit before streaming.
+      expect(turnDispatcher.dispatchStream).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Quick task 260501-nfe — failure-mode regression: when dispatchStream
+     * resolves with empty content AND no chunk fired (so messageRef is still
+     * null), relay must log relay-skipped reason=empty-response-from-parent
+     * and avoid posting anything.
+     */
+    it("logs relay-skipped reason=empty-response-from-parent when dispatchStream resolves empty", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-id-empty-resp",
+            parentChannelId: "parent-chan-2",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-empty-resp",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      const fetched = new Map<string, any>([
+        ["m1", { author: { bot: true }, webhookId: "wh", content: "Subagent finished." }],
+      ]);
+      const mockThreadChannel = {
+        id: "thread-id-empty-resp",
+        name: "research-task",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = buildDiscordClient(mockThreadChannel, "parent-chan-2");
+
+      // dispatchStream resolves with empty string and never invokes onChunk.
+      turnDispatcher.dispatchStream = vi.fn(async () => "");
+
+      const logInfo = vi.fn();
+      const log = {
+        info: logInfo,
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(() => log),
+      } as any;
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager,
+        registryPath,
+        discordClient: discordClient as any,
+        turnDispatcher: turnDispatcher as any,
+        log,
+      });
+
+      await spawner.relayCompletionToParent("thread-id-empty-resp");
+
+      const skippedCalls = logInfo.mock.calls.filter(
+        (c) =>
+          typeof c[1] === "string" && c[1].includes("subagent relay skipped"),
+      );
+      const emptyCall = skippedCalls.find(
+        (c) =>
+          c[0] &&
+          typeof c[0] === "object" &&
+          c[0].reason === "empty-response-from-parent",
+      );
+      expect(emptyCall).toBeDefined();
+      // No content was sent to the parent channel.
+      expect(parentChannelSendSpy).not.toHaveBeenCalled();
     });
   });
 });
