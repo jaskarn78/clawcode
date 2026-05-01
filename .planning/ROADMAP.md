@@ -1156,7 +1156,7 @@ Plans:
 
 ### Phase 999.17: vec_memories orphan cleanup on memory delete (REPLACED by Phase 107)
 
-### Phase 999.18: Subagent relay reliability — root-cause fix (BACKLOG)
+### Phase 999.18: Subagent relay reliability — root-cause fix (PARTIAL — dominant fix shipped 2026-05-01; remaining edge cases pending timer findings)
 
 **Goal:** Diagnose and fix the silent-relay-drop bug where subagent completion summaries don't always land in the parent's main channel. `relayCompletionToParent` (src/discord/subagent-thread-spawner.ts:201) has 5 silent-return points; quick task 260501-i3r added structured `subagent relay skipped` logs at each so production logs now reveal which branch fires when a relay drops. Once 1-2 weeks of operator data accumulates, identify the actual cause (most likely candidate: streaming-edit placeholders not surfacing in `messages.fetch` cache → `no-bot-messages` reason) and ship a targeted fix.
 
@@ -1166,9 +1166,15 @@ Plans:
 
 **Requirements:** TBD — likely 4-6.
 
-**Plans:** 0 plans (TBD — likely 2 plans: confirm root cause from logs + apply targeted fix with regression coverage).
+**Plans:** 0 plans landed in this phase directory; the dominant root cause was diagnosed and fixed via quick task `260501-nfe` (commits 9275734, 251eb5a, 6ddde6b). Edge-case follow-ups pending timer findings (Sun 2026-05-03).
 
-**Promotion target:** active milestone, after enough relay-skipped log data lands to narrow the cause.
+**Status (2026-05-01):** PARTIAL. Code-trace mid-session revealed the dominant failure mode was upstream of the 5 silent-return points: `relayCompletionToParent` was calling `turnDispatcher.dispatch()` (non-streaming) and silently discarding the response string. Phase 99-M's commit message claimed the parent posts "via normal Discord pipeline" but the implementation never wired the pipeline. **Fix shipped via quick task `260501-nfe`** — switched to `dispatchStream()` + `ProgressiveMessageEditor` posting to parent's main channel (mirrors bridge.ts user-message path). 39/39 spawner tests pass; relay path now posts on every successful dispatch. Two new relay-skipped reason tags added (`parent-channel-fetch-failed`, `empty-response-from-parent`) for the new failure modes after dispatch but before successful post.
+
+The original 5 silent-return logs (quick task 260501-i3r, commit 4a38e36) remain in place. The Sun 2026-05-03 13:31 UTC timer will run the journal sweep with all 7 reason tags in scope (5 original + 2 new) and surface any remaining edge cases. Phase 999.18 stays active until the timer findings are reviewed and any residual bugs are addressed.
+
+**Promotion target:** if timer findings show no significant residual issues, mark fully SHIPPED and close. Otherwise plan a small follow-up to address the dominant remaining tag.
+
+**Local repo only — fix not yet deployed to clawdy** (per Ramy-active deploy hold + explicit operator instruction).
 
 ### Phase 999.19: Subagent cleanup, memory consolidation, and delegate-channel routing (BACKLOG)
 

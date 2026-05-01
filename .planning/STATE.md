@@ -442,6 +442,7 @@ Recent decisions affecting current work:
 | 260501-j7x | Phase 999.24 — expand /etc/sudoers.d/clawcode on clawdy with CLAWCODE_SERVICE alias (systemctl reload/restart NOPASSWD for clawcode user) | 2026-05-01 | c3dc129 | [260501-j7x-phase-999-24-sudoers-expansion-for-clawc](./quick/260501-j7x-phase-999-24-sudoers-expansion-for-clawc/) |
 | 260501-jld | Phase 999.21 — consolidate 19 `gsd-*` Discord slash commands under `/get-shit-done` (nested subcommands, claudeCommand byte-identical, 594/594 tests pass) | 2026-05-01 | e422045 | [260501-jld-phase-999-21-consolidate-20-gsd-discord-](./quick/260501-jld-phase-999-21-consolidate-20-gsd-discord-/) |
 | 260501-k5s | Phase 999.22 — add fleet-wide `mutate-verify` directive to DEFAULT_SYSTEM_PROMPT_DIRECTIVES (soul guard against hallucinated tool-use claims; 11 → 12 keys, locked-additive verified, 38/38 tests pass) | 2026-05-01 | 67a1f03 | [260501-k5s-phase-999-22-soul-guard-mutate-verify-di](./quick/260501-k5s-phase-999-22-soul-guard-mutate-verify-di/) |
+| 260501-nfe | Phase 999.18 partial fix — switch `relayCompletionToParent` from `dispatch()` (response discarded) to `dispatchStream()` + ProgressiveMessageEditor posting to parent's main channel; addresses the dominant relay-summary-not-posted failure mode discovered during code-trace this session (39/39 spawner tests pass, +2 new relay-skipped reason tags, all 5 quick-task-260501-i3r diagnostic logs preserved byte-identical) | 2026-05-01 | 6ddde6b | [260501-nfe-fix-relay-summary-not-posted-bug-switch-](./quick/260501-nfe-fix-relay-summary-not-posted-bug-switch-/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
@@ -549,7 +550,7 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-01 - Completed quick tasks 260501-jld (Phase 999.21 /get-shit-done consolidation) + 260501-k5s (Phase 999.22 mutate-verify soul-guard directive) — both LOCAL REPO ONLY, deploy held per Ramy-active rule
+Last activity: 2026-05-01 - Completed quick task 260501-nfe — Phase 999.18 partial fix (dispatchStream + posting wiring for relayCompletionToParent). Earlier today: 260501-jld (999.21), 260501-k5s (999.22), 260501-j7x (999.24), 260501-i3r (relay observability). All LOCAL REPO ONLY, deploy held per Ramy-active rule + explicit operator instruction
 Stopped at: Completed 108-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
