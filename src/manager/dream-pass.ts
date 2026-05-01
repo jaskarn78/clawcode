@@ -132,7 +132,17 @@ export interface DreamDispatchResponse {
 
 export interface DreamPassLog {
   info(msg: string): void;
-  warn(msg: string): void;
+  /**
+   * Phase 107 DREAM-OUT-03 — pino-style structured warn. Accepts either:
+   *   - `(obj, msg)` — structured form (preferred): operators grep on
+   *     `component=dream-pass action=parse-failed agent=<name>` in journalctl.
+   *   - `(msg)` — string-only fallback for legacy callers.
+   *
+   * Single union signature (NOT TS overloads) so test stubs that only
+   * accept `(msg: string)` still satisfy the interface — TS overloads
+   * require the implementation to handle every overload shape.
+   */
+  warn(objOrMsg: Record<string, unknown> | string, msg?: string): void;
   error(msg: string): void;
 }
 
@@ -274,9 +284,24 @@ export async function runDreamPass(
     } catch (parseErr) {
       const msg =
         parseErr instanceof Error ? parseErr.message : String(parseErr);
-      const errorText = `dream-result-schema-validation-failed: JSON parse failed (${msg})`;
-      deps.log.error(`dream-pass: ${agentName} ${errorText}`);
-      return { kind: "failed", error: errorText };
+      // Phase 107 DREAM-OUT-03 — log warn (not error) with structured fields.
+      // Operator surface: parse-failure means "model misbehaved", not a
+      // system bug. Cap responsePrefix at 80 chars (Unicode-safe slice via
+      // Array.from so emoji + multibyte chars don't get split mid-codepoint).
+      const responsePrefix = Array.from(dispatchResp.rawText)
+        .slice(0, 80)
+        .join("");
+      deps.log.warn(
+        {
+          component: "dream-pass",
+          action: "parse-failed",
+          responsePrefix,
+          agent: agentName,
+          err: msg,
+        },
+        "dream pass returned non-JSON; treating as no-op",
+      );
+      return { kind: "failed", error: `parse-failed: ${msg}` };
     }
 
     const validated = dreamResultSchema.safeParse(parsedJson);

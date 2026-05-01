@@ -141,7 +141,12 @@ function buildDeps(
     },
     memoryRoot: overrides.memoryRoot ?? "/tmp/agents/test/memory",
     now,
-    log,
+    // Cast: MockLog uses vi.fn() (variadic) so the call-site assertions can
+    // inspect mock.calls; DreamPassLog declares warn as a single union
+    // signature `(objOrMsg, msg?)`. Behaviorally compatible — vi.fn accepts
+    // any args — but the structural types are too loose for direct
+    // assignment.
+    log: log as unknown as RunDreamPassDeps["log"],
   };
 }
 
