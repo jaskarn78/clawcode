@@ -749,6 +749,38 @@ Plans:
 
 ---
 
+### Phase 109: Image ingest pipeline — local resize + Haiku 4.5 vision pre-pass
+
+**Goal:** Cut response latency and token cost on screenshot-heavy turns (operator + Ramy share frequent screenshots). Two layered optimizations to the image-ingest path: (1) local resize before forwarding to Claude, (2) parallel Haiku 4.5 vision pre-pass that produces a structured `<screenshot-analysis>` text block, letting the main agent skip vision entirely on the dominant case (chat screenshots, error messages, dashboards — text-extraction-shaped queries).
+
+**Approach (operator-approved 2026-05-01):**
+
+1. **Local resize-on-ingest.** When a Discord attachment is an image, resize to ≤1568px longest side (Anthropic's documented vision sweet spot) using `sharp`. Anthropic resizes server-side anyway and bills you for the original — local resize cuts upload bandwidth, latency, and token cost ~30-60% for typical screenshots with zero user-visible quality loss.
+
+2. **Parallel Haiku 4.5 vision pre-pass.** When an image arrives, fire a Haiku call with a structured extraction prompt ("extract all visible text verbatim, describe layout/UI elements, flag highlights/errors") in parallel with message routing. Inject the result as a `<screenshot-analysis>` block into the main agent's message context. By default, drop the original image from the main agent's context — the analysis is sufficient for the dominant case, the main model (Sonnet/Opus) processes only text and runs faster.
+
+3. **Per-agent `vision.preserveImage` flag (default false).** For agents whose work is design/visual (color, layout, UI feedback questions), opt-in to keep the image in main agent context alongside the analysis. Admin Clawdy + Ramy's flow stay default-off.
+
+4. **Graceful fallback on Haiku failure.** If Haiku times out or errors, fall through to today's behavior: send image directly to main agent. Agent path that exists today is preserved as the fallback so this is purely additive — no failure mode is introduced that doesn't already exist.
+
+5. **Metrics.** Log per-image-bearing-turn token + latency delta so the win is verifiable in production after deploy.
+
+**Trigger:** 2026-05-01 operator request — "Ramy and I both share a lot of screenshots to provide the agents with context, if we could improve performance and efficiency with that, it would probably help."
+
+**Why Haiku pre-pass over OCR (Tesseract):** stays within Anthropic ecosystem, no new binary dependencies, no version drift risk, no fail points beyond what already exists. Same reliability surface as the main Claude calls today, with structured fallback to current behavior.
+
+**Token + speed math (typical chat screenshot):**
+- Status quo: Sonnet/Opus does ~1500 input tokens of vision + reasoning → ~3-5s response
+- Phase 109: Haiku does ~1500 vision tokens (5x cheaper than Sonnet, ~20x cheaper than Opus) → returns ~300-500 token structured text → main agent processes JUST text → **~40-60% latency drop AND ~50-70% token cost drop on screenshot-heavy turns**
+
+**Requirements:** TBD — likely 6-8 (resize, Haiku-call wiring, analysis-block injection, preserveImage config, fallback path, metrics, tests).
+
+**Plans:** 0 plans (TBD — likely 3 plans: resize substrate, Haiku pre-pass + analysis injection, deploy gate + metrics).
+
+**Promotion target:** active milestone, after Phase 108. Independent of 999.18-999.20 (relay reliability + delegate-channel routing) — different code path entirely.
+
+---
+
 ## Backlog
 
 Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
