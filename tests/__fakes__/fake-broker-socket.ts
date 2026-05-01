@@ -32,7 +32,7 @@ export type FakeSocket = PassThrough & {
   fakeError(err: Error): void;
 };
 
-function decorate(stream: PassThrough): FakeSocket {
+function decorate(stream: PassThrough, peer?: () => PassThrough): FakeSocket {
   const decorated = stream as FakeSocket;
   decorated.fakeClose = (reason?: string): void => {
     // Mirror real net.Socket: end() then 'close' fires.
@@ -40,6 +40,19 @@ function decorate(stream: PassThrough): FakeSocket {
     // Use process.nextTick so any in-flight writes flush first.
     process.nextTick(() => {
       decorated.emit("close", reason !== undefined);
+      // Propagate close to peer end of the pair so consumers holding the
+      // *other* half (e.g. the shim CLI's client socket when the broker /
+      // server side calls fakeClose) observe a 'close'/'end' event. Without
+      // this, fakeClose on one side would be invisible to the other —
+      // making the fake unusable for "daemon restart → shim exits" tests
+      // (Pitfall 5 in Phase 108).
+      const other = peer?.();
+      if (other && !other.destroyed) {
+        other.end();
+        process.nextTick(() => {
+          other.emit("close", reason !== undefined);
+        });
+      }
     });
   };
   decorated.fakeError = (err: Error): void => {
@@ -66,34 +79,50 @@ export type FakeBrokerSocketPair = {
  * fakeClose() so tests have explicit control.
  */
 export function createFakeBrokerSocketPair(): FakeBrokerSocketPair {
-  const aToB = new PassThrough();
-  const bToA = new PassThrough();
-
-  // Compose duplex streams that read from one PT and write to another.
-  // We can't easily build a true Duplex here without node:stream Duplex
-  // construction; instead, we attach forwarding listeners onto a single
-  // PT per side and proxy writes through.
+  // Each side is its own PassThrough. We override `write` on each side so
+  // that calling `client.write(x)` pushes `x` directly into `server`'s
+  // readable side (and vice versa). This avoids the looping that would
+  // otherwise happen if we used 'data' listeners for cross-wire forwarding
+  // (a 'data' listener on side A calling B.write would re-trigger A's
+  // forwarder, causing infinite ping-pong).
   const client = new PassThrough();
   const server = new PassThrough();
 
-  // Forward client.write → server (data appears on server.on('data'))
-  client.on("data", (chunk) => {
-    if (!server.writableEnded) server.write(chunk);
-  });
-  // Forward server.write → client
-  server.on("data", (chunk) => {
-    if (!client.writableEnded) client.write(chunk);
-  });
+  // Capture the original PassThrough.write so consumers reading from each
+  // side via `.on('data')` still receive bytes pushed by the *peer*. We
+  // monkey-patch `client.write` so that calls to it (which represent the
+  // shim "writing to the socket") get routed straight into server's
+  // readable buffer — surfacing on `server.on('data')` exactly once, with
+  // no echo back.
+  // Capture the PassThroughs' native write functions (bound to their owning
+  // instance). We invoke the *peer's* native write so bytes appear once on
+  // the peer's readable side without round-tripping through 'data' events.
+  const realClientWrite: (...args: unknown[]) => boolean =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (client.write as any).bind(client);
+  const realServerWrite: (...args: unknown[]) => boolean =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (server.write as any).bind(server);
 
-  // The PTs above (aToB / bToA) are kept as anchors so the streams aren't
-  // GC'd before tests finish. (Belt-and-suspenders — node would keep them
-  // alive via the listener closures regardless.)
-  void aToB;
-  void bToA;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (client as any).write = (...args: unknown[]): boolean => {
+    if (server.writableEnded || server.destroyed) return false;
+    return realServerWrite(...args);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (server as any).write = (...args: unknown[]): boolean => {
+    if (client.writableEnded || client.destroyed) return false;
+    return realClientWrite(...args);
+  };
+
+  // Suppress lint for unused vars: `realClientWrite` / `realServerWrite`
+  // are intentionally captured (above) and not referenced elsewhere.
+  void realClientWrite;
+  void realServerWrite;
 
   return {
-    client: decorate(client),
-    server: decorate(server),
+    client: decorate(client, () => server),
+    server: decorate(server, () => client),
   };
 }
 
