@@ -483,7 +483,23 @@ export async function sendRestartGreeting(
   if (lastSession.summaryMemoryId && deps.getMemoryById) {
     const existing = deps.getMemoryById(lastSession.summaryMemoryId);
     if (existing && existing.trim().length > 0) {
-      summary = existing;
+      // 2026-05-01 fix (260501-nxm) — guard against legacy bad summaries
+      // cached BEFORE the L496 isApiErrorDominatedSession guard landed
+      // (2026-04-30). Without this, a stale "Credit balance is too low"
+      // summary written by Haiku during a platform-incident session keeps
+      // reappearing on every subsequent restart until the cached value is
+      // overwritten or expired. Read-time filter only — no scrub of stored
+      // memory; the next session that writes a fresh summary will overwrite
+      // the bad cached value organically.
+      if (API_ERROR_FINGERPRINTS.some((re) => re.test(existing))) {
+        deps.log.info(
+          { agent: agentName, summaryMemoryId: lastSession.summaryMemoryId },
+          "[greeting] cached summary contains API-error fingerprint; using verbatim platform-error recovery message",
+        );
+        summary = PLATFORM_ERROR_RECOVERY_MESSAGE;
+      } else {
+        summary = existing;
+      }
     }
   }
 

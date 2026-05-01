@@ -648,3 +648,90 @@ describe("sendRestartGreeting — API-error-dominated session bypass", () => {
     expect(embedArg?.data?.description).toBe("I was building a thing.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 260501-nxm — cached-summary fast-path API-error guard
+// ---------------------------------------------------------------------------
+// The fast-path at L483-488 (Phase 99 D-fix) reuses lastSession.summaryMemoryId
+// verbatim — but if the cached summary was written BEFORE the 2026-04-30
+// isApiErrorDominatedSession guard landed, it can contain platform-error junk
+// like "Credit balance is too low". Operator observed this at 10:03 AM on
+// 2026-05-01 after `/clawcode-restart Admin Clawdy`. Guard mirrors the
+// upstream fingerprint set so write-side and read-side share one source of
+// truth.
+
+describe("sendRestartGreeting — cached-summary fast-path API-error guard", () => {
+  it("substitutes PLATFORM_ERROR_RECOVERY_MESSAGE when cached summary contains 'Credit balance is too low' (operator-observed 2026-05-01 bug)", async () => {
+    const session = makeSession({ summaryMemoryId: "mem_test_001" });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([session], { "sess-abc": [makeTurn()] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue("Credit balance is too low"),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+
+  it("preserves the cached summary verbatim when content has no API-error fingerprint (happy-path regression guard)", async () => {
+    const session = makeSession({ summaryMemoryId: "mem_test_002" });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([session], { "sess-abc": [makeTurn()] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue("I was building a thing."),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe("I was building a thing.");
+  });
+
+  it("substitutes PLATFORM_ERROR_RECOVERY_MESSAGE for any cached summary matching the API_ERROR_FINGERPRINTS array (e.g. 'Failed to authenticate. API Error: 403')", async () => {
+    const session = makeSession({ summaryMemoryId: "mem_test_003" });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([session], { "sess-abc": [makeTurn()] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi
+        .fn()
+        .mockReturnValue("Failed to authenticate. API Error: 403 — permission_error"),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "crash-suspected",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+});
