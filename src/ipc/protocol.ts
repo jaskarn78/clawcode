@@ -242,6 +242,15 @@ export const IPC_METHODS = [
   // closing the manual-rotation gap from Phase 999.10 Pitfall 3.
   "secrets-status",
   "secrets-invalidate",
+  // Phase 106 TRACK-CLI-01 — restore mcp-tracker IPC. Plan 999.15-03
+  // wired the daemon dispatch (daemon.ts case branch), the CLI client
+  // (src/cli/commands/mcp-tracker.ts), and the handler
+  // (src/manager/mcp-tracker-snapshot.ts) — but missed THIS enum entry,
+  // so `ipcRequestSchema.safeParse` rejected the method with -32600
+  // "Invalid Request" before dispatch ever ran. Direct mirror of
+  // commit a9c39c7 (Phase 96-05 same regression for probe-fs +
+  // list-fs-status).
+  "mcp-tracker-snapshot",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
