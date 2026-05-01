@@ -3,6 +3,7 @@ import type { Registry } from "../manager/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
 import type { TaskStore } from "../tasks/store.js";
 import type { SecretsResolver } from "../manager/secrets-resolver.js";
+import type { BrokerStatusProvider } from "./checks/mcp-broker.js";
 
 /**
  * Health check status values.
@@ -37,6 +38,16 @@ export type CheckContext = {
    * leave it undefined and continue working unchanged.
    */
   readonly secretsResolver?: SecretsResolver;
+  /**
+   * Phase 108 (POOL-07) — daemon-side adapter exposing
+   * `broker.getPoolStatus()` to the mcp-broker heartbeat check. Optional
+   * because most checks (auto-linker, fs-probe, etc.) don't need it; only
+   * the mcp-broker check reads it. Tests for unrelated checks leave it
+   * undefined and continue working unchanged. **Intentionally narrow:
+   * NEVER add a dispatch / callTool / sendRequest method here — see
+   * checks/mcp-broker.ts header (rate-limit-budget invariant).**
+   */
+  readonly brokerStatusProvider?: BrokerStatusProvider;
 };
 
 /**

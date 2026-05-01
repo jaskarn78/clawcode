@@ -7,6 +7,7 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
 import type { TaskStore } from "../tasks/store.js";
 import type { SecretsResolver } from "../manager/secrets-resolver.js";
+import type { BrokerStatusProvider } from "./checks/mcp-broker.js";
 import type {
   CheckModule,
   CheckContext,
@@ -76,6 +77,12 @@ export class HeartbeatRunner {
   // Phase 104 plan 03 (SEC-05) — passed into CheckContext so mcp-reconnect's
   // RecoveryDeps factory can wire `invalidate: (ref) => secretsResolver.invalidate(ref)`.
   private secretsResolver: SecretsResolver | undefined;
+  // Phase 108 (POOL-07) — daemon-side adapter exposing
+  // broker.getPoolStatus() to the mcp-broker check. Threaded into
+  // CheckContext per-tick. Setter wired in daemon.ts after broker
+  // construction, mirroring setSecretsResolver / setThreadManager /
+  // setTaskStore.
+  private brokerStatusProvider: BrokerStatusProvider | undefined;
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -140,6 +147,17 @@ export class HeartbeatRunner {
    */
   setSecretsResolver(resolver: SecretsResolver): void {
     this.secretsResolver = resolver;
+  }
+
+  /**
+   * Phase 108 (POOL-07) — inject the BrokerStatusProvider so the
+   * `mcp-broker` heartbeat check can poll pool liveness without holding
+   * a direct reference to the broker (keeps the check decoupled from
+   * the broker module's lifecycle). Mirrors the setSecretsResolver /
+   * setThreadManager / setTaskStore setter pattern.
+   */
+  setBrokerStatusProvider(provider: BrokerStatusProvider): void {
+    this.brokerStatusProvider = provider;
   }
 
   /**
@@ -218,6 +236,9 @@ export class HeartbeatRunner {
           ...(this.threadManager ? { threadManager: this.threadManager } : {}),
           ...(this.taskStore ? { taskStore: this.taskStore } : {}),
           ...(this.secretsResolver ? { secretsResolver: this.secretsResolver } : {}),
+          ...(this.brokerStatusProvider
+            ? { brokerStatusProvider: this.brokerStatusProvider }
+            : {}),
         };
 
         // Phase 999.12 HB-01 — special-case the inbox check timeout. Cross-

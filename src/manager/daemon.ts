@@ -2737,6 +2737,13 @@ export async function startDaemon(
   // through SecretsResolver in production — would serve the same stale
   // value that triggered the original auth-error.
   heartbeatRunner.setSecretsResolver(secretsResolver);
+  // Phase 108 (POOL-07) — broker-status provider for the mcp-broker
+  // heartbeat check. Adapter is intentionally narrow — only
+  // getPoolStatus() — to enforce the rate-limit-budget invariant
+  // (no synthetic password_read against 1Password).
+  heartbeatRunner.setBrokerStatusProvider({
+    getPoolStatus: () => broker.getPoolStatus(),
+  });
   // Phase 103 OBS-01 — wire HeartbeatRunner into SessionManager so
   // /clawcode-status can read context-zone fillPercentage synchronously.
   manager.setHeartbeatRunner(heartbeatRunner);

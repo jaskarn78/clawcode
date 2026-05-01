@@ -32,6 +32,7 @@ import consolidation from "./checks/consolidation.js";
 import contextFill from "./checks/context-fill.js";
 import fsProbe from "./checks/fs-probe.js";
 import inbox from "./checks/inbox.js";
+import mcpBroker from "./checks/mcp-broker.js";
 import mcpReconnect from "./checks/mcp-reconnect.js";
 import taskRetention from "./checks/task-retention.js";
 import threadIdle from "./checks/thread-idle.js";
@@ -45,6 +46,10 @@ export const CHECK_REGISTRY: readonly CheckModule[] = Object.freeze([
   contextFill,
   fsProbe,
   inbox,
+  // Phase 108 — pool liveness probe for the daemon-managed
+  // OnePasswordMcpBroker. NEVER calls a tool dispatch path; only reads
+  // `broker.getPoolStatus()`. See checks/mcp-broker.ts header.
+  mcpBroker,
   mcpReconnect,
   taskRetention,
   threadIdle,

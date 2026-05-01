@@ -13,9 +13,10 @@ describe("discoverChecks (Phase 999.8 — static registry)", () => {
     expect(result).toBe(CHECK_REGISTRY);
   });
 
-  it("returns 11 modules", async () => {
+  it("returns 12 modules", async () => {
+    // Phase 108 — added mcp-broker check (POOL-07).
     const result = await discoverChecks("/any/path");
-    expect(result).toHaveLength(11);
+    expect(result).toHaveLength(12);
   });
 
   it("ignores the checksDir parameter (back-compat shim)", async () => {
