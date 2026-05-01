@@ -188,12 +188,33 @@ export function resolveAgentConfig(
 
   // Auto-inject 1Password MCP when OP_SERVICE_ACCOUNT_TOKEN is available,
   // giving agents secure credential access without hardcoded secrets.
+  //
+  // Phase 108 — route through the daemon-managed broker. Each agent's MCP
+  // client spawns a tiny `clawcode mcp-broker-shim --pool 1password`
+  // subprocess; the shim opens a unix socket to the daemon's
+  // mcp-broker.sock, sends a {agent, tokenHash} handshake, then becomes a
+  // byte-transparent stdio bridge. The daemon broker owns ONE pooled
+  // `@takescake/1password-mcp` child per unique service-account token —
+  // 11 agents on 2 tokens drops 11 MCP children → 2.
+  //
+  // Mirrors the existing browser-mcp / search-mcp / image-mcp pattern
+  // (see lines 209-255). Token-literal redaction (Phase 104 SEC-07): the
+  // shim hashes the literal client-side; broker logs only `tokenHash`.
   if (!resolvedMcpMap.has("1password") && process.env.OP_SERVICE_ACCOUNT_TOKEN) {
     resolvedMcpMap.set("1password", {
       name: "1password",
-      command: "npx",
-      args: ["-y", "@takescake/1password-mcp@latest"],
-      env: { OP_SERVICE_ACCOUNT_TOKEN: process.env.OP_SERVICE_ACCOUNT_TOKEN },
+      command: "clawcode",
+      args: ["mcp-broker-shim", "--pool", "1password"],
+      env: {
+        // Token literal flows shim → handshake → broker → child spawn env.
+        // The shim sha256-hashes it before sending over the socket; the
+        // literal never lands in any log line (Phase 104 SEC-07).
+        OP_SERVICE_ACCOUNT_TOKEN: process.env.OP_SERVICE_ACCOUNT_TOKEN,
+        // Audit log identity (decision §5) — broker tags every dispatched
+        // call with `agent` so operators can grep journalctl for a
+        // specific agent's 1Password traffic.
+        CLAWCODE_AGENT: agent.name,
+      },
       // Phase 85 TOOL-01 — 1Password MCP is mandatory when auto-injected.
       optional: false,
     });

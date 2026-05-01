@@ -851,6 +851,75 @@ describe("resolveAgentConfig - mcpServers", () => {
     expect(image!.args).toEqual(["--flag"]);
     expect(image!.env).toEqual({ CUSTOM: "x" });
   });
+
+  // Phase 108 — 1Password broker shim auto-inject. The pre-Phase-108 path
+  // spawned `npx @takescake/1password-mcp` directly per-agent (11 children
+  // for 11 agents). Plan 04 rewires the auto-inject to spawn the broker
+  // shim instead; the daemon-managed broker owns ONE pooled MCP child per
+  // unique service-account token.
+  describe("Phase 108 — 1password broker shim auto-inject", () => {
+    const PRIOR_TOKEN = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    const TEST_TOKEN = "ops_TEST_PHASE108_TOKEN_LITERAL";
+
+    beforeEach(() => {
+      process.env.OP_SERVICE_ACCOUNT_TOKEN = TEST_TOKEN;
+    });
+    afterEach(() => {
+      if (PRIOR_TOKEN === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+      else process.env.OP_SERVICE_ACCOUNT_TOKEN = PRIOR_TOKEN;
+    });
+
+    it("108-LOAD-1: 1password auto-inject uses broker shim command (not direct npx)", () => {
+      const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+      const op = resolved.mcpServers.find((s) => s.name === "1password");
+      expect(op).toBeDefined();
+      expect(op!.command).toBe("clawcode");
+      expect(op!.args).toEqual(["mcp-broker-shim", "--pool", "1password"]);
+      // Token literal still flows through env so the shim can hash + the
+      // broker can spawn the pool child with it.
+      expect(op!.env?.OP_SERVICE_ACCOUNT_TOKEN).toBe(TEST_TOKEN);
+      // Pre-Phase-108 npx invocation MUST NOT appear.
+      expect(op!.command).not.toBe("npx");
+      expect(op!.args).not.toContain("@takescake/1password-mcp@latest");
+    });
+
+    it("108-LOAD-2: shim env carries CLAWCODE_AGENT for audit logging (decision §5)", () => {
+      const clawdy = { ...baseAgent, name: "clawdy" };
+      const rubi = { ...baseAgent, name: "rubi" };
+      const resolvedClawdy = resolveAgentConfig(clawdy, defaults, sharedMcpServers);
+      const resolvedRubi = resolveAgentConfig(rubi, defaults, sharedMcpServers);
+      expect(resolvedClawdy.mcpServers.find((s) => s.name === "1password")!.env)
+        .toEqual({ OP_SERVICE_ACCOUNT_TOKEN: TEST_TOKEN, CLAWCODE_AGENT: "clawdy" });
+      expect(resolvedRubi.mcpServers.find((s) => s.name === "1password")!.env)
+        .toEqual({ OP_SERVICE_ACCOUNT_TOKEN: TEST_TOKEN, CLAWCODE_AGENT: "rubi" });
+    });
+
+    it("108-LOAD-3: omits 1password auto-inject when OP_SERVICE_ACCOUNT_TOKEN is unset", () => {
+      delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+      const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+      expect(resolved.mcpServers.find((s) => s.name === "1password")).toBeUndefined();
+    });
+
+    it("108-LOAD-4: preserves user-specified '1password' mcpServer entry (no overwrite)", () => {
+      const custom = {
+        name: "1password",
+        command: "mycustom",
+        args: ["--flag"],
+        env: { CUSTOM: "x" },
+        optional: false,
+      };
+      const agent = {
+        ...baseAgent,
+        mcpServers: [custom] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }>,
+      };
+      const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+      const op = resolved.mcpServers.find((s) => s.name === "1password");
+      expect(op).toBeDefined();
+      expect(op!.command).toBe("mycustom");
+      expect(op!.args).toEqual(["--flag"]);
+      expect(op!.env).toEqual({ CUSTOM: "x" });
+    });
+  });
 });
 
 describe("resolveContent", () => {
