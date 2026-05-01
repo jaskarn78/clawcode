@@ -199,13 +199,22 @@ export class SubagentThreadSpawner {
    * subagent messages worth relaying.
    */
   async relayCompletionToParent(threadId: string): Promise<void> {
-    if (!this.turnDispatcher) return;
+    if (!this.turnDispatcher) {
+      this.log.info({ threadId, reason: "no-turn-dispatcher" }, "subagent relay skipped");
+      return;
+    }
     try {
       const registry = await readThreadRegistry(this.registryPath);
       const binding = getBindingForThread(registry, threadId);
-      if (!binding) return;
+      if (!binding) {
+        this.log.info({ threadId, reason: "no-binding" }, "subagent relay skipped");
+        return;
+      }
       const channel = await this.discordClient.channels.fetch(threadId);
-      if (!channel || !("messages" in channel)) return;
+      if (!channel || !("messages" in channel)) {
+        this.log.info({ threadId, reason: "no-channel-or-not-text" }, "subagent relay skipped");
+        return;
+      }
       // Fetch last 10 messages (enough to find the subagent's most recent
       // assistant reply, skipping the operator's follow-ups). Discord's
       // `fetch` returns newest-first.
@@ -239,10 +248,16 @@ export class SubagentThreadSpawner {
         if (!m.content || m.content.trim().length === 0) continue; // skip empty/embed-only
         subagentChunks.push(m.content);
       }
-      if (subagentChunks.length === 0) return;
+      if (subagentChunks.length === 0) {
+        this.log.info({ threadId, reason: "no-bot-messages" }, "subagent relay skipped");
+        return;
+      }
       // Reverse to oldest-first so the relay reads in chronological order.
       const fullSubagentReply = subagentChunks.reverse().join("\n").trim();
-      if (!fullSubagentReply) return;
+      if (!fullSubagentReply) {
+        this.log.info({ threadId, reason: "empty-content-after-concat" }, "subagent relay skipped");
+        return;
+      }
       // Truncate huge replies — the parent's prompt has a budget.
       const trimmed =
         fullSubagentReply.length > 1500
