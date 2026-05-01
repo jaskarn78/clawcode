@@ -1209,7 +1209,7 @@ Discoverability flow: spawn deep dives via `/research`, find past work via `/res
 
 **Promotion target:** active milestone, after Phase 999.19.
 
-### Phase 999.21: `/get-shit-done` Discord slash command consolidation (BACKLOG)
+### Phase 999.21: `/get-shit-done` Discord slash command consolidation (SHIPPED 2026-05-01)
 
 **Goal:** Consolidate the 20 existing `gsd-*` Discord slash commands (slash-types.ts:284-432, the curated subset of 57 GSD skills) under a single `/get-shit-done` top-level command with all 20 nested as subcommands. Pure UX polish — internal `claudeCommand: "/gsd:autonomous {args}"` mappings stay unchanged, only the Discord-facing surface flips from 20 top-level entries to 1 expandable group.
 
@@ -1221,9 +1221,9 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 
 **Requirements:** TBD — likely 3-4 (rewrite slash-types.ts entries, update handler dispatch to support subcommand routing, update slash-commands tests, deploy gate).
 
-**Plans:** 0 plans (TBD — 1 plan, mostly mechanical).
+**Plans:** 0 plans — shipped via quick task 260501-jld (3 atomic code commits + docs commit, no roadmap renumbering).
 
-**Promotion target:** active milestone, independent of 999.18-20 — could land any time as low-risk UX polish.
+**Status:** Shipped 2026-05-01 via quick task `260501-jld` (executor commits 7e3a587, 5a838ed, 642292a, e422045). 19 flat `gsd-*` Discord slash commands collapsed into one `/get-shit-done` top-level command with 19 nested subcommands. (Original task brief said 20 — actual count was 19 per `slash-types.ts` audit; existing test `slash-types-gsd-commands.test.ts:31` already pinned `toHaveLength(19)`.) claudeCommand text values byte-identical pre/post (pinned via static test). Dispatch uses single rewrite-at-entry pattern in `handleInteraction` — `/get-shit-done` + `getSubcommand()` remap to `gsd-${sub}` so all existing carve-outs (handleSetGsdProjectCommand, GSD_LONG_RUNNERS, agent-routed branch, cmdDef.find lookups) keep working unchanged. Three test files added/updated: 12 GS1 invariants, 3 GSR registration pins, 6 GSDN nested-form pins. Full `src/discord` vitest sweep: 594/594 pass. Discord slot delta: -18 (19 flat → 1 composite). **Deploy note:** new top-level `/get-shit-done` registration replaces stale `/gsd-*` entries on next Discord cache flush — operators may briefly see both during propagation. **Local repo only — not yet deployed to clawdy** (per Ramy-active deploy hold).
 
 ### Phase 999.22: Soul guard against agent hallucinated tool-use claims (BACKLOG)
 
