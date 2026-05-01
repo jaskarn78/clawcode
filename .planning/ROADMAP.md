@@ -781,6 +781,44 @@ Plans:
 
 ---
 
+### Phase 110: Retroactive sequential renumbering for shipped 999.x items (BACKLOG — low priority)
+
+**Goal:** Cosmetic cleanup — rename the 11 SHIPPED `999.x` phase directories and ROADMAP entries to next-sequential numbers (111+), preserving git-history searchability via redirect notes. Resolves the long-running visual mismatch where shipped work kept its backlog parking-lot number instead of being promoted to a clean sequential phase ID.
+
+**Scope (11 SHIPPED 999.x items eligible for rename):**
+- 999.1 (Agent output directives, SHIPPED 2026-04-29)
+- 999.2 (a2a refactor, SHIPPED 2026-04-29)
+- 999.3 (delegateTo, SHIPPED 2026-04-29)
+- 999.6 (pre-deploy snapshot/restore, SHIPPED 2026-05-01)
+- 999.8 (dashboard graph fixes, SHIPPED 2026-04-30)
+- 999.12 (cross-agent IPC + heartbeat inbox, SHIPPED 2026-05-01)
+- 999.13 (delegate map + timezone, SHIPPED partial 2026-04-30)
+- 999.14 (MCP child lifecycle, SHIPPED 2026-04-30)
+- 999.15 (MCP PID tracking, SHIPPED 2026-04-30)
+- 999.21 (`/get-shit-done` consolidation, SHIPPED 2026-05-01)
+- 999.22 (`mutate-verify` directive, SHIPPED 2026-05-01)
+- 999.24 (sudoers expansion, SHIPPED 2026-05-01)
+
+**Approach (sketch):**
+1. Pick a renumbering scheme (e.g., chronological-by-ship-date → 111, 112, 113, ...) OR (e.g., bundle-by-domain → group related ones together).
+2. Rename each `.planning/phases/999.X-<slug>/` directory to `.planning/phases/<NEW>-<slug>/` via `git mv`.
+3. Update each ROADMAP entry's `### Phase 999.X:` header to `### Phase <NEW>:` and add a `**Originally numbered:** 999.X` line for traceability.
+4. **DO NOT** rewrite historical commit messages — they reference `999.X-NN` as-is, and rewriting would break git-history searchability without fixing anything real. Future commits naturally reference the new sequential numbers.
+5. **DO NOT** move `.planning/quick/` task IDs — those are immutable and use a separate YYMMDD-xxx scheme.
+6. **DO NOT** rename BACKLOG-status 999.x items (999.4, 999.5, 999.7, 999.18-PARTIAL, 999.19, 999.20, 999.23) — those should renumber when *promoted* via `/gsd:review-backlog`, which is the proper workflow.
+
+**Why "for when usage resets":** this is pure cosmetic cleanup, ~30-60 min of mechanical work. Worth doing when API budget is fresh and there's no urgent feature work or production fire competing for context. Lowest priority on the backlog — bump up only when bored or when ROADMAP scan friction crosses a threshold.
+
+**Trigger:** 2026-05-01 — operator: "the phase numbers are confusing to me now. i liked it better when it was 100, 101, 102, now its 999.x which feels wrong". Phase 109 (image ingest) added going forward as sequential. This phase backfills the historical inconsistency for shipped items only.
+
+**Requirements:** TBD — likely 3-4 (rename scheme decision, directory mv pass, ROADMAP entry updates, redirect-note convention).
+
+**Plans:** 0 plans (TBD — likely 1 plan, mostly mechanical).
+
+**Promotion target:** parking lot. Promote when API usage resets and no higher-priority work is competing. No external dependency — can land any time.
+
+---
+
 ## Backlog
 
 Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
