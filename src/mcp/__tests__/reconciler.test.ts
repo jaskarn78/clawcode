@@ -58,10 +58,9 @@ vi.mock("../proc-scan.js", async () => {
   };
 });
 
-// IMPORTANT: This import will FAIL at Wave 0 because src/mcp/reconciler.ts
-// does not exist yet. Plan 02 ships it. Until then, every test in this file
-// errors at module-resolve time → that IS the RED state.
-// @ts-expect-error — module ships in Plan 02 (TRACK-01, TRACK-04)
+// Phase 999.15 Plan 02 has shipped src/mcp/reconciler.ts. The Wave 0 RED
+// placeholder directive (ts-expect-error on the import below) has been
+// removed now that the module is real and tsc flagged it as unused.
 import { reconcileAllAgents } from "../reconciler.js";
 
 /* ------------------------------------------------------------------ */
