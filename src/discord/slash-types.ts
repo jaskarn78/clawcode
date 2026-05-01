@@ -103,6 +103,19 @@ export type SlashCommandDef = {
    * Spec: https://discord.com/developers/docs/interactions/application-commands#permissions
    */
   readonly defaultMemberPermissions?: string;
+  /**
+   * Phase 999.21 — when set, the registration loop nests this entry under
+   * the named top-level command as a SUB_COMMAND (Discord type=1) instead
+   * of registering it as a standalone slash command. Internal dispatch
+   * (handleInteraction) rewrites `<top-level>+<sub>` back to the legacy
+   * flat name (`gsd-${sub}`) on entry so existing carve-outs
+   * (handleSetGsdProjectCommand, GSD_LONG_RUNNERS, the agent-routed
+   * branch) keep working unchanged. This collapses the 19 flat `gsd-*`
+   * entries into a single `/get-shit-done` top-level command on Discord —
+   * reclaiming 18 slots in Discord's per-guild 100-command cap and giving
+   * operators a self-organizing namespace in the slash menu.
+   */
+  readonly subcommandOf?: string;
 };
 
 // Phase 87 CMD-04 — clawcode-compact + clawcode-usage REMOVED from
@@ -264,11 +277,20 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
  * matching names get deduped via the existing `seenNames` set so the legacy
  * Phase 100 yaml block on Admin Clawdy keeps working unchanged.
  *
- * Dispatch:
- *   - `/gsd-autonomous`, `/gsd-plan-phase`, `/gsd-execute-phase` route to
- *     handleGsdLongRunner (subagent thread spawn) when GSD_LONG_RUNNERS
- *     matches.
- *   - `/gsd-set-project` is handled inline by handleSetGsdProjectCommand
+ * Phase 999.21 — entries are now NESTED subcommands under a single top-level
+ * `/get-shit-done` command (each entry has `subcommandOf: "get-shit-done"`).
+ * The slash-commands.ts register loop groups every entry whose `subcommandOf`
+ * matches into ONE composite Discord body item (type=1 SUB_COMMAND children),
+ * collapsing 19 flat `gsd-*` slots into 1 namespaced slot. The handleInteraction
+ * dispatcher rewrites `commandName === "get-shit-done"` + `getSubcommand()`
+ * back to the legacy flat form (`gsd-${sub}`) at the top of the function so
+ * every downstream carve-out keeps matching by the legacy strings unchanged.
+ *
+ * Dispatch (post-rewrite, all carve-outs see the legacy `gsd-*` names):
+ *   - `/get-shit-done autonomous`, `/get-shit-done plan-phase`,
+ *     `/get-shit-done execute-phase` route to handleGsdLongRunner (subagent
+ *     thread spawn) when GSD_LONG_RUNNERS matches the rewritten name.
+ *   - `/get-shit-done set-project` is handled inline by handleSetGsdProjectCommand
  *     (validates path + dispatches IPC `set-gsd-project`); claudeCommand
  *     intentionally empty so any accidental fallback to formatCommandMessage
  *     emits a no-op string the inline short-circuit prevents from being sent.
@@ -276,12 +298,17 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
  *     formatCommandMessage rewrites their claudeCommand template into the
  *     canonical SDK form for inline dispatch via the user's settingSources
  *     (loads ~/.claude/commands/gsd/*.md per Plan 100-06 symlinks).
+ *
+ * The `name` field on each entry is the SUBCOMMAND name (e.g. "autonomous",
+ * "plan-phase", "set-project") — NOT the full flat name. The composite
+ * top-level command is named `"get-shit-done"`.
  */
 export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   // The 5 originally shipped in Phase 100 Plan 04 (also live in Admin Clawdy's
   // yaml block — dedup via seenNames keeps both registrations safe).
   {
-    name: "gsd-autonomous",
+    name: "autonomous",
+    subcommandOf: "get-shit-done",
     description: "Run all remaining phases autonomously",
     claudeCommand: "/gsd:autonomous {args}",
     options: [
@@ -289,7 +316,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-plan-phase",
+    name: "plan-phase",
+    subcommandOf: "get-shit-done",
     description: "Create phase plan with verification loop",
     claudeCommand: "/gsd:plan-phase {phase}",
     options: [
@@ -297,7 +325,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-execute-phase",
+    name: "execute-phase",
+    subcommandOf: "get-shit-done",
     description: "Execute all plans in a phase",
     claudeCommand: "/gsd:execute-phase {phase}",
     options: [
@@ -305,7 +334,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-debug",
+    name: "debug",
+    subcommandOf: "get-shit-done",
     description: "Systematic debugging with persistent state",
     claudeCommand: "/gsd:debug {issue}",
     options: [
@@ -313,7 +343,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-quick",
+    name: "quick",
+    subcommandOf: "get-shit-done",
     description: "Quick task with GSD guarantees",
     claudeCommand: "/gsd:quick {task}",
     options: [
@@ -324,7 +355,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   // Phase 100 follow-up additions — operator hit friction (these were missing
   // from the slash menu, forcing them to type /gsd:* manually).
   {
-    name: "gsd-new-project",
+    name: "new-project",
+    subcommandOf: "get-shit-done",
     description: "Initialize a fresh GSD project (PROJECT.md, REQUIREMENTS.md, ROADMAP.md, codebase maps)",
     claudeCommand: "/gsd:new-project {args}",
     options: [
@@ -332,7 +364,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-new-milestone",
+    name: "new-milestone",
+    subcommandOf: "get-shit-done",
     description: "Create a new milestone in the current project",
     claudeCommand: "/gsd:new-milestone {args}",
     options: [
@@ -340,7 +373,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-add-phase",
+    name: "add-phase",
+    subcommandOf: "get-shit-done",
     description: "Insert a new phase into the current milestone",
     claudeCommand: "/gsd:add-phase {args}",
     options: [
@@ -348,7 +382,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-add-tests",
+    name: "add-tests",
+    subcommandOf: "get-shit-done",
     description: "Add tests for an existing phase or plan",
     claudeCommand: "/gsd:add-tests {args}",
     options: [
@@ -356,13 +391,15 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-audit-milestone",
+    name: "audit-milestone",
+    subcommandOf: "get-shit-done",
     description: "Audit milestone before completion",
     claudeCommand: "/gsd:audit-milestone",
     options: [],
   },
   {
-    name: "gsd-complete-milestone",
+    name: "complete-milestone",
+    subcommandOf: "get-shit-done",
     description: "Mark current milestone complete + archive",
     claudeCommand: "/gsd:complete-milestone {args}",
     options: [
@@ -370,19 +407,22 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-cleanup",
+    name: "cleanup",
+    subcommandOf: "get-shit-done",
     description: "Clean up planning artifacts after milestone",
     claudeCommand: "/gsd:cleanup",
     options: [],
   },
   {
-    name: "gsd-progress",
+    name: "progress",
+    subcommandOf: "get-shit-done",
     description: "Show current GSD project progress",
     claudeCommand: "/gsd:progress",
     options: [],
   },
   {
-    name: "gsd-verify-work",
+    name: "verify-work",
+    subcommandOf: "get-shit-done",
     description: "Manually verify a phase or UAT item",
     claudeCommand: "/gsd:verify-work {args}",
     options: [
@@ -390,7 +430,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-discuss-phase",
+    name: "discuss-phase",
+    subcommandOf: "get-shit-done",
     description: "Discuss design grey areas before planning",
     claudeCommand: "/gsd:discuss-phase {phase}",
     options: [
@@ -398,7 +439,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-do",
+    name: "do",
+    subcommandOf: "get-shit-done",
     description: "Quick task wrapper with GSD guarantees",
     claudeCommand: "/gsd:do {task}",
     options: [
@@ -406,7 +448,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-fast",
+    name: "fast",
+    subcommandOf: "get-shit-done",
     description: "Lightweight GSD without full ceremony",
     claudeCommand: "/gsd:fast {task}",
     options: [
@@ -414,7 +457,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
   {
-    name: "gsd-help",
+    name: "help",
+    subcommandOf: "get-shit-done",
     description: "GSD framework help",
     claudeCommand: "/gsd:help {args}",
     options: [
@@ -425,7 +469,8 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
   // The runtime project switcher — handled inline (not routed to LLM).
   // claudeCommand "" mirrors /clawcode-model and /clawcode-skills-browse.
   {
-    name: "gsd-set-project",
+    name: "set-project",
+    subcommandOf: "get-shit-done",
     description: "Switch this agent's gsd.projectDir at runtime (avoids yaml edit + restart)",
     claudeCommand: "",
     options: [
