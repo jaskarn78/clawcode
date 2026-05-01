@@ -135,7 +135,7 @@ Auto-injected by the daemon for every agent:
 | `search` | `web_search`, `web_fetch_url` | v2.0 Phase 71 |
 | `image` | `image_generate`, `image_edit`, `image_variations` | v2.0 Phase 72 |
 | `clawcode` | Discord / inbox / attachments | v1.0 |
-| `1password` | `op://` secret resolution (when `OP_SERVICE_ACCOUNT_TOKEN` set) | v1.4 |
+| `1password` | `op://` secret resolution (when `OP_SERVICE_ACCOUNT_TOKEN` set) | v1.4 (v2.7: pooled via daemon broker — one shared MCP child per service-account token) |
 
 Disable per-server via `defaults.<server>.enabled: false` in `clawcode.yaml`, or override per-agent by listing a server in the agent's `mcpServers:` block.
 
@@ -176,6 +176,8 @@ Service files:
 ```bash
 clawcode update --restart        # git pull + npm ci + npm run build + systemctl restart
 ```
+
+Restart preserves running-agent state via the auto pre-deploy snapshot (v2.7): the daemon writes `pre-deploy-snapshot.json` on shutdown and replays the captured agent set on next boot, so `systemctl restart` does not require manually re-starting agents.
 
 ## Tech Stack
 
