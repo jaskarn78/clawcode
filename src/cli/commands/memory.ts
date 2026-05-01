@@ -299,6 +299,64 @@ export function registerMemoryCommand(program: Command): void {
   // Phase 90 Plan 07 WIRE-06 — `clawcode memory backfill <agent>` subcommand.
   registerMemoryBackfillCommand(memoryCmd);
 
+  // Phase 107 VEC-CLEAN-03 — `clawcode memory cleanup-orphans [-a <agent>]`
+  // operator subcommand. Removes vec_memories rows whose memory_id no
+  // longer exists in `memories` (orphans accumulated from historical
+  // CHECK-constraint table-recreation migrations or any future delete
+  // path that bypasses MemoryStore.delete). Daemon-side:
+  // src/manager/daemon.ts case "memory-cleanup-orphans" → per-agent
+  // store.cleanupOrphans(). Idempotent; safe to re-run.
+  memoryCmd
+    .command("cleanup-orphans")
+    .description(
+      "Remove orphan vec_memories rows whose memory_id no longer exists in memories",
+    )
+    .option(
+      "-a, --agent <name>",
+      "Filter to one agent (omit for all agents)",
+    )
+    .action(async (opts: { agent?: string }) => {
+      try {
+        const params: Record<string, unknown> = {};
+        if (opts.agent) params.agent = opts.agent;
+        const result = (await sendIpcRequest(
+          SOCKET_PATH,
+          "memory-cleanup-orphans",
+          params,
+        )) as {
+          results: ReadonlyArray<{
+            agent: string;
+            removed: number;
+            totalAfter: number;
+          }>;
+        };
+        for (const r of result.results) {
+          if (r.totalAfter < 0) {
+            cliError(`${r.agent}: cleanup failed`);
+          } else if (r.removed === 0) {
+            cliLog(
+              `${r.agent}: no orphans (${r.totalAfter} vec_memories total)`,
+            );
+          } else {
+            cliLog(
+              `${r.agent}: removed ${r.removed} orphans (${r.totalAfter} vec_memories remaining)`,
+            );
+          }
+        }
+      } catch (error) {
+        if (error instanceof ManagerNotRunningError) {
+          cliError(
+            "Manager is not running. Start it with: clawcode start-all",
+          );
+          process.exit(1);
+          return;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        cliError(`Error: ${msg}`);
+        process.exit(1);
+      }
+    });
+
   memoryCmd
     .command("episodes <agent>")
     .description("List recent episodes for an agent")

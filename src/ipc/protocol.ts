@@ -78,6 +78,15 @@ export const IPC_METHODS = [
   "memory-list",
   "memory-graph",
   "memory-save",
+  // Phase 107 VEC-CLEAN-03 — operator-driven orphan cleanup. Removes
+  // vec_memories rows whose memory_id no longer exists in `memories`
+  // (orphans accumulated from historical CHECK-constraint table-recreation
+  // migrations or any future delete path that bypasses MemoryStore.delete).
+  // Backs `clawcode memory cleanup-orphans [-a <agent>]`. Daemon-side
+  // dispatch is a closure intercept BEFORE routeMethod that resolves
+  // MemoryStore via manager.getMemoryStore(agent) and calls
+  // store.cleanupOrphans() per agent. Returns { results: [...] }.
+  "memory-cleanup-orphans",
   // Phase 999.8 follow-up — operator-triggered tier-maintenance backfill.
   // Runs the same `TierManager.runMaintenance()` the heartbeat runs every
   // 6h, but on-demand for one agent or all agents at once. Used to seed
@@ -234,12 +243,12 @@ export const IPC_METHODS = [
   // array + calls manager.restartAgent so the new SDK session boots with
   // the new gsd.projectDir as cwd. Returns {ok, agent, projectDir}.
   "set-gsd-project",
-  // Phase 999.10 — secret cache observability + manual invalidation.
+  // Phase 104 — secret cache observability + manual invalidation.
   // `secrets-status` returns the SecretsResolver counter snapshot
   // (cacheSize, hits, misses, retries, rateLimitHits, last*) so operators
   // can render cache health in /clawcode-status. `secrets-invalidate`
   // flushes one URI (when params.uri provided) or the entire cache,
-  // closing the manual-rotation gap from Phase 999.10 Pitfall 3.
+  // closing the manual-rotation gap from Phase 104 Pitfall 3.
   "secrets-status",
   "secrets-invalidate",
   // Phase 106 TRACK-CLI-01 — restore mcp-tracker IPC. Plan 999.15-03
@@ -298,7 +307,7 @@ export const ipcResponseSchema = z
 export type IpcResponse = z.infer<typeof ipcResponseSchema>;
 
 /**
- * Phase 999.10 — `secrets-status` IPC response shape.
+ * Phase 104 — `secrets-status` IPC response shape.
  *
  * Validates the counter snapshot returned by SecretsResolver.snapshot()
  * (cacheSize + hit/miss/retry/rateLimitHits counters + optional ISO 8601
@@ -325,7 +334,7 @@ export const SecretsStatusResponseSchema = z.object({
 export type SecretsStatusResponse = z.infer<typeof SecretsStatusResponseSchema>;
 
 /**
- * Phase 999.10 — `secrets-invalidate` IPC request shape.
+ * Phase 104 — `secrets-invalidate` IPC request shape.
  *
  * Optional `uri` flushes one cache entry; omit (or pass empty params) to
  * flush the entire cache. The `op://` prefix guard provides defense-in-
@@ -338,7 +347,7 @@ export const SecretsInvalidateRequestSchema = z.object({
 export type SecretsInvalidateRequest = z.infer<typeof SecretsInvalidateRequestSchema>;
 
 /**
- * Phase 999.10 — `secrets-invalidate` IPC response shape.
+ * Phase 104 — `secrets-invalidate` IPC response shape.
  *
  * `invalidated` is the literal string `"all"` when the entire cache was
  * flushed, or the specific URI that was removed.

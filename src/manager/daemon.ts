@@ -3761,6 +3761,48 @@ export async function startDaemon(
             : undefined;
         return buildMcpTrackerSnapshot(mcpTracker, filter);
       }
+      // Phase 107 VEC-CLEAN-03 — memory-cleanup-orphans intercept BEFORE
+      // routeMethod (closure-intercept pattern, mirrors secrets-status +
+      // mcp-tracker-snapshot above). Per-agent: resolve MemoryStore via
+      // manager.getMemoryStore(agent) and call store.cleanupOrphans().
+      // Optional `agent` param scopes to one agent; otherwise iterates all
+      // resolvedAgents. Per-agent error logged + sentinel { totalAfter: -1 }
+      // pushed into results so partial failures don't kill the whole
+      // operator command. Returns { results: [{ agent, removed, totalAfter }] }.
+      case "memory-cleanup-orphans": {
+        const agentParam =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? ((params as { agent: string }).agent)
+            : null;
+        const targets = agentParam
+          ? [agentParam]
+          : resolvedAgents.map((a) => a.name);
+        const results: Array<{
+          agent: string;
+          removed: number;
+          totalAfter: number;
+        }> = [];
+        for (const agent of targets) {
+          const store = manager.getMemoryStore(agent);
+          if (!store) {
+            results.push({ agent, removed: 0, totalAfter: 0 });
+            continue;
+          }
+          try {
+            const r = store.cleanupOrphans();
+            results.push({
+              agent,
+              removed: r.removed,
+              totalAfter: r.totalAfter,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`[memory-cleanup-orphans] ${agent} failed: ${msg}`);
+            results.push({ agent, removed: 0, totalAfter: -1 });
+          }
+        }
+        return { results };
+      }
     }
 
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);

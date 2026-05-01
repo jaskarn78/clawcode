@@ -58,6 +58,8 @@ describe("IPC_METHODS", () => {
       "memory-list",
       "memory-graph",
       "memory-save",
+      // Phase 107 VEC-CLEAN-03 — operator-driven vec_memories orphan cleanup.
+      "memory-cleanup-orphans",
       "tier-maintenance-tick",
       // Subagent threads
       "spawn-subagent-thread",
@@ -486,5 +488,42 @@ describe("Phase 999.2 Plan 02 — IPC method aliases", () => {
   it("src/manager/daemon.ts has stacked-case `post-to-agent` + `send-to-agent` with shared body", () => {
     const text = readFileSync("src/manager/daemon.ts", "utf8");
     expect(text).toMatch(/case "post-to-agent":\s*\n\s*case "send-to-agent":/);
+  });
+});
+
+// Phase 107 VEC-CLEAN-03 — assert the new IPC method is enum-registered.
+// Without the enum entry, ipcRequestSchema.safeParse rejects the method
+// with -32600 "Invalid Request" before the daemon dispatch ever runs
+// (regression mirror of Phase 106 TRACK-CLI-01 / Phase 96-05 fix).
+describe("Phase 107 VEC-CLEAN-03 — memory-cleanup-orphans IPC", () => {
+  it("IPC_METHODS includes 'memory-cleanup-orphans'", () => {
+    expect(IPC_METHODS).toContain("memory-cleanup-orphans");
+  });
+
+  it("ipcRequestSchema accepts a memory-cleanup-orphans request with no params", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "co-1",
+      method: "memory-cleanup-orphans",
+      params: {},
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("memory-cleanup-orphans");
+    }
+  });
+
+  it("ipcRequestSchema accepts a memory-cleanup-orphans request with optional agent filter", () => {
+    const result = ipcRequestSchema.safeParse({
+      jsonrpc: "2.0",
+      id: "co-2",
+      method: "memory-cleanup-orphans",
+      params: { agent: "test-agent" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.method).toBe("memory-cleanup-orphans");
+      expect(result.data.params).toEqual({ agent: "test-agent" });
+    }
   });
 });
