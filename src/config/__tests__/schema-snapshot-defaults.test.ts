@@ -32,6 +32,7 @@ describe("defaultsSchema.preDeploySnapshotMaxAgeHours (Phase 999.6 SNAP-04)", ()
     const result = defaultsSchema.safeParse({});
     expect(result.success).toBe(true);
     if (result.success) {
+      // @ts-expect-error wave 0 — field added to defaultsSchema in Wave 1 (SNAP-04)
       expect(result.data.preDeploySnapshotMaxAgeHours).toBe(24);
     }
   });
@@ -40,6 +41,7 @@ describe("defaultsSchema.preDeploySnapshotMaxAgeHours (Phase 999.6 SNAP-04)", ()
     const result = defaultsSchema.safeParse({ preDeploySnapshotMaxAgeHours: 12 });
     expect(result.success).toBe(true);
     if (result.success) {
+      // @ts-expect-error wave 0 — field added to defaultsSchema in Wave 1 (SNAP-04)
       expect(result.data.preDeploySnapshotMaxAgeHours).toBe(12);
     }
   });
@@ -78,6 +80,7 @@ describe("defaultsSchema.preDeploySnapshotMaxAgeHours (Phase 999.6 SNAP-04)", ()
       expect(result.data.model).toBeDefined();
       expect(result.data.autoStart).toBe(true);
       // The new field's zod default applies on the omission path
+      // @ts-expect-error wave 0 — field added to defaultsSchema in Wave 1 (SNAP-04)
       expect(result.data.preDeploySnapshotMaxAgeHours).toBe(24);
     }
   });

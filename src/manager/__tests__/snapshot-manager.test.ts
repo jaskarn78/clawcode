@@ -42,15 +42,17 @@ import { join } from "node:path";
 import pino from "pino";
 
 // Wave 0 RED: this import fails because src/manager/snapshot-manager.ts does
-// not exist yet. Wave 1 creates it. Suppress tsc complaint with directive so
-// `npm run typecheck` survives the gap (vitest itself tolerates the missing
-// module by failing the test file at runtime — which is the desired RED).
-// @ts-expect-error wave 0 — snapshot-manager not yet created
+// not exist yet. Wave 1 creates it. Suppress tsc complaints with directives
+// on each line that trips TS2307 (module-not-found fires on the `from`
+// clause, not the `import` keyword) so `npm run typecheck` survives the
+// gap. Vitest tolerates the missing module by failing the test file at
+// runtime — which is the desired RED state.
 import {
   writePreDeploySnapshot,
   readAndConsumePreDeploySnapshot,
   preDeploySnapshotSchema,
   DEFAULT_PRE_DEPLOY_SNAPSHOT_PATH,
+  // @ts-expect-error wave 0 — snapshot-manager not yet created (Wave 1 GREEN)
 } from "../snapshot-manager.js";
 
 /**
@@ -211,7 +213,7 @@ describe("snapshot-manager — writePreDeploySnapshot atomicity (SNAP-01, SNAP-0
     await writePreDeploySnapshot(filePath, input, log);
     const raw = await readFile(filePath, "utf8");
     const parsed = preDeploySnapshotSchema.parse(JSON.parse(raw));
-    expect(parsed.runningAgents.map((a) => a.name)).toEqual([
+    expect(parsed.runningAgents.map((a: { name: string }) => a.name)).toEqual([
       "z-third",
       "a-first",
       "m-middle",
