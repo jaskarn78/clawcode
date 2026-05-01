@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 108-02-PLAN.md (broker + shim-server)
-last_updated: "2026-05-01T13:00:01.376Z"
+stopped_at: Completed 108-04-PLAN.md
+last_updated: "2026-05-01T13:27:22.421Z"
 last_activity: 2026-05-01
 progress:
-  total_phases: 35
+  total_phases: 42
   completed_phases: 13
   total_plans: 77
-  completed_plans: 70
+  completed_plans: 71
 ---
 
 # Project State
@@ -363,6 +363,9 @@ Recent decisions affecting current work:
 - [Phase 108]: BROKER_ERROR_CODE_DRAIN_TIMEOUT pinned to -32002; pool-crash code -32001 reused via documented constant (no cross-import) — both in JSON-RPC server-defined range
 - [Phase 108]: TokenHash validation pattern is /^[a-zA-Z0-9_-]{1,64}$/ (not strict hex) so test fixtures + production hashes both pass; SEC-07 invariants preserved (rejects empty / oversize / control bytes)
 - [Phase 108]: BrokerAgentConnection.rawToken empty in shim path — literal token NEVER traverses unix socket; 108-05 wires daemon-side lookup by hash
+- [Phase 108]: Tracker-before-broker construction order — broker's onPoolSpawn closes over the constructed mcpTracker singleton (no forward-reference gymnastics). Both orderings satisfy 'broker up before agents start' since manager.startAll runs ~2500 lines after either insertion point.
+- [Phase 108]: ShimServer.deps.resolveRawToken added — daemon-side tokenHash → rawToken Map injected at handshake; literal never crosses the socket (Phase 104 SEC-07).
+- [Phase 108]: Heartbeat provider surface intentionally narrow ({getPoolStatus} only) — RED test asserts Object.keys === ['getPoolStatus'] to gate against synthetic password_read consuming 1Password rate-limit budget.
 
 ### v2.1 closing decisions (for reference)
 
@@ -536,11 +539,12 @@ Recent decisions affecting current work:
 | Phase 108 P00 | 25min | 3 tasks | 8 files |
 | Phase 108 P03 | 9min | 2 tasks | 3 files |
 | Phase 108 P02 | 13m | 2 tasks | 2 files |
+| Phase 108 P04 | 60min | 4 tasks | 12 files |
 
 ## Session Continuity
 
-Last activity: 2026-05-01 - Completed quick task 260501-i3r: Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points
-Stopped at: Completed 108-02-PLAN.md (broker + shim-server)
+Last activity: 2026-05-01
+Stopped at: Completed 108-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
