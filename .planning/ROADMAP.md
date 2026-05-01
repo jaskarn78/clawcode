@@ -645,14 +645,14 @@ Haiku (the dream model) returned chat-style prose instead of the structured JSON
 
 #### Plans
 
-TBD by planner — likely 4-5 plans:
-- 107-00: Wave 0 RED tests for both pillars
-- 107-01: GREEN A — dream prompt strengthening + structured-output mode + recovery
-- 107-02: GREEN B — vec_memories cascade delete in MemoryStore + transaction wrapper
-- 107-03: GREEN — CLI subcommand for one-time + recurring cleanup
-- 107-04: deploy gate + smoke
+**Plans:** 3 plans
 
-**Status:** Planning underway 2026-05-01 via `/gsd:autonomous`. Deploy gate: same as Phase 106 (all channels silent ≥30 min on non-bot `messageCreate`).
+Plans:
+- [ ] 107-01-PLAN.md — Pillar A: Dream JSON enforcement (DREAM-OUT-01 fallback envelope + DREAM-OUT-03 warn-level recovery + DREAM-OUT-04 vitest; DREAM-OUT-02 deferred with anchors)
+- [ ] 107-02-PLAN.md — Pillar B: vec_memories orphan cleanup (VEC-CLEAN-01..04: audit, atomicity, cleanupOrphans method + IPC + CLI subcommand, vitest)
+- [ ] 107-03-PLAN.md — Wave 2 deploy gate + smoke (pre-deploy gauntlet, 30-min channel silence gate, ssh deploy, post-deploy DREAM warn smoke + VEC cascade verification + cleanupOrphans CLI run with idempotency check, SUMMARY)
+
+**Status:** Plans written 2026-05-01 via `/gsd:plan-phase`. Plans 107-01 and 107-02 run in parallel as Wave 1 (no file overlap). 107-03 is Wave 2, depends on both. Deploy gate: same as Phase 106 (all bound channels silent ≥30 min on non-bot `messageCreate`).
 
 #### Replaces
 
