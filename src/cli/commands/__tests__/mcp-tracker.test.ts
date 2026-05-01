@@ -53,8 +53,9 @@ const exitSpy = vi
   }) as never);
 
 async function runCli(argv: readonly string[]): Promise<number> {
-  // Dynamic import — fails at Wave 0 (module ships in Plan 03).
-  // @ts-expect-error — module ships in Plan 03 (TRACK-05)
+  // Wave 0 history: this dynamic import was @ts-expect-error'd because
+  // ../mcp-tracker.ts didn't ship until Plan 03 (TRACK-05). Module is now
+  // present — directive removed.
   const { registerMcpTrackerCommand } = await import("../mcp-tracker.js");
   const program = new Command();
   program.exitOverride();
@@ -120,7 +121,7 @@ describe("clawcode mcp-tracker CLI (Phase 999.15 Wave 0 — RED)", () => {
   });
 
   it("CLI-1: formatTrackerTable renders a stable snapshot for the canonical fixture", async () => {
-    // @ts-expect-error — module ships in Plan 03 (TRACK-05)
+    // Wave 0 directive removed — module ships in Plan 03 (this plan).
     const mod = await import("../mcp-tracker.js");
     const { formatTrackerTable } = mod as {
       formatTrackerTable: (snapshot: unknown) => string;
@@ -165,7 +166,7 @@ describe("clawcode mcp-tracker CLI (Phase 999.15 Wave 0 — RED)", () => {
   });
 
   it("CLI-4: subcommand registered as 'mcp-tracker' (NOT 'mcp-status' — Phase 85 collision)", async () => {
-    // @ts-expect-error — module ships in Plan 03 (TRACK-05)
+    // Wave 0 directive removed — module ships in Plan 03 (this plan).
     const { registerMcpTrackerCommand } = await import("../mcp-tracker.js");
     const program = new Command();
     program.exitOverride();
