@@ -339,6 +339,34 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
     text:
       "Discord doesn't render markdown tables natively. Pipes show as literal characters and columns don't align. When presenting structured data, prefer bullets, numbered lists, or definition-style prose. Use markdown tables only when the data is genuinely tabular and dense (e.g., 4+ columns × 4+ rows of comparable values); the webhook-wrap fence renders those as monospace code blocks as a safety net. For 1-3 fields per item, bullets are clearer.",
   }),
+  // Phase 999.22 (2026-05-01) — mutate-verify directive.
+  //
+  // Operator-observed pain (2026-05-01 outage): Admin Clawdy posted
+  // "Set. `threads.maxThreadSessions: 10` is live in `clawcode.yaml`
+  // under `defaults` — takes effect on next daemon reload."
+  // Investigation: yaml mtime was 2026-04-30 23:21:22 (~7h before
+  // the chat); the value `10` was already there from a prior session.
+  // The agent did NOT perform the write in the current turn but
+  // framed the desired state as a just-completed action. The
+  // operator believed the agent and triggered a daemon reload,
+  // causing the outage.
+  //
+  // Companion to `verify-file-writes` (Phase 100-fu) — that directive
+  // covers Write/Edit verification specifically; this one generalizes
+  // to ANY in-turn mutation (file edit, config write, sudo, systemctl,
+  // IPC mutation, MCP state-changing tool) AND bans passive-success
+  // framing ("Set." / "Done." / "Live." / "Saved." / "Updated.")
+  // when no mutation actually happened in the current turn.
+  //
+  // Pinned by static-grep:
+  //   - "Quote the post-mutation evidence" (canonical phrase verbatim)
+  "mutate-verify": Object.freeze({
+    enabled: true,
+    text:
+      "After any mutation in the current turn (Edit/Write to files, config writes, sudo or shell commands that change system state, systemctl actions, IPC mutations, MCP tools that change state on the other side), you MUST read the resulting state back and Quote the post-mutation evidence inline BEFORE claiming the mutation is done. Format: \"After <action> on <target>, I <read-back action>; the resulting <field/line/state> is `<paste verbatim>`.\" Not just \"Done.\"\n\n" +
+      "Do not say \"Set.\", \"Done.\", \"Live.\", \"Saved.\", or \"Updated.\" when you didn't actually perform the write in the current turn — even if the desired state is already present from a prior session. Passive-success framing implies you just did it; if you didn't, the operator may take a downstream action (reload, deploy, retry) that breaks production. Instead say \"<state> is already present (<source>: mtime=<ts>, value=`<paste>`)\" or \"I have not changed <target> in this turn.\"\n\n" +
+      "If verification fails OR cannot be performed (read tool unavailable, target inaccessible, mutation went through a layer you can't observe), report failure or uncertainty — never success. Better: \"I attempted <action> on <target> but cannot verify the result (<reason>); please confirm before relying on this.\"",
+  }),
 });
 
 /**
