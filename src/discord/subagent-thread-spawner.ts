@@ -451,8 +451,20 @@ export class SubagentThreadSpawner {
     //   channels: []           — never inherit channels for subagents
     //   threads: caller's      — D-INH-02, caller's quota wins
     //   webhook: composed      — caller's URL + delegate's identity
+    //
+    // Phase 106 DSCOPE-02 — strip `delegates` from spread. Subagents never
+    // orchestrate further subagents (recursion-guard at disallowedTools below
+    // is defense-in-depth; this strip removes the *directive text* from the
+    // subagent's system prompt entirely so the LLM doesn't even see it).
+    // Doing the strip at the caller keeps `renderDelegatesBlock` pure — the
+    // primary-agent code path remains byte-identical (Phase 999.13 invariant).
+    // Destructure-only (no mutation) so sourceConfig.delegates stays intact
+    // for any other consumer that holds a reference to it.
+    const { delegates: _strippedDelegates, ...subagentSourceConfig } =
+      sourceConfig;
+
     const subagentConfig: ResolvedAgentConfig = {
-      ...sourceConfig,
+      ...subagentSourceConfig,
       name: sessionName,
       model,
       channels: [],
