@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 106-03-PLAN.md
-last_updated: "2026-05-01T06:03:39.118Z"
+stopped_at: Completed 106-01-PLAN.md
+last_updated: "2026-05-01T06:04:18.376Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 33
   completed_phases: 11
   total_plans: 68
-  completed_plans: 60
+  completed_plans: 61
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 106 (agent-context-hygiene-bundle-delegate-scoping-research-stall-cli-hotfix) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 
 ## Performance Metrics
 
@@ -352,6 +352,9 @@ Recent decisions affecting current work:
 - [Phase 999.15]: [Phase 999.15 Plan 01]: Tracker reshape uses immutable-mutation pattern — every updateAgent/replaceMcpPids constructs a new RegisteredAgent reference; callers holding prior entries observe pre-mutation state. SYNC entry write before async cmdline cache enrichment so subsequent sync code sees the new state immediately. isPidAlive treats EPERM as alive (live proc owned by another user is still 'running').
 - [Phase 999.15]: Plan 02 reconciler module + polled discovery + reconcile-before-kill GREEN — 15 RED cases flipped; TRACK-01/02/04/06/08 complete; only Plan 03 IPC+CLI scope remains RED
 - [Phase 106]: Plan 106-03: Append mcp-tracker-snapshot to IPC_METHODS enum (9 lines, mirrors commit a9c39c7); restores clawcode mcp-tracker CLI path (no more -32600 Invalid Request)
+- [Phase 106]: Strip delegates at caller (subagent-thread-spawner) — keeps renderDelegatesBlock pure and primary-agent code path byte-identical
+- [Phase 106]: Destructure-only (no in-place delete) preserves sourceConfig purity for any other consumer holding a reference
+- [Phase 106]: Recursion guard (disallowedTools: spawn_subagent_thread) retained — defense-in-depth alongside DSCOPE invisibility per RESEARCH Pitfall 4
 
 ### v2.1 closing decisions (for reference)
 
@@ -518,11 +521,12 @@ Recent decisions affecting current work:
 | Phase 999.12 P01 | 12 min | 3 tasks | 6 files |
 | Phase 106 P00 | 8 min | 3 tasks | 3 files |
 | Phase 106 P03 | 3 min | 1 tasks | 1 files |
+| Phase 106 P01 | 3 min | 1 tasks | 1 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 106-03-PLAN.md
+Stopped at: Completed 106-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
