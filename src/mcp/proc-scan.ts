@@ -134,18 +134,53 @@ function escapeRegex(s: string): string {
 }
 
 /**
+ * Extract the bare package name from an npm-style package spec, if the arg
+ * looks like one. Returns null otherwise (e.g. flags, file paths).
+ *
+ * Examples:
+ *   "mcp-server-mysql@latest"          → "mcp-server-mysql"
+ *   "@takescake/1password-mcp@latest"  → "1password-mcp"
+ *   "@playwright/mcp@latest"           → "mcp"
+ *   "mcp-server-mysql"                 → "mcp-server-mysql"
+ *   "/opt/.../brave_search.py"         → null (path, not npm spec)
+ *   "-y"                               → null (flag)
+ *
+ * Phase 999.14 hot-fix: orphan grandchildren end up with cmdlines like
+ * `sh -c mcp-server-mysql` or `node /home/.../bin/mcp-server-mysql` after
+ * the npm-wrapper exec handoff. The original `npx -y mcp-server-mysql@latest`
+ * full-form doesn't substring-match those. By also adding the bare package
+ * name as a word-boundary alternative, the reaper catches both the live
+ * full-invocation form AND the orphan transformations.
+ */
+function extractBarePackageName(arg: string): string | null {
+  if (arg.startsWith("-")) return null;
+  if (arg.includes("/") && (arg.startsWith("/") || arg.startsWith("."))) {
+    return null; // path, not an npm spec
+  }
+  // Strip @version suffix (anything after the LAST @, but not the leading @scope)
+  const lastAt = arg.lastIndexOf("@");
+  const base = lastAt > 0 ? arg.slice(0, lastAt) : arg;
+  // Take last path segment (handles @scope/name)
+  const lastSegment = base.split("/").pop() ?? base;
+  if (/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(lastSegment)) {
+    return lastSegment;
+  }
+  return null;
+}
+
+/**
  * Build a single union regex from configured MCP server entries.
  *
  * Each configured entry contributes its FULL invocation form
- * (`command + ' ' + args.join(' ')`) to the alternation. A cmdline is
- * considered an MCP match if it contains any configured invocation as a
- * substring.
+ * (`command + ' ' + args.join(' ')`) to the alternation. Phase 999.14 hot-fix
+ * (2026-04-30 deploy reveal): also contributes the bare npm package name
+ * extracted from each non-flag arg (`\b<name>\b` substring match) so the
+ * orphan reaper catches grandchildren whose cmdline got transformed by the
+ * npm/sh wrapper exec chain.
  *
- * Note on orphan grandchildren: when an orphan's cmdline is the inner shell
- * form (e.g. `sh -c mcp-server-mysql`), the reaper's caller is responsible
- * for configuring patterns that match that form. The default config pattern
- * (`{command:'sh', args:['-c','mcp-server-mysql']}`) handles it via the same
- * full-form rule — no special-casing needed here.
+ * For example, `npx -y mcp-server-mysql@latest` produces TWO alternatives:
+ *   - `npx -y mcp-server-mysql@latest`          (matches live npm-exec proc)
+ *   - `\bmcp-server-mysql\b`                    (matches orphan `sh -c mcp-server-mysql` and `node /.../bin/mcp-server-mysql`)
  *
  * Throws on empty input — boundary validation per coding-style.md.
  */
@@ -163,6 +198,14 @@ export function buildMcpCommandRegexes(
         ? `${cfg.command} ${cfg.args.join(" ")}`
         : cfg.command;
     alternatives.push(escapeRegex(full));
+
+    // Bare npm package names — see extractBarePackageName JSDoc above.
+    for (const arg of cfg.args) {
+      const bareName = extractBarePackageName(arg);
+      if (bareName) {
+        alternatives.push(`\\b${escapeRegex(bareName)}\\b`);
+      }
+    }
   }
   // Deduplicate to keep the regex small.
   const uniq = Array.from(new Set(alternatives));

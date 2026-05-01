@@ -101,6 +101,72 @@ describe("buildMcpCommandRegexes", () => {
     // The dot must be escaped — `fooXjs` MUST NOT match
     expect(matchesAnyMcpCommand("node /path/to/fooXjs", re)).toBe(false);
   });
+
+  describe("Phase 999.14 hot-fix — bare-name fallback for orphan grandchildren", () => {
+    it("matches orphan `sh -c <name>` form for npx-style configs", () => {
+      // Production config: clawcode.yaml finmentum-db = npx -y mcp-server-mysql@latest
+      const re = buildMcpCommandRegexes({
+        "finmentum-db": { command: "npx", args: ["-y", "mcp-server-mysql@latest"] },
+      });
+      // Live full-form (the original bug-free case)
+      expect(matchesAnyMcpCommand("npx -y mcp-server-mysql@latest", re)).toBe(true);
+      // Orphan grandchildren — what actually pegged MariaDB on 2026-04-30
+      expect(matchesAnyMcpCommand("sh -c mcp-server-mysql", re)).toBe(true);
+      expect(matchesAnyMcpCommand(
+        "node /home/clawcode/.npm/_npx/ffa4ba40a56a3486/node_modules/.bin/mcp-server-mysql",
+        re,
+      )).toBe(true);
+    });
+
+    it("strips @scope/ from package names — extracts last segment", () => {
+      // 1password-mcp config: npx -y @takescake/1password-mcp@latest
+      const re = buildMcpCommandRegexes({
+        "1password": { command: "npx", args: ["-y", "@takescake/1password-mcp@latest"] },
+      });
+      expect(matchesAnyMcpCommand("npx -y @takescake/1password-mcp@latest", re)).toBe(true);
+      expect(matchesAnyMcpCommand(
+        "node /home/clawcode/.npm/_npx/50dbf3d343a0d5b4/node_modules/.bin/1password-mcp",
+        re,
+      )).toBe(true);
+    });
+
+    it("does NOT match unrelated procs that share a common word", () => {
+      const re = buildMcpCommandRegexes({
+        mysql: { command: "npx", args: ["-y", "mcp-server-mysql@latest"] },
+      });
+      // Word boundary keeps it tight
+      expect(matchesAnyMcpCommand("node my-mcp-server-mysqld-helper", re)).toBe(false);
+      // Substring without word boundary continues to match the full form
+      expect(matchesAnyMcpCommand("xnpx -y mcp-server-mysql@latest", re)).toBe(true);
+    });
+
+    it("ignores file paths in args (not npm specs)", () => {
+      const re = buildMcpCommandRegexes({
+        brave: { command: "/opt/clawcode-mcp-servers/python-venv/bin/python", args: ["/opt/clawcode-mcp-servers/python/brave_search.py"] },
+      });
+      // Full path-based form still matches as before
+      expect(matchesAnyMcpCommand(
+        "/opt/clawcode-mcp-servers/python-venv/bin/python /opt/clawcode-mcp-servers/python/brave_search.py",
+        re,
+      )).toBe(true);
+      // Path arg is NOT extracted as a bare-name pattern (the path-leading-slash check skips it)
+      // → A bare `brave_search` cmdline does NOT match (since extraction was correctly skipped).
+      expect(matchesAnyMcpCommand("sh -c brave_search", re)).toBe(false);
+    });
+
+    it("strips @latest only at the end, not @scope at the start", () => {
+      const re = buildMcpCommandRegexes({
+        playwright: { command: "npm", args: ["exec", "@playwright/mcp@latest"] },
+      });
+      expect(matchesAnyMcpCommand("npm exec @playwright/mcp@latest", re)).toBe(true);
+      // The bare-name extraction yields `mcp` (last segment after @scope). That's
+      // a common word — we accept the false-positive risk because: (a) reaper
+      // also requires PPID=1 + clawcode uid + age>=5s + path patterns specific
+      // to the npm cache directory, so even a `node mcp` arbitrary proc is
+      // already constrained.
+      expect(matchesAnyMcpCommand("sh -c mcp", re)).toBe(true);
+    });
+  });
 });
 
 describe("readProcInfo (Linux integration)", () => {
