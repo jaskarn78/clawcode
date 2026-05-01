@@ -231,11 +231,26 @@ const mcpReconnectCheck: CheckModule = {
 
   async execute(ctx: CheckContext): Promise<CheckResult> {
     const agentConfig = ctx.sessionManager.getAgentConfig(ctx.agentName);
-    const servers = agentConfig?.mcpServers ?? [];
+    const allServers = agentConfig?.mcpServers ?? [];
+    // Phase 999.27 — skip broker-pooled servers (1password broker shim).
+    // The probe spawns the shim with the agent config's BASE env (the
+    // daemon's clawdbot-fleet token), NOT the per-agent overridden token.
+    // For finmentum-scope agents this caused the broker to see hash drift
+    // every 60s heartbeat tick, triggering rebind cycles + pool churn that
+    // saturated MCP capacity. The broker has its own dedicated heartbeat
+    // at `heartbeat/checks/mcp-broker.ts` that uses `getPoolStatus()` to
+    // verify pool aliveness without spawning probe shims.
+    const { filterOutBrokerPooled } = await import(
+      "../../mcp/broker-shim-detect.js"
+    );
+    const servers = filterOutBrokerPooled(allServers);
     if (servers.length === 0) {
       return {
         status: "healthy",
-        message: "no MCP servers configured",
+        message:
+          allServers.length === 0
+            ? "no MCP servers configured"
+            : "all MCP servers are broker-pooled (covered by mcp-broker check)",
         metadata: { ready: 0, degraded: 0, failed: 0 },
       };
     }

@@ -6313,7 +6313,14 @@ async function routeMethod(
       const { makeRealCallTool, makeRealListTools } = await import(
         "../mcp/json-rpc-call.js"
       );
-      const rep = await performMcpReadinessHandshake(mcpServers);
+      // Phase 999.27 — skip broker-pooled servers from on-demand probes.
+      // The 1password broker shim probe would spawn with daemon-default
+      // env (clawdbot token), causing broker rebind cycles. Broker has
+      // its own heartbeat at `heartbeat/checks/mcp-broker.ts`.
+      const probableServers = (
+        await import("../mcp/broker-shim-detect.js")
+      ).filterOutBrokerPooled(mcpServers);
+      const rep = await performMcpReadinessHandshake(probableServers);
 
       // Carry prior capabilityProbe blocks for lastSuccessAt preservation.
       const prevProbeByName = new Map<
@@ -6328,7 +6335,7 @@ async function routeMethod(
 
       const probeLog = (await import("pino")).default({ level: "silent" });
       const serversByName = new Map(
-        mcpServers.map((s) => [
+        probableServers.map((s) => [
           s.name,
           {
             name: s.name,

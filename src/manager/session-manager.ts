@@ -73,6 +73,9 @@ import {
   type McpReadinessReport,
   type McpServerState,
 } from "../mcp/readiness.js";
+// Phase 999.27 — broker-pooled MCP detection (skip per-agent probes for
+// 1password broker shim; broker has its own heartbeat).
+import { filterOutBrokerPooled } from "../mcp/broker-shim-detect.js";
 import { ConversationBriefCache } from "./conversation-brief-cache.js";
 import {
   readEffortState,
@@ -971,7 +974,13 @@ export class SessionManager {
       ...(mcpServers.length > 0
         ? {
             mcpProbe: async () => {
-              const rep = await performMcpReadinessHandshake(mcpServers);
+              // Phase 999.27 — skip broker-pooled servers (1password broker
+              // shim) from warm-path probes. The probe spawns the shim with
+              // the daemon's default env (clawdbot token) instead of the
+              // per-agent overridden env, causing broker rebind cycles + pool
+              // churn. Broker has its own heartbeat (`mcp-broker.ts`).
+              const probableServers = filterOutBrokerPooled(mcpServers);
+              const rep = await performMcpReadinessHandshake(probableServers);
               mcpReadiness.current = rep;
               if (rep.optionalErrors.length > 0) {
                 this.log.warn(
@@ -1108,7 +1117,11 @@ export class SessionManager {
     //     the probe coroutine threw. The next 60s heartbeat tick reruns
     //     this probe with full state-merge semantics.
     if (mcpServers.length > 0) {
-      const serverNames = mcpServers.map((s) => s.name);
+      // Phase 999.27 — skip broker-pooled servers from agent-side capability
+      // probes. The 1password broker shim is daemon-singleton transport;
+      // probes spawning it with un-overridden env cause rebind cycles.
+      const probableForCapability = filterOutBrokerPooled(mcpServers);
+      const serverNames = probableForCapability.map((s) => s.name);
       const priorState = this.getMcpStateForAgent(name);
       const prevProbeByName = new Map<
         string,
@@ -1135,7 +1148,7 @@ export class SessionManager {
           const probeLog = pino({ level: "silent" });
 
           const serversByName = new Map(
-            mcpServers.map((s) => [
+            probableForCapability.map((s) => [
               s.name,
               {
                 name: s.name,

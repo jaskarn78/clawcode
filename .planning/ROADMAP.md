@@ -1456,7 +1456,7 @@ agents:
 1. **Env-resolver oscillation (Phase 999.27):** rebind warns fire ~1Hz with finmentum-scope agents bouncing between `aa18cf6f` and `dcfc03f8` token hashes 1 second apart. Not a 1Password rotation (rotations are minutes-to-days); the daemon's `mcpEnvOverrides` resolver is returning two different tokens for the same agent on adjacent calls. Tracked as Phase 999.27 below.
 2. **Pool churn from rapid rebinds (Phase 999.26.1 follow-up):** `beginDrain` fast-path immediately SIGTERMs the pool child when `inflight.size === 0`. Combined with 999.27 oscillation, this kills+respawns the pool child every second. fin-acquisition's warm-path probe `initialize` was in-flight when the pool child got SIGTERMed → 5s health-check timeout → agent marked failed. Mitigation: add a small drain delay (~500ms-1s) before pool kill to absorb oscillation cycles. Easy follow-up; doesn't fix root cause but reduces blast radius. Recovered fin-acquisition manually via `clawcode start fin-acquisition`.
 
-### Phase 999.27: Env-resolver oscillation root cause (BACKLOG — high priority, blocks reliable fin-acquisition boot)
+### Phase 999.27: Env-resolver oscillation root cause (SHIPPED 2026-05-01)
 
 **Goal:** Stop the daemon's `mcpEnvOverrides` resolver (Phase 100 follow-up) from returning two different `OP_SERVICE_ACCOUNT_TOKEN` values for the same agent on adjacent calls. The 999.26 rebind fix prevents this from breaking the broker, but the rapid token oscillation still causes pool churn and warm-path timeouts during agent boot.
 
@@ -1505,3 +1505,23 @@ Example oscillation (~1 Hz):
 **Plans:** 0 plans (TBD when promoted; Phase 1 diagnostics could be a quick task).
 
 **Promotion target:** active milestone — high priority. Each agent boot during oscillation has ~50% probability of warm-path timeout (the 5s health check window vs ~1s oscillation period). Operator currently must manually `clawcode start <agent>` after every daemon restart for the finmentum-scope agents.
+
+**Status (2026-05-01 16:34 PDT):** SHIPPED LIVE. Real root cause was simpler than any hypothesis: the per-agent capability-probe + heartbeat-reconnect paths spawn the broker shim using `ResolvedAgentConfig.mcpServers[].env` (the BASE shared-mcpServers env with the daemon's clawdbot-fleet token), not `AgentSessionConfig.mcpServers[].env` (which has Phase 100 `mcpEnvOverrides` resolved on top). For finmentum-scope agents, the agent's actual long-lived shim has `aa18cf6f` (Finmentum), but the heartbeat probe shim has `dcfc03f8` (clawdbot fleet) — broker sees drift every 60s heartbeat tick, rebinds, churns the pool. **Confirmed via /proc env audit:** ps showed each agent has exactly one long-lived shim with the CORRECT token; broker journal showed transient handshakes with WRONG token at heartbeat cadence (60s).
+
+**Fix:** new `src/mcp/broker-shim-detect.ts` helper (`isBrokerPooledMcpServer` + `filterOutBrokerPooled`) detects the broker-shim signature (`command=clawcode` + `args includes "mcp-broker-shim"`) and skips it from per-agent probes. Applied at 4 sites:
+1. `session-manager.ts` warm-path `mcpProbe` (filter before `performMcpReadinessHandshake`)
+2. `session-manager.ts` agent-start capability probe (filter before serversByName Map construction)
+3. `daemon.ts` on-demand mcp-status IPC handler
+4. `heartbeat/checks/mcp-reconnect.ts` per-agent heartbeat tick
+
+The broker has its own dedicated heartbeat (`heartbeat/checks/mcp-broker.ts`) that uses `getPoolStatus()` to verify pool aliveness without spawning probe shims — no coverage loss.
+
+**Tests:** 9 new tests in `src/mcp/__tests__/broker-shim-detect.test.ts` — broker shim signature match, false-positive guards (clawcode-CLI MCPs that AREN'T broker-pooled like `clawcode mcp` / `browser-mcp`), third-party MCPs (npx/node/python), filter order preservation, edge cases (empty / all-shim arrays). 42/42 broker + 6/6 mcp-reconnect tests pass.
+
+**Production verification (2026-05-01 16:34 PDT):** Daemon restarted with fix, then journaled for 60s+:
+- `agent token rotated — rebinding` events: **0** (was 4-5/min pre-fix)
+- All 4 priority agents (Admin Clawdy, fin-acquisition, research, fin-research) warm-path PASSED on first try (no manual `clawcode start` needed)
+- fin-acquisition specifically: warm-path completed in 2311ms (vs 5245ms timeout pre-fix)
+- Wake-order log fired correctly: `Admin Clawdy=1, fin-acquisition=2, research=3, fin-research=3, finmentum-content-creator=null`
+
+**Pairs with shipped Phase 999.26.1** (drain delay before kill — see Phase 999.26 entry above) which absorbs any remaining transient probe-shim disconnects without churning the pool child.

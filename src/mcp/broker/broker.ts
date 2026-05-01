@@ -28,6 +28,24 @@ const DEFAULT_PER_AGENT_MAX_CONCURRENT = 4;
 const DEFAULT_DRAIN_TIMEOUT_MS = 2000;
 
 /**
+ * Phase 999.26.1 — minimum delay before SIGTERMing a pool whose refCount
+ * just dropped to 0 with no inflight requests. Without this, the
+ * `inflight.size === 0` fast path in `beginDrain` immediately kills the
+ * pool child, which causes pool churn when transient probe shims connect
+ * + disconnect rapidly (heartbeat probes, on-demand mcp-status, etc.).
+ *
+ * Each pool spawn costs ~500ms cold start; killing-and-respawning every
+ * 60s heartbeat tick AND every rebind from `mcpEnvOverrides` mismatch
+ * caused warm-path timeouts during fin-acquisition boot on 2026-05-01.
+ *
+ * 1000ms is enough to absorb a typical heartbeat probe cycle (probe shim
+ * spawns, connects, sends `tools/list`, gets response, disconnects — all
+ * within ~200-400ms typically) and the next agent dispatch arrives well
+ * within this window for active agents.
+ */
+const DEFAULT_DRAIN_FAST_PATH_DELAY_MS = 1000;
+
+/**
  * Spawn function injection point. Tests pass a fake; production passes a
  * real `child_process.spawn`-backed function. The broker calls this once
  * per pool (per unique tokenHash) and re-calls it on auto-respawn.
@@ -634,9 +652,17 @@ export class OnePasswordMcpBroker {
       "pool draining (last ref disconnected)",
     );
 
-    // Fast path: already drained.
+    // Phase 999.26.1 — when there's no inflight, schedule the kill on a
+    // short delay instead of SIGTERMing immediately. This absorbs the
+    // transient connect-disconnect cycles caused by probe shims (heartbeat
+    // probes, on-demand mcp-status) so the pool child survives until the
+    // next legitimate dispatch. If a fresh connection rescues the pool
+    // before the delay elapses, `acceptConnection`'s drain-cancel branch
+    // clears the timer and the pool stays alive with zero respawn cost.
     if (pool.inflight.size === 0) {
-      this.killPoolNow(pool);
+      pool.drainTimer = setTimeout(() => {
+        this.killPoolNow(pool);
+      }, DEFAULT_DRAIN_FAST_PATH_DELAY_MS);
       return;
     }
 
