@@ -893,7 +893,7 @@ Plans:
 
 **Side-finding (informational, not blocking):** Prefix-hash didn't visibly change at the Phase 104 deploy boundary (still `92b7...` from Phase 103). Either Phase 104 directives are in a part of the prefix excluded from the hash computation, or they're landing in a different position than expected. Cache behavior + token telemetry confirm the directives ARE in the prompt, but understanding why the hash is stable across the deploy boundary is worth a quick investigation when this phase opens.
 
-### Phase 999.8: Dashboard knowledge-graph fixes — node cap + tier colors + tier maintenance (BACKLOG)
+### Phase 999.8: Dashboard knowledge-graph fixes — node cap + tier colors + tier maintenance (SHIPPED 2026-04-30)
 
 **Goal:** Three bugs/gaps surfaced 2026-04-29 when operator opened the knowledge-graph dashboard:
 
@@ -918,7 +918,7 @@ Plans:
 - [x] 999.8-02-PLAN.md — 4-color tier palette (hot/warm/cold/orphan) + top-right legend with live counts on the dashboard graph — COLOR-01, COLOR-02
 - [x] 999.8-03-PLAN.md — Restore heartbeat-check discovery via static `CHECK_REGISTRY` (11 modules); fixes silent `checkCount:0` in production — HB-01..HB-06
 
-**Promotion target:** active milestone, will likely become **Phase 107**. Bundle deploy with Phases 105 + 106 if scope stays small.
+**Status:** Shipped 2026-04-30. All 3 plans landed: memory-graph cap raised, 4-color tier palette + legend, heartbeat-check static registry restored. See 999.8-VERIFICATION.md. Note: original "promotion target Phase 107" plan was superseded — Phase 107 was used for the memory-pipeline-integrity bundle (dream JSON enforcement + vec_memories orphan cleanup, originally 999.16/999.17).
 
 ### Phase 999.9: Shared 1password-mcp by service-account scope (PROMOTED to Phase 108)
 
