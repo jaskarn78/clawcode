@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 106-02-PLAN.md
-last_updated: "2026-05-01T09:38:26.493Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 107-02-PLAN.md (Pillar B — vec_memories orphan cleanup)
+last_updated: "2026-05-01T09:39:57.806Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 34
   completed_phases: 12
   total_plans: 71
-  completed_plans: 64
+  completed_plans: 65
 ---
 
 # Project State
@@ -355,6 +355,9 @@ Recent decisions affecting current work:
 - [Phase 106]: Strip delegates at caller (subagent-thread-spawner) — keeps renderDelegatesBlock pure and primary-agent code path byte-identical
 - [Phase 106]: Destructure-only (no in-place delete) preserves sourceConfig purity for any other consumer holding a reference
 - [Phase 106]: Recursion guard (disallowedTools: spawn_subagent_thread) retained — defense-in-depth alongside DSCOPE invisibility per RESEARCH Pitfall 4
+- [Phase 107]: MemoryStore.cleanupOrphans uses directional SQL (DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories)) — never touches memories. Reversing direction would erase cold-archived memories.
+- [Phase 107]: cleanupOrphans lives on MemoryStore class (not separate utility) — single owner of the SQLite handle, mirrors bumpAccess + getMemoryFileSha256.
+- [Phase 107]: Daemon per-agent failure pushes sentinel { totalAfter: -1 } into results instead of aborting — operator sees both successes and failures in one CLI invocation.
 
 ### v2.1 closing decisions (for reference)
 
@@ -523,11 +526,12 @@ Recent decisions affecting current work:
 | Phase 106 P03 | 3 min | 1 tasks | 1 files |
 | Phase 106 P01 | 3 min | 1 tasks | 1 files |
 | Phase 106 P02 | 18 min | 1 tasks | 1 files |
+| Phase 107 P02 | 45m | 3 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 106-02-PLAN.md
+Stopped at: Completed 107-02-PLAN.md (Pillar B — vec_memories orphan cleanup)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
