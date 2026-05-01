@@ -68,6 +68,16 @@ export interface ReconcileDeps {
 export async function reconcileAllAgents(deps: ReconcileDeps): Promise<void> {
   const names = Array.from(deps.tracker.getRegisteredAgents().keys());
   for (const name of names) {
+    // Phase 108 (Pitfall 6) — broker-owned pool children are registered
+    // under synthetic owners with the `__broker:` prefix. The OnePassword
+    // broker is the SOLE entity allowed to SIGTERM those PIDs (it knows
+    // the per-pool refcount + drain ceiling). Per-tick reconciliation
+    // must never treat them as per-agent entries — skipping them here
+    // also prevents stale-claude detection from running, which would
+    // otherwise see the daemon PID as the "claude" process and never
+    // mark these entries as dead. Broker's own onPoolExit callback
+    // unregisters the synthetic entry on child exit.
+    if (name.startsWith("__broker:")) continue;
     try {
       await reconcileAgent(name, deps);
     } catch (err) {
@@ -95,6 +105,13 @@ export async function reconcileAgent(
   name: string,
   deps: ReconcileDeps,
 ): Promise<void> {
+  // Phase 108 (Pitfall 6) — defensive skip for broker-owned synthetic
+  // owners. reconcileAllAgents already filters them, but reconcileAgent
+  // is also wired into tracker.killAgentGroup's reconcile-before-kill
+  // closure (TRACK-06). A future caller passing a `__broker:` name here
+  // would otherwise probe a non-existent claude proc, mark it dead, and
+  // unregister the entry behind the broker's back.
+  if (name.startsWith("__broker:")) return;
   const entry = deps.tracker.getRegisteredAgents().get(name);
   if (!entry) return;
 

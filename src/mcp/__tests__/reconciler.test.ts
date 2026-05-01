@@ -359,6 +359,55 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
     expect(warns.length).toBe(0);
   });
 
+  // Phase 108 (Pitfall 6) — broker-owned synthetic owners must be skipped.
+  // OnePasswordMcpBroker registers each pooled MCP child PID under a
+  // synthetic owner like `__broker:1password:<tokenHash>` so the
+  // reconciler's per-agent kill logic never SIGTERMs a pool child.
+  it("Test 10 (Phase 108): skips entries whose owner name starts with `__broker:`", async () => {
+    const tracker = makeTracker([
+      // A real agent that should be reconciled normally.
+      ["fin-acquisition", { claudePid: 100, mcpPids: [201], registeredAt: 1_700_000_000_000 }],
+      // A broker-owned synthetic owner — must be left untouched.
+      ["__broker:1password:abc12345", { claudePid: 99_000, mcpPids: [501], registeredAt: 1_700_000_000_000 }],
+    ]);
+    // Real agent's claudePid still alive; reconciler should be a no-op for it.
+    isPidAliveMock.mockReturnValue(true);
+
+    const { log, lines } = captureLogger();
+    await reconcileAllAgents({
+      tracker: tracker as unknown as never,
+      daemonPid: DAEMON_PID,
+      log,
+    });
+
+    // For the real agent: no claude probe is needed (alive), no mcp re-walk
+    // (mcpPids non-empty). For the synthetic broker owner: the early
+    // `__broker:` skip means isPidAlive / discoverClaudeSubprocessPid /
+    // discoverAgentMcpPids must NEVER be called against it. Combined
+    // assertion: the synthetic owner must remain in the registered map
+    // and updateAgent / replaceMcpPids / unregister must not have been
+    // invoked for it.
+    const stillRegistered = tracker.getRegisteredAgents();
+    expect(stillRegistered.has("__broker:1password:abc12345")).toBe(true);
+    // No mutation calls for the synthetic owner.
+    for (const call of tracker.updateAgent.mock.calls) {
+      expect((call[0] as string).startsWith("__broker:")).toBe(false);
+    }
+    for (const call of tracker.replaceMcpPids.mock.calls) {
+      expect((call[0] as string).startsWith("__broker:")).toBe(false);
+    }
+    for (const call of tracker.unregister.mock.calls) {
+      expect((call[0] as string).startsWith("__broker:")).toBe(false);
+    }
+    // No log line should reference the synthetic owner.
+    const allLines = lines();
+    for (const ln of allLines) {
+      if (typeof ln.agent === "string") {
+        expect((ln.agent as string).startsWith("__broker:")).toBe(false);
+      }
+    }
+  });
+
   it("Test 9: agent-restart — both claudePid and mcpPids change in one cycle", async () => {
     const tracker = makeTracker([
       ["A", { claudePid: 100, mcpPids: [201, 202], registeredAt: 1_700_000_000_000 }],
