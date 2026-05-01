@@ -224,6 +224,169 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
     expect(sendAsAgent).not.toHaveBeenCalled();
   });
 
+  describe("bot-direct fallback (Phase 999.12 IPC-02)", () => {
+    it("posts response via bot-direct when target has no webhook (IPC-02)", async () => {
+      const sendText = vi.fn(async () => {});
+      const dispatchTurn = vi.fn().mockResolvedValue("hello back");
+      const writeInbox = vi.fn().mockResolvedValue({ messageId: "msg-bd1" });
+      const infoSpy = vi.fn();
+      const deps = buildAskAgentDeps({
+        runningAgents: ["fin-acquisition"],
+        dispatchTurn,
+        writeInbox,
+        webhookManager: {
+          hasWebhook: () => false,
+          sendAsAgent: vi.fn(),
+        },
+        configs: [{ name: "fin-acquisition" }],
+        log: {
+          info: infoSpy,
+          warn: () => {},
+          error: () => {},
+        } as never,
+        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
+        botDirectSender: { sendText },
+        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
+        agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
+      });
+
+      const result = await handleAskAgentIpc(
+        {
+          from: "admin-clawdy",
+          to: "fin-acquisition",
+          content: "hi",
+          mirror_to_target_channel: true,
+        },
+        deps,
+      );
+
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(sendText).toHaveBeenCalledWith("1481670479017414767", "hello back");
+
+      // Log shape matches triggerDeliveryFn — pinned for journalctl grep parity.
+      const logCalls = infoSpy.mock.calls;
+      const hit = logCalls.find(
+        (c) =>
+          typeof c[0] === "object" &&
+          c[0] !== null &&
+          (c[0] as Record<string, unknown>).to === "fin-acquisition" &&
+          (c[0] as Record<string, unknown>).channel === "1481670479017414767" &&
+          (c[0] as Record<string, unknown>).responseLength === 10 &&
+          c[1] === "agent response sent to Discord",
+      );
+      expect(hit).toBeDefined();
+
+      expect(result.ok).toBe(true);
+      expect(result.response).toBe("hello back");
+      expect(result.messageId).toBe("msg-bd1");
+    });
+
+    it("logs warn and continues when no webhook and no bot-direct sender (IPC-02b)", async () => {
+      const dispatchTurn = vi.fn().mockResolvedValue("dispatched-response");
+      const writeInbox = vi.fn().mockResolvedValue({ messageId: "msg-bd2" });
+      const deps = buildAskAgentDeps({
+        runningAgents: ["fin-acquisition"],
+        dispatchTurn,
+        writeInbox,
+        webhookManager: {
+          hasWebhook: () => false,
+          sendAsAgent: vi.fn(),
+        },
+        // botDirectSender intentionally omitted
+      });
+
+      const result = await handleAskAgentIpc(
+        {
+          from: "admin-clawdy",
+          to: "fin-acquisition",
+          content: "hi",
+          mirror_to_target_channel: true,
+        },
+        deps,
+      );
+
+      // dispatchTurn STILL ran; ask did not throw; response surfaced.
+      expect(dispatchTurn).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(true);
+      expect(result.response).toBe("dispatched-response");
+    });
+
+    it("does NOT call bot-direct when mirror_to_target_channel is false (IPC-03 regression pin)", async () => {
+      const sendText = vi.fn();
+      const dispatchTurn = vi.fn().mockResolvedValue("hello back");
+      const writeInbox = vi.fn().mockResolvedValue({ messageId: "msg-bd3" });
+      const infoSpy = vi.fn();
+      const deps = buildAskAgentDeps({
+        runningAgents: ["fin-acquisition"],
+        dispatchTurn,
+        writeInbox,
+        webhookManager: {
+          hasWebhook: () => false,
+          sendAsAgent: vi.fn(),
+        },
+        configs: [{ name: "fin-acquisition" }],
+        log: {
+          info: infoSpy,
+          warn: () => {},
+          error: () => {},
+        } as never,
+        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
+        botDirectSender: { sendText },
+        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
+        agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
+      });
+
+      // No mirror flag passed (default false).
+      const result = await handleAskAgentIpc(
+        { from: "admin-clawdy", to: "fin-acquisition", content: "hi" },
+        deps,
+      );
+
+      expect(sendText).not.toHaveBeenCalled();
+      const sentLog = infoSpy.mock.calls.find(
+        (c) => c[1] === "agent response sent to Discord",
+      );
+      expect(sentLog).toBeUndefined();
+      expect(result.response).toBe("hello back");
+    });
+
+    it("truncates response > 2000 chars to 2000 with ellipsis (IPC-02 truncation)", async () => {
+      const sendText = vi.fn(async () => {});
+      const longResponse = "x".repeat(2500);
+      const dispatchTurn = vi.fn().mockResolvedValue(longResponse);
+      const writeInbox = vi.fn().mockResolvedValue({ messageId: "msg-bd4" });
+      const deps = buildAskAgentDeps({
+        runningAgents: ["fin-acquisition"],
+        dispatchTurn,
+        writeInbox,
+        webhookManager: {
+          hasWebhook: () => false,
+          sendAsAgent: vi.fn(),
+        },
+        configs: [{ name: "fin-acquisition" }],
+        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
+        botDirectSender: { sendText },
+        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
+        agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
+      });
+
+      await handleAskAgentIpc(
+        {
+          from: "admin-clawdy",
+          to: "fin-acquisition",
+          content: "hi",
+          mirror_to_target_channel: true,
+        },
+        deps,
+      );
+
+      expect(sendText).toHaveBeenCalledTimes(1);
+      const [, sentText] = sendText.mock.calls[0];
+      expect(sentText.length).toBe(2000);
+      expect(sentText.endsWith("...")).toBe(true);
+    });
+  });
+
   it("writeInbox is called BEFORE dispatch and any mirror webhook (offline-path inbox guarantee)", async () => {
     const sendAsAgent = vi.fn().mockResolvedValue(undefined);
     const dispatchTurn = vi.fn().mockResolvedValue("answer");
