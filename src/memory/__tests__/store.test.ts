@@ -201,6 +201,62 @@ describe("MemoryStore", () => {
     });
   });
 
+  // Phase 107 VEC-CLEAN-01 / VEC-CLEAN-02 regression — pin the invariant
+  // that `MemoryStore.delete(id)` cascades to `vec_memories` ATOMICALLY
+  // (single transaction, paired rows always go together). RESEARCH.md
+  // confirms `MemoryStore.delete` is the only production
+  // `DELETE FROM memories` site; this test prevents future drift.
+  describe("Phase 107 VEC-CLEAN-01 regression — delete cascades to vec_memories", () => {
+    it("delete-cascades-vec — paired vec_memories row removed inside the same transaction", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const a = store.insert(
+        { content: "alpha", source: "manual", skipDedup: true },
+        randomEmbedding(),
+      );
+      const b = store.insert(
+        { content: "beta", source: "manual", skipDedup: true },
+        randomEmbedding(),
+      );
+
+      // Pre-state: both pairs present.
+      const beforeMemories = db
+        .prepare("SELECT count(*) as cnt FROM memories")
+        .get() as { cnt: number };
+      const beforeVec = db
+        .prepare("SELECT count(*) as cnt FROM vec_memories")
+        .get() as { cnt: number };
+      expect(beforeMemories.cnt).toBe(2);
+      expect(beforeVec.cnt).toBe(2);
+
+      // Delete `a`.
+      const deleted = store.delete(a.id);
+      expect(deleted).toBe(true);
+
+      // Cascade invariant: BOTH tables now lack `a.id`. The vec row was
+      // removed by `MemoryStore.delete` inside `db.transaction()` so the
+      // vec_memories table cannot be left with an orphan.
+      const aMemoryRow = db
+        .prepare("SELECT id FROM memories WHERE id = ?")
+        .get(a.id) as { id: string } | undefined;
+      const aVecRow = db
+        .prepare("SELECT memory_id FROM vec_memories WHERE memory_id = ?")
+        .get(a.id) as { memory_id: string } | undefined;
+      expect(aMemoryRow).toBeUndefined();
+      expect(aVecRow).toBeUndefined();
+
+      // `b` still paired in both tables (cascade is targeted, not blanket).
+      const bMemoryRow = db
+        .prepare("SELECT id FROM memories WHERE id = ?")
+        .get(b.id) as { id: string } | undefined;
+      const bVecRow = db
+        .prepare("SELECT memory_id FROM vec_memories WHERE memory_id = ?")
+        .get(b.id) as { memory_id: string } | undefined;
+      expect(bMemoryRow?.id).toBe(b.id);
+      expect(bVecRow?.memory_id).toBe(b.id);
+    });
+  });
+
   describe("listRecent", () => {
     it("returns entries ordered by created_at DESC", () => {
       store = createTestStore();
