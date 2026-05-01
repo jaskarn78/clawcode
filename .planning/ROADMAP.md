@@ -551,6 +551,61 @@ Plans:
 
 ---
 
+### Phase 106: Agent context hygiene bundle — delegate scoping + research stall + CLI hot-fix
+
+**Goal:** Bundle three loose ends from 2026-04-30's session into one ship. All three are infrastructure / agent-prompt-rendering hygiene; same touch points; one deploy.
+
+#### Pillar A — Delegate map should NOT inherit into spawned subagent system prompts (DSCOPE-01..04)
+
+The 2026-04-30 999.13 deploy went wrong because when fin-acquisition spawned fin-research as a subagent, fin-research-as-spawned-subagent inherited fin-acq's full system prompt including the `delegates: { research: fin-research }` directive. fin-research then saw "delegate research → fin-research" and tried to recursively call itself ("I'll spawn a focused research agent to handle this"). The SDK recursion guard blocked the actual spawn but the agent stalled instead of pivoting to do the work itself.
+
+The 999.13 yaml fan-out was rolled back, but the underlying bug is in the prompt-rendering layer — not the directive text. Properly, the `delegates` directive should only appear in the *primary* agent's system prompt, NOT in any subagent thread spawned by that primary. Subagents are leaf workers, not orchestrators; they shouldn't see the delegate map at all.
+
+**DSCOPE-01:** `renderDelegatesBlock` (or equivalent) is gated by an `isSubagent` (or similar) context flag. When rendering a subagent's system prompt, the block is omitted entirely.
+**DSCOPE-02:** Identify the system-prompt-assembly code path for spawned subagents (likely `subagent-thread-spawner.ts` or `spawn-subagent-thread` skill). Wire the flag at the right boundary.
+**DSCOPE-03:** Tests pin the behavior: primary agent's prompt CONTAINS the directive when `delegates` is configured; same agent's spawned subagent's prompt does NOT contain the directive even though the parent's config has it.
+**DSCOPE-04:** Yaml fan-out is restored (the same 8 channel-bound agents from quick-260430-po4): finmentum group → `{ research: fin-research }`, non-finmentum group → `{ research: research }`. Operator-curated; no Admin Clawdy.
+
+#### Pillar B — Research agent boot stall (STALL-01..02)
+
+After today's 999.12 deploy at 22:09:24, the snapshot listed 6 agents to auto-start. 4 of them reached `warm-path ready` within 2-4 min (finmentum-content-creator, fin-acquisition, Admin Clawdy, personal). 2 of them — `research` and `fin-research` — registered schedules + memory scanner but never reached `warm-path ready`. They're stopped in `clawcode status` and the journal shows no error for them.
+
+**STALL-01:** Investigate root cause. Hypothesis: research agents have a different MCP set (`brave-search`, `playwright`, `browserless`, `fal-ai`, `google-workspace`) and one of those is hanging during MCP load. Check via `pgrep -a` for stalled MCP procs spawned by these agents. Also check daemon SDK output / handle. If MCP load timeout is a dependency, instrument it with a telemetry log to make next-time diagnosis instant.
+**STALL-02:** Add a warmup-timeout check: if an agent doesn't reach `warm-path ready` within 60s of `agent.start`, log `level=50` with full context (which MCP loads are pending, what the SDK was last doing). Today's silent stall ate operator time; next time it should self-report.
+
+#### Pillar C — `clawcode mcp-tracker` CLI hot-fix (TRACK-CLI-01)
+
+After 999.15's deploy, `clawcode mcp-tracker` returns "Error: Invalid Request". The IPC handler `mcp-tracker-snapshot` and the CLI client request shape don't match — likely a method name typo OR a zod schema validation rejecting the empty params. ~10-line fix.
+
+**TRACK-CLI-01:** Diagnose mismatch (one of: method-name discrepancy daemon vs CLI; zod schema rejecting empty params; missing IPC method registration in daemon's routeMethod dispatch). Fix and re-test. Smoke: `clawcode mcp-tracker -a fin-acquisition` returns the formatted table.
+
+#### Out of scope
+
+- Async correlation-ID reply path (Phase 999.2 longer-term)
+- Discord bridge zombie-connection resilience (separate small phase)
+- new-reel skill rebuild (separate, multi-day)
+
+#### Trigger
+
+2026-05-01 — overnight cleanup run. All three issues surfaced during today's session, none individually big enough for own phase, all touching agent-prompt / MCP-lifecycle infrastructure.
+
+#### Requirements
+
+[DSCOPE-01 subagent-prompt scoping flag, DSCOPE-02 spawner wiring, DSCOPE-03 tests, DSCOPE-04 yaml fan-out restore; STALL-01 root cause + fix, STALL-02 warmup-timeout telemetry; TRACK-CLI-01 IPC schema match]
+
+#### Plans
+
+TBD by planner — likely 4-5 plans:
+- 106-00: Wave 0 RED tests for DSCOPE-01..03, TRACK-CLI-01 + STALL-02 telemetry
+- 106-01: GREEN A — subagent-prompt scoping fix
+- 106-02: GREEN B — research stall investigation, fix or telemetry
+- 106-03: GREEN C — mcp-tracker CLI fix
+- 106-04: yaml fan-out restore + deploy gate + smoke
+
+**Status:** Planning underway 2026-05-01 overnight via `/gsd:autonomous`. Deploy gate: all channels (incl. fin-acquisition, finmentum-content-creator, Admin Clawdy) silent ≥30 min on non-bot `messageCreate` events.
+
+---
+
 ## Backlog
 
 Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
