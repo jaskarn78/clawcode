@@ -1451,3 +1451,57 @@ agents:
 5. Rebind survives multiple rotations for the same agent (no permanent latch).
 
 35/35 broker tests pass (16 broker.test + 19 integration/shim/pooled). **Local repo only — deploy held per Ramy-active rule + queued with rest of pending deploys.** First post-deploy check: `journalctl -u clawcode --since "5 min ago" | grep "agent token sticky drift"` should return zero hits and instead show `agent token rotated — rebinding to new pool` warns when rotations actually occur.
+
+**Post-deploy observation (2026-05-01 16:15-16:20 PDT):** rebind fix verified — zero "rejecting connection" events, ~4 graceful rebinds/min. BUT discovered two follow-up issues during smoke:
+1. **Env-resolver oscillation (Phase 999.27):** rebind warns fire ~1Hz with finmentum-scope agents bouncing between `aa18cf6f` and `dcfc03f8` token hashes 1 second apart. Not a 1Password rotation (rotations are minutes-to-days); the daemon's `mcpEnvOverrides` resolver is returning two different tokens for the same agent on adjacent calls. Tracked as Phase 999.27 below.
+2. **Pool churn from rapid rebinds (Phase 999.26.1 follow-up):** `beginDrain` fast-path immediately SIGTERMs the pool child when `inflight.size === 0`. Combined with 999.27 oscillation, this kills+respawns the pool child every second. fin-acquisition's warm-path probe `initialize` was in-flight when the pool child got SIGTERMed → 5s health-check timeout → agent marked failed. Mitigation: add a small drain delay (~500ms-1s) before pool kill to absorb oscillation cycles. Easy follow-up; doesn't fix root cause but reduces blast radius. Recovered fin-acquisition manually via `clawcode start fin-acquisition`.
+
+### Phase 999.27: Env-resolver oscillation root cause (BACKLOG — high priority, blocks reliable fin-acquisition boot)
+
+**Goal:** Stop the daemon's `mcpEnvOverrides` resolver (Phase 100 follow-up) from returning two different `OP_SERVICE_ACCOUNT_TOKEN` values for the same agent on adjacent calls. The 999.26 rebind fix prevents this from breaking the broker, but the rapid token oscillation still causes pool churn and warm-path timeouts during agent boot.
+
+**Trigger:** 2026-05-01 16:15 PDT — post-deploy smoke of 999.26. Journal shows finmentum-scope agents (fin-acquisition, fin-research, finmentum-content-creator) rebinding between two specific token hashes:
+- `aa18cf6f` — likely Finmentum vault scope token
+- `dcfc03f8` — likely clawdbot fleet scope token
+
+Example oscillation (~1 Hz):
+```
+16:15:48  finmentum-content-creator  oldHash=aa18cf6f  newHash=dcfc03f8
+16:15:49  finmentum-content-creator  oldHash=dcfc03f8  newHash=aa18cf6f  ← 1 second later
+16:16:11  fin-research               oldHash=aa18cf6f  newHash=dcfc03f8
+16:16:12  fin-research               oldHash=dcfc03f8  newHash=aa18cf6f
+16:16:33  fin-acquisition            oldHash=aa18cf6f  newHash=dcfc03f8
+16:16:37  fin-acquisition            oldHash=dcfc03f8  newHash=aa18cf6f
+```
+
+**Hypotheses (need investigation):**
+
+1. **Two 1password-mcp shim subprocesses per agent** — one with the daemon-default clawdbot token (inherited from process.env), one with the Finmentum-scope override (from `mcpEnvOverrides`). Each spawns its own pool. If both shims are active and alternating dispatches, the rebind fires for every alternation. Investigate: `ps -ef | grep mcp-broker-shim | grep <agent>` should show ONE shim per agent — if there are two with different env, that's the bug.
+
+2. **Cache TTL flapping** — Phase 104's secrets boot-cache caches op-resolved values; Phase 100's `resolveMcpEnvOverrides` may bypass it on retry. If the cache returns the Finmentum token on hit and the resolver returns the clawdbot token on miss (because it falls back when op rate-limits), the agent's MCP child gets respawned with different env each cycle.
+
+3. **Async race in `mcpEnvOverrides`** — multiple concurrent shim respawns hit the resolver simultaneously; one gets cache, one gets fresh op-read with a different scope. Race condition rather than design intent.
+
+**Investigation steps:**
+- `ps -ef | grep mcp-broker-shim` — count shims per finmentum agent
+- `ps -ef | grep -A1 mcp-broker-shim | grep CLAWCODE_AGENT` — confirm env per shim
+- Audit `src/manager/op-env-resolver.ts` for per-agent token determinism
+- Audit `src/manager/secrets-resolver.ts` cache layer — does it return consistent values for the same key?
+- Add diagnostic logs at the resolver boundary: `tokenScope` (clawdbot vs finmentum) + `resolvedFromCache` (boolean) + `resolverCallId` (nanoid) so we can correlate which call returns which scope.
+
+**Scope:**
+- Phase 1 (diagnostic): add resolver-boundary logs to confirm which hypothesis is correct.
+- Phase 2 (fix): depends on Phase 1 findings. Likely candidates:
+  - Pin per-agent token to a single resolved value for the agent lifetime (no per-call re-resolution).
+  - Force the env-resolver to be a pure function (cache-stable per agent).
+  - Add a "resolved-token-fingerprint" pre-flight before every shim spawn to bail loudly if the token changes mid-session.
+
+**Pairs with:**
+- Phase 999.26 (shipped) — rebind fix prevents this from killing the agent. Without 999.26, this same oscillation hits the rejection loop and saturates MCP capacity.
+- Phase 999.26.1 follow-up (pool drain delay) — would mitigate the warm-path-timeout symptom while 999.27 root-cause work happens.
+
+**Requirements:** TBD — likely 4-6 (diagnostic logs, resolver audit, per-agent token pinning, regression test, smoke verification).
+
+**Plans:** 0 plans (TBD when promoted; Phase 1 diagnostics could be a quick task).
+
+**Promotion target:** active milestone — high priority. Each agent boot during oscillation has ~50% probability of warm-path timeout (the 5s health check window vs ~1s oscillation period). Operator currently must manually `clawcode start <agent>` after every daemon restart for the finmentum-scope agents.
