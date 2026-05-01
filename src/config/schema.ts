@@ -1332,6 +1332,15 @@ export const defaultsSchema = z.object({
   // 15 minutes. Every active session's MemoryFlushTimer fires this often
   // (skip heuristic bails if no meaningful turns since last flush).
   memoryFlushIntervalMs: z.number().int().positive().default(900_000),
+  // Phase 999.6 SNAP-04 — staleness threshold for pre-deploy-snapshot.json (hours).
+  // 24h default per CONTEXT.md. Configurable so operators can tune.
+  // Default-bearing → existing v2.5/v2.6 configs parse unchanged.
+  preDeploySnapshotMaxAgeHours: z
+    .number()
+    .int()
+    .positive()
+    .default(24)
+    .optional(),
   // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
   // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
   memoryCueEmoji: z.string().min(1).max(8).default("✅"),
