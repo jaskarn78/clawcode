@@ -301,7 +301,128 @@ export class SubagentThreadSpawner {
         `If the subagent's reply is too short or unclear to summarize, just acknowledge completion + link. ` +
         `Do NOT call read_thread again — you already have the relevant content above. End your turn after posting the summary.`;
       const origin = makeRootOrigin("task", `subagent-completion:${threadId}`);
-      await this.turnDispatcher.dispatch(origin, binding.agentName, relayPrompt);
+
+      // Quick task 260501-nfe (2026-05-01) — fetch the parent's main channel
+      // so the relay summary actually posts. Defensive: a missing or
+      // non-text channel is a hard skip (we have no surface to post to).
+      // Pre-fix this code called turnDispatcher.dispatch and discarded the
+      // returned response — the dominant cause of "summary never posts" in
+      // production (Phase 99-M wiring was never finished).
+      const parentChannel = await this.discordClient.channels
+        .fetch(binding.parentChannelId)
+        .catch(() => null);
+      const parentSendable = parentChannel as
+        | {
+            send: (
+              content: string,
+            ) => Promise<{ edit: (c: string) => Promise<unknown> }>;
+          }
+        | null;
+      if (!parentSendable || typeof parentSendable.send !== "function") {
+        this.log.info(
+          {
+            threadId,
+            reason: "parent-channel-fetch-failed",
+            parentChannelId: binding.parentChannelId,
+          },
+          "subagent relay skipped",
+        );
+        return;
+      }
+
+      // Quick task 260501-nfe — mirror bridge.ts:585-665 user-message path.
+      // Stream tokens into a ProgressiveMessageEditor that posts to the
+      // parent's main channel via channel.send (first chunk) / .edit
+      // (subsequent). Without this, the response string was awaited and
+      // discarded — the dominant cause of "summary never posts" in
+      // production (diagnosed 2026-05-01).
+      let messageRef:
+        | { edit: (content: string) => Promise<unknown> }
+        | null = null;
+      const editor = new ProgressiveMessageEditor({
+        editFn: async (content: string) => {
+          const wrapped = wrapMarkdownTablesInCodeFence(content);
+          const truncated =
+            wrapped.length > 2000 ? wrapped.slice(0, 1997) + "..." : wrapped;
+          if (!messageRef) {
+            messageRef = await parentSendable.send(truncated);
+          } else {
+            await messageRef.edit(truncated);
+          }
+        },
+        editIntervalMs: 750,
+        log: this.log,
+        agent: binding.agentName,
+      });
+
+      const response = await this.turnDispatcher.dispatchStream(
+        origin,
+        binding.agentName,
+        relayPrompt,
+        (accumulated: string) => editor.update(accumulated),
+        { channelId: binding.parentChannelId },
+      );
+      await editor.flush();
+
+      // Defense-in-depth: if dispatch returned empty AND no chunk fired,
+      // we have no post. Distinct from the 5 pre-dispatch silent-return
+      // reasons because this one is post-dispatch.
+      if (!messageRef && (!response || response.trim().length === 0)) {
+        this.log.info(
+          {
+            threadId,
+            reason: "empty-response-from-parent",
+            parentAgent: binding.agentName,
+          },
+          "subagent relay skipped",
+        );
+        return;
+      }
+
+      // Overflow handling — when the final response exceeds 2000 chars, the
+      // editor truncated the visible message. Send the tail as additional
+      // channel.send() chunks so nothing is lost. Mirrors postInitialMessage
+      // overflow logic (this file, lines 633-670).
+      const finalWrapped = wrapMarkdownTablesInCodeFence(response ?? "");
+      if (finalWrapped.length > 2000) {
+        let cursor = 2000;
+        let chunksSent = 0;
+        let lastError: string | null = null;
+        while (cursor < finalWrapped.length) {
+          const chunk = finalWrapped.slice(cursor, cursor + 2000);
+          try {
+            await parentSendable.send(chunk);
+            chunksSent++;
+          } catch (err) {
+            lastError = (err as Error).message;
+            this.log.warn(
+              {
+                threadId,
+                parentAgent: binding.agentName,
+                chunkIndex: chunksSent,
+                cursor,
+                totalLength: finalWrapped.length,
+                error: lastError,
+              },
+              "subagent relay overflow chunk send failed (non-fatal — continuing if possible)",
+            );
+            break;
+          }
+          cursor += 2000;
+        }
+        this.log.info(
+          {
+            threadId,
+            parentAgent: binding.agentName,
+            totalLength: finalWrapped.length,
+            chunksSent,
+            lastError,
+            fullySent: cursor >= finalWrapped.length,
+          },
+          "subagent relay overflow chunks summary",
+        );
+      }
+
       this.log.info(
         {
           threadId,
@@ -309,6 +430,7 @@ export class SubagentThreadSpawner {
           subagentSession: binding.sessionName,
           relayLen: trimmed.length,
           artifactCount: artifacts.length,
+          postedLength: (response ?? "").length,
         },
         "subagent completion relayed to parent",
       );
