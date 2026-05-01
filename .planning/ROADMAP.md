@@ -752,7 +752,7 @@ Plans:
 
 Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
 
-### Phase 999.1: Agent output directives — freshness, derivative work, trust override, table avoidance (BACKLOG)
+### Phase 999.1: Agent output directives — freshness, derivative work, trust override, table avoidance (SHIPPED 2026-04-29)
 
 **Goal:** Counter-instruct Claude Code's default behaviors that misfire in this trusted-operator workspace. Four directives shipped together as one coherent injection system into agent system context (CLAUDE.md, per-agent SOUL.md, subagent threadContext) — addressing the same architectural concern: model defaults need adjustment for this environment.
 
@@ -781,9 +781,9 @@ All four are the same architectural concern: counter-instruct platform/default m
 Plans:
 - [x] 999.1-01-PLAN.md — TDD landing of all 4 directive entries (Task 1 RED: 4 describe blocks + 11-key membership pin; Task 2 GREEN: 4 Object.freeze entries verbatim from research §Recommended Directive Text)
 
-**Promotion target:** active milestone, will likely become Phase 104.
+**Status:** Shipped 2026-04-29. Locked-additive entries landed in `DEFAULT_SYSTEM_PROMPT_DIRECTIVES` (Phase 94 D-10 rail). See 999.1-VERIFICATION.md. Note: original "promotion target Phase 104" plan was superseded — Phase 104 was used for the daemon-side op:// secret cache (999.10 promotion).
 
-### Phase 999.2: a2a refactor — rename + sync-reply + correlation IDs (BACKLOG)
+### Phase 999.2: a2a refactor — rename + sync-reply + correlation IDs (SHIPPED 2026-04-29, partial — async correlation-ID path deferred)
 
 **Goal:** Fix the agent-to-agent comms architectural debt surfaced 2026-04-29 when admin-clawdy → fin-acquisition produced no reply back. Three concerns:
 
@@ -802,9 +802,9 @@ Plans:
 - [x] 999.2-02-PLAN.md — Rename MCP tools (send_message → ask_agent, send_to_agent → post_to_agent) and IPC methods (send-message → ask-agent, send-to-agent → post-to-agent) with back-compat aliases (canonical names registered FIRST per D-RNX-04). Wave 2.
 - [x] 999.2-03-PLAN.md — v2 sync-reply behavior on ask_agent: surface target's reply in tool-result text (fixes 2026-04-29 smoking-gun bug), mirror_to_target_channel flag for webhook embeds, error propagation (remove silent catch). Wave 3.
 
-**Promotion target:** active milestone, will likely become **Phase 106** (deprioritized 2026-04-29 in favor of specialist routing — 999.3 → Phase 105 — which has a smaller blast radius and unblocks elevated-thinking delegation sooner).
+**Status:** Shipped 2026-04-29 — rename + back-compat aliases + v2 sync-reply landed; async correlation-ID path remains deferred for a future phase. See 999.2-VERIFICATION.md. Note: original "promotion target Phase 106" plan was superseded — Phase 106 was used for the agent-context-hygiene bundle (delegate scoping fix + research stall + CLI hot-fix).
 
-### Phase 999.3: Specialist subagent routing via delegateTo (BACKLOG)
+### Phase 999.3: Specialist subagent routing via delegateTo (SHIPPED 2026-04-29)
 
 **Goal:** Let any agent delegate research/coding work to a dedicated standing specialist agent (`fin-research` for fin-* agents, `research` for non-fin) and have the streamed output land in a Discord thread in the **caller's** channel, with autoRelay summary back to caller's main channel.
 
@@ -821,7 +821,7 @@ Plans:
 Plans:
 - [x] 999.3-01-PLAN.md — RED+GREEN delegateTo branch in spawnInThread + 4-surface fan-through (types → spawner → daemon IPC → MCP tool); 10 new tests (DEL-01..DEL-10); recursion-guard invariant preserved.
 
-**Promotion target:** active milestone, will likely become **Phase 105** (promoted 2026-04-29 ahead of 999.2 a2a refactor — smaller blast radius, leverages existing spawn_subagent_thread infra, unblocks elevated-thinking delegation sooner).
+**Status:** Shipped 2026-04-29. `delegateTo` parameter live on `spawn_subagent_thread` MCP tool, IPC handler, and spawnInThread; 4-surface fan-through complete with 10 DEL-01..DEL-10 tests. See 999.3-VERIFICATION.md. Note: original "promotion target Phase 105" plan was superseded — Phase 105 was used for trigger-policy default-allow + QUEUE_FULL coalescer storm fix. Follow-up gaps captured in 999.18 (relay reliability), 999.19 (cleanup + memory consolidation + delegate-channel routing), 999.22 (soul guard).
 
 ### Phase 999.4: /clawcode-usage accuracy fixes (BACKLOG)
 
