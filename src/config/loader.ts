@@ -455,6 +455,10 @@ export function resolveAgentConfig(
     // shape elsewhere in this resolver and reads more clearly.
     autoStart:
       agent.autoStart !== undefined ? agent.autoStart : defaults.autoStart,
+    // Phase 999.25 — wakeOrder pass-through (no defaults.X fallback).
+    // undefined → boot-last-in-yaml-order semantics handled by the sort
+    // step in daemon.ts (`a.wakeOrder ?? Infinity`).
+    wakeOrder: agent.wakeOrder,
     skills: agent.skills.length > 0 ? agent.skills : defaults.skills,
     soul: agent.soul,
     identity: agent.identity,

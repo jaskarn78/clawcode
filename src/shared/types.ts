@@ -161,6 +161,16 @@ export type ResolvedAgentConfig = {
    * so dormant agents are findable on demand).
    */
   readonly autoStart: boolean;
+  /**
+   * Phase 999.25 — boot-time wake-order priority. Lower numbers boot first.
+   * `undefined` means "boot last in YAML order" (stable sort). Consumed by
+   * the daemon's auto-start IIFE which sorts `autoStartAgents` by
+   * `(wakeOrder ?? Infinity)` before passing to `manager.startAll`.
+   *
+   * Pass-through from agent yaml — no defaults.X fallback (defaults has no
+   * wakeOrder field; ordering is per-agent or undefined).
+   */
+  readonly wakeOrder?: number;
   readonly skills: readonly string[];
   /**
    * Phase 999.13 DELEG-02 — per-agent specialty → target-agent map.

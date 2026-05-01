@@ -1365,3 +1365,33 @@ Tests: signal handling is integration-level (no unit test). Will be validated at
 **Plans:** 0 plans — shipped via quick task 260501-j7x (atomic sudoers swap on clawdy, no repo code changes).
 
 **Status:** Shipped 2026-05-01 via quick task `260501-j7x` (commit `c3dc129`). Added new `CLAWCODE_SERVICE` Cmnd_Alias to `/etc/sudoers.d/clawcode` covering exact-match `systemctl reload clawcode.service` and `systemctl restart clawcode.service`. Original `CLAWCODE_INSTALL` block preserved byte-equal. Atomic install via `install -m 0440 -o root -g root` (mandatory mode for sudoers.d). Validated via `visudo -cf` pre-install. Daemon left running; no live reload/restart smoke test (would have killed daemon — Phase 999.23 SIGHUP handler still pending). Pairs with future 999.23: together they close the "agent kills its own daemon" loop. Future hardening: install/update flow does NOT currently template sudoers.d entries — a later phase should add this so the grant survives reinstalls (out of scope for 260501-j7x).
+
+### Phase 999.25: Agent boot wake-order priority (SHIPPED 2026-05-01)
+
+**Goal:** Operator-controllable boot order for the auto-start sequence so critical agents (Admin Clawdy, fin-acquisition, research) come up before peripheral ones during cold restarts.
+
+**Trigger:** 2026-05-01 — operator request for "wake order" semantics. Today the boot order is determined by YAML order, which is incidental and not necessarily aligned with operator priority.
+
+**Approach:**
+- New optional `wakeOrder?: number` field on `agentConfigSchema`. Lower numbers boot first; undefined boots LAST in YAML order.
+- daemon.ts boot path sorts the auto-start array via `[...autoStartAgents].sort((a,b) => (a.wakeOrder ?? Infinity) - (b.wakeOrder ?? Infinity))` BEFORE passing to `manager.startAll`. Stable sort preserves YAML order for ties + unordered agents.
+- Boot remains sequential (`startAll` uses `for...await`); wakeOrder only changes the ORDER, not total time. Tiered parallel boot was considered and deferred — too much overlap with the boot-storm conditions that drove Phase 104 + Phase 108.
+- Loader pass-through: `wakeOrder` flows through `resolveAgentConfig` to the daemon without a `defaults.X` fallback (per-agent or undefined).
+
+**Status:** Shipped 2026-05-01 (local repo, deploy held). Schema field added (`src/config/schema.ts`), threaded through `ResolvedAgentConfig` (`src/shared/types.ts`), wired in `src/config/loader.ts` and the daemon's auto-start IIFE (`src/manager/daemon.ts`). Logs the resolved order at info level when any agent declares wakeOrder, so the journal records the boot sequence. Tests: 9 new (sort behavior + operator example + edge cases like negative numbers + zero) + static-grep pin against daemon source so a future refactor that drops the sort fails CI before production regresses. 13/13 tests pass.
+
+**Example yaml:**
+```yaml
+agents:
+  - name: admin-clawdy
+    wakeOrder: 1            # boots first
+  - name: fin-acquisition
+    wakeOrder: 2            # boots second
+  - name: research
+    wakeOrder: 3            # tier 3
+  - name: fin-research
+    wakeOrder: 3            # tier 3 — ties keep YAML order
+  - name: misc-agent        # no wakeOrder → boots last
+```
+
+**Out of scope (deferred):** Tiered parallel boot (group by wakeOrder, Promise.all within group). Re-creates Phase 104/108 boot-storm risk. Would need plan-checker, boot-storm load test, and per-tier max-concurrency cap. Revisit if cold-restart time becomes an operational pain point.

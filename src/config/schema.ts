@@ -1146,6 +1146,27 @@ export const agentSchema = z.object({
    * requires a daemon restart to take effect.
    */
   autoStart: z.boolean().optional(),
+  /**
+   * Phase 999.25 — wake-order priority for boot-time auto-start.
+   *
+   * Lower numbers boot first. Agents without `wakeOrder` boot LAST in YAML
+   * order (stable sort). Ties (same wakeOrder) preserve YAML order.
+   *
+   * Example:
+   *   - admin-clawdy:    wakeOrder: 1   → boots first
+   *   - fin-acquisition: wakeOrder: 2   → boots second
+   *   - research:        wakeOrder: 3   → boots third
+   *   - fin-research:    wakeOrder: 3   → boots fourth (tie → YAML order)
+   *   - everyone else:   no wakeOrder   → boots after, in YAML order
+   *
+   * Boot is sequential (startAll iterates with `for...await`), so wakeOrder
+   * only changes the ORDER, not the total time. Use case: ensure operator-
+   * critical agents (Admin Clawdy, Ramy's fin-acquisition) come up before
+   * peripheral agents during cold restarts.
+   *
+   * Reload classification: next-boot only — startAll has run by reload time.
+   */
+  wakeOrder: z.number().int().optional(),
   // Phase 94 TOOL-10 / D-10 — per-agent override of fleet directives.
   // Additive + optional: v2.5 migrated configs parse unchanged (loader
   // resolver fills from DEFAULT_SYSTEM_PROMPT_DIRECTIVES via

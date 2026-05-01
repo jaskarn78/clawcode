@@ -4746,13 +4746,31 @@ export async function startDaemon(
     );
     return false;
   });
+  // Phase 999.25 — sort by wakeOrder (lower = earlier). `undefined` becomes
+  // Infinity so unordered agents boot LAST. Stable sort: ties + same-priority
+  // groups preserve YAML order. Boot remains sequential (startAll uses
+  // `for...await`); this only changes the order, not the total time.
+  const sortedAutoStartAgents = [...autoStartAgents].sort(
+    (a, b) => (a.wakeOrder ?? Infinity) - (b.wakeOrder ?? Infinity),
+  );
+  if (sortedAutoStartAgents.some((c) => c.wakeOrder !== undefined)) {
+    log.info(
+      {
+        order: sortedAutoStartAgents.map((c) => ({
+          name: c.name,
+          wakeOrder: c.wakeOrder ?? null,
+        })),
+      },
+      "wake-order applied to auto-start sequence",
+    );
+  }
   void (async () => {
     try {
-      await manager.startAll(autoStartAgents);
+      await manager.startAll(sortedAutoStartAgents);
       log.info(
         {
-          agents: autoStartAgents.length,
-          skipped: resolvedAgents.length - autoStartAgents.length,
+          agents: sortedAutoStartAgents.length,
+          skipped: resolvedAgents.length - sortedAutoStartAgents.length,
         },
         "all agents auto-started",
       );
