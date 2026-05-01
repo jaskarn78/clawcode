@@ -246,7 +246,6 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
         } as never,
         // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         botDirectSender: { sendText },
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
       });
 
@@ -332,7 +331,6 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
         } as never,
         // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         botDirectSender: { sendText },
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
       });
 
@@ -366,7 +364,6 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
         configs: [{ name: "fin-acquisition" }],
         // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         botDirectSender: { sendText },
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 IPC-02)
         agentChannels: new Map([["fin-acquisition", ["1481670479017414767"]]]),
       });
 
@@ -381,7 +378,8 @@ describe("handleAskAgentIpc — Phase 999.2 Plan 03 sync-reply", () => {
       );
 
       expect(sendText).toHaveBeenCalledTimes(1);
-      const [, sentText] = sendText.mock.calls[0];
+      const call = sendText.mock.calls[0] as unknown as [string, string];
+      const sentText = call[1];
       expect(sentText.length).toBe(2000);
       expect(sentText.endsWith("...")).toBe(true);
     });
