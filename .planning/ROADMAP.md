@@ -928,3 +928,80 @@ Plans:
 - [ ] 999.14-02-PLAN.md — Wave 2: full-suite gate + operator-approved bundled deploy (with 999.13) + 5× restart soak on clawdy (MCP-06/07). To extend smoke: simulate Discord 50001 → registry pruned; force a stale binding → MCP-09 sweeps it.
 
 **Promotion target:** active milestone — high operator impact (recurring incident, takes down all finmentum agents when MariaDB saturates). Sequence: independent of 999.12 and 999.13. Could ship anytime. Pairs with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle.
+
+### Phase 999.15: MCP child PID tracking — full reconciliation, self-healing, and operator visibility (BACKLOG)
+
+**Goal:** Fix the daemon-side PID staleness exposed by the 999.14 deploy on 2026-04-30. Post-deploy verification showed 3 of 5 agents had recorded claude subprocess PIDs that were already dead — the SDK respawned claude during warmup, and our 1s settle window captured the dying first PID instead of the surviving second one. 999.14's hot-fix made orphan reaping self-healing via cmdline-only matching (bypassing the tracker), so the staleness is currently cosmetic for the orphan path. But the tracker IS used by graceful-shutdown and per-agent-restart paths, where staleness silently leaks live MCP children. This phase fixes the tracker properly.
+
+#### Why this is a real bug, not just cosmetic
+
+The orphan reaper is currently self-healing via cmdline match (PPID=1 + uid + age + cmdline regex). Tracker staleness doesn't break orphan cleanup. **But the tracker is used by:**
+
+- **Graceful shutdown (MCP-04):** `tracker.killAll(5s)` SIGTERMs recorded PIDs before daemon exit. Live MCP children never registered (because initial settle missed them) survive daemon exit → become orphans on next boot → 60s+ window of orphan accumulation before reaper catches them.
+- **Per-agent restart:** `clawcode restart fin-acquisition` → `stopAgent` → `tracker.killAgentGroup(name)` SIGTERMs stale PIDs (no-op). Old MCP children from the previous claude instance leak.
+- **SDK retry storms:** if an agent has a bad MCP env (e.g. 1Password rate-limit), SDK retries claude spawn N times. Tracker only knows the last (or worse, an early failed) instance.
+- **Operator visibility:** today there's no command to see what the tracker thinks is registered. Operators have to grep journal logs and pid trees.
+
+#### Scope (TRACK-01..08)
+
+**TRACK-01 — Per-tick reconciliation** in `startOrphanReaper`'s existing 60s interval (extend `onTickAfter` callback). For each registered agent: if recorded `claudePid` is dead → re-discover (with `minAge=10s`) → update tracker. If `mcpPidCount=0` OR claudePid changed → re-walk MCP children + replace. Idempotent. Self-healing. Cheap (already walking /proc each tick).
+
+**TRACK-02 — Polling discovery at agent.start.** Replace fixed 1s settle with polled wait: 6 attempts × 5s = max 30s, each checking for a `claude` proc with `ppid===daemonPid` AND `age >= 5s` (so we don't grab a freshly-spawned claude about to be respawned). Combined with TRACK-01 reconciliation, even if polling misses the settle window the reaper catches up.
+
+**TRACK-03 — Tracker API additions:**
+- `updateAgent(name, claudePid)` — replaces tracked claudePid
+- `replaceMcpPids(name, pids)` — replaces full MCP child PID set
+- `getRegisteredAgents()` — returns map of `agent → { claudePid, mcpPids[] }`
+- `pruneDeadPids(name)` — reads /proc, removes any PIDs no longer alive
+- Plus shared `isPidAlive(pid)` helper in `proc-scan.ts` (uses `process.kill(pid, 0)` standard liveness check)
+
+**TRACK-04 — Reconciliation logging.** Reconciler emits one structured pino warn log per cycle WHEN STATE CHANGES (no log for no-op cycles):
+```json
+{ "component": "mcp-tracker", "action": "reconcile", "agent": "fin-acquisition",
+  "oldClaudePid": 4067770, "newClaudePid": 4068098,
+  "oldMcpCount": 0, "newMcpCount": 8,
+  "reason": "stale-claude" | "missing-mcps" | "agent-restart" }
+```
+Operators grep for `action: "reconcile"` to audit tracker drift.
+
+**TRACK-05 — `clawcode mcp-status [-a <agent>]` CLI.** New CLI subcommand. Calls new IPC method `mcp-tracker-snapshot`. Prints table: `AGENT | CLAUDE_PID | MCP_PIDS | MCP_PROCS_ALIVE | CMDLINES`. Useful both for production debug AND for verifying TRACK-01 works in long-soak.
+
+**TRACK-06 — `tracker.killAgentGroup` reconciles before kill.** Today it SIGTERMs recorded PIDs (which may be stale). New flow: (1) reconcile to sync /proc state, (2) SIGTERM the reconciled set, (3) 5s grace then SIGKILL stragglers. Guarantees agent-stop / agent-restart cleanup catches even MCP children that initial settle missed.
+
+**TRACK-07 — Long-soak deploy verification on clawdy:**
+- Cold restart: after 90s every agent has live `claudePid` + non-empty `mcpPids`. Zero orphans.
+- Per-agent restart: `clawcode restart fin-acquisition` → old children SIGTERM'd cleanly, new ones registered after warmup. No orphan accumulation.
+- Forced respawn: `kill -9` the live claude PID for one agent → within 60s reconciler updates tracker to new PID + new MCP children.
+
+**TRACK-08 — Tests for SDK respawn scenarios:**
+1. Initial settle finds dying claude → polled discovery retries → eventually finds surviving claude (mock /proc with two claude PIDs over time)
+2. Tracker has stale claudePid → reconciler detects + re-registers (mock proc walk)
+3. Per-agent restart with stale entries → killAgentGroup reconciles before SIGTERM (assert all live PIDs got SIGTERM)
+4. Tracker snapshot IPC returns full state map (e2e through IPC client)
+5. CLI `mcp-status` formats the snapshot correctly (snapshot test on formatter output)
+
+#### Out of scope
+
+- Process-group leadership tracking (would require SDK spawn-time integration; SDK doesn't expose it; post-reparent pgid is unreliable per 999.14 RESEARCH Open Question 2). Reconciliation by /proc walk is more robust anyway.
+- Replacing the orphan reaper's cmdline-based detection with PID-based detection — the cmdline path is now self-healing and covers orphans directly. Tracker is for graceful-shutdown / restart paths only.
+- Daemon-side process supervision of MCP children (auto-restart MCP if it dies). Leave SDK-side respawn as authoritative.
+- Migrating to the agent SDK's process management API once it lands. SDK is pre-1.0; if/when it exposes PIDs, TRACK-01..05 simplify. Not waiting.
+
+#### What "thorough" catches that the 999.14 hot-fix doesn't
+
+- Claude respawn during warmup → caught by TRACK-01 reconciliation
+- Claude respawn mid-session (heartbeat failure, MCP env error retry) → TRACK-01 within 60s
+- MCP child crash + respawn under live claude → TRACK-01 (mcpPidCount drops, reconcile re-walks)
+- Agent restart with stale tracker → TRACK-06 reconcile-before-kill
+- Forced kill from operator (`kill -9 <claude>`) → TRACK-01
+
+**Trigger:** 2026-04-30 999.14 deploy reveal — diagnosed mid-deploy via journal + ps output (3/5 agents had `claudePid` not matching live claude proc). Hot-fix shipped (cmdline-only orphan detection bypasses tracker for orphan path), but tracker staleness needs proper fix to keep graceful-shutdown + agent-restart paths robust at fleet scale.
+
+**Requirements:** [TRACK-01..08 as scoped above]
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — sequence after 999.14 since this builds on its substrate (proc-scan, process-tracker, orphan-reaper). Medium operator impact: today the cosmetic staleness is hidden by cmdline-based orphan detection, but graceful-shutdown reliability + per-agent restart cleanup will degrade as the fleet scales (more agents = more SDK-respawn races = more leaked MCP children on agent-restart). Pairs naturally with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle architecture.
