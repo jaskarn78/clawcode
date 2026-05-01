@@ -22,3 +22,14 @@ reuzel-*.png
 *-product.png
 
 clawcode.yaml
+
+# Block any captured copies of clawcode.yaml under .planning/ (before/after
+# snapshots, audit dumps, migration artifacts). Production yaml carries
+# literal Discord bot + 1Password service-account tokens; capturing them
+# into planning artifacts silently exposes both. Refs in committed docs
+# MUST stay as op:// URIs — never resolved literals.
+.planning/**/clawcode.yaml*
+.planning/**/*.yaml.before
+.planning/**/*.yaml.after
+.planning/**/*-snapshot.yaml
+.planning/**/*-snapshot.yml
