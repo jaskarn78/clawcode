@@ -97,6 +97,20 @@ export interface McpProcessTrackerDeps {
    * can construct a tracker with the original 4-field shape.
    */
   readonly patterns?: RegExp;
+  /**
+   * Phase 999.15 TRACK-06 — late-bound reconcile closure. When provided,
+   * killAgentGroup calls this BEFORE the SIGTERM loop to sync /proc state
+   * with tracker state (so we kill the LIVE MCP children, not stale recorded
+   * ones). Failure is non-fatal — falls back to recorded PIDs (safety net).
+   *
+   * Daemon (src/manager/daemon.ts) wires this to a closure that calls
+   * reconcileAgent(name, deps) from src/mcp/reconciler.ts. Late-bound to
+   * avoid the bootstrap circular dependency (reconciler imports the tracker
+   * type; tracker dep would import the reconciler module).
+   *
+   * Tests inject a fake deps.reconcileAgent directly via constructor.
+   */
+  readonly reconcileAgent?: (name: string) => Promise<void>;
 }
 
 /** Polling interval for the post-SIGTERM grace loop. */
@@ -279,12 +293,25 @@ export class McpProcessTracker {
    * SIGTERM agent's PGs, await grace, SIGKILL stragglers. Idempotent — second
    * call after eviction is a no-op. Used by MCP-02.
    *
-   * Phase 999.15 TRACK-06 (Plan 02 — NOT this plan): will reconcile via
-   * reconcileAgent dep before kill. This plan keeps the existing 999.14
-   * behavior; PT-7/PT-8 stay RED until Plan 02.
+   * Phase 999.15 TRACK-06 — reconciles BEFORE kill so SIGTERM targets the
+   * LIVE MCP children (not stale recorded ones). The reconcile closure is
+   * injected via deps.reconcileAgent; failure falls back to the recorded
+   * PIDs (safety net — kill is best-effort cleanup, never block on /proc
+   * walk failures).
    */
   async killAgentGroup(agentName: string, graceMs: number = 5000): Promise<void> {
-    const pids = this.listForAgent(agentName);
+    // Phase 999.15 TRACK-06 — sync /proc state with tracker before kill.
+    if (this.deps.reconcileAgent) {
+      try {
+        await this.deps.reconcileAgent(agentName);
+      } catch (err) {
+        this.log.warn(
+          { agent: agentName, err: String(err) },
+          "reconcile-before-kill failed; falling back to recorded PIDs",
+        );
+      }
+    }
+    const pids = this.listForAgent(agentName); // post-reconcile state
     if (pids.length === 0) return; // already evicted — no-op
     await this.killPids(pids, graceMs, "agent-disconnect");
     // Evict on success so a second call is a no-op.
@@ -292,7 +319,14 @@ export class McpProcessTracker {
     for (const pid of pids) this.cmdlines.delete(pid);
   }
 
-  /** SIGTERM every tracked PID (deduplicated), grace, SIGKILL. Used by MCP-04. */
+  /**
+   * SIGTERM every tracked PID (deduplicated), grace, SIGKILL. Used by MCP-04.
+   *
+   * Phase 999.15 — NO reconcile here. This is the graceful-exit path
+   * (whole-daemon shutdown); /proc walks may hit timing issues during
+   * shutdown teardown. Use the recorded PIDs from the most recent reconcile
+   * cycle (CONTEXT determinism — locked decision).
+   */
   async killAll(graceMs: number = 5000): Promise<void> {
     const pids = this.list();
     if (pids.length === 0) return;

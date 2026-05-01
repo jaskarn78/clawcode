@@ -493,7 +493,6 @@ describe("Phase 999.15 extensions", () => {
       log: silentLogger(),
       clockTicksPerSec: 100,
       bootTimeUnix: 1_700_000_000,
-      // @ts-expect-error — Plan 01 adds reconcileAgent dep to McpProcessTrackerDeps
       reconcileAgent: reconcileFn,
     });
 
@@ -543,7 +542,6 @@ describe("Phase 999.15 extensions", () => {
       log,
       clockTicksPerSec: 100,
       bootTimeUnix: 1_700_000_000,
-      // @ts-expect-error — Plan 01 adds reconcileAgent dep to McpProcessTrackerDeps
       reconcileAgent: reconcileFn,
     });
 
