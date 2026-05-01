@@ -192,6 +192,62 @@ describe("buildDreamPrompt — D-02 context assembler", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 107 DREAM-OUT-01 — fallback envelope rule (rule 6)
+//
+// Pin the schema-correct fallback envelope contract: when the LLM cannot
+// produce valid JSON, it must output the exact 4-field empty envelope
+// matching dreamResultSchema. Existing rules 1-5 must remain unchanged
+// (Phase 95 static-grep regression rules).
+// ---------------------------------------------------------------------------
+describe("Phase 107 DREAM-OUT-01 fallback envelope rule", () => {
+  const baseInput: DreamPromptInput = {
+    agentName: "clawdy",
+    recentChunks: [],
+    memoryMd: "",
+    recentSummaries: [],
+    graphEdges: "",
+  };
+
+  it("rule 6 present in system prompt", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toMatch(/6\.\s+If you cannot produce valid JSON/);
+  });
+
+  it("schema-correct fallback envelope literal embedded verbatim", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toContain(
+      '{"newWikilinks":[],"promotionCandidates":[],"themedReflection":"","suggestedConsolidations":[]}',
+    );
+  });
+
+  it("fallback envelope keys exactly match dreamResultSchema", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    // All 4 schema keys appear in the fallback envelope literal.
+    expect(systemPrompt).toMatch(
+      /newWikilinks.*promotionCandidates.*themedReflection.*suggestedConsolidations/,
+    );
+  });
+
+  it("forbidden-preamble examples include 'Noted'", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toMatch(/Noted/);
+  });
+
+  it("existing rules 1-5 preserved (Phase 95 regression pin)", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toMatch(
+      /1\.\s+Your response MUST be valid JSON, parseable by JSON\.parse/,
+    );
+    expect(systemPrompt).toMatch(/2\.\s+The FIRST character MUST be '\{'/);
+    expect(systemPrompt).toMatch(/3\.\s+The LAST character MUST be '\}'/);
+    expect(systemPrompt).toMatch(/4\.\s+NO markdown code fences/);
+    expect(systemPrompt).toMatch(
+      /5\.\s+NO explanation text before or after the JSON object/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 999.13 — TZ-04: dream prompt timestamps (chunk lastModified + summary endedAt)
 //
 // Open Question 2 LOCKED YES — Plan 02 must convert renderChunk (line 115)

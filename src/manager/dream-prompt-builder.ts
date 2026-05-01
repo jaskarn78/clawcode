@@ -102,6 +102,9 @@ CRITICAL OUTPUT RULES:
 3. The LAST character MUST be '}' (no trailing commentary, no closing remarks).
 4. NO markdown code fences (no \`\`\`json wrapper).
 5. NO explanation text before or after the JSON object.
+6. If you cannot produce valid JSON for any reason (input unclear, no patterns found, internal error), output this EXACT fallback envelope and NOTHING else:
+{"newWikilinks":[],"promotionCandidates":[],"themedReflection":"","suggestedConsolidations":[]}
+NEVER output prose like "Noted —", "I'll do my best", "Picking up where we left off", or any other chat-style preamble.
 
 Required JSON schema (all 4 fields mandatory; use empty arrays/strings if no content):
 {
