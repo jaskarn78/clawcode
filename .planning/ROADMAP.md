@@ -1395,3 +1395,41 @@ agents:
 ```
 
 **Out of scope (deferred):** Tiered parallel boot (group by wakeOrder, Promise.all within group). Re-creates Phase 104/108 boot-storm risk. Would need plan-checker, boot-storm load test, and per-tier max-concurrency cap. Revisit if cold-restart time becomes an operational pain point.
+
+### Phase 999.26: Phase 108 broker token-sticky-drift loop (BACKLOG — high priority, observed in production)
+
+**Goal:** Fix the broker reconnect storm where finmentum-scope agents repeatedly bounce between two token hashes, consuming MCP capacity and slowing turns to the point of QUEUE_FULL on user messages.
+
+**Trigger:** 2026-05-01 ~15:00-15:19 PDT — Ramy reported fin-acquisition not responding. Investigation showed:
+- **79 `agent token sticky drift — rejecting connection` events in 20 minutes** for finmentum-scope agents:
+  - fin-acquisition: 55 events (every ~22s)
+  - finmentum-content-creator: 13 events
+  - fin-research: 11 events
+- Pattern per cycle: agent connects with `newHash":"dcfc03f8"` → broker rejects against `stickyHash":"aa18cf6f"` → handshake-accepted on different pool → repeats ~22s later.
+- Two real production user messages from Ramy hit `QUEUE_FULL` (15:12:50 + 15:19:07) because fin-acquisition's queue was saturated by slow turns waiting on broker reconnects.
+- Memory pressure: daemon at 15G / 20G with peak 20G during the loop.
+- fin-acquisition session reached turnCount 104 (Ramy was deep in active conversation), making restart-to-clear costly.
+
+**Proximate cause hypothesis:** the broker's per-agent stickyHash binding (set at first connect) does not align with the token the agent's MCP env-override resolver produces on subsequent calls. Possibilities:
+1. Vault-scope token cache TTL mismatch between SecretsResolver and the broker's pool key
+2. `mcpEnvOverrides` resolution returns Finmentum-scope token (`aa18cf6f`) at session start but clawdbot-scope token (`dcfc03f8`) on later tool calls (or vice versa)
+3. Broker pool keying uses one hash basis (e.g., raw token) while agent shim uses another (e.g., normalized OP_SERVICE_ACCOUNT_TOKEN env var)
+
+**Scope:**
+- Add diagnostic log at the agent shim send site: include `tokenSource` (cache-vs-fresh), `tokenScope` (clawdbot-vs-finmentum), `stickyHashAtConnect` to clarify whether the drift is on the agent or broker side.
+- Audit `OnePasswordMcpBroker` sticky-hash binding logic — should the binding rebind on graceful drift (e.g., when secret is rotated) instead of permanently rejecting?
+- Audit `resolveMcpEnvOverrides` (Phase 100 follow-up) to confirm it returns the SAME scoped token on every call within a session lifetime.
+- Tests: synthesize a sticky-drift scenario (agent connects with token A, broker binds, agent sends with token B) and assert: either the broker rebinds gracefully OR a single warn log + connection close (NOT a tight reconnect loop).
+- Consider: drift-counter circuit breaker — after N drift events in a window, force a fresh broker pool spawn for that token rather than continuing to reject.
+
+**Operational mitigation (NOT a code fix):** stop+start the affected agent clears its broker binding. But this drops in-flight conversation context — costly during active operator/client work.
+
+**Pairs with:**
+- Phase 999.22 mutate-verify (shipped, undeployed): would have prevented Admin Clawdy's "fin-acquisition is healthy, not stalled. 🟢" hallucination at 15:19:25 (response generated 18s AFTER the QUEUE_FULL log).
+- Phase 999.4 utilization derivation (shipped, undeployed): unrelated but was triaged in same session.
+
+**Requirements:** TBD — likely 4-6 (diagnostic logs, sticky-hash audit, env-resolver audit, drift-counter, regression test).
+
+**Plans:** 0 plans (TBD — likely 1-2 plans when promoted).
+
+**Promotion target:** active milestone — production-impact bug, blocks reliable Ramy/fin-acquisition workflow. Should ship before next high-traffic window. Diagnostic logs (item 1) could ship as a quick task to gather evidence before the architectural decision.
