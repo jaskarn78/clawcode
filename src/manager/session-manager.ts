@@ -650,6 +650,65 @@ export class SessionManager {
     }
     this.configs.set(name, config);
 
+    // Phase 106 STALL-02 — warmup-timeout sentinel. After the 2026-04-30
+    // 22:09 PT incident where research/fin-research silently stalled
+    // post-memory-scanner, post-schedules-registered, but pre-warm-path-ready
+    // (no error, no log), this sentinel converts silent failure into loud
+    // failure: at 60s elapsed without warm-path-ready, emit a structured
+    // pino-warn that operators can `grep "warmup-timeout" | jq .mcpServersPending`
+    // to identify the hung MCP. Cleared on any startAgent exit (success,
+    // failure, exception) via the try/finally wrapping the body.
+    // lastStep semantics: tracks the current major phase of agent startup so
+    // the warmup-timeout warn pinpoints WHICH subsystem hung. The dominant
+    // expected stall point per RESEARCH.md is `adapter.createSession` (Claude
+    // Agent SDK MCP cold-start handshake), so we sync-init lastStep to that
+    // value at the top of the try block — operators reading
+    // `journalctl | grep warmup-timeout | jq .lastStep` see the most-likely
+    // culprit by default. We monotonically advance through warm-path-check
+    // and post-warm as we pass each milestone. The "init" / "build-session-config"
+    // / "mcp-discovery" labels are reserved for future granularity but
+    // currently mostly transient (operators rarely catch a stall in those
+    // microsecond windows in practice).
+    let lastStep:
+      | "init"
+      | "build-session-config"
+      | "adapter-create-session"
+      | "mcp-discovery"
+      | "warm-path-check"
+      | "post-warm" = "init";
+    const mcpServersConfigured = (config.mcpServers ?? []).map((s) => s.name);
+    let mcpReadinessRef: McpReadinessReport | null = null;
+    const warmupTimeoutHandle = setTimeout(() => {
+      const loaded: string[] = [];
+      const pending: string[] = [];
+      if (mcpReadinessRef) {
+        for (const [serverName, state] of mcpReadinessRef.stateByName) {
+          if (state.status === "ready") loaded.push(serverName);
+          else pending.push(serverName);
+        }
+      } else {
+        pending.push(...mcpServersConfigured);
+      }
+      this.log.warn(
+        {
+          agent: name,
+          elapsedMs: 60_000,
+          lastStep,
+          mcpServersConfigured,
+          mcpServersLoaded: loaded,
+          mcpServersPending: pending,
+        },
+        "agent warmup-timeout — boot stalled, no warm-path-ready",
+      );
+    }, 60_000);
+
+    try {
+    // Phase 106 STALL-02 — sync-advance lastStep to the dominant expected
+    // stall point (adapter.createSession). Operators reading the
+    // warmup-timeout warn see the most-likely culprit by default; later
+    // milestones (warm-path-check, post-warm) overwrite this as we pass them.
+    lastStep = "adapter-create-session";
+
     // Ensure registry entry exists
     let registry = await readRegistry(this.registryPath);
     if (!registry.entries.find((e) => e.name === name)) {
@@ -775,6 +834,7 @@ export class SessionManager {
     // attempt so disposal during the wait aborts cleanly (no zombie
     // registration for an already-stopped agent).
     if (this.mcpTracker) {
+      lastStep = "mcp-discovery";
       const bootTimeUnix = this.mcpBootTimeUnix;
       const clockTicksPerSec = this.mcpClockTicksPerSec;
       void (async () => {
@@ -892,6 +952,7 @@ export class SessionManager {
     // do NOT contribute to the gate-blocking errors array.
     const mcpReadiness: { current: McpReadinessReport | null } = { current: null };
     const mcpServers = config.mcpServers ?? [];
+    lastStep = "warm-path-check";
     const warmResult = await runWarmPathCheck({
       agent: name,
       sqliteWarm: (agentName) => this.memory.warmSqliteStores(agentName),
@@ -965,6 +1026,11 @@ export class SessionManager {
       return;
     }
 
+    // Phase 106 STALL-02 — capture latest readiness so the sentinel timer
+    // (rare exotic stall during post-warm registry write) reports a useful
+    // mcpServersLoaded/Pending split rather than empty/configured.
+    mcpReadinessRef = mcpReadiness.current;
+    lastStep = "post-warm";
     const startedAt = Date.now();
     registry = updateEntry(registry, name, {
       status: "running",
@@ -1162,6 +1228,12 @@ export class SessionManager {
     // between DB flushes doesn't lose the active session's context). Skip
     // heuristic prevents spam on idle windows.
     this.startMemoryFileFlushTimer(name, config);
+    } finally {
+      // Phase 106 STALL-02 — clear the warmup-timeout sentinel on every
+      // exit path (success, early-return failure, exception). The
+      // outer try/finally guarantees no timer leak.
+      clearTimeout(warmupTimeoutHandle);
+    }
   }
 
   /**
