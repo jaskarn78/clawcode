@@ -52,7 +52,6 @@ import {
   readAndConsumePreDeploySnapshot,
   preDeploySnapshotSchema,
   DEFAULT_PRE_DEPLOY_SNAPSHOT_PATH,
-  // @ts-expect-error wave 0 — snapshot-manager not yet created (Wave 1 GREEN)
 } from "../snapshot-manager.js";
 
 /**

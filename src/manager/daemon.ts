@@ -17,6 +17,13 @@ import { SessionManager } from "./session-manager.js";
 import type { SessionAdapter } from "./session-adapter.js";
 import { SdkSessionAdapter } from "./session-adapter.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+// Phase 999.6 SNAP-01..05 — pre-deploy running-fleet snapshot. Writer fires
+// at top of shutdown() (before drain); reader fires at boot path (before
+// autoStartAgents filter) to restore the running fleet across restarts.
+import {
+  writePreDeploySnapshot,
+  readAndConsumePreDeploySnapshot,
+} from "./snapshot-manager.js";
 import { TaskStore } from "../tasks/store.js";
 import { TaskManager } from "../tasks/task-manager.js";
 import { SchemaRegistry } from "../tasks/schema-registry.js";
@@ -1472,6 +1479,14 @@ export const PID_PATH = join(MANAGER_DIR, "clawcode.pid");
  * Path to the registry file.
  */
 export const REGISTRY_PATH = join(MANAGER_DIR, "registry.json");
+
+/**
+ * Phase 999.6 SNAP-01..02 — Path to the pre-deploy running-fleet snapshot.
+ * Written at shutdown (before drain), read+deleted at boot (before the
+ * autoStartAgents filter). See `src/manager/snapshot-manager.ts` for the
+ * write/read contract and invariants.
+ */
+export const PRE_DEPLOY_SNAPSHOT_PATH = join(MANAGER_DIR, "pre-deploy-snapshot.json");
 
 /**
  * Ensure no stale socket file exists.
@@ -4179,6 +4194,25 @@ export async function startDaemon(
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
+    // Phase 999.6 SNAP-01 — write running-fleet snapshot FIRST so a hang
+    // anywhere downstream still leaves boot with a valid restore record.
+    // getRunningAgents() reflects the live SDK-attached sessions; this is
+    // the moment of truth before drain/stopAll begin tearing down.
+    try {
+      await writePreDeploySnapshot(
+        PRE_DEPLOY_SNAPSHOT_PATH,
+        manager.getRunningAgents().map((name) => ({
+          name,
+          sessionId: manager.getSessionHandle?.(name)?.sessionId ?? null,
+        })),
+        log,
+      );
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "pre-deploy snapshot write failed (non-fatal — boot falls back to static autoStart)",
+      );
+    }
     // 260419-q2z Fix B — drain in-flight session summaries BEFORE closing any
     // downstream resource. The 15s ceiling matches summarizeSession's internal
     // 10s timeout + 5s slack for embed + insert + markSummarized. After drain
@@ -4334,8 +4368,26 @@ export async function startDaemon(
   // start, cutting cold-start time from O(N agents × 2-3s) to
   // O(active agents × 2-3s). Skipped agents are logged at info level so
   // operators can verify the skip happened (not a silent failure).
+  // Phase 999.6 SNAP-02 — read pre-deploy snapshot and union into autoStart set.
+  // Awaited synchronously (sub-10ms). Reader deletes the file before returning
+  // to prevent infinite auto-revive loops on partial-startAll failures.
+  const snapshotKnownAgentNames = new Set(resolvedAgents.map((c) => c.name));
+  const restoredFromSnapshot = await readAndConsumePreDeploySnapshot(
+    PRE_DEPLOY_SNAPSHOT_PATH,
+    snapshotKnownAgentNames,
+    config.defaults.preDeploySnapshotMaxAgeHours ?? 24,
+    log,
+  );
+
   const autoStartAgents = resolvedAgents.filter((cfg) => {
     if (cfg.autoStart !== false) return true;
+    if (restoredFromSnapshot.has(cfg.name)) {
+      log.info(
+        { agent: cfg.name },
+        "boot auto-start via pre-deploy snapshot (yaml autoStart=false overridden for one boot)",
+      );
+      return true;
+    }
     log.info(
       { agent: cfg.name },
       "skipping boot auto-start — autoStart=false (manually startable via `clawcode start <name>`)",
