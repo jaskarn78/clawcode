@@ -1225,7 +1225,7 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 
 **Status:** Shipped 2026-05-01 via quick task `260501-jld` (executor commits 7e3a587, 5a838ed, 642292a, e422045). 19 flat `gsd-*` Discord slash commands collapsed into one `/get-shit-done` top-level command with 19 nested subcommands. (Original task brief said 20 — actual count was 19 per `slash-types.ts` audit; existing test `slash-types-gsd-commands.test.ts:31` already pinned `toHaveLength(19)`.) claudeCommand text values byte-identical pre/post (pinned via static test). Dispatch uses single rewrite-at-entry pattern in `handleInteraction` — `/get-shit-done` + `getSubcommand()` remap to `gsd-${sub}` so all existing carve-outs (handleSetGsdProjectCommand, GSD_LONG_RUNNERS, agent-routed branch, cmdDef.find lookups) keep working unchanged. Three test files added/updated: 12 GS1 invariants, 3 GSR registration pins, 6 GSDN nested-form pins. Full `src/discord` vitest sweep: 594/594 pass. Discord slot delta: -18 (19 flat → 1 composite). **Deploy note:** new top-level `/get-shit-done` registration replaces stale `/gsd-*` entries on next Discord cache flush — operators may briefly see both during propagation. **Local repo only — not yet deployed to clawdy** (per Ramy-active deploy hold).
 
-### Phase 999.22: Soul guard against agent hallucinated tool-use claims (BACKLOG)
+### Phase 999.22: Soul guard against agent hallucinated tool-use claims (SHIPPED 2026-05-01)
 
 **Goal:** Prevent agents (especially `Admin Clawdy`) from claiming to have performed actions they didn't actually execute. Add a soul-level constraint and verification protocol so agents must read-back-confirm any file edit, config change, or system mutation before reporting it as done.
 
@@ -1239,9 +1239,9 @@ Reduces slash-menu clutter from 20 entries to 1, improves discoverability via th
 
 **Requirements:** TBD — likely 3-5.
 
-**Plans:** 0 plans (TBD — likely 1 plan: soul addendum + small verification helper + tests on Admin Clawdy specifically).
+**Plans:** 0 plans — shipped via quick task 260501-k5s (TDD RED + GREEN + docs, 3 atomic commits).
 
-**Promotion target:** active milestone — high impact for trust, low blast radius.
+**Status:** Shipped 2026-05-01 via quick task `260501-k5s` (executor commits fd3aa10, 9486ad5, 67a1f03). Added new `mutate-verify` directive to fleet-wide `DEFAULT_SYSTEM_PROMPT_DIRECTIVES` rail in `src/config/schema.ts` (Phase 94 D-10 substrate, Phase 999.1 locked-additive convention). Key count: 11 → 12, locked-additive verified via static-grep + git-diff (existing 11 keys byte-identical). Directive covers the 4 brief requirements: read-back rule, passive-success-framing ban (Set./Done./Live./Saved./Updated.), failure-by-default on uncertainty, evidence-quoting format. Fleet scope (matches FRESH-/TRUST-/TABLE-* pattern, NOT subagent-only DERIV-* pattern). Tests: 38/38 pass (was 33+5 RED → all GREEN). Operational note: directive read at agent session boot; NEW agent sessions pick it up automatically; existing live sessions will not have it until next session start (no daemon restart required for the directive itself — only for refreshing live agents). **Local repo only — deploy held per Ramy-active rule + explicit operator instruction "Wait for me to give deploy order".**
 
 ### Phase 999.23: Daemon SIGHUP handler + systemd restart-on-SIGHUP hardening (BACKLOG)
 

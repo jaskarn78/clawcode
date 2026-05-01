@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.7
 milestone_name: Operator Self-Serve + Production Hardening
-status: Phase complete — ready for verification
-stopped_at: Completed 108-04-PLAN.md
-last_updated: "2026-05-01T13:27:22.421Z"
+status: milestone shipped — awaiting next phase
+stopped_at: v2.7 closed 2026-05-01 with Phase 108 LIVE
+last_updated: "2026-05-01T14:30:00.000Z"
 last_activity: 2026-05-01
 progress:
-  total_phases: 42
-  completed_phases: 13
-  total_plans: 77
-  completed_plans: 71
+  total_phases_v2_7: 9
+  completed_phases_v2_7: 7
+  deferred_phases_v2_7: 2
+  bundled_backlog_ships: 5
 ---
 
 # Project State
@@ -19,28 +19,31 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
-**Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 106 — agent-context-hygiene-bundle-delegate-scoping-research-stall-cli-hotfix
+**Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
+
+**Current focus:** v2.7 milestone shipped 2026-05-01. No active phase. Next phase opens when operator initiates work.
 
 ## Current Position
 
-Phase: 106 (agent-context-hygiene-bundle-delegate-scoping-research-stall-cli-hotfix) — EXECUTING
-Plan: 5 of 5
+Milestone: v2.7 Operator Self-Serve + Production Hardening — SHIPPED 2026-05-01
+Last shipped phase: Phase 108 (shared 1password-mcp via daemon-managed broker — LIVE, agentRefCount=3 fan-out proof)
+Deferred (planning only, did not ship): Phase 101 (document-ingestion pipeline), Phase 102 (meeting copilot deploy)
 
 ## Performance Metrics
 
-**Velocity:**
+**v2.7 milestone (2026-04-26 → 2026-05-01, 5 days):**
 
-- Total plans completed: 70+ (v1.0-v2.1 across 12 milestones)
-- Average duration: ~3.5 min
-- Total execution time: ~4+ hours
+- 7 phases shipped (100, 103-108) + 2 deferred (101, 102)
+- 5 bundled backlog ships (999.6, 999.12, 999.13, 999.14, 999.15)
+- Phase 108 deploy: 6 iterations, 5 hot-fixes, all caught + fixed live without rollback
+- Final outcome: ~60% MCP child reduction in production via broker pooling
 
 **Recent Trend:**
 
-- v2.1 plans: stable 5-32min each (40 plans shipped in ~1 day)
-- Trend: Stable
+- Mid-milestone (Phases 104-105): infrastructure incident response — secrets cache + dispatch fixes shipped within 24h of operator-reported symptoms
+- End-milestone (Phase 108): structural change with 5 hot-fixes during deploy — fail-loud guard pattern (added in first hot-fix) cracked open all downstream bugs
 
-*Updated after each plan completion*
+*Updated after each milestone close*
 
 ## Accumulated Context
 
@@ -438,6 +441,7 @@ Recent decisions affecting current work:
 | 260501-i3r | Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points | 2026-05-01 | 61292ed | [260501-i3r-add-structured-relay-skipped-diagnostic-](./quick/260501-i3r-add-structured-relay-skipped-diagnostic-/) |
 | 260501-j7x | Phase 999.24 — expand /etc/sudoers.d/clawcode on clawdy with CLAWCODE_SERVICE alias (systemctl reload/restart NOPASSWD for clawcode user) | 2026-05-01 | c3dc129 | [260501-j7x-phase-999-24-sudoers-expansion-for-clawc](./quick/260501-j7x-phase-999-24-sudoers-expansion-for-clawc/) |
 | 260501-jld | Phase 999.21 — consolidate 19 `gsd-*` Discord slash commands under `/get-shit-done` (nested subcommands, claudeCommand byte-identical, 594/594 tests pass) | 2026-05-01 | e422045 | [260501-jld-phase-999-21-consolidate-20-gsd-discord-](./quick/260501-jld-phase-999-21-consolidate-20-gsd-discord-/) |
+| 260501-k5s | Phase 999.22 — add fleet-wide `mutate-verify` directive to DEFAULT_SYSTEM_PROMPT_DIRECTIVES (soul guard against hallucinated tool-use claims; 11 → 12 keys, locked-additive verified, 38/38 tests pass) | 2026-05-01 | 67a1f03 | [260501-k5s-phase-999-22-soul-guard-mutate-verify-di](./quick/260501-k5s-phase-999-22-soul-guard-mutate-verify-di/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
@@ -545,7 +549,7 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-01 - Completed quick task 260501-j7x: Phase 999.24 sudoers expansion on clawdy (systemctl reload/restart NOPASSWD for clawcode user) + Phase 108 work in parallel
+Last activity: 2026-05-01 - Completed quick tasks 260501-jld (Phase 999.21 /get-shit-done consolidation) + 260501-k5s (Phase 999.22 mutate-verify soul-guard directive) — both LOCAL REPO ONLY, deploy held per Ramy-active rule
 Stopped at: Completed 108-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
