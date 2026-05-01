@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.15-00-PLAN.md
-last_updated: "2026-05-01T01:23:48.986Z"
+stopped_at: Completed 999.15-01-PLAN.md
+last_updated: "2026-05-01T01:50:06.384Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 30
   completed_phases: 10
   total_plans: 57
-  completed_plans: 50
+  completed_plans: 51
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 999.15 (mcp-pid-tracking-reconciliation-self-healing-and-operator-visibility) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 
 ## Performance Metrics
 
@@ -349,6 +349,7 @@ Recent decisions affecting current work:
 - [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — startOrphanReaper exposes onTickAfter callback as the seam for MCP-09 sweep wiring; sequence pinned by Test 8 (reap completes BEFORE callback runs). Wave 1 plugs sweepStaleBindings into the seam without re-touching orphan-reaper.
 - [Phase 999.14]: Daemon-wide McpProcessTracker singleton (mirrors SecretsResolver DI) handles per-agent PID register/unregister + boot scan + 60s reaper + shutdown killAll. onTickAfter callback runs MCP-09 sweep AFTER orphan reap (locked sequence).
 - [Phase 999.15]: Wave 0 RED tests pin all TRACK-01..06+08 behaviors via 6 test files (3 new, 3 extended); zero 999.14 GREEN regressions
+- [Phase 999.15]: [Phase 999.15 Plan 01]: Tracker reshape uses immutable-mutation pattern — every updateAgent/replaceMcpPids constructs a new RegisteredAgent reference; callers holding prior entries observe pre-mutation state. SYNC entry write before async cmdline cache enrichment so subsequent sync code sees the new state immediately. isPidAlive treats EPERM as alive (live proc owned by another user is still 'running').
 
 ### v2.1 closing decisions (for reference)
 
@@ -507,9 +508,10 @@ Recent decisions affecting current work:
 | Phase 999.14 P00 | 13 min | 6 tasks | 8 files |
 | Phase 999.14 P01 | 35 min | 6 tasks | 10 files |
 | Phase 999.15 P00 | 30 min | 4 tasks | 6 files |
+| Phase 999.15 P01 | 25 min | 3 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 999.15-00-PLAN.md
+Stopped at: Completed 999.15-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
