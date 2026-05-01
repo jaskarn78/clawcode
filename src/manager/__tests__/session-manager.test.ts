@@ -2123,6 +2123,10 @@ describe("Phase 999.15 polled discovery (TRACK-02)", () => {
     }
     await rm(tmpDir2, { recursive: true, force: true });
     vi.useRealTimers();
+    // Tear down per-test vi.spyOn installations on shared procScan module so
+    // SM-{1..4} cases don't leak call history into one another (Wave 0 plumbing
+    // gap — fixed at Plan 02 GREEN per Rule 1: broken test mock state).
+    vi.restoreAllMocks();
   });
 
   it("SM-1: polled discovery succeeds across SDK respawn (3 attempts; final hit at attempt 3)", async () => {

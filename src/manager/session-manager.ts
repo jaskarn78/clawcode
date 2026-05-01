@@ -7,14 +7,30 @@ import {
 } from "../mcp/proc-scan.js";
 
 /**
- * Phase 999.14 MCP-01 — settle window between SDK createSession resolving
- * and our /proc walk. The npm-wrapper grandchildren (sh -c → node) take
- * ~500-1000ms to fully spawn after the SDK returns; a 1s wait gives them
- * time to reach steady state before we enumerate. Captured as a constant
- * with rationale so future maintainers don't tune it down to 0 and
- * silently break PID discovery.
+ * Phase 999.15 TRACK-02 — polled discovery budget for the agent.start MCP
+ * registration path. Replaces the prior fixed 1s settle window (which the
+ * 2026-04-30 deploy on clawdy revealed captures the dying first-PID when
+ * the SDK respawns claude during warmup).
+ *
+ * Total wall-clock budget = MAX_ATTEMPTS × INTERVAL = 30s. After that, the
+ * polled loop logs a warn and exits — the 60s reaper-tick reconciler
+ * (Plan 02 TRACK-01) catches up on the next tick.
+ *
+ * MIN_AGE_SEC = 5 → discoverClaudeSubprocessPid filters candidates younger
+ * than 5s, so the dying-first-PID (typically dies within 2-3s) is excluded.
  */
-const MCP_SPAWN_SETTLE_MS = 1000;
+const MCP_POLL_INTERVAL_MS = 5000;
+const MCP_POLL_MAX_ATTEMPTS = 6;
+const MCP_POLL_MIN_AGE_SEC = 5;
+
+/**
+ * Phase 999.15 TRACK-02 — fake-timer-friendly sleep helper. Uses setTimeout
+ * (NOT Promise.resolve().then) so vi.useFakeTimers + vi.advanceTimersByTimeAsync
+ * drive the polled-discovery loop deterministically in SM-1..SM-4.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 import type { SessionAdapter, SessionHandle } from "./session-adapter.js";
 import type { BackoffConfig } from "./types.js";
 import { DEFAULT_BACKOFF_CONFIG } from "./types.js";
@@ -130,6 +146,19 @@ export type SessionManagerOptions = {
    * test fixtures).
    */
   readonly mcpTracker?: import("../mcp/process-tracker.js").McpProcessTracker | null;
+
+  /**
+   * Phase 999.15 TRACK-02 — cached at daemon boot via readBootTimeUnix() /
+   * readClockTicksPerSec() and passed through so the polled-discovery loop
+   * can hand them to discoverClaudeSubprocessPid({ minAge: 5, ... })
+   * without re-reading /proc/stat per call.
+   *
+   * Optional: tests mock discoverClaudeSubprocessPid directly and don't
+   * exercise the age-filter math; production daemon ALWAYS supplies these
+   * when mcpTracker is set.
+   */
+  readonly mcpBootTimeUnix?: number;
+  readonly mcpClockTicksPerSec?: number;
 };
 
 /**
@@ -226,6 +255,15 @@ export class SessionManager {
    * tests/non-Linux leave it undefined and PID discovery is skipped.
    */
   private readonly mcpTracker?: import("../mcp/process-tracker.js").McpProcessTracker | null;
+
+  /**
+   * Phase 999.15 TRACK-02 — proc-age math constants for polled discovery.
+   * Set at construction from SessionManagerOptions; passed through to
+   * discoverClaudeSubprocessPid as opts.bootTimeUnix + opts.clockTicksPerSec
+   * so the function does NOT re-read /proc/stat on every poll attempt.
+   */
+  private readonly mcpBootTimeUnix?: number;
+  private readonly mcpClockTicksPerSec?: number;
 
   /**
    * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
@@ -388,6 +426,10 @@ export class SessionManager {
     this.opEnvResolver = options.opEnvResolver;
     // Phase 999.14 MCP-01 — capture optional MCP process tracker.
     this.mcpTracker = options.mcpTracker;
+    // Phase 999.15 TRACK-02 — cache age-filter constants (production daemon
+    // wires these at boot; tests omit and rely on mocked discoverClaudeSubprocessPid).
+    this.mcpBootTimeUnix = options.mcpBootTimeUnix;
+    this.mcpClockTicksPerSec = options.mcpClockTicksPerSec;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -718,25 +760,65 @@ export class SessionManager {
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
 
-    // Phase 999.14 MCP-01 — discover this agent's claude subprocess + MCP
-    // child PIDs and register them in the daemon-wide tracker. Settle window
-    // (1s) accounts for the npm-wrapper grandchildren that take ~500-1000ms
-    // to fully spawn after createSession resolves. Wrapped in best-effort
-    // try/catch so a /proc-walk failure NEVER blocks agent startup
-    // (operator pain trumps orphan tracking — the next reaper tick will
-    // catch any leaked PIDs).
+    // Phase 999.15 TRACK-02 — POLLED discovery (replaces the prior 1s
+    // fire-and-forget settle). The 2026-04-30 deploy on clawdy revealed the
+    // SDK respawns claude during warmup; the dying-first-PID was registered
+    // before the surviving second-PID settled. We now poll up to 6×5s with
+    // minAge=5s — the dying-first-PID dies in 2-3s, so the age filter
+    // excludes it and we only register stable claudes.
+    //
+    // Wrapped in best-effort try/catch so /proc-walk failures NEVER block
+    // agent startup. If the 30s budget elapses with no match, we log warn
+    // and exit — the 60s reaper tick (TRACK-01 reconciler) catches up.
+    //
+    // The polled loop ALSO checks this.sessions.has(name) before each
+    // attempt so disposal during the wait aborts cleanly (no zombie
+    // registration for an already-stopped agent).
     if (this.mcpTracker) {
+      const bootTimeUnix = this.mcpBootTimeUnix;
+      const clockTicksPerSec = this.mcpClockTicksPerSec;
       void (async () => {
         try {
-          await new Promise((r) => setTimeout(r, MCP_SPAWN_SETTLE_MS));
-          const claudePid = await discoverClaudeSubprocessPid(process.pid);
-          if (claudePid == null) {
+          // Polled discovery: complete the FULL 6-attempt budget so we
+          // capture the SURVIVING claudePid across the 30s window — not
+          // just the first stable hit (which the 2026-04-30 deploy reveal
+          // showed could still be a soon-to-die respawn casualty). The
+          // minAge=5s filter on each attempt rejects freshly-spawned
+          // claudes; the last non-null result across all 6 attempts is
+          // the most-stable PID we can register.
+          //
+          // Disposal during the wait short-circuits via the
+          // sessions.has(name) check at the TOP of each iteration —
+          // operator-initiated stop aborts before the next discover call
+          // (Pitfall 6 — abort on dispose).
+          let claudePid: number | null = null;
+          for (let attempt = 0; attempt < MCP_POLL_MAX_ATTEMPTS; attempt++) {
+            await sleep(MCP_POLL_INTERVAL_MS);
+            if (!this.sessions.has(name)) return;
+            try {
+              const found = await discoverClaudeSubprocessPid(process.pid, {
+                minAge: MCP_POLL_MIN_AGE_SEC,
+                bootTimeUnix,
+                clockTicksPerSec,
+              });
+              if (found !== null) claudePid = found;
+            } catch (err) {
+              this.log.warn(
+                { agent: name, attempt, err: String(err) },
+                "polled discovery attempt failed — retrying",
+              );
+              continue;
+            }
+          }
+          if (claudePid === null) {
             this.log.warn(
               { agent: name },
-              "could not locate claude subprocess PID; MCP lifecycle tracking unavailable for this agent",
+              "no claude proc settled within 30s — relying on reaper reconciliation",
             );
             return;
           }
+          // Re-check disposal post-loop before mutating tracker state.
+          if (!this.sessions.has(name)) return;
           const tracker = this.mcpTracker;
           if (!tracker) return; // narrowing
           let patterns: RegExp;
@@ -755,7 +837,7 @@ export class SessionManager {
               claudePid,
               mcpPidCount: mcpPids.length,
             },
-            "registered agent MCP PIDs with tracker (Phase 999.14 MCP-01)",
+            "registered agent MCP PIDs with tracker (Phase 999.15 TRACK-02)",
           );
         } catch (err) {
           this.log.warn(
