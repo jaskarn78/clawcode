@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 108-00-PLAN.md (Wave 0 RED scaffolding) — Wave 1 plans 108-01..04 ready
-last_updated: "2026-05-01T12:41:54.059Z"
+stopped_at: Completed 108-03-PLAN.md
+last_updated: "2026-05-01T12:55:36.516Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 35
   completed_phases: 13
   total_plans: 77
-  completed_plans: 67
+  completed_plans: 69
 ---
 
 # Project State
@@ -358,6 +358,8 @@ Recent decisions affecting current work:
 - [Phase 107]: MemoryStore.cleanupOrphans uses directional SQL (DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories)) — never touches memories. Reversing direction would erase cold-archived memories.
 - [Phase 107]: cleanupOrphans lives on MemoryStore class (not separate utility) — single owner of the SQLite handle, mirrors bumpAccess + getMemoryFileSha256.
 - [Phase 107]: Daemon per-agent failure pushes sentinel { totalAfter: -1 } into results instead of aborting — operator sees both successes and failures in one CLI invocation.
+- [Phase 108]: Shim handshake wire format: { agent, tokenHash } only — token literal hashed in-shim and never sent on socket (SEC-07)
+- [Phase 108]: Shim exit codes: 0 (clean stdin end / SIGTERM), 64 (missing CLAWCODE_AGENT or OP_SERVICE_ACCOUNT_TOKEN), 75 (broker socket close → SDK reconnect)
 
 ### v2.1 closing decisions (for reference)
 
@@ -528,11 +530,12 @@ Recent decisions affecting current work:
 | Phase 106 P02 | 18 min | 1 tasks | 1 files |
 | Phase 107 P02 | 45m | 3 tasks | 7 files |
 | Phase 108 P00 | 25min | 3 tasks | 8 files |
+| Phase 108 P03 | 9min | 2 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 108-00-PLAN.md (Wave 0 RED scaffolding) — Wave 1 plans 108-01..04 ready
+Stopped at: Completed 108-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
