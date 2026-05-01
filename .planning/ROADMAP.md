@@ -999,13 +999,13 @@ Operators grep for `action: "reconcile"` to audit tracker drift.
 
 **Requirements:** [TRACK-01..08 as scoped above]
 
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 - [x] 999.15-00-PLAN.md — Wave 0 RED tests across 6 test files (TRACK-01..06+08)
 - [x] 999.15-01-PLAN.md — Tracker API extensions + isPidAlive (TRACK-03 + TRACK-04 substrate)
 - [x] 999.15-02-PLAN.md — Reconciler + polled discovery + reconcile-before-kill (TRACK-01/02/04/06)
-- [ ] 999.15-03-PLAN.md — mcp-tracker IPC + CLI (TRACK-05)
+- [x] 999.15-03-PLAN.md — mcp-tracker IPC + CLI (TRACK-05)
 - [ ] 999.15-04-PLAN.md — Local gate + operator deploy + 3 long-soak smokes on clawdy (TRACK-07)
 
 **Promotion target:** active milestone — sequence after 999.14 since this builds on its substrate (proc-scan, process-tracker, orphan-reaper). Medium operator impact: today the cosmetic staleness is hidden by cmdline-based orphan detection, but graceful-shutdown reliability + per-agent restart cleanup will degrade as the fleet scales (more agents = more SDK-respawn races = more leaked MCP children on agent-restart). Pairs naturally with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle architecture.
