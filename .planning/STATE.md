@@ -1,7 +1,7 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v2.7
+milestone_name: Operator Self-Serve + Production Hardening
 status: Phase complete — ready for verification
 stopped_at: Completed 108-04-PLAN.md
 last_updated: "2026-05-01T13:27:22.421Z"
@@ -437,6 +437,7 @@ Recent decisions affecting current work:
 | 260429-ouw | Webhook table-wrap regression — wrap markdown tables inside webhookManager.send (covers 3 missed Phase 100-fu call sites) | 2026-04-29 | 696bc39 | [260429-ouw-webhook-path-table-wrap-regression-add-w](./quick/260429-ouw-webhook-path-table-wrap-regression-add-w/) |
 | 260501-i3r | Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points | 2026-05-01 | 61292ed | [260501-i3r-add-structured-relay-skipped-diagnostic-](./quick/260501-i3r-add-structured-relay-skipped-diagnostic-/) |
 | 260501-j7x | Phase 999.24 — expand /etc/sudoers.d/clawcode on clawdy with CLAWCODE_SERVICE alias (systemctl reload/restart NOPASSWD for clawcode user) | 2026-05-01 | c3dc129 | [260501-j7x-phase-999-24-sudoers-expansion-for-clawc](./quick/260501-j7x-phase-999-24-sudoers-expansion-for-clawc/) |
+| 260501-jld | Phase 999.21 — consolidate 19 `gsd-*` Discord slash commands under `/get-shit-done` (nested subcommands, claudeCommand byte-identical, 594/594 tests pass) | 2026-05-01 | e422045 | [260501-jld-phase-999-21-consolidate-20-gsd-discord-](./quick/260501-jld-phase-999-21-consolidate-20-gsd-discord-/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
