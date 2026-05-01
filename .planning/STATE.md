@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 999.12-00 + 999.12-01 (Wave 0 RED + Wave 1 GREEN bundle)
-last_updated: "2026-05-01T05:07:57.468Z"
+stopped_at: Completed 106-00-PLAN.md (Wave 0 RED tests)
+last_updated: "2026-05-01T05:58:08.698Z"
 last_activity: 2026-05-01
 progress:
-  total_phases: 30
-  completed_phases: 10
-  total_plans: 63
-  completed_plans: 57
+  total_phases: 33
+  completed_phases: 11
+  total_plans: 68
+  completed_plans: 59
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 999.12 — cross-agent-ipc-channel-delivery-heartbeat-inbox-timeout
+**Current focus:** Phase 106 — agent-context-hygiene-bundle-delegate-scoping-research-stall-cli-hotfix
 
 ## Current Position
 
-Phase: 999.12 (cross-agent-ipc-channel-delivery-heartbeat-inbox-timeout) — EXECUTING
-Plan: 2 of 3
+Phase: 106 (agent-context-hygiene-bundle-delegate-scoping-research-stall-cli-hotfix) — EXECUTING
+Plan: 2 of 5
 
 ## Performance Metrics
 
@@ -515,11 +515,12 @@ Recent decisions affecting current work:
 | Phase 999.6 P01 | 12 min | 3 tasks | 3 files |
 | Phase 999.12 P00 | 18 min | 2 tasks | 4 files |
 | Phase 999.12 P01 | 12 min | 3 tasks | 6 files |
+| Phase 106 P00 | 8 min | 3 tasks | 3 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 999.12-00 + 999.12-01 (Wave 0 RED + Wave 1 GREEN bundle)
+Stopped at: Completed 106-00-PLAN.md (Wave 0 RED tests)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)

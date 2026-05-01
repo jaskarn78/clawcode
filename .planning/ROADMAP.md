@@ -593,10 +593,10 @@ After 999.15's deploy, `clawcode mcp-tracker` returns "Error: Invalid Request". 
 
 [DSCOPE-01 subagent-prompt scoping flag, DSCOPE-02 spawner wiring, DSCOPE-03 tests, DSCOPE-04 yaml fan-out restore; STALL-01 root cause + fix, STALL-02 warmup-timeout telemetry; TRACK-CLI-01 IPC schema match]
 
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
-- [ ] 106-00-PLAN.md — Wave 0 RED tests: DSCOPE config-strip snapshot, STALL-02 fake-timer warmup-timeout, TRACK-CLI expected-tuple extension
+- [x] 106-00-PLAN.md — Wave 0 RED tests: DSCOPE config-strip snapshot, STALL-02 fake-timer warmup-timeout, TRACK-CLI expected-tuple extension
 - [ ] 106-01-PLAN.md — Wave 1 GREEN DSCOPE: caller-side strip of `delegates` from sourceConfig spread in subagent-thread-spawner.ts (~3 LOC + comment)
 - [ ] 106-02-PLAN.md — Wave 1 GREEN STALL-02: 60s warmup-timeout sentinel + lastStep tracker inside startAgent (~30 LOC)
 - [ ] 106-03-PLAN.md — Wave 1 GREEN TRACK-CLI: append `mcp-tracker-snapshot` to IPC_METHODS enum (1 LOC + comment, mirrors commit a9c39c7)
