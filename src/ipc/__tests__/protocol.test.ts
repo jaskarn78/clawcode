@@ -145,10 +145,15 @@ describe("IPC_METHODS", () => {
       // Phase 100 follow-up — runtime gsd.projectDir override (Discord
       // /gsd-set-project + daemon set-gsd-project IPC handler).
       "set-gsd-project",
-      // Phase 999.10 SEC-06 — daemon-side op:// secret cache telemetry +
+      // Phase 104 SEC-06 — daemon-side op:// secret cache telemetry +
       // operator-driven cache invalidation surface.
       "secrets-status",
       "secrets-invalidate",
+      // Phase 106 TRACK-CLI-01 — restore mcp-tracker IPC. Daemon
+      // dispatch + CLI client wired in 999.15-03; this entry was
+      // missed (deploy-blocking "Invalid Request"). Mirrors commit
+      // a9c39c7 fix for probe-fs / list-fs-status.
+      "mcp-tracker-snapshot",
     ]);
   });
 });
