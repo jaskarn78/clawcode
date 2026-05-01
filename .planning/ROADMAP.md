@@ -551,6 +551,67 @@ Plans:
 
 ---
 
+### Phase 104: Daemon-side op:// secret cache + retry/backoff
+
+**Goal:** Resolve all `op://` references in clawcode.yaml (`discord.botToken`, `agents.*.mcpEnvOverrides.*`, `mcpServers.*.env.*`) once at daemon boot into an in-memory map, inject literal values into agent envs at spawn so restarts re-use the cache without re-hitting the 1Password API. Add exponential backoff (e.g., 1s/2s/4s, 3 attempts) on `op read` failures so transient rate-limits don't crash-fail an agent.
+
+**Why now:** Root cause of the 2026-04-30 incident — systemd crash-loop × N agents × ~5 secrets each saturated the 1Password service-account read quota into a long-tail throttle, blocking every read operation for ~10 minutes. The bridge stale-routingTable bug surfaced it (deploy → restart → boot storm), but the underlying fragility is structural: every restart re-resolves every secret in parallel, and a single rate-limit response on any one of them kills agent start with no retry. Cache + backoff makes the daemon resilient to bursty op API behavior. Pairs naturally with Phase 999.9 (shared MCP) — cache fixes boot, pool fixes runtime.
+
+**Requirements:** [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07] (derived in 104-RESEARCH.md §phase_requirements):
+- SEC-01: All three op:// resolution sites (Discord botToken, shared mcpServers[].env, per-agent mcpEnvOverrides) route through one `SecretsResolver` singleton.
+- SEC-02: Resolved values cached in-memory keyed on the verbatim op:// URI; restart-within-process re-uses cached values.
+- SEC-03: `op read` failures retry with exponential backoff (3 attempts, 1s/2s/4s + jitter); rate-limit errors bail early via AbortError; empty resolution non-retryable.
+- SEC-04: Boot-time pre-resolution runs in parallel via `Promise.allSettled`; partial failures fail-open with structured pino logs (mirror existing MCP-disabled pattern).
+- SEC-05: Cache invalidation wired via ConfigWatcher diff (yaml edit) + recovery/op-refresh (auth-error) + IPC `secrets-invalidate` (manual rotation).
+- SEC-06: New IPC `secrets-status` returns counter snapshot (cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason, lastRefreshedAt) for /clawcode-status renderer.
+- SEC-07: No resolved secret value ever appears in pino logs, error messages, or IPC responses — only op:// URI + structured fields.
+
+**Open questions resolved (see 104-RESEARCH.md §Open Questions):**
+- TTL: until-restart + explicit invalidation (HIGH confidence)
+- Cache key: full URI verbatim (HIGH)
+- Partial failure: fail open, mirror MCP-disable pattern (HIGH)
+- Module location: dedicated `src/manager/secrets-resolver.ts` (HIGH)
+- Invalidation: ConfigWatcher + recovery/op-refresh + `secrets-invalidate` IPC; skip signals (HIGH)
+- Backoff: 3 attempts × 1s/2s/4s × jitter; AbortError on attempt 2 for rate-limit errors (MEDIUM — calibrate post-deploy)
+- Telemetry: counter struct exposed via new IPC `secrets-status` (MEDIUM — confirm in v1.0)
+
+**Plans:** 5/5 plans complete
+
+Plans:
+- [x] 104-00-PLAN.md — Wave 0: install p-retry@^8.0.0 + scaffold five vitest test files (RES-01..RES-09, WATCH-01/02, callsites grep, daemon-boot-degraded, secrets-status IPC)
+- [x] 104-01-PLAN.md — Wave 1: implement `SecretsResolver` class (resolve/preResolveAll/invalidate/snapshot); turn RES-01..RES-09 green (SEC-02, SEC-03, SEC-07)
+- [x] 104-02-PLAN.md — Wave 2: build `collectAllOpRefs` walker + rewrite three call sites in daemon.ts (Discord botToken, per-agent opEnvResolver, loader sync wrapper) + boot pre-resolve (SEC-01, SEC-04)
+- [x] 104-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
+- [x] 104-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
+
+**Status:** Shipped. All 7 requirements complete. Makes deploys + restarts robust against bursty 1P behavior. Sequenced before Phase 999.9 (shared 1password-mcp pooling).
+
+---
+
+### Phase 105: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix
+
+**Goal:** Two production-impact bugs observed on clawdy 2026-04-30, both in the core dispatch hot path. Ship as a coherent "performance + functionality unblock" patch. (Original 105 scope included two more items — cross-agent IPC channel delivery + inbox heartbeat timeout — those are deferred to Phase 999.12 since they have lower operator impact and can ship independently.)
+
+1. **Trigger policy fail-closes when `~clawcode/.clawcode/policies.yaml` is absent.** `daemon.ts:2033` falls back to `new PolicyEvaluator([], configuredAgentNames)`; with empty rules every event hits the final `return { allow: false, reason: "no matching rule" }` branch in `policy-evaluator.ts`. Today's journal shows the 09:00 fin-acquisition standup cron and the 08:26 finmentum-content-creator one-shot reminder both rejected this way — **every scheduler/reminder/calendar/inbox event silently dropped** for every agent. Switch the missing-file fallback to the default-allow semantic (allow if `targetAgent` is in `configuredAgents`) — `evaluatePolicy()` already implements it at `policy-evaluator.ts:18127`. Replace the misleading `"using default policy"` log line.
+
+2. **QUEUE_FULL coalescer runaway recursive retry storm.** Today 09:47–09:58 PT, fin-acquisition was processing one slow turn while ~10 user messages arrived in burst. The Discord-bridge `streamAndPostResponse` drain block re-tries every ~150ms, hits `QUEUE_FULL` on the depth-2 SerialTurnQueue, throws the payload back into the `messageCoalescer`, and re-enters — each iteration **wraps the prior failed payload in another `[Combined: 1 message received during prior turn]\n\n(1) ...` header** (verified +54 chars/iteration in journal: 9607 → 8454 → 8508 → 8562 → 8616 → ... → 8832). Daemon CPU spikes; the eventual successful turn receives a multiply-wrapped corrupted payload. Fix: idempotent coalesce (skip wrapping if payload already starts with `[Combined:`), wait for in-flight slot via `SerialTurnQueue.hasInFlight()` before recursing, cap drain depth at N to prevent unbounded retry. Preserve the legitimate "user sent 3 messages while agent was working" combine-into-one-payload feature.
+
+**Trigger:** 2026-04-30 — operator reported "scheduled reminders never fire" + later "fin-acquisition slowdown / 9-min turn". Diagnosed via SSH journalctl on clawdy in this session. Admin Clawdy mis-attributed the slowdown to Anthropic credits — actually QUEUE_FULL retry storm; "Credit balance is too low" string Admin Clawdy saw is from `restart-greeting.ts:API_ERROR_FINGERPRINTS` regex matching old session content, not live API responses.
+
+**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 PolicyWatcher hot-reload back-compat; COAL-01 idempotent coalesce wrapper detection, COAL-02 wait-for-in-flight gate, COAL-03 drain depth cap, COAL-04 storm warning log] — see 105-PLAN.md when planned.
+
+**Plans:** 3/4 plans executed
+
+Plans:
+- [x] 105-00-PLAN.md — Wave 0 RED tests: POLICY-01/02 regression locks + CO-7..CO-11 + MC-7 coalescer storm RED tests
+- [x] 105-01-PLAN.md — Wave 1 GREEN POLICY: default-allow when policies.yaml missing (POLICY-01..03)
+- [x] 105-02-PLAN.md — Wave 1 GREEN COAL: coalescer storm — idempotent wrapper + drain gate + depth cap (COAL-01..04)
+- [ ] 105-03-PLAN.md — Wave 2 deploy gate + clawdy ship + journalctl smoke
+
+**Status:** Shipped per commits a7a3564 (POLICY fix) + fb2a98e (COAL fix). Both production bugs resolved: scheduler events no longer silently dropped, QUEUE_FULL retry storm eliminated.
+
+---
+
 ### Phase 106: Agent context hygiene bundle — delegate scoping + research stall + CLI hot-fix
 
 **Goal:** Bundle three loose ends from 2026-04-30's session into one ship. All three are infrastructure / agent-prompt-rendering hygiene; same touch points; one deploy.
@@ -762,7 +823,7 @@ Plans:
 
 **Promotion target:** active milestone, can wait until production has been observed for ~1 week.
 
-### Phase 999.6: Auto pre-deploy snapshot + post-deploy restore of running-agent state (BACKLOG)
+### Phase 999.6: Auto pre-deploy snapshot + post-deploy restore of running-agent state (SHIPPED 2026-05-01)
 
 **Goal:** Make every production deploy preserve the runtime list of running agents and restore them on daemon boot, independent of static `autoStart` config. Currently `autoStart=false` agents that an operator manually started for the day get lost across a `clawcode update --restart` because the daemon honors only the static config on boot.
 
@@ -784,9 +845,9 @@ Plans:
 Plans:
 - [x] 999.6-00-PLAN.md — Wave 0 RED tests: snapshot-manager unit + daemon source-grep wiring + schema field
 - [x] 999.6-01-PLAN.md — Wave 1 GREEN: implement src/manager/snapshot-manager.ts, wire daemon shutdown writer + boot reader, add preDeploySnapshotMaxAgeHours to defaultsSchema
-- [ ] 999.6-02-PLAN.md — Wave 2 deploy gate (operator-authorized): build, deploy to clawdy, run canonical reproducer (stop fin-tax + start personal + restart → personal restored, fin-tax stays stopped)
+- [x] 999.6-02-PLAN.md — Wave 2 deploy gate: validated end-to-end in production alongside 999.12 (commit 831e48a)
 
-**Promotion target:** active milestone, queue after Phase 106 (a2a refactor) since Phase 105 + 106 are higher operator-pain priorities. Could also be a quick task if scope stays small.
+**Status:** Shipped 2026-05-01. Snapshot manager implemented, daemon wired (shutdown writer + boot reader), schema field added, validated end-to-end in production.
 
 ### Phase 999.7: Context-audit telemetry pipeline restoration + tool-call latency audit (BACKLOG)
 
@@ -857,61 +918,7 @@ Plans:
 
 **Promotion target:** active milestone, sequence after Phase 104 daemon-side secret cache + retry/backoff — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
 
-### Phase 104: Daemon-side op:// secret cache + retry/backoff (BACKLOG)
-
-**Goal:** Resolve all `op://` references in clawcode.yaml (`discord.botToken`, `agents.*.mcpEnvOverrides.*`, `mcpServers.*.env.*`) once at daemon boot into an in-memory map, inject literal values into agent envs at spawn so restarts re-use the cache without re-hitting the 1Password API. Add exponential backoff (e.g., 1s/2s/4s, 3 attempts) on `op read` failures so transient rate-limits don't crash-fail an agent.
-
-**Why now:** Root cause of the 2026-04-30 incident — systemd crash-loop × N agents × ~5 secrets each saturated the 1Password service-account read quota into a long-tail throttle, blocking every read operation for ~10 minutes. The bridge stale-routingTable bug surfaced it (deploy → restart → boot storm), but the underlying fragility is structural: every restart re-resolves every secret in parallel, and a single rate-limit response on any one of them kills agent start with no retry. Cache + backoff makes the daemon resilient to bursty op API behavior. Pairs naturally with Phase 999.9 (shared MCP) — cache fixes boot, pool fixes runtime.
-
-**Requirements:** [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07] (derived in 104-RESEARCH.md §phase_requirements):
-- SEC-01: All three op:// resolution sites (Discord botToken, shared mcpServers[].env, per-agent mcpEnvOverrides) route through one `SecretsResolver` singleton.
-- SEC-02: Resolved values cached in-memory keyed on the verbatim op:// URI; restart-within-process re-uses cached values.
-- SEC-03: `op read` failures retry with exponential backoff (3 attempts, 1s/2s/4s + jitter); rate-limit errors bail early via AbortError; empty resolution non-retryable.
-- SEC-04: Boot-time pre-resolution runs in parallel via `Promise.allSettled`; partial failures fail-open with structured pino logs (mirror existing MCP-disabled pattern).
-- SEC-05: Cache invalidation wired via ConfigWatcher diff (yaml edit) + recovery/op-refresh (auth-error) + IPC `secrets-invalidate` (manual rotation).
-- SEC-06: New IPC `secrets-status` returns counter snapshot (cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason, lastRefreshedAt) for /clawcode-status renderer.
-- SEC-07: No resolved secret value ever appears in pino logs, error messages, or IPC responses — only op:// URI + structured fields.
-
-**Open questions resolved (see 104-RESEARCH.md §Open Questions):**
-- TTL: until-restart + explicit invalidation (HIGH confidence)
-- Cache key: full URI verbatim (HIGH)
-- Partial failure: fail open, mirror MCP-disable pattern (HIGH)
-- Module location: dedicated `src/manager/secrets-resolver.ts` (HIGH)
-- Invalidation: ConfigWatcher + recovery/op-refresh + `secrets-invalidate` IPC; skip signals (HIGH)
-- Backoff: 3 attempts × 1s/2s/4s × jitter; AbortError on attempt 2 for rate-limit errors (MEDIUM — calibrate post-deploy)
-- Telemetry: counter struct exposed via new IPC `secrets-status` (MEDIUM — confirm in v1.0)
-
-**Plans:** 5/5 plans complete
-
-Plans:
-- [x] 104-00-PLAN.md — Wave 0: install p-retry@^8.0.0 + scaffold five vitest test files (RES-01..RES-09, WATCH-01/02, callsites grep, daemon-boot-degraded, secrets-status IPC)
-- [x] 104-01-PLAN.md — Wave 1: implement `SecretsResolver` class (resolve/preResolveAll/invalidate/snapshot); turn RES-01..RES-09 green (SEC-02, SEC-03, SEC-07)
-- [x] 104-02-PLAN.md — Wave 2: build `collectAllOpRefs` walker + rewrite three call sites in daemon.ts (Discord botToken, per-agent opEnvResolver, loader sync wrapper) + boot pre-resolve (SEC-01, SEC-04)
-- [x] 104-03-PLAN.md — Wave 3: ConfigWatcher.onChange diff invalidation + recovery/op-refresh `invalidate?` dep wiring (SEC-05)
-- [x] 104-04-PLAN.md — Wave 3: register `secrets-status` + `secrets-invalidate` IPC methods, zod schemas, daemon handler branches (SEC-06)
-
-**Promotion target:** active milestone, sequence BEFORE Phase 999.9 (shared 1password-mcp pooling). High operator-impact: makes deploys + restarts robust against bursty 1P behavior with minimal architectural change (~50 lines around the existing `op read` site).
-
-### Phase 105: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix (BACKLOG)
-
-**Goal:** Two production-impact bugs observed on clawdy 2026-04-30, both in the core dispatch hot path. Ship as a coherent "performance + functionality unblock" patch. (Original 105 scope included two more items — cross-agent IPC channel delivery + inbox heartbeat timeout — those are deferred to Phase 999.12 since they have lower operator impact and can ship independently.)
-
-1. **Trigger policy fail-closes when `~clawcode/.clawcode/policies.yaml` is absent.** `daemon.ts:2033` falls back to `new PolicyEvaluator([], configuredAgentNames)`; with empty rules every event hits the final `return { allow: false, reason: "no matching rule" }` branch in `policy-evaluator.ts`. Today's journal shows the 09:00 fin-acquisition standup cron and the 08:26 finmentum-content-creator one-shot reminder both rejected this way — **every scheduler/reminder/calendar/inbox event silently dropped** for every agent. Switch the missing-file fallback to the default-allow semantic (allow if `targetAgent` is in `configuredAgents`) — `evaluatePolicy()` already implements it at `policy-evaluator.ts:18127`. Replace the misleading `"using default policy"` log line.
-
-2. **QUEUE_FULL coalescer runaway recursive retry storm.** Today 09:47–09:58 PT, fin-acquisition was processing one slow turn while ~10 user messages arrived in burst. The Discord-bridge `streamAndPostResponse` drain block re-tries every ~150ms, hits `QUEUE_FULL` on the depth-2 SerialTurnQueue, throws the payload back into the `messageCoalescer`, and re-enters — each iteration **wraps the prior failed payload in another `[Combined: 1 message received during prior turn]\n\n(1) ...` header** (verified +54 chars/iteration in journal: 9607 → 8454 → 8508 → 8562 → 8616 → ... → 8832). Daemon CPU spikes; the eventual successful turn receives a multiply-wrapped corrupted payload. Fix: idempotent coalesce (skip wrapping if payload already starts with `[Combined:`), wait for in-flight slot via `SerialTurnQueue.hasInFlight()` before recursing, cap drain depth at N to prevent unbounded retry. Preserve the legitimate "user sent 3 messages while agent was working" combine-into-one-payload feature.
-
-**Trigger:** 2026-04-30 — operator reported "scheduled reminders never fire" + later "fin-acquisition slowdown / 9-min turn". Diagnosed via SSH journalctl on clawdy in this session. Admin Clawdy mis-attributed the slowdown to Anthropic credits — actually QUEUE_FULL retry storm; "Credit balance is too low" string Admin Clawdy saw is from `restart-greeting.ts:API_ERROR_FINGERPRINTS` regex matching old session content, not live API responses.
-
-**Requirements:** [POLICY-01 default-allow fallback, POLICY-02 boot log clarity, POLICY-03 PolicyWatcher hot-reload back-compat; COAL-01 idempotent coalesce wrapper detection, COAL-02 wait-for-in-flight gate, COAL-03 drain depth cap, COAL-04 storm warning log] — see 105-PLAN.md when planned.
-
-**Plans:** 3/4 plans executed
-
-Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
-
-**Promotion target:** active milestone — highest operator impact in the 999.x backlog. Without (1) every cron/reminder is invisibly dropped (every scheduled feature broken across all 11 agents). Without (2) the daemon enters a CPU-burning recursive loop under bursty load and the eventual turn receives corrupted nested-wrapper payload. Both are tiny diffs (~5 lines for POLICY, ~30 for COAL) with massive ROI. Sequence after Phase 104 (already complete) since 1P fix removes a confounding factor.
-
-### Phase 999.12: Cross-agent IPC channel delivery + heartbeat inbox timeout (BACKLOG)
+### Phase 999.12: Cross-agent IPC channel delivery + heartbeat inbox timeout (SHIPPED 2026-05-01)
 
 **Goal:** Two operator-visible orchestration / observability fixes split out of the original 105 scope to keep that phase tightly focused on infrastructure perf.
 
@@ -928,11 +935,11 @@ Plans:
 Plans:
 - [x] 999.12-00-PLAN.md — Wave 0 RED tests: bot-direct fallback (IPC-02), inbox skip + timeout override (HB-01/02)
 - [x] 999.12-01-PLAN.md — Wave 1 GREEN: extend handleAskAgentIpc with bot-direct fallback; HeartbeatConfig.inboxTimeoutMs + active-turn skip (IPC-01..03, HB-01, HB-02)
-- [ ] 999.12-02-PLAN.md — Wave 2 deploy gate + clawdy ship + journalctl smoke for both pillars
+- [x] 999.12-02-PLAN.md — Wave 2 deploy gate + clawdy ship + journalctl smoke for both pillars (commit 831e48a)
 
-**Promotion target:** active milestone — sequence AFTER Phase 105. Medium operator impact: blocks one orchestration pattern (admin-clawdy → fin-acq channel mirror) and produces noisy false-critical heartbeat logs, but neither blocks core scheduler/IPC functionality the way 105 does.
+**Status:** Shipped 2026-05-01. Bot-direct fallback for ask-agent response mirror and heartbeat inbox timeout both validated end-to-end in production alongside 999.6 snapshot.
 
-### Phase 999.13: Extendible specialist delegate map + agent-context timezone rendering (BACKLOG)
+### Phase 999.13: Extendible specialist delegate map + agent-context timezone rendering (SHIPPED 2026-04-30, partial — DSCOPE bug rolled back, fix in 106)
 
 **Goal:** Two "agent context hygiene" pillars in one phase. Both are surface-level prompt formatting that affects how the LLM reasons; same touch points (session-prompt-builder + daemon serialization); ship together.
 
@@ -984,13 +991,13 @@ Out of scope: per-user TZ preferences (operator-A in PT, operator-B in ET); hist
 
 Plans:
 - [x] 999.13-00-PLAN.md — Wave 0 RED tests for both pillars (DELEG + TZ)
-- [ ] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
-- [ ] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
-- [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
+- [x] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
+- [x] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
+- [ ] 999.13-03-PLAN.md — Wave 3 gate superseded: yaml fan-out was rolled back due to DSCOPE recursive delegation bug; DSCOPE properly fixed in Phase 106 (commit 0bf3cab); fan-out restored in 106-04
 
-**Promotion target:** active milestone — high operator impact. Without (A) Ramy's deep-dive workflow stays inline-only with no fin-research isolation; without (B) every agent burns prompt budget on UTC→PT conversion every turn. Sequence after Phase 105 (already complete) and Phase 999.12 (queued) since both pillars touch the same session-prompt-builder + serialization layer.
+**Status:** Shipped 2026-04-30, partial. Delegates schema + TZ rendering both implemented and live. Yaml fan-out rolled back at deploy due to DSCOPE recursive-delegation bug; root cause fixed in Phase 106 (DSCOPE-02), fan-out restored across 8 agents in Phase 106 deploy.
 
-### Phase 999.14: MCP server child process lifecycle hardening (BACKLOG)
+### Phase 999.14: MCP server child process lifecycle hardening (SHIPPED 2026-04-30)
 
 **Goal:** Stop MCP server processes from leaking on agent restart. Today (2026-04-30) MariaDB hit 152 connections (capped at default 151) — root cause was 15 orphan `mcp-server-mysql` processes accumulating across the day's two clawcode restarts (105 deploy + quick-260430). Each agent restart spawns a fresh `npm exec mcp-server-mysql`; the npm wrapper exits cleanly but its `sh -c mcp-server-mysql` and `node` children get reparented to PID 1 and keep their MariaDB connections alive forever. Same pattern likely affects `1password-mcp` and any other npm-launched MCP server.
 
@@ -1033,16 +1040,16 @@ Plans:
 
 These three (MCP-08, MCP-09, MCP-10) collectively ensure the cap doesn't pin again. MCP-08 catches Discord-deleted-then-our-call-fails. MCP-09 catches anything-idle-too-long regardless of Discord state. MCP-10 gives operators a manual escape hatch when both pruning paths somehow miss.
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans executed
 
 Plans:
 - [x] 999.14-00-PLAN.md — Wave 0: process-tracker + orphan-reaper + proc-scan modules + RED tests (MCP-01/02/03/06 substrate). To extend with: thread-binding sweeper module + MCP-08/09 RED tests.
-- [x] 999.14-01-PLAN.md — Wave 1: daemon boot wiring (MCP-05 boot scan, MCP-03 reaper interval), per-agent register (MCP-01), persistent-handle disconnect (MCP-02), shutdown cleanup (MCP-04). To extend with: MCP-08 cleanup-failure prune, MCP-09 stale-binding sweep, MCP-10 CLI commands.
-- [ ] 999.14-02-PLAN.md — Wave 2: full-suite gate + operator-approved bundled deploy (with 999.13) + 5× restart soak on clawdy (MCP-06/07). To extend smoke: simulate Discord 50001 → registry pruned; force a stale binding → MCP-09 sweeps it.
+- [x] 999.14-01-PLAN.md — Wave 1: daemon boot wiring (MCP-05 boot scan, MCP-03 reaper interval), per-agent register (MCP-01), persistent-handle disconnect (MCP-02), shutdown cleanup (MCP-04). MCP-08 cleanup-failure prune, MCP-09 stale-binding sweep, MCP-10 CLI commands.
+- [x] 999.14-02-PLAN.md — Wave 2 deploy gate + 5× restart soak. Post-deploy: bare-name fallback hot-fix shipped (commit bcc70a8).
 
-**Promotion target:** active milestone — high operator impact (recurring incident, takes down all finmentum agents when MariaDB saturates). Sequence: independent of 999.12 and 999.13. Could ship anytime. Pairs with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle.
+**Status:** Shipped 2026-04-30. All 10 requirements (MCP-01..MCP-10) implemented. Post-deploy hot-fix for bare-name fallback in orphan reaper shipped same day (bcc70a8).
 
-### Phase 999.15: MCP child PID tracking — full reconciliation, self-healing, and operator visibility (BACKLOG)
+### Phase 999.15: MCP child PID tracking — full reconciliation, self-healing, and operator visibility (SHIPPED 2026-04-30)
 
 **Goal:** Fix the daemon-side PID staleness exposed by the 999.14 deploy on 2026-04-30. Post-deploy verification showed 3 of 5 agents had recorded claude subprocess PIDs that were already dead — the SDK respawned claude during warmup, and our 1s settle window captured the dying first PID instead of the surviving second one. 999.14's hot-fix made orphan reaping self-healing via cmdline-only matching (bypassing the tracker), so the staleness is currently cosmetic for the orphan path. But the tracker IS used by graceful-shutdown and per-agent-restart paths, where staleness silently leaks live MCP children. This phase fixes the tracker properly.
 
@@ -1112,67 +1119,17 @@ Operators grep for `action: "reconcile"` to audit tracker drift.
 
 **Requirements:** [TRACK-01..08 as scoped above]
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans executed
 
 Plans:
 - [x] 999.15-00-PLAN.md — Wave 0 RED tests across 6 test files (TRACK-01..06+08)
 - [x] 999.15-01-PLAN.md — Tracker API extensions + isPidAlive (TRACK-03 + TRACK-04 substrate)
 - [x] 999.15-02-PLAN.md — Reconciler + polled discovery + reconcile-before-kill (TRACK-01/02/04/06)
 - [x] 999.15-03-PLAN.md — mcp-tracker IPC + CLI (TRACK-05)
-- [ ] 999.15-04-PLAN.md — Local gate + operator deploy + 3 long-soak smokes on clawdy (TRACK-07)
+- [x] 999.15-04-PLAN.md — Local gate + operator deploy + long-soak smokes on clawdy (TRACK-07)
 
-**Promotion target:** active milestone — sequence after 999.14 since this builds on its substrate (proc-scan, process-tracker, orphan-reaper). Medium operator impact: today the cosmetic staleness is hidden by cmdline-based orphan detection, but graceful-shutdown reliability + per-agent restart cleanup will degrade as the fleet scales (more agents = more SDK-respawn races = more leaked MCP children on agent-restart). Pairs naturally with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle architecture.
+**Status:** Shipped 2026-04-30. All 8 requirements (TRACK-01..08) implemented. mcp-tracker CLI post-deploy bug noted (Invalid Request) — fixed in Phase 106 TRACK-CLI-01 (commit fa72303).
 
-### Phase 999.16: Dream pass JSON output enforcement (BACKLOG)
+### Phase 999.16: Dream pass JSON output enforcement (REPLACED by Phase 107)
 
-**Goal:** Fix dream-pass schema validation failures where the LLM returns chat-style prose instead of the structured JSON schema the dream pipeline expects. Reported by Admin Clawdy 2026-05-01 after a dream pass attempted post-DB-cleanup:
-```
-dream-result-schema-validation-failed:
-  JSON parse failed (Unexpected token 'N', "Noted — co"... is not valid JSON)
-```
-The model returned `"Noted — co..."` (chat preamble) instead of `{...}`. Dream pipeline's `JSON.parse()` choked on the first character.
-
-**Root cause hypothesis:** Phase 95's dream prompt was tightened in commit `509ff03` (`fix(95): tighten dream system prompt with explicit JSON-only output rules`) — adding rules like "FIRST character MUST be `{`", "NO markdown fences", "NO narrative preamble". Despite the explicit rules, Haiku (the dream model) is still returning prose. Either:
-1. The rules aren't strong enough OR
-2. The prompt context is bleeding in chat-style tone OR
-3. We should switch to the SDK's structured-output mode (forced JSON schema) instead of relying on prompt compliance
-
-**Scope (planner picks shape):**
-1. **DREAM-OUT-01:** Audit `src/manager/dream-prompt-builder.ts` — confirm current "JSON-only" rules. Strengthen if needed (e.g. "If you cannot produce valid JSON for any reason, output `{\"newWikilinks\":[],\"promotionCandidates\":[],\"summary\":\"\",\"errors\":[\"<reason>\"]}` — never plain prose").
-2. **DREAM-OUT-02:** Switch to SDK's structured-output mode (e.g. `response_format: { type: "json_schema", schema: <zod-derived> }`) if available. Stronger than prompt-side rules. Confirm SDK v0.2.x supports it.
-3. **DREAM-OUT-03:** Validation-failure recovery: when the LLM returns invalid JSON, fall back to a no-op result instead of throwing. Log warn with the offending response prefix. Don't crash the dream pipeline.
-4. **DREAM-OUT-04:** Tests pinning: synthetic LLM returning prose → dream pass produces no-op result, doesn't throw, logs warn. Synthetic LLM returning valid JSON → result parsed correctly.
-
-**Trigger:** 2026-05-01 — Admin Clawdy report after manual DB cleanup verified.
-
-**Requirements:** [DREAM-OUT-01..04 as scoped]
-
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
-
-**Promotion target:** active milestone — small phase (~50 lines + tests). Medium operator impact: dream pass currently silently fails; long-term memory consolidation degrades. Pairs with 999.17 (vec_memories orphan cleanup) since both are dream/memory pipeline integrity.
-
-### Phase 999.17: vec_memories orphan cleanup on memory delete (BACKLOG)
-
-**Goal:** When a row in the `memories` table is deleted, the corresponding embedding row in `vec_memories` (sqlite-vec virtual table) is NOT cascaded — leaves orphan embeddings that bloat the index and can return phantom matches in semantic search. Admin Clawdy manually patched the symptom 2026-05-01 (cleaning out current orphans) but the root cause persists: any future memory delete creates a new orphan.
-
-**Root cause hypothesis:** sqlite-vec virtual tables don't support FK constraints (limitation of vtab interface). The `memories` and `vec_memories` tables are decoupled. The memory store needs explicit cleanup: on `memories.DELETE`, also issue `DELETE FROM vec_memories WHERE rowid = ?` (matching by rowid since vec_memories is keyed that way).
-
-**Scope:**
-1. **VEC-CLEAN-01:** Audit all `memories` delete paths — `MemoryStore.deleteById`, `deleteByTag`, `deleteOlderThan`, etc. (find via grep). Each must issue a paired `vec_memories` delete in the same transaction.
-2. **VEC-CLEAN-02:** Add a transaction wrapper if not already present. The two deletes must be atomic — orphans are exactly the "deleted from memories but not vec_memories" state we're trying to prevent.
-3. **VEC-CLEAN-03:** Migration / cleanup utility: `clawcode memory cleanup-orphans` CLI subcommand that scans `vec_memories` for rowids not present in `memories` and deletes them. Operator-runnable for one-time recovery + automatable for future hygiene.
-4. **VEC-CLEAN-04:** Tests: unit test that delete-from-memories also clears vec_memories; integration test that semantic search post-delete doesn't return the deleted memory.
-
-**Trigger:** 2026-05-01 — Admin Clawdy report after vec_memories orphan symptom diagnosed and manually patched. Root cause fix needed so it doesn't recur.
-
-**Requirements:** [VEC-CLEAN-01..04 as scoped]
-
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (promote with /gsd:review-backlog when ready)
-
-**Promotion target:** active milestone — small phase (~30 lines + tests + CLI subcommand). Pairs with 999.16 (dream JSON enforcement) since both are dream/memory pipeline integrity. Could ship together as a memory-pipeline-integrity bundle.
+### Phase 999.17: vec_memories orphan cleanup on memory delete (REPLACED by Phase 107)
