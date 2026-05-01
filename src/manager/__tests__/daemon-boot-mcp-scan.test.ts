@@ -188,3 +188,124 @@ describe("daemon boot wiring contracts (MCP-01..09)", () => {
     }).not.toThrow();
   });
 });
+
+/* =========================================================================
+ *  Phase 999.15 mcp-tracker-snapshot IPC (TRACK-05).
+ *
+ *  All cases below FAIL at Wave 0 because:
+ *    - The IPC method "mcp-tracker-snapshot" is not yet registered in the
+ *      daemon routeMethod switch (Plan 03 adds it).
+ *    - The daemon-side handler that builds { agents: [...] } shape from
+ *      tracker.getRegisteredAgents() does not exist yet (Plan 03).
+ *
+ *  The harness here mirrors the pure-handler-shape pattern from the
+ *  existing Test 7/Test 9 in this file: we exercise the IPC payload
+ *  CONTRACT, not the live socket dispatch (which the parent file
+ *  intentionally avoids — daemon.ts is too large for unit instantiation).
+ *
+ *  No 999.14 cases above are modified — strict append.
+ * =======================================================================*/
+
+describe("Phase 999.15 mcp-tracker-snapshot IPC (TRACK-05)", () => {
+  it("IPC-1: mcp-tracker-snapshot returns { agents: Array<...> } with liveness counts", async () => {
+    // Plan 03 will export a pure handler that the daemon's routeMethod
+    // switch delegates to. Until that exists, the dynamic import fails with
+    // Cannot-find-module — that IS the RED state.
+    let buildSnapshot: ((tracker: unknown) => unknown) | null = null;
+    try {
+      // @ts-expect-error — module ships in Plan 03 (TRACK-05). Several
+      // landing locations are plausible; the planner picks one. We probe
+      // a likely path here; whatever Plan 03 chooses must be reachable
+      // from this import.
+      const mod = await import("../mcp-tracker-snapshot.js");
+      buildSnapshot = (
+        mod as { buildMcpTrackerSnapshot?: (t: unknown) => unknown }
+      ).buildMcpTrackerSnapshot ?? null;
+    } catch {
+      buildSnapshot = null;
+    }
+    expect(buildSnapshot).toBeTypeOf("function");
+
+    // Once Plan 03 lands buildSnapshot, this fixture-driven contract pins
+    // the response shape: per-agent { agent, claudePid, mcpPids, aliveCount,
+    // totalCount, cmdlines, registeredAt }.
+    const fakeTracker = {
+      patterns: /mcp-server/,
+      getRegisteredAgents: () =>
+        new Map([
+          [
+            "agent-a",
+            {
+              claudePid: 100,
+              mcpPids: [201, 202, 203],
+              registeredAt: 1_700_000_000_000,
+            },
+          ],
+          [
+            "agent-b",
+            {
+              claudePid: 110,
+              mcpPids: [211, 212, 213],
+              registeredAt: 1_700_000_001_000,
+            },
+          ],
+        ]),
+    };
+
+    const out = (await Promise.resolve(buildSnapshot!(fakeTracker))) as {
+      agents: ReadonlyArray<{
+        agent: string;
+        claudePid: number;
+        mcpPids: readonly number[];
+        aliveCount: number;
+        totalCount: number;
+        cmdlines: readonly string[];
+      }>;
+    };
+    expect(Array.isArray(out.agents)).toBe(true);
+    expect(out.agents.length).toBe(2);
+    const agentA = out.agents.find((a) => a.agent === "agent-a")!;
+    expect(agentA.claudePid).toBe(100);
+    expect([...agentA.mcpPids].sort()).toEqual([201, 202, 203]);
+    expect(typeof agentA.aliveCount).toBe("number");
+    expect(typeof agentA.totalCount).toBe("number");
+    expect(agentA.totalCount).toBe(3);
+    expect(Array.isArray(agentA.cmdlines)).toBe(true);
+  });
+
+  it("IPC-2: mcp-tracker-snapshot includes registeredAt epoch-ms timestamp per agent", async () => {
+    let buildSnapshot: ((tracker: unknown) => unknown) | null = null;
+    try {
+      // @ts-expect-error — module ships in Plan 03 (TRACK-05)
+      const mod = await import("../mcp-tracker-snapshot.js");
+      buildSnapshot = (
+        mod as { buildMcpTrackerSnapshot?: (t: unknown) => unknown }
+      ).buildMcpTrackerSnapshot ?? null;
+    } catch {
+      buildSnapshot = null;
+    }
+    expect(buildSnapshot).toBeTypeOf("function");
+
+    const fakeTracker = {
+      patterns: /mcp-server/,
+      getRegisteredAgents: () =>
+        new Map([
+          [
+            "agent-a",
+            {
+              claudePid: 100,
+              mcpPids: [201],
+              registeredAt: 1_700_000_000_123,
+            },
+          ],
+        ]),
+    };
+
+    const out = (await Promise.resolve(buildSnapshot!(fakeTracker))) as {
+      agents: ReadonlyArray<{ agent: string; registeredAt?: number }>;
+    };
+    const a = out.agents[0]!;
+    expect(typeof a.registeredAt).toBe("number");
+    expect(a.registeredAt).toBe(1_700_000_000_123);
+  });
+});
