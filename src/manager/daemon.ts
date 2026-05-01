@@ -53,6 +53,17 @@ import {
 // McpProcessTracker construction via the late-bound reconcileAgent closure
 // for TRACK-06 reconcile-before-kill.
 import { reconcileAllAgents, reconcileAgent } from "../mcp/reconciler.js";
+// Phase 108 — daemon-managed broker pooling 1password-mcp children across
+// agents. The broker owns ONE @takescake/1password-mcp child per unique
+// resolved OP_SERVICE_ACCOUNT_TOKEN; agents connect via per-process shim
+// CLI subprocesses (loader.ts auto-injects `clawcode mcp-broker-shim
+// --pool 1password`). ShimServer accepts socket connections from those
+// shims and bridges them to the broker.
+import { OnePasswordMcpBroker } from "../mcp/broker/broker.js";
+import { ShimServer } from "../mcp/broker/shim-server.js";
+import { spawn as childSpawn } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
+import { createHash } from "node:crypto";
 import { cleanupThreadWithClassifier } from "../discord/thread-cleanup.js";
 import {
   parseIdleDuration,
@@ -1487,6 +1498,9 @@ export const REGISTRY_PATH = join(MANAGER_DIR, "registry.json");
  * write/read contract and invariants.
  */
 export const PRE_DEPLOY_SNAPSHOT_PATH = join(MANAGER_DIR, "pre-deploy-snapshot.json");
+// Phase 108 — daemon-side socket the per-agent `clawcode mcp-broker-shim`
+// subprocesses connect to. Owner-only permissions (chmod 0700 dir).
+export const MCP_BROKER_SOCKET_PATH = join(MANAGER_DIR, "mcp-broker.sock");
 
 /**
  * Ensure no stale socket file exists.
@@ -1674,6 +1688,136 @@ export async function startDaemon(
     mcpLog.info("no mcp servers configured; skipping lifecycle tracker");
   }
 
+  // 4-ter. Phase 108 — OnePasswordMcpBroker + ShimServer.
+  //
+  // Owns ONE pooled `@takescake/1password-mcp` child per unique resolved
+  // OP_SERVICE_ACCOUNT_TOKEN. Constructed AFTER SecretsResolver (so the
+  // tokenHash → rawToken map is built from warmed cache values) AND AFTER
+  // McpProcessTracker (so onPoolSpawn can register the pool PID under a
+  // synthetic `__broker:1password:<tokenHash>` owner). The reconciler
+  // (src/mcp/reconciler.ts via the per-agent skip-list added in this
+  // phase) treats those entries as broker-owned and never SIGTERMs them
+  // during per-agent cleanup.
+  //
+  // ORDERING DECISION (108-04): the planner offered tracker-before-broker
+  // OR broker-before-tracker. We pick **tracker-before-broker** so the
+  // broker's onPoolSpawn callback closes over the already-constructed
+  // tracker singleton (no forward-reference / null-checks needed). Per
+  // RESEARCH.md §5 the only hard constraint is "broker is up before
+  // agents start" — both orderings satisfy that since manager.startAll
+  // happens far below.
+  //
+  // Token literal flow (Phase 104 SEC-07): shim hashes
+  // OP_SERVICE_ACCOUNT_TOKEN client-side → handshake sends only
+  // {agent, tokenHash}. Broker resolves tokenHash → rawToken via the
+  // daemon-built tokenHashToRawToken map below, then spawns the pool
+  // child with the literal in its env. Logs only ever see tokenHash.
+  const tokenHashToRawToken = new Map<string, string>();
+  const collectTokenLiteral = (literal: string): string => {
+    const tokenHash = createHash("sha256").update(literal).digest("hex").slice(0, 16);
+    if (!tokenHashToRawToken.has(tokenHash)) {
+      tokenHashToRawToken.set(tokenHash, literal);
+    }
+    return tokenHash;
+  };
+  // Process-env fallback (loader's auto-inject path uses this token).
+  if (process.env.OP_SERVICE_ACCOUNT_TOKEN) {
+    collectTokenLiteral(process.env.OP_SERVICE_ACCOUNT_TOKEN);
+  }
+  // Per-agent overrides (mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN)
+  // resolved through SecretsResolver get harvested below once
+  // resolvedAgents is built (line ~1706+). Defer the populate-from-config
+  // step until after the resolveAllAgents call.
+
+  const brokerLog = log.child({ subsystem: "mcp-broker" });
+  const broker = new OnePasswordMcpBroker({
+    log: brokerLog,
+    spawnFn: ({ tokenHash, rawToken }) => {
+      // Spawn the upstream MCP child the broker pools. This is the same
+      // command the pre-Phase-108 loader injected per-agent — now once
+      // per token. SEC-07: never log rawToken.
+      const child = childSpawn(
+        "npx",
+        ["-y", "@takescake/1password-mcp@latest"],
+        {
+          env: {
+            ...process.env,
+            OP_SERVICE_ACCOUNT_TOKEN: rawToken,
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      // Phase 999.15 reconciler integration — register pool PID under
+      // synthetic owner so reconciler skip-list (added in this phase)
+      // keeps it safe from per-agent SIGTERM during agent cleanup.
+      if (mcpTracker !== null && child.pid !== undefined) {
+        const syntheticOwner = `__broker:1password:${tokenHash}`;
+        void mcpTracker.register(syntheticOwner, process.pid, [child.pid]);
+        // Tear down tracker entry when the child exits (broker's own
+        // exit handler is the source of truth for respawn — when the
+        // broker calls spawnFn again on respawn we re-register fresh).
+        child.once("exit", () => {
+          if (mcpTracker !== null) {
+            mcpTracker.unregister(syntheticOwner);
+          }
+        });
+      }
+      brokerLog.info(
+        {
+          component: "mcp-broker",
+          pool: `1password-mcp:${tokenHash}`,
+          childPid: child.pid ?? null,
+        },
+        "spawned pool child",
+      );
+      return child;
+    },
+  });
+
+  const shimServer = new ShimServer({
+    log: brokerLog.child({ component: "mcp-broker-shim-server" }),
+    broker,
+    socketPath: MCP_BROKER_SOCKET_PATH,
+    resolveRawToken: (tokenHash) => tokenHashToRawToken.get(tokenHash),
+  });
+
+  // Listen on the unix-domain socket. Bind failures are non-fatal: log
+  // loudly and continue — agents that try to use 1password will see MCP
+  // child spawn errors via the SDK's existing onMcpResolutionError path.
+  const brokerNetServer = createNetServer((socket) => {
+    shimServer.handleConnection(socket);
+  });
+  try {
+    // Best-effort cleanup of stale socket file from a prior crashed daemon.
+    try {
+      await unlink(MCP_BROKER_SOCKET_PATH);
+    } catch {
+      // ENOENT is the happy path; other errors will surface on listen().
+    }
+    await new Promise<void>((resolveListen, rejectListen) => {
+      const onError = (err: Error): void => {
+        brokerNetServer.removeListener("listening", onListening);
+        rejectListen(err);
+      };
+      const onListening = (): void => {
+        brokerNetServer.removeListener("error", onError);
+        resolveListen();
+      };
+      brokerNetServer.once("error", onError);
+      brokerNetServer.once("listening", onListening);
+      brokerNetServer.listen(MCP_BROKER_SOCKET_PATH);
+    });
+    brokerLog.info(
+      { socketPath: MCP_BROKER_SOCKET_PATH },
+      "mcp-broker listening",
+    );
+  } catch (err) {
+    brokerLog.error(
+      { socketPath: MCP_BROKER_SOCKET_PATH, err: String(err) },
+      "mcp-broker socket bind failed; pool routing will fail until restart",
+    );
+  }
+
   // 4b. Phase 104 — sync wrapper around the warmed cache. The loader
   // requires a SYNC resolver (loader.ts is sync by design); the warming was
   // done above by preResolveAll. If a URI was missed (config edited between
@@ -1709,6 +1853,49 @@ export async function startDaemon(
       "MCP server disabled — env resolution failed",
     );
   });
+
+  // Phase 108 — harvest every per-agent OP_SERVICE_ACCOUNT_TOKEN literal
+  // (post-op:// resolution) into the daemon-side tokenHash → rawToken map
+  // built above. Per-agent overrides (yaml mcpEnvOverrides.1password) live
+  // in `agent.mcpEnvOverrides` as op:// URIs; they were NOT resolved by
+  // resolveAllAgents (loader keeps them verbatim — see MCP-LOAD-1 test).
+  // Resolve each via the warm cache here so the broker's spawnFn has the
+  // literal when an agent on a non-default token connects.
+  for (const agent of resolvedAgents) {
+    // 1) The auto-injected `1password` MCP entry's env carries either the
+    //    process-env token (no override) OR the resolved override literal.
+    //    Loader's resolveMcpEnvValue runs op:// substitution at that path,
+    //    so `mcpServers[i].env.OP_SERVICE_ACCOUNT_TOKEN` is already a
+    //    literal here.
+    const opServer = agent.mcpServers.find((s) => s.name === "1password");
+    const opServerToken = opServer?.env?.OP_SERVICE_ACCOUNT_TOKEN;
+    if (typeof opServerToken === "string" && opServerToken.length > 0) {
+      collectTokenLiteral(opServerToken);
+    }
+    // 2) Per-agent mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN is an
+    //    op:// URI in the resolved config (loader keeps it verbatim per
+    //    Phase 100 follow-up MCP-LOAD-1). Resolve via the warm secrets
+    //    cache so the broker can spawn with the literal env. Failures are
+    //    logged and skipped — that token simply won't be poolable; the
+    //    affected agent's 1password MCP will fail at SDK level via the
+    //    existing onMcpResolutionError path.
+    const overrideUri = agent.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+    if (typeof overrideUri === "string" && overrideUri.startsWith("op://")) {
+      const resolved = secretsResolver.getCached(overrideUri);
+      if (typeof resolved === "string" && resolved.length > 0) {
+        collectTokenLiteral(resolved);
+      } else {
+        brokerLog.warn(
+          { agent: agent.name, uri: overrideUri },
+          "mcp-broker: per-agent OP_SERVICE_ACCOUNT_TOKEN override unresolved; pool spawn for this agent will fail",
+        );
+      }
+    }
+  }
+  brokerLog.info(
+    { uniqueTokens: tokenHashToRawToken.size },
+    "mcp-broker: tokenHash → rawToken map built",
+  );
 
   // Phase 100 follow-up — merge runtime gsd.projectDir overrides into the
   // resolved configs BEFORE SessionManager spins up. The override file lives
@@ -4082,6 +4269,37 @@ export async function startDaemon(
       // logged inside applySecretsDiff and never propagate (configReloader
       // must still run for the non-secret parts of the diff).
       await applySecretsDiff(diff, secretsResolver, log);
+      // Phase 108 — Pitfall 2: hot-reload of OP_SERVICE_ACCOUNT_TOKEN is
+      // explicitly NOT supported (CONTEXT.md §"Out of scope"). The broker
+      // pins each agent → tokenHash on first connect; a yaml edit that
+      // changes a token literal mid-flight is caught at the broker's
+      // sticky-pin check and rejected per-connection. Surface an
+      // operator-visible warning here so the rejection isn't a silent
+      // surprise. Walk the diff for any 1password-token change.
+      try {
+        for (const newAgent of newResolvedAgents) {
+          const newOverride =
+            newAgent.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+          const oldAgent = resolvedAgents.find((a) => a.name === newAgent.name);
+          const oldOverride =
+            oldAgent?.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+          if (newOverride !== oldOverride) {
+            brokerLog.error(
+              {
+                agent: newAgent.name,
+                hadOverride: oldOverride !== undefined,
+                hasOverride: newOverride !== undefined,
+              },
+              "mcp-broker: hot-reload of OP_SERVICE_ACCOUNT_TOKEN is NOT supported — restart daemon to apply (broker token pin is sticky per-agent)",
+            );
+          }
+        }
+      } catch (err) {
+        brokerLog.warn(
+          { err: String(err) },
+          "mcp-broker: hot-reload token-diff probe threw (non-fatal)",
+        );
+      }
       const summary = await configReloader.applyChanges(diff, newResolvedAgents);
       log.info({ subsystems: summary.subsystemsReloaded, agents: summary.agentsAffected }, "config hot-reloaded");
     },
@@ -4264,6 +4482,18 @@ export async function startDaemon(
         "pre-deploy snapshot write failed (non-fatal — boot falls back to static autoStart)",
       );
     }
+    // Phase 108 — broker preDrainNotify BEFORE manager.drain. Stops new
+    // shim connections immediately while existing ones continue serving
+    // any in-flight tool calls until manager.drain finishes the agents'
+    // last turns. RESEARCH.md §5 ordering invariant.
+    try {
+      shimServer.preDrainNotify();
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "mcp-broker preDrainNotify threw (non-fatal)",
+      );
+    }
     // 260419-q2z Fix B — drain in-flight session summaries BEFORE closing any
     // downstream resource. The 15s ceiling matches summarizeSession's internal
     // 10s timeout + 5s slack for embed + insert + markSummarized. After drain
@@ -4282,6 +4512,34 @@ export async function startDaemon(
       log.warn(
         { err: (err as Error).message },
         "session manager drain threw unexpectedly (non-fatal)",
+      );
+    }
+    // Phase 108 — drain the broker AFTER manager.drain so any shim-routed
+    // tool calls in-flight during the agents' final turns can complete.
+    // The 2000ms ceiling matches Pitfall 3 (last-ref drain timeout). We
+    // wrap in try/catch so a hung broker shutdown doesn't block the rest
+    // of daemon shutdown — log + continue.
+    try {
+      await shimServer.shutdown(2000);
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "mcp-broker shutdown threw (non-fatal)",
+      );
+    }
+    try {
+      brokerNetServer.close();
+      // Best-effort cleanup of the socket file so the next daemon boot
+      // doesn't trip on EADDRINUSE.
+      try {
+        await unlink(MCP_BROKER_SOCKET_PATH);
+      } catch {
+        // socket may not exist — fine.
+      }
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "mcp-broker socket close threw (non-fatal)",
       );
     }
     // Phase 69 — close OpenAI endpoint FIRST: activeStreams drained + server

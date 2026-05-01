@@ -66,6 +66,18 @@ export type ShimServerDeps = {
    * handleConnection() directly without a real socket file.
    */
   socketPath?: string;
+  /**
+   * Phase 108 Plan 04 — daemon-side tokenHash → rawToken resolver. The
+   * shim NEVER sends the literal token over the socket (Phase 104 SEC-07);
+   * the daemon holds a tokenHash → rawToken map built at boot from
+   * resolved agent configs. The broker needs the literal to spawn the
+   * pool child via its env. Returns undefined when the tokenHash is
+   * unknown (handshake will be rejected).
+   *
+   * Tests omit this — the test path uses rawToken="" because the test
+   * spawnFn doesn't read the token. Production MUST inject this.
+   */
+  resolveRawToken?: (tokenHash: string) => string | undefined;
 };
 
 type Connection = {
@@ -81,11 +93,17 @@ export class ShimServer {
   private readonly log: Logger;
   private readonly broker: OnePasswordMcpBroker;
   private readonly connections: Set<Connection> = new Set();
+  private readonly resolveRawToken: (tokenHash: string) => string | undefined;
   private draining = false;
 
   constructor(deps: ShimServerDeps) {
     this.log = deps.log;
     this.broker = deps.broker;
+    // Phase 108 Plan 04 — production daemon injects a real resolver that
+    // looks up the rawToken via a daemon-held tokenHash → rawToken map.
+    // Tests omit it; the test rawToken=="" path is fine because test
+    // spawnFn doesn't actually read the token.
+    this.resolveRawToken = deps.resolveRawToken ?? (() => undefined);
   }
 
   /**
@@ -203,13 +221,17 @@ export class ShimServer {
     }
 
     // Build BrokerAgentConnection and register with broker. We never
-    // transmit the literal token over the socket, so rawToken is empty
-    // here — production daemon will look up the literal by tokenHash
-    // via the SecretsResolver (108-05 wires that up).
+    // transmit the literal token over the socket — the shim hashed it
+    // client-side (Phase 104 SEC-07). Production daemon injects a
+    // tokenHash → rawToken resolver via `deps.resolveRawToken` so the
+    // broker can spawn the pool child with the literal env var. Tests
+    // (and offline flows) leave it undefined → rawToken="" stays the
+    // safe default and the test spawnFn doesn't actually read it.
+    const rawToken = this.resolveRawToken(tokenHash) ?? "";
     const brokerConn: BrokerAgentConnection = {
       agentName: agent,
       tokenHash,
-      rawToken: "",
+      rawToken,
       send: (msg) => {
         if (conn.closed) return;
         try {
