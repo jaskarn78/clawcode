@@ -156,29 +156,41 @@ export class OnePasswordMcpBroker {
       return;
     }
 
-    // Pitfall 2: agent sticky tokenHash drift detection.
+    // Pitfall 2 (Phase 999.26 fix) — agent tokenHash drift handling.
+    //
+    // When the daemon's env-override resolver returns a different
+    // OP_SERVICE_ACCOUNT_TOKEN for an agent across reconnects (legitimate
+    // 1Password rotation, scope change via config edit, secrets-resolver
+    // cache TTL flip), the agent's shim spawns with a new tokenHash. The
+    // ORIGINAL behavior REJECTED the new connection and required a daemon
+    // restart — but the SDK respawn loop reads the SAME env on every retry,
+    // so the agent reconnects with the SAME new hash, hits the same
+    // rejection, and loops every ~3s forever. Production observed this on
+    // 2026-05-01 with finmentum-scope agents (55 events for fin-acquisition
+    // in 20 min, saturating MCP capacity to the point of QUEUE_FULL on
+    // user messages).
+    //
+    // FIX: rebind. The daemon is the authority on the agent's token; if
+    // the resolver gives us a new one, the broker follows. Detach from old
+    // pool (decrement refCount, drain if 0), update sticky map, fall
+    // through to normal first-connect path on the new pool. Inflight
+    // requests on the old pool's child continue to completion (the OLD
+    // token is still valid for those — they were issued under it).
     const stickyHash = this.agentTokenSticky.get(conn.agentName);
     if (stickyHash !== undefined && stickyHash !== conn.tokenHash) {
-      this.poolLog(conn.tokenHash).error(
+      this.poolLog(conn.tokenHash).warn(
         {
           component: "mcp-broker",
           pool: `1password-mcp:${conn.tokenHash}`,
           agent: conn.agentName,
-          stickyHash,
+          oldHash: stickyHash,
           newHash: conn.tokenHash,
         },
-        "agent token sticky drift — rejecting connection",
+        "agent token rotated — rebinding to new pool",
       );
-      conn.send({
-        jsonrpc: "2.0",
-        error: {
-          code: BROKER_ERROR_CODE_DRAIN_TIMEOUT,
-          message: "Agent token mapping changed; daemon restart required",
-        },
-      });
-      return;
+      this.detachAgentFromOldPool(conn.agentName, stickyHash);
     }
-    if (stickyHash === undefined) {
+    if (stickyHash === undefined || stickyHash !== conn.tokenHash) {
       this.agentTokenSticky.set(conn.agentName, conn.tokenHash);
     }
 
@@ -532,6 +544,40 @@ export class OnePasswordMcpBroker {
     } else {
       // No agents — remove pool.
       this.pools.delete(pool.tokenHash);
+    }
+  }
+
+  /**
+   * Phase 999.26 — detach an agent from a previously-bound pool when the
+   * daemon's env-override resolver returns a new tokenHash for that agent.
+   *
+   * Mirrors the bookkeeping in `handleAgentDisconnect` (refCount decrement,
+   * drain trigger when refCount hits 0) but is keyed by `(agentName,
+   * oldTokenHash)` rather than the connection object — the new connection
+   * is on a DIFFERENT pool, and the old connection's onClose has already
+   * fired (or is about to fire as the shim respawn cycle completes).
+   *
+   * Inflight requests on the old pool's child are NOT canceled — they
+   * complete on the old token (still valid until 1P actually invalidates
+   * it). The old pool drains naturally once its refCount reaches 0.
+   *
+   * Safe to call when no old pool exists (no-op).
+   */
+  private detachAgentFromOldPool(
+    agentName: string,
+    oldTokenHash: string,
+  ): void {
+    const oldPool = this.pools.get(oldTokenHash);
+    if (oldPool === undefined) return;
+    oldPool.refCount = Math.max(0, oldPool.refCount - 1);
+    // Drop any queued entries owned by this agent on the old pool. The
+    // requests will be reissued on the new pool by the SDK when the agent
+    // retries (or silently dropped if the agent moved on).
+    oldPool.queue = oldPool.queue.filter(
+      (q) => q.agent.agentName !== agentName,
+    );
+    if (oldPool.refCount === 0) {
+      this.beginDrain(oldPool);
     }
   }
 

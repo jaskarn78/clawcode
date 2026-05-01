@@ -425,3 +425,192 @@ describe("Broker — module shape", () => {
     expect(BROKER_ERROR_CODE_DRAIN_TIMEOUT).toBeLessThanOrEqual(-32000);
   });
 });
+
+describe("Broker — token rotation rebind (Phase 999.26)", () => {
+  // Reproduces the 2026-05-01 production incident: fin-acquisition's
+  // OP_SERVICE_ACCOUNT_TOKEN env changed between shim respawns (legitimate
+  // 1Password rotation OR scope-resolver returning a different token), so
+  // the agent's tokenHash flipped from `aa18cf6f` → `dcfc03f8`. The pre-fix
+  // broker REJECTED every reconnect with "daemon restart required"; the
+  // SDK respawn loop hit it every ~3s for 20+ minutes, saturating MCP
+  // capacity and causing QUEUE_FULL on user messages. The fix: rebind to
+  // the new pool, drain the old one if refCount hits 0.
+  let cap: CapturedLog;
+  beforeEach(() => {
+    cap = captureLogger();
+  });
+
+  it("agent reconnect with rotated tokenHash rebinds to new pool (no rejection)", async () => {
+    const { spawnFn, spawned } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+
+    // Original connection on token A.
+    const a1 = makeAgentConn(
+      "fin-acquisition",
+      "aa18cf6f",
+      TEST_TOKEN_LITERAL,
+    );
+    await broker.acceptConnection(a1);
+    expect(spawned).toHaveLength(1);
+
+    // Token rotates — same agent reconnects with a NEW tokenHash.
+    const a2 = makeAgentConn(
+      "fin-acquisition",
+      "dcfc03f8",
+      TEST_TOKEN_LITERAL_B,
+    );
+    await broker.acceptConnection(a2);
+
+    // No JSON-RPC error response was sent to the new connection — it was
+    // accepted (the pre-fix behavior would have sent an error here).
+    expect(a2.received).toHaveLength(0);
+
+    // A new pool was spawned for the new tokenHash.
+    expect(spawned).toHaveLength(2);
+    const status = broker.getPoolStatus();
+    const byHash = Object.fromEntries(status.map((s) => [s.tokenHash, s]));
+    // New pool active with the rebound agent.
+    expect(byHash["dcfc03f8"]?.agentRefCount).toBe(1);
+    // Old pool dropped its sole reference — drain triggered, pool gone
+    // from the live status (or refCount==0). Either represents successful
+    // detachment; the multi-agent test below pins the partial-detach case.
+    const oldStatus = byHash["aa18cf6f"];
+    if (oldStatus !== undefined) {
+      expect(oldStatus.agentRefCount).toBe(0);
+    }
+  });
+
+  it("rebind logs warn (not error) with oldHash + newHash for audit trail", async () => {
+    const { spawnFn } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+
+    const a1 = makeAgentConn(
+      "fin-acquisition",
+      "aa18cf6f",
+      TEST_TOKEN_LITERAL,
+    );
+    await broker.acceptConnection(a1);
+
+    const a2 = makeAgentConn(
+      "fin-acquisition",
+      "dcfc03f8",
+      TEST_TOKEN_LITERAL_B,
+    );
+    await broker.acceptConnection(a2);
+
+    const rotateLogs = cap.lines().filter((l) =>
+      String(l.msg).includes("token rotated"),
+    );
+    expect(rotateLogs.length).toBeGreaterThanOrEqual(1);
+    const log = rotateLogs[0]!;
+    expect(log.level).toBe(40); // pino warn
+    expect(log.agent).toBe("fin-acquisition");
+    expect(log.oldHash).toBe("aa18cf6f");
+    expect(log.newHash).toBe("dcfc03f8");
+  });
+
+  it("rebind does NOT send a JSON-RPC error to the new connection (no respawn loop)", async () => {
+    const { spawnFn } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+
+    const a1 = makeAgentConn(
+      "fin-acquisition",
+      "aa18cf6f",
+      TEST_TOKEN_LITERAL,
+    );
+    await broker.acceptConnection(a1);
+
+    const a2 = makeAgentConn(
+      "fin-acquisition",
+      "dcfc03f8",
+      TEST_TOKEN_LITERAL_B,
+    );
+    await broker.acceptConnection(a2);
+
+    // The pre-fix behavior was: send a JSON-RPC error with code
+    // BROKER_ERROR_CODE_DRAIN_TIMEOUT and message "daemon restart required".
+    // That triggered the SDK respawn loop. Post-fix: zero error responses.
+    expect(a2.received).toHaveLength(0);
+    // Sanity: a normal dispatch on the new connection routes correctly.
+    await broker.handleAgentMessage(a2, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "password_read" },
+    });
+    // No error came back — the dispatch landed on the pool.
+    expect(a2.received).toHaveLength(0);
+  });
+
+  it("rebind preserves other agents on the old pool (refCount only decrements by 1)", async () => {
+    const { spawnFn, spawned } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+
+    // Two other agents share the old pool — they should not be disturbed.
+    const other1 = makeAgentConn(
+      "finmentum-content-creator",
+      "aa18cf6f",
+      TEST_TOKEN_LITERAL,
+    );
+    const other2 = makeAgentConn(
+      "fin-research",
+      "aa18cf6f",
+      TEST_TOKEN_LITERAL,
+    );
+    await broker.acceptConnection(other1);
+    await broker.acceptConnection(other2);
+
+    const a1 = makeAgentConn(
+      "fin-acquisition",
+      "aa18cf6f",
+      TEST_TOKEN_LITERAL,
+    );
+    await broker.acceptConnection(a1);
+    expect(spawned).toHaveLength(1); // single pool so far
+
+    // fin-acquisition rebinds to a new token.
+    const a2 = makeAgentConn(
+      "fin-acquisition",
+      "dcfc03f8",
+      TEST_TOKEN_LITERAL_B,
+    );
+    await broker.acceptConnection(a2);
+
+    const status = broker.getPoolStatus();
+    const byHash = Object.fromEntries(status.map((s) => [s.tokenHash, s]));
+    // Old pool retains the two non-rotated agents.
+    expect(byHash["aa18cf6f"]?.agentRefCount).toBe(2);
+    // New pool has just fin-acquisition.
+    expect(byHash["dcfc03f8"]?.agentRefCount).toBe(1);
+  });
+
+  it("rebind survives multiple rotations for the same agent (no permanent latch)", async () => {
+    const { spawnFn } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+
+    // Agent rotates A → B → C across three reconnects.
+    const a = makeAgentConn("fin-acquisition", "hashAAAA", TEST_TOKEN_LITERAL);
+    await broker.acceptConnection(a);
+
+    const b = makeAgentConn("fin-acquisition", "hashBBBB", TEST_TOKEN_LITERAL_B);
+    await broker.acceptConnection(b);
+
+    const c = makeAgentConn(
+      "fin-acquisition",
+      "hashCCCC",
+      "ops_TESTTOKEN_FAKE_THIRD",
+    );
+    await broker.acceptConnection(c);
+
+    // No JSON-RPC errors anywhere (no rejection loop).
+    expect(a.received).toHaveLength(0);
+    expect(b.received).toHaveLength(0);
+    expect(c.received).toHaveLength(0);
+
+    // Active pool is the latest hash.
+    const status = broker.getPoolStatus();
+    const active = status.filter((s) => s.agentRefCount > 0);
+    expect(active).toHaveLength(1);
+    expect(active[0]!.tokenHash).toBe("hashCCCC");
+  });
+});

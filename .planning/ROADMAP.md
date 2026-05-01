@@ -1396,7 +1396,7 @@ agents:
 
 **Out of scope (deferred):** Tiered parallel boot (group by wakeOrder, Promise.all within group). Re-creates Phase 104/108 boot-storm risk. Would need plan-checker, boot-storm load test, and per-tier max-concurrency cap. Revisit if cold-restart time becomes an operational pain point.
 
-### Phase 999.26: Phase 108 broker token-sticky-drift loop (BACKLOG — high priority, observed in production)
+### Phase 999.26: Phase 108 broker token-sticky-drift loop (SHIPPED 2026-05-01)
 
 **Goal:** Fix the broker reconnect storm where finmentum-scope agents repeatedly bounce between two token hashes, consuming MCP capacity and slowing turns to the point of QUEUE_FULL on user messages.
 
@@ -1433,3 +1433,21 @@ agents:
 **Plans:** 0 plans (TBD — likely 1-2 plans when promoted).
 
 **Promotion target:** active milestone — production-impact bug, blocks reliable Ramy/fin-acquisition workflow. Should ship before next high-traffic window. Diagnostic logs (item 1) could ship as a quick task to gather evidence before the architectural decision.
+
+**Status (2026-05-01):** Shipped (local repo, deploy held). Root cause identified directly from code reading + journal evidence — diagnostic-logs Stage 1 was skipped because the bug was clear:
+
+- `OnePasswordMcpBroker.acceptConnection` set `agentTokenSticky.set(agent, hash)` on first connect (`src/mcp/broker/broker.ts:181`).
+- On any subsequent connect with a different hash (legitimate 1Password rotation, scope-resolver returning a different token), the broker rejected with JSON-RPC error code `BROKER_ERROR_CODE_DRAIN_TIMEOUT` and message "Agent token mapping changed; daemon restart required".
+- The shim subprocess saw the error → exited with `SHIM_EXIT_TEMPFAIL` → SDK respawn loop → same env → same new hash → rejected again. Tight ~3s loop, observed 79 events in 20 min for finmentum-scope agents.
+- The "daemon restart required" message was overly conservative — the daemon's env-resolver is the trust boundary; if it gives the broker a new token, the broker should follow.
+
+**Fix (commit landing in this push):** rebind on token drift in `acceptConnection` — log warn (not error) with `oldHash`/`newHash` for audit, call new `detachAgentFromOldPool(agentName, oldTokenHash)` helper to decrement old pool refCount + drop queued entries + trigger drain when refCount hits 0, update sticky map to new hash, then fall through to the normal first-connect path on the new pool. Inflight requests on the old pool's child complete naturally (the OLD token is still valid until 1P actually invalidates it).
+
+**Tests:** 5 new regression tests in `src/mcp/broker/__tests__/broker.test.ts`:
+1. Agent reconnect with rotated tokenHash rebinds to new pool (no rejection).
+2. Rebind logs warn (not error) with oldHash + newHash for audit trail.
+3. Rebind does NOT send a JSON-RPC error to the new connection (no respawn loop).
+4. Rebind preserves other agents on the old pool (refCount only decrements by 1).
+5. Rebind survives multiple rotations for the same agent (no permanent latch).
+
+35/35 broker tests pass (16 broker.test + 19 integration/shim/pooled). **Local repo only — deploy held per Ramy-active rule + queued with rest of pending deploys.** First post-deploy check: `journalctl -u clawcode --since "5 min ago" | grep "agent token sticky drift"` should return zero hits and instead show `agent token rotated — rebinding to new pool` warns when rotations actually occur.
