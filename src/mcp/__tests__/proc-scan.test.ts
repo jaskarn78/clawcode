@@ -28,11 +28,17 @@ vi.mock("node:fs/promises", async () => {
   return {
     ...actual,
     readFile: (...args: Parameters<typeof actual.readFile>) => {
-      readFileSpy(...args);
+      // Spy records the call; if a test configured the spy with a
+      // mockImplementation/mockResolvedValue, use its return; otherwise fall
+      // through to the real readFile (Linux integration tests + security test
+      // depend on the real call path).
+      const spyResult = readFileSpy(...args);
+      if (spyResult !== undefined) return spyResult;
       return actual.readFile(...args);
     },
     readdir: (...args: Parameters<typeof actual.readdir>) => {
-      readdirSpy(...args);
+      const spyResult = readdirSpy(...args);
+      if (spyResult !== undefined) return spyResult;
       return actual.readdir(...args);
     },
   };
@@ -274,7 +280,6 @@ describe("Phase 999.15 extensions", () => {
 
   it("PS-1: isPidAlive(0) returns false without calling process.kill", async () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    // @ts-expect-error — isPidAlive ships in Plan 01
     const { isPidAlive } = await import("../proc-scan.js");
     expect(typeof isPidAlive).toBe("function");
     expect(isPidAlive(0)).toBe(false);
@@ -283,7 +288,6 @@ describe("Phase 999.15 extensions", () => {
 
   it("PS-2: isPidAlive(-1) returns false (guard against negative input)", async () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    // @ts-expect-error — isPidAlive ships in Plan 01
     const { isPidAlive } = await import("../proc-scan.js");
     expect(isPidAlive(-1)).toBe(false);
     expect(killSpy).not.toHaveBeenCalled();
@@ -292,7 +296,6 @@ describe("Phase 999.15 extensions", () => {
   it.skipIf(!isLinux)(
     "PS-3: isPidAlive(process.pid) returns true (own pid — Linux-only integration)",
     async () => {
-      // @ts-expect-error — isPidAlive ships in Plan 01
       const { isPidAlive } = await import("../proc-scan.js");
       expect(isPidAlive(process.pid)).toBe(true);
     },
@@ -301,7 +304,6 @@ describe("Phase 999.15 extensions", () => {
   it.skipIf(!isLinux)(
     "PS-4: isPidAlive(99999999) returns false (ESRCH path, Linux-only integration)",
     async () => {
-      // @ts-expect-error — isPidAlive ships in Plan 01
       const { isPidAlive } = await import("../proc-scan.js");
       expect(isPidAlive(99_999_999)).toBe(false);
     },
@@ -313,7 +315,6 @@ describe("Phase 999.15 extensions", () => {
       e.code = "EPERM";
       throw e;
     });
-    // @ts-expect-error — isPidAlive ships in Plan 01
     const { isPidAlive } = await import("../proc-scan.js");
     expect(isPidAlive(12_345)).toBe(true);
   });
@@ -358,7 +359,6 @@ describe("Phase 999.15 extensions", () => {
       return Promise.reject(err);
     });
 
-    // @ts-expect-error — Plan 01 adds opts argument
     const result = await discoverClaudeSubprocessPid(daemonPid, {
       minAge: 10,
       bootTimeUnix,

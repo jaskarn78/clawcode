@@ -245,6 +245,22 @@ export function readClockTicksPerSec(): number {
 }
 
 /**
+ * Phase 999.15 — optional filter knobs for discoverClaudeSubprocessPid.
+ *
+ * When `minAge` is set, candidates younger than that many seconds are filtered
+ * out (defense against the SDK respawn race observed in the 999.14 deploy:
+ * the dying first-PID was registered before the surviving second-PID settled).
+ * Caller must supply `bootTimeUnix` + `clockTicksPerSec` so the function does
+ * NOT re-read /proc/stat on every call (those values are cached at daemon
+ * boot via readBootTimeUnix() + readClockTicksPerSec()).
+ */
+export interface DiscoverClaudeOpts {
+  readonly minAge?: number; // seconds
+  readonly bootTimeUnix?: number;
+  readonly clockTicksPerSec?: number;
+}
+
+/**
  * Phase 999.14 MCP-01 — discover the agent's `claude` CLI subprocess PID.
  *
  * The Claude Agent SDK does not expose the spawned subprocess PID via its
@@ -259,9 +275,15 @@ export function readClockTicksPerSec(): number {
  * Implementation note: scans the full /proc list once. For a daemon
  * managing 14+ agents, that's a single ~50ms call per startAgent — cheap.
  * Non-Linux returns null (test-friendly).
+ *
+ * Phase 999.15 — accepts optional opts. `opts.minAge` requires
+ * `opts.bootTimeUnix` + `opts.clockTicksPerSec` to be supplied (caller-bug
+ * surface — throws on missing). Default behavior with no opts is byte-
+ * identical to 999.14 (regression-pinned by PS-7).
  */
 export async function discoverClaudeSubprocessPid(
   daemonPid: number,
+  opts?: DiscoverClaudeOpts,
 ): Promise<number | null> {
   let pids: readonly number[];
   try {
@@ -282,6 +304,22 @@ export async function discoverClaudeSubprocessPid(
     const argv0 = info.cmdline[0] ?? "";
     // Match "/path/to/claude" OR exact "claude" (npm-bin shim).
     if (!/(?:^|\/)claude$/.test(argv0)) continue;
+    if (opts?.minAge !== undefined) {
+      if (
+        opts.bootTimeUnix === undefined ||
+        opts.clockTicksPerSec === undefined
+      ) {
+        throw new Error(
+          "discoverClaudeSubprocessPid: opts.minAge requires opts.bootTimeUnix + opts.clockTicksPerSec",
+        );
+      }
+      const age = procAgeSeconds({
+        startTimeJiffies: info.startTimeJiffies,
+        bootTimeUnix: opts.bootTimeUnix,
+        clockTicksPerSec: opts.clockTicksPerSec,
+      });
+      if (age < opts.minAge) continue;
+    }
     if (!best || info.startTimeJiffies > best.startTimeJiffies) {
       best = { pid: info.pid, startTimeJiffies: info.startTimeJiffies };
     }
@@ -341,4 +379,32 @@ export async function readBootTimeUnix(): Promise<number> {
     throw new Error("malformed /proc/stat: no btime line");
   }
   return Number(match[1]);
+}
+
+/**
+ * Phase 999.15 — POSIX liveness check for a PID.
+ *
+ * Uses `process.kill(pid, 0)` — signal 0 only checks existence + permission,
+ * does not actually signal the target. Errno semantics:
+ *   - ESRCH (no such process)        → returns false
+ *   - EPERM (process exists, no perm) → returns true
+ *     (sufficient for our purposes — we only care that the proc IS running,
+ *      not whether we can kill it.)
+ *   - other errors                    → rethrown (surfacing unknowns)
+ *
+ * Validates: returns false IMMEDIATELY for pid <= 0 (no syscall). NaN /
+ * non-finite input also returns false. This guards against bad input rather
+ * than throwing — callers may pass stale tracker values.
+ */
+export function isPidAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw err;
+  }
 }
