@@ -908,15 +908,9 @@ Plans:
 - Per-tool concurrency limits inside the shared instance to keep one chatty agent from starving the others.
 - Per-agent audit/trace continuity when N agents share one MCP — how do tool-call traces stay attributable to the originating Turn?
 
-**Plans:** 4 plans
+**Plans:** 0 plans (TBD — promote with `/gsd:discuss-phase 999.9` to settle scope, then `/gsd:plan-phase 999.9`)
 
-Plans:
-- [x] 999.13-00-PLAN.md — Wave 0 RED tests for both pillars (DELEG + TZ)
-- [x] 999.13-01-PLAN.md — Pillar A GREEN: delegates schema + renderer + injection (DELEG-01..04)
-- [x] 999.13-02-PLAN.md — Pillar B GREEN: agent-visible TZ helper + 5 site conversions (TZ-01..05)
-- [ ] 999.13-03-PLAN.md — Wave 3 gate + operator-approved deploy + journalctl smoke
-
-**Promotion target:** active milestone, sequence after Phase 104 daemon-side secret cache + retry/backoff — that fix removes the boot-time pressure and lets this phase focus purely on the runtime pooling design.
+**Promotion target:** active milestone, sequence after Phase 104 daemon-side secret cache + retry/backoff (already shipped) — that fix removed boot-time pressure; this phase focuses purely on the runtime pooling design.
 
 ### Phase 999.12: Cross-agent IPC channel delivery + heartbeat inbox timeout (SHIPPED 2026-05-01)
 
