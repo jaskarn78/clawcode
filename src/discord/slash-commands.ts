@@ -1064,8 +1064,12 @@ export class SlashCommandHandler {
     }
 
     for (const guildId of guildIds) {
-      // Collect all commands across all agents for this guild
+      // Collect all commands across all agents for this guild.
+      // Phase 999.21 — `allCommands` is the TOP-LEVEL slash command set;
+      // entries with `subcommandOf` set route into `gsdSubcommands` instead
+      // and are emitted as a single composite Discord body item below.
       const allCommands: SlashCommandDef[] = [];
+      const gsdSubcommands: SlashCommandDef[] = [];
       const seenNames = new Set<string>();
 
       for (const agent of this.resolvedAgents) {
@@ -1122,7 +1126,32 @@ export class SlashCommandHandler {
         const merged = mergeAndDedupe(agentCommands, nativeDefs);
 
         for (const cmd of merged) {
-          if (!seenNames.has(cmd.name)) {
+          // Phase 999.21 — route entries with `subcommandOf` into the nested
+          // GSD composite (single /get-shit-done top-level command) instead
+          // of allCommands. Entries WITHOUT subcommandOf with a `gsd-` flat
+          // name (legacy yaml entries on Admin Clawdy) are gracefully
+          // remapped: the `gsd-` prefix is stripped and the entry is rewritten
+          // with `subcommandOf: "get-shit-done"` so operators can leave their
+          // yaml unchanged through the migration. Non-GSD entries take the
+          // normal top-level dedup path.
+          if (cmd.subcommandOf) {
+            const key = `${cmd.subcommandOf}:${cmd.name}`;
+            if (!seenNames.has(key)) {
+              seenNames.add(key);
+              gsdSubcommands.push(cmd);
+            }
+          } else if (cmd.name.startsWith("gsd-")) {
+            const subName = cmd.name.replace(/^gsd-/, "");
+            const key = `get-shit-done:${subName}`;
+            if (!seenNames.has(key)) {
+              seenNames.add(key);
+              gsdSubcommands.push({
+                ...cmd,
+                name: subName,
+                subcommandOf: "get-shit-done",
+              });
+            }
+          } else if (!seenNames.has(cmd.name)) {
             seenNames.add(cmd.name);
             allCommands.push(cmd);
           }
@@ -1131,17 +1160,34 @@ export class SlashCommandHandler {
 
       // Phase 100 follow-up — auto-inherit GSD_SLASH_COMMANDS for any guild
       // that has at least one agent with `gsd?.projectDir` configured. Single
-      // source of truth (slash-types.ts); no per-agent yaml duplication. The
-      // existing `seenNames` dedup keeps the legacy Phase 100 yaml entries on
-      // Admin Clawdy working unchanged — first-seen wins, so the agent's own
-      // copy lands first (during the resolveAgentCommands loop above) and
-      // GSD_SLASH_COMMANDS only fills in any names the agent didn't define.
+      // source of truth (slash-types.ts); no per-agent yaml duplication.
+      //
+      // Phase 999.21 — GSD entries are now NESTED subcommands under a single
+      // /get-shit-done top-level command. They are NOT pushed into
+      // `allCommands` (which is the top-level set); instead they're collected
+      // into `gsdSubcommands` and emitted as ONE composite Discord body item
+      // below (type=1 SUB_COMMAND children). The same skip-and-collect logic
+      // is mirrored in the per-agent merge loop above (the dedup at L1124
+      // routes entries with subcommandOf into gsdSubcommands instead of
+      // allCommands) so any agent yaml entry that opts into the nested form
+      // also lands in the composite. seenNames keys for nested entries are
+      // namespaced as `${subcommandOf}:${name}` so they cannot collide with
+      // top-level command names.
       const hasGsdEnabledAgent = this.resolvedAgents.some(
         (a) => a.gsd?.projectDir,
       );
       if (hasGsdEnabledAgent) {
         for (const cmd of GSD_SLASH_COMMANDS) {
-          if (!seenNames.has(cmd.name)) {
+          // Phase 999.21 — every GSD_SLASH_COMMANDS entry has subcommandOf
+          // set, so route into gsdSubcommands. Defensive fallback: if a
+          // future entry lacks subcommandOf, fall back to top-level dedup.
+          if (cmd.subcommandOf) {
+            const key = `${cmd.subcommandOf}:${cmd.name}`;
+            if (!seenNames.has(key)) {
+              seenNames.add(key);
+              gsdSubcommands.push(cmd);
+            }
+          } else if (!seenNames.has(cmd.name)) {
             seenNames.add(cmd.name);
             allCommands.push(cmd);
           }
@@ -1157,7 +1203,7 @@ export class SlashCommandHandler {
       }
 
       // Convert to Discord API format
-      const body = allCommands.map((cmd) => ({
+      const body: Array<Record<string, unknown>> = allCommands.map((cmd) => ({
         name: cmd.name,
         description: cmd.description,
         options: cmd.options.map((opt) => ({
@@ -1184,6 +1230,41 @@ export class SlashCommandHandler {
           ? { default_member_permissions: (cmd as { defaultMemberPermissions?: string }).defaultMemberPermissions }
           : {}),
       }));
+
+      // Phase 999.21 — emit ONE composite top-level Discord body item for the
+      // collected GSD subcommands. Each child gets type=1 (SUB_COMMAND).
+      // Discord caps subcommand counts at 25 per top-level command — 19 fits
+      // comfortably. `default_member_permissions` is intentionally NOT set on
+      // the composite (none of the 19 GSD entries currently use the field;
+      // Discord scopes the bitmask at top-level commands only — even if a
+      // subcommand wanted one, Discord would reject it). claudeCommand text
+      // values on each subcommand stay BYTE-IDENTICAL pre/post — pinned by
+      // GS1l + GSDN-03 regression tests.
+      if (gsdSubcommands.length > 0) {
+        body.push({
+          name: "get-shit-done",
+          description: "GSD framework — phase planning, execution, debugging",
+          options: gsdSubcommands.map((cmd) => ({
+            name: cmd.name,
+            description: cmd.description,
+            type: 1, // SUB_COMMAND
+            options: cmd.options.map((opt) => ({
+              name: opt.name,
+              type: opt.type,
+              description: opt.description,
+              required: opt.required,
+              ...(opt.choices && opt.choices.length > 0
+                ? {
+                    choices: opt.choices.map((c) => ({
+                      name: c.name,
+                      value: c.value,
+                    })),
+                  }
+                : {}),
+            })),
+          })),
+        });
+      }
 
       // Phase 87 CMD-07 — pre-flight cap assertion. Thrown BEFORE rest.put so
       // no partial registration lands; operators see the full over-cap error
@@ -1240,7 +1321,39 @@ export class SlashCommandHandler {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     const channelId = interaction.channelId;
-    const commandName = interaction.commandName;
+    // Phase 999.21 — /get-shit-done nested subcommand entry-point rewrite.
+    // Discord delivers nested commands as commandName === "get-shit-done"
+    // with the actual command in interaction.options.getSubcommand(). Remap
+    // to the legacy flat `gsd-<sub>` form so every downstream dispatch carve-
+    // out (handleSetGsdProjectCommand, handleGsdLongRunner, agent-routed
+    // branch, GSD_LONG_RUNNERS lookup, cmdDef resolution) keeps working
+    // unchanged. The remap is the SINGLE rewrite point for the
+    // consolidation; every existing string-comparison against `gsd-*` names
+    // continues to match without modification downstream.
+    let commandName = interaction.commandName;
+    if (commandName === "get-shit-done") {
+      let sub: string | null = null;
+      try {
+        sub = interaction.options.getSubcommand(false);
+      } catch {
+        sub = null;
+      }
+      if (!sub) {
+        // Defensive: Discord should guarantee a subcommand for top-levels
+        // with subcommands, but log + reply ephemerally on the off-chance
+        // a malformed interaction reaches us.
+        try {
+          await interaction.reply({
+            content: "Missing subcommand for /get-shit-done.",
+            ephemeral: true,
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      commandName = `gsd-${sub}`;
+    }
 
     // Phase 85 Plan 03 TOOL-06 / UI-01 — dedicated inline handler for
     // /clawcode-tools. Routes through the same IPC as a control command but
@@ -1463,12 +1576,31 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Find the command definition for this agent
+    // Find the command definition for this agent.
+    // Phase 999.21 — when the rewrite-at-entry remap fired (the operator
+    // invoked /get-shit-done <sub>), `commandName` is now `gsd-<sub>` for
+    // every downstream string match. cmdDef lookup must accept BOTH forms:
+    //   1. The legacy flat `gsd-<sub>` name (Admin Clawdy yaml entries
+    //      shipped pre-999.21 still carry these names directly).
+    //   2. The stripped `<sub>` name (GSD_SLASH_COMMANDS entries post-999.21
+    //      use the bare suffix).
+    // The dual-lookup keeps both back-compat (legacy yaml on Admin Clawdy)
+    // and the auto-inheritance path (GSD-enabled agent without a yaml block,
+    // e.g. fin-acquisition) working unchanged. The strip is gated on the
+    // rewrite-at-entry remap firing so non-GSD agent-routed commands still
+    // match by their full name without surprise prefix stripping.
     const agentConfig = this.resolvedAgents.find((a) => a.name === agentName);
     const agentCommands = agentConfig
       ? resolveAgentCommands(agentConfig.slashCommands)
       : DEFAULT_SLASH_COMMANDS;
-    const commandDef = agentCommands.find((c) => c.name === commandName);
+    const wasGsdNested = interaction.commandName === "get-shit-done";
+    const subName = wasGsdNested ? commandName.replace(/^gsd-/, "") : null;
+    const commandDef =
+      agentCommands.find((c) => c.name === commandName) ??
+      (subName ? agentCommands.find((c) => c.name === subName) : undefined) ??
+      (subName
+        ? GSD_SLASH_COMMANDS.find((c) => c.name === subName)
+        : undefined);
 
     if (!commandDef) {
       try {
@@ -2129,9 +2261,19 @@ export class SlashCommandHandler {
     // back to GSD_SLASH_COMMANDS so any GSD-enabled agent without a yaml
     // block (e.g. fin-acquisition) finds its cmdDef via the auto-inheritance
     // path. Mirrors the seenNames dedup at register time — first match wins.
+    //
+    // Phase 999.21 — GSD_SLASH_COMMANDS entries now use the stripped suffix
+    // for `name` (e.g. "autonomous"); the rewrite-at-entry remap leaves
+    // `commandName` as the legacy `gsd-<sub>` form for downstream match
+    // back-compat, so lookups against GSD_SLASH_COMMANDS must strip the
+    // `gsd-` prefix. The agent's own slashCommands are checked under both
+    // forms (legacy yaml entries still use the `gsd-*` flat name; future
+    // yaml entries may use the stripped form with subcommandOf set).
+    const subName = commandName.replace(/^gsd-/, "");
     const cmdDef =
       agentConfig.slashCommands.find((c) => c.name === commandName) ??
-      GSD_SLASH_COMMANDS.find((c) => c.name === commandName);
+      agentConfig.slashCommands.find((c) => c.name === subName) ??
+      GSD_SLASH_COMMANDS.find((c) => c.name === subName);
     if (!cmdDef) {
       try {
         await interaction.editReply(`Unknown command: /${commandName}`);
