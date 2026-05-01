@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 108-03-PLAN.md
-last_updated: "2026-05-01T12:55:36.516Z"
+stopped_at: Completed 108-02-PLAN.md (broker + shim-server)
+last_updated: "2026-05-01T13:00:01.376Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 35
   completed_phases: 13
   total_plans: 77
-  completed_plans: 69
+  completed_plans: 70
 ---
 
 # Project State
@@ -360,6 +360,9 @@ Recent decisions affecting current work:
 - [Phase 107]: Daemon per-agent failure pushes sentinel { totalAfter: -1 } into results instead of aborting — operator sees both successes and failures in one CLI invocation.
 - [Phase 108]: Shim handshake wire format: { agent, tokenHash } only — token literal hashed in-shim and never sent on socket (SEC-07)
 - [Phase 108]: Shim exit codes: 0 (clean stdin end / SIGTERM), 64 (missing CLAWCODE_AGENT or OP_SERVICE_ACCOUNT_TOKEN), 75 (broker socket close → SDK reconnect)
+- [Phase 108]: BROKER_ERROR_CODE_DRAIN_TIMEOUT pinned to -32002; pool-crash code -32001 reused via documented constant (no cross-import) — both in JSON-RPC server-defined range
+- [Phase 108]: TokenHash validation pattern is /^[a-zA-Z0-9_-]{1,64}$/ (not strict hex) so test fixtures + production hashes both pass; SEC-07 invariants preserved (rejects empty / oversize / control bytes)
+- [Phase 108]: BrokerAgentConnection.rawToken empty in shim path — literal token NEVER traverses unix socket; 108-05 wires daemon-side lookup by hash
 
 ### v2.1 closing decisions (for reference)
 
@@ -531,11 +534,12 @@ Recent decisions affecting current work:
 | Phase 107 P02 | 45m | 3 tasks | 7 files |
 | Phase 108 P00 | 25min | 3 tasks | 8 files |
 | Phase 108 P03 | 9min | 2 tasks | 3 files |
+| Phase 108 P02 | 13m | 2 tasks | 2 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 108-03-PLAN.md
+Stopped at: Completed 108-02-PLAN.md (broker + shim-server)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
