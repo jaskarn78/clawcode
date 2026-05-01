@@ -40,6 +40,11 @@ import {
   readBootTimeUnix,
   readClockTicksPerSec,
 } from "../mcp/proc-scan.js";
+// Phase 999.15 — tracker reconciliation engine. Wired into the existing
+// onTickAfter callback (alongside sweepStaleBindings) AND into the
+// McpProcessTracker construction via the late-bound reconcileAgent closure
+// for TRACK-06 reconcile-before-kill.
+import { reconcileAllAgents, reconcileAgent } from "../mcp/reconciler.js";
 import { cleanupThreadWithClassifier } from "../discord/thread-cleanup.js";
 import {
   parseIdleDuration,
@@ -1588,24 +1593,47 @@ export async function startDaemon(
   const mcpLog = log.child({ subsystem: "mcp-lifecycle" });
   let mcpTracker: McpProcessTracker | null = null;
   let reaperInterval: NodeJS.Timeout | null = null;
+  // Phase 999.15 — hoisted out of the inner try so SessionManager construction
+  // (line ~1816) and the onTickAfter reconcile closure (line ~4070+) can both
+  // pass them to discoverClaudeSubprocessPid({ minAge, bootTimeUnix,
+  // clockTicksPerSec }) without re-reading /proc/stat per call.
+  let mcpBootTimeUnix: number | undefined;
+  let mcpClockTicksPerSec: number | undefined;
   if (Object.keys(mcpServersConfig).length > 0) {
     try {
-      const bootTimeUnix = await readBootTimeUnix();
+      mcpBootTimeUnix = await readBootTimeUnix();
+      mcpClockTicksPerSec = readClockTicksPerSec();
       const mcpPatterns = buildMcpCommandRegexes(mcpServersConfig);
       const mcpUid = process.getuid?.() ?? -1;
+      // Phase 999.15 TRACK-06 — late-bound reconcileAgent closure for
+      // tracker.killAgentGroup. Pattern from Phase 100 follow-up
+      // triggerDeliveryFn — closure captures the LIVE `mcpTracker` ref so
+      // the reconciler always sees the post-construction singleton (avoids
+      // bootstrap circular dep where reconciler imports the tracker type).
+      const reconcileAgentClosure = async (name: string): Promise<void> => {
+        if (!mcpTracker) return;
+        await reconcileAgent(name, {
+          tracker: mcpTracker,
+          daemonPid: process.pid,
+          log: mcpLog,
+          bootTimeUnix: mcpBootTimeUnix,
+          clockTicksPerSec: mcpClockTicksPerSec,
+        });
+      };
       mcpTracker = new McpProcessTracker({
         uid: mcpUid,
         patterns: mcpPatterns,
         log: mcpLog,
-        clockTicksPerSec: readClockTicksPerSec(),
-        bootTimeUnix,
+        clockTicksPerSec: mcpClockTicksPerSec,
+        bootTimeUnix: mcpBootTimeUnix,
+        reconcileAgent: reconcileAgentClosure,
       });
       try {
         await reapOrphans({
           uid: mcpUid,
           patterns: mcpPatterns,
-          clockTicksPerSec: readClockTicksPerSec(),
-          bootTimeUnix,
+          clockTicksPerSec: mcpClockTicksPerSec,
+          bootTimeUnix: mcpBootTimeUnix,
           reason: "boot-scan",
           log: mcpLog,
         });
@@ -1815,6 +1843,13 @@ export async function startDaemon(
     // Phase 999.14 MCP-01 — daemon-wide tracker for per-agent MCP child
     // PID discovery + cleanup. Null when no MCP servers configured (no-op).
     mcpTracker,
+    // Phase 999.15 TRACK-02 — proc-age math constants piped through so the
+    // polled-discovery loop can pass minAge=5 + bootTimeUnix +
+    // clockTicksPerSec to discoverClaudeSubprocessPid without per-call
+    // /proc/stat reads. Undefined when mcpTracker is null (non-Linux / no
+    // MCP servers configured).
+    mcpBootTimeUnix,
+    mcpClockTicksPerSec,
   });
 
   // 6-bis. Create TurnDispatcher singleton (Phase 57 Plan 03).
@@ -4060,25 +4095,46 @@ export async function startDaemon(
         "invalid threadIdleArchiveAfter; sweep disabled",
       );
     }
-    const onTickAfter =
-      idleMs > 0 && subagentThreadSpawner != null
-        ? async () => {
-            try {
-              await sweepStaleBindings({
-                spawner: subagentThreadSpawner,
-                registryPath: THREAD_REGISTRY_PATH,
-                now: Date.now(),
-                idleMs,
-                log: mcpLog,
-              });
-            } catch (err) {
-              mcpLog.error(
-                { err: String(err) },
-                "stale-binding sweep failed (non-fatal)",
-              );
-            }
-          }
-        : undefined;
+    // Phase 999.15 TRACK-01 — reconciler ALWAYS runs (independent of the
+    // 999.14 stale-binding sweep). Both calls are wrapped in their own
+    // try/catch so a failure in one does NOT block the other or propagate
+    // to startOrphanReaper (which would crash the 60s tick loop).
+    const sweepEnabled = idleMs > 0 && subagentThreadSpawner != null;
+    const onTickAfter = async () => {
+      if (sweepEnabled) {
+        try {
+          await sweepStaleBindings({
+            spawner: subagentThreadSpawner,
+            registryPath: THREAD_REGISTRY_PATH,
+            now: Date.now(),
+            idleMs,
+            log: mcpLog,
+          });
+        } catch (err) {
+          mcpLog.error(
+            { err: String(err) },
+            "stale-binding sweep failed (non-fatal)",
+          );
+        }
+      }
+      // Phase 999.15 TRACK-01 — tracker reconciliation (independent of sweep).
+      if (mcpTracker) {
+        try {
+          await reconcileAllAgents({
+            tracker: mcpTracker,
+            daemonPid: process.pid,
+            log: mcpLog,
+            bootTimeUnix: mcpBootTimeUnix,
+            clockTicksPerSec: mcpClockTicksPerSec,
+          });
+        } catch (err) {
+          mcpLog.error(
+            { err: String(err) },
+            "reconcileAllAgents failed (non-fatal)",
+          );
+        }
+      }
+    };
     const mcpUid = process.getuid?.() ?? -1;
     const bootTimeUnixForReaper = await readBootTimeUnix();
     const mcpPatternsForReaper = buildMcpCommandRegexes(mcpServersConfig);
@@ -4092,8 +4148,13 @@ export async function startDaemon(
       onTickAfter,
     });
     mcpLog.info(
-      { intervalMs: 60_000, sweepEnabled: onTickAfter != null, idleMs },
-      "mcp orphan reaper + stale-binding sweep started",
+      {
+        intervalMs: 60_000,
+        sweepEnabled,
+        reconcilerEnabled: true, // Phase 999.15 TRACK-01 — always-on
+        idleMs,
+      },
+      "mcp orphan reaper + stale-binding sweep + reconciler started",
     );
   }
 
