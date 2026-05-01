@@ -1154,3 +1154,72 @@ Plans:
 ### Phase 999.16: Dream pass JSON output enforcement (REPLACED by Phase 107)
 
 ### Phase 999.17: vec_memories orphan cleanup on memory delete (REPLACED by Phase 107)
+
+### Phase 999.18: Subagent relay reliability — root-cause fix (BACKLOG)
+
+**Goal:** Diagnose and fix the silent-relay-drop bug where subagent completion summaries don't always land in the parent's main channel. `relayCompletionToParent` (src/discord/subagent-thread-spawner.ts:201) has 5 silent-return points; quick task 260501-i3r added structured `subagent relay skipped` logs at each so production logs now reveal which branch fires when a relay drops. Once 1-2 weeks of operator data accumulates, identify the actual cause (most likely candidate: streaming-edit placeholders not surfacing in `messages.fetch` cache → `no-bot-messages` reason) and ship a targeted fix.
+
+**Trigger:** 2026-05-01 — operator report ("summary doesn't always land back to main channel" during research subagent runs). Quick task 260501-i3r (commit 4a38e36) gave the diagnostic substrate; root-cause fix waits on real failure data.
+
+**Depends on:** quick task 260501-i3r diagnostic logs + ~1-2 weeks of production observation to identify the dominant failure mode.
+
+**Requirements:** TBD — likely 4-6.
+
+**Plans:** 0 plans (TBD — likely 2 plans: confirm root cause from logs + apply targeted fix with regression coverage).
+
+**Promotion target:** active milestone, after enough relay-skipped log data lands to narrow the cause.
+
+### Phase 999.19: Subagent cleanup, memory consolidation, and delegate-channel routing (BACKLOG)
+
+**Goal:** Three coordinated changes to make `delegateTo` (Phase 999.3) usable as a real research-fanout primitive instead of a fleet-leak generator:
+
+1. **Spawn delegated threads on the *delegate's* channel, not the parent's.** Today the spawner uses `parentConfig.channels[0]` (subagent-thread-spawner.ts:350) so every `delegateTo: research` thread lands on `#admin-clawdy`. Switch to `sourceConfig.channels[0]` when delegating so threads naturally appear under `#research` / `#fin-research`. Discord's native thread panel becomes the discovery surface — no custom log-thread needed. The cross-channel completion relay still posts to the parent's main channel for operator visibility (`relayCompletionToParent` already reads parent's channel correctly — keeps working unchanged).
+
+2. **Default `autoArchive: true` for the delegate path.** Currently `autoArchive` defaults `false`, leaking `Admin Clawdy-via-research-*` sessions in `/clawcode-fleet` indefinitely. Flip the default when `delegateTo` is set so the subagent session stops + archives + prunes from the registry the moment its turn finishes. Non-delegate `-sub-` spawns keep current behavior.
+
+3. **Memory consolidation into the *delegate's* SQLite store.** Before `autoArchive` stops the session, write a summary record (task + key findings + thread URL) directly into the dedicated agent's per-agent memory DB. The delegate's session may not be running; consolidation must use a direct DB write (not a message dispatch) and call the delegate's embedder for the vector. Then the dedicated `research` agent surfaces all past delegated work via its normal hybrid-RRF retrieval (Phase 90 MEM-03) on subsequent turns — institutional memory without keeping the agent live.
+
+Plus: fix the **`-via-` naming pattern leak across the codebase**. Phase 999.3 introduced `${parent}-via-${delegate}-${shortId}` session names but `THREAD_SUFFIX_RE` (restart-greeting.ts:199), prune Rule 2 (registry.ts:413), and 5 hardcoded `-sub-/-thread-` filters (openai/server.ts:376, openai/endpoint-bootstrap.ts:285, daemon.ts:2736/4142/5932, cli/commands/threads.ts:103, capability-manifest.ts:184) all only match `-sub-`. Treat `-via-` like `-sub-` everywhere.
+
+**Trigger:** 2026-05-01 — operator observed `Admin Clawdy-via-research-*` ephemeral sessions accumulating in `/clawcode-fleet` listing, expecting delegated work to consolidate back to the dedicated research agent's memory and clean up after itself.
+
+**Requirements:** TBD — likely 8-10.
+
+**Plans:** 0 plans (TBD — 3 plans: filter+routing fix wave, consolidation pipeline, integration tests).
+
+**Promotion target:** active milestone, after Phase 108. Should land before Phase 999.20 (which depends on this spawn API surface).
+
+### Phase 999.20: `/research` and `/research-search` Discord slash commands (BACKLOG)
+
+**Goal:** Two new Discord slash commands that make research workflows first-class, building on Phase 999.19's spawn + consolidation foundation:
+
+1. **`/research <topic> [agent:research|fin-research]`** — calls the delegated-spawn path with `delegateTo` set to the chosen research agent. Posts the new thread URL ephemerally to the operator. Multiple invocations spawn parallel threads on the chosen research channel; each consolidates into the dedicated agent's memory on completion (per 999.19).
+2. **`/research-search <query> [agent:research|fin-research]`** — IPC into the chosen agent's memory store, runs the existing hybrid-RRF retrieval (Phase 90 MEM-03 substrate already exists), returns top 5 hits with their original deep-dive thread links. Lets the operator surface past research semantically without scrolling Discord history.
+
+Discoverability flow: spawn deep dives via `/research`, find past work via `/research-search` or the `#research` channel's native thread panel.
+
+**Trigger:** 2026-05-01 — operator wants easy access to all of their delegated research without hunting through subthreads.
+
+**Depends on:** Phase 999.19 — delegate-channel routing + consolidation pipeline must be in place first; otherwise these commands would re-create the leak/scatter problems 999.19 fixes.
+
+**Requirements:** TBD — likely 5-7.
+
+**Plans:** 0 plans (TBD — 2 plans: spawn command + search command + integration tests).
+
+**Promotion target:** active milestone, after Phase 999.19.
+
+### Phase 999.21: `/get-shit-done` Discord slash command consolidation (BACKLOG)
+
+**Goal:** Consolidate the 20 existing `gsd-*` Discord slash commands (slash-types.ts:284-432, the curated subset of 57 GSD skills) under a single `/get-shit-done` top-level command with all 20 nested as subcommands. Pure UX polish — internal `claudeCommand: "/gsd:autonomous {args}"` mappings stay unchanged, only the Discord-facing surface flips from 20 top-level entries to 1 expandable group.
+
+20 fits cleanly under one Discord top-level command (cap is 25 subcommands per command, no subcommand groups needed). User confirmed all 20 nested — no top-level escapes for "frequently typed" commands.
+
+Reduces slash-menu clutter from 20 entries to 1, improves discoverability via the Discord-native subcommand UI ("/get-shit-done " auto-suggests all 20 with their descriptions).
+
+**Trigger:** 2026-05-01 — operator request to clean up the slash command surface.
+
+**Requirements:** TBD — likely 3-4 (rewrite slash-types.ts entries, update handler dispatch to support subcommand routing, update slash-commands tests, deploy gate).
+
+**Plans:** 0 plans (TBD — 1 plan, mostly mechanical).
+
+**Promotion target:** active milestone, independent of 999.18-20 — could land any time as low-risk UX polish.
