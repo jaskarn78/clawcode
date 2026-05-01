@@ -2,20 +2,18 @@
 phase: 108-shared-1password-mcp-pooling
 plan: "05"
 type: execute
-status: partial-deployed-rolled-back
+status: live
 date: 2026-05-01
-deployed-by: operator (explicit "Deploy it" 06:34 PT) — rolled back to dormant state at 06:42 PT after warm-path failures
-deploy-pids: 432427 (initial), 436507 (hot-fix attempt), 439879 (rollback)
-requirements-completed: [POOL-01, POOL-02, POOL-03, POOL-04, BROKER-01, BROKER-02, SHIM-01, SHIM-02, HEARTBEAT-01]
-requirements-shipped-but-dormant: [WIRE-01]
-requirements-deferred: [LIVE-INTEGRATION]
+deployed-by: operator (explicit "Deploy it" 06:34 PT) → 6 deploy attempts → live at 07:14 PT
+deploy-pids: 432427, 436507, 439879, 456538, 467200, 481758, final
+requirements-completed: [POOL-01, POOL-02, POOL-03, POOL-04, BROKER-01, BROKER-02, SHIM-01, SHIM-02, HEARTBEAT-01, WIRE-01, LIVE-INTEGRATION]
 ---
 
 # Phase 108-05 — Deploy gate + smoke
 
-**Outcome:** partial-deployed-rolled-back
+**Outcome:** LIVE 💠
 
-Phase 108 broker code (108-01..04) shipped to clawdy successfully. Loader.ts auto-injection wiring (108-04-01 commit `421d8c1`) was reverted in commit `f2eb64e` (Admin Clawdy auto-healed during outage). System is healthy at pre-108 1Password path; broker code dormant in dist/.
+Phase 108 broker pooling now active in production after 6 deploy iterations + 5 hot-fixes from live debugging. Pool fan-out proven (`agentRefCount=3`), MCP child count dropped ~60% (15 → 6 procs).
 
 ## Pre-deploy gauntlet
 
@@ -78,9 +76,50 @@ Phase 108 broker code (108-01..04) shipped to clawdy successfully. Loader.ts aut
 | `src/mcp/reconciler.ts` `__broker:` skip | ✅ | ✅ (no-op until pools spawn) |
 | `src/config/loader.ts` auto-injection | ❌ (reverted) | ❌ (back to npx per-agent) |
 
-## Deferred items (LIVE-INTEGRATION follow-up phase)
+## Live debug + hot-fix sequence (operator-approved continuation)
 
-A future phase needs to:
+Operator approved diagnostic continuation. gsd-debugger spawned, identified root cause (HIGH confidence), applied 5 sequential hot-fixes:
+
+| Iteration | Bug | Fix |
+|-----------|-----|-----|
+| v3 | Hash slice mismatch (daemon=16, shim=8) — daemon's `tokenHashToRawToken` map never resolved shim handshakes | `daemon.ts:1717` slice 16→8 + fail-loud guard on empty `rawToken` |
+| v3 | Socket path mismatch — shim default `/var/run/clawcode/mcp-broker.sock` vs daemon `~/.clawcode/manager/mcp-broker.sock` | `mcp-broker-shim.ts:59` default via `homedir()` |
+| v4 | Per-agent literal token not harvested — only `op://` URI overrides handled, but production yaml uses literal `ops_...` tokens | `daemon.ts:1890` handles both literal + op:// |
+| v5 | Agent name regex `/^[a-zA-Z0-9_\-]{1,64}$/` rejected "Admin Clawdy" (space) | `shim-server.ts:36` allow space |
+| v6 | Health check 5s timeout < cold pool spawn time (npx + tarball extract) | `health.ts:23` 5000→30000ms |
+
+After v6 deploy: 3 agents ready, 0 warm-path failures, refCount peaked at 3.
+
+## Production proof points (post-v6, 2026-05-01 07:14 PT)
+
+```
+agent attached to pool — agentRefCount=1
+agent attached to pool — agentRefCount=2
+agent attached to pool — agentRefCount=3
+```
+
+Three agents sharing ONE pool child via the broker. Fan-out working as designed.
+
+```
+ps -ef | grep -E '@takescake|1password-mcp' | wc -l  →  6
+```
+
+vs ~15 pre-108 (5 agents × 3-proc npm chain). Net: **9 fewer MCP child processes against the same 1Password service-account quota**.
+
+## Smoke audit
+
+| Check | Result |
+|-------|--------|
+| `pgrep -ac 1password-mcp` (or ps grep equivalent) | 6 (down from ~15) ✅ |
+| Pool fan-out (`agentRefCount > 1`) | YES (peak 3) ✅ |
+| Broker boot logs | "mcp-broker listening" + "uniqueTokens=2" ✅ |
+| Token redaction (`grep ops_eyJzaWdu`) | 0 leaks ✅ |
+| `systemctl is-active clawcode` | active ✅ |
+| Discord routing operational | YES (per #admin-clawdy live test) ✅ |
+
+## Known follow-ups (not blocking LIVE)
+
+A future small phase can:
 
 1. **Reproduce the shim → SDK handshake race in a controlled test.** Currently the unit tests use FakeBrokerSocketPair which doesn't exercise the SDK's actual stdio + JSON-RPC initialize timing. Build an integration test that spawns the real shim against the real broker and runs through `initialize` end-to-end — measure timings, identify the race window.
 
