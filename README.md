@@ -245,6 +245,7 @@ scripts/
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full version-by-version + phase-by-phase changelog.
 
 Recent milestones:
+- **v2.7 Operator Self-Serve + Production Hardening** (2026-05-01) — GSD-via-Discord, /clawcode-status rich telemetry + Usage panel, daemon-side op:// secret cache, trigger-policy default-allow + coalescer storm fix, MCP lifecycle hardening, 1password-mcp broker pooling
 - **v2.6 Tool Reliability & Memory Dreaming** (2026-04-25) — capability probes, dynamic tool advertising, idle-time memory dreaming
 - **v2.5 Cutover Parity Verification** (2026-04-25) — verifier infrastructure, status/marketplace/manifest UX fixes
 - **v2.4 OpenClaw ↔ ClawCode Continuous Sync** (2026-04-24) — pull-model rsync sync + cutover semantics

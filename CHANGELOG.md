@@ -14,10 +14,24 @@ summary. Newest first.
 
 ## [Unreleased]
 
-Phases shipped (or in flight) after the v2.6 milestone close on 2026-04-25.
-These will be archived into the next milestone (v2.7) when that cycle is
-opened. Backlog items (`999.x`) are included only when shipped; pure backlog
-entries live in `.planning/ROADMAP.md` under the Backlog section.
+_No changes pending. Open the next phase to begin tracking._
+
+---
+
+## [v2.7] — Operator Self-Serve + Production Hardening (2026-04-26 → 2026-05-01)
+
+Two-pillar milestone: **Pillar A — Operator Self-Serve** (Phases 100-103)
+delivered GSD-via-Discord on Admin Clawdy, the document-ingestion pipeline,
+meeting copilot deploy + ClawCode integration, and `/clawcode-status` rich
+telemetry + `/clawcode-usage` panel — operator gains daily-driver Discord-
+side ergonomics with no more shell-only workflows for routine actions.
+**Pillar B — Production Hardening** (Phases 104-108 + bundled `999.x`
+ships) closed multiple infrastructure incidents with structural fixes:
+daemon-side `op://` secret cache + retry/backoff, trigger-policy
+default-allow + QUEUE_FULL coalescer storm fix, MCP lifecycle/PID tracking,
+agent-context hygiene, memory pipeline integrity (dream JSON +
+`vec_memories`), and shared 1password-mcp via daemon-managed broker pooling
+(~60% reduction in MCP child count).
 
 ### Phase 108 — Shared 1password-mcp via daemon-managed broker (LIVE 2026-05-01)
 
