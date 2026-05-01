@@ -432,6 +432,7 @@ Recent decisions affecting current work:
 | 260419-p51 | Multi-agent bearer keys (scope=all) + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs | 2026-04-19 | edecd6e | [260419-p51-multi-agent-bearer-keys-fork-escalation-](./quick/260419-p51-multi-agent-bearer-keys-fork-escalation-/) |
 | 260419-q2z | Registry atomic write + recovery + `clawcode registry repair` CLI + always-summarize short sessions + graceful shutdown drain (FIX A+B+C) | 2026-04-19 | fa34ef3 | [260419-q2z-registry-atomic-write-graceful-shutdown-](./quick/260419-q2z-registry-atomic-write-graceful-shutdown-/) |
 | 260429-ouw | Webhook table-wrap regression — wrap markdown tables inside webhookManager.send (covers 3 missed Phase 100-fu call sites) | 2026-04-29 | 696bc39 | [260429-ouw-webhook-path-table-wrap-regression-add-w](./quick/260429-ouw-webhook-path-table-wrap-regression-add-w/) |
+| 260501-i3r | Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points | 2026-05-01 | 61292ed | [260501-i3r-add-structured-relay-skipped-diagnostic-](./quick/260501-i3r-add-structured-relay-skipped-diagnostic-/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
@@ -538,7 +539,7 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-01
+Last activity: 2026-05-01 - Completed quick task 260501-i3r: Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points
 Stopped at: Completed 108-02-PLAN.md (broker + shim-server)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
