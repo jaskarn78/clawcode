@@ -747,7 +747,8 @@ export class SessionManager {
             return;
           }
           const mcpPids = await discoverAgentMcpPids(claudePid, patterns);
-          await tracker.register(name, mcpPids);
+          // Phase 999.15 TRACK-03 — 3-arg register stores claudePid alongside MCPs.
+          await tracker.register(name, claudePid, mcpPids);
           this.log.info(
             {
               agent: name,

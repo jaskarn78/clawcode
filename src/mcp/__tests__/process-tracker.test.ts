@@ -139,20 +139,21 @@ describe("McpProcessTracker", () => {
     });
 
     const t = makeTracker();
-    await t.register("agent-a", [100, 101]);
-    await t.register("agent-b", [200]);
+    // Phase 999.15 — 3-arg register(name, claudePid, mcpPids)
+    await t.register("agent-a", 999, [100, 101]);
+    await t.register("agent-b", 999, [200]);
 
-    expect(t.list().sort()).toEqual([100, 101, 200]);
-    expect(t.listForAgent("agent-a").sort()).toEqual([100, 101]);
+    expect([...t.list()].sort()).toEqual([100, 101, 200]);
+    expect([...t.listForAgent("agent-a")].sort()).toEqual([100, 101]);
     expect(t.listForAgent("unknown")).toEqual([]);
 
     // Mutating returned array does not affect tracker (it's a fresh copy)
     const listed = [...t.listForAgent("agent-a")];
     listed.push(9999);
-    expect(t.listForAgent("agent-a").sort()).toEqual([100, 101]);
+    expect([...t.listForAgent("agent-a")].sort()).toEqual([100, 101]);
 
     const evicted = t.unregister("agent-a");
-    expect(evicted.sort()).toEqual([100, 101]);
+    expect([...evicted].sort()).toEqual([100, 101]);
     expect(t.list()).toEqual([200]);
   });
 
@@ -170,7 +171,7 @@ describe("McpProcessTracker", () => {
     });
 
     const t = makeTracker();
-    await t.register("agent-x", [500]);
+    await t.register("agent-x", 999, [500]);
 
     // Drive killAgentGroup with a short grace; readProcInfo always returns
     // alive, so SIGKILL must fire after the grace period.
@@ -194,8 +195,8 @@ describe("McpProcessTracker", () => {
     });
 
     const t = makeTracker();
-    await t.register("agent-a", [100, 200]);
-    await t.register("agent-b", [200, 300]); // 200 overlaps
+    await t.register("agent-a", 999, [100, 200]);
+    await t.register("agent-b", 999, [200, 300]); // 200 overlaps
 
     // After register, immediately make readProcInfo return null so SIGKILL is skipped
     readProcInfoMock.mockResolvedValue(null);
@@ -230,7 +231,7 @@ describe("McpProcessTracker", () => {
       clockTicksPerSec: 100,
       bootTimeUnix: 1_700_000_000,
     });
-    await t.register("agent-y", [700]);
+    await t.register("agent-y", 999, [700]);
 
     // Subsequent readProcInfo returns null (proc dies cleanly after SIGTERM)
     readProcInfoMock.mockResolvedValue(null);
@@ -261,7 +262,7 @@ describe("McpProcessTracker", () => {
     });
 
     const t = makeTracker();
-    await t.register("agent-z", [800]);
+    await t.register("agent-z", 999, [800]);
 
     // Make readProcInfo null after first SIGTERM so SIGKILL is skipped
     readProcInfoMock.mockResolvedValue(null);
@@ -317,10 +318,8 @@ describe("Phase 999.15 extensions", () => {
     // 3-arg register (Plan 01 signature change). At Wave 0 the runtime
     // ignores the extra positional arg or fails on the missing
     // getRegisteredAgents export — either way the test is RED.
-    // @ts-expect-error — Plan 01 changes register signature to (name, claudePid, mcpPids)
     await t.register("agent-a", 4_000, [101, 102, 103]);
 
-    // @ts-expect-error — Plan 01 adds getRegisteredAgents()
     const map = t.getRegisteredAgents() as ReadonlyMap<string, {
       claudePid: number;
       mcpPids: readonly number[];
@@ -344,10 +343,8 @@ describe("Phase 999.15 extensions", () => {
     });
 
     const t = makeTrackerExt();
-    // @ts-expect-error — Plan 01 register signature
     await t.register("agent-b", 5_500, [201]);
 
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const map = t.getRegisteredAgents() as ReadonlyMap<string, {
       claudePid: number;
       mcpPids: readonly number[];
@@ -366,18 +363,14 @@ describe("Phase 999.15 extensions", () => {
     });
 
     const t = makeTrackerExt();
-    // @ts-expect-error — Plan 01 register signature
     await t.register("A", 100, []);
 
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const r1 = (t.getRegisteredAgents() as ReadonlyMap<string, {
       claudePid: number; mcpPids: readonly number[]; registeredAt: number;
     }>).get("A")!;
 
-    // @ts-expect-error — Plan 01 updateAgent
     t.updateAgent("A", 200);
 
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const r2 = (t.getRegisteredAgents() as ReadonlyMap<string, {
       claudePid: number; mcpPids: readonly number[]; registeredAt: number;
     }>).get("A")!;
@@ -397,19 +390,15 @@ describe("Phase 999.15 extensions", () => {
     });
 
     const t = makeTrackerExt();
-    // @ts-expect-error — Plan 01 register signature
     await t.register("A", 100, [201, 202]);
 
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const r1 = (t.getRegisteredAgents() as ReadonlyMap<string, {
       claudePid: number; mcpPids: readonly number[]; registeredAt: number;
     }>).get("A")!;
     const r1MpidsSnapshot = [...r1.mcpPids].sort();
 
-    // @ts-expect-error — Plan 01 replaceMcpPids
     t.replaceMcpPids("A", [301, 302, 303]);
 
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const r2 = (t.getRegisteredAgents() as ReadonlyMap<string, {
       claudePid: number; mcpPids: readonly number[]; registeredAt: number;
     }>).get("A")!;
@@ -430,12 +419,9 @@ describe("Phase 999.15 extensions", () => {
     });
 
     const t = makeTrackerExt();
-    // @ts-expect-error — Plan 01 register signature
     await t.register("A", 100, [201]);
-    // @ts-expect-error — Plan 01 register signature
     await t.register("B", 110, [211]);
 
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const map = t.getRegisteredAgents() as ReadonlyMap<string, unknown>;
 
     expect(typeof map.get).toBe("function");
@@ -458,36 +444,27 @@ describe("Phase 999.15 extensions", () => {
     });
 
     const t = makeTrackerExt();
-    // @ts-expect-error — Plan 01 register signature
     await t.register("A", 100, [101, 102, 103]);
 
-    // Mock isPidAlive to return true for 101 + 103, false for 102.
-    // pruneDeadPids hits proc-scan.isPidAlive which is module-level mocked
-    // by the existing top-of-file vi.mock("../proc-scan.js"). Plan 01 will
-    // add isPidAlive to the actual proc-scan module — at Wave 0, the
-    // tracker's pruneDeadPids method itself does not exist, so the test
-    // fails with "is not a function".
-    const procScan = await vi.importMock<typeof import("../proc-scan.js")>(
-      "../proc-scan.js",
-    );
-    // isPidAlive may not exist on the import yet (Plan 01 adds it). Probe
-    // and stub if missing — the call below still fails since pruneDeadPids
-    // method itself isn't on the tracker yet.
-    if (typeof (procScan as { isPidAlive?: unknown }).isPidAlive !== "function") {
-      (procScan as unknown as { isPidAlive: (p: number) => boolean }).isPidAlive =
-        (p: number) => p !== 102;
-    } else {
-      vi.spyOn(procScan as unknown as { isPidAlive: (p: number) => boolean }, "isPidAlive")
-        .mockImplementation((p: number) => p !== 102);
-    }
+    // Drive isPidAlive's behavior at the syscall layer — process.kill(pid, 0):
+    //   - throws ESRCH  → isPidAlive returns false (pid 102 = dead)
+    //   - returns true  → isPidAlive returns true  (pids 101, 103 = alive)
+    // This is more reliable than spying on the proc-scan module export
+    // because ES module live-bindings + vi.mock interactions are brittle.
+    vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === 102) {
+        const e = new Error("no such process") as NodeJS.ErrnoException;
+        e.code = "ESRCH";
+        throw e;
+      }
+      return true;
+    });
 
-    // @ts-expect-error — Plan 01 pruneDeadPids
     const result = await t.pruneDeadPids("A");
     expect([...result.pruned].sort()).toEqual([102]);
     expect([...result.alive].sort()).toEqual([101, 103]);
 
     // Tracker state should reflect the pruning.
-    // @ts-expect-error — Plan 01 getRegisteredAgents
     const entry = (t.getRegisteredAgents() as ReadonlyMap<string, {
       mcpPids: readonly number[];
     }>).get("A")!;
@@ -508,7 +485,6 @@ describe("Phase 999.15 extensions", () => {
 
     const reconcileFn = vi.fn(async (name: string) => {
       // Simulate reconcile updating the tracker to fresh PIDs.
-      // @ts-expect-error — Plan 01 replaceMcpPids
       t.replaceMcpPids(name, [200, 201]);
     });
 
@@ -521,7 +497,6 @@ describe("Phase 999.15 extensions", () => {
       reconcileAgent: reconcileFn,
     });
 
-    // @ts-expect-error — Plan 01 register signature
     await t.register("agent-x", 100, [100, 101]);
 
     // After register, make readProcInfo null so SIGKILL is skipped.
@@ -572,7 +547,6 @@ describe("Phase 999.15 extensions", () => {
       reconcileAgent: reconcileFn,
     });
 
-    // @ts-expect-error — Plan 01 register signature
     await t.register("agent-x", 100, [100, 101]);
 
     readProcInfoMock.mockResolvedValue(null);

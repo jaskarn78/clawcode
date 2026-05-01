@@ -1,9 +1,24 @@
 /**
  * Phase 999.14 — MCP child process tracker (singleton, daemon-wide).
+ * Phase 999.15 — extended with reconciler-friendly API surface (TRACK-03):
+ *   - 3-arg register(name, claudePid, mcpPids) — stores claudePid alongside MCPs
+ *   - updateAgent(name, claudePid) / replaceMcpPids(name, mcpPids) — sync mutators
+ *   - getRegisteredAgents() → ReadonlyMap<name, RegisteredAgent>
+ *   - pruneDeadPids(name) — async; uses isPidAlive
  *
  * Mirrors SecretsResolver DI shape (constructor captures deps, no module
  * state). Tracks per-agent MCP child PIDs and provides idempotent process-
  * group kills for MCP-02 (agent disconnect) and MCP-04 (daemon shutdown).
+ *
+ * Invariants:
+ *   - All mutations are IMMUTABLE — every update writes a NEW RegisteredAgent
+ *     object reference. Callers holding a previous reference observe the
+ *     pre-mutation state (pinned by PT-3 / PT-4).
+ *   - Mutator methods (register's entry write, updateAgent, replaceMcpPids)
+ *     are SYNC — JS event-loop ordering serializes mutations. Cmdline cache
+ *     enrichment in register/replaceMcpPids is async + best-effort and runs
+ *     AFTER the synchronous entry write so subsequent sync code observes the
+ *     new state immediately.
  *
  * Canonical log shape (pinned by tests):
  *   { component: "mcp-tracker", action: "sigterm" | "sigkill", pid, cmdline,
@@ -11,7 +26,7 @@
  */
 
 import type { Logger } from "pino";
-import { readProcInfo } from "./proc-scan.js";
+import { readProcInfo, isPidAlive } from "./proc-scan.js";
 
 /**
  * Idempotent process-group SIGTERM/SIGKILL helper.
@@ -57,6 +72,20 @@ export function killGroup(
   }
 }
 
+/**
+ * Phase 999.15 — per-agent tracker entry.
+ *
+ * Returned by getRegisteredAgents() as the value type of the ReadonlyMap.
+ * Reference identity changes on every updateAgent / replaceMcpPids call
+ * (immutable mutation pattern — pinned by PT-3 / PT-4).
+ */
+export interface RegisteredAgent {
+  readonly claudePid: number;
+  readonly mcpPids: readonly number[];
+  /** Epoch ms — set at register-time, preserved across updates. */
+  readonly registeredAt: number;
+}
+
 export interface McpProcessTrackerDeps {
   readonly uid: number;
   readonly log: Logger;
@@ -77,7 +106,8 @@ const POLL_MS = 250;
  * Per-agent MCP PID tracker with idempotent process-group kills.
  */
 export class McpProcessTracker {
-  private readonly pids = new Map<string, ReadonlySet<number>>();
+  /** Phase 999.15 — reshaped from Map<string, ReadonlySet<number>> to per-agent entry. */
+  private readonly entries = new Map<string, RegisteredAgent>();
   /** Captured at register-time so kill-time logs include cmdline even after death. */
   private readonly cmdlines = new Map<number, string>();
   private readonly log: Logger;
@@ -102,12 +132,180 @@ export class McpProcessTracker {
     return this.deps.patterns;
   }
 
-  /** Register PIDs under agent name; replaces prior set; captures cmdlines. */
-  async register(agentName: string, pids: readonly number[]): Promise<void> {
-    const next = new Set<number>(pids);
-    this.pids.set(agentName, next);
-    // Best-effort cmdline capture; failure to read just leaves the cache empty
-    // (kill log will use "unknown" for cmdline in that case).
+  /**
+   * Phase 999.15 — register an agent with its claude subprocess PID + MCP child PIDs.
+   *
+   * SYNC entry write (the immediate this.entries.set call) — subsequent sync
+   * code observes the new state right away. Cmdline cache enrichment is
+   * async/best-effort and runs AFTER the entry write, so failures here never
+   * roll back tracker state.
+   *
+   * Replaces any prior entry for the same agent. registeredAt updates to now
+   * on every call — fresh registration is treated as a new lifecycle.
+   */
+  async register(
+    agentName: string,
+    claudePid: number,
+    mcpPids: readonly number[],
+  ): Promise<void> {
+    // SYNC — JS event-loop ordering serializes mutations (Phase 999.15 invariant per orchestrator)
+    const entry: RegisteredAgent = {
+      claudePid,
+      mcpPids: [...mcpPids],
+      registeredAt: Date.now(),
+    };
+    this.entries.set(agentName, entry);
+    // Best-effort cmdline cache enrichment — failures don't roll back state.
+    await this.enrichCmdlineCache(mcpPids);
+  }
+
+  /**
+   * Phase 999.15 — replace tracked claudePid for an agent.
+   *
+   * SYNC. Constructs a NEW RegisteredAgent object (immutable mutation —
+   * callers holding the prior reference see the old claudePid). registeredAt
+   * is preserved (this is an update, not a fresh registration).
+   *
+   * @throws if the agent is not registered (caller should register first).
+   */
+  updateAgent(agentName: string, claudePid: number): void {
+    // SYNC — JS event-loop ordering serializes mutations (Phase 999.15 invariant per orchestrator)
+    const existing = this.entries.get(agentName);
+    if (!existing) {
+      throw new Error(
+        `McpProcessTracker.updateAgent: agent '${agentName}' not registered`,
+      );
+    }
+    const next: RegisteredAgent = {
+      claudePid,
+      mcpPids: existing.mcpPids,
+      registeredAt: existing.registeredAt,
+    };
+    this.entries.set(agentName, next);
+  }
+
+  /**
+   * Phase 999.15 — replace tracked MCP child PIDs for an agent.
+   *
+   * SYNC entry write (immediate this.entries.set). Constructs a NEW
+   * RegisteredAgent object (immutable mutation). Cmdline cache enrichment
+   * for newly added pids is fire-and-forget so this method itself stays sync.
+   *
+   * @throws if the agent is not registered.
+   */
+  replaceMcpPids(agentName: string, mcpPids: readonly number[]): void {
+    // SYNC — JS event-loop ordering serializes mutations (Phase 999.15 invariant per orchestrator)
+    const existing = this.entries.get(agentName);
+    if (!existing) {
+      throw new Error(
+        `McpProcessTracker.replaceMcpPids: agent '${agentName}' not registered`,
+      );
+    }
+    const next: RegisteredAgent = {
+      claudePid: existing.claudePid,
+      mcpPids: [...mcpPids],
+      registeredAt: existing.registeredAt,
+    };
+    this.entries.set(agentName, next);
+    // Fire-and-forget cmdline cache enrichment — this method must stay sync.
+    void this.enrichCmdlineCache(mcpPids);
+  }
+
+  /**
+   * Phase 999.15 — return the full registered-agent map as a ReadonlyMap.
+   *
+   * Returned reference is the live internal Map (typed as ReadonlyMap so
+   * callers cannot mutate). Reference identity of each entry value changes
+   * on every updateAgent/replaceMcpPids call (immutable mutation — pinned by
+   * PT-3, PT-4). Used by the reconciler (Plan 02) and the mcp-tracker CLI
+   * (Plan 03) for inspection.
+   */
+  getRegisteredAgents(): ReadonlyMap<string, RegisteredAgent> {
+    return this.entries;
+  }
+
+  /**
+   * Phase 999.15 — partition the agent's mcpPids into pruned (dead) + alive.
+   *
+   * Walks the agent's MCP PID list, calls isPidAlive(pid) for each, and
+   * removes dead ones from tracker state via replaceMcpPids. Idempotent:
+   * calling twice in a row with no /proc changes is a no-op the second time.
+   *
+   * Returns the partition for caller logging / metrics. Empty arrays if the
+   * agent is not registered (defensive — does NOT throw).
+   */
+  async pruneDeadPids(
+    agentName: string,
+  ): Promise<{ pruned: readonly number[]; alive: readonly number[] }> {
+    const entry = this.entries.get(agentName);
+    if (!entry) return { pruned: [], alive: [] };
+    const alive: number[] = [];
+    const pruned: number[] = [];
+    for (const pid of entry.mcpPids) {
+      if (isPidAlive(pid)) alive.push(pid);
+      else pruned.push(pid);
+    }
+    if (pruned.length > 0) {
+      this.replaceMcpPids(agentName, alive);
+    }
+    return { pruned, alive };
+  }
+
+  /** Remove an agent's tracked PIDs. Returns the evicted MCP PIDs. */
+  unregister(agentName: string): readonly number[] {
+    const entry = this.entries.get(agentName);
+    if (!entry) return [];
+    this.entries.delete(agentName);
+    // Don't drop cmdline cache yet — killAll/killAgentGroup may still need them.
+    return [...entry.mcpPids];
+  }
+
+  /** All tracked MCP PIDs across every agent (deduplicated). claudePid NOT included. */
+  list(): readonly number[] {
+    const all = new Set<number>();
+    for (const entry of this.entries.values()) {
+      for (const pid of entry.mcpPids) all.add(pid);
+    }
+    return Array.from(all);
+  }
+
+  /** Tracked MCP PIDs for a specific agent (empty array if unknown). */
+  listForAgent(agentName: string): readonly number[] {
+    const entry = this.entries.get(agentName);
+    return entry ? [...entry.mcpPids] : [];
+  }
+
+  /**
+   * SIGTERM agent's PGs, await grace, SIGKILL stragglers. Idempotent — second
+   * call after eviction is a no-op. Used by MCP-02.
+   *
+   * Phase 999.15 TRACK-06 (Plan 02 — NOT this plan): will reconcile via
+   * reconcileAgent dep before kill. This plan keeps the existing 999.14
+   * behavior; PT-7/PT-8 stay RED until Plan 02.
+   */
+  async killAgentGroup(agentName: string, graceMs: number = 5000): Promise<void> {
+    const pids = this.listForAgent(agentName);
+    if (pids.length === 0) return; // already evicted — no-op
+    await this.killPids(pids, graceMs, "agent-disconnect");
+    // Evict on success so a second call is a no-op.
+    this.entries.delete(agentName);
+    for (const pid of pids) this.cmdlines.delete(pid);
+  }
+
+  /** SIGTERM every tracked PID (deduplicated), grace, SIGKILL. Used by MCP-04. */
+  async killAll(graceMs: number = 5000): Promise<void> {
+    const pids = this.list();
+    if (pids.length === 0) return;
+    await this.killPids(pids, graceMs, "shutdown");
+    this.entries.clear();
+    this.cmdlines.clear();
+  }
+
+  /**
+   * Best-effort cmdline cache population. Failures are swallowed (cache is
+   * for log enrichment only — kill flow uses "unknown" if the cache misses).
+   */
+  private async enrichCmdlineCache(pids: readonly number[]): Promise<void> {
     await Promise.all(
       pids.map(async (pid) => {
         try {
@@ -120,52 +318,6 @@ export class McpProcessTracker {
         }
       }),
     );
-  }
-
-  /** Remove an agent's tracked PIDs. Returns the evicted PIDs. */
-  unregister(agentName: string): readonly number[] {
-    const evicted = this.pids.get(agentName);
-    if (!evicted) return [];
-    this.pids.delete(agentName);
-    // Don't drop cmdline cache yet — killAll/killAgentGroup may still need them.
-    return Array.from(evicted);
-  }
-
-  /** All tracked PIDs across every agent (deduplicated). */
-  list(): readonly number[] {
-    const all = new Set<number>();
-    for (const set of this.pids.values()) {
-      for (const pid of set) all.add(pid);
-    }
-    return Array.from(all);
-  }
-
-  /** Tracked PIDs for a specific agent (empty array if unknown). */
-  listForAgent(agentName: string): readonly number[] {
-    const set = this.pids.get(agentName);
-    return set ? Array.from(set) : [];
-  }
-
-  /**
-   * SIGTERM agent's PGs, await grace, SIGKILL stragglers. Idempotent — second
-   * call after eviction is a no-op. Used by MCP-02.
-   */
-  async killAgentGroup(agentName: string, graceMs: number = 5000): Promise<void> {
-    const pids = this.listForAgent(agentName);
-    if (pids.length === 0) return; // already evicted — no-op
-    await this.killPids(pids, graceMs, "agent-disconnect");
-    // Evict on success so a second call is a no-op.
-    this.pids.delete(agentName);
-    for (const pid of pids) this.cmdlines.delete(pid);
-  }
-
-  /** SIGTERM every tracked PID (deduplicated), grace, SIGKILL. Used by MCP-04. */
-  async killAll(graceMs: number = 5000): Promise<void> {
-    const pids = this.list();
-    if (pids.length === 0) return;
-    await this.killPids(pids, graceMs, "shutdown");
-    this.pids.clear();
-    this.cmdlines.clear();
   }
 
   /** SIGTERM each pid, poll for liveness, SIGKILL stragglers after grace. */
