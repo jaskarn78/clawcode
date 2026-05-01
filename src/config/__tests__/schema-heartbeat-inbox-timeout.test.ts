@@ -22,7 +22,6 @@ describe("defaultsSchema.heartbeatInboxTimeoutMs (Phase 999.12 HB-01)", () => {
     const result = defaultsSchema.safeParse({});
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error: added in Wave 1 (Phase 999.12 HB-01)
       expect(result.data.heartbeatInboxTimeoutMs).toBe(60_000);
     }
   });
@@ -31,7 +30,6 @@ describe("defaultsSchema.heartbeatInboxTimeoutMs (Phase 999.12 HB-01)", () => {
     const result = defaultsSchema.safeParse({ heartbeatInboxTimeoutMs: 120_000 });
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error: added in Wave 1 (Phase 999.12 HB-01)
       expect(result.data.heartbeatInboxTimeoutMs).toBe(120_000);
     }
   });
@@ -54,7 +52,6 @@ describe("defaultsSchema.heartbeatInboxTimeoutMs (Phase 999.12 HB-01)", () => {
       expect(result.data.model).toBeDefined();
       expect(result.data.autoStart).toBe(true);
       // New default fires on omission.
-      // @ts-expect-error: added in Wave 1 (Phase 999.12 HB-01)
       expect(result.data.heartbeatInboxTimeoutMs).toBe(60_000);
     }
   });

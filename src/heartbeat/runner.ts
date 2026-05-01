@@ -73,7 +73,7 @@ export class HeartbeatRunner {
   private readonly zoneTrackers: Map<string, ContextZoneTracker> = new Map();
   private threadManager: ThreadManager | undefined;
   private taskStore: TaskStore | undefined;
-  // Phase 999.10 plan 03 (SEC-05) — passed into CheckContext so mcp-reconnect's
+  // Phase 104 plan 03 (SEC-05) — passed into CheckContext so mcp-reconnect's
   // RecoveryDeps factory can wire `invalidate: (ref) => secretsResolver.invalidate(ref)`.
   private secretsResolver: SecretsResolver | undefined;
 
@@ -133,7 +133,7 @@ export class HeartbeatRunner {
   }
 
   /**
-   * Phase 999.10 plan 03 (SEC-05) — inject the SecretsResolver into
+   * Phase 104 plan 03 (SEC-05) — inject the SecretsResolver into
    * CheckContext so the op-refresh recovery handler can call
    * deps.invalidate(ref) before re-reading via op CLI. Mirrors the
    * setThreadManager / setTaskStore pattern.
@@ -220,7 +220,15 @@ export class HeartbeatRunner {
           ...(this.secretsResolver ? { secretsResolver: this.secretsResolver } : {}),
         };
 
-        const timeoutMs = (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;
+        // Phase 999.12 HB-01 — special-case the inbox check timeout. Cross-
+        // agent turns commonly take 30-90s; the fleet-wide checkTimeoutSeconds
+        // (default 10s) creates false-positive critical alerts on the inbox
+        // check. inboxTimeoutMs (default 60_000 from schema) overrides ONLY
+        // the inbox check; other checks keep the fleet-wide timeout.
+        const timeoutMs =
+          check.name === "inbox" && this.config.inboxTimeoutMs !== undefined
+            ? this.config.inboxTimeoutMs
+            : (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;
         const result = await this.executeWithTimeout(check, context, timeoutMs);
         const timestamp = new Date().toISOString();
 

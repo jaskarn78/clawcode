@@ -661,7 +661,6 @@ describe("HeartbeatRunner", () => {
       const log = createMockLogger();
       const config = createDefaultConfig({
         checkTimeoutSeconds: 1,
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 HB-01)
         inboxTimeoutMs: 5000,
       });
 
@@ -709,7 +708,6 @@ describe("HeartbeatRunner", () => {
       const log = createMockLogger();
       const config = createDefaultConfig({
         checkTimeoutSeconds: 1,
-        // @ts-expect-error: added in Wave 1 (Phase 999.12 HB-01)
         inboxTimeoutMs: 5000,
       });
 

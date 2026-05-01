@@ -1341,6 +1341,19 @@ export const defaultsSchema = z.object({
     .positive()
     .default(24)
     .optional(),
+  // Phase 999.12 HB-01 — per-check inbox heartbeat timeout in milliseconds.
+  // Default 60_000 (60s) — comfortably exceeds typical Sonnet/Opus tool-using
+  // cross-agent turn duration (30-90s) so the heartbeat inbox check no longer
+  // false-positive-criticals during normal IPC traffic. Set to undefined or
+  // omit to fall back to the fleet-wide `heartbeat.checkTimeoutSeconds`.
+  // Default-bearing → existing v2.x configs parse unchanged. Same additive-
+  // optional shape as preDeploySnapshotMaxAgeHours above.
+  heartbeatInboxTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .default(60_000)
+    .optional(),
   // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
   // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
   memoryCueEmoji: z.string().min(1).max(8).default("✅"),

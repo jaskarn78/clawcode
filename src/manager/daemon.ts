@@ -81,7 +81,7 @@ import { createRateLimiter } from "../discord/rate-limiter.js";
 import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
 import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
-import type { CheckStatus } from "../heartbeat/types.js";
+import type { CheckStatus, HeartbeatConfig } from "../heartbeat/types.js";
 import type { ContextZone, ZoneTransition } from "../heartbeat/context-zones.js";
 import { TaskScheduler } from "../scheduler/scheduler.js";
 import { TriggerEngine } from "../triggers/engine.js";
@@ -2482,7 +2482,16 @@ export async function startDaemon(
   await manager.reconcileRegistry(resolvedAgents);
 
   // 8. Initialize heartbeat runner
-  const heartbeatConfig = config.defaults.heartbeat;
+  // Phase 999.12 HB-01 — thread defaults.heartbeatInboxTimeoutMs into the
+  // HeartbeatConfig so the inbox check gets its 60s default instead of the
+  // fleet-wide 10s checkTimeoutSeconds (which false-positive-criticals
+  // during normal cross-agent turns).
+  const heartbeatConfig: HeartbeatConfig = {
+    ...config.defaults.heartbeat,
+    ...(config.defaults.heartbeatInboxTimeoutMs !== undefined
+      ? { inboxTimeoutMs: config.defaults.heartbeatInboxTimeoutMs }
+      : {}),
+  };
   const heartbeatRunner = new HeartbeatRunner({
     sessionManager: manager,
     registryPath: REGISTRY_PATH,

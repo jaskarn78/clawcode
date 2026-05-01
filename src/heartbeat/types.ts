@@ -29,7 +29,7 @@ export type CheckContext = {
   readonly threadManager?: ThreadManager;
   readonly taskStore?: TaskStore;
   /**
-   * Phase 999.10 plan 03 (SEC-05) — exposed to checks that build
+   * Phase 104 plan 03 (SEC-05) — exposed to checks that build
    * RecoveryDeps so the op-refresh recovery handler can invalidate the
    * secrets cache before re-resolving stale auth-error values. Optional
    * because most checks (auto-linker, fs-probe, etc.) don't need it; only
@@ -57,6 +57,17 @@ export type HeartbeatConfig = {
   readonly enabled: boolean;
   readonly intervalSeconds: number;
   readonly checkTimeoutSeconds: number;
+  /**
+   * Phase 999.12 HB-01 — per-check timeout override for the inbox check
+   * only (in milliseconds). Cross-agent turns commonly take 30-90s; the
+   * fleet-wide checkTimeoutSeconds (default 10s) generates false-positive
+   * critical alerts on the inbox check during an in-flight turn. Specified
+   * in milliseconds (rather than seconds) to disambiguate from
+   * `checkTimeoutSeconds` and align with millisecond-granular timeout
+   * primitives used elsewhere. Threaded from
+   * `defaults.heartbeatInboxTimeoutMs` (schema default 60_000).
+   */
+  readonly inboxTimeoutMs?: number;
   readonly contextFill: {
     readonly warningThreshold: number;
     readonly criticalThreshold: number;
