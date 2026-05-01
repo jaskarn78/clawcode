@@ -1068,3 +1068,57 @@ Plans:
 - [ ] 999.15-04-PLAN.md — Local gate + operator deploy + 3 long-soak smokes on clawdy (TRACK-07)
 
 **Promotion target:** active milestone — sequence after 999.14 since this builds on its substrate (proc-scan, process-tracker, orphan-reaper). Medium operator impact: today the cosmetic staleness is hidden by cmdline-based orphan detection, but graceful-shutdown reliability + per-agent restart cleanup will degrade as the fleet scales (more agents = more SDK-respawn races = more leaked MCP children on agent-restart). Pairs naturally with 999.9 (shared 1password-mcp pooling) since both touch MCP server lifecycle architecture.
+
+### Phase 999.16: Dream pass JSON output enforcement (BACKLOG)
+
+**Goal:** Fix dream-pass schema validation failures where the LLM returns chat-style prose instead of the structured JSON schema the dream pipeline expects. Reported by Admin Clawdy 2026-05-01 after a dream pass attempted post-DB-cleanup:
+```
+dream-result-schema-validation-failed:
+  JSON parse failed (Unexpected token 'N', "Noted — co"... is not valid JSON)
+```
+The model returned `"Noted — co..."` (chat preamble) instead of `{...}`. Dream pipeline's `JSON.parse()` choked on the first character.
+
+**Root cause hypothesis:** Phase 95's dream prompt was tightened in commit `509ff03` (`fix(95): tighten dream system prompt with explicit JSON-only output rules`) — adding rules like "FIRST character MUST be `{`", "NO markdown fences", "NO narrative preamble". Despite the explicit rules, Haiku (the dream model) is still returning prose. Either:
+1. The rules aren't strong enough OR
+2. The prompt context is bleeding in chat-style tone OR
+3. We should switch to the SDK's structured-output mode (forced JSON schema) instead of relying on prompt compliance
+
+**Scope (planner picks shape):**
+1. **DREAM-OUT-01:** Audit `src/manager/dream-prompt-builder.ts` — confirm current "JSON-only" rules. Strengthen if needed (e.g. "If you cannot produce valid JSON for any reason, output `{\"newWikilinks\":[],\"promotionCandidates\":[],\"summary\":\"\",\"errors\":[\"<reason>\"]}` — never plain prose").
+2. **DREAM-OUT-02:** Switch to SDK's structured-output mode (e.g. `response_format: { type: "json_schema", schema: <zod-derived> }`) if available. Stronger than prompt-side rules. Confirm SDK v0.2.x supports it.
+3. **DREAM-OUT-03:** Validation-failure recovery: when the LLM returns invalid JSON, fall back to a no-op result instead of throwing. Log warn with the offending response prefix. Don't crash the dream pipeline.
+4. **DREAM-OUT-04:** Tests pinning: synthetic LLM returning prose → dream pass produces no-op result, doesn't throw, logs warn. Synthetic LLM returning valid JSON → result parsed correctly.
+
+**Trigger:** 2026-05-01 — Admin Clawdy report after manual DB cleanup verified.
+
+**Requirements:** [DREAM-OUT-01..04 as scoped]
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — small phase (~50 lines + tests). Medium operator impact: dream pass currently silently fails; long-term memory consolidation degrades. Pairs with 999.17 (vec_memories orphan cleanup) since both are dream/memory pipeline integrity.
+
+### Phase 999.17: vec_memories orphan cleanup on memory delete (BACKLOG)
+
+**Goal:** When a row in the `memories` table is deleted, the corresponding embedding row in `vec_memories` (sqlite-vec virtual table) is NOT cascaded — leaves orphan embeddings that bloat the index and can return phantom matches in semantic search. Admin Clawdy manually patched the symptom 2026-05-01 (cleaning out current orphans) but the root cause persists: any future memory delete creates a new orphan.
+
+**Root cause hypothesis:** sqlite-vec virtual tables don't support FK constraints (limitation of vtab interface). The `memories` and `vec_memories` tables are decoupled. The memory store needs explicit cleanup: on `memories.DELETE`, also issue `DELETE FROM vec_memories WHERE rowid = ?` (matching by rowid since vec_memories is keyed that way).
+
+**Scope:**
+1. **VEC-CLEAN-01:** Audit all `memories` delete paths — `MemoryStore.deleteById`, `deleteByTag`, `deleteOlderThan`, etc. (find via grep). Each must issue a paired `vec_memories` delete in the same transaction.
+2. **VEC-CLEAN-02:** Add a transaction wrapper if not already present. The two deletes must be atomic — orphans are exactly the "deleted from memories but not vec_memories" state we're trying to prevent.
+3. **VEC-CLEAN-03:** Migration / cleanup utility: `clawcode memory cleanup-orphans` CLI subcommand that scans `vec_memories` for rowids not present in `memories` and deletes them. Operator-runnable for one-time recovery + automatable for future hygiene.
+4. **VEC-CLEAN-04:** Tests: unit test that delete-from-memories also clears vec_memories; integration test that semantic search post-delete doesn't return the deleted memory.
+
+**Trigger:** 2026-05-01 — Admin Clawdy report after vec_memories orphan symptom diagnosed and manually patched. Root cause fix needed so it doesn't recur.
+
+**Requirements:** [VEC-CLEAN-01..04 as scoped]
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+**Promotion target:** active milestone — small phase (~30 lines + tests + CLI subcommand). Pairs with 999.16 (dream JSON enforcement) since both are dream/memory pipeline integrity. Could ship together as a memory-pipeline-integrity bundle.
