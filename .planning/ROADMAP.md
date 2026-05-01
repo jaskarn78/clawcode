@@ -734,10 +734,10 @@ Plans:
 
 **Trigger:** 2026-04-30 — three concurrent `1password-mcp` processes against same service-account quota during FCC migration + daemon crash-loop boot storm → 1Password long-tail rate-limit blocked all `op read` operations for ~10 minutes.
 
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
-- [ ] 108-00-PLAN.md — Wave 0 RED: broker test scaffolding + shared fakes (FakePooledChild, FakeBrokerSocketPair) + 6 RED test files for pooled-child / broker / shim-server / mcp-broker-shim CLI / heartbeat / integration
+- [x] 108-00-PLAN.md — Wave 0 RED: broker test scaffolding + shared fakes (FakePooledChild, FakeBrokerSocketPair) + 6 RED test files for pooled-child / broker / shim-server / mcp-broker-shim CLI / heartbeat / integration
 - [ ] 108-01-PLAN.md — Wave 1: PooledChild data plane — id rewriter, initialize cache-and-replay, drain-then-SIGTERM lifecycle, types.ts contract module
 - [ ] 108-02-PLAN.md — Wave 1: OnePasswordMcpBroker control plane (token-keyed pool registry, per-agent semaphore, audit logs, auto-respawn) + ShimServer unix-socket listener
 - [ ] 108-03-PLAN.md — Wave 1: `clawcode mcp-broker-shim` CLI subcommand — agent stdio ↔ broker socket bridge, mirrors browser-mcp/search-mcp/image-mcp precedent

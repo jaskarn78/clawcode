@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 107-02-PLAN.md (Pillar B — vec_memories orphan cleanup)
-last_updated: "2026-05-01T09:39:57.806Z"
+stopped_at: Completed 108-00-PLAN.md (Wave 0 RED scaffolding) — Wave 1 plans 108-01..04 ready
+last_updated: "2026-05-01T12:41:54.059Z"
 last_activity: 2026-05-01
 progress:
-  total_phases: 34
-  completed_phases: 12
-  total_plans: 71
-  completed_plans: 65
+  total_phases: 35
+  completed_phases: 13
+  total_plans: 77
+  completed_plans: 67
 ---
 
 # Project State
@@ -527,11 +527,12 @@ Recent decisions affecting current work:
 | Phase 106 P01 | 3 min | 1 tasks | 1 files |
 | Phase 106 P02 | 18 min | 1 tasks | 1 files |
 | Phase 107 P02 | 45m | 3 tasks | 7 files |
+| Phase 108 P00 | 25min | 3 tasks | 8 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-01
-Stopped at: Completed 107-02-PLAN.md (Pillar B — vec_memories orphan cleanup)
+Stopped at: Completed 108-00-PLAN.md (Wave 0 RED scaffolding) — Wave 1 plans 108-01..04 ready
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
