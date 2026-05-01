@@ -721,6 +721,25 @@ Plans:
 
 ---
 
+### Phase 108: Shared 1password-mcp via daemon-managed broker
+
+**Goal:** Pool one shared `1password-mcp` subprocess per unique `OP_SERVICE_ACCOUNT_TOKEN` across agents. In current config, drops 11 instances → 2 (default scope + finmentum scope). Reduces fan-out load against 1Password service-account quota during boot storms + concurrent tool use. Pairs with Phase 104 (boot-time secret cache, shipped) and Phase 999.14/15 (MCP lifecycle, shipped).
+
+**Architecture (operator-approved 2026-05-01):**
+- **Transport:** daemon-managed broker (fan-out proxy). Daemon owns the single MCP child per service-account token; agents talk to broker, not directly to MCP child.
+- **Keep-alive:** drain immediately on last referencing agent stop. Add TTL keep-warm later if cold-starts hurt.
+- **Crash recovery:** auto-respawn pool + per-call failure (in-flight requests fail with structured error, agents retry via existing semantics).
+- **Concurrency:** per-agent semaphore (4 concurrent calls per agent).
+- **Audit/trace:** broker logs every JSON-RPC with `agent`, `turnId`, `tool` structured fields.
+
+**Trigger:** 2026-04-30 — three concurrent `1password-mcp` processes against same service-account quota during FCC migration + daemon crash-loop boot storm → 1Password long-tail rate-limit blocked all `op read` operations for ~10 minutes.
+
+**Plans:** TBD — researcher + planner spawn next.
+
+**Replaces:** Phase 999.9 (BACKLOG). Promoted per renumbering convention from commit `bfd8dfe`.
+
+---
+
 ## Backlog
 
 Backlog items live outside the active phase sequence. Promote with `/gsd:review-backlog` when ready to plan, or use `/gsd:discuss-phase 999.x` to explore further.
@@ -893,7 +912,7 @@ Plans:
 
 **Promotion target:** active milestone, will likely become **Phase 107**. Bundle deploy with Phases 105 + 106 if scope stays small.
 
-### Phase 999.9: Shared 1password-mcp by service-account scope (BACKLOG)
+### Phase 999.9: Shared 1password-mcp by service-account scope (PROMOTED to Phase 108)
 
 **Goal:** Pool one shared `1password-mcp` subprocess per unique `OP_SERVICE_ACCOUNT_TOKEN` across agents instead of spawning a fresh instance per agent. In current config, this drops 9 instances → 2 (default account + finmentum scope), reducing memory + fd + process count and capping fan-out load against the 1Password read API during boot storms and concurrent tool use.
 
