@@ -1714,7 +1714,10 @@ export async function startDaemon(
   // child with the literal in its env. Logs only ever see tokenHash.
   const tokenHashToRawToken = new Map<string, string>();
   const collectTokenLiteral = (literal: string): string => {
-    const tokenHash = createHash("sha256").update(literal).digest("hex").slice(0, 16);
+    // 8-char slice MUST match the shim's hashing (mcp-broker-shim.ts).
+    // A drift here makes shim handshakes resolve to rawToken="" → child
+    // spawn with empty token → auth fail → crash loop → shim exit 75.
+    const tokenHash = createHash("sha256").update(literal).digest("hex").slice(0, 8);
     if (!tokenHashToRawToken.has(tokenHash)) {
       tokenHashToRawToken.set(tokenHash, literal);
     }
@@ -1733,6 +1736,18 @@ export async function startDaemon(
   const broker = new OnePasswordMcpBroker({
     log: brokerLog,
     spawnFn: ({ tokenHash, rawToken }) => {
+      // Fail loud if rawToken is empty — that means tokenHash failed to
+      // resolve in the daemon's tokenHashToRawToken map, which is the
+      // canonical hash-length-mismatch failure mode. Better to surface
+      // a daemon error than silently crash-loop pool children with bad
+      // auth. SEC-07: include only tokenHash in the error.
+      if (!rawToken) {
+        throw new Error(
+          `mcp-broker: empty rawToken for tokenHash=${tokenHash} — ` +
+            "shim/daemon hash-slice drift? Check that " +
+            "mcp-broker-shim.ts and daemon.ts both slice(0, 8).",
+        );
+      }
       // Spawn the upstream MCP child the broker pools. This is the same
       // command the pre-Phase-108 loader injected per-agent — now once
       // per token. SEC-07: never log rawToken.
@@ -1872,23 +1887,28 @@ export async function startDaemon(
     if (typeof opServerToken === "string" && opServerToken.length > 0) {
       collectTokenLiteral(opServerToken);
     }
-    // 2) Per-agent mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN is an
-    //    op:// URI in the resolved config (loader keeps it verbatim per
-    //    Phase 100 follow-up MCP-LOAD-1). Resolve via the warm secrets
-    //    cache so the broker can spawn with the literal env. Failures are
-    //    logged and skipped — that token simply won't be poolable; the
-    //    affected agent's 1password MCP will fail at SDK level via the
-    //    existing onMcpResolutionError path.
-    const overrideUri = agent.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
-    if (typeof overrideUri === "string" && overrideUri.startsWith("op://")) {
-      const resolved = secretsResolver.getCached(overrideUri);
-      if (typeof resolved === "string" && resolved.length > 0) {
-        collectTokenLiteral(resolved);
+    // 2) Per-agent mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN. Two
+    //    legal yaml shapes:
+    //      a) op:// URI — resolve via the warm secrets cache, then collect.
+    //      b) Literal `ops_...` token (current production yaml) — collect
+    //         directly. The shim hashes whatever literal flows through its
+    //         env, so the daemon must collect the same literal here so the
+    //         hashes match at handshake time.
+    const overrideValue = agent.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+    if (typeof overrideValue === "string" && overrideValue.length > 0) {
+      if (overrideValue.startsWith("op://")) {
+        const resolved = secretsResolver.getCached(overrideValue);
+        if (typeof resolved === "string" && resolved.length > 0) {
+          collectTokenLiteral(resolved);
+        } else {
+          brokerLog.warn(
+            { agent: agent.name, uri: overrideValue },
+            "mcp-broker: per-agent OP_SERVICE_ACCOUNT_TOKEN op:// override unresolved; pool spawn for this agent will fail",
+          );
+        }
       } else {
-        brokerLog.warn(
-          { agent: agent.name, uri: overrideUri },
-          "mcp-broker: per-agent OP_SERVICE_ACCOUNT_TOKEN override unresolved; pool spawn for this agent will fail",
-        );
+        // Literal token — collect directly. SEC-07: never log the literal.
+        collectTokenLiteral(overrideValue);
       }
     }
   }

@@ -20,7 +20,13 @@ type McpServerConfig = {
   readonly env: Readonly<Record<string, string>>;
 };
 
-const DEFAULT_TIMEOUT_MS = 5000;
+// Phase 108 broker shim path needs more headroom: when an agent's health
+// check is the FIRST connection to a cold pool, the broker has to spawn
+// `npx -y @takescake/1password-mcp@latest` (npm registry lookup + tarball
+// extract + node startup, ~5-15s on cold cache). Subsequent agents attach
+// to the warm pool and respond in <100ms. 30s covers the cold-start;
+// agents on warm pools complete well under it.
+const DEFAULT_TIMEOUT_MS = 30000;
 
 /**
  * Check if an MCP server is healthy by spawning it and sending an initialize request.

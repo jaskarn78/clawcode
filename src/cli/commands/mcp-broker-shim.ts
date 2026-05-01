@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import * as net from "node:net";
 import * as crypto from "node:crypto";
+import { homedir } from "node:os";
 import pino, { type Logger } from "pino";
 import { cliError } from "../output.js";
 
@@ -56,7 +57,10 @@ export type RunShimOptions = ShimDeps & {
   pool: "1password";
 };
 
-const DEFAULT_BROKER_SOCKET = "/var/run/clawcode/mcp-broker.sock";
+// Default to the daemon's MANAGER_DIR-based socket path (matches
+// MCP_BROKER_SOCKET_PATH in src/manager/daemon.ts). Both daemon and shim
+// run as the same user (clawcode), so homedir() resolves identically.
+const DEFAULT_BROKER_SOCKET = `${homedir()}/.clawcode/manager/mcp-broker.sock`;
 
 /** Compute the 8-char tokenHash used by both shim and broker. */
 function computeTokenHash(tokenLiteral: string): string {

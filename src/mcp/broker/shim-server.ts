@@ -33,7 +33,11 @@ export const SHIM_HANDSHAKE_ERROR_INVALID_AGENT = -32011;
 export const SHIM_HANDSHAKE_ERROR_SHUTTING_DOWN = -32012;
 
 /** Agent name validation pattern — alphanumeric + dash + underscore, 1-64 chars. */
-const AGENT_NAME_PATTERN = /^[a-zA-Z0-9_\-]{1,64}$/;
+// Agent names in clawcode.yaml allow alnum, dash, underscore, and SPACES
+// (e.g. "Admin Clawdy"). Reject anything that could be shell-metacharacter
+// or path-traversal noise. Spaces are safe inside the JSON-RPC handshake
+// payload — they only flow into structured log fields, never into shell.
+const AGENT_NAME_PATTERN = /^[a-zA-Z0-9 _\-]{1,64}$/;
 /**
  * TokenHash is the first 8 (or more) hex-ish chars of sha256(token).
  * Pattern is intentionally permissive — production sends sha256-derived
