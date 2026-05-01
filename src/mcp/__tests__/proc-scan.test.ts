@@ -45,6 +45,7 @@ import {
   readProcInfo,
   procAgeSeconds,
   listAllPids,
+  discoverClaudeSubprocessPid,
 } from "../proc-scan.js";
 
 const isLinux = process.platform === "linux";
@@ -249,5 +250,147 @@ describe("procAgeSeconds", () => {
     });
     expect(age).toBeGreaterThanOrEqual(998);
     expect(age).toBeLessThanOrEqual(1001);
+  });
+});
+
+/* =========================================================================
+ *  Phase 999.15 extensions — RED tests for TRACK-01 substrate (isPidAlive +
+ *  discoverClaudeSubprocessPid minAge opts).
+ *
+ *  All cases below FAIL at Wave 0 because:
+ *    - PS-1..PS-5: src/mcp/proc-scan.ts does not export isPidAlive yet
+ *      (Plan 01 adds it).
+ *    - PS-6..PS-7: discoverClaudeSubprocessPid signature is currently
+ *      (daemonPid) → Promise<number | null>; Plan 01 adds the optional
+ *      { minAge?, bootTimeUnix?, clockTicksPerSec? } opts argument.
+ *
+ *  No 999.14 cases above are modified — strict append.
+ * =======================================================================*/
+
+describe("Phase 999.15 extensions", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("PS-1: isPidAlive(0) returns false without calling process.kill", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    // @ts-expect-error — isPidAlive ships in Plan 01
+    const { isPidAlive } = await import("../proc-scan.js");
+    expect(typeof isPidAlive).toBe("function");
+    expect(isPidAlive(0)).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("PS-2: isPidAlive(-1) returns false (guard against negative input)", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    // @ts-expect-error — isPidAlive ships in Plan 01
+    const { isPidAlive } = await import("../proc-scan.js");
+    expect(isPidAlive(-1)).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(!isLinux)(
+    "PS-3: isPidAlive(process.pid) returns true (own pid — Linux-only integration)",
+    async () => {
+      // @ts-expect-error — isPidAlive ships in Plan 01
+      const { isPidAlive } = await import("../proc-scan.js");
+      expect(isPidAlive(process.pid)).toBe(true);
+    },
+  );
+
+  it.skipIf(!isLinux)(
+    "PS-4: isPidAlive(99999999) returns false (ESRCH path, Linux-only integration)",
+    async () => {
+      // @ts-expect-error — isPidAlive ships in Plan 01
+      const { isPidAlive } = await import("../proc-scan.js");
+      expect(isPidAlive(99_999_999)).toBe(false);
+    },
+  );
+
+  it("PS-5: isPidAlive treats EPERM as alive (process exists, just can't signal)", async () => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      const e = new Error("permission denied") as NodeJS.ErrnoException;
+      e.code = "EPERM";
+      throw e;
+    });
+    // @ts-expect-error — isPidAlive ships in Plan 01
+    const { isPidAlive } = await import("../proc-scan.js");
+    expect(isPidAlive(12_345)).toBe(true);
+  });
+
+  it("PS-6: discoverClaudeSubprocessPid accepts opts.minAge and filters proc by age", async () => {
+    // Mock /proc layout via the readFileSpy / readdirSpy hooks established
+    // at the top of this file. Two claude procs both children of daemonPid:
+    //   PID-A (id=4001): age ~3s    — filtered out by minAge=10
+    //   PID-B (id=4002): age ~15s   — kept
+    const daemonPid = 99_000;
+
+    // bootTimeUnix + clockTicksPerSec set to make age math predictable.
+    // Now = some value; we provide bootTimeUnix and clockTicksPerSec via opts
+    // so the pure-math path applies (no /proc/stat read for btime).
+    const nowSec = Math.floor(Date.now() / 1000);
+    const bootTimeUnix = nowSec - 1000;
+    const clockTicksPerSec = 100;
+
+    const startTimeFor = (ageSec: number): number =>
+      (nowSec - ageSec - bootTimeUnix) * clockTicksPerSec;
+
+    const procEntries = ["1", "4001", "4002", `${daemonPid}`, "self"];
+    readdirSpy.mockReset();
+    readFileSpy.mockReset();
+    readdirSpy.mockResolvedValue(procEntries as unknown as string[]);
+
+    readFileSpy.mockImplementation((path: unknown) => {
+      const p = String(path);
+      // /proc/<pid>/stat: comm in parens, then state ppid pgrp ... + 22 fields
+      // We need ppid (idx 1 of post-comm tail) and starttime (idx 19).
+      const fakeStat = (ppid: number, starttime: number) =>
+        `0 (claude) S ${ppid} 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0 0 0`;
+      if (p === `/proc/4001/stat`) return Promise.resolve(fakeStat(daemonPid, startTimeFor(3)));
+      if (p === `/proc/4002/stat`) return Promise.resolve(fakeStat(daemonPid, startTimeFor(15)));
+      if (p === `/proc/4001/cmdline`) return Promise.resolve("claude ");
+      if (p === `/proc/4002/cmdline`) return Promise.resolve("claude ");
+      if (p === `/proc/4001/status`) return Promise.resolve("Uid:\t1000\t1000\t1000\t1000");
+      if (p === `/proc/4002/status`) return Promise.resolve("Uid:\t1000\t1000\t1000\t1000");
+      // Anything else (pid 1, daemon, self) — return ENOENT-like absence.
+      const err = new Error("ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      return Promise.reject(err);
+    });
+
+    // @ts-expect-error — Plan 01 adds opts argument
+    const result = await discoverClaudeSubprocessPid(daemonPid, {
+      minAge: 10,
+      bootTimeUnix,
+      clockTicksPerSec,
+    });
+
+    expect(result).toBe(4002);
+  });
+
+  it("PS-7: discoverClaudeSubprocessPid with no opts → existing behavior unchanged (regression pin)", async () => {
+    // Without opts, discoverClaudeSubprocessPid should accept any matching
+    // claude child regardless of age (no minAge filter applied).
+    const daemonPid = 99_000;
+    const procEntries = ["1", "4001", `${daemonPid}`];
+
+    readdirSpy.mockReset();
+    readFileSpy.mockReset();
+    readdirSpy.mockResolvedValue(procEntries as unknown as string[]);
+
+    readFileSpy.mockImplementation((path: unknown) => {
+      const p = String(path);
+      const fakeStat = (ppid: number) =>
+        `0 (claude) S ${ppid} 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 50 0 0 0`;
+      if (p === `/proc/4001/stat`) return Promise.resolve(fakeStat(daemonPid));
+      if (p === `/proc/4001/cmdline`) return Promise.resolve("claude ");
+      if (p === `/proc/4001/status`) return Promise.resolve("Uid:\t1000\t1000\t1000\t1000");
+      const err = new Error("ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      return Promise.reject(err);
+    });
+
+    const result = await discoverClaudeSubprocessPid(daemonPid);
+    expect(result).toBe(4001);
   });
 });

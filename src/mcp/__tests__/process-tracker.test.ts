@@ -274,3 +274,320 @@ describe("McpProcessTracker", () => {
     expect(killSpy.mock.calls.length).toBe(callsAfterFirst);
   });
 });
+
+/* =========================================================================
+ *  Phase 999.15 extensions — RED tests for TRACK-03 + TRACK-06.
+ *
+ *  All cases below FAIL at Wave 0 because the extended McpProcessTracker API
+ *  ships in Plan 01 (updateAgent, replaceMcpPids, getRegisteredAgents,
+ *  pruneDeadPids, 3-arg register) and the reconcile-before-kill safety net
+ *  in killAgentGroup ships in Plan 02 (TRACK-06).
+ *
+ *  No 999.14 cases above are modified — strict append.
+ * =======================================================================*/
+
+describe("Phase 999.15 extensions", () => {
+  beforeEach(() => {
+    readProcInfoMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeTrackerExt(log = silentLogger()): McpProcessTracker {
+    return new McpProcessTracker({
+      uid: 1000,
+      log,
+      clockTicksPerSec: 100,
+      bootTimeUnix: 1_700_000_000,
+    });
+  }
+
+  it("PT-1: register(name, claudePid, mcpPids) stores all three; getRegisteredAgents().get(name) reflects them", async () => {
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const t = makeTrackerExt();
+    // 3-arg register (Plan 01 signature change). At Wave 0 the runtime
+    // ignores the extra positional arg or fails on the missing
+    // getRegisteredAgents export — either way the test is RED.
+    // @ts-expect-error — Plan 01 changes register signature to (name, claudePid, mcpPids)
+    await t.register("agent-a", 4_000, [101, 102, 103]);
+
+    // @ts-expect-error — Plan 01 adds getRegisteredAgents()
+    const map = t.getRegisteredAgents() as ReadonlyMap<string, {
+      claudePid: number;
+      mcpPids: readonly number[];
+      registeredAt: number;
+    }>;
+    const entry = map.get("agent-a");
+    expect(entry).toBeDefined();
+    expect(entry!.claudePid).toBe(4_000);
+    expect([...entry!.mcpPids].sort()).toEqual([101, 102, 103]);
+    expect(typeof entry!.registeredAt).toBe("number");
+    expect(Number.isFinite(entry!.registeredAt)).toBe(true);
+  });
+
+  it("PT-2: register pins claudePid for the agent (runtime regression for the new signature)", async () => {
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const t = makeTrackerExt();
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("agent-b", 5_500, [201]);
+
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const map = t.getRegisteredAgents() as ReadonlyMap<string, {
+      claudePid: number;
+      mcpPids: readonly number[];
+      registeredAt: number;
+    }>;
+    expect(map.get("agent-b")?.claudePid).toBe(5_500);
+  });
+
+  it("PT-3: updateAgent replaces tracked claudePid via NEW object reference (immutable mutations)", async () => {
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const t = makeTrackerExt();
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("A", 100, []);
+
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const r1 = (t.getRegisteredAgents() as ReadonlyMap<string, {
+      claudePid: number; mcpPids: readonly number[]; registeredAt: number;
+    }>).get("A")!;
+
+    // @ts-expect-error — Plan 01 updateAgent
+    t.updateAgent("A", 200);
+
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const r2 = (t.getRegisteredAgents() as ReadonlyMap<string, {
+      claudePid: number; mcpPids: readonly number[]; registeredAt: number;
+    }>).get("A")!;
+
+    expect(r1).not.toBe(r2); // new object reference
+    expect(r2.claudePid).toBe(200);
+    expect(r1.claudePid).toBe(100); // old reference unchanged (immutable mutations)
+  });
+
+  it("PT-4: replaceMcpPids replaces full mcp set immutably; old reference unchanged", async () => {
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const t = makeTrackerExt();
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("A", 100, [201, 202]);
+
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const r1 = (t.getRegisteredAgents() as ReadonlyMap<string, {
+      claudePid: number; mcpPids: readonly number[]; registeredAt: number;
+    }>).get("A")!;
+    const r1MpidsSnapshot = [...r1.mcpPids].sort();
+
+    // @ts-expect-error — Plan 01 replaceMcpPids
+    t.replaceMcpPids("A", [301, 302, 303]);
+
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const r2 = (t.getRegisteredAgents() as ReadonlyMap<string, {
+      claudePid: number; mcpPids: readonly number[]; registeredAt: number;
+    }>).get("A")!;
+
+    expect(r1).not.toBe(r2);
+    expect([...r2.mcpPids].sort()).toEqual([301, 302, 303]);
+    // r1 reference remains the original — its mcpPids must not have shifted.
+    expect([...r1.mcpPids].sort()).toEqual(r1MpidsSnapshot);
+  });
+
+  it("PT-5: getRegisteredAgents returns a Map-shaped ReadonlyMap (size/get/has/entries available)", async () => {
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const t = makeTrackerExt();
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("A", 100, [201]);
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("B", 110, [211]);
+
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const map = t.getRegisteredAgents() as ReadonlyMap<string, unknown>;
+
+    expect(typeof map.get).toBe("function");
+    expect(typeof map.has).toBe("function");
+    expect(typeof map.entries).toBe("function");
+    expect(map.size).toBe(2);
+    expect(map.has("A")).toBe(true);
+    expect(map.has("B")).toBe(true);
+    expect(map.has("ghost")).toBe(false);
+  });
+
+  it("PT-6: pruneDeadPids removes dead PIDs and returns alive set", async () => {
+    // register-time enrichment reads cmdline for each pid
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const t = makeTrackerExt();
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("A", 100, [101, 102, 103]);
+
+    // Mock isPidAlive to return true for 101 + 103, false for 102.
+    // pruneDeadPids hits proc-scan.isPidAlive which is module-level mocked
+    // by the existing top-of-file vi.mock("../proc-scan.js"). Plan 01 will
+    // add isPidAlive to the actual proc-scan module — at Wave 0, the
+    // tracker's pruneDeadPids method itself does not exist, so the test
+    // fails with "is not a function".
+    const procScan = await vi.importMock<typeof import("../proc-scan.js")>(
+      "../proc-scan.js",
+    );
+    // isPidAlive may not exist on the import yet (Plan 01 adds it). Probe
+    // and stub if missing — the call below still fails since pruneDeadPids
+    // method itself isn't on the tracker yet.
+    if (typeof (procScan as { isPidAlive?: unknown }).isPidAlive !== "function") {
+      (procScan as unknown as { isPidAlive: (p: number) => boolean }).isPidAlive =
+        (p: number) => p !== 102;
+    } else {
+      vi.spyOn(procScan as unknown as { isPidAlive: (p: number) => boolean }, "isPidAlive")
+        .mockImplementation((p: number) => p !== 102);
+    }
+
+    // @ts-expect-error — Plan 01 pruneDeadPids
+    const result = await t.pruneDeadPids("A");
+    expect([...result.pruned].sort()).toEqual([102]);
+    expect([...result.alive].sort()).toEqual([101, 103]);
+
+    // Tracker state should reflect the pruning.
+    // @ts-expect-error — Plan 01 getRegisteredAgents
+    const entry = (t.getRegisteredAgents() as ReadonlyMap<string, {
+      mcpPids: readonly number[];
+    }>).get("A")!;
+    expect([...entry.mcpPids].sort()).toEqual([101, 103]);
+  });
+
+  it("PT-7: killAgentGroup reconciles BEFORE kill (TRACK-06) — kills the reconciled set, not the stale one", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    // Register-time read so cmdlines are captured.
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const reconcileFn = vi.fn(async (name: string) => {
+      // Simulate reconcile updating the tracker to fresh PIDs.
+      // @ts-expect-error — Plan 01 replaceMcpPids
+      t.replaceMcpPids(name, [200, 201]);
+    });
+
+    const t = new McpProcessTracker({
+      uid: 1000,
+      log: silentLogger(),
+      clockTicksPerSec: 100,
+      bootTimeUnix: 1_700_000_000,
+      // @ts-expect-error — Plan 01 adds reconcileAgent dep to McpProcessTrackerDeps
+      reconcileAgent: reconcileFn,
+    });
+
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("agent-x", 100, [100, 101]);
+
+    // After register, make readProcInfo null so SIGKILL is skipped.
+    readProcInfoMock.mockResolvedValue(null);
+
+    await t.killAgentGroup("agent-x", 50);
+
+    // reconcileFn called BEFORE any kill (call-order assertion)
+    expect(reconcileFn).toHaveBeenCalled();
+    const reconcileCallOrder = reconcileFn.mock.invocationCallOrder[0]!;
+    const firstKillCallOrder = killSpy.mock.invocationCallOrder[0];
+    expect(firstKillCallOrder).toBeDefined();
+    expect(reconcileCallOrder).toBeLessThan(firstKillCallOrder!);
+
+    // SIGTERMs should target the RECONCILED set [200, 201], NOT [100, 101].
+    const sigtermCalls = killSpy.mock.calls.filter((c) => c[1] === "SIGTERM");
+    const sigtermPids = sigtermCalls.map((c) => Math.abs(Number(c[0]))).sort();
+    expect(sigtermPids).toEqual([200, 201]);
+    // None of the stale recorded PIDs should have been signaled.
+    for (const pid of [100, 101]) {
+      const hit = sigtermCalls.some((c) => Math.abs(Number(c[0])) === pid);
+      expect(hit).toBe(false);
+    }
+  });
+
+  it("PT-8: killAgentGroup falls back to recorded PIDs when reconcileFn throws (safety net)", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    readProcInfoMock.mockResolvedValue({
+      pid: 0,
+      ppid: 999,
+      uid: 1000,
+      cmdline: ["mcp"],
+      startTimeJiffies: 50000,
+    });
+
+    const reconcileFn = vi.fn(async () => {
+      throw new Error("simulated /proc walk failure");
+    });
+
+    const { log, lines } = captureLogger();
+    const t = new McpProcessTracker({
+      uid: 1000,
+      log,
+      clockTicksPerSec: 100,
+      bootTimeUnix: 1_700_000_000,
+      // @ts-expect-error — Plan 01 adds reconcileAgent dep to McpProcessTrackerDeps
+      reconcileAgent: reconcileFn,
+    });
+
+    // @ts-expect-error — Plan 01 register signature
+    await t.register("agent-x", 100, [100, 101]);
+
+    readProcInfoMock.mockResolvedValue(null);
+
+    // Must NOT reject — fallback path takes over.
+    await expect(t.killAgentGroup("agent-x", 50)).resolves.not.toThrow();
+
+    // SIGTERM the recorded PIDs as fallback.
+    const sigtermCalls = killSpy.mock.calls.filter((c) => c[1] === "SIGTERM");
+    const sigtermPids = sigtermCalls.map((c) => Math.abs(Number(c[0]))).sort();
+    expect(sigtermPids).toEqual([100, 101]);
+
+    // A warn log should mention the err string.
+    const warns = lines().filter((l) => l.level === 40);
+    const reconcileWarn = warns.find((l) => typeof l.err === "string");
+    expect(reconcileWarn).toBeDefined();
+  });
+});
