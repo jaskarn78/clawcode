@@ -722,7 +722,7 @@ Plans:
 
 ---
 
-### Phase 108: Shared 1password-mcp via daemon-managed broker
+### Phase 108: Shared 1password-mcp via daemon-managed broker (SHIPPED 2026-05-01)
 
 **Goal:** Pool one shared `1password-mcp` subprocess per unique `OP_SERVICE_ACCOUNT_TOKEN` across agents. In current config, drops 11 instances → 2 (default scope + finmentum scope). Reduces fan-out load against 1Password service-account quota during boot storms + concurrent tool use. Pairs with Phase 104 (boot-time secret cache, shipped) and Phase 999.14/15 (MCP lifecycle, shipped).
 
@@ -735,7 +735,7 @@ Plans:
 
 **Trigger:** 2026-04-30 — three concurrent `1password-mcp` processes against same service-account quota during FCC migration + daemon crash-loop boot storm → 1Password long-tail rate-limit blocked all `op read` operations for ~10 minutes.
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans executed — LIVE on clawdy
 
 Plans:
 - [x] 108-00-PLAN.md — Wave 0 RED: broker test scaffolding + shared fakes (FakePooledChild, FakeBrokerSocketPair) + 6 RED test files for pooled-child / broker / shim-server / mcp-broker-shim CLI / heartbeat / integration
@@ -743,9 +743,11 @@ Plans:
 - [x] 108-02-PLAN.md — Wave 1: OnePasswordMcpBroker control plane (token-keyed pool registry, per-agent semaphore, audit logs, auto-respawn) + ShimServer unix-socket listener
 - [x] 108-03-PLAN.md — Wave 1: `clawcode mcp-broker-shim` CLI subcommand — agent stdio ↔ broker socket bridge, mirrors browser-mcp/search-mcp/image-mcp precedent
 - [x] 108-04-PLAN.md — Wave 1: daemon boot integration — loader rewire (line 189-200), broker after SecretsResolver, reconciler `__broker:` skip-list, heartbeat mcp-broker check, shutdown ordering
-- [ ] 108-05-PLAN.md — Wave 2: pre-deploy gauntlet + 30-min channel-silence gate + operator deploy phrase + ssh deploy + 5-check post-deploy smoke + phase SUMMARY
+- [x] 108-05-PLAN.md — Wave 2: pre-deploy gauntlet + 30-min channel-silence gate + operator deploy phrase + ssh deploy + 5-check post-deploy smoke + phase SUMMARY (deployed by operator at 06:34 PT after 6 deploy iterations + 5 hot-fixes; LIVE at 07:14 PT)
 
 **Replaces:** Phase 999.9 (BACKLOG). Promoted per renumbering convention from commit `bfd8dfe`.
+
+**Status:** Shipped 2026-05-01. Pool fan-out proven (`agentRefCount=3`), MCP child count dropped ~60% (15 → 6 processes). 5 hot-fixes from live debugging captured in commits `9a1f12d` (broker integration) + `4e755ee` (status update). Closed v2.7 milestone (commit `3f308f0`).
 
 ---
 
