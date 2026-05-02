@@ -2163,7 +2163,7 @@ describe("Phase 999.13 — DELEG", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
       expect(result.data.delegates).toEqual({ research: "fin-research" });
     }
   });
@@ -2175,7 +2175,7 @@ describe("Phase 999.13 — DELEG", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
       expect(result.data.delegates).toEqual({});
     }
   });
@@ -2184,7 +2184,7 @@ describe("Phase 999.13 — DELEG", () => {
     const result = agentSchema.safeParse({ name: "test-agent" });
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
       expect(result.data.delegates).toBeUndefined();
     }
   });
@@ -2244,9 +2244,8 @@ describe("Phase 999.13 — DELEG", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
       expect(result.data.agents[0].delegates).toBeUndefined();
-      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates to AgentConfig
       expect(result.data.agents[1].delegates).toBeUndefined();
     }
   });

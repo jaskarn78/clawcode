@@ -334,12 +334,13 @@ function fakeLogger() {
   };
 }
 
+// ScoringConfig (src/memory/relevance.ts) is the 3-field shape used by
+// TierManager. The previous 5-field literal here was a stale fixture from
+// an earlier scoring API and no longer compiles against the current type.
 const DEFAULT_SCORING: ScoringConfig = {
-  recencyWeight: 0.4,
-  importanceWeight: 0.3,
-  accessWeight: 0.2,
-  distanceWeight: 0.1,
-  recencyHalfLifeDays: 7,
+  semanticWeight: 0.7,
+  decayWeight: 0.3,
+  halfLifeDays: 30,
 };
 
 describe("edge lifecycle", () => {

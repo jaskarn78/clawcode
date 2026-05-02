@@ -14,12 +14,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { RoutingTable } from "../router.js";
+import type { RoutingTable } from "../types.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
 import type { SessionManager } from "../../manager/session-manager.js";
 import { SlashCommandHandler } from "../slash-commands.js";
 
 function makeAgent(name: string): ResolvedAgentConfig {
+  // Test fixture omits many optional fields on ResolvedAgentConfig — the
+  // SUT under test only reads name/admin/effort, so we cast through
+  // `unknown` rather than fabricating every nested zod-default.
   return {
     name,
     workspace: `/tmp/${name}`,
@@ -35,7 +38,7 @@ function makeAgent(name: string): ResolvedAgentConfig {
     effort: "low",
     reactions: true,
     mcpServers: [],
-  } as ResolvedAgentConfig;
+  } as unknown as ResolvedAgentConfig;
 }
 
 function makeStubLogger(): {

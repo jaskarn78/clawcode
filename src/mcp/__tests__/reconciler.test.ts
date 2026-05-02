@@ -73,12 +73,15 @@ type AgentEntry = {
   readonly registeredAt: number;
 };
 
+// vitest 4 narrows `ReturnType<typeof vi.fn>` to a generic
+// `Mock<Procedure | Constructable>` that is not directly callable. Pin each
+// fake method to its concrete signature so the test body can call them.
 interface FakeTracker {
   patterns: RegExp;
-  getRegisteredAgents: ReturnType<typeof vi.fn>;
-  updateAgent: ReturnType<typeof vi.fn>;
-  replaceMcpPids: ReturnType<typeof vi.fn>;
-  unregister: ReturnType<typeof vi.fn>;
+  getRegisteredAgents: ReturnType<typeof vi.fn<() => Map<string, AgentEntry>>>;
+  updateAgent: ReturnType<typeof vi.fn<(name: string, claudePid: number) => void>>;
+  replaceMcpPids: ReturnType<typeof vi.fn<(name: string, pids: readonly number[]) => void>>;
+  unregister: ReturnType<typeof vi.fn<(name: string) => readonly number[]>>;
 }
 
 function makeTracker(entries: ReadonlyArray<readonly [string, AgentEntry]>): FakeTracker {

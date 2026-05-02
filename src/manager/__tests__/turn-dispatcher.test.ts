@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import pino from "pino";
 import { TurnDispatcher, TurnDispatcherError } from "../turn-dispatcher.js";
+import type { MemoryRetriever, MemoryCueWriter, DiscordReactFn, SubagentCapture } from "../turn-dispatcher.js";
 import { makeRootOrigin } from "../turn-origin.js";
 
 type MockTurn = {
@@ -286,7 +287,10 @@ describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
 describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () => {
   it("MEM-03-TD1: retrieveMemoryChunks invoked with query; result wrapped as <memory-context>", async () => {
     const mock = makeMockSessionManager();
-    const retriever = vi.fn(async () =>
+    // Cast the frozen result to the retriever's declared return shape;
+    // Object.freeze tightens the literal types to readonly tuples which
+    // don't satisfy the wider `readonly MemoryRetrievalResult[]` contract.
+    const retriever: MemoryRetriever = vi.fn<MemoryRetriever>(async (_agent, _query) =>
       Object.freeze([
         Object.freeze({
           chunkId: "c1",
@@ -296,7 +300,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
           fusedScore: 0.5,
           scoreWeight: 0,
         }),
-      ]),
+      ]) as unknown as Awaited<ReturnType<MemoryRetriever>>,
     );
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
@@ -361,7 +365,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
 
   it("MEM-03-TD5: dispatchStream also augments with memory context", async () => {
     const mock = makeMockSessionManager();
-    const retriever = vi.fn(async () =>
+    const retriever: MemoryRetriever = vi.fn<MemoryRetriever>(async (_agent, _query) =>
       Object.freeze([
         Object.freeze({
           chunkId: "c1",
@@ -371,7 +375,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
           fusedScore: 0.5,
           scoreWeight: 0,
         }),
-      ]),
+      ]) as unknown as Awaited<ReturnType<MemoryRetriever>>,
     );
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
@@ -391,8 +395,8 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
 describe("TurnDispatcher — cue detection hook (Phase 90 MEM-05)", () => {
   it("MEM-05-TD1: cue in user message triggers memoryCueWriter + discordReact", async () => {
     const mock = makeMockSessionManager();
-    const cueWriter = vi.fn(async () => "/ws/memory/2026-04-24-remember-abcd.md");
-    const reactSpy = vi.fn(async () => {});
+    const cueWriter = vi.fn<MemoryCueWriter>(async () => "/ws/memory/2026-04-24-remember-abcd.md");
+    const reactSpy = vi.fn<DiscordReactFn>(async () => {});
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
       log: silentLog,
@@ -484,7 +488,7 @@ describe("TurnDispatcher — cue detection hook (Phase 90 MEM-05)", () => {
 describe("TurnDispatcher — subagent capture hook (Phase 90 MEM-06)", () => {
   it("MEM-06-TD1: onTaskToolReturn DI slot is callable from external caller", async () => {
     const mock = makeMockSessionManager();
-    const captureSpy = vi.fn(async () => "/ws/memory/2026-04-24-subagent-research.md");
+    const captureSpy = vi.fn<SubagentCapture>(async () => "/ws/memory/2026-04-24-subagent-research.md");
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
       log: silentLog,

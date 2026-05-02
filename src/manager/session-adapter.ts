@@ -624,7 +624,10 @@ export class SdkSessionAdapter implements SessionAdapter {
     // treatment — Rule 3 (RESEARCH.md Pitfall ordering pin).
     const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       model: resolveModelId(config.model),
-      effort: config.effort,
+      // Phase 83 EFFORT-04 — narrow v2.2 EffortLevel ("xhigh"/"auto"/"off")
+      // to the SDK's start-option subset before assignment. Runtime control
+      // for the wider set lives on q.setMaxThinkingTokens.
+      effort: narrowEffortForSdkOption(config.effort),
       cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
       systemPrompt: buildSystemPromptOption(config.systemPrompt),
@@ -679,7 +682,9 @@ export class SdkSessionAdapter implements SessionAdapter {
     // with — no drift on resume. Rule 3 symmetric-edits enforced.
     const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
       model: resolveModelId(config.model),
-      effort: config.effort,
+      // Phase 83 EFFORT-04 — narrow same as createSession path. Symmetric
+      // edits enforced by RESEARCH.md Pitfall ordering pin.
+      effort: narrowEffortForSdkOption(config.effort),
       cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
       systemPrompt: buildSystemPromptOption(config.systemPrompt),
@@ -1108,7 +1113,12 @@ function wrapSdkQuery(
           }
         }
 
-        if (msg.type === "user") {
+        // Local SdkMessage union narrows away "user" (matches the
+        // stream_event note above) but the runtime SDK does emit user
+        // messages with `parent_tool_use_id` for tool_use_result delivery.
+        // Recover the runtime shape via a string-typed read — same pattern
+        // already used for stream_event handling at line ~1089.
+        if ((msg as { type?: string }).type === "user") {
           // Close the tool_call span when the matching tool_use_result arrives.
           // SDK emits user messages with `parent_tool_use_id` set to the tool_use_id.
           const toolUseId = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id;

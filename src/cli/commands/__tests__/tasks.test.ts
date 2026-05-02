@@ -54,7 +54,7 @@ describe("clawcode tasks CLI", () => {
     it("prints the new task_id on success", async () => {
       mockSendIpc.mockResolvedValue({ task_id: "task:new789" });
       await program.parseAsync(["node", "cli", "tasks", "retry", "task:old123"]);
-      const output = stdoutSpy.mock.calls.map(c => String(c[0])).join("");
+      const output = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
       expect(output).toContain("task:new789");
       expect(output).toContain("digest preserved");
     });
@@ -81,7 +81,7 @@ describe("clawcode tasks CLI", () => {
         result: { summary: "done" },
       });
       await program.parseAsync(["node", "cli", "tasks", "status", "task:abc"]);
-      const output = stdoutSpy.mock.calls.map(c => String(c[0])).join("");
+      const output = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
       expect(output).toContain("complete");
     });
   });
@@ -94,7 +94,7 @@ describe("clawcode tasks CLI", () => {
       } catch {
         // Expected: process.exit mock throws
       }
-      const errOutput = stderrSpy.mock.calls.map(c => String(c[0])).join("");
+      const errOutput = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
       expect(errOutput).toContain("Manager is not running");
     });
   });

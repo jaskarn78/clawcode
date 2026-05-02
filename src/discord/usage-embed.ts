@@ -81,10 +81,14 @@ export function renderBar(utilization: number | undefined): string {
  * Worst-wins: rejected > allowed_warning > allowed.
  */
 function pickColor(snapshots: readonly RateLimitSnapshot[]): number {
-  let worst: "allowed" | "allowed_warning" | "rejected" = "allowed";
+  // Worst-wins: rejected returns early; otherwise we only ever escalate
+  // from "allowed" to "allowed_warning". The previous `worst !== "rejected"`
+  // guard was dead code (the early return above means `worst` is never
+  // "rejected" at this point), and TS6.0 flagged it as TS2367.
+  let worst: "allowed" | "allowed_warning" = "allowed";
   for (const s of snapshots) {
     if (s.status === "rejected") return COLOR_REJECT;
-    if (s.status === "allowed_warning" && worst !== "rejected") {
+    if (s.status === "allowed_warning") {
       worst = "allowed_warning";
     }
   }

@@ -307,7 +307,10 @@ export function resolveAgentConfig(
   // a single MCP's env failure (e.g. bad op:// ref) logs + excludes that
   // MCP from this agent's list instead of throwing the entire config
   // load. Agents that don't reference the failing MCP are unaffected.
-  const mcpServers: ResolvedAgentConfig["mcpServers"] = [];
+  // Build into a mutable local; the field on ResolvedAgentConfig is the
+  // readonly view — `push`ing here is fine, the readonly modifier applies
+  // to consumers of the resolved config, not to construction.
+  const mcpServers: Array<ResolvedAgentConfig["mcpServers"][number]> = [];
   for (const s of resolvedMcpMap.values()) {
     try {
       const env = Object.fromEntries(

@@ -9,6 +9,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     defaults: {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
       // Phase 86 MODEL-01 — defaults carry the full allowlist so back-compat
       // tests that build a base Config don't produce a spurious diff on
       // the defaults.allowedModels field.

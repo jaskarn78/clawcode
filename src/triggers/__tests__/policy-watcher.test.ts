@@ -513,7 +513,7 @@ describe("PolicyWatcher", () => {
       const alpha = parseResult.data.agents.find(
         (a) => a.name === "agent-alpha",
       );
-      // @ts-expect-error Phase 999.13 RED — Plan 01 adds delegates field
+      // Phase 999.13 GREEN — delegates field is on AgentConfig now.
       expect(alpha?.delegates).toEqual({ research: "research" });
 
       // Build the configuredAgents Set the way the daemon does.

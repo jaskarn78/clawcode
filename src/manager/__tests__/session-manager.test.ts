@@ -386,6 +386,7 @@ vi.mock("../warm-path-check.js", async () => {
 });
 
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "../warm-path-check.js";
+import type { WarmPathResult } from "../warm-path-check.js";
 
 const mockedRunWarmPathCheck = vi.mocked(runWarmPathCheck);
 
@@ -395,31 +396,34 @@ const mockedRunWarmPathCheck = vi.mocked(runWarmPathCheck);
 beforeEach(() => {
   mockedRunWarmPathCheck.mockReset();
   mockedRunWarmPathCheck.mockResolvedValue(
+    // WarmPathResult has mutable fields; Object.freeze produces Readonly<T>.
+    // Recover the declared shape via cast — runtime immutability is preserved
+    // by the freeze, the consumer only reads.
     Object.freeze({
       ready: true,
       durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1, browser: 0 }),
       total_ms: 131,
       errors: Object.freeze([]) as readonly string[],
-    }),
+    }) as unknown as WarmPathResult,
   );
 });
 
-function makeReadyResult(totalMs = 131) {
+function makeReadyResult(totalMs = 131): WarmPathResult {
   return Object.freeze({
     ready: true,
     durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1, browser: 0 }),
     total_ms: totalMs,
     errors: Object.freeze([]) as readonly string[],
-  });
+  }) as unknown as WarmPathResult;
 }
 
-function makeFailureResult(errors: readonly string[], totalMs = 85) {
+function makeFailureResult(errors: readonly string[], totalMs = 85): WarmPathResult {
   return Object.freeze({
     ready: false,
     durations_ms: Object.freeze({ sqlite: 20, embedder: 65, session: 0, browser: 0 }),
     total_ms: totalMs,
     errors: Object.freeze([...errors]) as readonly string[],
-  });
+  }) as unknown as WarmPathResult;
 }
 
 describe("startAgent warm-path gate (Phase 56)", () => {

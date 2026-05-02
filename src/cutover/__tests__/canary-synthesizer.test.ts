@@ -37,7 +37,7 @@ const CANNED_TWO_PROMPTS = JSON.stringify([
 ]);
 
 function baseDeps(overrides: Partial<SynthesizerDeps> = {}): SynthesizerDeps {
-  const dispatch = vi.fn(async () => CANNED_TWO_PROMPTS);
+  const dispatch = vi.fn<SynthesizerDeps["dispatcher"]["dispatch"]>(async () => CANNED_TWO_PROMPTS);
   return {
     agent: "fin-acquisition",
     topIntents: [
@@ -54,7 +54,7 @@ function baseDeps(overrides: Partial<SynthesizerDeps> = {}): SynthesizerDeps {
 
 describe("synthesizeCanaryPrompts — S1 happy path", () => {
   it("dispatcher called once; returns synthesized prompts sorted by intent ASC", async () => {
-    const dispatch = vi.fn(async () => CANNED_TWO_PROMPTS);
+    const dispatch = vi.fn<SynthesizerDeps["dispatcher"]["dispatch"]>(async () => CANNED_TWO_PROMPTS);
     const deps = baseDeps({
       topIntents: [
         // Intentionally reverse-sorted to prove the synthesizer doesn't depend
@@ -72,10 +72,11 @@ describe("synthesizeCanaryPrompts — S1 happy path", () => {
 
     expect(dispatch).toHaveBeenCalledTimes(1);
     // The dispatcher prompt should reference both intents.
-    const promptArg =
-      (dispatch.mock.calls[0]?.[2] as string | undefined) ??
-      (dispatch.mock.calls[0]?.[0] as string | undefined) ??
-      "";
+    // SynthesizerDispatchFn signature: (origin, agentName, message, options?)
+    // — message is index [2]. Previous code had a fallback to `[0]` which
+    // pre-dated the origin-first signature; vitest 4 tuple-narrowing
+    // surfaced the dead branch.
+    const promptArg = dispatch.mock.calls[0]?.[2] ?? "";
     expect(promptArg).toContain("a");
     expect(promptArg).toContain("b");
     expect(outcome.kind).toBe("synthesized");
@@ -100,7 +101,7 @@ describe("synthesizeCanaryPrompts — S2 limit applied", () => {
         prompt: `prompt for i${String(i).padStart(2, "0")}`,
       })),
     );
-    const dispatch = vi.fn(async () => canned20);
+    const dispatch = vi.fn<SynthesizerDeps["dispatcher"]["dispatch"]>(async () => canned20);
     const outcome = await synthesizeCanaryPrompts(
       baseDeps({
         topIntents: intents,
@@ -118,10 +119,8 @@ describe("synthesizeCanaryPrompts — S2 limit applied", () => {
     }
     // The dispatcher prompt should contain top 20 intents (i00..i19) and NOT
     // the lowest-count entries that fell outside the slice (i20..i29).
-    const promptArg =
-      (dispatch.mock.calls[0]?.[2] as string | undefined) ??
-      (dispatch.mock.calls[0]?.[0] as string | undefined) ??
-      "";
+    // Index [2] = message arg per SynthesizerDispatchFn signature.
+    const promptArg = dispatch.mock.calls[0]?.[2] ?? "";
     expect(promptArg).toContain("i00");
     expect(promptArg).toContain("i19");
     expect(promptArg).not.toContain("i29");

@@ -2309,8 +2309,12 @@ export async function startDaemon(
       });
     }
 
-    // Only add handler-based schedules to TaskScheduler (those with a handler)
-    for (const schedule of agentConfig.schedules) {
+    // Only add handler-based schedules to TaskScheduler (those with a handler).
+    // User-defined yaml schedules are prompt-based (ScheduleEntryConfig has no
+    // `handler` field). The cast covers a future case where dynamically-injected
+    // schedules carry a handler at runtime — today this filter is a no-op for
+    // config-sourced entries, by design.
+    for (const schedule of agentConfig.schedules as readonly ScheduleEntry[]) {
       if (schedule.enabled && schedule.handler) {
         handlerSchedules.push(schedule);
       }
@@ -6594,7 +6598,18 @@ async function routeMethod(
         const tracker = manager.getUsageTracker(agentName);
         if (tracker) {
           const agentCosts = tracker.getCostsByAgentModel(since.toISOString(), now.toISOString());
-          results.push(...agentCosts);
+          // CostByAgentModel uses `tokens_in/tokens_out`; the IPC wire shape
+          // here uses `input_tokens/output_tokens`. Map field names rather
+          // than push() the row directly.
+          for (const row of agentCosts) {
+            results.push({
+              agent: row.agent,
+              model: row.model,
+              input_tokens: row.tokens_in,
+              output_tokens: row.tokens_out,
+              cost_usd: row.cost_usd,
+            });
+          }
         }
       }
       return { period, costs: results };

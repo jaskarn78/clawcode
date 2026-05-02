@@ -54,7 +54,7 @@ describe("Phase 96 Plan 05 — daemon probe-fs + list-fs-status IPC (DIPC-)", ()
     const getSnapshot = vi.fn(
       () => new Map<string, FsCapabilitySnapshot>(),
     );
-    const writeFsSnapshot = vi.fn(async () => {});
+    const writeFsSnapshot = vi.fn<ProbeFsIpcDeps["writeFsSnapshot"]>(async () => {});
     const fileAccess = ["/path/a", "/path/b"];
 
     const deps: ProbeFsIpcDeps = {
@@ -179,7 +179,7 @@ describe("Phase 96 Plan 05 — daemon probe-fs + list-fs-status IPC (DIPC-)", ()
     const getSnapshot = vi.fn(
       () => new Map<string, FsCapabilitySnapshot>(),
     );
-    const writeFsSnapshot = vi.fn(async () => {});
+    const writeFsSnapshot = vi.fn<ProbeFsIpcDeps["writeFsSnapshot"]>(async () => {});
     const paths = ["/path/a", "/path/b", "/path/c"];
 
     const deps: ProbeFsIpcDeps = {

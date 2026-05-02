@@ -255,9 +255,12 @@ export async function loadMarketplaceCatalog(
   // Synthetic source is appended (after locals, before legacy/explicit
   // sources are processed). Public access only — no authToken. opts.sources
   // is NEVER mutated; we build a new array for the iteration.
-  const sourcesArr: Array<(typeof opts.sources)[number]> = Array.from(
-    opts.sources,
-  );
+  // `opts.sources` is a union of two readonly array shapes. `Array.from`
+  // can't pick a single overload across the union, so spread into a new
+  // array typed as the union's element type. Behaviour is identical to
+  // `Array.from(opts.sources)` — same iteration order, same elements.
+  type SourceElement = (typeof opts.sources)[number];
+  const sourcesArr: SourceElement[] = [...(opts.sources as readonly SourceElement[])];
   const hasExplicitClawhub = sourcesArr.some(
     (s) =>
       typeof s === "object" &&

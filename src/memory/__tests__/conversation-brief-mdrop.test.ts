@@ -303,7 +303,10 @@ describe("conversation-brief — 99-mdrop telemetry escalation", () => {
 
     const errorCalls: Array<{ payload: Record<string, unknown>; msg: string }> = [];
     const warnCalls: Array<{ payload: Record<string, unknown>; msg: string }> = [];
-    const log = {
+    // LoggerLike is structural with optional `error`. The extra `info`
+    // method below is fine at runtime but TS object-literal-strictness
+    // flags it; widen the type so the consumer reads only warn/error.
+    const log: { info: () => void; warn: (p: Record<string, unknown>, m: string) => void; error: (p: Record<string, unknown>, m: string) => void } = {
       info: () => {},
       warn: (payload: Record<string, unknown>, msg: string) => {
         warnCalls.push({ payload, msg });
@@ -319,7 +322,10 @@ describe("conversation-brief — 99-mdrop telemetry escalation", () => {
         conversationStore: convStore,
         memoryStore: memStore,
         config: { sessionCount: 3, gapThresholdHours: 4, budgetTokens: 2000 },
-        log,
+        // The structural LoggerLike on the consumer side has only warn (+
+        // optional error). The fixture's extra `info` is for traceability
+        // in the test, not part of the contract — narrow the assignment.
+        log: log as unknown as Parameters<typeof assembleConversationBrief>[1]["log"],
       },
     );
 

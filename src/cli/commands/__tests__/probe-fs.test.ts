@@ -27,6 +27,10 @@ import {
   type FsProbeOutcomeWire,
   type RunProbeFsActionArgs,
 } from "../probe-fs.js";
+
+// vitest 4 narrows .mock.calls when the mock's parameters can't be inferred.
+// Pin to the action's sendIpc signature.
+type SendIpcFn = NonNullable<RunProbeFsActionArgs["sendIpc"]>;
 import { ManagerNotRunningError } from "../../../shared/errors.js";
 
 function completedOutcome(): FsProbeOutcomeWire {
@@ -124,7 +128,7 @@ describe("clawcode probe-fs — Phase 96 Plan 05 (PRO-)", () => {
   });
 
   it("PRO-HAPPY: deps.sendIpc returns completed outcome → stdout has 3-row table with status emojis; exit 0", async () => {
-    const sendIpc = vi.fn(async () => completedOutcome() as unknown);
+    const sendIpc = vi.fn<SendIpcFn>(async () => completedOutcome() as unknown);
     const args: RunProbeFsActionArgs = {
       agent: "fin-acquisition",
       sendIpc,
@@ -149,7 +153,7 @@ describe("clawcode probe-fs — Phase 96 Plan 05 (PRO-)", () => {
   });
 
   it("PRO-DIFF: --diff flag → outcome.changes rendered as 'Changes since last probe'", async () => {
-    const sendIpc = vi.fn(async () => outcomeWithChanges() as unknown);
+    const sendIpc = vi.fn<SendIpcFn>(async () => outcomeWithChanges() as unknown);
     const args: RunProbeFsActionArgs = {
       agent: "fin-acquisition",
       diff: true,
@@ -165,7 +169,7 @@ describe("clawcode probe-fs — Phase 96 Plan 05 (PRO-)", () => {
   });
 
   it("PRO-CONNECTION-FAILURE: ManagerNotRunningError → stderr 'daemon'; exit non-zero (ECONNREFUSED equivalent)", async () => {
-    const sendIpc = vi.fn(async () => {
+    const sendIpc = vi.fn<SendIpcFn>(async () => {
       throw new ManagerNotRunningError();
     });
     const args: RunProbeFsActionArgs = {
@@ -180,7 +184,7 @@ describe("clawcode probe-fs — Phase 96 Plan 05 (PRO-)", () => {
   });
 
   it("PRO-AGENT-NOT-RUNNING: IPC reject with 'agent not running' → stderr error; exit non-zero", async () => {
-    const sendIpc = vi.fn(async () => {
+    const sendIpc = vi.fn<SendIpcFn>(async () => {
       throw new Error("agent not running");
     });
     const args: RunProbeFsActionArgs = {

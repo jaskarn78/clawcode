@@ -31,7 +31,11 @@ describe("provisionAgent", () => {
   let agentsBasePath: string;
 
   beforeEach(async () => {
-    tmpDir = await mkdir(join(tmpdir(), `clawcode-test-${Date.now()}`), { recursive: true });
+    // node:fs/promises mkdir with `recursive: true` returns the first
+    // directory path created, OR undefined if every path already exists.
+    // Build the path eagerly and pass it to mkdir so we always have a value.
+    tmpDir = join(tmpdir(), `clawcode-test-${Date.now()}`);
+    await mkdir(tmpDir, { recursive: true });
     configPath = join(tmpDir, "clawcode.yaml");
     agentsBasePath = join(tmpDir, "agents");
 

@@ -18,7 +18,12 @@ import { ManagerError } from "../../shared/errors.js";
 describe("memory-lookup handler logic", () => {
   describe("limit clamping", () => {
     it("defaults to 5 when limit is not a number", () => {
-      const params = { agent: "test", query: "hello" };
+      // Type as the broader IPC params shape (limit is optional) so the
+      // typeof-narrowing branch typechecks. Behaviour unchanged.
+      const params: { agent: string; query: string; limit?: number } = {
+        agent: "test",
+        query: "hello",
+      };
       const limit = typeof params.limit === "number" ? Math.min(Math.max(params.limit, 1), 20) : 5;
       expect(limit).toBe(5);
     });

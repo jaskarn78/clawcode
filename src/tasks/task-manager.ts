@@ -235,7 +235,10 @@ export class TaskManager {
       }
     }
 
-    // Build TurnOrigin for B's turn.
+    // Build TurnOrigin for B's turn. TurnOrigin (zod-inferred) is a non-readonly
+    // type, but Object.freeze produces Readonly<T>; cast away the readonly
+    // modifier — runtime immutability is preserved by the freezes themselves
+    // and the consumer (TurnDispatcher.dispatch) only reads from origin.
     const childOrigin: TurnOrigin = Object.freeze({
       source: Object.freeze({ kind: "task" as const, id: taskId }),
       rootTurnId: rootCausationId,
@@ -244,7 +247,10 @@ export class TaskManager {
         ...(parentRow?.causation_id ? [parentRow.causation_id] : []),
         taskId,
       ]),
-    });
+      // Phase 60 TRIG-08 — TurnOrigin schema requires causationId (default
+      // null for non-trigger flows). Tasks aren't trigger-driven.
+      causationId: null,
+    }) as unknown as TurnOrigin;
 
     // Transition pending -> running BEFORE dispatch (row is "live" while B executes).
     this.opts.store.transition(taskId, "running", { heartbeat_at: nowMs } as Record<string, unknown>);
@@ -330,7 +336,8 @@ export class TaskManager {
       rootTurnId: row.causation_id,
       parentTurnId: row.causation_id,
       chain: Object.freeze([row.causation_id, taskId]),
-    });
+      causationId: null,
+    }) as unknown as TurnOrigin;
     const message = this.formatCompleteMessage(row.task_type, resultPayload);
     void this.opts.turnDispatcher
       .dispatch(resultOrigin, row.caller_agent, message)
@@ -369,7 +376,8 @@ export class TaskManager {
       rootTurnId: row.causation_id,
       parentTurnId: row.causation_id,
       chain: Object.freeze([row.causation_id, taskId]),
-    });
+      causationId: null,
+    }) as unknown as TurnOrigin;
     const message = `Task '${row.task_type}' was CANCELLED by ${cancellerName}`;
     void this.opts.turnDispatcher
       .dispatch(cancelOrigin, row.caller_agent, message)
@@ -487,7 +495,8 @@ export class TaskManager {
       rootTurnId: row.causation_id,
       parentTurnId: row.causation_id,
       chain: Object.freeze([row.causation_id, taskId]),
-    });
+      causationId: null,
+    }) as unknown as TurnOrigin;
     const message = `Task '${row.task_type}' TIMED OUT after ${deadlineMs}ms`;
     void this.opts.turnDispatcher
       .dispatch(timeoutOrigin, row.caller_agent, message)

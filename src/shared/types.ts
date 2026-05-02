@@ -21,7 +21,10 @@ export type ResolvedAgentConfig = {
   readonly memoryPath: string;
   readonly channels: readonly string[];
   readonly model: "sonnet" | "opus" | "haiku";
-  readonly effort: "low" | "medium" | "high" | "max";
+  // Mirrors `effortSchema` in config/schema.ts. Phase note: the schema was
+  // extended with `xhigh`, `auto`, and `off` but this resolved-type union
+  // had not been widened to match — keep them in sync.
+  readonly effort: "low" | "medium" | "high" | "xhigh" | "max" | "auto" | "off";
   /**
    * Phase 86 MODEL-01 — per-agent allowlist for the /clawcode-model
    * Discord picker and the SessionManager.setModelForAgent guard.
@@ -225,6 +228,11 @@ export type ResolvedAgentConfig = {
       readonly hotDemotionDays: number;
       readonly coldRelevanceThreshold: number;
       readonly hotBudget: number;
+      // Phase 100-fu — backlink-count threshold for centrality-based hot
+      // promotion. Mirrored on the zod schema and in DEFAULT_TIER_CONFIG.
+      // Was missing from this resolved type, which surfaced as TS2741 at
+      // session-memory.ts:88 when passing tierConfig to TierManager.
+      readonly centralityPromoteThreshold: number;
     };
     /**
      * Phase 67 — conversation persistence knobs. Shape mirrors the resolved

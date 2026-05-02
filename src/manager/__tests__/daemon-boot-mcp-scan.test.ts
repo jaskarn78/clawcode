@@ -213,10 +213,7 @@ describe("Phase 999.15 mcp-tracker-snapshot IPC (TRACK-05)", () => {
     // Cannot-find-module — that IS the RED state.
     let buildSnapshot: ((tracker: unknown) => unknown) | null = null;
     try {
-      // @ts-expect-error — module ships in Plan 03 (TRACK-05). Several
-      // landing locations are plausible; the planner picks one. We probe
-      // a likely path here; whatever Plan 03 chooses must be reachable
-      // from this import.
+      // GREEN — module shipped in Plan 03 (TRACK-05).
       const mod = await import("../mcp-tracker-snapshot.js");
       buildSnapshot = (
         mod as { buildMcpTrackerSnapshot?: (t: unknown) => unknown }
@@ -276,7 +273,7 @@ describe("Phase 999.15 mcp-tracker-snapshot IPC (TRACK-05)", () => {
   it("IPC-2: mcp-tracker-snapshot includes registeredAt epoch-ms timestamp per agent", async () => {
     let buildSnapshot: ((tracker: unknown) => unknown) | null = null;
     try {
-      // @ts-expect-error — module ships in Plan 03 (TRACK-05)
+      // GREEN — module shipped in Plan 03 (TRACK-05).
       const mod = await import("../mcp-tracker-snapshot.js");
       buildSnapshot = (
         mod as { buildMcpTrackerSnapshot?: (t: unknown) => unknown }

@@ -25,6 +25,10 @@ import {
   registerFsStatusCommand,
 } from "../fs-status.js";
 
+// Pin vi.fn to the action's `sendIpc` signature so .mock.calls[i] tuple-narrows
+// to [method, params] under vitest 4 instead of [].
+type SendIpcFn = NonNullable<RunFsStatusActionArgs["sendIpc"]>;
+
 function happySnapshot(): FsStatusResponse {
   return {
     agent: "fin-acquisition",
@@ -88,7 +92,7 @@ describe("clawcode fs-status — Phase 96 Plan 05 (FSS-)", () => {
   });
 
   it("FSS-CLI-HAPPY: full snapshot rendered as table with path | status | mode | lastProbeAt columns", async () => {
-    const sendIpc = vi.fn(async () => happySnapshot() as unknown);
+    const sendIpc = vi.fn<SendIpcFn>(async () => happySnapshot() as unknown);
     const args: RunFsStatusActionArgs = {
       agent: "fin-acquisition",
       sendIpc,

@@ -25,6 +25,8 @@ describe("resolveAgentConfig", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+    outputDir: "outputs/{date}/",
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
@@ -577,6 +579,8 @@ describe("resolveAgentConfig - mcpServers", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+    outputDir: "outputs/{date}/",
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
@@ -1289,6 +1293,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+    outputDir: "outputs/{date}/",
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
@@ -1695,6 +1701,8 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
     return {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
       allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
       // Phase 89 — zod defaults these to true / 300_000 in defaultsSchema
       greetOnRestart: true,
@@ -1840,6 +1848,8 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
     return {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
       allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
       greetOnRestart: true,
       greetCoolDownMs: 300_000,
@@ -2083,6 +2093,8 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
     return {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
       allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
       greetOnRestart: true,
       greetCoolDownMs: 300_000,

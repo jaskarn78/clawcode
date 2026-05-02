@@ -258,9 +258,9 @@ describe("clawcode threads prune --agent (MCP-10)", () => {
 
 describe("clawcode threads prune error handling (MCP-10)", () => {
   it("Test 10: ManagerNotRunningError — exits 1 with message", async () => {
-    sendIpcRequestMock.mockRejectedValue(
-      new ManagerNotRunningError("manager down"),
-    );
+    // ManagerNotRunningError ctor takes no args (message is hard-coded);
+    // pass nothing — the prior fixture passed an unused string.
+    sendIpcRequestMock.mockRejectedValue(new ManagerNotRunningError());
 
     const code = await runCli([
       "threads",

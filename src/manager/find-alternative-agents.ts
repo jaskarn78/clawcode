@@ -78,7 +78,7 @@ export function findAlternativeAgents(
 ): readonly string[] {
   const toolToServer = provider.toolToServer ?? defaultToolToServer;
   const serverName = toolToServer(toolName);
-  if (!serverName) return Object.freeze<string>([]);
+  if (!serverName) return Object.freeze<readonly string[]>([]);
 
   const matches: string[] = [];
   for (const agentName of provider.listAgents()) {

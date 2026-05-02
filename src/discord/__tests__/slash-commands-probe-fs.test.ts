@@ -346,7 +346,12 @@ describe("Phase 96 Plan 05 — /clawcode-probe-fs slash command (PFS-)", () => {
   });
 
   it("PFS-DIFF-FIELD: outcome.changes populates a 'Changes since last probe' field", () => {
-    const embed = renderProbeFsEmbed("fin-acquisition", outcomeWithChanges());
+    // outcomeWithChanges() is typed `unknown` to keep the fixture
+    // shape-loose; cast to the wire shape at the call boundary.
+    const embed = renderProbeFsEmbed(
+      "fin-acquisition",
+      outcomeWithChanges() as Parameters<typeof renderProbeFsEmbed>[1],
+    );
     const data = embed.toJSON() as {
       fields?: { name: string; value: string }[];
     };

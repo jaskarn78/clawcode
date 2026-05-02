@@ -62,11 +62,19 @@ function makeMockTaskStore(db: DatabaseType) {
 function makeFakeSource(
   sourceId: string,
   opts: { poll?: boolean } = {},
-): TriggerSource & { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; pollFn?: ReturnType<typeof vi.fn> } {
-  const source: TriggerSource & { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; pollFn?: ReturnType<typeof vi.fn> } = {
+): TriggerSource & {
+  start: ReturnType<typeof vi.fn<() => void>>;
+  stop: ReturnType<typeof vi.fn<() => void>>;
+  pollFn?: ReturnType<typeof vi.fn<(since: string | null) => Promise<readonly never[]>>>;
+} {
+  const source: TriggerSource & {
+    start: ReturnType<typeof vi.fn<() => void>>;
+    stop: ReturnType<typeof vi.fn<() => void>>;
+    pollFn?: ReturnType<typeof vi.fn<(since: string | null) => Promise<readonly never[]>>>;
+  } = {
     sourceId,
-    start: vi.fn(),
-    stop: vi.fn(),
+    start: vi.fn<() => void>(),
+    stop: vi.fn<() => void>(),
   };
   if (opts.poll) {
     const pollFn = vi.fn().mockResolvedValue([]);

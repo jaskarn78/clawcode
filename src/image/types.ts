@@ -14,11 +14,15 @@
 export type ImageBackend = "openai" | "minimax" | "fal";
 
 /**
- * Error taxonomy — exactly 8 discriminants. Each maps to a distinct agent
- * action (retry, fix args, give up, try another backend).
+ * Error taxonomy. Each maps to a distinct agent action (retry, fix args,
+ * give up, try another backend).
  *
  *  - rate_limit            backend rate-limited (transient, retry with backoff)
- *  - invalid_input         arg / config / file path / API key issue (caller fix)
+ *  - invalid_input         arg / config / file path / API key issue (caller fix,
+ *                          surfaced by provider-level validation)
+ *  - invalid_argument      IPC-boundary argument violation (unknown agent,
+ *                          unknown toolName) — mirrors the search/browser
+ *                          taxonomy used by sibling daemon handlers.
  *  - backend_unavailable   backend unreachable / 5xx (try another backend)
  *  - unsupported_operation backend doesn't support requested op (e.g. minimax + edit)
  *  - content_policy        prompt rejected by safety filter (caller rephrase)
@@ -29,6 +33,7 @@ export type ImageBackend = "openai" | "minimax" | "fal";
 export type ImageErrorType =
   | "rate_limit"
   | "invalid_input"
+  | "invalid_argument"
   | "backend_unavailable"
   | "unsupported_operation"
   | "content_policy"
@@ -108,3 +113,12 @@ export interface ImageUsageEvent {
   readonly session_id: string;
   readonly turn_id?: string;
 }
+
+/**
+ * Provider contract — re-exported from `./tools.js` so callers that import
+ * type contracts from this module (the canonical types entry point) can
+ * reference `ImageProvider` without reaching into `tools.ts`. Callers that
+ * need both the type and the implementing helpers continue to import from
+ * `./tools.js` directly.
+ */
+export type { ImageProvider } from "./tools.js";

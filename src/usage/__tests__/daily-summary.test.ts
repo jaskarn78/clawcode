@@ -189,7 +189,7 @@ describe("emitDailySummary", () => {
     const traceStore = stubTraceStore(makeCacheReport());
     const usageTracker = stubUsageTracker(makeUsageAggregate());
     const log = stubLogger();
-    const sendSpy = vi.fn(async () => undefined);
+    const sendSpy = vi.fn<(agentName: string, content: string) => Promise<void>>(async () => undefined);
     const webhookManager = {
       hasWebhook: vi.fn(() => true),
       send: sendSpy,
@@ -216,7 +216,7 @@ describe("emitDailySummary", () => {
     const traceStore = stubTraceStore(makeCacheReport());
     const usageTracker = stubUsageTracker(makeUsageAggregate());
     const log = stubLogger();
-    const sendSpy = vi.fn(async () => undefined);
+    const sendSpy = vi.fn<(agentName: string, content: string) => Promise<void>>(async () => undefined);
     const webhookManager = {
       hasWebhook: vi.fn(() => false),
       send: sendSpy,
@@ -270,7 +270,7 @@ describe("emitDailySummary", () => {
     );
     const usageTracker = stubUsageTracker(makeUsageAggregate());
     const log = stubLogger();
-    const sendSpy = vi.fn(async () => undefined);
+    const sendSpy = vi.fn<(agentName: string, content: string) => Promise<void>>(async () => undefined);
     const webhookManager = {
       hasWebhook: vi.fn(() => true),
       send: sendSpy,
@@ -295,7 +295,7 @@ describe("emitDailySummary", () => {
     );
     const usageTracker = stubUsageTracker(makeUsageAggregate({ turns: 0 }));
     const log = stubLogger();
-    const sendSpy = vi.fn(async () => undefined);
+    const sendSpy = vi.fn<(agentName: string, content: string) => Promise<void>>(async () => undefined);
     const webhookManager = {
       hasWebhook: vi.fn(() => true),
       send: sendSpy,

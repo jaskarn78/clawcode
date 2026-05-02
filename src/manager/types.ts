@@ -91,7 +91,10 @@ export type BackoffConfig = {
 export type AgentSessionConfig = {
   readonly name: string;
   readonly model: "sonnet" | "opus" | "haiku";
-  readonly effort: "low" | "medium" | "high" | "max";
+  // Mirrors `effortSchema` in config/schema.ts and ResolvedAgentConfig.effort
+  // — the canonical 7-value union. Was previously narrowed to 4 values which
+  // diverged from the schema after `xhigh`/`auto`/`off` were added.
+  readonly effort: "low" | "medium" | "high" | "xhigh" | "max" | "auto" | "off";
   readonly workspace: string;
   readonly systemPrompt: string;
   readonly mutableSuffix?: string;
