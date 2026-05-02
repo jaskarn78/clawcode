@@ -35,6 +35,18 @@
  */
 
 import { spawn } from "node:child_process";
+import type { Logger } from "pino";
+import { killGroup } from "./process-tracker.js";
+
+/**
+ * Silent fallback logger. Mirrors src/mcp/health.ts — production callers pass
+ * a real pino child for killGroup's EPERM/unexpected-error path; tests get a
+ * no-op so we don't have to thread a logger through every fixture.
+ */
+const NOOP_LOG = {
+  warn: () => {},
+  error: () => {},
+} as unknown as Logger;
 
 /**
  * Minimal MCP server config shape consumed by the JSON-RPC primitives.
@@ -86,6 +98,7 @@ async function rpcCall(
   method: string,
   params: Record<string, unknown>,
   timeoutMs: number = RPC_TIMEOUT_MS,
+  log: Logger = NOOP_LOG,
 ): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
     let resolved = false;
@@ -97,12 +110,12 @@ async function rpcCall(
       if (resolved) return;
       resolved = true;
 
-      if (child && !child.killed) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Process may have already exited.
-        }
+      // Group-kill via negative PID — detached:true at spawn made the child
+      // its own pgid leader, so this reaches the npm wrapper + sh + node
+      // grandchildren together. Pre-fix single-PID kill orphaned the
+      // grandchildren to PID 1 (mcp-server-mysql leak; see fn JSDoc).
+      if (child?.pid && !child.killed) {
+        killGroup(child.pid, "SIGKILL", log);
       }
 
       if (err) {
@@ -120,7 +133,12 @@ async function rpcCall(
       child = spawn(server.command, [...server.args], {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, ...server.env },
+        // Phase 999.X — fresh process group so finish()'s killGroup reaps
+        // the wrapper + sh + node grandchildren together.
+        detached: true,
       });
+      // One-shot probe — don't keep the daemon's event loop alive for it.
+      child.unref();
 
       child.on("error", (err: Error) => {
         clearTimeout(timer);
@@ -222,13 +240,14 @@ async function rpcCall(
  */
 export function makeRealListTools(
   serversByName: ReadonlyMap<string, McpServerConfig>,
+  log: Logger = NOOP_LOG,
 ): (serverName: string) => Promise<readonly McpToolDescriptor[]> {
   return async (serverName: string) => {
     const server = serversByName.get(serverName);
     if (!server) {
       throw new Error(`MCP server '${serverName}' not configured`);
     }
-    const result = (await rpcCall(server, "tools/list", {})) as {
+    const result = (await rpcCall(server, "tools/list", {}, undefined, log)) as {
       tools?: ReadonlyArray<{ name?: string }>;
     };
     const tools = result?.tools ?? [];
@@ -253,6 +272,7 @@ export function makeRealListTools(
  */
 export function makeRealCallTool(
   serversByName: ReadonlyMap<string, McpServerConfig>,
+  log: Logger = NOOP_LOG,
 ): (
   serverName: string,
   toolName: string,
@@ -263,9 +283,12 @@ export function makeRealCallTool(
     if (!server) {
       throw new Error(`MCP server '${serverName}' not configured`);
     }
-    return await rpcCall(server, "tools/call", {
-      name: toolName,
-      arguments: args,
-    });
+    return await rpcCall(
+      server,
+      "tools/call",
+      { name: toolName, arguments: args },
+      undefined,
+      log,
+    );
   };
 }
