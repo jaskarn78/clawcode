@@ -937,6 +937,97 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
 
     expect(after).toBe(before);
   }, 30_000);
+
+  // ── Phase 99-C: pending-summary backlog drain ──────────────────────────────
+  // summarizePendingSessions should pick up sessions that ended/crashed
+  // without ever being summarized (status='ended' OR 'crashed' AND
+  // summary_memory_id IS NULL with at least one turn) and run summarizeSession
+  // on each via the same wiring the stop-path / crash-path use.
+  it("summarizePendingSessions drains the backlog and writes summary memories", async () => {
+    const agentName = "summarize-pending";
+    const config = makeIsolatedConfig(agentName);
+    await manager.startAgent(agentName, config);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    const memStore = manager.getMemoryStore(agentName)!;
+
+    // Seed 3 ended-no-summary sessions (each with 4 turns to exceed minTurns=3).
+    const seeded: string[] = [];
+    for (let s = 0; s < 3; s++) {
+      const session = convStore.startSession(agentName);
+      seeded.push(session.id);
+      for (let i = 0; i < 4; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: `pending session ${s} turn ${i} body`,
+        });
+      }
+      convStore.endSession(session.id);
+    }
+
+    // Sanity: the backlog query sees the 3 seeded sessions.
+    expect(
+      convStore.listPendingSummarySessions(agentName, 10).map((x) => x.id),
+    ).toEqual(expect.arrayContaining(seeded));
+
+    const insertSpy = vi.spyOn(memStore, "insert");
+    const result = await manager.summarizePendingSessions(agentName, 10);
+
+    expect(result.attempted).toBe(3);
+    expect(result.summarized).toBe(3);
+    expect(result.skipped).toBe(0);
+
+    // Each session got a session-summary memory entry.
+    const summaryInserts = insertSpy.mock.calls.filter((c) =>
+      (c[0] as { tags?: readonly string[] }).tags?.includes(
+        "session-summary",
+      ),
+    );
+    expect(summaryInserts.length).toBe(3);
+
+    // After draining, every seeded session is now status='summarized' with
+    // a summary_memory_id populated.
+    for (const id of seeded) {
+      const after = convStore.getSession(id)!;
+      expect(after.status).toBe("summarized");
+      expect(after.summaryMemoryId).toBeTruthy();
+    }
+    // Backlog is now empty.
+    expect(convStore.listPendingSummarySessions(agentName, 10)).toHaveLength(0);
+  }, 30_000);
+
+  it("summarizePendingSessions returns zeroed counts when stores aren't open", async () => {
+    // No startAgent — memoryStore / conversationStore not in the maps.
+    const r = await manager.summarizePendingSessions("never-started", 5);
+    expect(r).toEqual({ attempted: 0, summarized: 0, skipped: 0 });
+  });
+
+  it("summarizePendingSessions respects the limit argument", async () => {
+    const agentName = "summarize-pending-limit";
+    const config = makeIsolatedConfig(agentName);
+    await manager.startAgent(agentName, config);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    for (let s = 0; s < 5; s++) {
+      const session = convStore.startSession(agentName);
+      for (let i = 0; i < 4; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: "user",
+          content: `lim ${s}.${i}`,
+        });
+      }
+      convStore.endSession(session.id);
+    }
+
+    const r = await manager.summarizePendingSessions(agentName, 2);
+    expect(r.attempted).toBe(2);
+    // 3 sessions remain pending after the capped tick.
+    expect(
+      convStore.listPendingSummarySessions(agentName, 10).length,
+    ).toBe(3);
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------

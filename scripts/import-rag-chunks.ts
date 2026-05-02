@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { MemoryStore } from "../src/memory/store.js";
 import { DocumentStore } from "../src/documents/store.js";
 import { EmbeddingService } from "../src/memory/embedder.js";
+import { getAgentMemoryDbPath } from "../src/shared/agent-paths.js";
 import type { ChunkInput } from "../src/documents/chunker.js";
 
 type SourceRow = {
@@ -69,7 +70,7 @@ async function main(): Promise<void> {
   }
   console.log(`Paths:   ${byPath.size}`);
 
-  const targetDbPath = join(DB_BASE, AGENT_NAME, "memory", "memories.db");
+  const targetDbPath = getAgentMemoryDbPath(join(DB_BASE, AGENT_NAME));
   console.log(`Target:  ${targetDbPath}`);
 
   // MemoryStore initializes the shared DB with sqlite-vec loaded + all

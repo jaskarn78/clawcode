@@ -153,11 +153,16 @@ describe("ConversationStore", () => {
     });
 
     // ── agents-forget-across-sessions debug (2026-04-19) ─────────────────
+    // 2026-04-25 evening hotfix added an EXISTS(conversation_turns) filter to
+    // listRecentTerminatedSessions so empty restart cycles don't shadow real
+    // history; these tests record one turn per session to satisfy that filter.
     it("listRecentTerminatedSessions excludes active sessions", () => {
       setup();
       const s1 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s1.id, role: "user", content: "1" });
       convStore.endSession(s1.id);
       const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s2.id, role: "user", content: "2" });
       convStore.crashSession(s2.id);
       const s3 = convStore.startSession("agent-a"); // left active
 
@@ -173,6 +178,11 @@ describe("ConversationStore", () => {
       setup();
       const memId = createMemoryEntry(memStore, "summarized-check");
       const session = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: session.id,
+        role: "user",
+        content: "x",
+      });
       convStore.endSession(session.id);
       convStore.markSummarized(session.id, memId);
 
@@ -185,10 +195,13 @@ describe("ConversationStore", () => {
     it("listRecentTerminatedSessions orders by started_at DESC", () => {
       setup();
       const s1 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s1.id, role: "user", content: "1" });
       convStore.endSession(s1.id);
       const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s2.id, role: "user", content: "2" });
       convStore.endSession(s2.id);
       const s3 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s3.id, role: "user", content: "3" });
       convStore.endSession(s3.id);
 
       const terminated = convStore.listRecentTerminatedSessions("agent-a", 10);
@@ -201,10 +214,13 @@ describe("ConversationStore", () => {
     it("listRecentTerminatedSessions respects limit and agent filter", () => {
       setup();
       const s1 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s1.id, role: "user", content: "1" });
       convStore.endSession(s1.id);
       const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s2.id, role: "user", content: "2" });
       convStore.endSession(s2.id);
       const s3 = convStore.startSession("agent-b");
+      convStore.recordTurn({ sessionId: s3.id, role: "user", content: "3" });
       convStore.endSession(s3.id);
 
       const aLimited = convStore.listRecentTerminatedSessions("agent-a", 1);
@@ -212,6 +228,94 @@ describe("ConversationStore", () => {
       expect(aLimited[0].agentName).toBe("agent-a");
 
       const bAll = convStore.listRecentTerminatedSessions("agent-b", 10);
+      expect(bAll).toHaveLength(1);
+      expect(bAll[0].id).toBe(s3.id);
+    });
+
+    // ── Phase 99-C: pending-summary backlog query ───────────────────────────
+    it("listPendingSummarySessions returns ended/crashed sessions with no summary", () => {
+      setup();
+      // s1: ended, no summary, has turn → should appear
+      const s1 = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: s1.id,
+        role: "user",
+        content: "hi",
+      });
+      convStore.endSession(s1.id);
+
+      // s2: crashed, no summary, has turn → should appear
+      const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: s2.id,
+        role: "user",
+        content: "yo",
+      });
+      convStore.crashSession(s2.id);
+
+      // s3: ended WITH summary → should be excluded
+      const s3 = convStore.startSession("agent-a");
+      convStore.recordTurn({
+        sessionId: s3.id,
+        role: "user",
+        content: "ok",
+      });
+      convStore.endSession(s3.id);
+      const memId = createMemoryEntry(memStore, "s3-summary");
+      convStore.markSummarized(s3.id, memId);
+
+      // s4: zero-turn ended, no summary → excluded by EXISTS filter
+      const s4 = convStore.startSession("agent-a");
+      convStore.endSession(s4.id);
+      void s4;
+
+      // s5: still active → excluded by status filter
+      convStore.startSession("agent-a");
+
+      const pending = convStore.listPendingSummarySessions("agent-a", 10);
+      expect(pending).toHaveLength(2);
+      const ids = pending.map((s) => s.id);
+      expect(ids).toContain(s1.id);
+      expect(ids).toContain(s2.id);
+    });
+
+    it("listPendingSummarySessions orders by started_at ASC (oldest first)", () => {
+      setup();
+      const s1 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s1.id, role: "user", content: "1" });
+      convStore.endSession(s1.id);
+      // Tiny gap so started_at differs deterministically — better-sqlite3 ISO
+      // timestamps have ms resolution, so rowid tie-break catches the rest.
+      const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s2.id, role: "user", content: "2" });
+      convStore.endSession(s2.id);
+      const s3 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s3.id, role: "user", content: "3" });
+      convStore.endSession(s3.id);
+
+      const pending = convStore.listPendingSummarySessions("agent-a", 10);
+      expect(pending).toHaveLength(3);
+      expect(pending[0].id).toBe(s1.id);
+      expect(pending[2].id).toBe(s3.id);
+    });
+
+    it("listPendingSummarySessions respects limit and agent filter", () => {
+      setup();
+      const s1 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s1.id, role: "user", content: "1" });
+      convStore.endSession(s1.id);
+      const s2 = convStore.startSession("agent-a");
+      convStore.recordTurn({ sessionId: s2.id, role: "user", content: "2" });
+      convStore.endSession(s2.id);
+      const s3 = convStore.startSession("agent-b");
+      convStore.recordTurn({ sessionId: s3.id, role: "user", content: "3" });
+      convStore.endSession(s3.id);
+
+      const aOne = convStore.listPendingSummarySessions("agent-a", 1);
+      expect(aOne).toHaveLength(1);
+      expect(aOne[0].agentName).toBe("agent-a");
+
+      const bAll = convStore.listPendingSummarySessions("agent-b", 10);
       expect(bAll).toHaveLength(1);
       expect(bAll[0].id).toBe(s3.id);
     });

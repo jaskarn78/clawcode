@@ -3,6 +3,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { Logger } from "pino";
 import type { ResolvedAgentConfig } from "../shared/types.js";
+import { getAgentMemoryDbPath } from "../shared/agent-paths.js";
 import { MemoryStore } from "../memory/store.js";
 import { EmbeddingService } from "../memory/embedder.js";
 import { SessionLogger } from "../memory/session-log.js";
@@ -59,7 +60,7 @@ export class AgentMemoryManager {
         mkdirSync(memoryDir, { recursive: true });
       }
 
-      const dbPath = join(memoryDir, "memories.db");
+      const dbPath = getAgentMemoryDbPath(config.memoryPath);
       const store = new MemoryStore(dbPath);
       this.memoryStores.set(name, store);
 

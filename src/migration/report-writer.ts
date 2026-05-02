@@ -67,6 +67,7 @@ import { loadConfig, resolveAllAgents } from "../config/loader.js";
 import { scanSecrets } from "./guards.js";
 import { discoverWorkspaceMarkdown } from "./memory-translator.js";
 import { MemoryStore } from "../memory/store.js";
+import { getAgentMemoryDbPath } from "../shared/agent-paths.js";
 import type { PlanReport, AgentPlan } from "./diff-builder.js";
 
 /**
@@ -210,7 +211,7 @@ export async function buildMigrationReport(
       sourceCount = discovered.length;
     }
     // Migrated count via per-agent memories.db
-    const dbPath = join(agent.memoryPath, "memory", "memories.db");
+    const dbPath = getAgentMemoryDbPath(agent.memoryPath);
     let migratedCount = 0;
     if (existsSync(dbPath)) {
       const store = new MemoryStore(dbPath);
@@ -277,7 +278,7 @@ export async function buildMigrationReport(
       .map((b) => b.match.peer.id),
     clawcodeChannelIds: resolvedAgents.flatMap((a) => [...a.channels]),
     perAgentDbPaths: resolvedAgents.map((a) =>
-      join(a.memoryPath, "memory", "memories.db"),
+      getAgentMemoryDbPath(a.memoryPath),
     ),
   });
 

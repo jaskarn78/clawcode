@@ -38,6 +38,7 @@ import { join } from "node:path";
 import { loadConfig, resolveAllAgents } from "../config/loader.js";
 import { discoverWorkspaceMarkdown } from "./memory-translator.js";
 import { MemoryStore } from "../memory/store.js";
+import { getAgentMemoryDbPath } from "../shared/agent-paths.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 
 /**
@@ -228,7 +229,7 @@ async function checkMemoryCount(
   // MIGRATED count via target memories.db. memoryPath resolves to the
   // per-agent memory dir for finmentum-shared agents (Phase 75) and to the
   // workspace itself for dedicated agents.
-  const dbPath = join(resolved.memoryPath, "memory", "memories.db");
+  const dbPath = getAgentMemoryDbPath(resolved.memoryPath);
   if (!existsSync(dbPath)) {
     return Object.freeze({
       check: "memory-count" as const,

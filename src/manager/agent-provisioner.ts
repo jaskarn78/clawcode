@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { parseDocument, type Document } from "yaml";
 import { expandHome } from "../config/defaults.js";
+import { getAgentMemoryDbPath } from "../shared/agent-paths.js";
 
 const AGENT_NAME_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
 const VALID_MODELS = new Set(["sonnet", "opus", "haiku"]);
@@ -145,5 +146,5 @@ async function scaffoldWorkspace(workspace: string, soul: string): Promise<void>
     await writeFile(soulPath, content, "utf-8");
   }
 
-  await mkdir(dirname(join(workspace, "memory", "memories.db")), { recursive: true });
+  await mkdir(dirname(getAgentMemoryDbPath(workspace)), { recursive: true });
 }
