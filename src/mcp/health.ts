@@ -1,4 +1,16 @@
 import { spawn } from "node:child_process";
+import type { Logger } from "pino";
+import { killGroup } from "./process-tracker.js";
+
+/**
+ * Silent fallback logger. Production callers pass a real pino child; tests and
+ * pre-Phase-999.X callers that don't supply one get a no-op so probe spawn
+ * cleanup stays best-effort without forcing a deps churn.
+ */
+const NOOP_LOG = {
+  warn: () => {},
+  error: () => {},
+} as unknown as Logger;
 
 /**
  * Result of an MCP server health check.
@@ -32,15 +44,25 @@ const DEFAULT_TIMEOUT_MS = 30000;
  * Check if an MCP server is healthy by spawning it and sending an initialize request.
  *
  * Spawns the server process, sends a JSON-RPC initialize message, and waits for
- * a valid response. Always kills the spawned process after the check completes.
+ * a valid response. Always kills the spawned PROCESS GROUP after the check
+ * completes — `detached: true` makes the child its own pgid leader so the
+ * negative-PID SIGKILL reaches the npm wrapper plus its `sh -c` and `node`
+ * grandchildren together. Without this, the wrapper dies but grandchildren
+ * (e.g. `node /.../bin/mcp-server-mysql` holding a MariaDB connection)
+ * reparent to PID 1 and leak until the 999.14 orphan reaper sweep — fast
+ * enough probes (heartbeat 60s × 14 agents) outpaced the reaper in production.
  *
  * @param server - MCP server configuration
  * @param timeoutMs - Maximum time to wait for response (default 5000ms)
+ * @param log - Optional pino logger; killGroup uses it for EPERM/unexpected
+ *              kill errors (rare). Defaults to a no-op logger so existing
+ *              callers and tests don't have to thread one through.
  * @returns Health check result with name, healthy status, latency, and optional error
  */
 export async function checkMcpServerHealth(
   server: McpServerConfig,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  log: Logger = NOOP_LOG,
 ): Promise<McpHealthResult> {
   const startTime = Date.now();
 
@@ -53,13 +75,13 @@ export async function checkMcpServerHealth(
       resolved = true;
       const latencyMs = Date.now() - startTime;
 
-      // Kill the child process if still running
-      if (child && !child.killed) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Process may have already exited
-        }
+      // Kill the child PROCESS GROUP if still running. detached:true at
+      // spawn made the child a pgid leader so `process.kill(-pid, ...)` via
+      // killGroup reaches the npm wrapper + sh + node together. Single-PID
+      // kill (pre-fix) only signaled the wrapper; grandchildren orphaned to
+      // PID 1 with their MariaDB connections still open.
+      if (child?.pid && !child.killed) {
+        killGroup(child.pid, "SIGKILL", log);
       }
 
       resolve({
@@ -79,7 +101,12 @@ export async function checkMcpServerHealth(
       child = spawn(server.command, [...server.args], {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, ...server.env },
+        // Phase 999.X — fresh process group so finish()'s killGroup reaches
+        // the wrapper + sh + node grandchildren together (see fn JSDoc).
+        detached: true,
       });
+      // Don't keep the daemon's event loop alive for this one-shot probe.
+      child.unref();
 
       child.on("error", (err: Error) => {
         clearTimeout(timer);
