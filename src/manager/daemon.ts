@@ -3251,19 +3251,55 @@ export async function startDaemon(
           // running) — surfaces as a low-signal dream pass rather than an
           // exception that crashes the operator's manual trigger.
           const dreamMemoryStore = {
-            getRecentChunks: async () => {
+            getRecentChunks: async (_agent: string, limit: number) => {
               if (!memoryStore) return [];
-              // Best-effort: pull recent chunks via the existing memory
-              // search surface. The production MemoryStore doesn't expose
-              // a dedicated getRecentChunks; the dream-pass primitive is
-              // tolerant of empty arrays (low-signal but valid).
-              return [];
+              try {
+                return memoryStore.listRecentMemoryChunks(limit);
+              } catch (err) {
+                log.warn(
+                  {
+                    component: "dream-pass",
+                    action: "list-chunks-failed",
+                    agent,
+                    err: err instanceof Error ? err.message : String(err),
+                  },
+                  "dream-pass: listRecentMemoryChunks failed; treating as empty",
+                );
+                return [];
+              }
             },
           };
           const dreamConvStore = {
-            getRecentSummaries: async () => {
-              if (!conversationStore) return [];
-              return [];
+            getRecentSummaries: async (_agent: string, limit: number) => {
+              if (!conversationStore || !memoryStore) return [];
+              try {
+                const sessions =
+                  conversationStore.listRecentTerminatedSessions(agent, limit);
+                return sessions
+                  .map((s) => {
+                    if (!s.summaryMemoryId) return null;
+                    const mem = memoryStore.getById(s.summaryMemoryId);
+                    if (!mem || mem.content.trim().length === 0) return null;
+                    const endedIso = s.endedAt ?? s.startedAt;
+                    return {
+                      sessionId: s.id,
+                      summary: mem.content,
+                      endedAt: new Date(endedIso),
+                    };
+                  })
+                  .filter((x): x is NonNullable<typeof x> => x !== null);
+              } catch (err) {
+                log.warn(
+                  {
+                    component: "dream-pass",
+                    action: "list-summaries-failed",
+                    agent,
+                    err: err instanceof Error ? err.message : String(err),
+                  },
+                  "dream-pass: listRecentTerminatedSessions failed; treating as empty",
+                );
+                return [];
+              }
             },
           };
           const { makeRootOrigin: makeDreamOrigin } = await import(
@@ -3330,16 +3366,25 @@ export async function startDaemon(
             log,
           });
         },
-        // Plan 95-02 — applyDreamResult adapter. The auto-linker adapter
-        // is intentionally a no-op for v1 (returns added:0): real link
-        // application is deferred to a future plan that wires the LLM
-        // {from,to} pairs into the Phase 36-41 graph store. Dream-log
+        // applyDreamResult adapter. applyAutoLinks persists the LLM-proposed
+        // path→path edges into <memoryRoot>/graph-edges.json (read back on
+        // the next dream pass for "existing wikilinks" context). Dream-log
         // emission via writeDreamLog IS wired (D-05 atomic markdown).
         applyDreamResult: async (agent, outcome) => {
           const cfg = resolvedAgents.find((a) => a.name === agent);
           const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+          const { appendDreamWikilinks } = await import(
+            "./dream-graph-edges.js"
+          );
           return applyDreamResultPrim(agent, outcome, {
-            applyAutoLinks: async () => ({ added: 0 }),
+            applyAutoLinks: async (_agent, links) => {
+              if (!memoryRoot) return { added: 0 };
+              return appendDreamWikilinks({
+                memoryRoot,
+                links,
+                now: () => new Date(),
+              });
+            },
             // Phase 99 dream hotfix (2026-04-26): pass writeDreamLog directly.
             // dream-auto-apply calls deps.writeDreamLog({agentName, memoryRoot, entry}),
             // not just entry — the previous wrapper signature `(entry) => …` caused

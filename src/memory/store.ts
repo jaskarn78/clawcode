@@ -1206,6 +1206,52 @@ export class MemoryStore {
   }
 
   /**
+   * List the most recent memory_chunks rows ordered by file_mtime_ms DESC.
+   * Returns the shape consumed by the dream-pass prompt builder
+   * (`{id, path, body, lastModified: Date}`); rowid is the secondary sort
+   * key so chunks of the same file land in deterministic order.
+   */
+  listRecentMemoryChunks(limit: number): readonly Readonly<{
+    id: string;
+    path: string;
+    body: string;
+    lastModified: Date;
+  }>[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT id, path, body, file_mtime_ms
+             FROM memory_chunks
+             ORDER BY file_mtime_ms DESC, rowid DESC
+             LIMIT ?`,
+        )
+        .all(limit) as ReadonlyArray<{
+        id: string;
+        path: string;
+        body: string;
+        file_mtime_ms: number;
+      }>;
+      return Object.freeze(
+        rows.map((r) =>
+          Object.freeze({
+            id: r.id,
+            path: r.path,
+            body: r.body,
+            lastModified: new Date(r.file_mtime_ms),
+          }),
+        ),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to list recent memory chunks: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
    * Phase 90 MEM-02 — idempotency gate for the scanner. Returns the stored
    * sha256 for `path` so the scanner can skip re-embedding when the file
    * content hasn't changed (big win for backfill runs).

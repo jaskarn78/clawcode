@@ -148,13 +148,16 @@ export interface DreamPassLog {
 
 export interface RunDreamPassDeps {
   readonly memoryStore: {
-    getRecentChunks(agent: string, limit: number): Promise<MemoryChunk[]>;
+    getRecentChunks(
+      agent: string,
+      limit: number,
+    ): Promise<readonly MemoryChunk[]>;
   };
   readonly conversationStore: {
     getRecentSummaries(
       agent: string,
       limit: number,
-    ): Promise<ConversationSummary[]>;
+    ): Promise<readonly ConversationSummary[]>;
   };
   readonly readFile: (path: string) => Promise<string>;
   readonly dispatch: (req: DreamDispatchRequest) => Promise<DreamDispatchResponse>;
