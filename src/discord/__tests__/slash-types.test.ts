@@ -12,8 +12,8 @@ describe("slash-types", () => {
     // DEFAULT_SLASH_COMMANDS. They are re-provided at registration time by the
     // SDK discovery loop via native-cc-commands.buildNativeCommandDefs so the
     // native-dispatch path is the ONLY path for /compact and /cost going forward.
-    it("contains exactly 12 commands (10 clawcode-* + 2 ultra-* native shortcuts added in 999.31)", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(12);
+    it("contains exactly 13 commands (10 clawcode-* + 2 ultra-* + gsd-do single-entry added in 999.32)", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(13);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
@@ -28,6 +28,7 @@ describe("slash-types", () => {
         "clawcode-clawhub-auth",
         "ultra-plan",
         "ultra-review",
+        "gsd-do",
       ]);
     });
 
@@ -41,10 +42,10 @@ describe("slash-types", () => {
       expect(names).not.toContain("clawcode-usage");
     });
 
-    it("every remaining entry matches /^clawcode-/ OR is a Phase 999.31 ultra-* native shortcut", () => {
-      const ultraNames = new Set(["ultra-plan", "ultra-review"]);
+    it("every remaining entry matches /^clawcode-/ OR is a 999.31 ultra-* shortcut OR is gsd-do (999.32)", () => {
+      const exempt = new Set(["ultra-plan", "ultra-review", "gsd-do"]);
       for (const cmd of DEFAULT_SLASH_COMMANDS) {
-        if (ultraNames.has(cmd.name)) continue;
+        if (exempt.has(cmd.name)) continue;
         expect(cmd.name).toMatch(/^clawcode-/);
       }
     });
@@ -96,14 +97,15 @@ describe("slash-types", () => {
       // Phase 88 MKT-01 / MKT-07 / UI-01 — clawcode-skills-browse and
       // clawcode-skills are picker-driven (zero free-text args); they join
       // the no-options set.
-      // Phase 999.31 — ultra-plan and ultra-review have an `args` option,
-      // so they join the with-options set (not the no-options set).
+      // Phase 999.31 — ultra-plan and ultra-review have an `args` option.
+      // Phase 999.32 — gsd-do has an `args` option.
       const withOptions = new Set([
         "clawcode-memory",
         "clawcode-model",
         "clawcode-effort",
         "ultra-plan",
         "ultra-review",
+        "gsd-do",
       ]);
       const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
       expect(noOptionCmds.length).toBe(7);
@@ -149,7 +151,7 @@ describe("slash-types", () => {
   });
 
   describe("CONTROL_COMMANDS", () => {
-    it("contains exactly 13 control commands", () => {
+    it("contains exactly 12 control commands", () => {
       // Quick task 260419-nic — grew from 5 to 7 with clawcode-interrupt +
       // clawcode-steer. Phase 85 Plan 03 added clawcode-tools → 8.
       // Phase 91 Plan 05 added clawcode-sync-status → 9.
@@ -157,7 +159,8 @@ describe("slash-types", () => {
       // Phase 95 Plan 03 added clawcode-dream → 11.
       // Phase 96 Plan 05 added clawcode-probe-fs → 12.
       // Phase 103 Plan 03 added clawcode-usage → 13.
-      expect(CONTROL_COMMANDS).toHaveLength(13);
+      // Phase 999.32 — clawcode-probe-fs slash removed (operator cleanup) → 12.
+      expect(CONTROL_COMMANDS).toHaveLength(12);
     });
 
     it("all control commands have control: true and a valid ipcMethod", () => {

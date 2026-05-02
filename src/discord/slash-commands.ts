@@ -1240,31 +1240,18 @@ export class SlashCommandHandler {
       // subcommand wanted one, Discord would reject it). claudeCommand text
       // values on each subcommand stay BYTE-IDENTICAL pre/post — pinned by
       // GS1l + GSDN-03 regression tests.
-      if (gsdSubcommands.length > 0) {
-        body.push({
-          name: "get-shit-done",
-          description: "GSD framework — phase planning, execution, debugging",
-          options: gsdSubcommands.map((cmd) => ({
-            name: cmd.name,
-            description: cmd.description,
-            type: 1, // SUB_COMMAND
-            options: cmd.options.map((opt) => ({
-              name: opt.name,
-              type: opt.type,
-              description: opt.description,
-              required: opt.required,
-              ...(opt.choices && opt.choices.length > 0
-                ? {
-                    choices: opt.choices.map((c) => ({
-                      name: c.name,
-                      value: c.value,
-                    })),
-                  }
-                : {}),
-            })),
-          })),
-        });
-      }
+      //
+      // Phase 999.32 — Discord-side composite suppressed. Operator hit
+      // friction with the 19-subcommand menu; consolidated into a SINGLE
+      // top-level `/gsd-do args:<subcommand + flags>` entry registered via
+      // DEFAULT_SLASH_COMMANDS. The dispatcher in handleInteraction parses
+      // the args' first token, rewrites commandName to `gsd-${first-token}`,
+      // and existing carve-outs (GSD_LONG_RUNNERS subagent-thread spawn,
+      // set-project inline handler) keep matching against the legacy flat
+      // names. GSD_SLASH_COMMANDS stays as the source-of-truth for what
+      // subcommand names are valid (used by the dispatcher's lookup).
+      // Setting `gsdSubcommands` aside so it's still typed but never emitted.
+      void gsdSubcommands;
 
       // Phase 87 CMD-07 — pre-flight cap assertion. Thrown BEFORE rest.put so
       // no partial registration lands; operators see the full over-cap error
@@ -1331,7 +1318,12 @@ export class SlashCommandHandler {
     // consolidation; every existing string-comparison against `gsd-*` names
     // continues to match without modification downstream.
     let commandName = interaction.commandName;
+    let gsdDoRewrittenArgs: string | null = null;
     if (commandName === "get-shit-done") {
+      // Phase 999.21 legacy entry — kept for back-compat in case Discord's
+      // client cache still routes /get-shit-done despite Phase 999.32
+      // suppressing the composite registration. Translates the same way as
+      // the new gsd-do entry below: extract subcommand, rewrite commandName.
       let sub: string | null = null;
       try {
         sub = interaction.options.getSubcommand(false);
@@ -1339,9 +1331,6 @@ export class SlashCommandHandler {
         sub = null;
       }
       if (!sub) {
-        // Defensive: Discord should guarantee a subcommand for top-levels
-        // with subcommands, but log + reply ephemerally on the off-chance
-        // a malformed interaction reaches us.
         try {
           await interaction.reply({
             content: "Missing subcommand for /get-shit-done.",
@@ -1353,6 +1342,48 @@ export class SlashCommandHandler {
         return;
       }
       commandName = `gsd-${sub}`;
+    } else if (commandName === "gsd-do") {
+      // Phase 999.32 — single-entry GSD command. Parse the args' first token
+      // as the subcommand name and rewrite commandName to `gsd-${first-token}`
+      // so existing carve-outs (handleSetGsdProjectCommand,
+      // handleGsdLongRunner, agent-routed branch via formatCommandMessage)
+      // keep matching the legacy flat-name strings without modification.
+      // Remaining tokens become the new args value passed downstream.
+      const raw = interaction.options.getString("args", true).trim();
+      if (raw.length === 0) {
+        try {
+          await interaction.reply({
+            content:
+              "Missing args. Usage: `/gsd-do args:<subcommand> [flags...]` (e.g. `args:autonomous --from 100`)",
+            ephemeral: true,
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      const firstSpace = raw.search(/\s/);
+      const sub = firstSpace === -1 ? raw : raw.slice(0, firstSpace);
+      const rest = firstSpace === -1 ? "" : raw.slice(firstSpace + 1).trim();
+      // Light validation: subcommand must look like a slug (no shell
+      // metacharacters). The downstream formatCommandMessage forwards the
+      // claudeCommand text into the agent's prompt; the subcommand becomes
+      // a path segment in `/gsd:<sub>`. Reject obvious prompt-injection
+      // shapes (newlines, backticks) before they reach the agent context.
+      if (!/^[a-z][a-z0-9-]*$/i.test(sub)) {
+        try {
+          await interaction.reply({
+            content:
+              `Invalid subcommand "${sub}". Use letters/digits/hyphens only (e.g. autonomous, plan-phase, set-project).`,
+            ephemeral: true,
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      commandName = `gsd-${sub}`;
+      gsdDoRewrittenArgs = rest;
     }
 
     // Phase 85 Plan 03 TOOL-06 / UI-01 — dedicated inline handler for
@@ -1478,10 +1509,12 @@ export class SlashCommandHandler {
     // renderProbeFsEmbed helper (above). D-03 refresh trigger: operator
     // forces re-probe immediately after ACL/group/systemd change to
     // eliminate the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
-    if (commandName === "clawcode-probe-fs") {
-      await this.handleProbeFsCommand(interaction);
-      return;
-    }
+    // Phase 999.32 — /clawcode-probe-fs slash command removed (operator
+    // cleanup). The CLI subcommand `clawcode probe fs <agent>` and the
+    // daemon's `probe-fs` IPC method stay live; heartbeat fs-probe still
+    // runs every 60s for ambient refresh. The handleProbeFsCommand helper
+    // is left intact for future re-introduction (or removal in a
+    // dead-code sweep) but no slash command routes to it.
 
     // Phase 103 OBS-07 / UI-01 — /clawcode-usage inline handler.
     // 12th application of the inline-handler-short-circuit-before-
@@ -1506,7 +1539,7 @@ export class SlashCommandHandler {
     // and triggers an agent restart (gsd.projectDir is non-reloadable per
     // Phase 100 GSD-07).
     if (commandName === "gsd-set-project") {
-      await this.handleSetGsdProjectCommand(interaction);
+      await this.handleSetGsdProjectCommand(interaction, gsdDoRewrittenArgs);
       return;
     }
 
@@ -1522,7 +1555,7 @@ export class SlashCommandHandler {
     // ("/gsd:debug {issue}" / "/gsd:quick {task}") rewrites to the canonical
     // SDK form via formatCommandMessage's placeholder substitution.
     if (GSD_LONG_RUNNERS.has(commandName)) {
-      await this.handleGsdLongRunner(interaction, commandName);
+      await this.handleGsdLongRunner(interaction, commandName, gsdDoRewrittenArgs);
       return;
     }
 
@@ -1611,15 +1644,25 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Extract options from the interaction
+    // Extract options from the interaction.
+    // Phase 999.32 — when invoked via /gsd-do, the dispatcher pre-parsed
+    // the rest-of-args. Bind that string to whatever option name cmdDef
+    // expects so formatCommandMessage's placeholder substitution works
+    // without needing the original interaction's option set.
     const options = new Map<string, string | number | boolean>();
-    for (const opt of commandDef.options) {
-      const value = interaction.options.get(opt.name);
-      if (value !== null && value !== undefined) {
-        // discord.js returns CommandInteractionOption; extract the value
-        const raw = value.value;
-        if (raw !== null && raw !== undefined) {
-          options.set(opt.name, raw);
+    if (gsdDoRewrittenArgs !== null) {
+      for (const opt of commandDef.options) {
+        options.set(opt.name, gsdDoRewrittenArgs);
+      }
+    } else {
+      for (const opt of commandDef.options) {
+        const value = interaction.options.get(opt.name);
+        if (value !== null && value !== undefined) {
+          // discord.js returns CommandInteractionOption; extract the value
+          const raw = value.value;
+          if (raw !== null && raw !== undefined) {
+            options.set(opt.name, raw);
+          }
         }
       }
     }
@@ -2220,6 +2263,17 @@ export class SlashCommandHandler {
   private async handleGsdLongRunner(
     interaction: ChatInputCommandInteraction,
     commandName: string,
+    /**
+     * Phase 999.32 — when the operator invoked via /gsd-do args:<sub> ...,
+     * the dispatcher pre-parsed the rest-of-args into this string. We treat
+     * it as the value for whatever option the cmdDef expects ({args}, {phase},
+     * {task}, {issue}) so formatCommandMessage's placeholder substitution
+     * still produces the canonical /gsd:<sub> ... slash. null when the
+     * operator went through the legacy /get-shit-done composite path
+     * (Discord nested subcommand UI) — in that case, options come from
+     * interaction.options.get(name) as before.
+     */
+    gsdDoRewrittenArgs: string | null = null,
   ): Promise<void> {
     // Step 1 — defer FIRST (before any other I/O). 3s race-safe.
     try {
@@ -2284,11 +2338,21 @@ export class SlashCommandHandler {
     }
 
     // Step 4 — extract option values + build canonical /gsd:* string.
+    // Phase 999.32 — when invoked via /gsd-do, the dispatcher passes the
+    // pre-parsed rest-of-args; bind it to whatever option name cmdDef
+    // expects (the operator typed one free-form string; substitute it for
+    // every {args} / {phase} / {task} / {issue} placeholder uniformly).
     const options = new Map<string, string | number | boolean>();
-    for (const opt of cmdDef.options) {
-      const v = interaction.options.get(opt.name);
-      if (v !== null && v !== undefined && v.value !== null && v.value !== undefined) {
-        options.set(opt.name, v.value);
+    if (gsdDoRewrittenArgs !== null) {
+      for (const opt of cmdDef.options) {
+        options.set(opt.name, gsdDoRewrittenArgs);
+      }
+    } else {
+      for (const opt of cmdDef.options) {
+        const v = interaction.options.get(opt.name);
+        if (v !== null && v !== undefined && v.value !== null && v.value !== undefined) {
+          options.set(opt.name, v.value);
+        }
       }
     }
     const canonicalSlash = formatCommandMessage(cmdDef, options);
@@ -2384,6 +2448,13 @@ export class SlashCommandHandler {
    */
   private async handleSetGsdProjectCommand(
     interaction: ChatInputCommandInteraction,
+    /**
+     * Phase 999.32 — when invoked via /gsd-do args:set-project /abs/path,
+     * the dispatcher pre-parsed everything after `set-project` into this
+     * string. When non-null, used as the path value instead of reading
+     * the `path` option (which doesn't exist on the gsd-do interaction).
+     */
+    gsdDoRewrittenArgs: string | null = null,
   ): Promise<void> {
     try {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -2415,8 +2486,12 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Read the required `path` option.
-    const path = interaction.options.getString("path", true);
+    // Read the required `path` option (or use the rewritten args from
+    // /gsd-do).
+    const path =
+      gsdDoRewrittenArgs !== null
+        ? gsdDoRewrittenArgs
+        : interaction.options.getString("path", true);
     if (!path || typeof path !== "string") {
       try {
         await interaction.editReply(

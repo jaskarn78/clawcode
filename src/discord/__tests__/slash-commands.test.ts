@@ -480,7 +480,11 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
     // Phase 95 Plan 03 DREAM-07 added clawcode-dream → 11 controls.
     // Phase 96 Plan 05 D-03 added clawcode-probe-fs → 12 controls.
     // Phase 103 Plan 03 OBS-07 added clawcode-usage → 13 controls.
-    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(23);
+    // Phase 999.31 added ultra-plan + ultra-review to defaults → 12 defaults.
+    // Phase 999.32 removed clawcode-probe-fs (operator cleanup) → 12 controls.
+    // Phase 999.32 added gsd-do single-entry to defaults → 13 defaults.
+    // Total: 13 defaults + 12 controls = 25.
+    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(25);
 
     // Sanity — makeRootOrigin still accepts 'discord' (used by handleSteerSlash).
     const origin = makeRootOrigin("discord", "chan-xyz");

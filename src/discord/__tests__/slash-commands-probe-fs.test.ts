@@ -209,7 +209,10 @@ function outcomeWithChanges(): unknown {
   };
 }
 
-describe("Phase 96 Plan 05 — /clawcode-probe-fs slash command (PFS-)", () => {
+// Phase 999.32 — /clawcode-probe-fs slash command removed (operator cleanup).
+// Daemon IPC `probe-fs` and CLI `clawcode probe fs` stay live. Tests skipped
+// rather than deleted in case the slash gets re-introduced.
+describe.skip("Phase 96 Plan 05 — /clawcode-probe-fs slash command (PFS-)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

@@ -285,6 +285,29 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
       { name: "args", type: 3, description: "Optional PR number", required: false },
     ],
   },
+
+  // Phase 999.32 — single-entry GSD command. Replaces the /get-shit-done
+  // composite (Phase 999.21) which had 19 subcommand slots cluttering the
+  // Discord menu. Operator types the gsd subcommand name + flags as a
+  // single string; the dispatcher in slash-commands.ts parses the first
+  // token, rewrites commandName to `gsd-${first-token}` so existing
+  // carve-outs (GSD_LONG_RUNNERS subagent-thread spawn for autonomous /
+  // plan-phase / execute-phase, set-project inline handler) keep working
+  // unchanged.
+  //
+  // Examples:
+  //   /gsd-do args:autonomous --from 100      → fires /gsd:autonomous --from 100
+  //   /gsd-do args:plan-phase 109             → fires /gsd:plan-phase 109
+  //   /gsd-do args:set-project /opt/projects  → inline runtime project switch
+  //   /gsd-do args:debug "memory leak"        → fires /gsd:debug "memory leak"
+  {
+    name: "gsd-do",
+    description: "Run a GSD command. Args: <subcommand> [flags...] (e.g. autonomous --from 100)",
+    claudeCommand: "/gsd:{args}",
+    options: [
+      { name: "args", type: 3, description: "GSD subcommand + flags", required: true },
+    ],
+  },
 ] as const;
 
 /**
@@ -668,33 +691,11 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       },
     ],
   },
-  // Phase 96 Plan 05 PFS- / UI-01 — operator-driven on-demand filesystem
-  // capability re-probe. Admin-only ephemeral; the inline-short-circuit
-  // handler in slash-commands.ts checks isAdminClawdyInteraction BEFORE
-  // routing through ipcMethod "probe-fs" so non-admins get an instant
-  // "Admin-only command" reply (zero IPC + zero LLM turn cost). Renders
-  // FsProbeOutcome via renderProbeFsEmbed (paths probed, ready/degraded
-  // counts, top 3 changes since last probe). 11th application of the
-  // inline-short-circuit pattern (after Phases 85/86/87/88/90/91/92/95).
-  // D-03 refresh trigger: operator runs after ACL/group/systemd change
-  // to force re-probe BEFORE asking user to retry — eliminates the 60s
-  // heartbeat-stale window per RESEARCH.md Pitfall 7.
-  {
-    name: "clawcode-probe-fs",
-    description:
-      "Force re-probe of an agent's filesystem capability (admin-only)",
-    claudeCommand: "",
-    control: true,
-    ipcMethod: "probe-fs",
-    options: [
-      {
-        name: "agent",
-        type: 3,
-        description: "Agent name to re-probe",
-        required: true,
-      },
-    ],
-  },
+  // Phase 999.32 — `clawcode-probe-fs` slash command removed (operator
+  // cleanup). The IPC handler `probe-fs` and the `clawcode probe fs <agent>`
+  // CLI subcommand both stay live for programmatic / scripted re-probe;
+  // the heartbeat fs-probe still runs every 60s for ambient refresh.
+  // Operators who need an explicit re-probe can run the CLI directly.
   // Phase 103 OBS-07 / UI-01 — daemon-routed OAuth Max usage panel. Reads
   // the per-agent RateLimitTracker via ipcMethod "list-rate-limit-snapshots"
   // (NOT "rate-limit-status" which is the SEPARATE Discord outbound rate-
