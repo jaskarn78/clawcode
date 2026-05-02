@@ -1063,6 +1063,62 @@ describe("MemoryStore", () => {
       expect(rows[0].body).toBe("new body");
     });
 
+    it("listRecentMemoryChunks orders by file_mtime_ms DESC and respects limit", () => {
+      store = createTestStore();
+      const base = 1700000000000;
+      store.insertMemoryChunk({
+        path: "/ws/memory/oldest.md",
+        chunkIndex: 0,
+        heading: "Oldest",
+        body: "oldest body",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: base,
+        fileSha256: "old",
+        embedding: randomEmbedding384(),
+      });
+      store.insertMemoryChunk({
+        path: "/ws/memory/middle.md",
+        chunkIndex: 0,
+        heading: "Middle",
+        body: "middle body",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: base + 1000,
+        fileSha256: "mid",
+        embedding: randomEmbedding384(),
+      });
+      store.insertMemoryChunk({
+        path: "/ws/memory/newest.md",
+        chunkIndex: 0,
+        heading: "Newest",
+        body: "newest body",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: base + 2000,
+        fileSha256: "new",
+        embedding: randomEmbedding384(),
+      });
+
+      const all = store.listRecentMemoryChunks(10);
+      expect(all).toHaveLength(3);
+      expect(all[0].path).toBe("/ws/memory/newest.md");
+      expect(all[0].body).toBe("newest body");
+      expect(all[0].lastModified).toBeInstanceOf(Date);
+      expect(all[0].lastModified.getTime()).toBe(base + 2000);
+      expect(all[2].path).toBe("/ws/memory/oldest.md");
+
+      const limited = store.listRecentMemoryChunks(2);
+      expect(limited).toHaveLength(2);
+      expect(limited[0].path).toBe("/ws/memory/newest.md");
+      expect(limited[1].path).toBe("/ws/memory/middle.md");
+    });
+
+    it("listRecentMemoryChunks returns empty array when no chunks present", () => {
+      store = createTestStore();
+      expect(store.listRecentMemoryChunks(10)).toHaveLength(0);
+    });
+
     it("MEM-02-S5: searchMemoryChunksFts finds inserted body text", () => {
       store = createTestStore();
       store.insertMemoryChunk({
