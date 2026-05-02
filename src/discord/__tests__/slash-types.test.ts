@@ -12,8 +12,8 @@ describe("slash-types", () => {
     // DEFAULT_SLASH_COMMANDS. They are re-provided at registration time by the
     // SDK discovery loop via native-cc-commands.buildNativeCommandDefs so the
     // native-dispatch path is the ONLY path for /compact and /cost going forward.
-    it("contains exactly 10 commands with clawcode- prefix (Phase 90 Plan 06 added clawhub-auth)", () => {
-      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(10);
+    it("contains exactly 12 commands (10 clawcode-* + 2 ultra-* native shortcuts added in 999.31)", () => {
+      expect(DEFAULT_SLASH_COMMANDS).toHaveLength(12);
       const names = DEFAULT_SLASH_COMMANDS.map((cmd) => cmd.name);
       expect(names).toEqual([
         "clawcode-status",
@@ -26,6 +26,8 @@ describe("slash-types", () => {
         "clawcode-skills",
         "clawcode-plugins-browse",
         "clawcode-clawhub-auth",
+        "ultra-plan",
+        "ultra-review",
       ]);
     });
 
@@ -39,8 +41,10 @@ describe("slash-types", () => {
       expect(names).not.toContain("clawcode-usage");
     });
 
-    it("every remaining entry matches /^clawcode-/ (Pitfall 10 namespace guard)", () => {
+    it("every remaining entry matches /^clawcode-/ OR is a Phase 999.31 ultra-* native shortcut", () => {
+      const ultraNames = new Set(["ultra-plan", "ultra-review"]);
       for (const cmd of DEFAULT_SLASH_COMMANDS) {
+        if (ultraNames.has(cmd.name)) continue;
         expect(cmd.name).toMatch(/^clawcode-/);
       }
     });
@@ -92,7 +96,15 @@ describe("slash-types", () => {
       // Phase 88 MKT-01 / MKT-07 / UI-01 — clawcode-skills-browse and
       // clawcode-skills are picker-driven (zero free-text args); they join
       // the no-options set.
-      const withOptions = new Set(["clawcode-memory", "clawcode-model", "clawcode-effort"]);
+      // Phase 999.31 — ultra-plan and ultra-review have an `args` option,
+      // so they join the with-options set (not the no-options set).
+      const withOptions = new Set([
+        "clawcode-memory",
+        "clawcode-model",
+        "clawcode-effort",
+        "ultra-plan",
+        "ultra-review",
+      ]);
       const noOptionCmds = DEFAULT_SLASH_COMMANDS.filter((cmd) => !withOptions.has(cmd.name));
       expect(noOptionCmds.length).toBe(7);
       for (const cmd of noOptionCmds) {

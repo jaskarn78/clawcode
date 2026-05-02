@@ -263,6 +263,28 @@ export const DEFAULT_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     claudeCommand: "",
     options: [],
   },
+
+  // Phase 999.31 — top-level shortcuts to native Anthropic Claude Code
+  // commands. Not GSD-flavored; standalone slash entries that the agent's
+  // session resolves directly via settingSources (~/.claude/CLAUDE.md +
+  // built-in command set). claudeCommand is forwarded verbatim so the SDK
+  // sees the native /ultraplan / /ultrareview invocation.
+  {
+    name: "ultra-plan",
+    description: "Deep multi-agent planning (native Anthropic /ultraplan)",
+    claudeCommand: "/ultraplan {args}",
+    options: [
+      { name: "args", type: 3, description: "Task description", required: true },
+    ],
+  },
+  {
+    name: "ultra-review",
+    description: "Multi-agent cloud review of current branch (or specific PR)",
+    claudeCommand: "/ultrareview {args}",
+    options: [
+      { name: "args", type: 3, description: "Optional PR number", required: false },
+    ],
+  },
 ] as const;
 
 /**
@@ -478,27 +500,6 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
 
-  // Phase 999.31 — ultra-* commands. Both delegate to native Anthropic
-  // Claude Code commands: /ultraplan (deep planning) and /ultrareview
-  // (multi-agent cloud review of branch or PR).
-  {
-    name: "ultra-plan",
-    subcommandOf: "get-shit-done",
-    description: "Deep multi-agent planning (native Claude Code /ultraplan)",
-    claudeCommand: "/ultraplan {args}",
-    options: [
-      { name: "args", type: 3, description: "Task description", required: true },
-    ],
-  },
-  {
-    name: "ultra-review",
-    subcommandOf: "get-shit-done",
-    description: "Multi-agent cloud review of current branch (or specific PR)",
-    claudeCommand: "/ultrareview {args}",
-    options: [
-      { name: "args", type: 3, description: "Optional PR number", required: false },
-    ],
-  },
 ] as const;
 
 /**

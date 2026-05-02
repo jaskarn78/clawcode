@@ -69,14 +69,11 @@ const EXPECTED_CLAUDE_COMMANDS: ReadonlyMap<string, string> = new Map([
   ["fast", "/gsd:fast {task}"],
   ["help", "/gsd:help {args}"],
   ["set-project", ""],
-  // Phase 999.31 — ultra-* additions (native Anthropic commands)
-  ["ultra-plan", "/ultraplan {args}"],
-  ["ultra-review", "/ultrareview {args}"],
 ]);
 
 describe("Phase 100 follow-up — GSD_SLASH_COMMANDS constant", () => {
-  it("GS1a — exports exactly 21 entries (19 GSD + 2 ultra-* added in 999.31)", () => {
-    expect(GSD_SLASH_COMMANDS).toHaveLength(21);
+  it("GS1a — exports exactly 19 entries", () => {
+    expect(GSD_SLASH_COMMANDS).toHaveLength(19);
   });
 
   it("GS1b — each entry has SlashCommandDef shape (name, description, claudeCommand, options)", () => {
