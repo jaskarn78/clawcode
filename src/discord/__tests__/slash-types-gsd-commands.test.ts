@@ -69,8 +69,8 @@ const EXPECTED_CLAUDE_COMMANDS: ReadonlyMap<string, string> = new Map([
   ["fast", "/gsd:fast {task}"],
   ["help", "/gsd:help {args}"],
   ["set-project", ""],
-  // Phase 999.31 — ultra-* additions
-  ["ultra-plan", "/oh-my-claudecode:ralplan {args}"],
+  // Phase 999.31 — ultra-* additions (native Anthropic commands)
+  ["ultra-plan", "/ultraplan {args}"],
   ["ultra-review", "/ultrareview {args}"],
 ]);
 

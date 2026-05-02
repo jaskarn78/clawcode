@@ -478,15 +478,14 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
     ],
   },
 
-  // Phase 999.31 — ultra-* commands (consensus planning + multi-agent review).
-  // These delegate to OMC marketplace skills (ralplan = consensus planner via
-  // Planner/Architect/Critic loop) and Claude Code's built-in /ultrareview
+  // Phase 999.31 — ultra-* commands. Both delegate to native Anthropic
+  // Claude Code commands: /ultraplan (deep planning) and /ultrareview
   // (multi-agent cloud review of branch or PR).
   {
     name: "ultra-plan",
     subcommandOf: "get-shit-done",
-    description: "Consensus planning — Planner + Architect + Critic loop",
-    claudeCommand: "/oh-my-claudecode:ralplan {args}",
+    description: "Deep multi-agent planning (native Claude Code /ultraplan)",
+    claudeCommand: "/ultraplan {args}",
     options: [
       { name: "args", type: 3, description: "Task description", required: true },
     ],
