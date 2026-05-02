@@ -22,10 +22,11 @@
  */
 import type { Command } from "commander";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import pino from "pino";
 import type { Logger } from "pino";
 import { loadConfig } from "../../config/loader.js";
+import { getAgentMemoryDbPath } from "../../shared/agent-paths.js";
 import { MemoryStore } from "../../memory/store.js";
 import { ConversationStore } from "../../memory/conversation-store.js";
 import {
@@ -115,8 +116,7 @@ export async function runSyncTranslateSessionsAction(
     return 1;
   }
 
-  const memoryDir = agent.memoryPath ?? workspace;
-  const dbPath = resolve(memoryDir, "memories.db");
+  const dbPath = getAgentMemoryDbPath(agent.memoryPath ?? workspace);
   const sessionsDir = args.sessionsDir ?? defaultStagingDir(args.agentName);
   const cursorPath = args.cursorPath ?? DEFAULT_TRANSLATOR_CURSOR_PATH;
 

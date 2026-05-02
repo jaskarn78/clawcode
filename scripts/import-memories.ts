@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { MemoryStore } from "../src/memory/store.js";
 import { EmbeddingService } from "../src/memory/embedder.js";
 import { extractWikilinks } from "../src/memory/graph.js";
+import { getAgentMemoryDbPath } from "../src/shared/agent-paths.js";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 
@@ -109,12 +110,12 @@ function deriveTags(filename: string, content: string): string[] {
 }
 
 async function main() {
-  const dbPath = join(
-    process.env.CLAWCODE_HOME ?? join(homedir(), ".clawcode"),
-    "agents",
-    AGENT_NAME,
-    "memory",
-    "memories.db",
+  const dbPath = getAgentMemoryDbPath(
+    join(
+      process.env.CLAWCODE_HOME ?? join(homedir(), ".clawcode"),
+      "agents",
+      AGENT_NAME,
+    ),
   );
 
   console.log(`Importing memories for agent '${AGENT_NAME}'`);

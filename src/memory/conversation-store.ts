@@ -89,6 +89,14 @@ type ConversationStatements = {
    * boot (Phase 67 SESS-03 production bug).
    */
   readonly listRecentTerminatedSessions: Statement;
+  /**
+   * Phase 99-C: backlog drain query — sessions in terminal status
+   * ('ended' | 'crashed') that DO carry turn rows but have NEVER been
+   * summarized (`summary_memory_id IS NULL`). Ordered by oldest first so
+   * the heartbeat drain processes the historical backlog before recent
+   * misses.
+   */
+  readonly listPendingSummarySessions: Statement;
   readonly insertTurn: Statement;
   readonly getTurnsForSession: Statement;
   readonly getTurnsForSessionLimited: Statement;
@@ -322,6 +330,29 @@ export class ConversationStore {
     limit: number,
   ): readonly ConversationSession[] {
     const rows = this.stmts.listRecentTerminatedSessions.all(
+      agentName,
+      limit,
+    ) as SessionRow[];
+    return Object.freeze(rows.map(rowToSession));
+  }
+
+  /**
+   * Phase 99-C: list sessions in terminal status that have NEVER been
+   * summarized (`summary_memory_id IS NULL`) AND carry at least one turn
+   * row. Ordered ASC so the heartbeat backlog drain processes the oldest
+   * historical miss first. Caller (heartbeat check via SessionManager)
+   * runs `summarizeSession` for each returned session.
+   *
+   * Excludes status='summarized' (already done) and status='active' (the
+   * stop/crash trigger sites haven't fired yet — premature summarization
+   * would race the in-flight session). Excludes zero-turn sessions because
+   * `summarizeSession` skips them with reason='zero-turns' regardless.
+   */
+  listPendingSummarySessions(
+    agentName: string,
+    limit: number,
+  ): readonly ConversationSession[] {
+    const rows = this.stmts.listPendingSummarySessions.all(
       agentName,
       limit,
     ) as SessionRow[];
@@ -575,6 +606,29 @@ export class ConversationStore {
              LIMIT 1
            )
          ORDER BY started_at DESC, rowid DESC
+         LIMIT ?`,
+      ),
+      // Phase 99-C: pending-summary backlog drain. Sessions that ended/
+      // crashed without summarization — typically (a) translator-imported
+      // OpenClaw sessions written directly with status='ended' (see
+      // src/sync/conversation-turn-translator.ts:225) and (b) historical
+      // hard-crashes that bypassed both stop and crash trigger sites in
+      // src/manager/session-manager.ts. EXISTS filter so summarizeSession
+      // doesn't burn a Haiku budget on zero-turn rows it would skip with
+      // reason='zero-turns' anyway. ASC so oldest backlog drains first.
+      listPendingSummarySessions: this.db.prepare(
+        `SELECT id, agent_name, started_at, ended_at, turn_count,
+                total_tokens, summary_memory_id, status
+         FROM conversation_sessions
+         WHERE agent_name = ?
+           AND status IN ('ended', 'crashed')
+           AND summary_memory_id IS NULL
+           AND EXISTS (
+             SELECT 1 FROM conversation_turns ct
+             WHERE ct.session_id = conversation_sessions.id
+             LIMIT 1
+           )
+         ORDER BY started_at ASC, rowid ASC
          LIMIT ?`,
       ),
       insertTurn: this.db.prepare(

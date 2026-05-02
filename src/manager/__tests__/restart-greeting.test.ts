@@ -336,12 +336,17 @@ describe("sendRestartGreeting — skip paths", () => {
   });
 
   it("P8: last session endedAt 8 days ago → skipped-dormant with lastActivityMs", async () => {
+    // The dormant candidate must carry turns so the loop picks it as
+    // `lastSession`; otherwise the helper short-circuits into the Phase 90.1
+    // minimal-embed branch BEFORE the dormancy check fires.
     const eightDaysAgo = FIXED_NOW - 8 * 24 * 3600_000;
     const dormantSession = makeSession({
       endedAt: new Date(eightDaysAgo).toISOString(),
     });
     const deps = makeDeps({
-      conversationStore: stubStore([dormantSession], {}),
+      conversationStore: stubStore([dormantSession], {
+        "sess-abc": [makeTurn()],
+      }),
     });
     const result = await sendRestartGreeting(deps, {
       agentName: "clawdy",
@@ -401,7 +406,13 @@ describe("sendRestartGreeting — skip paths", () => {
     expect(result).toEqual({ kind: "skipped-empty-state" });
   });
 
-  it("P12: getTurnsForSession returns [] → skipped-empty-state (defensive)", async () => {
+  it("P12: getTurnsForSession returns [] AND no summaryMemoryId → minimal-embed kind:sent", async () => {
+    // Phase 90.1 hotfix relaxed D-11 to send a "no prior session to recap"
+    // minimal embed instead of silently skipping; Phase 99-D added a
+    // summaryMemoryId fallback before that branch fires. With no turns AND
+    // no summaryMemoryId, the helper still ends up at the minimal-embed
+    // branch — this test pins that the operator sees visible feedback
+    // rather than a silent skip on a fully-empty agent.
     const deps = makeDeps({
       conversationStore: stubStore([makeSession()], { "sess-abc": [] }),
     });
@@ -410,7 +421,12 @@ describe("sendRestartGreeting — skip paths", () => {
       config: makeConfig(),
       restartKind: "clean",
     });
-    expect(result).toEqual({ kind: "skipped-empty-state" });
+    expect(result.kind).toBe("sent");
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toMatch(/no prior session to recap/);
   });
 
   it("P13: cool-down entry 4 min ago + coolDown=5 min → skipped-cool-down (lastGreetingAtMs populated)", async () => {
@@ -733,5 +749,126 @@ describe("sendRestartGreeting — cached-summary fast-path API-error guard", () 
     }).sendAsAgent;
     const embedArg = sendAsAgent.mock.calls[0]?.[3];
     expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 99-D — summaryMemoryId fallback when no candidate has turns
+// ---------------------------------------------------------------------------
+// Operator-observed: agents whose recent terminated sessions are all
+// turn-empty (translator-imported sessions with status='ended' BEFORE turn
+// rows reach the DB, OR sessions whose raw turns were pruned by Gap-2
+// cleanup post-summarize) used to fall through to the "no prior session to
+// recap" minimal embed even when a stored summary memory entry was on hand.
+// The 99-D fallback picks the first candidate with `summaryMemoryId` set
+// and routes through the existing summaryMemoryId fast-path.
+
+describe("sendRestartGreeting — Phase 99-D summaryMemoryId fallback", () => {
+  it("uses cached summary verbatim when ALL recent sessions have zero turns but oldest carries summaryMemoryId", async () => {
+    const empty1 = makeSession({ id: "s1", summaryMemoryId: null });
+    const empty2 = makeSession({ id: "s2", summaryMemoryId: null });
+    const summaryOnly = makeSession({
+      id: "s3",
+      summaryMemoryId: "mem_99d_001",
+      // Older than empty1/empty2 but still well within dormancy.
+      startedAt: new Date(FIXED_NOW - 7_200_000).toISOString(),
+      endedAt: new Date(FIXED_NOW - 5_400_000).toISOString(),
+    });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore(
+        [empty1, empty2, summaryOnly],
+        { s1: [], s2: [], s3: [] },
+      ),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue("Reviewed Q3 plan with the team."),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe("Reviewed Q3 plan with the team.");
+  });
+
+  it("falls through to skipped-empty-state minimal embed when NO candidate has turns AND none have summaryMemoryId", async () => {
+    const empty1 = makeSession({ id: "s1", summaryMemoryId: null });
+    const empty2 = makeSession({ id: "s2", summaryMemoryId: null });
+    const summarizeSpy = vi.fn();
+    const deps = makeDeps({
+      conversationStore: stubStore([empty1, empty2], { s1: [], s2: [] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue(undefined),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    // Existing minimal-embed branch fires — kind=sent with the "no prior
+    // session to recap" minimal embed (Phase 90.1 hotfix preserved).
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toMatch(/no prior session to recap/);
+  });
+
+  it("ignores summaryMemoryId fallback if getMemoryById is undefined (DI not wired)", async () => {
+    const empty1 = makeSession({ id: "s1", summaryMemoryId: "mem_99d_002" });
+    const summarizeSpy = vi.fn();
+    const deps = makeDeps({
+      conversationStore: stubStore([empty1], { s1: [] }),
+      summarize: summarizeSpy,
+      // no getMemoryById injected
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    // Without getMemoryById the helper cannot resolve the summary, so it
+    // correctly falls through to the minimal-embed branch.
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toMatch(/no prior session to recap/);
+  });
+
+  it("listRecentTerminatedSessions is called with the bumped Phase 99-D limit (25)", async () => {
+    const summarizeSpy = vi.fn();
+    const listSpy = vi.fn().mockReturnValue([]);
+    const deps = makeDeps({
+      conversationStore: {
+        listRecentTerminatedSessions: listSpy,
+        getTurnsForSession: vi.fn(() => []),
+      },
+      summarize: summarizeSpy,
+    });
+
+    await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(listSpy).toHaveBeenCalledWith("clawdy", 25);
   });
 });

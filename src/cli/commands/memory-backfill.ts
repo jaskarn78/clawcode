@@ -13,10 +13,10 @@
  *   1 — agent not in clawcode.yaml, workspace unset, or scanner threw
  */
 import type { Command } from "commander";
-import { resolve } from "node:path";
 import pino from "pino";
 import type { Logger } from "pino";
 import { loadConfig } from "../../config/loader.js";
+import { getAgentMemoryDbPath } from "../../shared/agent-paths.js";
 import { MemoryStore } from "../../memory/store.js";
 import { EmbeddingService } from "../../memory/embedder.js";
 import { MemoryScanner } from "../../memory/memory-scanner.js";
@@ -120,8 +120,7 @@ export async function runMemoryBackfillAction(
     return 1;
   }
 
-  const memoryDir = agent.memoryPath ?? workspace;
-  const dbPath = resolve(memoryDir, "memories.db");
+  const dbPath = getAgentMemoryDbPath(agent.memoryPath ?? workspace);
 
   const scanner = makeScanner(args.agentName, workspace, dbPath, log);
 

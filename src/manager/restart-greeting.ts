@@ -397,12 +397,19 @@ export async function sendRestartGreeting(
   // restart (common during operator testing or debugging) reads the most-
   // recent session (0 turns) and silently skips the greeting with
   // `skipped-empty-state`. That looks identical to a broken greeting even
-  // though the agent has plenty of history. We cap the lookback at 5 sessions
-  // to avoid pathological scans — anything older than that is effectively
-  // ancient and the dormancy rule would kick in anyway.
+  // though the agent has plenty of history.
+  //
+  // Phase 99-D — bumped lookback from 5 to 25 because translator-imported
+  // OpenClaw sessions can stack many turn-empty rows (status='ended' with
+  // turns still mid-translate). 5 was too tight on agents with translator
+  // backfill; 25 keeps the scan bounded but lets the loop reach a real
+  // session. The sibling fast-path (`summaryMemoryId` fallback) below
+  // covers sessions where Gap-2 cleanup has pruned raw turns post-summary
+  // OR where the translator has not yet replayed turns into a session it
+  // already imported as 'ended'.
   const recent = deps.conversationStore.listRecentTerminatedSessions(
     agentName,
-    5,
+    25,
   );
   if (recent.length === 0) return { kind: "skipped-empty-state" };
 
@@ -418,6 +425,30 @@ export async function sendRestartGreeting(
       lastSession = candidate;
       turns = candidateTurns;
       break;
+    }
+  }
+
+  // Phase 99-D fallback — none of the candidates had turns, but one may
+  // already carry a stored session-summary memory entry (translator-imported
+  // session that was later summarized via the 99-C heartbeat, or a session
+  // whose raw turns were pruned by Gap-2 cleanup post-summarize). Picking
+  // such a session here routes through the existing summaryMemoryId fast-
+  // path (~L483) which uses the cached summary verbatim and skips the Haiku
+  // call. Without this, agents with summary-only sessions fall through to
+  // the "no prior session to recap" minimal embed even though we DO have a
+  // recap on hand.
+  if (!lastSession && deps.getMemoryById) {
+    for (const candidate of recent) {
+      if (!candidate.summaryMemoryId) continue;
+      const cached = deps.getMemoryById(candidate.summaryMemoryId);
+      if (cached && cached.trim().length > 0) {
+        lastSession = candidate;
+        // turns intentionally stays []. The fast-path at ~L483 keys off
+        // `lastSession.summaryMemoryId + getMemoryById` and bypasses the
+        // turns-based Haiku prompt entirely; the dormancy + embed-builder
+        // steps below only consult `lastSession`.
+        break;
+      }
     }
   }
   // Phase 90.1 hotfix (D-11 relaxation) — if no session has turns (happens

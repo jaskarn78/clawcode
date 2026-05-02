@@ -2531,6 +2531,90 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Phase 99-C — drain the pending-summary backlog for an agent.
+   *
+   * Looks up sessions in terminal status that never received a Phase 64
+   * summarization (status IN ('ended','crashed') AND summary_memory_id IS
+   * NULL — see ConversationStore.listPendingSummarySessions for the full
+   * predicate) and runs `summarizeSession` on each, oldest-first. Counts
+   * the outcome shape so the caller (the `summarize-pending` heartbeat
+   * check) can render a one-line healthy/warning message.
+   *
+   * Each in-flight summary is registered with `trackSummary` so daemon
+   * shutdown drain (`drain(timeoutMs)`) waits for it to settle, exactly
+   * like the stop-path and crash-path trigger sites already do.
+   *
+   * Never throws — failures fall through into the `skipped` count and a
+   * defensive warn log. The heartbeat check timeout is the ultimate
+   * upper bound on per-tick work.
+   */
+  async summarizePendingSessions(
+    agentName: string,
+    limit: number,
+  ): Promise<{
+    readonly attempted: number;
+    readonly summarized: number;
+    readonly skipped: number;
+  }> {
+    const memoryStore = this.memory.memoryStores.get(agentName);
+    const conversationStore = this.memory.conversationStores.get(agentName);
+    if (!memoryStore || !conversationStore) {
+      return { attempted: 0, summarized: 0, skipped: 0 };
+    }
+    let pending: readonly { readonly id: string }[] = [];
+    try {
+      pending = conversationStore.listPendingSummarySessions(agentName, limit);
+    } catch (err) {
+      this.log.warn(
+        { agent: agentName, error: (err as Error).message },
+        "summarize-pending: list query failed (non-fatal)",
+      );
+      return { attempted: 0, summarized: 0, skipped: 0 };
+    }
+
+    let attempted = 0;
+    let summarized = 0;
+    let skipped = 0;
+    for (const session of pending) {
+      attempted++;
+      const sessionId = session.id;
+      try {
+        const result = await this.trackSummary(
+          (async () => {
+            const r = await summarizeSession(
+              { agentName, sessionId },
+              {
+                conversationStore,
+                memoryStore,
+                embedder: this.memory.embedder,
+                summarize: this.summarizeFn,
+                log: this.log,
+              },
+            );
+            if ("success" in r && r.success) {
+              summarized++;
+            } else {
+              skipped++;
+            }
+          })(),
+        );
+        void result;
+      } catch (err) {
+        skipped++;
+        this.log.warn(
+          {
+            agent: agentName,
+            session: sessionId,
+            error: (err as Error).message,
+          },
+          "summarize-pending: per-session summarization threw (non-fatal)",
+        );
+      }
+    }
+    return { attempted, summarized, skipped };
+  }
+
   private async summarizeSessionIfPossible(
     agentName: string,
     sessionId: string,

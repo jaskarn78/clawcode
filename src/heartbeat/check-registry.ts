@@ -34,6 +34,7 @@ import fsProbe from "./checks/fs-probe.js";
 import inbox from "./checks/inbox.js";
 import mcpBroker from "./checks/mcp-broker.js";
 import mcpReconnect from "./checks/mcp-reconnect.js";
+import summarizePending from "./checks/summarize-pending.js";
 import taskRetention from "./checks/task-retention.js";
 import threadIdle from "./checks/thread-idle.js";
 import tierMaintenance from "./checks/tier-maintenance.js";
@@ -51,6 +52,10 @@ export const CHECK_REGISTRY: readonly CheckModule[] = Object.freeze([
   // `broker.getPoolStatus()`. See checks/mcp-broker.ts header.
   mcpBroker,
   mcpReconnect,
+  // Phase 99-C — drains pending session-summary backlog (sessions that
+  // ended/crashed without ever firing the SessionSummarizer). See
+  // checks/summarize-pending.ts header.
+  summarizePending,
   taskRetention,
   threadIdle,
   tierMaintenance,
