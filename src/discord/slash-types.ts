@@ -477,6 +477,29 @@ export const GSD_SLASH_COMMANDS: readonly SlashCommandDef[] = [
       { name: "path", type: 3, description: "Absolute path to the new project directory", required: true },
     ],
   },
+
+  // Phase 999.31 — ultra-* commands (consensus planning + multi-agent review).
+  // These delegate to OMC marketplace skills (ralplan = consensus planner via
+  // Planner/Architect/Critic loop) and Claude Code's built-in /ultrareview
+  // (multi-agent cloud review of branch or PR).
+  {
+    name: "ultra-plan",
+    subcommandOf: "get-shit-done",
+    description: "Consensus planning — Planner + Architect + Critic loop",
+    claudeCommand: "/oh-my-claudecode:ralplan {args}",
+    options: [
+      { name: "args", type: 3, description: "Task description", required: true },
+    ],
+  },
+  {
+    name: "ultra-review",
+    subcommandOf: "get-shit-done",
+    description: "Multi-agent cloud review of current branch (or specific PR)",
+    claudeCommand: "/ultrareview {args}",
+    options: [
+      { name: "args", type: 3, description: "Optional PR number", required: false },
+    ],
+  },
 ] as const;
 
 /**
