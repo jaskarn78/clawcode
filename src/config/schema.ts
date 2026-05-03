@@ -1565,6 +1565,34 @@ export const defaultsSchema = z.object({
     .describe(
       "Idle duration after which stale Discord thread bindings get auto-archived (e.g. '24h', '6h', '30m'); '0' disables. Default '24h'.",
     ),
+  // Phase 109-B — orphan-claude reaper config. Alert-only by default for the
+  // first ~7 days post-deploy so operators can audit the false-positive rate
+  // before flipping to "reap". Hot-reload via ConfigReloader; takes effect
+  // on the next 60s tick without daemon restart.
+  orphanClaudeReaper: z
+    .object({
+      mode: z.enum(["off", "alert", "reap"]).default("alert"),
+      minAgeSeconds: z.number().int().positive().default(30),
+    })
+    .optional(),
+  // Phase 109-D — fleet-wide observability config. cgroupSampling reads
+  // /sys/fs/cgroup/system.slice/clawcode.service/memory.{current,max}; toggle
+  // off on hosts where cgroup v2 isn't mounted (the reader degrades to null
+  // gracefully anyway, but operators can disable explicitly).
+  observability: z
+    .object({
+      cgroupSampling: z.boolean().default(true),
+      cgroupAlertPercent: z.number().int().positive().max(100).default(80),
+    })
+    .optional(),
+  // Phase 109-C — broker pooling kill-switch. Phase 108 keeps `enabled: true`
+  // by default since the broker is LIVE in production; surfaced here so an
+  // operator can flip to false at runtime if the pool misbehaves under load.
+  brokerPooling: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .optional(),
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),

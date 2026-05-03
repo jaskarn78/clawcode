@@ -156,6 +156,10 @@ describe("IPC_METHODS", () => {
       // missed (deploy-blocking "Invalid Request"). Mirrors commit
       // a9c39c7 fix for probe-fs / list-fs-status.
       "mcp-tracker-snapshot",
+      // Phase 109-D — fleet-wide observability snapshot.
+      "fleet-stats",
+      // Phase 109-A — 1Password broker pool status (rps/throttle counters).
+      "broker-status",
     ]);
   });
 });

@@ -260,6 +260,16 @@ export const IPC_METHODS = [
   // commit a9c39c7 (Phase 96-05 same regression for probe-fs +
   // list-fs-status).
   "mcp-tracker-snapshot",
+  // Phase 109-D — fleet-wide observability snapshot. Returns FleetStatsData
+  // (cgroup memory pressure + claude proc drift + per-MCP-type RSS aggregate).
+  // Read-only; safe to poll. Linux-only signals degrade to null on hosts
+  // without /proc or cgroup v2 — never throws.
+  "fleet-stats",
+  // Phase 109-A — per-pool 1Password broker status snapshot (rps + throttle
+  // counters + last Retry-After). Decoupled from the heartbeat narrow
+  // surface; consumed by `clawcode broker-status` CLI for live operator
+  // visibility into 1P quota pressure across the fleet.
+  "broker-status",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

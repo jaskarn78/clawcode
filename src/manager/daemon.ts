@@ -42,6 +42,10 @@ import { SecretsResolver } from "./secrets-resolver.js";
 // + shutdown cleanup). Singleton mirrors the SecretsResolver DI pattern.
 import { McpProcessTracker } from "../mcp/process-tracker.js";
 import { buildMcpTrackerSnapshot } from "./mcp-tracker-snapshot.js";
+// Phase 109-D — fleet-wide observability (cgroup memory + claude proc drift
+// + per-MCP-pattern aggregate). Pure helper; safe to invoke from the IPC
+// handler.
+import { buildFleetStats } from "./fleet-stats.js";
 import { reapOrphans, startOrphanReaper } from "../mcp/orphan-reaper.js";
 import {
   buildMcpCommandRegexes,
@@ -53,6 +57,15 @@ import {
 // McpProcessTracker construction via the late-bound reconcileAgent closure
 // for TRACK-06 reconcile-before-kill.
 import { reconcileAllAgents, reconcileAgent } from "../mcp/reconciler.js";
+// Phase 109-B — orphan-claude reaper. Detects `claude` procs whose ppid is
+// the daemon but which are not in tracker.getRegisteredAgents() (the
+// today-fire pattern from 2026-05-03). Wired into onTickAfter AFTER the
+// reconciler so a freshly-discovered SDK respawn is registered before the
+// reaper sees it.
+import {
+  tickOrphanClaudeReaper,
+  type OrphanClaudeReaperMode,
+} from "../mcp/orphan-claude-reaper.js";
 // Phase 108 — daemon-managed broker pooling 1password-mcp children across
 // agents. The broker owns ONE @takescake/1password-mcp child per unique
 // resolved OP_SERVICE_ACCOUNT_TOKEN; agents connect via per-process shim
@@ -4007,6 +4020,22 @@ export async function startDaemon(
       case "secrets-invalidate": {
         return handleSecretsInvalidate(secretsResolver, params);
       }
+      // Phase 109-A — broker-status IPC. Returns the live PoolStatus[] from
+      // the daemon-singleton broker (rps + throttle + lastRetryAfterSec
+      // counters live here). Empty array when broker has no pools active
+      // (no agents have spawned a 1Password shim yet — normal at boot).
+      case "broker-status": {
+        const pools = broker.getPoolStatus();
+        const totalRps = pools.reduce(
+          (sum, p) => sum + (p.rpsLastMin ?? 0),
+          0,
+        );
+        const totalThrottles24h = pools.reduce(
+          (sum, p) => sum + (p.throttleEvents24h ?? 0),
+          0,
+        );
+        return { pools, totalRps, totalThrottles24h };
+      }
       // Phase 999.15 TRACK-05 — mcp-tracker-snapshot intercept BEFORE
       // routeMethod (closure-intercept pattern, mirrors secrets-status
       // above). Pure handler in mcp-tracker-snapshot.ts builds the
@@ -4023,6 +4052,33 @@ export async function startDaemon(
             ? ((params as { agent: string }).agent)
             : undefined;
         return buildMcpTrackerSnapshot(mcpTracker, filter);
+      }
+      // Phase 109-D — fleet-wide observability snapshot. Walks /proc once to
+      // count claude procs vs tracker.getRegisteredAgents() (drift detector),
+      // aggregates per-MCP-cmdline-pattern child counts + summed VmRSS, and
+      // reads cgroup memory.{current,max} for memory pressure. Linux-only
+      // signals degrade to null on non-Linux hosts. Read-only; never mutates
+      // tracker or registry state.
+      case "fleet-stats": {
+        const trackedClaudeCount = mcpTracker
+          ? Array.from(mcpTracker.getRegisteredAgents().keys()).filter(
+              (n) => !n.startsWith("__broker:"),
+            ).length
+          : 0;
+        const labeledPatterns: Array<{ label: string; regex: RegExp }> = [];
+        for (const [name, cfg] of Object.entries(mcpServersConfig)) {
+          try {
+            const single = buildMcpCommandRegexes({ [name]: cfg });
+            labeledPatterns.push({ label: name, regex: single });
+          } catch {
+            // Skip empty/invalid entries — buildMcpCommandRegexes throws on empty.
+          }
+        }
+        return await buildFleetStats({
+          daemonPid: process.pid,
+          trackedClaudeCount,
+          mcpPatterns: labeledPatterns,
+        });
       }
       // Phase 107 VEC-CLEAN-03 — memory-cleanup-orphans intercept BEFORE
       // routeMethod (closure-intercept pattern, mirrors secrets-status +
@@ -4509,6 +4565,44 @@ export async function startDaemon(
           mcpLog.error(
             { err: String(err) },
             "reconcileAllAgents failed (non-fatal)",
+          );
+        }
+      }
+      // Phase 109-B — orphan-claude reaper. Runs AFTER the reconciler so a
+      // freshly-discovered SDK respawn (TRACK-02 polled discovery) gets
+      // registered before this scan can mark it as orphaned. Reads the
+      // current mode from the live config defaults so a yaml hot-reload
+      // (defaults.orphanClaudeReaper.mode) takes effect on the next tick
+      // without a daemon restart.
+      if (
+        mcpTracker &&
+        mcpBootTimeUnix !== undefined &&
+        mcpClockTicksPerSec !== undefined
+      ) {
+        const oc = (config.defaults as {
+          orphanClaudeReaper?: {
+            mode?: OrphanClaudeReaperMode;
+            minAgeSeconds?: number;
+          };
+        }).orphanClaudeReaper;
+        const mode: OrphanClaudeReaperMode = oc?.mode ?? "alert";
+        const minAgeSeconds = oc?.minAgeSeconds ?? 30;
+        const mcpUidForReaper = process.getuid?.() ?? -1;
+        try {
+          await tickOrphanClaudeReaper({
+            daemonPid: process.pid,
+            tracker: mcpTracker,
+            uid: mcpUidForReaper,
+            minAgeSeconds,
+            bootTimeUnix: mcpBootTimeUnix,
+            clockTicksPerSec: mcpClockTicksPerSec,
+            mode,
+            log: mcpLog.child({ subsystem: "orphan-claude-reaper" }),
+          });
+        } catch (err) {
+          mcpLog.error(
+            { err: String(err) },
+            "orphan-claude reaper tick failed (non-fatal)",
           );
         }
       }

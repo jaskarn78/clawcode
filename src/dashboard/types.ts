@@ -135,6 +135,47 @@ export type MemoryStatsData = {
   >;
 };
 
+/**
+ * Phase 109-D — fleet-wide observability snapshot.
+ *
+ * Surfaced via the `fleet-stats` IPC method and the `/api/fleet-stats`
+ * dashboard endpoint. All fields are optional/nullable so a host without
+ * the underlying source (non-Linux dev machine, broker not running, etc.)
+ * still produces a valid response — operators see "unknown" rather than
+ * a 500.
+ *
+ * Back-compat invariant: this type is NOT folded into DashboardState.
+ * The existing /api/status payload stays byte-identical so the current
+ * dashboard JS keeps rendering. Operators who want fleet-stats poll the
+ * new endpoint.
+ */
+export type FleetStatsData = {
+  /** cgroup memory pressure snapshot (Linux only — null on other hosts). */
+  readonly cgroup: {
+    readonly memoryCurrentBytes: number;
+    readonly memoryMaxBytes: number | null;
+    readonly memoryPercent: number | null;
+  } | null;
+  /**
+   * Live `claude` proc count (from /proc) minus daemon-tracked agent count.
+   * Positive value = orphan claudes the daemon doesn't see (109-B target).
+   * null when /proc is unavailable.
+   */
+  readonly claudeProcDrift: {
+    readonly liveCount: number;
+    readonly trackedCount: number;
+    readonly drift: number;
+  } | null;
+  /** Per-MCP-cmdline-pattern aggregate (count + summed VmRSS in MB). */
+  readonly mcpFleet: ReadonlyArray<{
+    readonly pattern: string;
+    readonly count: number;
+    readonly rssMB: number;
+  }>;
+  /** Epoch ms — when this snapshot was taken. */
+  readonly sampledAt: number;
+};
+
 /** A single task edge for the dashboard task graph (OBS-03). */
 export type TaskGraphEdge = {
   readonly task_id: string;

@@ -52,6 +52,12 @@ export type BrokerPoolStatus = {
    * to widen the type.
    */
   readonly respawnCount24h?: number;
+  /** Phase 109-A — dispatched calls in the trailing 60s window. */
+  readonly rpsLastMin?: number;
+  /** Phase 109-A — throttle-classified responses in the trailing 24h window. */
+  readonly throttleEvents24h?: number;
+  /** Phase 109-A — last Retry-After seconds parsed from a throttle response. */
+  readonly lastRetryAfterSec?: number | null;
 };
 
 /**

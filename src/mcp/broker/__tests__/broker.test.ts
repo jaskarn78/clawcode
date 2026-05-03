@@ -614,3 +614,127 @@ describe("Broker — token rotation rebind (Phase 999.26)", () => {
     expect(active[0]!.tokenHash).toBe("hashCCCC");
   });
 });
+
+// Phase 109-A — cross-fleet 1P observability. Pins the new fields on
+// PoolStatus (rpsLastMin, throttleEvents24h, lastRetryAfterSec) and the
+// throttle classifier behavior on child error responses.
+describe("Broker — Phase 109-A observability", () => {
+  let cap: CapturedLog;
+  beforeEach(() => {
+    cap = captureLogger();
+  });
+
+  it("rpsLastMin counts dispatched calls in the trailing 60s window", async () => {
+    const { spawnFn } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+    const a = makeAgentConn("agent-a", "tokenA01", TEST_TOKEN_LITERAL);
+    await broker.acceptConnection(a);
+
+    for (let i = 1; i <= 3; i++) {
+      await broker.handleAgentMessage(a, {
+        jsonrpc: "2.0",
+        id: i,
+        method: "tools/call",
+        params: { name: "password_read" },
+      });
+    }
+
+    const status = broker.getPoolStatus()[0]!;
+    expect(status.rpsLastMin).toBe(3);
+  });
+
+  it("throttleEvents24h increments + lastRetryAfterSec parses retryAfter from error.data", async () => {
+    const { spawnFn, spawned } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+    const a = makeAgentConn("agent-a", "tokenA01", TEST_TOKEN_LITERAL);
+    await broker.acceptConnection(a);
+
+    await broker.handleAgentMessage(a, {
+      jsonrpc: "2.0",
+      id: 42,
+      method: "tools/call",
+      params: { name: "password_read" },
+    });
+    const child = spawned[0]!;
+    const written = child.consumeStdinJson() as Array<{ id: number }>;
+    const poolId = written[0]!.id;
+
+    // Simulate an upstream rate-limit response carrying retryAfter=5.
+    child.pushStdoutLine({
+      jsonrpc: "2.0",
+      id: poolId,
+      error: { code: -32000, message: "429 rate limited", data: { retryAfter: 5 } },
+    });
+    await new Promise((r) => setImmediate(r));
+
+    const status = broker.getPoolStatus()[0]!;
+    expect(status.throttleEvents24h).toBe(1);
+    expect(status.lastRetryAfterSec).toBe(5);
+
+    const throttleLog = cap.lines().find(
+      (l) =>
+        l.component === "mcp-broker" &&
+        typeof l.msg === "string" &&
+        l.msg.includes("throttle response from pool child"),
+    );
+    expect(throttleLog).toBeDefined();
+    expect(throttleLog!.retryAfterSec).toBe(5);
+    expect(throttleLog!.tool).toBe("password_read");
+  });
+
+  it("non-throttle errors do NOT increment throttleEvents24h", async () => {
+    const { spawnFn, spawned } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+    const a = makeAgentConn("agent-a", "tokenA01", TEST_TOKEN_LITERAL);
+    await broker.acceptConnection(a);
+
+    await broker.handleAgentMessage(a, {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "password_read" },
+    });
+    const child = spawned[0]!;
+    const written = child.consumeStdinJson() as Array<{ id: number }>;
+    child.pushStdoutLine({
+      jsonrpc: "2.0",
+      id: written[0]!.id,
+      error: { code: -32602, message: "Invalid params" },
+    });
+    await new Promise((r) => setImmediate(r));
+
+    const status = broker.getPoolStatus()[0]!;
+    expect(status.throttleEvents24h).toBe(0);
+    expect(status.lastRetryAfterSec).toBeNull();
+  });
+
+  it("throttle log line never contains the literal token (SEC-07)", async () => {
+    const { spawnFn, spawned } = makeSpawnFn();
+    const broker = new OnePasswordMcpBroker({ log: cap.log, spawnFn });
+    const a = makeAgentConn("agent-a", "tokenA01", TEST_TOKEN_LITERAL);
+    await broker.acceptConnection(a);
+
+    await broker.handleAgentMessage(a, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "password_read" },
+    });
+    const child = spawned[0]!;
+    const written = child.consumeStdinJson() as Array<{ id: number }>;
+    child.pushStdoutLine({
+      jsonrpc: "2.0",
+      id: written[0]!.id,
+      error: {
+        code: -32000,
+        message: "rate limit exceeded",
+        data: { retryAfter: 2 },
+      },
+    });
+    await new Promise((r) => setImmediate(r));
+
+    const raw = cap.raw();
+    expect(raw).not.toContain(TEST_TOKEN_LITERAL);
+    expect(raw).not.toMatch(/ops_[A-Z0-9_]/);
+  });
+});

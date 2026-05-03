@@ -90,7 +90,29 @@ export type PoolStatus = {
   queueDepth: number;
   respawnCount: number;
   childPid: number | null;
+  /**
+   * Phase 109-A — per-pool throughput + throttle observability. Lets
+   * operators see WHICH pool is hammering the 1Password service-account
+   * quota in real time and whether the upstream is throttling.
+   *
+   * Both fields are optional so existing 108 consumers (heartbeat check)
+   * keep working without an explicit upgrade — they read PoolStatus.alive
+   * + agentRefCount only. Tests assert that the heartbeat provider
+   * surface stays narrow.
+   */
+  /** Dispatched calls in the trailing 60s window. */
+  rpsLastMin?: number;
+  /** Count of throttle-classified responses in the trailing 24h window. */
+  throttleEvents24h?: number;
+  /** Last Retry-After value (seconds) parsed from a throttle response, or null. */
+  lastRetryAfterSec?: number | null;
 };
+
+/** Phase 109-A — heuristic detector for upstream throttle responses. */
+const THROTTLE_RE = /rate.?limit|429|too many requests/i;
+
+/** 24h in milliseconds — drop throttle-event timestamps older than this. */
+const THROTTLE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** Minimal JSON-RPC message types — we don't need a full schema here. */
 type JsonRpcId = number | string;
@@ -130,6 +152,16 @@ type Pool = {
   stdoutBuf: string;
   draining: boolean;
   drainTimer: NodeJS.Timeout | null;
+  /**
+   * Phase 109-A — dispatch timestamps (epoch ms). Trimmed to the trailing
+   * 60s window on every read. Bounded length: max ~600 entries at 10 rps,
+   * O(n) trim per status read which is fine at heartbeat cadence.
+   */
+  rpsBuffer: number[];
+  /** Phase 109-A — throttle-event timestamps in the trailing 24h window. */
+  throttleBuffer: number[];
+  /** Phase 109-A — last parsed Retry-After (seconds), null if never. */
+  lastRetryAfterSec: number | null;
 };
 
 type AgentSemaphore = {
@@ -308,13 +340,17 @@ export class OnePasswordMcpBroker {
     sem.active += 1;
 
     const poolId = this.nextPoolId++;
+    const now = Date.now();
     pool.inflight.set(poolId, {
       agent: conn,
       agentReqId: msg.id as JsonRpcId,
       tool,
       turnId,
-      startedAt: Date.now(),
+      startedAt: now,
     });
+    // Phase 109-A — record dispatch for rps observability. Trimmed lazily
+    // on getPoolStatus reads so the hot dispatch path stays cheap.
+    pool.rpsBuffer.push(now);
 
     const rewritten = { ...msg, id: poolId };
     try {
@@ -361,6 +397,9 @@ export class OnePasswordMcpBroker {
       stdoutBuf: "",
       draining: false,
       drainTimer: null,
+      rpsBuffer: [],
+      throttleBuffer: [],
+      lastRetryAfterSec: null,
     };
     this.wireChild(pool);
     this.pools.set(tokenHash, pool);
@@ -442,6 +481,32 @@ export class OnePasswordMcpBroker {
       return;
     }
     pool.inflight.delete(poolId);
+
+    // Phase 109-A — classify error responses as throttle if message matches.
+    // Stateless heuristic: exact regex on the JSON-RPC error.message string.
+    // Token-redaction invariant (Phase 104 SEC-07): we DO NOT log error.data,
+    // only the boolean classification + parsed retryAfter integer.
+    if (parsed.error !== undefined) {
+      const errMsg = parsed.error.message ?? "";
+      if (THROTTLE_RE.test(errMsg)) {
+        const tNow = Date.now();
+        pool.throttleBuffer.push(tNow);
+        const ra = parseRetryAfterSeconds(parsed.error.data);
+        if (ra !== null) pool.lastRetryAfterSec = ra;
+        this.poolLog(pool.tokenHash).warn(
+          {
+            component: "mcp-broker",
+            pool: `1password-mcp:${pool.tokenHash}`,
+            agent: route.agent.agentName,
+            turnId: route.turnId,
+            tool: route.tool,
+            retryAfterSec: ra,
+            throttleEvents24h: countWithinWindow(pool.throttleBuffer, tNow, THROTTLE_WINDOW_MS),
+          },
+          "throttle response from pool child",
+        );
+      }
+    }
 
     // Restore agent-side id and deliver.
     const restored: JsonRpcMessage = { ...parsed, id: route.agentReqId };
@@ -741,8 +806,18 @@ export class OnePasswordMcpBroker {
 
   /** Snapshot of every pool's status — used by heartbeat. */
   getPoolStatus(): PoolStatus[] {
+    const now = Date.now();
     const out: PoolStatus[] = [];
     for (const [, pool] of this.pools) {
+      // Phase 109-A — lazy trim on read. Cheap because the buffers are
+      // bounded by recent dispatch rate (rps × 60) and recent throttle
+      // count (rare events).
+      pool.rpsBuffer = trimWindow(pool.rpsBuffer, now, 60_000);
+      pool.throttleBuffer = trimWindow(
+        pool.throttleBuffer,
+        now,
+        THROTTLE_WINDOW_MS,
+      );
       out.push({
         tokenHash: pool.tokenHash,
         alive: pool.alive,
@@ -751,6 +826,9 @@ export class OnePasswordMcpBroker {
         queueDepth: pool.queue.length,
         respawnCount: pool.respawnCount,
         childPid: pool.child.pid ?? null,
+        rpsLastMin: pool.rpsBuffer.length,
+        throttleEvents24h: pool.throttleBuffer.length,
+        lastRetryAfterSec: pool.lastRetryAfterSec,
       });
     }
     return out;
@@ -802,4 +880,56 @@ export class OnePasswordMcpBroker {
     }
     this.pools.clear();
   }
+}
+
+/**
+ * Phase 109-A — drop timestamps older than `windowMs` from the buffer's
+ * head. Pure; returns a new array slice.
+ */
+function trimWindow(
+  buf: readonly number[],
+  now: number,
+  windowMs: number,
+): number[] {
+  const cutoff = now - windowMs;
+  let i = 0;
+  while (i < buf.length && (buf[i] as number) < cutoff) i++;
+  return buf.slice(i);
+}
+
+function countWithinWindow(
+  buf: readonly number[],
+  now: number,
+  windowMs: number,
+): number {
+  const cutoff = now - windowMs;
+  let n = 0;
+  for (const t of buf) if (t >= cutoff) n++;
+  return n;
+}
+
+/**
+ * Phase 109-A — best-effort parse of an MCP error.data shape into a
+ * Retry-After seconds integer. Accepts numbers, strings of seconds, or
+ * shapes like `{ retryAfter: 5 }` or `{ retryAfterSeconds: 5 }`. Returns
+ * null when no recognizable value is present.
+ */
+function parseRetryAfterSeconds(data: unknown): number | null {
+  if (typeof data === "number" && Number.isFinite(data)) return data;
+  if (typeof data === "string") {
+    const n = Number(data);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (data !== null && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    for (const key of ["retryAfter", "retryAfterSeconds", "retry_after"]) {
+      const v = obj[key];
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string") {
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+  return null;
 }

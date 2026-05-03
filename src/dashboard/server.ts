@@ -314,6 +314,20 @@ async function handleRequest(
       return;
     }
 
+    // Phase 109-D — fleet-wide observability snapshot. Cgroup memory pressure,
+    // claude proc drift, per-MCP-pattern RSS aggregate. Read-only; safe to
+    // poll. Adjacent to /api/status (which keeps its byte-stable shape) so
+    // existing dashboard JS keeps rendering unchanged.
+    if (method === "GET" && pathname === "/api/fleet-stats") {
+      try {
+        const data = await sendIpcRequest(socketPath, "fleet-stats", {});
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
     // One-shot health endpoint
     if (method === "GET" && pathname === "/api/health") {
       try {

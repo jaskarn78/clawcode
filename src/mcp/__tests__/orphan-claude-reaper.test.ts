@@ -1,0 +1,309 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Writable } from "node:stream";
+import pino from "pino";
+import {
+  scanForOrphanClaudes,
+  tickOrphanClaudeReaper,
+} from "../orphan-claude-reaper.js";
+import * as procScan from "../proc-scan.js";
+import type { McpProcessTracker, RegisteredAgent } from "../process-tracker.js";
+
+function captureLogger() {
+  const chunks: string[] = [];
+  const sink = new Writable({
+    write(chunk, _enc, cb) {
+      chunks.push(String(chunk));
+      cb();
+    },
+  });
+  const log = pino({ level: "debug" }, sink);
+  const lines = () =>
+    chunks
+      .join("")
+      .split("\n")
+      .filter((s) => s.length > 0)
+      .map((s) => JSON.parse(s) as Record<string, unknown>);
+  return { log, lines };
+}
+
+function makeTracker(entries: Map<string, RegisteredAgent>): McpProcessTracker {
+  return {
+    getRegisteredAgents: () => entries,
+  } as unknown as McpProcessTracker;
+}
+
+function mockProc(opts: {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly uid: number;
+  readonly cmdline: readonly string[];
+  readonly startTimeJiffies?: number;
+}): procScan.ProcInfo {
+  return {
+    pid: opts.pid,
+    ppid: opts.ppid,
+    uid: opts.uid,
+    cmdline: opts.cmdline,
+    startTimeJiffies: opts.startTimeJiffies ?? 0,
+  };
+}
+
+const SCAN_BASE = {
+  uid: 1000,
+  minAgeSeconds: 30,
+  bootTimeUnix: 0,
+  clockTicksPerSec: 100,
+};
+
+describe("scanForOrphanClaudes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns nothing when daemonPid is 1 (defensive)", async () => {
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([100]);
+    vi.spyOn(procScan, "readProcInfo").mockResolvedValue(
+      mockProc({ pid: 100, ppid: 1, uid: 1000, cmdline: ["/usr/bin/claude"] }),
+    );
+    const tracker = makeTracker(new Map());
+    const out = await scanForOrphanClaudes({
+      daemonPid: 1,
+      tracker,
+      ...SCAN_BASE,
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("yields claude procs whose ppid matches daemonPid and are NOT in tracker", async () => {
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([100, 200]);
+    vi.spyOn(procScan, "readProcInfo").mockImplementation(async (pid) => {
+      const map: Record<number, procScan.ProcInfo> = {
+        100: mockProc({
+          pid: 100,
+          ppid: 99,
+          uid: 1000,
+          cmdline: ["/usr/bin/claude"],
+        }),
+        200: mockProc({
+          pid: 200,
+          ppid: 99,
+          uid: 1000,
+          cmdline: ["claude"],
+        }),
+      };
+      return map[pid] ?? null;
+    });
+    const tracker = makeTracker(
+      new Map([
+        [
+          "agent-a",
+          { claudePid: 100, mcpPids: [], registeredAt: 0 } as RegisteredAgent,
+        ],
+      ]),
+    );
+    const out = await scanForOrphanClaudes({
+      daemonPid: 99,
+      tracker,
+      ...SCAN_BASE,
+    });
+    expect(out.map((c) => c.pid)).toEqual([200]);
+  });
+
+  it("skips entries whose name starts with __broker: when reading tracker", async () => {
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([300]);
+    vi.spyOn(procScan, "readProcInfo").mockResolvedValue(
+      mockProc({
+        pid: 300,
+        ppid: 99,
+        uid: 1000,
+        cmdline: ["/usr/bin/claude"],
+      }),
+    );
+    // Tracker has __broker:* entry with claudePid=300 — broker-owned
+    // synthetic owners must NOT save this PID from being treated as
+    // a tracked claude (the broker-owned PID is the daemon PID 99 in
+    // production, not a real claude proc — the regex already excludes
+    // it; still, the orphan-claude reaper must skip __broker: rows
+    // when computing the tracked set).
+    const tracker = makeTracker(
+      new Map([
+        [
+          "__broker:1password:abc",
+          { claudePid: 300, mcpPids: [], registeredAt: 0 } as RegisteredAgent,
+        ],
+      ]),
+    );
+    const out = await scanForOrphanClaudes({
+      daemonPid: 99,
+      tracker,
+      ...SCAN_BASE,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.pid).toBe(300);
+  });
+
+  it("skips procs younger than minAgeSeconds", async () => {
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([100]);
+    // bootTimeUnix=0 + clockTicksPerSec=100 → procStartUnix = 1/100 = 0.01s.
+    // Age = Date.now()/1000 - 0.01 ≈ now seconds. To force age < 30 we set
+    // startTimeJiffies very high → procStartUnix near now() so age is ~0.
+    const nowSec = Date.now() / 1000;
+    vi.spyOn(procScan, "readProcInfo").mockResolvedValue(
+      mockProc({
+        pid: 100,
+        ppid: 99,
+        uid: 1000,
+        cmdline: ["/usr/bin/claude"],
+        startTimeJiffies: Math.floor(nowSec * 100),
+      }),
+    );
+    const out = await scanForOrphanClaudes({
+      daemonPid: 99,
+      tracker: makeTracker(new Map()),
+      ...SCAN_BASE,
+    });
+    expect(out).toEqual([]);
+  });
+});
+
+describe("tickOrphanClaudeReaper", () => {
+  let cap: ReturnType<typeof captureLogger>;
+  beforeEach(() => {
+    cap = captureLogger();
+    delete process.env.CLAWCODE_ORPHAN_CLAUDE_REAPER_DISABLE;
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.CLAWCODE_ORPHAN_CLAUDE_REAPER_DISABLE;
+  });
+
+  it("noops when mode is 'off'", async () => {
+    const killFn = vi.fn();
+    await tickOrphanClaudeReaper({
+      daemonPid: 99,
+      tracker: makeTracker(new Map()),
+      ...SCAN_BASE,
+      mode: "off",
+      log: cap.log,
+      killFn,
+    });
+    expect(killFn).not.toHaveBeenCalled();
+    expect(cap.lines()).toEqual([]);
+  });
+
+  it("noops when CLAWCODE_ORPHAN_CLAUDE_REAPER_DISABLE=1", async () => {
+    process.env.CLAWCODE_ORPHAN_CLAUDE_REAPER_DISABLE = "1";
+    const killFn = vi.fn();
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([100]);
+    vi.spyOn(procScan, "readProcInfo").mockResolvedValue(
+      mockProc({ pid: 100, ppid: 99, uid: 1000, cmdline: ["claude"] }),
+    );
+    await tickOrphanClaudeReaper({
+      daemonPid: 99,
+      tracker: makeTracker(new Map()),
+      ...SCAN_BASE,
+      mode: "reap",
+      log: cap.log,
+      killFn,
+    });
+    expect(killFn).not.toHaveBeenCalled();
+  });
+
+  it("alert mode emits pino warn per orphan and DOES NOT kill", async () => {
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([100, 200]);
+    vi.spyOn(procScan, "readProcInfo").mockImplementation(async (pid) => {
+      const map: Record<number, procScan.ProcInfo> = {
+        100: mockProc({ pid: 100, ppid: 99, uid: 1000, cmdline: ["/usr/bin/claude"] }),
+        200: mockProc({ pid: 200, ppid: 99, uid: 1000, cmdline: ["claude"] }),
+      };
+      return map[pid] ?? null;
+    });
+    const killFn = vi.fn();
+    await tickOrphanClaudeReaper({
+      daemonPid: 99,
+      tracker: makeTracker(new Map()),
+      ...SCAN_BASE,
+      mode: "alert",
+      log: cap.log,
+      killFn,
+    });
+    expect(killFn).not.toHaveBeenCalled();
+    const alerts = cap.lines().filter(
+      (l) => l.component === "orphan-claude-reaper" && l.action === "alert",
+    );
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]!.mode).toBe("alert");
+    expect(alerts[0]!.msg).toBe("orphan claude proc detected");
+  });
+
+  it("reap mode SIGTERMs candidates and SIGKILLs survivors after grace", async () => {
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([200]);
+    vi.spyOn(procScan, "readProcInfo").mockResolvedValue(
+      mockProc({ pid: 200, ppid: 99, uid: 1000, cmdline: ["claude"] }),
+    );
+    const killFn = vi.fn();
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    await tickOrphanClaudeReaper({
+      daemonPid: 99,
+      tracker: makeTracker(new Map()),
+      ...SCAN_BASE,
+      mode: "reap",
+      log: cap.log,
+      killFn,
+      sleepFn,
+    });
+    // Alert + SIGTERM in first pass.
+    expect(killFn).toHaveBeenCalledWith(200, "SIGTERM");
+    expect(sleepFn).toHaveBeenCalledWith(10_000);
+    // Survivor on rescan → SIGKILL.
+    expect(killFn).toHaveBeenCalledWith(200, "SIGKILL");
+    const lines = cap.lines();
+    expect(lines.some((l) => l.action === "alert")).toBe(true);
+    expect(lines.some((l) => l.action === "sigterm")).toBe(true);
+    expect(lines.some((l) => l.action === "sigkill")).toBe(true);
+  });
+
+  it("never reaps a claude that became tracked between snapshot and kill", async () => {
+    // Race scenario: scan returns pid 200 as a candidate (not in tracker
+    // at scan time). Between scan and the second tickOrphanClaudeReaper
+    // call, session-manager registers it. The next tick MUST NOT touch it.
+    const tracker = makeTracker(new Map());
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([200]);
+    vi.spyOn(procScan, "readProcInfo").mockResolvedValue(
+      mockProc({ pid: 200, ppid: 99, uid: 1000, cmdline: ["claude"] }),
+    );
+    // First tick (alert) — emits one alert.
+    const killFn = vi.fn();
+    await tickOrphanClaudeReaper({
+      daemonPid: 99,
+      tracker,
+      ...SCAN_BASE,
+      mode: "alert",
+      log: cap.log,
+      killFn,
+    });
+    expect(cap.lines().filter((l) => l.action === "alert")).toHaveLength(1);
+
+    // Now session-manager registers it.
+    const trackedEntries = new Map([
+      [
+        "agent-a",
+        { claudePid: 200, mcpPids: [], registeredAt: 0 } as RegisteredAgent,
+      ],
+    ]);
+    const trackedTracker = makeTracker(trackedEntries);
+
+    // Second tick — should be a noop since pid 200 is now tracked.
+    const cap2 = captureLogger();
+    await tickOrphanClaudeReaper({
+      daemonPid: 99,
+      tracker: trackedTracker,
+      ...SCAN_BASE,
+      mode: "reap",
+      log: cap2.log,
+      killFn,
+    });
+    expect(killFn).not.toHaveBeenCalled();
+    expect(cap2.lines()).toEqual([]);
+  });
+});
