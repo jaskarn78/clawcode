@@ -184,6 +184,79 @@ describe("SecretsResolver", () => {
     // preResolveAll itself does not throw.
   });
 
+  // Phase 999.33 — bounded-concurrency boot-storm prevention.
+  // Pre-fix: Promise.allSettled fanned out N op CLI subprocesses
+  // simultaneously, saturating 1Password's rate-limit window when N > 4-5.
+  // Post-fix: cap in-flight resolutions to 4. Verified by tracking max
+  // concurrent inflight count across a 12-URI resolution wave.
+  it("RES-08: preResolveAll caps concurrent in-flight at 4 (boot-storm fix)", async () => {
+    let inflight = 0;
+    let maxInflight = 0;
+    const opRead: OpReadFn = vi.fn(async (uri: string) => {
+      inflight++;
+      maxInflight = Math.max(maxInflight, inflight);
+      // Simulate a slow op CLI shell-out so concurrent calls overlap.
+      await new Promise((r) => setTimeout(r, 25));
+      inflight--;
+      return `${SENTINEL_VALUE}-${uri}`;
+    });
+
+    const r = new SecretsResolver({
+      opRead,
+      log: silentLogger(),
+      retryOptions: { retries: 0 },
+    });
+
+    const uris = Array.from({ length: 12 }, (_, i) => `op://item-${i}/credential`);
+    const results = await r.preResolveAll(uris);
+
+    expect(results).toHaveLength(12);
+    expect(results.every((x) => x.ok)).toBe(true);
+    // All 12 resolved exactly once (no waste).
+    expect(opRead).toHaveBeenCalledTimes(12);
+    // Concurrency was bounded — must NEVER exceed the cap. Pre-fix this
+    // would have been 12 (or close to N).
+    expect(maxInflight).toBeLessThanOrEqual(4);
+    expect(maxInflight).toBeGreaterThan(1); // sanity — actually went parallel
+  });
+
+  it("RES-09: preResolveAll preserves URI→outcome ordering (deterministic out array)", async () => {
+    // The wave processor uses a shared cursor; each worker writes to
+    // out[idx] for its assigned URI. The returned array must mirror
+    // the input order even if workers complete out-of-order.
+    const opRead: OpReadFn = vi.fn(async (uri: string) => {
+      // Delay inversely to URI index — last URIs resolve first.
+      const idx = parseInt(uri.replace(/\D/g, ""), 10) || 0;
+      await new Promise((r) => setTimeout(r, (10 - idx) * 5));
+      return `${SENTINEL_VALUE}-${uri}`;
+    });
+
+    const r = new SecretsResolver({
+      opRead,
+      log: silentLogger(),
+      retryOptions: { retries: 0 },
+    });
+
+    const uris = Array.from({ length: 8 }, (_, i) => `op://item-${i}/credential`);
+    const results = await r.preResolveAll(uris);
+
+    for (let i = 0; i < uris.length; i++) {
+      expect(results[i]?.uri).toBe(uris[i]);
+    }
+  });
+
+  it("RES-10: preResolveAll handles empty input without crashing", async () => {
+    const opRead: OpReadFn = vi.fn(async () => SENTINEL_VALUE);
+    const r = new SecretsResolver({
+      opRead,
+      log: silentLogger(),
+      retryOptions: { retries: 0 },
+    });
+    const results = await r.preResolveAll([]);
+    expect(results).toEqual([]);
+    expect(opRead).not.toHaveBeenCalled();
+  });
+
   it("RES-07: counters track lifecycle", async () => {
     const calls = {
       sentinelCount: 0,

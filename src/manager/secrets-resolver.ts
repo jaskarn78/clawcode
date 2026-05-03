@@ -213,27 +213,58 @@ export class SecretsResolver {
   }
 
   /**
-   * Pre-resolve every URI in the list in parallel. Used at daemon boot to
-   * fill the cache once, before any agent spawn. Failures DO NOT throw —
-   * they're returned as a per-URI result so the caller can decide
-   * fail-closed vs fail-open per zone (mirrors the existing graceful-
-   * degradation contract for op:// reference failures at boot).
+   * Pre-resolve every URI in the list at boot to fill the cache once,
+   * before any agent spawn. Failures DO NOT throw — they're returned as a
+   * per-URI result so the caller can decide fail-closed vs fail-open per
+   * zone (mirrors the existing graceful-degradation contract for op://
+   * reference failures at boot).
+   *
+   * Phase 999.33 — bounded-concurrency wave processor. The original
+   * implementation did `Promise.allSettled(uris.map(...))` which fanned
+   * out ALL URIs simultaneously. With ~25 distinct op:// references in a
+   * production config, that issued 25 concurrent `op` CLI subprocesses in
+   * ~1 second, saturating 1Password's rate-limit window and causing
+   * BOOT-STORM failures (observed 2026-04-30 + 2026-05-03). The retry
+   * shim's exponential backoff didn't help — the retries also fired
+   * within the same RL window.
+   *
+   * Fix: cap in-flight resolutions to `MAX_CONCURRENT` (default 4). With
+   * 25 URIs, boot resolves in ~7 sequential waves of 4 (last wave 1) ≈
+   * 1-2s wall-clock IF every resolution is a cache miss + cold op-CLI
+   * spawn. Cache hits (post-restart with persistent cache, Phase 999.34
+   * follow-up) bypass the wave entirely. Inflight dedup (existing) stays
+   * orthogonal — duplicate URIs in the input share a single resolution
+   * regardless of wave placement.
    */
   async preResolveAll(
     uris: readonly string[],
   ): Promise<readonly { uri: string; ok: boolean; reason?: string }[]> {
-    const results = await Promise.allSettled(
-      uris.map(async (uri) => {
-        await this.resolve(uri);
-        return uri;
-      }),
+    const MAX_CONCURRENT = 4;
+    type Outcome = { uri: string; ok: boolean; reason?: string };
+    const out: Outcome[] = new Array(uris.length);
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= uris.length) return;
+        const uri = uris[idx]!;
+        try {
+          await this.resolve(uri);
+          out[idx] = { uri, ok: true };
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          out[idx] = { uri, ok: false, reason };
+        }
+      }
+    };
+
+    const workers = Array.from(
+      { length: Math.min(MAX_CONCURRENT, uris.length) },
+      () => worker(),
     );
-    return results.map((r, i) => {
-      const uri = uris[i]!;
-      if (r.status === "fulfilled") return { uri, ok: true };
-      const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
-      return { uri, ok: false, reason };
-    });
+    await Promise.all(workers);
+    return out;
   }
 
   /** Frozen telemetry snapshot — counters + current cache size. */
