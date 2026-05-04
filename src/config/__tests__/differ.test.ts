@@ -388,6 +388,54 @@ describe("diffConfigs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 110 Stage 0a — shimRuntime + brokers reloadable
+// ---------------------------------------------------------------------------
+
+describe("diffConfigs - Phase 110 Stage 0a reloadable additions", () => {
+  it("classifies a defaults.shimRuntime.search edit as reloadable", () => {
+    const oldConfig = makeConfig();
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        // Cast through unknown — the Config type forbids the field today
+        // but the differ classifies via fieldPath, not type. Stage 0b
+        // widens the enum and the cast goes away.
+        shimRuntime: { search: "node", image: "node", browser: "node" },
+      } as unknown as Config["defaults"],
+    });
+    // Force a perceived change by making the new object have a populated
+    // shimRuntime where the old one had undefined.
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath.startsWith("defaults.shimRuntime"),
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+  });
+
+  it("classifies a defaults.brokers.<name>.enabled edit as reloadable", () => {
+    const oldConfig = makeConfig({
+      defaults: {
+        ...makeConfig().defaults,
+        brokers: { "1password": { enabled: true } },
+      } as unknown as Config["defaults"],
+    });
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        brokers: { "1password": { enabled: false } },
+      } as unknown as Config["defaults"],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath.startsWith("defaults.brokers"),
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 75 Plan 01 — SHARED-01: memoryPath classified as non-reloadable
 // ---------------------------------------------------------------------------
 

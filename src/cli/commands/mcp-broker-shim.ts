@@ -36,6 +36,39 @@ export const SHIM_EXIT_TEMPFAIL = 75; // EX_TEMPFAIL — socket closed; SDK shou
 /** Subset of net.Socket the shim depends on. */
 export type ShimSocket = NodeJS.ReadWriteStream & NodeJS.EventEmitter;
 
+/**
+ * Phase 110 Stage 0a — outcome of normalizing the CLI's `--type` / `--pool`
+ * pair into the single `serverType` value passed downstream. Exported as a
+ * tagged result so tests can assert both the success path and the
+ * unsupported-type rejection without spinning up commander + a real socket.
+ *
+ * Today only `"1password"` is accepted; Stage 1 widens the set as the
+ * broker class grows multi-server dispatch.
+ */
+export type NormalizeServerTypeResult =
+  | { readonly ok: true; readonly serverType: "1password" }
+  | { readonly ok: false; readonly serverType: string; readonly message: string };
+
+export function normalizeServerType(opts: {
+  readonly type?: string;
+  readonly pool?: string;
+}): NormalizeServerTypeResult {
+  // --type wins when both passed; fall back to --pool; default to
+  // "1password" so a bare invocation keeps Phase 108's behavior.
+  const serverType = opts.type ?? opts.pool ?? "1password";
+  if (serverType !== "1password") {
+    return {
+      ok: false,
+      serverType,
+      message:
+        `Unsupported broker type: ${serverType} ` +
+        "(only '1password' supported in Phase 110 Stage 0a; " +
+        "broker generalization ships in Stage 1)",
+    };
+  }
+  return { ok: true, serverType: "1password" };
+}
+
 export type ShimDeps = {
   /** Agent-side stdin (defaults to process.stdin). */
   stdin: NodeJS.ReadableStream;
@@ -119,11 +152,17 @@ export async function runShim(opts: RunShimOptions): Promise<number> {
   }
 
   const tokenHash = computeTokenHash(tokenLiteral);
+  // Phase 110 Stage 0a — `serverType` is the broker generalization key
+  // (replaces `pool` going forward). Today serverType always equals the
+  // pool name; Stage 1a wires multi-server dispatch keyed off serverType.
+  // Logged on every line so journalctl greps by serverType work from
+  // day one — broker types added later slot in without log-shape churn.
   const childLog = log.child({
     component: "mcp-broker-shim",
     agent,
     tokenHash,
     pool: opts.pool,
+    serverType: opts.pool,
   });
 
   let socket: ShimSocket;
@@ -220,8 +259,14 @@ export async function runShim(opts: RunShimOptions): Promise<number> {
  * Register the `mcp-broker-shim` subcommand with the commander program.
  *
  * Mirrors the existing `browser-mcp` / `search-mcp` / `image-mcp` shape so
- * the SDK can spawn `clawcode mcp-broker-shim --pool 1password` as a stdio
- * MCP child per agent.
+ * the SDK can spawn `clawcode mcp-broker-shim --type 1password` (or the
+ * legacy `--pool 1password`) as a stdio MCP child per agent.
+ *
+ * Phase 110 Stage 0a — `--type` is the broker generalization key. The
+ * legacy `--pool` flag stays as an alias indefinitely (Phase 108's
+ * published shape; loader auto-inject still emits it). When both flags
+ * are passed, `--type` wins. Stage 1 widens the accepted serverType set;
+ * today only "1password" is accepted.
  */
 export function registerMcpBrokerShimCommand(program: Command): void {
   program
@@ -229,35 +274,48 @@ export function registerMcpBrokerShimCommand(program: Command): void {
     .description(
       "Per-agent stdio bridge to the daemon's mcp-broker unix socket (Phase 108)",
     )
-    .option("--pool <name>", "Pool name (currently only '1password')", "1password")
+    .option(
+      "--type <serverType>",
+      "Broker server-id (preferred form going forward; only '1password' accepted today)",
+    )
+    .option(
+      "--pool <name>",
+      "Legacy alias for --type (Phase 108 shape; kept indefinitely for backwards compat)",
+    )
     .option(
       "--socket <path>",
       "Override broker socket path (defaults to CLAWCODE_BROKER_SOCKET env or /var/run/clawcode/mcp-broker.sock)",
     )
-    .action(async (options: { pool: string; socket?: string }) => {
-      try {
-        const pool = options.pool;
-        if (pool !== "1password") {
-          cliError(`Unsupported pool: ${pool} (only '1password' is supported)`);
-          process.exit(SHIM_EXIT_USAGE);
-        }
-        const socketPath =
-          options.socket ??
-          process.env.CLAWCODE_BROKER_SOCKET ??
-          DEFAULT_BROKER_SOCKET;
+    .action(
+      async (options: { type?: string; pool?: string; socket?: string }) => {
+        try {
+          const normalized = normalizeServerType({
+            type: options.type,
+            pool: options.pool,
+          });
+          if (!normalized.ok) {
+            cliError(normalized.message);
+            process.exit(SHIM_EXIT_USAGE);
+          }
+          const socketPath =
+            options.socket ??
+            process.env.CLAWCODE_BROKER_SOCKET ??
+            DEFAULT_BROKER_SOCKET;
 
-        const code = await runShim({
-          pool: "1password",
-          stdin: process.stdin,
-          stdout: process.stdout,
-          env: process.env,
-          connectSocket: async () => net.createConnection({ path: socketPath }),
-        });
-        process.exit(code);
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        cliError(`Error in mcp-broker-shim: ${msg}`);
-        process.exit(SHIM_EXIT_TEMPFAIL);
-      }
-    });
+          const code = await runShim({
+            pool: "1password",
+            stdin: process.stdin,
+            stdout: process.stdout,
+            env: process.env,
+            connectSocket: async () =>
+              net.createConnection({ path: socketPath }),
+          });
+          process.exit(code);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          cliError(`Error in mcp-broker-shim: ${msg}`);
+          process.exit(SHIM_EXIT_TEMPFAIL);
+        }
+      },
+    );
 }

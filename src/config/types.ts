@@ -130,6 +130,21 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "defaults.fileAccess",
   "agents.*.outputDir",
   "defaults.outputDir",
+  // Phase 110 Stage 0a — shimRuntime + brokers schema scaffolding.
+  //   - defaults.shimRuntime: per-shim-type runtime selector. Reloadable
+  //     via the existing prefix-match classifier (children of the prefix
+  //     all classify reloadable). Stage 0a accepts only "node"; Stage 0b
+  //     widens the enum and lands the alternate-runtime spawn path. The
+  //     swap happens on the NEXT agent start (current shims keep running
+  //     under their boot-time runtime — same posture as Phase 90 MEM-04).
+  //   - defaults.brokers: server-id keyed dispatch table. Schema-only in
+  //     Stage 0a; the broker dispatcher is wired in Stage 1a. Mirrors the
+  //     Phase 109-C `brokerPooling` precedent (schema present, consumer
+  //     reads at its own cadence) so a runtime YAML edit in Stage 0a is
+  //     a no-op until Stage 1a lands. Classified reloadable so the
+  //     Stage 1a wiring picks up edits without a restart.
+  "defaults.shimRuntime",
+  "defaults.brokers",
   // Phase 100 GSD-07 — settingSources + gsd.projectDir DELIBERATELY EXCLUDED
   // from RELOADABLE_FIELDS. See NON_RELOADABLE_FIELDS below + Plan 100-02
   // session-adapter wiring for rationale: both fields are SDK session-boot

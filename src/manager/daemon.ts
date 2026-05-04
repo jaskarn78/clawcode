@@ -45,7 +45,7 @@ import { buildMcpTrackerSnapshot } from "./mcp-tracker-snapshot.js";
 // Phase 109-D — fleet-wide observability (cgroup memory + claude proc drift
 // + per-MCP-pattern aggregate). Pure helper; safe to invoke from the IPC
 // handler.
-import { buildFleetStats } from "./fleet-stats.js";
+import { buildFleetStats, type McpRuntime } from "./fleet-stats.js";
 import { reapOrphans, startOrphanReaper } from "../mcp/orphan-reaper.js";
 import {
   buildMcpCommandRegexes,
@@ -4065,13 +4065,85 @@ export async function startDaemon(
               (n) => !n.startsWith("__broker:"),
             ).length
           : 0;
-        const labeledPatterns: Array<{ label: string; regex: RegExp }> = [];
+        // Phase 110 Stage 0a — every aggregate carries a runtime
+        // classification so /api/fleet-stats consumers can split shim-
+        // runtime cohorts (Stage 0/1 targets) from yaml-defined externals.
+        // Yaml-defined entries default to "external"; the loader-auto-
+        // injected shims (browser/search/image — see src/config/loader.ts:
+        // 249-294) and the broker shim (1password — same file:215-238)
+        // are added below with their runtime read from
+        // config.defaults.shimRuntime (Stage 0a defaults all to "node").
+        const labeledPatterns: Array<{
+          label: string;
+          regex: RegExp;
+          runtime: McpRuntime;
+        }> = [];
         for (const [name, cfg] of Object.entries(mcpServersConfig)) {
           try {
             const single = buildMcpCommandRegexes({ [name]: cfg });
-            labeledPatterns.push({ label: name, regex: single });
+            labeledPatterns.push({
+              label: name,
+              regex: single,
+              runtime: "external",
+            });
           } catch {
             // Skip empty/invalid entries — buildMcpCommandRegexes throws on empty.
+          }
+        }
+        // Loader-auto-injected shim patterns. These are NOT in
+        // mcpServersConfig (they're injected per-agent inside
+        // resolveAgentConfig) but they show up in /proc as `clawcode
+        // <type>-mcp` cmdlines. We synthesize their patterns here using
+        // the same buildMcpCommandRegexes helper so the bare-package-name
+        // alternation logic stays a single source of truth.
+        const shimRuntimeCfg = config.defaults.shimRuntime;
+        const autoInjected: ReadonlyArray<{
+          label: string;
+          command: string;
+          args: readonly string[];
+          runtime: McpRuntime;
+        }> = [
+          {
+            label: "browser",
+            command: "clawcode",
+            args: ["browser-mcp"],
+            runtime: shimRuntimeCfg?.browser ?? "node",
+          },
+          {
+            label: "search",
+            command: "clawcode",
+            args: ["search-mcp"],
+            runtime: shimRuntimeCfg?.search ?? "node",
+          },
+          {
+            label: "image",
+            command: "clawcode",
+            args: ["image-mcp"],
+            runtime: shimRuntimeCfg?.image ?? "node",
+          },
+          {
+            // Phase 108 broker shim. Both `--pool 1password` (legacy
+            // form, current loader auto-inject) and `--type 1password`
+            // (Phase 110 alias) match because the regex includes the
+            // bare-package-name alternation `\bmcp-broker-shim\b`.
+            label: "1password",
+            command: "clawcode",
+            args: ["mcp-broker-shim", "--pool", "1password"],
+            runtime: "node",
+          },
+        ];
+        for (const { label, command, args, runtime } of autoInjected) {
+          // Skip if the operator yaml-defined a server with the same
+          // name (mcpServersConfig wins — the operator's entry already
+          // got pushed above with runtime: "external").
+          if (mcpServersConfig[label] !== undefined) continue;
+          try {
+            const regex = buildMcpCommandRegexes({
+              [label]: { command, args: [...args] },
+            });
+            labeledPatterns.push({ label, regex, runtime });
+          } catch {
+            // unreachable — args is non-empty for every auto-inject
           }
         }
         return await buildFleetStats({

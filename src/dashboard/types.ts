@@ -166,12 +166,33 @@ export type FleetStatsData = {
     readonly trackedCount: number;
     readonly drift: number;
   } | null;
-  /** Per-MCP-cmdline-pattern aggregate (count + summed VmRSS in MB). */
+  /**
+   * Per-MCP-cmdline-pattern aggregate (count + summed VmRSS in MB).
+   *
+   * Phase 110 Stage 0a — `runtime` field added so /api/fleet-stats
+   * consumers can split shim-runtime cohorts (Stage 0/1 targets) from
+   * yaml-defined externals (out of scope) without re-deriving from
+   * cmdline. Optional in the type because pre-Stage-0a dashboards keep
+   * working byte-identically; daemon always populates it post-Stage-0a.
+   */
   readonly mcpFleet: ReadonlyArray<{
     readonly pattern: string;
     readonly count: number;
     readonly rssMB: number;
+    readonly runtime?: "node" | "static" | "python" | "external";
   }>;
+  /**
+   * Phase 110 Stage 0a — rolled-up shim-runtime baseline. The summary
+   * `/api/fleet-stats` consumers read to track Stage 0 progress without
+   * iterating `mcpFleet`. `null` when no shim-runtime entries exist
+   * (distinguish from all-zero baseline). Optional for back-compat with
+   * pre-Stage-0a clients; always populated post-Stage-0a.
+   */
+  readonly shimRuntimeBaseline?: {
+    readonly node: { readonly count: number; readonly rssMB: number };
+    readonly static?: { readonly count: number; readonly rssMB: number };
+    readonly python?: { readonly count: number; readonly rssMB: number };
+  } | null;
   /** Epoch ms — when this snapshot was taken. */
   readonly sampledAt: number;
 };
