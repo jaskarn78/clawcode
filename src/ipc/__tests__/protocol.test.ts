@@ -64,6 +64,8 @@ describe("IPC_METHODS", () => {
       // Subagent threads
       "spawn-subagent-thread",
       "cleanup-subagent-thread",
+      // Phase 999.25 — explicit subagent work-completion signal.
+      "subagent-complete",
       "read-thread",
       "message-history",
       "archive-discord-thread",

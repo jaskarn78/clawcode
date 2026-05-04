@@ -2659,3 +2659,92 @@ agents:
     ).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.25 — defaults.subagentCompletion schema parse + defaults
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — defaults.subagentCompletion", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-subagent-completion-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses an explicit subagentCompletion block end-to-end", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentCompletion:
+    enabled: false
+    quiescenceMinutes: 10
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sc = (config.defaults as unknown as {
+      subagentCompletion?: { enabled: boolean; quiescenceMinutes: number };
+    }).subagentCompletion;
+    expect(sc).toEqual({ enabled: false, quiescenceMinutes: 10 });
+  });
+
+  it("default-fills enabled=true / quiescenceMinutes=5 when partial", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentCompletion: {}
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sc = (config.defaults as unknown as {
+      subagentCompletion?: { enabled: boolean; quiescenceMinutes: number };
+    }).subagentCompletion;
+    expect(sc).toEqual({ enabled: true, quiescenceMinutes: 5 });
+  });
+
+  it("rejects negative quiescenceMinutes", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentCompletion:
+    quiescenceMinutes: -1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("omitting subagentCompletion leaves the field undefined (back-compat)", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    expect(
+      (config.defaults as unknown as { subagentCompletion?: unknown })
+        .subagentCompletion,
+    ).toBeUndefined();
+  });
+});

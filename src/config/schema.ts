@@ -1575,6 +1575,19 @@ export const defaultsSchema = z.object({
       minAgeSeconds: z.number().int().positive().default(30),
     })
     .optional(),
+  // Phase 999.25 — subagent completion relay. Decouples
+  // `relayCompletionToParent` (operator-channel notification) from
+  // session-end. Two new triggers: the `subagent_complete` MCP tool
+  // (explicit signal from skill author) and a quiescence-timer sweep
+  // (60s onTickAfter). `completedAt` on the ThreadBinding dedupes the
+  // three trigger paths (tool / quiescence / session-end). Hot-reload
+  // works post-PR #8 (closure-capture fix).
+  subagentCompletion: z
+    .object({
+      enabled: z.boolean().default(true),
+      quiescenceMinutes: z.number().int().positive().default(5),
+    })
+    .optional(),
   // Phase 999.X — subagent-thread reaper. Auto-spawned subagent threads
   // (SubagentThreadSpawner-named, see src/manager/subagent-name.ts) are
   // one-shot delegated tasks; they should self-prune after the Discord
