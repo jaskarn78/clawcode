@@ -289,6 +289,205 @@ describe("sweepStaleBindings (MCP-09 orchestrator)", () => {
     expect(result.prunedCount).toBe(0);
   });
 
+  it("Phase 999.X: subagent-named binding triggers stopSubagentSession", async () => {
+    // Binding whose sessionName matches isSubagentThreadName.
+    const subBinding: ThreadBinding = {
+      threadId: "thread-sub-1",
+      parentChannelId: "ch-1",
+      agentName: "fin-acquisition-via-fin-research-57r__G",
+      sessionName: "fin-acquisition-via-fin-research-57r__G",
+      createdAt: NOW - 30 * ONE_HOUR,
+      lastActivity: NOW - 25 * ONE_HOUR,
+    };
+    readThreadRegistryMock.mockResolvedValue(makeRegistry([subBinding]));
+    cleanupThreadWithClassifierMock.mockResolvedValue({
+      archived: false,
+      bindingPruned: true,
+      classification: "prune",
+    });
+
+    const log = makeLog();
+    const spawner = { archiveThread: vi.fn() };
+    const stopSubagentSession = vi.fn().mockResolvedValue(undefined);
+
+    const result = await sweepStaleBindings({
+      spawner,
+      registryPath: REGISTRY_PATH,
+      now: NOW,
+      idleMs: TWENTY_FOUR_HOURS,
+      log: log as unknown as import("pino").Logger,
+      stopSubagentSession,
+    });
+
+    expect(stopSubagentSession).toHaveBeenCalledTimes(1);
+    expect(stopSubagentSession).toHaveBeenCalledWith(
+      "fin-acquisition-via-fin-research-57r__G",
+    );
+    expect(result.subagentSessionsStopped).toBe(1);
+  });
+
+  it("Phase 999.X: operator-defined binding does NOT trigger stopSubagentSession", async () => {
+    // Plain agentName/sessionName; no nanoid6 suffix.
+    const opBinding: ThreadBinding = {
+      threadId: "thread-op-1",
+      parentChannelId: "ch-1",
+      agentName: "fin-acquisition",
+      sessionName: "fin-acquisition",
+      createdAt: NOW - 30 * ONE_HOUR,
+      lastActivity: NOW - 25 * ONE_HOUR,
+    };
+    readThreadRegistryMock.mockResolvedValue(makeRegistry([opBinding]));
+    cleanupThreadWithClassifierMock.mockResolvedValue({
+      archived: false,
+      bindingPruned: true,
+      classification: "prune",
+    });
+
+    const log = makeLog();
+    const spawner = { archiveThread: vi.fn() };
+    const stopSubagentSession = vi.fn().mockResolvedValue(undefined);
+
+    const result = await sweepStaleBindings({
+      spawner,
+      registryPath: REGISTRY_PATH,
+      now: NOW,
+      idleMs: TWENTY_FOUR_HOURS,
+      log: log as unknown as import("pino").Logger,
+      stopSubagentSession,
+    });
+
+    expect(stopSubagentSession).not.toHaveBeenCalled();
+    expect(result.subagentSessionsStopped).toBe(0);
+  });
+
+  it("Phase 999.X: stopSubagentSession not provided → no stop attempt (back-compat)", async () => {
+    const subBinding: ThreadBinding = {
+      threadId: "thread-sub-1",
+      parentChannelId: "ch-1",
+      agentName: "fin-acquisition-via-fin-research-57r__G",
+      sessionName: "fin-acquisition-via-fin-research-57r__G",
+      createdAt: NOW - 30 * ONE_HOUR,
+      lastActivity: NOW - 25 * ONE_HOUR,
+    };
+    readThreadRegistryMock.mockResolvedValue(makeRegistry([subBinding]));
+    cleanupThreadWithClassifierMock.mockResolvedValue({
+      archived: false,
+      bindingPruned: true,
+      classification: "prune",
+    });
+
+    const log = makeLog();
+    const spawner = { archiveThread: vi.fn() };
+
+    const result = await sweepStaleBindings({
+      spawner,
+      registryPath: REGISTRY_PATH,
+      now: NOW,
+      idleMs: TWENTY_FOUR_HOURS,
+      log: log as unknown as import("pino").Logger,
+      // stopSubagentSession intentionally omitted
+    });
+
+    // Sweep proceeded normally; subagentSessionsStopped is zero by default.
+    expect(result.subagentSessionsStopped).toBe(0);
+    expect(result.prunedCount).toBe(1);
+  });
+
+  it("Phase 999.X: stopSubagentSession failure does NOT abort sweep", async () => {
+    const subBinding1: ThreadBinding = {
+      threadId: "thread-sub-1",
+      parentChannelId: "ch-1",
+      agentName: "fin-acquisition-via-fin-research-57r__G",
+      sessionName: "fin-acquisition-via-fin-research-57r__G",
+      createdAt: NOW - 30 * ONE_HOUR,
+      lastActivity: NOW - 25 * ONE_HOUR,
+    };
+    const subBinding2: ThreadBinding = {
+      threadId: "thread-sub-2",
+      parentChannelId: "ch-1",
+      agentName: "fin-acquisition-via-fin-research-4XZKL0",
+      sessionName: "fin-acquisition-via-fin-research-4XZKL0",
+      createdAt: NOW - 26 * ONE_HOUR,
+      lastActivity: NOW - 25 * ONE_HOUR,
+    };
+    readThreadRegistryMock.mockResolvedValue(
+      makeRegistry([subBinding1, subBinding2]),
+    );
+    cleanupThreadWithClassifierMock.mockResolvedValue({
+      archived: false,
+      bindingPruned: true,
+      classification: "prune",
+    });
+
+    const log = makeLog();
+    const spawner = { archiveThread: vi.fn() };
+    const stopSubagentSession = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await sweepStaleBindings({
+      spawner,
+      registryPath: REGISTRY_PATH,
+      now: NOW,
+      idleMs: TWENTY_FOUR_HOURS,
+      log: log as unknown as import("pino").Logger,
+      stopSubagentSession,
+    });
+
+    // First failed, second succeeded — second still got processed.
+    expect(stopSubagentSession).toHaveBeenCalledTimes(2);
+    expect(result.subagentSessionsStopped).toBe(1);
+  });
+
+  it("Phase 999.X: 'not running' race is tolerated silently", async () => {
+    const subBinding: ThreadBinding = {
+      threadId: "thread-sub-1",
+      parentChannelId: "ch-1",
+      agentName: "fin-acquisition-via-fin-research-57r__G",
+      sessionName: "fin-acquisition-via-fin-research-57r__G",
+      createdAt: NOW - 30 * ONE_HOUR,
+      lastActivity: NOW - 25 * ONE_HOUR,
+    };
+    readThreadRegistryMock.mockResolvedValue(makeRegistry([subBinding]));
+    cleanupThreadWithClassifierMock.mockResolvedValue({
+      archived: false,
+      bindingPruned: true,
+      classification: "prune",
+    });
+
+    const log = makeLog();
+    const spawner = { archiveThread: vi.fn() };
+    const stopSubagentSession = vi.fn().mockRejectedValue(
+      new Error(
+        "Agent 'fin-acquisition-via-fin-research-57r__G' is not running",
+      ),
+    );
+
+    await sweepStaleBindings({
+      spawner,
+      registryPath: REGISTRY_PATH,
+      now: NOW,
+      idleMs: TWENTY_FOUR_HOURS,
+      log: log as unknown as import("pino").Logger,
+      stopSubagentSession,
+    });
+
+    // Race tolerated → info, not error.
+    expect(log.error).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "stop-subagent-session-failed",
+      }),
+      expect.any(String),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "stop-subagent-session",
+      }),
+      expect.stringContaining("already stopped"),
+    );
+  });
+
   it("Test 12: continues on individual failure — staleCount=3, prunedCount=2", async () => {
     const bindings = [
       makeBinding("t1", "fin-acquisition", NOW - 30 * ONE_HOUR),

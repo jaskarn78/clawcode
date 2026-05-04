@@ -2538,3 +2538,124 @@ agents:
     ).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.X — defaults.subagentReaper schema parse + defaults
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — defaults.subagentReaper", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-subagent-reaper-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses an explicit subagentReaper block end-to-end", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper:
+    mode: alert
+    idleTimeoutMinutes: 60
+    minAgeSeconds: 120
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sr = (config.defaults as unknown as {
+      subagentReaper?: {
+        mode: string;
+        idleTimeoutMinutes: number;
+        minAgeSeconds: number;
+      };
+    }).subagentReaper;
+    expect(sr).toEqual({
+      mode: "alert",
+      idleTimeoutMinutes: 60,
+      minAgeSeconds: 120,
+    });
+  });
+
+  it("default-fills mode/idleTimeoutMinutes/minAgeSeconds when partial", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper: {}
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sr = (config.defaults as unknown as {
+      subagentReaper?: {
+        mode: string;
+        idleTimeoutMinutes: number;
+        minAgeSeconds: number;
+      };
+    }).subagentReaper;
+    expect(sr).toEqual({
+      mode: "reap",
+      idleTimeoutMinutes: 1440,
+      minAgeSeconds: 300,
+    });
+  });
+
+  it("rejects an unknown mode value", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper:
+    mode: nuclear
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("rejects negative idleTimeoutMinutes", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper:
+    idleTimeoutMinutes: -1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("omitting subagentReaper leaves the field undefined (back-compat)", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    expect(
+      (config.defaults as unknown as { subagentReaper?: unknown }).subagentReaper,
+    ).toBeUndefined();
+  });
+});

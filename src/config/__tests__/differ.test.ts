@@ -436,6 +436,70 @@ describe("diffConfigs - Phase 110 Stage 0a reloadable additions", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 999.X — defaults.subagentReaper reloadable
+// ---------------------------------------------------------------------------
+
+describe("diffConfigs - subagentReaper reloadable", () => {
+  it("classifies a defaults.subagentReaper.mode edit as reloadable", () => {
+    const oldConfig = makeConfig({
+      defaults: {
+        ...makeConfig().defaults,
+        subagentReaper: {
+          mode: "alert",
+          idleTimeoutMinutes: 1440,
+          minAgeSeconds: 300,
+        },
+      } as unknown as Config["defaults"],
+    });
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        subagentReaper: {
+          mode: "reap",
+          idleTimeoutMinutes: 1440,
+          minAgeSeconds: 300,
+        },
+      } as unknown as Config["defaults"],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath.startsWith("defaults.subagentReaper"),
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+  });
+
+  it("classifies idleTimeoutMinutes + minAgeSeconds edits as reloadable too", () => {
+    const oldConfig = makeConfig({
+      defaults: {
+        ...makeConfig().defaults,
+        subagentReaper: {
+          mode: "reap",
+          idleTimeoutMinutes: 1440,
+          minAgeSeconds: 300,
+        },
+      } as unknown as Config["defaults"],
+    });
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        subagentReaper: {
+          mode: "reap",
+          idleTimeoutMinutes: 60,
+          minAgeSeconds: 30,
+        },
+      } as unknown as Config["defaults"],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const changes = result.changes.filter((c) =>
+      c.fieldPath.startsWith("defaults.subagentReaper"),
+    );
+    expect(changes.length).toBeGreaterThan(0);
+    for (const c of changes) expect(c.reloadable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 75 Plan 01 — SHARED-01: memoryPath classified as non-reloadable
 // ---------------------------------------------------------------------------
 

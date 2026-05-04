@@ -145,6 +145,13 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   //     Stage 1a wiring picks up edits without a restart.
   "defaults.shimRuntime",
   "defaults.brokers",
+  // Phase 999.X — subagent-thread reaper config. Mode/idle/minAge edits
+  // hot-reload through the existing ConfigReloader path (Phase 109-B
+  // precedent — same shape as defaults.orphanClaudeReaper above). The
+  // daemon's onTickAfter closure reads `config.defaults.subagentReaper`
+  // each tick, so a YAML edit takes effect on the next 60s sweep without
+  // a restart.
+  "defaults.subagentReaper",
   // Phase 100 GSD-07 — settingSources + gsd.projectDir DELIBERATELY EXCLUDED
   // from RELOADABLE_FIELDS. See NON_RELOADABLE_FIELDS below + Plan 100-02
   // session-adapter wiring for rationale: both fields are SDK session-boot
