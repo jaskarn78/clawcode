@@ -2425,3 +2425,116 @@ describe("Phase 999.13 — DELEG renderer + canonical text", () => {
     expect(aIdx).toBeLessThan(bIdx);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 110 Stage 0a — defaults.shimRuntime + defaults.brokers parse
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — Phase 110 Stage 0a schema additions", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-stage0a-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses defaults.shimRuntime with explicit `node` for all three sub-fields", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  shimRuntime:
+    search: node
+    image: node
+    browser: node
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    // Cast through unknown — the inferred Config type does not yet expose
+    // the new field on the public surface; the schema parses it.
+    const sr = (config.defaults as unknown as {
+      shimRuntime?: { search: string; image: string; browser: string };
+    }).shimRuntime;
+    expect(sr).toEqual({ search: "node", image: "node", browser: "node" });
+  });
+
+  it("rejects defaults.shimRuntime.search with an unknown enum value", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  shimRuntime:
+    search: rust
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("parses defaults.brokers with a single entry and default-bearing fields", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  brokers:
+    "1password":
+      enabled: true
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const brokers = (config.defaults as unknown as {
+      brokers?: Record<
+        string,
+        {
+          enabled: boolean;
+          maxConcurrent: number;
+          spawnArgs: string[];
+          env: Record<string, string>;
+          drainOnIdleMs: number;
+        }
+      >;
+    }).brokers;
+    expect(brokers).toBeDefined();
+    expect(brokers!["1password"]).toEqual({
+      enabled: true,
+      // Defaults from brokerEntrySchema fire when omitted.
+      maxConcurrent: 4,
+      spawnArgs: [],
+      env: {},
+      drainOnIdleMs: 0,
+    });
+  });
+
+  it("omitting both shimRuntime and brokers leaves the defaults block parsing unchanged (back-compat)", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    expect(
+      (config.defaults as unknown as { shimRuntime?: unknown }).shimRuntime,
+    ).toBeUndefined();
+    expect(
+      (config.defaults as unknown as { brokers?: unknown }).brokers,
+    ).toBeUndefined();
+  });
+});

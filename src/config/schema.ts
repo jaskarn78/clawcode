@@ -1593,6 +1593,39 @@ export const defaultsSchema = z.object({
       enabled: z.boolean().default(true),
     })
     .optional(),
+  // Phase 110 Stage 0a — per-shim-type runtime selector. Each entry picks
+  // the runtime the loader-auto-injected `clawcode {search,image,browser}-
+  // mcp` shim spawns under. Stage 0a ships the dial wired end-to-end with
+  // a single value ("node" — current behavior); Stage 0b widens the enum
+  // to ["node","static","python"] and lands the alternate-runtime binary.
+  // Single-value-enum-today is intentional: rolling out the rollback flag
+  // in its own PR keeps Stage 0b's blast radius scoped to the runtime
+  // implementation only.
+  shimRuntime: z
+    .object({
+      search: z.enum(["node"]).default("node"),
+      image: z.enum(["node"]).default("node"),
+      browser: z.enum(["node"]).default("node"),
+    })
+    .optional(),
+  // Phase 110 Stage 0a — broker dispatch table. Server-id keyed map for
+  // generalizing Phase 108's OnePasswordMcpBroker to typed multi-server
+  // pools (one broker proc per server-id, N agents → 1 child). Schema
+  // only this PR; Stage 1a wires the broker class to read this map and
+  // Stage 1b wires the daemon dispatch. Reloadable in classification so
+  // the surface is stable; runtime edits are no-ops until Stage 1a.
+  brokers: z
+    .record(
+      z.string().min(1),
+      z.object({
+        enabled: z.boolean().default(true),
+        maxConcurrent: z.number().int().positive().default(4),
+        spawnArgs: z.array(z.string()).default(() => []),
+        env: z.record(z.string(), z.string()).default(() => ({})),
+        drainOnIdleMs: z.number().int().nonnegative().default(0),
+      }),
+    )
+    .optional(),
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),

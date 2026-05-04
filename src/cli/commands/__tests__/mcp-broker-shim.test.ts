@@ -29,6 +29,7 @@ import {
 // Production target — does NOT exist yet.
 import {
   runShim,
+  normalizeServerType,
   type ShimDeps,
 } from "../mcp-broker-shim.js";
 
@@ -248,6 +249,77 @@ describe("mcp-broker-shim — daemon restart triggers non-zero exit (Pitfall 5)"
     const exitCode = await shimPromise;
     expect(exitCode).not.toBe(0);
     expect(typeof exitCode).toBe("number");
+  });
+});
+
+describe("mcp-broker-shim — Phase 110 Stage 0a `--type` alias", () => {
+  it("`--type 1password` accepted; resolves to serverType '1password'", () => {
+    const r = normalizeServerType({ type: "1password" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.serverType).toBe("1password");
+  });
+
+  it("legacy `--pool 1password` continues to work (Phase 108 shape)", () => {
+    const r = normalizeServerType({ pool: "1password" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.serverType).toBe("1password");
+  });
+
+  it("bare invocation (no flag) defaults to '1password'", () => {
+    const r = normalizeServerType({});
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.serverType).toBe("1password");
+  });
+
+  it("`--type` wins when both flags passed", () => {
+    // Synthetic case: --pool=1password, --type=fal-ai. --type wins, gets
+    // rejected. The opposite combo (type=1password, pool=garbage) is a
+    // success because --type wins regardless of --pool's value.
+    const r1 = normalizeServerType({ type: "fal-ai", pool: "1password" });
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.serverType).toBe("fal-ai");
+
+    const r2 = normalizeServerType({ type: "1password", pool: "garbage" });
+    expect(r2.ok).toBe(true);
+  });
+
+  it("rejects unsupported serverType with EX_USAGE-shaped error", () => {
+    const r = normalizeServerType({ type: "fal-ai" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.serverType).toBe("fal-ai");
+      expect(r.message).toContain("Unsupported broker type: fal-ai");
+      expect(r.message).toContain("Phase 110 Stage 0a");
+      expect(r.message).toContain("Stage 1");
+    }
+  });
+
+  it("runShim child logger emits a serverType field on every line", async () => {
+    const cap = captureLogger();
+    const wiring = buildWiring();
+
+    const env = {
+      CLAWCODE_AGENT: "agent-x",
+      OP_SERVICE_ACCOUNT_TOKEN: TEST_TOKEN_LITERAL,
+    };
+    const shimPromise = runShim({
+      pool: "1password",
+      ...buildDeps(wiring, cap.log, env),
+    });
+    await new Promise((r) => setImmediate(r));
+    wiring.pair.server.fakeClose();
+    await shimPromise.catch(() => undefined);
+
+    const lines = cap.lines();
+    // Every shim-emitted line carries serverType=1password (journalctl
+    // greps work day one).
+    const shimLines = lines.filter(
+      (l) => l.component === "mcp-broker-shim",
+    );
+    expect(shimLines.length).toBeGreaterThan(0);
+    for (const l of shimLines) {
+      expect(l.serverType).toBe("1password");
+    }
   });
 });
 
