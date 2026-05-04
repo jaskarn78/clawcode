@@ -1575,6 +1575,23 @@ export const defaultsSchema = z.object({
       minAgeSeconds: z.number().int().positive().default(30),
     })
     .optional(),
+  // Phase 999.X — subagent-thread reaper. Auto-spawned subagent threads
+  // (SubagentThreadSpawner-named, see src/manager/subagent-name.ts) are
+  // one-shot delegated tasks; they should self-prune after the Discord
+  // thread goes idle but today nothing stops them. The fleet evidence
+  // (admin-clawdy 2026-05-04) showed two such threads running 8h+/13h+
+  // after their work completed. Hot-reload via ConfigReloader; takes
+  // effect on the next 60s tick. Default mode "reap" — the screenshot
+  // shows real leaks today, so we act on first tick rather than running
+  // alert-only first (operator decision). Env kill-switch:
+  // CLAWCODE_SUBAGENT_REAPER_DISABLE=1.
+  subagentReaper: z
+    .object({
+      mode: z.enum(["off", "alert", "reap"]).default("reap"),
+      idleTimeoutMinutes: z.number().int().positive().default(1440),
+      minAgeSeconds: z.number().int().positive().default(300),
+    })
+    .optional(),
   // Phase 109-D — fleet-wide observability config. cgroupSampling reads
   // /sys/fs/cgroup/system.slice/clawcode.service/memory.{current,max}; toggle
   // off on hosts where cgroup v2 isn't mounted (the reader degrades to null

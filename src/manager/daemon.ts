@@ -66,6 +66,17 @@ import {
   tickOrphanClaudeReaper,
   type OrphanClaudeReaperMode,
 } from "../mcp/orphan-claude-reaper.js";
+// Phase 999.X — subagent-thread session reaper. Catches the today-fire
+// pattern (admin-clawdy 2026-05-04): auto-spawned subagent sessions
+// (`*-via-*-<nanoid6>` / `*-sub-<nanoid6>`) sitting at status `running`
+// for hours after their work completed. Hosted in the same onTickAfter
+// alongside orphan-claude-reaper + stale-binding-sweep. Default mode
+// "reap" — see config/schema.ts subagentReaper for rationale.
+import {
+  tickSubagentSessionReaper,
+  type SubagentReaperMode,
+  type RunningSessionInfo,
+} from "./subagent-session-reaper.js";
 // Phase 108 — daemon-managed broker pooling 1password-mcp children across
 // agents. The broker owns ONE @takescake/1password-mcp child per unique
 // resolved OP_SERVICE_ACCOUNT_TOKEN; agents connect via per-process shim
@@ -4615,6 +4626,13 @@ export async function startDaemon(
             now: Date.now(),
             idleMs,
             log: mcpLog,
+            // Phase 999.X — when a stale binding belongs to an auto-
+            // spawned subagent thread (name regex match), also stop
+            // the underlying session. Operator-defined agent bindings
+            // are filtered inside sweepStaleBindings via
+            // isSubagentThreadName, so this callback is safe to pass
+            // unconditionally.
+            stopSubagentSession: (name) => manager.stopAgent(name),
           });
         } catch (err) {
           mcpLog.error(
@@ -4677,6 +4695,53 @@ export async function startDaemon(
             "orphan-claude reaper tick failed (non-fatal)",
           );
         }
+      }
+      // Phase 999.X — subagent-thread session reaper. Walks the
+      // session registry + thread bindings to find auto-spawned
+      // subagent sessions (`*-via-*-<nanoid6>` / `*-sub-<nanoid6>`)
+      // that are: (a) orphaned (binding gone but session still
+      // running) or (b) idle (binding lastActivity > idleTimeout).
+      // Reads config.defaults.subagentReaper each tick so a yaml
+      // hot-reload takes effect on the next 60s sweep. Wrapped in
+      // its own try/catch so a failure here does NOT crash the
+      // tick loop or block other reapers.
+      try {
+        const sr = (config.defaults as {
+          subagentReaper?: {
+            mode?: SubagentReaperMode;
+            idleTimeoutMinutes?: number;
+            minAgeSeconds?: number;
+          };
+        }).subagentReaper;
+        const subMode: SubagentReaperMode = sr?.mode ?? "reap";
+        const subIdleTimeoutMinutes = sr?.idleTimeoutMinutes ?? 1440;
+        const subMinAgeSeconds = sr?.minAgeSeconds ?? 300;
+        // Snapshot both registries at tick start (matches the
+        // orphan-claude-reaper invariant: the decision uses one
+        // consistent snapshot, no mid-walk mutation).
+        const sessionRegistry = await readRegistry(REGISTRY_PATH);
+        const sessions: readonly RunningSessionInfo[] = sessionRegistry.entries.map(
+          (e) => ({
+            name: e.name,
+            status: e.status,
+            startedAt: e.startedAt,
+          }),
+        );
+        const threadRegistry = await readThreadRegistry(THREAD_REGISTRY_PATH);
+        await tickSubagentSessionReaper({
+          sessions,
+          bindings: threadRegistry.bindings,
+          idleTimeoutMinutes: subIdleTimeoutMinutes,
+          minAgeSeconds: subMinAgeSeconds,
+          mode: subMode,
+          log: mcpLog.child({ subsystem: "subagent-session-reaper" }),
+          stopAgent: (name) => manager.stopAgent(name),
+        });
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "subagent-session reaper tick failed (non-fatal)",
+        );
       }
     };
     const mcpUid = process.getuid?.() ?? -1;
