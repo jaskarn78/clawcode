@@ -1599,7 +1599,15 @@ export async function startDaemon(
   await writeFile(PID_PATH, String(process.pid), "utf-8");
 
   // 4. Load config
-  const config = await loadConfig(configPath);
+  // Phase 999.X — `let` (not `const`) so the configWatcher's onChange
+  // handler can reassign on yaml edit. Long-lived closures (orphan-claude
+  // reaper, subagent-session reaper, both inside onTickAfter) read
+  // `config.defaults.<dial>` lazily on each tick — `let` mutability +
+  // closure-by-reference means yaml hot-reload of those dials takes
+  // effect on the next 60s tick without a daemon restart. Pre-fix this
+  // was `const` and the closures captured a boot-time snapshot,
+  // silently ignoring yaml edits.
+  let config = await loadConfig(configPath);
 
   // 4a. Phase 104 SEC-01/SEC-04 — single SecretsResolver instance for the
   // whole daemon lifetime. Pre-resolves every op:// URI in the config in
@@ -4476,7 +4484,14 @@ export async function startDaemon(
   const configWatcher = new ConfigWatcher({
     configPath,
     auditTrailPath,
-    onChange: async (diff, newResolvedAgents) => {
+    onChange: async (diff, newResolvedAgents, newConfig) => {
+      // Phase 999.X — replace the daemon's `config` reference so closures
+      // reading `config.defaults.<dial>` (orphan-claude reaper,
+      // subagent-session reaper, both inside onTickAfter) see the live
+      // yaml on the next tick. Done FIRST so any failure in the rest of
+      // this handler still leaves config in sync with what the watcher
+      // believes is current.
+      config = newConfig;
       // Phase 104 plan 03 (SEC-05) — reconcile the secrets cache against
       // the diff BEFORE applyChanges so the reload's downstream agent
       // restarts/spawns hit a hot, fresh cache. Walks the diff for op:// URI

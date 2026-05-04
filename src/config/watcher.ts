@@ -19,9 +19,22 @@ import type { ResolvedAgentConfig } from "../shared/types.js";
 export type ConfigWatcherOptions = {
   readonly configPath: string;
   readonly auditTrailPath: string;
+  /**
+   * Notification fires AFTER the watcher's internal `currentConfig` is
+   * updated to `newConfig`. The daemon updates its own `let config` ref
+   * from `newConfig` so consumers reading `config.defaults.<dial>` from
+   * inside long-lived closures (e.g. the 60s reaper tick in
+   * `daemon.ts:onTickAfter`) pick up yaml edits without a daemon
+   * restart. The bug this signature change fixes:
+   * `const config = await loadConfig(...)` in daemon.ts captured a
+   * boot-time snapshot; the reaper closures read `config.defaults`
+   * forever, so yaml hot-reload of `subagentReaper` /
+   * `orphanClaudeReaper` was effectively a no-op until restart.
+   */
   readonly onChange: (
     diff: ConfigDiff,
     resolvedAgents: ResolvedAgentConfig[],
+    newConfig: Config,
   ) => Promise<void>;
   readonly log: pino.Logger;
   /** Debounce interval in milliseconds. Defaults to 500. */
@@ -175,7 +188,7 @@ export class ConfigWatcher {
     );
 
     try {
-      await this.onChange(diff, resolvedAgents);
+      await this.onChange(diff, resolvedAgents, newConfig);
     } catch (err) {
       this.log.error({ err }, "onChange callback failed");
     }
