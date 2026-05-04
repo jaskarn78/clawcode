@@ -12,6 +12,17 @@ export type ThreadBinding = {
   readonly sessionName: string;
   readonly createdAt: number;
   readonly lastActivity: number;
+  /**
+   * Phase 999.25 — set when `relayCompletionToParent` has fired for this
+   * binding (explicit `subagent_complete` tool, the quiescence-timer
+   * sweep, or the existing session-end callback — whichever wins).
+   * Once set, subsequent relay paths skip to avoid double-posting.
+   *
+   * Optional + nullable for back-compat: pre-Phase-999.25 entries parse
+   * unchanged (treated as not-yet-completed). Persisted to
+   * `thread-bindings.json` so the dedupe survives daemon restart.
+   */
+  readonly completedAt?: number | null;
 };
 
 /**

@@ -35,6 +35,15 @@ export const TOOL_DEFINITIONS = {
     description: "Spawn a subagent in a new Discord thread",
     ipcMethod: "spawn-subagent-thread",
   },
+  // Phase 999.25 — explicit work-completion signal. A subagent calls
+  // this when its delegated work is done so the relay to the parent
+  // channel fires immediately instead of waiting hours for the
+  // session to be stopped.
+  subagent_complete: {
+    description:
+      "Signal that this subagent has finished its delegated work. Posts your final answer to the parent agent's channel and stops further relays. Call this once, after your last substantive reply in the thread. agentName must match this subagent's session name (e.g. 'fin-acquisition-via-fin-research-AbC123'). Operator-defined agents who call this get a clear no-op error.",
+    ipcMethod: "subagent-complete",
+  },
   read_thread: {
     description: "Read recent messages from a Discord thread (your subagent's work)",
     ipcMethod: "read-thread",
@@ -459,6 +468,40 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
+      }
+    },
+  );
+
+  // Phase 999.25 — subagent_complete tool. The subagent calls this
+  // when its delegated work is done; relay fires immediately instead
+  // of waiting for the session to be stopped (which today defers
+  // delivery by hours).
+  server.tool(
+    "subagent_complete",
+    "Signal that this subagent has finished its delegated work. Posts your final answer to the parent agent's channel right away (instead of waiting until your session is stopped) and prevents duplicate relays. Call this exactly once, after your last substantive message in the thread. agentName MUST be your own session name (e.g. 'fin-acquisition-via-fin-research-AbC123' — typically the parent passed it in your spawn task description, or it's available as your agent identity). Idempotent: calling twice returns reason='already-completed'.",
+    {
+      agentName: z
+        .string()
+        .describe(
+          "Your own session name (the subagent thread session, e.g. 'fin-acquisition-via-fin-research-AbC123')",
+        ),
+    },
+    async ({ agentName }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "subagent-complete", {
+          agentName,
+        })) as { ok: boolean; reason: string };
+        const text = result.ok
+          ? `Completion relayed (${result.reason})`
+          : `Not relayed: ${result.reason}`;
+        return { content: [{ type: "text" as const, text }] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${message}` },
+          ],
+        };
       }
     },
   );

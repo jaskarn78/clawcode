@@ -500,6 +500,54 @@ describe("diffConfigs - subagentReaper reloadable", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 999.25 — defaults.subagentCompletion reloadable
+// ---------------------------------------------------------------------------
+
+describe("diffConfigs - subagentCompletion reloadable", () => {
+  it("classifies a defaults.subagentCompletion.enabled edit as reloadable", () => {
+    const oldConfig = makeConfig({
+      defaults: {
+        ...makeConfig().defaults,
+        subagentCompletion: { enabled: true, quiescenceMinutes: 5 },
+      } as unknown as Config["defaults"],
+    });
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        subagentCompletion: { enabled: false, quiescenceMinutes: 5 },
+      } as unknown as Config["defaults"],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath.startsWith("defaults.subagentCompletion"),
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+  });
+
+  it("classifies a quiescenceMinutes edit as reloadable", () => {
+    const oldConfig = makeConfig({
+      defaults: {
+        ...makeConfig().defaults,
+        subagentCompletion: { enabled: true, quiescenceMinutes: 5 },
+      } as unknown as Config["defaults"],
+    });
+    const newConfig = makeConfig({
+      defaults: {
+        ...oldConfig.defaults,
+        subagentCompletion: { enabled: true, quiescenceMinutes: 10 },
+      } as unknown as Config["defaults"],
+    });
+    const result = diffConfigs(oldConfig, newConfig);
+    const change = result.changes.find((c) =>
+      c.fieldPath.startsWith("defaults.subagentCompletion"),
+    );
+    expect(change).toBeDefined();
+    expect(change!.reloadable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 75 Plan 01 — SHARED-01: memoryPath classified as non-reloadable
 // ---------------------------------------------------------------------------
 

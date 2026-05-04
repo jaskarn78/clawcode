@@ -77,6 +77,15 @@ import {
   type SubagentReaperMode,
   type RunningSessionInfo,
 } from "./subagent-session-reaper.js";
+// Phase 999.25 — subagent completion relay. `relayAndMarkCompleted`
+// helpers used by the IPC handler (`subagent-complete` tool) and the
+// quiescence sweep, both wired below. Single source of truth for the
+// idempotent relay-and-stamp flow.
+import {
+  relayAndMarkCompletedByAgentName,
+  relayAndMarkCompletedByThreadId,
+} from "./relay-and-mark-completed.js";
+import { tickSubagentCompletionSweep } from "./subagent-completion-sweep.js";
 // Phase 108 — daemon-managed broker pooling 1password-mcp children across
 // agents. The broker owns ONE @takescake/1password-mcp child per unique
 // resolved OP_SERVICE_ACCOUNT_TOKEN; agents connect via per-process shim
@@ -4213,6 +4222,42 @@ export async function startDaemon(
         }
         return { results };
       }
+      // Phase 999.25 — subagent-complete intercept BEFORE routeMethod
+      // (closure-intercept pattern, mirrors secrets-status +
+      // mcp-tracker-snapshot above). The handler closes over `config`
+      // (live ref post-PR-#8 closure-capture fix), `log`, and
+      // `subagentThreadSpawner`, none of which are on routeMethod's
+      // signature. Pure helper in `relay-and-mark-completed.ts` does
+      // the lookup → idempotent-relay → stamp-completedAt; this case
+      // is a thin shell that wires deps + handles the env kill-switch
+      // + reads the live `config.defaults.subagentCompletion.enabled`
+      // toggle.
+      case "subagent-complete": {
+        const agentName = validateStringParam(params, "agentName");
+        if (process.env.CLAWCODE_SUBAGENT_COMPLETION_DISABLE === "1") {
+          return { ok: false, reason: "disabled" };
+        }
+        const sc = (config.defaults as {
+          subagentCompletion?: { enabled?: boolean };
+        }).subagentCompletion;
+        const enabled = sc?.enabled !== false;
+        return relayAndMarkCompletedByAgentName(
+          {
+            readThreadRegistry: () =>
+              readThreadRegistry(THREAD_REGISTRY_PATH),
+            writeThreadRegistry: (next) =>
+              writeThreadRegistry(THREAD_REGISTRY_PATH, next),
+            relayCompletionToParent: subagentThreadSpawner
+              ? (threadId) =>
+                  subagentThreadSpawner.relayCompletionToParent(threadId)
+              : null,
+            now: () => Date.now(),
+            log: log.child({ subsystem: "subagent-completion" }),
+            enabled,
+          },
+          agentName,
+        );
+      }
     }
 
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);
@@ -4756,6 +4801,64 @@ export async function startDaemon(
         mcpLog.error(
           { err: String(err) },
           "subagent-session reaper tick failed (non-fatal)",
+        );
+      }
+      // Phase 999.25 — subagent completion quiescence sweep. Walks
+      // running subagent sessions whose binding has been idle past
+      // `quiescenceMinutes` (default 5) AND haven't relayed yet
+      // (`completedAt === null/undefined`); fires
+      // relayCompletionToParent + stamps completedAt. Reads
+      // `config.defaults.subagentCompletion` lazily on each tick, so
+      // yaml hot-reload of `quiescenceMinutes` / `enabled` takes effect
+      // on the next sweep without daemon restart (closure-capture fix
+      // from PR #8 makes the live `config` reference current).
+      try {
+        const scCfg = (config.defaults as {
+          subagentCompletion?: {
+            enabled?: boolean;
+            quiescenceMinutes?: number;
+          };
+        }).subagentCompletion;
+        const completionEnabled = scCfg?.enabled !== false;
+        const quiescenceMinutes = scCfg?.quiescenceMinutes ?? 5;
+        // Snapshot both registries (consistent-snapshot invariant
+        // matches subagent-session-reaper above).
+        const sessionRegistryForCompletion = await readRegistry(REGISTRY_PATH);
+        const sessionsForCompletion = sessionRegistryForCompletion.entries.map(
+          (e) => ({ name: e.name, status: e.status }),
+        );
+        const threadRegistryForCompletion = await readThreadRegistry(
+          THREAD_REGISTRY_PATH,
+        );
+        await tickSubagentCompletionSweep({
+          sessions: sessionsForCompletion,
+          bindings: threadRegistryForCompletion.bindings,
+          quiescenceMinutes,
+          enabled: completionEnabled,
+          log: mcpLog.child({ subsystem: "subagent-completion-sweep" }),
+          relayAndMarkCompleted: async (threadId: string) => {
+            return relayAndMarkCompletedByThreadId(
+              {
+                readThreadRegistry: () =>
+                  readThreadRegistry(THREAD_REGISTRY_PATH),
+                writeThreadRegistry: (next) =>
+                  writeThreadRegistry(THREAD_REGISTRY_PATH, next),
+                relayCompletionToParent: subagentThreadSpawner
+                  ? (tid) =>
+                      subagentThreadSpawner.relayCompletionToParent(tid)
+                  : null,
+                now: () => Date.now(),
+                log: mcpLog.child({ subsystem: "subagent-completion" }),
+                enabled: completionEnabled,
+              },
+              threadId,
+            );
+          },
+        });
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "subagent-completion sweep tick failed (non-fatal)",
         );
       }
     };
@@ -6255,8 +6358,43 @@ async function routeMethod(
       // parent agent BEFORE cleanup so the binding (parent agent + channel)
       // is still readable. Relay is fire-and-forget (errors logged, never
       // thrown) so cleanup always runs.
+      //
+      // Phase 999.25 — dedupe with the explicit `subagent_complete` tool
+      // and the quiescence sweep. If `binding.completedAt` is already
+      // set, both prior paths fired; skip the relay here to avoid a
+      // duplicate post in the parent channel. Cleanup still runs.
       manager.registerSessionEndCallback(result.sessionName, async () => {
-        await subagentThreadSpawner.relayCompletionToParent(result.threadId);
+        try {
+          const reg = await readThreadRegistry(THREAD_REGISTRY_PATH);
+          const binding = getBindingForThread(reg, result.threadId);
+          if (binding?.completedAt !== undefined && binding?.completedAt !== null) {
+            logger.info(
+              {
+                component: "subagent-thread-spawner",
+                action: "skip-session-end-relay",
+                reason: "already-completed",
+                threadId: result.threadId,
+                sessionName: result.sessionName,
+                completedAt: binding.completedAt,
+              },
+              "session-end relay skipped — completion already relayed",
+            );
+          } else {
+            await subagentThreadSpawner.relayCompletionToParent(result.threadId);
+          }
+        } catch (err) {
+          // Best-effort: relay failure must not block cleanup. Matches
+          // the pre-Phase-999.25 fire-and-forget posture.
+          logger.warn(
+            {
+              component: "subagent-thread-spawner",
+              err: String(err),
+              threadId: result.threadId,
+              sessionName: result.sessionName,
+            },
+            "session-end relay errored (non-fatal); cleanup continues",
+          );
+        }
         await subagentThreadSpawner.cleanupSubagentThread(result.threadId);
       });
       return { ok: true, ...result };

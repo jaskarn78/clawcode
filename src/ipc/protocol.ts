@@ -96,6 +96,15 @@ export const IPC_METHODS = [
   // Subagent threads
   "spawn-subagent-thread",
   "cleanup-subagent-thread",
+  // Phase 999.25 — explicit work-completion signal from the subagent.
+  // Decouples relayCompletionToParent from session-end so operators see
+  // results in their channel within seconds of work-done, not hours
+  // later when the session is finally stopped. Handler looks up the
+  // calling agent's binding by sessionName, skips if no binding (silent
+  // no-op for operator agents that mistakenly call this), skips if
+  // already completed (idempotent), else fires relay + sets
+  // binding.completedAt.
+  "subagent-complete",
   "read-thread",
   "message-history",
   // Phase 100 follow-up — operator/agent-driven Discord thread archive.

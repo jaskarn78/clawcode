@@ -152,6 +152,11 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // each tick, so a YAML edit takes effect on the next 60s sweep without
   // a restart.
   "defaults.subagentReaper",
+  // Phase 999.25 — subagent completion relay. enabled +
+  // quiescenceMinutes hot-reload via the same closure-capture-fixed
+  // path as subagentReaper above. The daemon's quiescence sweep reads
+  // `config.defaults.subagentCompletion` on each 60s tick.
+  "defaults.subagentCompletion",
   // Phase 100 GSD-07 — settingSources + gsd.projectDir DELIBERATELY EXCLUDED
   // from RELOADABLE_FIELDS. See NON_RELOADABLE_FIELDS below + Plan 100-02
   // session-adapter wiring for rationale: both fields are SDK session-boot
