@@ -730,11 +730,24 @@ Plans:
   - `McpRuntime` classification ("node" | "static" | "python" | "external") on every mcpFleet entry.
 
 **Pending stages:**
-- **Stage 0b** — shim-runtime swap (widen enum, land alternate-runtime spawn path)
+- **Stage 0b** — shim-runtime swap (widen enum, land alternate-runtime spawn path) — PLANNED 2026-05-05, 9 plans / 6 waves
 - **Stage 1a** — broker generalization (wire broker class to read `defaults.brokers` dispatch table)
 - **Stage 1b+** — TBD per memory-reduction findings
 
-**Status:** Stage 0a SHIPPED 2026-05-03; Stages 0b/1a active. No production behavior changes from Stage 0a; every dial defaults to current behavior.
+**Stage 0b Requirements:** [0B-RT-00, 0B-RT-01, 0B-RT-02, 0B-RT-03, 0B-RT-04, 0B-RT-05, 0B-RT-06, 0B-RT-07, 0B-RT-08, 0B-RT-09, 0B-RT-10, 0B-RT-11, 0B-RT-12, 0B-RT-13]
+
+**Plans:** 9 plans
+- [ ] 110-00-PLAN.md — Wave 0 spike + kill-switch gate (minimal Go shim, RSS measurement on admin-clawdy)
+- [ ] 110-01-PLAN.md — Daemon `list-mcp-tools` IPC method (ships first, before any Go shim builds against it)
+- [ ] 110-02-PLAN.md — Schema enum widening + loader auto-inject + fleet-stats classifier
+- [ ] 110-03-PLAN.md — CI Go build matrix + npm prebuild-install bundling
+- [ ] 110-04-PLAN.md — Search Go shim implementation (IPC client + Register + main wiring)
+- [ ] 110-05-PLAN.md — Search rollout (admin-clawdy canary 24-48h → fleet)
+- [ ] 110-06-PLAN.md — Image Go shim implementation + rollout
+- [ ] 110-07-PLAN.md — Browser Go shim implementation + rollout (Stage 0b structural deploy COMPLETE)
+- [ ] 110-08-PLAN.md — Cleanup decision (keep Node fallback OR remove) + rollback drill
+
+**Status:** Stage 0a SHIPPED 2026-05-03; Stage 0b PLANNED 2026-05-05 (9 plans, 6 waves, target ≥ 2.7 GiB RSS savings); Stage 1a active. No production behavior changes from Stage 0a; every dial defaults to current behavior.
 
 **Note on number reuse:** the original Phase 110 ROADMAP entry was scoped as "Retroactive sequential renumbering for shipped 999.x items". That backlog scope was renumbered to **Phase 114** when this MCP memory-reduction work shipped under the 110 commit tag. See Phase 114 below.
 
