@@ -296,6 +296,20 @@ export async function loadMarketplaceCatalog(
             : {}),
         });
         for (const item of resp.items) {
+          // Defensive: skip entries whose `name` is missing/empty. The
+          // ClawHub registry treats `name` as required but real-world
+          // 2026-05-04 traffic surfaced an item with `name === undefined`
+          // (caught by the daemon error log: "Cannot read properties of
+          // undefined (reading 'localeCompare')" at the Step-3 sort).
+          // Skipping at ingestion keeps the sort total + the operator
+          // still sees the rest of the catalog instead of an empty list.
+          if (typeof item.name !== "string" || item.name.length === 0) {
+            opts.log?.warn(
+              { source: source.baseUrl, item: { ...item, name: item.name } },
+              "loadMarketplaceCatalog: clawhub item missing name; skipping",
+            );
+            continue;
+          }
           // Local wins — skip if name collision.
           if (byName.has(item.name)) continue;
           byName.set(item.name, clawhubItemToEntry(item, source));
@@ -363,8 +377,13 @@ export async function loadMarketplaceCatalog(
   }
 
   // --- Step 3: deterministic sort -----------------------------------
-  const entries = [...byName.values()].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
+  // Defensive: filter out entries with missing `name` BEFORE the sort.
+  // Step 1 + Step 2 ingestion already filter on `name`, but a future
+  // source path could regress; a missing name here would crash the
+  // entire operator-facing /clawcode-skills-browse with an opaque
+  // "Cannot read properties of undefined (reading 'localeCompare')".
+  const entries = [...byName.values()]
+    .filter((e) => typeof e.name === "string" && e.name.length > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
   return Object.freeze(entries);
 }
