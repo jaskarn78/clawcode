@@ -695,7 +695,52 @@ Plans:
 
 ---
 
-### Phase 109: Image ingest pipeline — local resize + Haiku 4.5 vision pre-pass
+### Phase 109: MCP/Secret Resilience bundle — broker observability + orphan reaper + preflight + fleet-stats (SHIPPED 2026-05-03)
+
+**Goal:** Bundle four coherent infrastructure changes addressing the 2026-05-03 fleet incident (cgroup at 97.8% MemoryMax, 4 orphan claude procs invisible to the daemon, host swap exhausted): broker observability, orphan-claude reaper, preflight gating, fleet-stats dashboard endpoint.
+
+**Sub-scopes (all shipped):**
+- **109-A** — per-pool 1Password broker rps + throttle counters (`rpsLastMin`, `throttleEvents24h`, `lastRetryAfterSec`); new `clawcode broker-status` CLI; new broker-status IPC method.
+- **109-B** — orphan-claude reaper (alert mode default; reap mode behind config flag). Detects claude procs whose ppid is the daemon but absent from `tracker.getRegisteredAgents()`. Hot-reloadable via `defaults.orphanClaudeReaper`. Kill-switch: `CLAWCODE_ORPHAN_CLAUDE_REAPER_DISABLE=1`.
+- **109-C** — `clawcode preflight` — blocks unsafe restarts (cgroup memory >80% or any broker tool calls inflight).
+- **109-D** — fleet-stats IPC + `/api/fleet-stats` dashboard endpoint. cgroup memory pressure, claude proc drift, per-MCP-pattern aggregate RSS.
+
+**Trigger:** 2026-05-03 operator-reported fleet incident — host swap exhausted, daemon could not see 4 claude processes.
+
+**Status:** Shipped 2026-05-03 (commit `8880fe8`). Linux-only signals (cgroup, /proc) degrade to null on hosts without them. PoolStatus extensions are optional fields → existing 108 heartbeat consumer unchanged. /api/status payload byte-stable (FleetStatsData lives at a new endpoint, not folded into DashboardState). 87 tests passing across 7 affected suites.
+
+**Note on number reuse:** the original Phase 109 ROADMAP entry was scoped as "Image ingest pipeline — local resize + Haiku 4.5 vision pre-pass". That pending scope was renumbered to **Phase 113** when this resilience bundle shipped under the 109 commit tag. See Phase 113 below.
+
+---
+
+### Phase 110: MCP memory reduction — foundational scaffolding (Stage 0a SHIPPED 2026-05-03; later stages active)
+
+**Goal:** Multi-stage MCP memory-reduction effort. Stage 0a (foundational scaffolding, no behavior change) lands the schema + observability + CLI surface for the upcoming shim-runtime swap (Stage 0b) and broker generalization (Stage 1).
+
+**Stage 0a (SHIPPED 2026-05-03, commit `5aa5ab6`, PR #6):**
+- **Schema additions** (`src/config/schema.ts`):
+  - `defaults.shimRuntime.{search,image,browser}` — per-shim runtime selector. Stage 0a accepts only "node"; Stage 0b widens the enum and lands the alternate-runtime spawn path.
+  - `defaults.brokers` — server-id keyed dispatch table for typed multi-server pools. Schema only; Stage 1a wires the broker class to read this map.
+- **CLI alias** (`src/cli/commands/mcp-broker-shim.ts`):
+  - `mcp-broker-shim --type <serverType>` as the broker generalization key (preferred form going forward).
+  - Legacy `--pool <name>` retained as alias indefinitely; `--type` wins when both passed.
+  - `normalizeServerType()` exported for unit testing.
+  - Every shim log line now carries a `serverType` field (journalctl greps by serverType work day one).
+- **Observability** (`src/dashboard/types.ts`, `src/manager/fleet-stats.ts`, `src/manager/daemon.ts`):
+  - `McpRuntime` classification ("node" | "static" | "python" | "external") on every mcpFleet entry.
+
+**Pending stages:**
+- **Stage 0b** — shim-runtime swap (widen enum, land alternate-runtime spawn path)
+- **Stage 1a** — broker generalization (wire broker class to read `defaults.brokers` dispatch table)
+- **Stage 1b+** — TBD per memory-reduction findings
+
+**Status:** Stage 0a SHIPPED 2026-05-03; Stages 0b/1a active. No production behavior changes from Stage 0a; every dial defaults to current behavior.
+
+**Note on number reuse:** the original Phase 110 ROADMAP entry was scoped as "Retroactive sequential renumbering for shipped 999.x items". That backlog scope was renumbered to **Phase 114** when this MCP memory-reduction work shipped under the 110 commit tag. See Phase 114 below.
+
+---
+
+### Phase 113: Image ingest pipeline — local resize + Haiku 4.5 vision pre-pass (PENDING — renumbered from original Phase 109)
 
 **Goal:** Cut response latency and token cost on screenshot-heavy turns (operator + Ramy share frequent screenshots). Two layered optimizations to the image-ingest path: (1) local resize before forwarding to Claude, (2) parallel Haiku 4.5 vision pre-pass that produces a structured `<screenshot-analysis>` text block, letting the main agent skip vision entirely on the dominant case (chat screenshots, error messages, dashboards — text-extraction-shaped queries).
 
@@ -713,25 +758,25 @@ Plans:
 
 **Trigger:** 2026-05-01 operator request — "Ramy and I both share a lot of screenshots to provide the agents with context, if we could improve performance and efficiency with that, it would probably help."
 
-**Why Haiku pre-pass over OCR (Tesseract):** stays within Anthropic ecosystem, no new binary dependencies, no version drift risk, no fail points beyond what already exists. Same reliability surface as the main Claude calls today, with structured fallback to current behavior.
+**Why Haiku pre-pass over OCR (Tesseract):** stays within Anthropic ecosystem, no new binary dependencies, no version drift risk, no fail points beyond what already exists.
 
 **Token + speed math (typical chat screenshot):**
 - Status quo: Sonnet/Opus does ~1500 input tokens of vision + reasoning → ~3-5s response
-- Phase 109: Haiku does ~1500 vision tokens (5x cheaper than Sonnet, ~20x cheaper than Opus) → returns ~300-500 token structured text → main agent processes JUST text → **~40-60% latency drop AND ~50-70% token cost drop on screenshot-heavy turns**
+- Phase 113: Haiku does ~1500 vision tokens (5x cheaper than Sonnet, ~20x cheaper than Opus) → returns ~300-500 token structured text → main agent processes JUST text → **~40-60% latency drop AND ~50-70% token cost drop on screenshot-heavy turns**
 
 **Requirements:** TBD — likely 6-8 (resize, Haiku-call wiring, analysis-block injection, preserveImage config, fallback path, metrics, tests).
 
 **Plans:** 0 plans (TBD — likely 3 plans: resize substrate, Haiku pre-pass + analysis injection, deploy gate + metrics).
 
-**Promotion target:** active milestone, after Phase 108. Independent of 999.18-999.20 (relay reliability + delegate-channel routing) — different code path entirely.
+**Originally numbered:** Phase 109 (renumbered 2026-05-05 after the 109 commit tag was used for the MCP/Secret Resilience bundle).
 
 ---
 
-### Phase 110: Retroactive sequential renumbering for shipped 999.x items (BACKLOG — low priority)
+### Phase 114: Retroactive sequential renumbering for shipped 999.x items (BACKLOG — low priority, renumbered from original Phase 110)
 
-**Goal:** Cosmetic cleanup — rename the 11 SHIPPED `999.x` phase directories and ROADMAP entries to next-sequential numbers (111+), preserving git-history searchability via redirect notes. Resolves the long-running visual mismatch where shipped work kept its backlog parking-lot number instead of being promoted to a clean sequential phase ID.
+**Goal:** Cosmetic cleanup — rename the SHIPPED `999.x` phase directories and ROADMAP entries to next-sequential numbers, preserving git-history searchability via redirect notes. Resolves the long-running visual mismatch where shipped work kept its backlog parking-lot number instead of being promoted to a clean sequential phase ID.
 
-**Scope (11 SHIPPED 999.x items eligible for rename):**
+**Scope (SHIPPED 999.x items eligible for rename, as of 2026-05-05):**
 - 999.1 (Agent output directives, SHIPPED 2026-04-29)
 - 999.2 (a2a refactor, SHIPPED 2026-04-29)
 - 999.3 (delegateTo, SHIPPED 2026-04-29)
@@ -744,24 +789,27 @@ Plans:
 - 999.21 (`/get-shit-done` consolidation, SHIPPED 2026-05-01)
 - 999.22 (`mutate-verify` directive, SHIPPED 2026-05-01)
 - 999.24 (sudoers expansion, SHIPPED 2026-05-01)
+- 999.25 (boot wake-order priority, SHIPPED 2026-05-01)
+- 999.26 (broker token-sticky-drift, SHIPPED 2026-05-01)
+- 999.27 (env-resolver oscillation, SHIPPED 2026-05-01)
+- 999.28 (mcp-server-mysql grandchild leak, SHIPPED 2026-05-02)
+- 999.29 (dream-pass adapter wiring, SHIPPED 2026-05-02)
+- 999.30 (subagent relay on work-completion, SHIPPED 2026-05-04 — see Backlog entry; was tagged as `999.25` in commits, renumbered)
+- 999.31 (`/ultra-plan` + `/ultra-review` subcommands, SHIPPED 2026-05-04)
+- 999.32 (GSD `/gsd-do` consolidation, SHIPPED 2026-05-04)
+- 999.33 (preResolveAll concurrency bound, SHIPPED 2026-05-04)
 
 **Approach (sketch):**
-1. Pick a renumbering scheme (e.g., chronological-by-ship-date → 111, 112, 113, ...) OR (e.g., bundle-by-domain → group related ones together).
+1. Pick a renumbering scheme (e.g., chronological-by-ship-date → 115, 116, 117, ...) OR (e.g., bundle-by-domain → group related ones together).
 2. Rename each `.planning/phases/999.X-<slug>/` directory to `.planning/phases/<NEW>-<slug>/` via `git mv`.
 3. Update each ROADMAP entry's `### Phase 999.X:` header to `### Phase <NEW>:` and add a `**Originally numbered:** 999.X` line for traceability.
 4. **DO NOT** rewrite historical commit messages — they reference `999.X-NN` as-is, and rewriting would break git-history searchability without fixing anything real. Future commits naturally reference the new sequential numbers.
 5. **DO NOT** move `.planning/quick/` task IDs — those are immutable and use a separate YYMMDD-xxx scheme.
 6. **DO NOT** rename BACKLOG-status 999.x items (999.4, 999.5, 999.7, 999.18-PARTIAL, 999.19, 999.20, 999.23) — those should renumber when *promoted* via `/gsd:review-backlog`, which is the proper workflow.
 
-**Why "for when usage resets":** this is pure cosmetic cleanup, ~30-60 min of mechanical work. Worth doing when API budget is fresh and there's no urgent feature work or production fire competing for context. Lowest priority on the backlog — bump up only when bored or when ROADMAP scan friction crosses a threshold.
+**Why "for when usage resets":** pure cosmetic cleanup, ~30-60 min of mechanical work. Worth doing when API budget is fresh and there's no urgent feature work or production fire competing for context. Lowest priority on the backlog.
 
-**Trigger:** 2026-05-01 — operator: "the phase numbers are confusing to me now. i liked it better when it was 100, 101, 102, now its 999.x which feels wrong". Phase 109 (image ingest) added going forward as sequential. This phase backfills the historical inconsistency for shipped items only.
-
-**Requirements:** TBD — likely 3-4 (rename scheme decision, directory mv pass, ROADMAP entry updates, redirect-note convention).
-
-**Plans:** 0 plans (TBD — likely 1 plan, mostly mechanical).
-
-**Promotion target:** parking lot. Promote when API usage resets and no higher-priority work is competing. No external dependency — can land any time.
+**Originally numbered:** Phase 110 (renumbered 2026-05-05 after the 110 commit tag was used for the MCP memory-reduction work).
 
 ---
 
@@ -1503,3 +1551,56 @@ The broker has its own dedicated heartbeat (`heartbeat/checks/mcp-broker.ts`) th
 **Files changed:** `src/manager/daemon.ts`, `src/manager/dream-graph-edges.ts` (new), `src/manager/dream-pass.ts` (Promise type widening), `src/memory/store.ts`. 6 files, 422 insertions, 16 deletions.
 
 **Status:** Shipped 2026-05-02 — live on clawdy. Pairs with Phase 99-A (translator DB path fix) — together they unblock dream-pass `themedReflection` from citing real data, closing Phase 99 sub-scope J.
+
+### Phase 999.30: Subagent relay on work-completion, not session-end (SHIPPED 2026-05-04)
+
+**Note on number collision:** committed under tag `feat(999.25)` (commits `81975aa`, `12f4ac1`) but Phase 999.25 was already taken by "Agent boot wake-order priority". Renumbered to 999.30 in ROADMAP 2026-05-05. Commit-tag history preserved as-is.
+
+**Goal:** Subagent results were delivered to operator hours late because the relay to the parent channel only fired on session-end. After this phase, operators see results within seconds (explicit tool) or 5 minutes (quiescence sweep fallback).
+
+**Trigger:** 2026-05-04 — operator-reported relay latency. Subagent finished work, posted to its thread, but parent channel didn't see the relay until the subagent session ended (could be hours later).
+
+**Three relay triggers, deduped via `binding.completedAt`:**
+1. **Explicit `mcp__clawcode__subagent_complete({ agentName })` tool** — subagent calls when work is done. Daemon handler looks up binding, fires relay, stamps completedAt. Operator agents calling this get `{ ok: false, reason: "no-binding" }`.
+2. **Quiescence sweep** — new module `src/manager/subagent-completion-sweep.ts` wired into the existing 60s `onTickAfter`. Bindings idle past `quiescenceMinutes` (default 5) get auto-relayed. Safety net for legacy subagents.
+3. **Session-end callback** (existing) — now skips if `completedAt` is set; logs `skip-session-end-relay`.
+
+Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempotent helper used by both the IPC handler and the sweep.
+
+**Schema:** `defaults.subagentCompletion.{enabled, quiescenceMinutes}`. Hot-reloadable. Env kill-switch `CLAWCODE_SUBAGENT_COMPLETION_DISABLE=1`.
+
+**Back-compat:** `ThreadBinding.completedAt` is optional + nullable. Pre-Phase-999.30 bindings parse unchanged.
+
+**PR:** [#9](https://github.com/jaskarn78/clawcode/pull/9) merged 2026-05-04 (commit `12f4ac1`).
+
+**Status:** Shipped 2026-05-04 — code merged. Deploy status: TBD (depends on recent deploy state).
+
+### Phase 999.31: `/ultra-plan` + `/ultra-review` slash commands at top level (SHIPPED 2026-05-04)
+
+**Goal:** Surface the cloud `/ultraplan` and `/ultrareview` workflows as discoverable top-level slash commands instead of buried under `/get-shit-done` subcommands.
+
+**Three-commit progression:**
+- `b46acd9` — added `/ultra-plan` + `/ultra-review` as subcommands of `/get-shit-done`
+- `709e5ce` — fix: `/ultra-plan` now routes to native `/ultraplan` (was incorrectly routing to `/oh-my-claudecode:ralplan`)
+- `848a443` — fix: moved `/ultra-plan` + `/ultra-review` to top-level (not GSD subcommands), since they have their own workflow shape
+
+**Status:** Shipped 2026-05-04. Slash commands now discoverable at top level.
+
+### Phase 999.32: GSD consolidation into `/gsd-do` entry, remove `/clawcode-probe-fs` (SHIPPED 2026-05-04)
+
+**Goal:** Consolidate the GSD entry surface into a single `/gsd-do` command (routes to the right GSD subcommand based on freeform input). Removes the standalone `/clawcode-probe-fs` slash command (functionality merged into the unified entry).
+
+**Status:** Shipped 2026-05-04 (commit `584a20a`). Reduces operator decision overhead — one slash command instead of nine.
+
+### Phase 999.33: Bound `preResolveAll` concurrency to 4 in-flight (SHIPPED 2026-05-04, partial boot-storm fix)
+
+**Goal:** Boot-storm partial fix — secret resolver's `preResolveAll` was firing all in-flight resolutions in parallel during cold-restart, contributing to the cgroup memory pressure seen in the 2026-05-03 fleet incident. Cap parallelism at 4.
+
+**Status:** Shipped 2026-05-04 (commit `eee88c2`). Marked partial fix because boot-storm has multiple contributors — this is one of several mitigations layered with Phase 109 (orphan reaper, preflight gate).
+
+### Untagged maintenance ships (2026-05-04 → 2026-05-05)
+
+Three quick fixes shipped without a phase tag:
+- **`716fb46` (PR #7) 2026-05-04** — Auto-prune spawned subagent threads after inactivity. Companion to Phase 999.30 (work-completion relay). Cleans up stale subagent thread state on the daemon.
+- **`98ff1bc` (PR #8) 2026-05-04** — Hot-reload reaper dial fix: pass `newConfig` through `ConfigWatcher` so the orphan-claude reaper picks up live config changes without daemon restart. Closure-capture fix.
+- **`bca9400` (PR #10) 2026-05-05** — Marketplace skip-empty-name: clawhub items with missing/empty `name` field caused marketplace UI to crash. Skip them silently with debug log.

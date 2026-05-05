@@ -43,6 +43,32 @@ Deploy on clawdy: 2 restarts (one per build wave), 6 agents auto-restored from p
 
 **Note:** Credential rotation (former Phase 99-G scope) handled by operator outside the GSD workflow as of 2026-05-05.
 
+## Post-v2.7 Continued Activity (2026-05-03 → 2026-05-05)
+
+Nine commits landed beyond the 2026-05-02 fix wave, organized into a hardening + ergonomics wave:
+
+**Infrastructure / hardening:**
+- **Phase 109 (commit `8880fe8`, 2026-05-03)** — MCP/Secret Resilience bundle. Four sub-scopes: 109-A broker observability (`rpsLastMin`/`throttleEvents24h`/`lastRetryAfterSec` + `clawcode broker-status` CLI), 109-B orphan-claude reaper (alert mode default; reap-mode behind flag), 109-C `clawcode preflight` (blocks restart if cgroup mem >80% or broker calls inflight), 109-D fleet-stats IPC + `/api/fleet-stats` dashboard endpoint. Driven by 2026-05-03 fleet incident (cgroup at 97.8% MemoryMax, 4 invisible orphan claudes, swap exhausted).
+- **Phase 110 Stage 0a (commit `5aa5ab6`, PR #6, 2026-05-03)** — MCP memory reduction foundational scaffolding. Schema + observability + CLI surface for upcoming shim-runtime swap (Stage 0b) and broker generalization (Stage 1). NO behavior change. Adds `defaults.shimRuntime` per-shim runtime selector, `defaults.brokers` dispatch table, `mcp-broker-shim --type` CLI alias, `McpRuntime` classification in fleet-stats.
+- **Phase 999.33 (commit `eee88c2`, 2026-05-04)** — Bound `preResolveAll` concurrency to 4 in-flight. Boot-storm partial fix layered with Phase 109 mitigations.
+
+**Subagent / relay:**
+- **Phase 999.30 (commits `81975aa`, `12f4ac1`, PR #9, 2026-05-04)** — Subagent relay on work-completion, not session-end. Three triggers (explicit `subagent_complete` tool, 5-min quiescence sweep, session-end callback) deduped via `binding.completedAt`. **Note: tagged as `999.25` in commits but renumbered to 999.30 in ROADMAP 2026-05-05** (number collision with shipped boot wake-order priority).
+- **(untagged, commit `716fb46`, PR #7, 2026-05-04)** — Auto-prune spawned subagent threads after inactivity. Companion cleanup to 999.30.
+
+**Ergonomics:**
+- **Phase 999.31 (commits `b46acd9`, `709e5ce`, `848a443`, 2026-05-04)** — `/ultra-plan` + `/ultra-review` slash commands at top level (initially under `/get-shit-done`, then routed to native `/ultraplan`, then promoted to top-level).
+- **Phase 999.32 (commit `584a20a`, 2026-05-04)** — Consolidated GSD into single `/gsd-do` entry; removed `/clawcode-probe-fs`.
+
+**Stability fixes:**
+- **(untagged, commit `98ff1bc`, PR #8, 2026-05-04)** — Hot-reload reaper dial fix: pass `newConfig` through `ConfigWatcher` so orphan-claude reaper picks up live config changes without daemon restart.
+- **(untagged, commit `bca9400`, PR #10, 2026-05-05)** — Marketplace skip-empty-name: clawhub items with missing/empty `name` no longer crash marketplace UI.
+
+**Phase number collisions resolved 2026-05-05:**
+- Phase 109 commit-tag bound to MCP/Secret Resilience bundle (shipped). Original "Image ingest pipeline" scope renumbered to **Phase 113**.
+- Phase 110 commit-tag bound to MCP memory-reduction work (Stage 0a shipped, later stages active). Original "Retroactive 999.x renumbering" scope renumbered to **Phase 114**.
+- Phase 999.25 commit-tag bound to "Agent boot wake-order priority" (shipped 2026-05-01). The 2026-05-04 PR #9 was tagged `feat(999.25)` for "subagent relay on work-completion" but renumbered to **Phase 999.30** in ROADMAP.
+
 ## Performance Metrics
 
 **v2.7 milestone (2026-04-26 → 2026-05-01, 5 days):**
