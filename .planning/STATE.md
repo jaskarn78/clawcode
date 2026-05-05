@@ -2,15 +2,17 @@
 gsd_state_version: 1.0
 milestone: v2.7
 milestone_name: Operator Self-Serve + Production Hardening
-status: milestone shipped — awaiting next phase
-stopped_at: v2.7 closed 2026-05-01 with Phase 108 LIVE
-last_updated: "2026-05-01T14:30:00.000Z"
-last_activity: 2026-05-01
+status: milestone shipped — Phase 99 + 102 closed/dropped 2026-05-05
+stopped_at: v2.7 closed 2026-05-01 with Phase 108 LIVE; post-v2.7 fixes shipped 2026-05-02; Phase 99 closed + Phase 102 dropped 2026-05-05
+last_updated: "2026-05-05T00:00:00.000Z"
+last_activity: 2026-05-05
 progress:
-  total_phases_v2_7: 9
+  total_phases_v2_7: 8
   completed_phases_v2_7: 7
-  deferred_phases_v2_7: 2
+  deferred_phases_v2_7: 1
+  dropped_phases_v2_7: 1
   bundled_backlog_ships: 5
+  post_v2_7_ships: 3
 ---
 
 # Project State
@@ -21,27 +23,48 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** v2.7 milestone shipped 2026-05-01. No active phase. Next phase opens when operator initiates work.
+**Current focus:** v2.7 shipped 2026-05-01; post-v2.7 fix wave shipped 2026-05-02 closing Phase 99 sub-scopes A/C/D/J + new operator-reported leaks (999.28, 999.29). Phase 99 fully closed and Phase 102 dropped 2026-05-05 (operator decision). No active phase. Next phase opens when operator initiates work.
 
 ## Current Position
 
 Milestone: v2.7 Operator Self-Serve + Production Hardening — SHIPPED 2026-05-01
-Last shipped phase: Phase 108 (shared 1password-mcp via daemon-managed broker — LIVE, agentRefCount=3 fan-out proof)
-Deferred (planning only, did not ship): Phase 101 (document-ingestion pipeline), Phase 102 (meeting copilot deploy)
+Last shipped: post-v2.7 fix wave 2026-05-02 — PR #3 (999.29 dream-pass adapter wiring), PR #4 (999.28 mcp probe group-kill), PR #5 (Phase 99 sub-scopes A/C/D/J unified)
+Pending (planning only, did not ship): Phase 101 (document-ingestion pipeline)
+Dropped 2026-05-05: Phase 102 (meeting copilot deploy) — removed from roadmap by operator. Phase 99 sub-scopes E/G/H/I — manual recovery accepted as final state; credential rotation (former G scope) handled by operator outside GSD workflow.
+
+## Current Session — Post-v2.7 fix wave (2026-05-02)
+
+Three ultraplan PRs landed back-to-back via the cloud `/ultraplan` workflow:
+- **PR #3 (`778c8c7`) — Phase 999.29:** dream-pass adapters wired (`getRecentChunks` → `listRecentMemoryChunks`, `getRecentSummaries` → terminated-session+memory hydration, `applyAutoLinks` → graph-edges.json writer). Closes "Wikilinks 0 applied" pattern across all dream embeds.
+- **PR #4 (`d15c8f1`) — Phase 999.28:** MCP probe wrapper group-kill (`detached: true` spawn + `killGroup` cleanup) eliminates `mcp-server-mysql` grandchildren reparenting to PID 1 across 14×60s probe cadence.
+- **PR #5 (`3bbde46`) — Phase 99 unified:** sub-scopes A (`getAgentMemoryDbPath` helper + 8 callsites + CI grep regression pin) + C (pending-summary backlog drain via 30-min × 5 sessions/tick heartbeat) + D (restart-greeting lookback 5 → 25 + summaryMemoryId fallback) + J (closes via A's path fix).
+
+Deploy on clawdy: 2 restarts (one per build wave), 6 agents auto-restored from pre-deploy snapshot each time, 13 heartbeat checks now registered (+ summarize-pending), zero rollbacks.
+
+**Note:** Credential rotation (former Phase 99-G scope) handled by operator outside the GSD workflow as of 2026-05-05.
 
 ## Performance Metrics
 
 **v2.7 milestone (2026-04-26 → 2026-05-01, 5 days):**
 
-- 7 phases shipped (100, 103-108) + 2 deferred (101, 102)
+- 7 phases shipped (100, 103-108) + 1 deferred (101) + 1 dropped (102, 2026-05-05)
 - 5 bundled backlog ships (999.6, 999.12, 999.13, 999.14, 999.15)
 - Phase 108 deploy: 6 iterations, 5 hot-fixes, all caught + fixed live without rollback
 - Final outcome: ~60% MCP child reduction in production via broker pooling
+
+**Post-v2.7 fix wave (2026-05-02, single session):**
+
+- 3 PRs merged via cloud `/ultraplan` (PR #3, #4, #5)
+- 7 sub-scopes/items closed in one wave (Phase 99: A, C, D, J + new 999.28, 999.29)
+- 21 source files touched, 1646+ insertions, 63 deletions
+- 265 new tests added (71 + 9 + 185), 100% pass post-deploy
+- 2 production deploys to clawdy with snapshot/restore preserving 6 running agents both times
 
 **Recent Trend:**
 
 - Mid-milestone (Phases 104-105): infrastructure incident response — secrets cache + dispatch fixes shipped within 24h of operator-reported symptoms
 - End-milestone (Phase 108): structural change with 5 hot-fixes during deploy — fail-loud guard pattern (added in first hot-fix) cracked open all downstream bugs
+- Post-v2.7 (2026-05-02): cloud `/ultraplan` workflow proven — 3 PRs in single session via remote agent + local `git am` apply pattern (artifact: `<X.Y>` chat-rendering noise needs pre-clean before patch apply)
 
 *Updated after each milestone close*
 

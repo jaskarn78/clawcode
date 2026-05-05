@@ -315,7 +315,7 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 **Plans:** TBD (run /gsd:plan-phase 97 in v2.7 to break down)
 **Status:** Backlog — Phase 96 must ship first. Phase 97 opens after Phase 96 deploys + UAT-95 passes.
 
-### Phase 99: Memory translator + sync hygiene + restart-greeting fallback (deferred to v2.7)
+### Phase 99: Memory translator + sync hygiene + restart-greeting fallback (CLOSED 2026-05-05)
 
 **Goal:** Fix four architectural bugs surfaced during Phase 98 cutover (2026-04-25 evening) when recovering fin-acquisition's pre-cutover conversation history. All four are silent-failure bugs — the system reported success but the data wasn't where the agent looks.
 
@@ -354,13 +354,7 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - Add SQL filter option: `WHERE turn_count > 0 OR summary_memory_id IS NOT NULL` to push the filtering server-side.
   - Test fixture: synthesize a "5 empty + 1 meaty" scenario and verify Phase 89 picks the meaty one.
 
-**Sub-scope E — Skills migration cross-host limitation (Phase 84 gap):**
-- Trigger: Post-cutover, the user asked whether `finmentum-crm` skill was migrated. Investigation found that 15 finmentum skills' SKILL.md files DID copy to ClawCode side at `/home/clawcode/.clawcode/agents/finmentum/skills/<name>/SKILL.md` but were NOT registered in the agent's `skills:` field in clawcode.yaml AND were not symlinked to the canonical scan path `/home/clawcode/.clawcode/skills/<name>/`. Phase 84's `clawcode migrate openclaw skills` reported zero results when run on clawdy because OpenClaw lives on a separate host (claude-bot, 100.71.14.96).
-- Recovery (manual, this session): scrubbed plaintext MySQL credentials from `finmentum-crm/SKILL.md`, symlinked all 15 skills from agent-workspace path to canonical scan path, added `skills:` field listing all 15 to fin-acquisition's agent block. Config-watcher auto-reloaded.
-- Scope:
-  - Extend `clawcode migrate openclaw skills` to support `--source <ssh-host>` for cross-host OpenClaw → ClawCode migration. Mirror Phase 91 `rsync over SSH` pattern.
-  - OR document Phase 84 as "single-host migration only" + define a manual recipe (essentially what we did): rsync skills, symlink to canonical path, edit yaml `skills:` field, restart agent. Recipe should live in `.planning/runbooks/skills-cross-host-migration.md`.
-  - Either way: the secret-scan must run cross-host (Phase 84 originally refused finmentum-crm BECAUSE it had plaintext MySQL creds — that gate must not be lost in the cross-host path).
+**Sub-scope E — Skills migration cross-host limitation: ~~DROPPED 2026-05-05~~** (data recovered manually; cross-host CLI deemed not worth building post-cutover).
 
 **Sub-scope F — `/clawcode-status` data wiring (Phase 93 incomplete implementation): ~~CLOSED — promoted to Phase 103, SHIPPED 2026-04-29~~**
 - Trigger: Operator ran `/clawcode-status` post-cutover. The 17-field embed (Phase 93 D-93-02-1) has SHAPE-parity with OpenClaw but most fields show `n/a` or `unknown` — the renderer hardcodes "n/a" for Fallbacks/Compactions/Tokens/Runner/Fast/Harness/Reasoning/Elevated/Queue and `data.X` field props are passed through as `undefined` for sessionId/lastActivityAt/effort/permissionMode.
@@ -369,40 +363,11 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - May not have ClawCode analog: Fast, Elevated (OpenClaw-specific concepts — design decision: drop the fields OR repurpose for ClawCode equivalents).
 - **Resolution:** Promoted to standalone Phase 103 (rich telemetry + Usage panel) and shipped 2026-04-29. Rate-limit event wiring, Usage embed, and most n/a fields wired. Remaining honest-n/a: `Fallbacks` — tracked as Phase 999.5 (no source currently exists). See Phase 103 VERIFICATION.md.
 
-**Sub-scope G — Plaintext credential rotation batch (security):**
-- Trigger: Multiple plaintext credentials surfaced during Phase 96/98 work. Operator deferred rotation to a Phase 99 batch.
-- Credentials known exposed (each at multiple disk locations + in agent contexts):
-  - Anthropic API key (`/home/jjagpal/.openclaw/openclaw.json` env block)
-  - OpenAI API key (same)
-  - Google API key (same)
-  - MiniMax API key (same)
-  - ElevenLabs API key (`openclaw.json` messages.tts.providers block)
-  - Discord bot token (`openclaw.json` channels.discord.token, ~`MTQ3MDE2MjYzMDY4NDcwNDg4MQ.GLLa1Z.*`)
-  - Discord webhook token for #finmentum-client-acquisition (`webhook ID 1490470938318344194`)
-  - MySQL password (`KME6fka2nuy@cmu@pmj`) — was in finmentum-crm/SKILL.md (now scrubbed) AND in OpenClaw session jsonl files (now translated into ClawCode's conversation_turns) AND likely in heartbeat/audit logs. Scrubbed from active SKILL.md as of 2026-04-26.
-  - SSH password (`686Shanghai`) — used inline in command-line invocations during Phase 96/98 work; now in shell history on multiple hosts.
-- Scope:
-  - Generate fresh credentials for each. Rotate in 1Password vault. Update env files / config refs. Restart affected services.
-  - Set up SSH key auth for jjagpal user across both hosts (claude-bot + clawdy) so passwords never touch the command line.
-  - Audit + redact translated session turns containing the old MySQL password (the conversation_turns table will need a one-shot SQL to redact occurrences in `content` columns).
-  - Document rotation runbook for future credential exposure events.
+**Sub-scope G — Plaintext credential rotation batch: ~~DROPPED 2026-05-05~~** (operator handling rotation outside the GSD workflow).
 
-**Sub-scope H — Cron schedule migration tooling (Phase 47/91 gap):**
-- Trigger: Operator asked whether OpenClaw cron jobs migrated to ClawCode after Phase 98 cutover. Investigation found ZERO of OpenClaw's 44 enabled cron jobs (34 for fin-acquisition: 11 client birthdays, birthday card prep, holiday gift reminder, ADV/Reg S-P compliance reviews, Schwab data sync, etc.) had transferred. Phase 91 sync only covered FILES, not schedules.
-- Recovery (manual, this session): wrote translation script that read `~/.openclaw/cron/jobs.json` (filtered to fin-acquisition + cron-kind + agentTurn-kind), shifted PT cron expressions +7h to UTC (PDT approximation), emitted ClawCode `scheduleEntrySchema` YAML, inserted into fin-acquisition's agent block. 30 of 34 migrated (4 `every`-kind interval schedules skipped). Disabled the 30 corresponding jobs on OpenClaw side to prevent duplicate firings.
-- Scope:
-  - Build first-class `clawcode migrate openclaw schedules` CLI subcommand (mirror of Phase 84 skills migration). Supports `--source <ssh-host>` for cross-host. Translates kind=cron AND kind=every. Writes via Phase 86 atomic-yaml-writer pattern.
-  - Extend `scheduleEntrySchema` with optional `tz` field so the scheduler can do per-job tz resolution instead of the `+7h UTC offset hack` we used (off by 1h during PST winter season; acceptable for birthdays but not for time-sensitive ops jobs).
-  - Add interval (`every`-kind) schedule support to `scheduleEntrySchema` (currently cron-only).
-  - Idempotent — running migration twice doesn't duplicate. Match by name+cron tuple.
+**Sub-scope H — Cron schedule migration tooling: ~~DROPPED 2026-05-05~~** (data migrated manually; CLI deemed not worth building post-cutover).
 
-**Sub-scope I — Schedule prompts referencing OpenClaw-side paths/scripts:**
-- Trigger: 2 of the migrated schedules (`schwab-sdd-auto-click` + `schwab-data-sync`) reference `python3 /home/jjagpal/.openclaw/workspace-finmentum/scripts/sync_schwab_twr.py` — a Python script that lives on claude-bot, not clawdy. Phase 96 D-05/D-06 fileAccess allows reading, but the script's runtime deps + execution context don't exist on clawdy.
-- Scope (deferred decision):
-  - **Path 1 — copy scripts to clawdy** with deps: cron-job runtime needs Python venv on clawdy with the right packages. Replicate the script + venv. Update path references to clawdy-side.
-  - **Path 2 — invoke remote** (ssh from clawdy → claude-bot → run script): introduces dependency on claude-bot staying available + SSH access from the clawcode user. Risky.
-  - **Path 3 — port to clawcode-native MCP/tool**: rewrite the Schwab sync logic as a ClawCode skill or MCP server. Cleanest long-term.
-- Track which migrated schedules reference OpenClaw paths so they're not silently broken.
+**Sub-scope I — Schedule prompts referencing OpenClaw-side paths: ~~DROPPED 2026-05-05~~** (no longer tracking; operator will address per-schedule as they trigger).
 
 **Sub-scope J — Phase 95 dreaming source-material wiring + production hardening (partial):**
 - Trigger: Operator enabled dreaming for fin-acquisition. Three latent bugs surfaced + were hotfixed inline this session: (1) Haiku wraps JSON output in ```json``` markdown fence — strict JSON.parse rejects (`f38ae00`); (2) Haiku produces narrative prose preamble before JSON ("Picking up where we left off, …") — extract first balanced JSON object (`ca0122b`); (3) tightened system prompt to require strict JSON-only output (`509ff03`); (4) `entry.timestamp.toISOString()` undefined — wrapper lambda in IPC handler was discarding entry shape, dream-auto-apply was passing the FULL `{agentName, memoryRoot, entry}` but the lambda treated it all as `entry` (`c2d68f9`).
@@ -413,14 +378,17 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
   - Test fixture: spawn a dream pass after a synthetic conversation, assert `themedReflection` cites specific session content.
   - Add a `dream.minSourceContent` config (e.g., min 5 chunks OR min 1 session summary) — skip dream pass when source is too sparse to produce meaningful output.
 
-**Plans:** TBD (run /gsd:plan-phase 99 in v2.7 to break down)
-**Status:** Backlog — opened 2026-04-25 evening during Phase 98 cutover recovery, expanded 2026-04-26 with sub-scopes E/F/G/H/I/J as more issues surfaced. None of these block production but all degrade UX or carry security/operational debt. Phase 99 priority below Phase 97 (cutover-blocking gaps come first).
+**Plans:** Sub-scopes A/C/D/J shipped 2026-05-02 via ultraplan PRs #3 + #5 (commits 778c8c7 + 3bbde46). Sub-scopes E/G/H/I dropped 2026-05-05 (manual recovery accepted as final).
+**Status:** ~~CLOSED 2026-05-05~~ — A/B/C/D/F/J shipped; E/G/H/I dropped (operator decision, manual recovery accepted as final state). Credential rotation (former G scope) handled by operator outside GSD workflow.
 
-**Sub-scope resolution summary (2026-05-01 triage):**
-- ~~B~~ — CLOSED: Path 2 chosen, cutover complete, sync deprecated.
+**Sub-scope resolution summary (updated 2026-05-02):**
+- ~~A~~ — CLOSED 2026-05-02 via PR #5 (commit 3bbde46): `getAgentMemoryDbPath()` helper in `src/shared/agent-paths.ts` + 8 callsite migrations + static-grep CI regression pin in `src/shared/__tests__/agent-paths.regression.test.ts`.
+- ~~B~~ — CLOSED 2026-05-01: Path 2 chosen, cutover complete, sync deprecated.
+- ~~C~~ — CLOSED 2026-05-02 via PR #5 (commit 3bbde46): `ConversationStore.listPendingSummarySessions()` + `SessionManager.summarizePendingSessions()` + `summarize-pending` heartbeat check at 30-min cadence × 5 sessions/tick. Backlog of 308 drains in ~30h wall-clock.
+- ~~D~~ — CLOSED 2026-05-02 via PR #5 (commit 3bbde46): restart-greeting lookback bumped 5 → 25 + `summaryMemoryId` fallback when no candidate has turns.
 - ~~F~~ — CLOSED: Promoted to Phase 103, shipped 2026-04-29.
-- J (partial) — JSON bugs 1-4 CLOSED via Phase 107 (shipped 2026-04-30); source-material wiring still open, blocked on Sub-scope A.
-- **Remaining open:** A (translator DB path), C (auto-summarization), D (restart-greeting lookback + summaryMemoryId fallback), E (skills CLI — data recovered manually), G (credential rotation), H (schedule migration CLI — data migrated manually), I (schedule prompts referencing OpenClaw paths), J (dream source-material).
+- ~~J~~ — CLOSED 2026-05-02. JSON bugs 1-4 closed via Phase 107 (2026-04-30); source-material wiring closed via PR #3 (commit 778c8c7) + PR #5 (path fix unblocks dream prompt builder seeing canonical DB).
+- ~~E~~ ~~G~~ ~~H~~ ~~I~~ — DROPPED 2026-05-05: manual recovery accepted as final state. Credential rotation handled by operator outside GSD workflow. No further work tracked under Phase 99.
 
 ### Phase 100: GSD-via-Discord on Admin Clawdy (operator-self-serve dev workflow)
 
@@ -493,35 +461,6 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 **Plans:** TBD (run /gsd:plan-phase 101 in v2.7 to break down)
 
 **Status:** Pending — opened 2026-04-28 evening after the Pon tax return debug session. Closely related to Phase 100-fu's long-output-to-file directive (which addresses the Discord-output side); Phase 101 addresses the upstream document-parsing side. Likely the single highest-leverage operator-facing feature in the v2.7 milestone — fin-acquisition's daily workflow is document-heavy, and the current ad-hoc PyMuPDF fallbacks are unreliable.
-
-### Phase 102: Meeting copilot deploy + ClawCode integration (finance-clawdy-coach)
-
-**Goal:** Take the existing finance-clawdy-coach project (https://github.com/jaskarn78/finance-clawdy-coach — built but never deployed/tested) from on-disk to production-running, validate the live coaching pipeline through one real client meeting, then evaluate whether to integrate it with ClawCode's fin-acquisition agent (deeper memory continuity) or leave it standalone.
-
-**Trigger:** Operator (Ramy at Finmentum) needs real-time coaching during client RIA calls. Mac-side BlackHole 2ch capture + Linux-side Deepgram Nova-2 STT + CoachingEngine (rules + Claude Haiku) + Discord webhook delivery + post-call CRM extraction (finance-clawdy FastAPI :9000) + MySQL upsert. Architecture is sound and tested in isolation (104 pytest tests); production validation is the missing piece.
-
-**Pre-existing primitives we can reuse:**
-- finance-clawdy-coach repo (FastAPI server + Mac listener + finance-clawdy CRM service, all complete)
-- Deepgram API key (operator-provisioned, 1Password)
-- Anthropic API key for the Haiku coaching brain (1Password — possibly already shared with ClawCode's daemon)
-- Discord webhook URL for the coaching channel (existing)
-- finmentum MySQL CRM (existing — the database that fin-acquisition's `finmentum-db` MCP server already reads)
-- ClawCode's fin-acquisition agent on clawdy with vault-scoped 1Password (Phase 100-fu, just shipped) — knows clients, has memory, has the right tools
-- ClawCode's `send_to_agent` IPC (Phase 30+) — used by Path C integration option
-
-**Sub-scope candidates (refined during discuss-phase):**
-1. **Path A — bare-bones deploy + smoke test (must-do).** Deploy server + finance-clawdy on clawdy host (or claude-bot), wire env vars (Deepgram + Anthropic + Discord webhook + MySQL), set up Mac client on operator's MacBook with BlackHole + listener.py launched-on-demand. Run ONE real client meeting end-to-end. Capture: did capture work? Was Deepgram latency acceptable? Were coaching prompts useful? Did finance-clawdy upsert correctly? Required for any further integration decisions.
-2. **Path B — light integration: webhook → ClawCode thread.** Coaching webhook posts to a Discord thread bound to fin-acquisition. fin sees the live transcript (read_thread MCP), can answer ad-hoc questions in the same thread without disrupting coaching. Post-call summary same path. Trade-off: coaching stays autonomous (its own Haiku calls); ClawCode gets visibility but doesn't drive.
-3. **Path C — deep integration: replace finance-clawdy LLM calls with `send_to_agent` IPC.** finance-clawdy stops calling Anthropic directly; dispatches turns to fin-acquisition. Pre-call: coaching engine asks fin "what should I know about <client>" → fin queries memory_lookup → returns context → coaching prompts now include client-specific recall. Post-call: transcript → fin processes with full continuity → updates fin's OWN memory (knowledge graph + tier promotion) AND the CRM. Couples the two projects but aligns memory/identity.
-4. **Path-A operations:** systemd unit files for server + finance-clawdy, healthcheck integration with clawdy's existing monitoring, journalctl integration, `setup.sh` runbook adapted for clawdy host (it currently assumes interactive prompts).
-5. **Mac client lifecycle:** how does the client launch? Operator runs `python listener.py` before each meeting? Could add a menu-bar wrapper (BitBar/SwiftBar?) to make it one-click. Or auto-detect via Google Calendar + auto-launch (deferred to v2 per repo's PROJECT.md).
-6. **Cost gate / budget alarm:** Deepgram (~$0.43/hr Nova-2) + Anthropic Haiku coaching (~$0.001/UtteranceEnd × ~50 utterances/call = $0.05/call) + Anthropic for finance-clawdy CRM extraction (~$0.10/call). Per-call budget ~$0.50-0.70. Add a daily-cap circuit breaker to prevent runaway costs from a misconfigured loop.
-7. **Privacy + audit:** "client must never know" constraint (per repo PROJECT.md). Verify no bot joins the meeting, no cloud transcripts persist beyond the JSONL spool retention window (operator-curated), no PII leaks into ClawCode's general-purpose memory if Path C is chosen (need a memory namespace/tag for "from-meeting-coach" content so it's properly access-controlled).
-8. **First-real-call UAT:** the canonical regression artifact. Phase 102 ships when operator runs a real client meeting end-to-end and reports back: capture worked, coaching prompts were useful, finance-clawdy CRM upsert succeeded, summary embed matched reality.
-
-**Plans:** TBD (run /gsd:plan-phase 102 in v2.7 to break down)
-
-**Status:** Pending — opened 2026-04-28 evening after reviewing the finance-clawdy-coach repo (https://github.com/jaskarn78/finance-clawdy-coach). Highest-leverage operator-facing feature in v2.7 IF Path A validates the pipeline. Path B/C decision deferred until post-A.
 
 ### Phase 103: /clawcode-status rich telemetry + Usage panel (operator-observability)
 
@@ -1525,3 +1464,42 @@ The broker has its own dedicated heartbeat (`heartbeat/checks/mcp-broker.ts`) th
 - Wake-order log fired correctly: `Admin Clawdy=1, fin-acquisition=2, research=3, fin-research=3, finmentum-content-creator=null`
 
 **Pairs with shipped Phase 999.26.1** (drain delay before kill — see Phase 999.26 entry above) which absorbs any remaining transient probe-shim disconnects without churning the pool child.
+
+### Phase 999.28: MCP probe wrapper group-kill — mcp-server-mysql grandchild leak (SHIPPED 2026-05-02)
+
+**Goal:** Stop `checkMcpServerHealth` and `rpcCall` cleanup paths from leaking grandchildren into PPID=1. Both paths spawned the npm wrapper non-detached and only `child.kill("SIGKILL")` on the wrapper PID; the wrapper forks `sh -c` which forks `node /.../bin/mcp-server-mysql`, and that grandchild reparented to init holding its MariaDB connection open. With probes firing every 60s × 14 agents, the 999.14 orphan reaper sweep cadence couldn't keep up — zombies accumulated on clawdy.
+
+**Trigger:** 2026-05-02 — operator surfaced via ultraplan: "mcp-mysql leak and 0 dreamlinks". Production observation: persistent `node mcp-server-mysql` processes attached to PID 1 across 14 agents holding MySQL connections idle.
+
+**Fix:**
+- `spawn(...)` now passes `detached: true` so the child is its own pgid leader. Combined with `child.unref()` so the one-shot probe doesn't pin the daemon's event loop.
+- Cleanup replaces `child.kill("SIGKILL")` with `killGroup(child.pid, "SIGKILL", log)` from `src/mcp/process-tracker.ts` — `process.kill` on the negative PID hits wrapper + sh + node grandchildren together.
+- Silent fallback Logger keeps existing call sites and tests unchanged (no deps churn).
+- Linux-only regression tests use `/proc/<pid>/stat` (not signal 0) to detect post-SIGKILL state since zombies still respond to signal 0 in CI containers with delayed init reaping.
+
+**PR:** [#4](https://github.com/jaskarn78/clawcode/pull/4) merged 2026-05-02 (commit `d15c8f1`); deployed to clawdy 2026-05-02.
+
+**Tests:** 5 new Linux-only leak regression tests across `src/mcp/__tests__/health.test.ts` (2) and `src/mcp/__tests__/json-rpc-call.test.ts` (3). 9/9 pass.
+
+**Files changed:** `src/mcp/health.ts`, `src/mcp/json-rpc-call.ts`, plus paired test files. 4 files, 389 insertions, 19 deletions.
+
+**Status:** Shipped 2026-05-02 — live on clawdy. Per-probe killGroup eliminates grandchild reparenting; orphan reaper now has no slack to fall behind.
+
+### Phase 999.29: Dream-pass adapter wiring — listRecentMemoryChunks + getRecentSummaries + applyAutoLinks (SHIPPED 2026-05-02)
+
+**Goal:** Three IPC adapter functions in the run-dream-pass handler were stubbed to `return []` / `{ added: 0 }` from Phase 95-02 ("real link application is deferred to a future plan"). Result: every dream-pass embed posted "Wikilinks 0 applied" because the LLM was producing wikilinks but `applyAutoLinks` discarded them; `themedReflection` cited no data because `getRecentChunks`/`getRecentSummaries` returned empty arrays. Confirmed pattern across fin-acquisition dreams from 04-26 through 05-01: only 1 wikilink ever applied (on 04-28).
+
+**Trigger:** 2026-05-02 — operator: every dream pass embed shows "Wikilinks 0 applied"; verbatim "No memory chunks, conversation summaries, or wikilink graph data were provided in this reflection cycle" in themed reflections.
+
+**Fix:**
+- New `MemoryStore.listRecentMemoryChunks(limit)` — reads `memory_chunks` ordered by `file_mtime_ms DESC` to feed the dream prompt.
+- New `appendDreamWikilinks` writer in `src/manager/dream-graph-edges.ts` — persists path→path edges to `<memoryRoot>/graph-edges.json` with dedupe + atomic temp+rename. Dream-pass primitive already reads this file back as the "existing wikilinks" prompt section (`dream-pass.ts:222-224`), so this completes the round-trip.
+- Daemon `getRecentSummaries` now hydrates from `conversationStore.listRecentTerminatedSessions(agent, limit)` + linked `memoryStore.getById(summaryMemoryId)`.
+
+**PR:** [#3](https://github.com/jaskarn78/clawcode/pull/3) merged 2026-05-02 (commit `778c8c7`); deployed to clawdy 2026-05-02.
+
+**Tests:** 2 new test files: `src/manager/__tests__/dream-graph-edges.test.ts` (6 cases — file-missing creation, dedupe, empty-input, all-duplicate, malformed-JSON tolerance, nested-mkdir) + `src/memory/__tests__/store.test.ts` additions for `listRecentMemoryChunks` (DESC ordering + limit + empty store). 71/71 pass.
+
+**Files changed:** `src/manager/daemon.ts`, `src/manager/dream-graph-edges.ts` (new), `src/manager/dream-pass.ts` (Promise type widening), `src/memory/store.ts`. 6 files, 422 insertions, 16 deletions.
+
+**Status:** Shipped 2026-05-02 — live on clawdy. Pairs with Phase 99-A (translator DB path fix) — together they unblock dream-pass `themedReflection` from citing real data, closing Phase 99 sub-scope J.
