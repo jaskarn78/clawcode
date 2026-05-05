@@ -1611,6 +1611,44 @@ Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempot
 
 **Status:** Shipped 2026-05-04 (commit `eee88c2`). Marked partial fix because boot-storm has multiple contributors — this is one of several mitigations layered with Phase 109 (orphan reaper, preflight gate).
 
+### Phase 999.34: Cross-agent IPC for subagent threads — addressable subagent identity (BACKLOG)
+
+**Goal:** Enable agents to address messages to subagent thread sessions, not just registered top-level agents. Today `send_to_agent` / `delegate_task` / `ask_agent` accept an agent name from `clawcode.yaml`'s `agents:` registry. Subagents (spawned via `spawn_subagent_thread`) live as ephemeral `ThreadBinding` records keyed by `bindingId` + `threadId` — they have NO entry in the agent registry, so the messaging tools cannot reach them.
+
+**Trigger (2026-05-05):** admin-clawdy attempted to post mid-task instructions into a `reelforge-build-end-to-end` subagent thread. The messaging tool rejected the subagent session name because it's not in the agent registry. Operator had to relay the message manually via local terminal — the exact failure mode Phase 999.30 eliminated for the reverse direction (subagent → operator).
+
+**Why this matters (architectural, not just ergonomic):**
+- Phase 999.30 shipped *parent → operator* relay on work-completion. The *parent → in-flight subagent* direction has no equivalent. Asymmetric IPC = manual relay tax.
+- Multi-agent workflows where a planner agent iteratively guides a builder subagent (course-correct mid-task, hand off updated context, queue follow-on work) cannot happen autonomously today.
+- Operator becomes a manual relay every time admin-clawdy or another planner agent needs to redirect a long-running subagent.
+- The same gap blocks: peer → subagent (one builder talking to another), operator-from-different-channel → subagent (operator on `#admin-clawdy` reaching a subagent in a different thread without channel-hopping).
+
+**Sub-scope candidates (refine during /gsd:discuss-phase):**
+1. **Subagent addressing scheme.** Define the reference syntax. Options:
+   - `<parent-agent>/<subagent-session-name>` (path-style, human-friendly)
+   - `subagent:<bindingId>` (binding-id-style, canonical)
+   - Both accepted with binding-id as the wire form (path-style is sugar resolved at IPC boundary)
+2. **Registry lookup extension.** New IPC method `get-subagent-binding` returning enough metadata to dispatch a turn (parent agent, thread ID, current state, last activity). `getAgentConfig` / `dispatchTurn` etc. need a fork or wrapper that resolves subagent bindings as well as registered agents.
+3. **Tool surface (pick one):**
+   - Extend existing `send_to_agent` / `delegate_task` to accept the subagent reference forms (back-compat preserved; old callers unchanged)
+   - Add new dedicated tools `send_to_subagent` / `delegate_to_subagent` (cleaner separation; explicit caller intent)
+4. **Permission model.** Should ANY agent post to ANY subagent thread, or only the parent that spawned it? Default proposal: **parent-only, with `clawcode.yaml`-tagged "globally addressable" subagents as opt-in escape hatch**. Operator can mark long-running subagents as fleet-addressable for orchestration scenarios.
+5. **Discoverability.** New tool `list_active_subagents([parentAgent])` so agents find session names without relying on operator memory or chat history scrubbing.
+6. **Lifecycle envelope.** Send to a completed/timed-out subagent → structured error response. Mirror 999.30's `{ ok: false, reason: "subagent-completed" | "subagent-not-found" | "permission-denied" }` pattern.
+7. **Discord-side compat.** When the subagent is paused waiting for next message (the actual blocker case), the message must arrive via the same Discord thread the subagent is reading from — not a side-channel. This means the IPC method ultimately posts to the bound thread, not directly to the subagent's stdin.
+
+**Pre-existing primitives to reuse:**
+- Phase 999.30 `src/manager/subagent-completion-sweep.ts` — already iterates active bindings; same iterator backs `list_active_subagents`
+- `ThreadBinding` type from `src/discord/subagent-thread-spawner.ts`
+- IPC pipeline from `delegate_task` (Phase 59) + the relay-and-mark-completed helper from 999.30
+- `dispatchStream` + `ProgressiveMessageEditor` from quick task `260501-nfe` (the same pipeline 999.30 uses for parent → operator delivery)
+
+**Status:** Backlog — captured 2026-05-05 from operator-reported failure (admin-clawdy → reelforge-build-end-to-end thread). Operator confirms message was relayed manually for now.
+
+**Promotion target:** likely next milestone (v2.8?) tackling autonomous multi-agent orchestration. Pairs with Phase 999.19 (subagent cleanup / memory consolidation / delegate-channel routing) — both address making subagent thread management first-class. Could bundle.
+
+**Risk callout:** permission model mistakes here have real blast radius — accidentally letting any agent post to any subagent thread breaks isolation guarantees subagents currently rely on. Operator decision on default permission model gates execution.
+
 ### Untagged maintenance ships (2026-05-04 → 2026-05-05)
 
 Three quick fixes shipped without a phase tag:
