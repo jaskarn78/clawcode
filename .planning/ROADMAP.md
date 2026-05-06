@@ -736,11 +736,11 @@ Plans:
 
 **Stage 0b Requirements:** [0B-RT-00, 0B-RT-01, 0B-RT-02, 0B-RT-03, 0B-RT-04, 0B-RT-05, 0B-RT-06, 0B-RT-07, 0B-RT-08, 0B-RT-09, 0B-RT-10, 0B-RT-11, 0B-RT-12, 0B-RT-13]
 
-**Plans:** 9 plans
+**Plans:** 1/9 plans executed
 - [ ] 110-00-PLAN.md — Wave 0 spike + kill-switch gate (minimal Go shim, RSS measurement on admin-clawdy)
 - [ ] 110-01-PLAN.md — Daemon `list-mcp-tools` IPC method (ships first, before any Go shim builds against it)
 - [ ] 110-02-PLAN.md — Schema enum widening + loader auto-inject + fleet-stats classifier
-- [ ] 110-03-PLAN.md — CI Go build matrix + npm prebuild-install bundling
+- [x] 110-03-PLAN.md — CI Go build matrix + npm prebuild-install bundling
 - [ ] 110-04-PLAN.md — Search Go shim implementation (IPC client + Register + main wiring)
 - [ ] 110-05-PLAN.md — Search rollout (admin-clawdy canary 24-48h → fleet)
 - [ ] 110-06-PLAN.md — Image Go shim implementation + rollout

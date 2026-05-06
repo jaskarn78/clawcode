@@ -1,18 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.7
-milestone_name: Operator Self-Serve + Production Hardening
-status: milestone shipped — Phase 99 + 102 closed/dropped 2026-05-05
-stopped_at: v2.7 closed 2026-05-01 with Phase 108 LIVE; post-v2.7 fixes shipped 2026-05-02; Phase 99 closed + Phase 102 dropped 2026-05-05
-last_updated: "2026-05-05T00:00:00.000Z"
-last_activity: 2026-05-05
+milestone: v1.0
+milestone_name: milestone
+status: Executing Phase 110
+stopped_at: Completed 110-03-PLAN.md
+last_updated: "2026-05-06T13:57:37.459Z"
+last_activity: 2026-05-06
 progress:
-  total_phases_v2_7: 8
-  completed_phases_v2_7: 7
-  deferred_phases_v2_7: 1
-  dropped_phases_v2_7: 1
-  bundled_backlog_ships: 5
-  post_v2_7_ships: 3
+  total_phases: 56
+  completed_phases: 14
+  total_plans: 86
+  completed_plans: 73
 ---
 
 # Project State
@@ -23,18 +21,17 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** v2.7 shipped 2026-05-01; post-v2.7 fix wave shipped 2026-05-02 closing Phase 99 sub-scopes A/C/D/J + new operator-reported leaks (999.28, 999.29). Phase 99 fully closed and Phase 102 dropped 2026-05-05 (operator decision). No active phase. Next phase opens when operator initiates work.
+**Current focus:** Phase 110 — MCP shim runtime swap (Stage 0b)
 
 ## Current Position
 
-Milestone: v2.7 Operator Self-Serve + Production Hardening — SHIPPED 2026-05-01
-Last shipped: post-v2.7 fix wave 2026-05-02 — PR #3 (999.29 dream-pass adapter wiring), PR #4 (999.28 mcp probe group-kill), PR #5 (Phase 99 sub-scopes A/C/D/J unified)
-Pending (planning only, did not ship): Phase 101 (document-ingestion pipeline)
-Dropped 2026-05-05: Phase 102 (meeting copilot deploy) — removed from roadmap by operator. Phase 99 sub-scopes E/G/H/I — manual recovery accepted as final state; credential rotation (former G scope) handled by operator outside GSD workflow.
+Phase: 110 (MCP shim runtime swap (Stage 0b)) — EXECUTING
+Plan: 1 of 9
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 
 Three ultraplan PRs landed back-to-back via the cloud `/ultraplan` workflow:
+
 - **PR #3 (`778c8c7`) — Phase 999.29:** dream-pass adapters wired (`getRecentChunks` → `listRecentMemoryChunks`, `getRecentSummaries` → terminated-session+memory hydration, `applyAutoLinks` → graph-edges.json writer). Closes "Wikilinks 0 applied" pattern across all dream embeds.
 - **PR #4 (`d15c8f1`) — Phase 999.28:** MCP probe wrapper group-kill (`detached: true` spawn + `killGroup` cleanup) eliminates `mcp-server-mysql` grandchildren reparenting to PID 1 across 14×60s probe cadence.
 - **PR #5 (`3bbde46`) — Phase 99 unified:** sub-scopes A (`getAgentMemoryDbPath` helper + 8 callsites + CI grep regression pin) + C (pending-summary backlog drain via 30-min × 5 sessions/tick heartbeat) + D (restart-greeting lookback 5 → 25 + summaryMemoryId fallback) + J (closes via A's path fix).
@@ -48,23 +45,28 @@ Deploy on clawdy: 2 restarts (one per build wave), 6 agents auto-restored from p
 Nine commits landed beyond the 2026-05-02 fix wave, organized into a hardening + ergonomics wave:
 
 **Infrastructure / hardening:**
+
 - **Phase 109 (commit `8880fe8`, 2026-05-03)** — MCP/Secret Resilience bundle. Four sub-scopes: 109-A broker observability (`rpsLastMin`/`throttleEvents24h`/`lastRetryAfterSec` + `clawcode broker-status` CLI), 109-B orphan-claude reaper (alert mode default; reap-mode behind flag), 109-C `clawcode preflight` (blocks restart if cgroup mem >80% or broker calls inflight), 109-D fleet-stats IPC + `/api/fleet-stats` dashboard endpoint. Driven by 2026-05-03 fleet incident (cgroup at 97.8% MemoryMax, 4 invisible orphan claudes, swap exhausted).
 - **Phase 110 Stage 0a (commit `5aa5ab6`, PR #6, 2026-05-03)** — MCP memory reduction foundational scaffolding. Schema + observability + CLI surface for upcoming shim-runtime swap (Stage 0b) and broker generalization (Stage 1). NO behavior change. Adds `defaults.shimRuntime` per-shim runtime selector, `defaults.brokers` dispatch table, `mcp-broker-shim --type` CLI alias, `McpRuntime` classification in fleet-stats.
 - **Phase 999.33 (commit `eee88c2`, 2026-05-04)** — Bound `preResolveAll` concurrency to 4 in-flight. Boot-storm partial fix layered with Phase 109 mitigations.
 
 **Subagent / relay:**
+
 - **Phase 999.30 (commits `81975aa`, `12f4ac1`, PR #9, 2026-05-04)** — Subagent relay on work-completion, not session-end. Three triggers (explicit `subagent_complete` tool, 5-min quiescence sweep, session-end callback) deduped via `binding.completedAt`. **Note: tagged as `999.25` in commits but renumbered to 999.30 in ROADMAP 2026-05-05** (number collision with shipped boot wake-order priority).
 - **(untagged, commit `716fb46`, PR #7, 2026-05-04)** — Auto-prune spawned subagent threads after inactivity. Companion cleanup to 999.30.
 
 **Ergonomics:**
+
 - **Phase 999.31 (commits `b46acd9`, `709e5ce`, `848a443`, 2026-05-04)** — `/ultra-plan` + `/ultra-review` slash commands at top level (initially under `/get-shit-done`, then routed to native `/ultraplan`, then promoted to top-level).
 - **Phase 999.32 (commit `584a20a`, 2026-05-04)** — Consolidated GSD into single `/gsd-do` entry; removed `/clawcode-probe-fs`.
 
 **Stability fixes:**
+
 - **(untagged, commit `98ff1bc`, PR #8, 2026-05-04)** — Hot-reload reaper dial fix: pass `newConfig` through `ConfigWatcher` so orphan-claude reaper picks up live config changes without daemon restart.
 - **(untagged, commit `bca9400`, PR #10, 2026-05-05)** — Marketplace skip-empty-name: clawhub items with missing/empty `name` no longer crash marketplace UI.
 
 **Phase number collisions resolved 2026-05-05:**
+
 - Phase 109 commit-tag bound to MCP/Secret Resilience bundle (shipped). Original "Image ingest pipeline" scope renumbered to **Phase 113**.
 - Phase 110 commit-tag bound to MCP memory-reduction work (Stage 0a shipped, later stages active). Original "Retroactive 999.x renumbering" scope renumbered to **Phase 114**.
 - Phase 999.25 commit-tag bound to "Agent boot wake-order priority" (shipped 2026-05-01). The 2026-05-04 PR #9 was tagged `feat(999.25)` for "subagent relay on work-completion" but renumbered to **Phase 999.30** in ROADMAP.
@@ -418,6 +420,8 @@ Recent decisions affecting current work:
 - [Phase 108]: Tracker-before-broker construction order — broker's onPoolSpawn closes over the constructed mcpTracker singleton (no forward-reference gymnastics). Both orderings satisfy 'broker up before agents start' since manager.startAll runs ~2500 lines after either insertion point.
 - [Phase 108]: ShimServer.deps.resolveRawToken added — daemon-side tokenHash → rawToken Map injected at handshake; literal never crosses the socket (Phase 104 SEC-07).
 - [Phase 108]: Heartbeat provider surface intentionally narrow ({getPoolStatus} only) — RED test asserts Object.keys === ['getPoolStatus'] to gate against synthetic password_read consuming 1Password rate-limit budget.
+- [Phase 110]: Postinstall dev-skip when prebuilds/ absent — preserves npm ci on source-checkout while keeping fail-loud on corrupt tarballs (110-03)
+- [Phase 110]: Artifact-name contract clawcode-mcp-shim-linux-<arch> binds go-build.yml uploads to npm-publish.yml downloads (110-03)
 
 ### v2.1 closing decisions (for reference)
 
@@ -598,11 +602,12 @@ Recent decisions affecting current work:
 | Phase 108 P03 | 9min | 2 tasks | 3 files |
 | Phase 108 P02 | 13m | 2 tasks | 2 files |
 | Phase 108 P04 | 60min | 4 tasks | 12 files |
+| Phase 110 P03 | 7 | 3 tasks | 5 files |
 
 ## Session Continuity
 
-Last activity: 2026-05-01 - Completed quick task 260501-x44 — fix 121 typecheck errors from TS6/vitest4 upgrade fallout (121→1, the 1 = budget.ts:138 flagged for /ultrareview as suspected real logic bug). Today's quick tasks: 260501-i3r (relay observability), 260501-j7x (999.24 sudoers), 260501-jld (999.21 /get-shit-done), 260501-k5s (999.22 mutate-verify directive), 260501-nfe (999.18 partial — relay dispatchStream), 260501-nxm (cached-summary fingerprint filter), 260501-x44 (typecheck cleanup — unblocks /ultrareview prep). All LOCAL REPO ONLY, deploy held per Ramy-active rule + repeated explicit operator instructions ("Wait for me to give deploy order" + "dont deploy until i say its ok")
-Stopped at: Completed 108-04-PLAN.md
+Last activity: 2026-05-06
+Stopped at: Completed 110-03-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
