@@ -45,13 +45,60 @@ export function cmdlineMatchesClaude(cmdline: readonly string[]): boolean {
  *   - "node":     Loader-auto-injected `clawcode {search,image,browser}-mcp`
  *                 (or `mcp-broker-shim`) running under the bundled Node
  *                 CLI — current production runtime.
- *   - "static":   Reserved for Stage 0b's static-binary alternate runtime.
- *   - "python":   Reserved for Stage 0b's python-wrapper alternate runtime.
+ *   - "static":   Stage 0b's static-binary alternate runtime — Go binary
+ *                 deployed at /usr/local/bin/clawcode-mcp-shim, dispatched
+ *                 via `--type <search|image|browser>`. Recognized by basename.
+ *   - "python":   Stage 0b's python-wrapper alternate runtime (reserved —
+ *                 implementation deferred). Recognized via the
+ *                 `python3 /path/to/clawcode-mcp-shim.py` cmdline shape.
  *   - "external": Yaml-defined entries the loader does NOT auto-inject
  *                 (e.g. brave_search.py, fal_ai.py, mcp-server-mysql).
  *                 These are out of scope for shim-runtime swap.
  */
 export type McpRuntime = "node" | "static" | "python" | "external";
+
+/**
+ * Phase 110 Stage 0b — classify a /proc cmdline by its runtime cohort.
+ *
+ * Pure function; no I/O. Used to label MCP shim children so /api/fleet-stats
+ * can split the fleet into runtime cohorts (Stage 0/1 memory-reduction
+ * targets vs. external servers).
+ *
+ * Match strategy: argv0 basename (path-agnostic). The Wave 2 deploy
+ * installs the Go binary at /usr/local/bin/clawcode-mcp-shim, but a dev
+ * build may live at any path. Matching the basename keeps both code paths
+ * in scope without an explicit allowlist.
+ *
+ * Distinction between Stage 0b's reserved Python translator and the
+ * generic Python externals (brave_search.py, fal_ai.py) is by argv[1]
+ * basename — only `clawcode-mcp-shim.py` triggers the "python" runtime.
+ * Everything else under `python` / `python3` falls through to "external"
+ * (preserves Stage 0a behavior).
+ */
+export function classifyShimRuntime(cmdline: readonly string[]): McpRuntime {
+  if (cmdline.length === 0) return "external";
+  const argv0 = cmdline[0]!;
+  const basename = argv0.split("/").pop() ?? argv0;
+
+  // Phase 110 Stage 0b — Go static binary basename.
+  if (basename === "clawcode-mcp-shim") return "static";
+
+  // Phase 110 Stage 0b — reserved Python translator. Distinguish from
+  // generic Python externals (brave_search.py, fal_ai.py, …) by inspecting
+  // argv[1]'s basename for the clawcode-mcp-shim.py marker.
+  if (basename === "python3" || basename === "python") {
+    const arg1 = cmdline[1] ?? "";
+    const arg1Base = arg1.split("/").pop() ?? arg1;
+    if (arg1Base === "clawcode-mcp-shim.py") return "python";
+    return "external"; // brave_search.py, fal_ai.py — Stage 0a behavior preserved.
+  }
+
+  // Stage 0a — Node bundled CLI shim (`clawcode <type>-mcp`).
+  if (basename === "clawcode") return "node";
+
+  // Anything else (1Password broker via npx, dumb-pipe externals, etc.)
+  return "external";
+}
 
 /**
  * Per-pattern aggregate over a list of MCP cmdline regexes.
