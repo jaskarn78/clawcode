@@ -18,6 +18,77 @@ import type {
   ResolvedMarketplaceSources,
 } from "../shared/types.js";
 
+// ---------------------------------------------------------------------------
+// Phase 110 Stage 0b — install paths + command resolver for the alternate
+// MCP shim runtimes the loader auto-injects on operator opt-in via
+// `defaults.shimRuntime.<type>`.
+//
+// STATIC_SHIM_PATH: the Go binary deployed by Wave 2's CI artifact
+// bundling. The shim is a single binary that dispatches on `--type
+// <search|image|browser>` (mirrors Phase 108 broker shim's `--type`
+// pattern at `src/cli/commands/mcp-broker-shim.ts`).
+//
+// PYTHON_SHIM_PATH: reserved path for a future FastMCP-based Python
+// translator. The Python translator does NOT exist in Stage 0b; the
+// constant is defined together with STATIC so widening the schema enum
+// to "python" does not require another loader change later.
+//
+// The `resolveShimCommand` helper is exported because
+// `src/manager/daemon.ts`'s fleet-stats IPC handler builds proc-scan
+// regex patterns from the SAME command/args shape so /api/fleet-stats
+// can match the running shim children. Both call-sites must agree on
+// the spawn shape per runtime, otherwise the dashboard goes blind when
+// an operator flips a flag.
+//
+// Crash-fallback (LOCKED): no try/catch around the alternate-runtime
+// path, no pre-detection of binary existence. If a "static" spawn
+// fails the operator's tooling surfaces the failure directly — the
+// operator-locked decision is fail-loud, not silent degradation.
+// ---------------------------------------------------------------------------
+export const STATIC_SHIM_PATH = "/usr/local/bin/clawcode-mcp-shim";
+export const PYTHON_SHIM_PATH = "/usr/local/bin/clawcode-mcp-shim.py";
+
+export type ShimType = "search" | "image" | "browser";
+export type ShimRuntime = "node" | "static" | "python";
+
+/**
+ * Phase 110 Stage 0b — resolve the command/args pair the loader emits
+ * (and `src/manager/daemon.ts`'s fleet-stats proc-scan must match) for
+ * a given shim type + runtime selector.
+ *
+ * Pure function; returns a fresh object on every call. Callers that
+ * embed the result in a longer-lived structure spread `args`
+ * (`[...result.args]`) so subsequent mutations don't leak into shared
+ * literal references — matches the immutability discipline in CLAUDE.md.
+ *
+ * The "node" branch is the default-only fallthrough — exhaustiveness
+ * over the schema-bound `ShimRuntime` union means any future widening
+ * surfaces here as a missing case at compile time.
+ */
+export function resolveShimCommand(
+  type: ShimType,
+  runtime: ShimRuntime,
+): { readonly command: string; readonly args: readonly string[] } {
+  switch (runtime) {
+    case "static":
+      return {
+        command: STATIC_SHIM_PATH,
+        args: ["--type", type],
+      };
+    case "python":
+      return {
+        command: "python3",
+        args: [PYTHON_SHIM_PATH, "--type", type],
+      };
+    case "node":
+    default:
+      return {
+        command: "clawcode",
+        args: [`${type}-mcp`],
+      };
+  }
+}
+
 /**
  * Resolves a 1Password `op://vault/item/field` reference to its secret value.
  *
@@ -238,55 +309,54 @@ export function resolveAgentConfig(
     });
   }
 
-  // Phase 70 — auto-inject the browser MCP server so every agent gets
-  // browser_navigate, browser_screenshot, browser_click, browser_fill,
-  // browser_extract, browser_wait_for. The subprocess pattern mirrors the
-  // `clawcode` entry: the daemon owns the singleton Chromium and this
-  // subprocess is a thin IPC translator. Gated by defaults.browser.enabled
-  // (default true). CLAWCODE_AGENT env is consumed by the subprocess as
-  // the default agent identity for tool calls (src/browser/mcp-server.ts).
+  // Phase 70/71/72 + Phase 110 Stage 0b — auto-inject browser/search/image
+  // MCP servers so every agent gets the corresponding tool surface. Each
+  // shim type's command/args branches on `defaults.shimRuntime.<type>`
+  // (default "node" — current behavior). See `src/config/shim-runtime.ts`
+  // for the per-runtime command/args mapping (kept in a shared module so
+  // `src/manager/fleet-stats.ts`'s proc-scan patterns stay in sync with
+  // what the loader actually spawns).
+  //
+  // Crash-fallback (LOCKED): no try/catch around the alternate-runtime
+  // path, no pre-detection of binary existence. If a "static" spawn
+  // fails, the operator's tooling surfaces the failure directly — the
+  // operator-locked decision is fail-loud, not silent degradation.
   const browserEnabled = defaults.browser?.enabled !== false;
   if (browserEnabled && !resolvedMcpMap.has("browser")) {
+    const runtime: ShimRuntime = defaults.shimRuntime?.browser ?? "node";
+    const { command, args } = resolveShimCommand("browser", runtime);
     resolvedMcpMap.set("browser", {
       name: "browser",
-      command: "clawcode",
-      args: ["browser-mcp"],
+      command,
+      args: [...args],
       env: { CLAWCODE_AGENT: agent.name },
       // Phase 85 TOOL-01 — browser MCP is mandatory when auto-injected.
       optional: false,
     });
   }
 
-  // Phase 71 — auto-inject the search MCP server so every agent gets
-  // web_search + web_fetch_url. The daemon owns the BraveClient/ExaClient
-  // singletons; this subprocess is a thin IPC translator. Gated by
-  // defaults.search.enabled (default true). CLAWCODE_AGENT env is consumed
-  // by the subprocess as the default agent identity for tool calls
-  // (src/search/mcp-server.ts).
   const searchEnabled = defaults.search?.enabled !== false;
   if (searchEnabled && !resolvedMcpMap.has("search")) {
+    const runtime: ShimRuntime = defaults.shimRuntime?.search ?? "node";
+    const { command, args } = resolveShimCommand("search", runtime);
     resolvedMcpMap.set("search", {
       name: "search",
-      command: "clawcode",
-      args: ["search-mcp"],
+      command,
+      args: [...args],
       env: { CLAWCODE_AGENT: agent.name },
       // Phase 85 TOOL-01 — search MCP is mandatory when auto-injected.
       optional: false,
     });
   }
 
-  // Phase 72 — auto-inject the image MCP server so every agent gets
-  // image_generate + image_edit + image_variations. The daemon owns the
-  // OpenAI/MiniMax/fal provider clients; this subprocess is a thin IPC
-  // translator. Gated by defaults.image.enabled (default true).
-  // CLAWCODE_AGENT env is consumed by the subprocess as the default
-  // agent identity for tool calls (src/image/mcp-server.ts).
   const imageEnabled = defaults.image?.enabled !== false;
   if (imageEnabled && !resolvedMcpMap.has("image")) {
+    const runtime: ShimRuntime = defaults.shimRuntime?.image ?? "node";
+    const { command, args } = resolveShimCommand("image", runtime);
     resolvedMcpMap.set("image", {
       name: "image",
-      command: "clawcode",
-      args: ["image-mcp"],
+      command,
+      args: [...args],
       env: { CLAWCODE_AGENT: agent.name },
       // Phase 85 TOOL-01 — image MCP is mandatory when auto-injected.
       optional: false,
