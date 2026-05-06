@@ -974,11 +974,16 @@ function mapYamlOutcome(
 // existing /etc/clawcode/env path keeps working as a fallback.
 //
 // Pure: no I/O (cache reads only), no logging — testable in isolation.
-function buildSearchEnv(
+//
+// Exported solely for unit tests at src/manager/__tests__/build-search-env.test.ts.
+// The production call site is the daemon's createBraveClient/createExaClient
+// construction in 9d below.
+export function buildSearchEnv(
   searchCfg: { brave: { apiKeyEnv: string; apiKey?: string }; exa: { apiKeyEnv: string; apiKey?: string } },
-  resolver: SecretsResolver,
+  resolver: { getCached(uri: string): string | undefined },
+  baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
   const inject = (rawValue: string | undefined, envKey: string): void => {
     if (!rawValue) return;
     let resolved: string | undefined;

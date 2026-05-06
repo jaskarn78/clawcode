@@ -58,14 +58,29 @@ The cred is already in 1Password (`clawdbot` vault, item "Brave Search API Key",
 
 ##### Path 1 — fastest, env-file route (no code deploy required)
 
-Operator runs on clawdy as `jjagpal` (op CLI signed in):
+Operator runs on clawdy as `jjagpal` (op CLI signed in). Two equivalent forms — interactive sudo (simpler) or in-band password.
+
+**Interactive form** (operator types sudo password when prompted):
 
 ```bash
 ssh clawdy
+# op read runs as jjagpal (already signed in); pipe value to sudo tee
 echo "BRAVE_API_KEY=$(op read 'op://clawdbot/Brave Search API Key/credential')" \
-  | echo "686Shanghai" | sudo -S -p "" tee -a /etc/clawcode/env > /dev/null
-echo "686Shanghai" | sudo -S -p "" /bin/systemctl restart clawcode.service
+  | sudo tee -a /etc/clawcode/env > /dev/null
+sudo systemctl restart clawcode.service
 ```
+
+**In-band sudo password form** (matches the `686Shanghai | sudo -S` pattern used elsewhere in this plan; uses `bash -c` so sudo's stdin is ONLY the password and the BRAVE value is interpolated in the outer shell as `jjagpal`):
+
+```bash
+ssh clawdy
+KEY=$(op read 'op://clawdbot/Brave Search API Key/credential')
+echo "686Shanghai" | sudo -S -p "" bash -c "echo BRAVE_API_KEY=\"$KEY\" >> /etc/clawcode/env"
+echo "686Shanghai" | sudo -S -p "" /bin/systemctl restart clawcode.service
+unset KEY
+```
+
+> The earlier draft of this command piped `echo "686Shanghai" | echo "BRAVE_API_KEY=..."` which silently discards stdin (echo ignores it) and writes nothing to the env file. Use one of the two forms above.
 
 > Phase 999.6 snapshot/restore preserves running agents across the systemd restart. Wait ~2 min for warm-path-ready (personal can stretch to 4-7 min via Phase 999.33 boot-storm).
 >
