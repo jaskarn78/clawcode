@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 110-01-PLAN.md (list-mcp-tools daemon IPC method)
-last_updated: "2026-05-06T14:00:03.903Z"
+stopped_at: Completed 110-02-PLAN.md
+last_updated: "2026-05-06T14:08:05.130Z"
 last_activity: 2026-05-06
 progress:
   total_phases: 56
   completed_phases: 14
   total_plans: 86
-  completed_plans: 75
+  completed_plans: 76
 ---
 
 # Project State
@@ -424,6 +424,7 @@ Recent decisions affecting current work:
 - [Phase 110]: Artifact-name contract clawcode-mcp-shim-linux-<arch> binds go-build.yml uploads to npm-publish.yml downloads (110-03)
 - [Phase 110]: Plan 110-00 Wave 0 build artifacts shipped: 5.7 MB Go MCP spike binary, 4/4 regression tests pass, operator runbook + RSS measurement helper authored. Operator kill-switch gate (admin-clawdy live VmRSS ≤ 15 MB + exit-75 respawn) PENDING — Wave 1 (Plan 110-01) blocked until operator approves.
 - [Phase 110]: Use native zod/v4 z.toJSONSchema() for list-mcp-tools handler instead of zod-to-json-schema npm package — zero new deps, satisfies CLAUDE.md no-new-deps rule, native converter produces correct required[] output
+- [Phase 110]: Inlined STATIC_SHIM_PATH/PYTHON_SHIM_PATH/resolveShimCommand in src/config/loader.ts (single source of truth) so daemon.ts fleet-stats handler imports the same helper that the loader uses — keeps spawn shape and proc-scan regex shape in lockstep when an operator flips defaults.shimRuntime.<type>
 
 ### v2.1 closing decisions (for reference)
 
@@ -607,11 +608,12 @@ Recent decisions affecting current work:
 | Phase 110 P03 | 7 | 3 tasks | 5 files |
 | Phase 110 P00 | 25min | 2 tasks | 7 files |
 | Phase 110 P01 | 7m | 2 tasks | 4 files |
+| Phase 110 P02 | 20min | 3 tasks | 6 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-06
-Stopped at: Completed 110-01-PLAN.md (list-mcp-tools daemon IPC method)
+Stopped at: Completed 110-02-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
