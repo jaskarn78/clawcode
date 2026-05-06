@@ -1623,19 +1623,36 @@ export const defaultsSchema = z.object({
       enabled: z.boolean().default(true),
     })
     .optional(),
-  // Phase 110 Stage 0a — per-shim-type runtime selector. Each entry picks
-  // the runtime the loader-auto-injected `clawcode {search,image,browser}-
-  // mcp` shim spawns under. Stage 0a ships the dial wired end-to-end with
-  // a single value ("node" — current behavior); Stage 0b widens the enum
-  // to ["node","static","python"] and lands the alternate-runtime binary.
-  // Single-value-enum-today is intentional: rolling out the rollback flag
-  // in its own PR keeps Stage 0b's blast radius scoped to the runtime
-  // implementation only.
+  // Phase 110 Stage 0a → Stage 0b — per-shim-type runtime selector. Each
+  // entry picks the runtime the loader-auto-injected `clawcode {search,
+  // image,browser}-mcp` shim spawns under. Stage 0a shipped the dial
+  // wired end-to-end with a single value ("node" — current behavior);
+  // Stage 0b widens the enum (DONE — see PR landing this commit) to
+  // ["node","static","python"] so an operator can flip a flag and the
+  // loader rewrites command/args without a daemon restart.
+  //
+  // - "node":   current behavior — `clawcode <type>-mcp` Node shim (~147 MB RSS each)
+  // - "static": Go binary at /usr/local/bin/clawcode-mcp-shim --type <type> (target <10 MB RSS)
+  // - "python": (reserved) python3 translator at /usr/local/bin/clawcode-mcp-shim.py;
+  //             no implementation in Stage 0b. Widening the enum together
+  //             with "static" lets a future Python pivot ship without
+  //             another schema migration.
+  //
+  // Default still "node": existing operator config is byte-identical
+  // until they explicitly flip a flag. Per-type independence — search
+  // can flip to "static" while image stays "node" — is intentional so
+  // the operator can roll out per-shim-type per CONTEXT.md's locked
+  // search → image → browser rollout order.
+  //
+  // Crash-fallback policy (LOCKED): if a "static" spawn fails, fail
+  // loud — do NOT auto-fall-back to "node". Surface the failure to the
+  // operator. Loader code intentionally contains no try/catch around
+  // the alternate-runtime path.
   shimRuntime: z
     .object({
-      search: z.enum(["node"]).default("node"),
-      image: z.enum(["node"]).default("node"),
-      browser: z.enum(["node"]).default("node"),
+      search: z.enum(["node", "static", "python"]).default("node"),
+      image: z.enum(["node", "static", "python"]).default("node"),
+      browser: z.enum(["node", "static", "python"]).default("node"),
     })
     .optional(),
   // Phase 110 Stage 0a — broker dispatch table. Server-id keyed map for
