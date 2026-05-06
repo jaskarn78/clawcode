@@ -149,4 +149,81 @@ describe("collectAllOpRefs", () => {
     });
     expect(collectAllOpRefs(cfg2)).toEqual([]);
   });
+
+  // Phase 110 follow-up — Zone 4: defaults.search.{brave,exa}.apiKey.
+  it("COLL-08: returns op:// URI from defaults.search.brave.apiKey", () => {
+    const cfg = makeConfig({
+      defaults: {
+        search: {
+          brave: { apiKey: "op://clawdbot/Brave Search API Key/credential" },
+          exa: {},
+        },
+      } as unknown as Config["defaults"],
+    });
+    expect(collectAllOpRefs(cfg)).toEqual([
+      "op://clawdbot/Brave Search API Key/credential",
+    ]);
+  });
+
+  it("COLL-09: returns op:// URI from defaults.search.exa.apiKey", () => {
+    const cfg = makeConfig({
+      defaults: {
+        search: {
+          brave: {},
+          exa: { apiKey: "op://clawdbot/Exa/credential" },
+        },
+      } as unknown as Config["defaults"],
+    });
+    expect(collectAllOpRefs(cfg)).toEqual(["op://clawdbot/Exa/credential"]);
+  });
+
+  it("COLL-10: collects both brave + exa apiKey op:// refs in one pass", () => {
+    const cfg = makeConfig({
+      defaults: {
+        search: {
+          brave: { apiKey: "op://clawdbot/Brave/credential" },
+          exa: { apiKey: "op://clawdbot/Exa/credential" },
+        },
+      } as unknown as Config["defaults"],
+    });
+    const result = collectAllOpRefs(cfg);
+    expect(result).toContain("op://clawdbot/Brave/credential");
+    expect(result).toContain("op://clawdbot/Exa/credential");
+    expect(result).toHaveLength(2);
+  });
+
+  it("COLL-11: ignores literal (non-op://) brave.apiKey / exa.apiKey", () => {
+    const cfg = makeConfig({
+      defaults: {
+        search: {
+          brave: { apiKey: "BSA-literal-key" },
+          exa: { apiKey: "" },
+        },
+      } as unknown as Config["defaults"],
+    });
+    expect(collectAllOpRefs(cfg)).toEqual([]);
+  });
+
+  it("COLL-12: handles missing defaults.search / undefined apiKey without throwing", () => {
+    // No defaults.
+    expect(() =>
+      collectAllOpRefs(makeConfig({ defaults: undefined } as unknown as Partial<Config>)),
+    ).not.toThrow();
+    // defaults present but no search.
+    expect(() =>
+      collectAllOpRefs(
+        makeConfig({ defaults: {} as Config["defaults"] }),
+      ),
+    ).not.toThrow();
+    // search present but no brave/exa.apiKey set.
+    expect(
+      collectAllOpRefs(
+        makeConfig({
+          defaults: {
+            search: { brave: {}, exa: {} },
+          } as unknown as Config["defaults"],
+        }),
+      ),
+    ).toEqual([]);
+  });
 });

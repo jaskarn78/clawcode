@@ -932,6 +932,15 @@ export const searchConfigSchema = z
     brave: z
       .object({
         apiKeyEnv: z.string().min(1).default("BRAVE_API_KEY"),
+        // Phase 110 follow-up — explicit op:// (or literal) override that
+        // takes precedence over apiKeyEnv lookup. Lets operators store the
+        // Brave key in 1Password instead of /etc/clawcode/env so Brave
+        // joins the same secrets-resolver path used by FINNHUB / FAL /
+        // STRAVA / etc. (clawcode.yaml zone 2). Resolved at daemon boot
+        // via collectAllOpRefs → SecretsResolver.preResolveAll. If the
+        // resolved value is non-empty it overrides whatever (if anything)
+        // is in process.env[apiKeyEnv].
+        apiKey: z.string().optional(),
         safeSearch: z.enum(["off", "moderate", "strict"]).default("moderate"),
         country: z.string().length(2).default("us"),
       })
@@ -943,6 +952,9 @@ export const searchConfigSchema = z
     exa: z
       .object({
         apiKeyEnv: z.string().min(1).default("EXA_API_KEY"),
+        // Same op:// passthrough as brave.apiKey above — keeps the two
+        // backends symmetric for the same reason.
+        apiKey: z.string().optional(),
         useAutoprompt: z.boolean().default(false),
       })
       .default(() => ({

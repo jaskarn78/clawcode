@@ -961,6 +961,45 @@ function mapYamlOutcome(
   return { kind: "refused", reason: `unknown outcome: ${outcome}` };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 110 follow-up — daemon-side search-key resolution helper.
+//
+// Reads `defaults.search.brave.apiKey` and `defaults.search.exa.apiKey` from
+// the parsed config, resolves op:// references via the boot-warm
+// SecretsResolver cache, and returns a synthetic env that injects the
+// resolved value at the matching apiKeyEnv key — overlaying process.env
+// at exactly those two slots while preserving everything else.
+//
+// Returns process.env unchanged when neither yaml field is set, so the
+// existing /etc/clawcode/env path keeps working as a fallback.
+//
+// Pure: no I/O (cache reads only), no logging — testable in isolation.
+function buildSearchEnv(
+  searchCfg: { brave: { apiKeyEnv: string; apiKey?: string }; exa: { apiKeyEnv: string; apiKey?: string } },
+  resolver: SecretsResolver,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const inject = (rawValue: string | undefined, envKey: string): void => {
+    if (!rawValue) return;
+    let resolved: string | undefined;
+    if (rawValue.startsWith("op://")) {
+      // SecretsResolver.preResolveAll already warmed the cache at boot.
+      // getCached() returns the resolved string or undefined on cache miss
+      // (which here means pre-resolve failed; legacy env-var fallback
+      // takes over because we leave env[envKey] untouched).
+      resolved = resolver.getCached(rawValue);
+    } else {
+      resolved = rawValue;
+    }
+    if (resolved && resolved.length > 0) {
+      env[envKey] = resolved;
+    }
+  };
+  inject(searchCfg.brave.apiKey, searchCfg.brave.apiKeyEnv);
+  inject(searchCfg.exa.apiKey, searchCfg.exa.apiKeyEnv);
+  return env;
+}
+
 // Phase 92 Plan 04 CUT-06 / CUT-07 — cutover-button-action IPC handler.
 //
 // MIRROR Phase 86 Plan 02 handleSetModelIpc blueprint: pure exported helper
@@ -3057,9 +3096,20 @@ export async function startDaemon(
   // BRAVE_API_KEY / EXA_API_KEY are absent. No warm-path probe needed —
   // HTTP clients are ephemeral; missing keys surface as `invalid_argument`
   // on first tool call, not as daemon-boot crashes.
+  //
+  // Phase 110 follow-up — yaml-level `defaults.search.brave.apiKey` (and
+  // .exa.apiKey) take precedence over process.env[apiKeyEnv] when set.
+  // Plain strings pass through verbatim; op:// references are resolved
+  // via the boot-time SecretsResolver cache (collectAllOpRefs zone 4).
+  // Why: systemd EnvironmentFile=/etc/clawcode/env on prod historically
+  // never carried BRAVE_API_KEY, so daemon process.env lookup failed
+  // silently and every web_search call returned `invalid_argument:
+  // missing Brave API key`. Routing through 1Password matches every
+  // other secret in the same yaml.
   const searchCfg = config.defaults.search;
-  const braveClient = createBraveClient(searchCfg);
-  const exaClient = createExaClient(searchCfg);
+  const searchEnv = buildSearchEnv(searchCfg, secretsResolver);
+  const braveClient = createBraveClient(searchCfg, searchEnv);
+  const exaClient = createExaClient(searchCfg, searchEnv);
   if (searchCfg.enabled) {
     log.info(
       { backend: searchCfg.backend, maxResults: searchCfg.maxResults },

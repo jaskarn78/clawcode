@@ -52,25 +52,61 @@ The new dist/binary on master is structurally identical to what's already on cla
 
 **This is NOT a Phase 110 blocker** in the sense that flipping the search canary doesn't change the BRAVE pipeline outcome. It IS a separate BLOCKER for the Stage 0b user-facing claim "search works on the new Go shim" because there's nothing for either shim to demonstrate.
 
-#### Two-part fix (separate from Phase 110)
+#### The fix (1Password reference confirmed: `op://clawdbot/Brave Search API Key/credential`)
 
-**Option 1 (fastest):** Add `BRAVE_API_KEY=<key>` to `/etc/clawcode/env`. Operator obtains the key, ssh's to clawdy, edits the env file (sudo). Daemon picks it up on next restart. No code change. **Phase 110 search canary then proceeds normally.**
+The cred is already in 1Password (`clawdbot` vault, item "Brave Search API Key", field `credential`). Two paths — both make the daemon-side BraveClient resolve correctly. Pick one.
 
-**Option 2 (matches op:// pattern of other secrets):** Add a yaml-level `defaults.search.brave.apiKey: op://clawdbot/Brave/api-key` field, modify `daemon.ts` to op-resolve it at boot before constructing BraveClient, pass resolved value into `createBraveClient` as a third arg or via a custom env. Code change required (~30 LOC + tests).
+##### Path 1 — fastest, env-file route (no code deploy required)
 
-**Recommendation:** Option 1 unblocks Stage 0b TODAY. File Option 2 as a separate phase ("BRAVE_API_KEY op:// resolution parity") for the "all secrets via 1Password" cleanup goal.
+Operator runs on clawdy as `jjagpal` (op CLI signed in):
 
-#### Operator action (Gate A, post-fix-decision)
+```bash
+ssh clawdy
+echo "BRAVE_API_KEY=$(op read 'op://clawdbot/Brave Search API Key/credential')" \
+  | echo "686Shanghai" | sudo -S -p "" tee -a /etc/clawcode/env > /dev/null
+echo "686Shanghai" | sudo -S -p "" /bin/systemctl restart clawcode.service
+```
 
-1. Decide Option 1 or Option 2.
-2. If Option 1: provision the key (operator obtains from Brave Search API dashboard), append to `/etc/clawcode/env` on clawdy, daemon restart required (use Phase 999.6 snapshot/restore — same as deploy procedure).
-3. After fix is in place, send a Discord prompt to admin-clawdy: *"Use web_search to find today's date. Reply YYYY-MM-DD only."*
-4. **GREEN** — agent returns `2026-05-06` with sources → advance to Gate B.
-5. **RED** — different error than "missing API key" → escalate; investigate further before Stage 0b.
+> Phase 999.6 snapshot/restore preserves running agents across the systemd restart. Wait ~2 min for warm-path-ready (personal can stretch to 4-7 min via Phase 999.33 boot-storm).
+>
+> Run the Discord smoke test below after restart.
 
-> Why this needs operator action, not Claude: provisioning a new secret + daemon restart is exactly the kind of action gated by `feedback_no_auto_deploy.md` and `feedback_ramy_active_no_deploy.md`. Even though Claude has read-only ssh authorized, writing secrets and restarting systemd are out.
+##### Path 2 — yaml-level op:// resolution (code shipped on master, takes effect at next deploy)
 
-**Resume signal:** `gate-a-fixed` (after the env fix + verification prompt returns real results) or `gate-a-deferred` (rollout proceeds without resolving Brave; cgroup-pressure-relief value of Phase 110 stands alone independent of search-result-quality).
+Path 2 code is already shipped on master in commit `<TBD — see git log>`:
+
+| Change | What |
+|---|---|
+| `src/config/schema.ts` | New optional `defaults.search.brave.apiKey` and `.exa.apiKey` fields (string \| op://) |
+| `src/manager/secrets-collector.ts` | Zone 4 added — collectAllOpRefs scans the two new fields and feeds them to `SecretsResolver.preResolveAll` at boot |
+| `src/manager/daemon.ts` | New `buildSearchEnv(searchCfg, secretsResolver)` helper builds a synthetic env from `process.env` overlaid with resolved `apiKey` values; `createBraveClient` / `createExaClient` receive this env (instead of the default `process.env`) |
+| `src/manager/__tests__/secrets-collector.test.ts` | 5 new tests (COLL-08 through COLL-12) covering brave + exa apiKey collection, dedup, literals ignored, missing-field safety |
+
+After Path 2 ships to clawdy + daemon restart, the operator edits `/etc/clawcode/clawcode.yaml`:
+
+```yaml
+defaults:
+  search:
+    brave:
+      apiKey: op://clawdbot/Brave Search API Key/credential
+```
+
+ConfigWatcher hot-reloads. Boot-time SecretsResolver caches the resolved value; BraveClient sees it via the synthetic env at `apiKeyEnv` ("BRAVE_API_KEY" by default). No `/etc/clawcode/env` edit needed for Brave going forward.
+
+> Path 2 keeps the existing env-file path working as a fallback — when `apiKey` is absent or its op:// resolve cache-misses, the synthetic env passes `process.env` through unchanged so any literal `BRAVE_API_KEY=...` in `/etc/clawcode/env` keeps working.
+
+**Recommendation:** Path 1 for today's unblock; Path 2 ships at the next Phase 110 deploy as the permanent fix and keeps Brave consistent with every other secret in clawcode.yaml (FINNHUB, FAL, MYSQL_*, etc., all `op://`).
+
+#### Operator action (Gate A)
+
+1. Pick Path 1 or Path 2.
+2. After the fix is in place, send a Discord prompt to admin-clawdy: *"Use web_search to find today's date. Reply YYYY-MM-DD only."*
+3. **GREEN** — agent returns `2026-05-06` with sources → advance to Gate B.
+4. **RED** — different error than "missing API key" → escalate; investigate further before Stage 0b.
+
+> Why this still needs operator action: provisioning the value via env-file edit (Path 1) or yaml-edit + daemon restart (Path 2) is exactly the kind of action gated by `feedback_no_auto_deploy.md` and `feedback_ramy_active_no_deploy.md`.
+
+**Resume signal:** `gate-a-fixed` (after the fix + verification prompt returns real results) or `gate-a-deferred` (Phase 110 rollout proceeds without resolving Brave; the cgroup-pressure-relief value stands alone).
 
 ### Gate B — Ramy-quiet Discord MCP check
 

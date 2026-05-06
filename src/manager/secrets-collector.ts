@@ -3,11 +3,14 @@
  * clawcode.yaml config so SecretsResolver.preResolveAll can warm the cache
  * once at boot, before any agent spawn.
  *
- * Three zones in scope (matches Phase 999.10 roadmap entry + plan 02
- * must-haves):
+ * Four zones in scope (Phase 110 follow-up extends from three to four):
  *   1. discord.botToken (single optional string)
  *   2. mcpServers.<name>.env.<key> (server-shared env)
  *   3. agents.<name>.mcpEnvOverrides.<server>.<key> (per-agent overrides)
+ *   4. defaults.search.{brave,exa}.apiKey (Phase 110 — daemon-side
+ *      BraveClient/ExaClient construction site; Phase 71+ created the
+ *      need by routing search through the daemon's process.env which
+ *      systemd EnvironmentFile didn't populate)
  *
  * Dedups via Set — the same op:// URI referenced from multiple zones
  * collapses to one cache entry (which is correct: one URI = one secret).
@@ -79,6 +82,18 @@ export function collectAllOpRefs(config: Config): readonly string[] {
         }
       }
     }
+  }
+
+  // Zone 4 (Phase 110 follow-up): defaults.search.{brave,exa}.apiKey.
+  // Daemon-side BraveClient / ExaClient construction reads these via the
+  // SecretsResolver cache after preResolveAll. Schema makes them optional
+  // strings, so the defaults block + missing field both safely return [].
+  const search = config.defaults?.search;
+  if (search) {
+    const braveApiKey = search.brave?.apiKey;
+    if (isOpRef(braveApiKey)) refs.add(braveApiKey);
+    const exaApiKey = search.exa?.apiKey;
+    if (isOpRef(exaApiKey)) refs.add(exaApiKey);
   }
 
   return Array.from(refs);
