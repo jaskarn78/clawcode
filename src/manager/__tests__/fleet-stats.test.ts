@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFleetStats, cmdlineMatchesClaude } from "../fleet-stats.js";
+import {
+  buildFleetStats,
+  classifyShimRuntime,
+  cmdlineMatchesClaude,
+} from "../fleet-stats.js";
 import * as procScan from "../../mcp/proc-scan.js";
 import * as cgroupStats from "../cgroup-stats.js";
 
@@ -18,6 +22,84 @@ describe("cmdlineMatchesClaude", () => {
   });
   it("rejects empty cmdline", () => {
     expect(cmdlineMatchesClaude([])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 110 Stage 0b — classifier recognizes the new Go static binary basename
+// (`clawcode-mcp-shim`) and the reserved Python translator basename
+// (`clawcode-mcp-shim.py`) so /api/fleet-stats accurately reports per-shim
+// runtime cohorts when an operator flips `defaults.shimRuntime.<type>`.
+// ---------------------------------------------------------------------------
+describe("classifyShimRuntime — Phase 110 Stage 0b cmdline classification", () => {
+  it("classifies `clawcode <type>-mcp` cmdlines as 'node' (Stage 0a behavior preserved)", () => {
+    expect(classifyShimRuntime(["clawcode", "search-mcp"])).toBe("node");
+    expect(classifyShimRuntime(["/usr/local/bin/clawcode", "image-mcp"])).toBe("node");
+    expect(classifyShimRuntime(["clawcode", "browser-mcp"])).toBe("node");
+  });
+
+  it("classifies `clawcode-mcp-shim --type <T>` as 'static' (basename match)", () => {
+    expect(
+      classifyShimRuntime([
+        "/usr/local/bin/clawcode-mcp-shim",
+        "--type",
+        "search",
+      ]),
+    ).toBe("static");
+  });
+
+  it("classifies dev-build static shims at non-canonical paths as 'static' (basename, not full path)", () => {
+    expect(
+      classifyShimRuntime([
+        "/some/other/path/clawcode-mcp-shim",
+        "--type",
+        "image",
+      ]),
+    ).toBe("static");
+    // Bare basename (no path) also matches.
+    expect(classifyShimRuntime(["clawcode-mcp-shim", "--type", "browser"])).toBe(
+      "static",
+    );
+  });
+
+  it("classifies `python3 /path/clawcode-mcp-shim.py --type <T>` as 'python'", () => {
+    expect(
+      classifyShimRuntime([
+        "python3",
+        "/usr/local/bin/clawcode-mcp-shim.py",
+        "--type",
+        "browser",
+      ]),
+    ).toBe("python");
+    // Bare `python` (without "3") + dev-build path also matches.
+    expect(
+      classifyShimRuntime(["python", "./build/clawcode-mcp-shim.py", "--type", "search"]),
+    ).toBe("python");
+  });
+
+  it("preserves Stage 0a 'external' classification for python externals (brave_search.py, fal_ai.py)", () => {
+    // brave_search.py / fal_ai.py are Python externals — NOT the Stage 0b
+    // python translator. They must continue to classify as "external" so
+    // the dashboard's per-runtime baseline doesn't accidentally absorb
+    // out-of-scope memory into the shim-runtime cohort.
+    expect(classifyShimRuntime(["python3", "/x/brave_search.py"])).toBe(
+      "external",
+    );
+    expect(classifyShimRuntime(["python3", "fal_ai.py"])).toBe("external");
+    expect(classifyShimRuntime(["python", "tools/brave_search.py"])).toBe(
+      "external",
+    );
+  });
+
+  it("classifies anything else (1Password broker, dumb-pipe externals, etc.) as 'external'", () => {
+    expect(classifyShimRuntime(["npx", "-y", "mcp-server-mysql@latest"])).toBe(
+      "external",
+    );
+    expect(classifyShimRuntime(["sh", "-c", "mcp-server-mysql"])).toBe("external");
+    expect(classifyShimRuntime(["node", "/usr/lib/node_modules/brave-search/index.js"])).toBe(
+      "external",
+    );
+    expect(classifyShimRuntime([])).toBe("external");
   });
 });
 
@@ -244,6 +326,83 @@ describe("buildFleetStats — Phase 110 Stage 0a runtime classification", () => 
     });
     expect(stats.shimRuntimeBaseline).toEqual({
       node: { count: 1, rssMB: 147 },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 110 Stage 0b — end-to-end fleet-stats integration with mixed runtimes.
+// Verifies the `runtime` field on each mcpFleet entry surfaces the per-pattern
+// classification correctly when an operator has flipped a flag and a
+// `clawcode-mcp-shim` proc is running alongside the legacy Node shim.
+// ---------------------------------------------------------------------------
+describe("buildFleetStats — Phase 110 Stage 0b mixed runtime aggregation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("aggregates static + node shims into separate runtime cohorts in shimRuntimeBaseline", async () => {
+    vi.spyOn(cgroupStats, "readCgroupMemoryStats").mockResolvedValue(null);
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([400, 401, 402]);
+    vi.spyOn(procScan, "readProcInfo").mockImplementation(async (pid) => {
+      const map: Record<number, procScan.ProcInfo> = {
+        400: {
+          pid: 400,
+          ppid: 1,
+          uid: 1000,
+          // Operator flipped defaults.shimRuntime.search → "static".
+          // Loader spawned the Go binary; cmdline reflects that shape.
+          cmdline: ["/usr/local/bin/clawcode-mcp-shim", "--type", "search"],
+          startTimeJiffies: 1,
+        },
+        401: {
+          pid: 401,
+          ppid: 1,
+          uid: 1000,
+          // image still on Node (Stage 0a behavior).
+          cmdline: ["clawcode", "image-mcp"],
+          startTimeJiffies: 2,
+        },
+        402: {
+          pid: 402,
+          ppid: 1,
+          uid: 1000,
+          // browser still on Node.
+          cmdline: ["clawcode", "browser-mcp"],
+          startTimeJiffies: 3,
+        },
+      };
+      return map[pid] ?? null;
+    });
+
+    const stats = await buildFleetStats({
+      daemonPid: 99,
+      trackedClaudeCount: 0,
+      mcpPatterns: [
+        // The daemon caller derives these patterns from
+        // resolveShimCommand(<type>, <runtime>) so the regex matches the
+        // actual cmdline shape and the runtime tag flows through.
+        {
+          label: "search",
+          regex: /clawcode-mcp-shim --type search/,
+          runtime: "static",
+        },
+        { label: "image", regex: /clawcode image-mcp/, runtime: "node" },
+        { label: "browser", regex: /clawcode browser-mcp/, runtime: "node" },
+      ],
+      readRssMB: async (pid) => (pid === 400 ? 8 : 147),
+    });
+
+    // mcpFleet preserves runtime per entry — alphabetical order.
+    expect(stats.mcpFleet).toEqual([
+      { pattern: "browser", count: 1, rssMB: 147, runtime: "node" },
+      { pattern: "image", count: 1, rssMB: 147, runtime: "node" },
+      { pattern: "search", count: 1, rssMB: 8, runtime: "static" },
+    ]);
+    // Baseline rolls up by runtime — shows the savings headline.
+    expect(stats.shimRuntimeBaseline).toEqual({
+      node: { count: 2, rssMB: 294 },
+      static: { count: 1, rssMB: 8 },
     });
   });
 });
