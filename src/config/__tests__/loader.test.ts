@@ -856,6 +856,118 @@ describe("resolveAgentConfig - mcpServers", () => {
     expect(image!.env).toEqual({ CUSTOM: "x" });
   });
 
+  // -------------------------------------------------------------------------
+  // Phase 110 Stage 0b — runtime-conditional auto-inject for browser/search/
+  // image. Each shim type's command/args branches on `defaults.shimRuntime.
+  // <type>` (default "node"). Stage 0a's behavior (`clawcode <type>-mcp`) is
+  // preserved when the field is absent or explicitly "node".
+  //
+  // Crash-fallback policy: NO try/catch around the static-runtime path. The
+  // loader simply emits the command/args; spawn-time failures surface to the
+  // operator (fail-loud, see CONTEXT.md).
+  // -------------------------------------------------------------------------
+  describe("Phase 110 Stage 0b — runtime-conditional auto-inject", () => {
+    const SHIM_TYPES = ["browser", "search", "image"] as const;
+    const STATIC_PATH = "/usr/local/bin/clawcode-mcp-shim";
+    const PYTHON_PATH = "/usr/local/bin/clawcode-mcp-shim.py";
+
+    for (const type of SHIM_TYPES) {
+      it(`${type}: default (no shimRuntime) keeps 'clawcode ${type}-mcp' (byte-identical to Stage 0a)`, () => {
+        const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry).toBeDefined();
+        expect(entry!.command).toBe("clawcode");
+        expect(entry!.args).toEqual([`${type}-mcp`]);
+        expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
+      });
+
+      it(`${type}: explicit 'node' is identical to default`, () => {
+        const d: DefaultsConfig = {
+          ...defaults,
+          shimRuntime: { search: "node", image: "node", browser: "node" },
+        } as DefaultsConfig;
+        const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry!.command).toBe("clawcode");
+        expect(entry!.args).toEqual([`${type}-mcp`]);
+      });
+
+      it(`${type}: 'static' rewrites to /usr/local/bin/clawcode-mcp-shim --type ${type}`, () => {
+        const d: DefaultsConfig = {
+          ...defaults,
+          shimRuntime: {
+            search: type === "search" ? "static" : "node",
+            image: type === "image" ? "static" : "node",
+            browser: type === "browser" ? "static" : "node",
+          },
+        } as DefaultsConfig;
+        const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry).toBeDefined();
+        expect(entry!.command).toBe(STATIC_PATH);
+        expect(entry!.args).toEqual(["--type", type]);
+        // CLAWCODE_AGENT env passthrough preserved across all runtimes —
+        // the inner translator still needs the agent identity.
+        expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
+      });
+
+      it(`${type}: 'python' rewrites to python3 /usr/local/bin/clawcode-mcp-shim.py --type ${type}`, () => {
+        const d: DefaultsConfig = {
+          ...defaults,
+          shimRuntime: {
+            search: type === "search" ? "python" : "node",
+            image: type === "image" ? "python" : "node",
+            browser: type === "browser" ? "python" : "node",
+          },
+        } as DefaultsConfig;
+        const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry).toBeDefined();
+        expect(entry!.command).toBe("python3");
+        expect(entry!.args).toEqual([PYTHON_PATH, "--type", type]);
+        expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
+      });
+    }
+
+    it("per-type independence: search=static, image=node, browser=python yields three different commands", () => {
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "python" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      const image = resolved.mcpServers.find((s) => s.name === "image");
+      const browser = resolved.mcpServers.find((s) => s.name === "browser");
+
+      expect(search!.command).toBe(STATIC_PATH);
+      expect(search!.args).toEqual(["--type", "search"]);
+
+      expect(image!.command).toBe("clawcode");
+      expect(image!.args).toEqual(["image-mcp"]);
+
+      expect(browser!.command).toBe("python3");
+      expect(browser!.args).toEqual([PYTHON_PATH, "--type", "browser"]);
+    });
+
+    it("static-runtime config does NOT pre-detect missing binary or fall back (loader is fail-loud)", () => {
+      // The loader emits the static path even though the binary doesn't
+      // exist on this CI host. Pre-detection + fallback would silently
+      // degrade — operator-locked decision is to surface spawn errors
+      // directly so the operator notices and reverts the flag.
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      // Static path emitted unconditionally — no fs.existsSync check, no
+      // fallback to "clawcode search-mcp".
+      expect(search!.command).toBe(STATIC_PATH);
+      expect(search!.args).toEqual(["--type", "search"]);
+      expect(search!.command).not.toBe("clawcode");
+    });
+  });
+
   // Phase 108 — 1Password broker shim auto-inject. The pre-Phase-108 path
   // spawned `npx @takescake/1password-mcp` directly per-agent (11 children
   // for 11 agents). Plan 04 rewires the auto-inject to spawn the broker
