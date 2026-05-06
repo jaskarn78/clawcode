@@ -551,7 +551,7 @@ Plans:
 - [x] 105-00-PLAN.md — Wave 0 RED tests: POLICY-01/02 regression locks + CO-7..CO-11 + MC-7 coalescer storm RED tests
 - [x] 105-01-PLAN.md — Wave 1 GREEN POLICY: default-allow when policies.yaml missing (POLICY-01..03)
 - [x] 105-02-PLAN.md — Wave 1 GREEN COAL: coalescer storm — idempotent wrapper + drain gate + depth cap (COAL-01..04)
-- [ ] 105-03-PLAN.md — Wave 2 deploy gate + clawdy ship + journalctl smoke
+- [x] 105-03-PLAN.md — Wave 2 deploy gate + clawdy ship + journalctl smoke (bundled into Phase 106 overnight deploy 2026-05-01; see 105-03-SUMMARY.md)
 
 **Status:** Shipped per commits a7a3564 (POLICY fix) + fb2a98e (COAL fix). Both production bugs resolved: scheduler events no longer silently dropped, QUEUE_FULL retry storm eliminated.
 
@@ -606,7 +606,7 @@ Plans:
 - [x] 106-01-PLAN.md — Wave 1 GREEN DSCOPE: caller-side strip of `delegates` from sourceConfig spread in subagent-thread-spawner.ts (~3 LOC + comment)
 - [x] 106-02-PLAN.md — Wave 1 GREEN STALL-02: 60s warmup-timeout sentinel + lastStep tracker inside startAgent (~30 LOC)
 - [x] 106-03-PLAN.md — Wave 1 GREEN TRACK-CLI: append `mcp-tracker-snapshot` to IPC_METHODS enum (1 LOC + comment, mirrors commit a9c39c7)
-- [ ] 106-04-PLAN.md — Wave 2: pre-deploy validation, deploy gate poll (channels silent ≥30 min, 6h cap), ssh deploy on clawdy, smoke (TRACK-CLI table + STALL repro classify A/B/C), restore yaml fan-out (8 agents), SUMMARY
+- [x] 106-04-PLAN.md — Wave 2: pre-deploy validation, deploy gate poll (channels silent ≥30 min, 6h cap), ssh deploy on clawdy, smoke (TRACK-CLI table + STALL repro classify A/B/C), restore yaml fan-out (8 agents), SUMMARY (shipped 2026-05-01 autonomous overnight; see 106-04-SUMMARY.md)
 
 **Status:** Shipped 2026-05-01 overnight via `/gsd:autonomous`. Deploy gate satisfied (31 min silence at 23:20 PT). All 3 fixes live: DSCOPE, STALL-02, TRACK-CLI. yaml fan-out restored across 8 agents.
 
@@ -742,10 +742,10 @@ Plans:
 - [x] 110-02-PLAN.md — Schema enum widening + loader auto-inject + fleet-stats classifier
 - [x] 110-03-PLAN.md — CI Go build matrix + npm prebuild-install bundling
 - [x] 110-04-PLAN.md — Search Go shim implementation (IPC client + Register + main wiring)
-- [ ] 110-05-PLAN.md — Search rollout (admin-clawdy canary 24-48h → fleet)
-- [ ] 110-06-PLAN.md — Image Go shim implementation + rollout
-- [ ] 110-07-PLAN.md — Browser Go shim implementation + rollout (Stage 0b structural deploy COMPLETE)
-- [ ] 110-08-PLAN.md — Cleanup decision (keep Node fallback OR remove) + rollback drill
+- [x] 110-05-PLAN.md — Search rollout (admin-clawdy canary flipped 2026-05-06; smoke confirmed; 4-agent expanded canary same day)
+- [x] 110-06-PLAN.md — Image Go shim implementation + rollout (code on master 2026-05-06; prod binary active; canary on 4 agents)
+- [x] 110-07-PLAN.md — Browser Go shim implementation + rollout (code on master 2026-05-06; prod binary active; canary on 4 agents)
+- [ ] 110-08-PLAN.md — Cleanup decision (keep Node fallback OR remove) + rollback drill (remaining fleet: fin-acquisition, fin-research, finmentum-content-creator, fin-tax, fin-playground)
 
 **Status:** Stage 0a SHIPPED 2026-05-03; Stage 0b PLANNED 2026-05-05 (9 plans, 6 waves, target ≥ 2.7 GiB RSS savings); Stage 1a active. No production behavior changes from Stage 0a; every dial defaults to current behavior.
 
@@ -1720,3 +1720,21 @@ Three quick fixes shipped without a phase tag:
 - **`716fb46` (PR #7) 2026-05-04** — Auto-prune spawned subagent threads after inactivity. Companion to Phase 999.30 (work-completion relay). Cleans up stale subagent thread state on the daemon.
 - **`98ff1bc` (PR #8) 2026-05-04** — Hot-reload reaper dial fix: pass `newConfig` through `ConfigWatcher` so the orphan-claude reaper picks up live config changes without daemon restart. Closure-capture fix.
 - **`bca9400` (PR #10) 2026-05-05** — Marketplace skip-empty-name: clawhub items with missing/empty `name` field caused marketplace UI to crash. Skip them silently with debug log.
+
+### Phase 999.42: Hermes-parity memory + auto-skill gaps (BACKLOG)
+
+**Source:** Competitive analysis of Hermes Agent (NousResearch, Feb 2026, 64K stars).
+**Threat:** Hermes ships `hermes claw migrate` — directly imports `~/.openclaw`. Explicitly targeting ClawCode users.
+
+**Three capability gaps to close:**
+
+**A — FTS5 session archive**
+Hermes stores every session in a SQLite FTS5 table, enabling full-text search across all past sessions at retrieval time. ClawCode uses flat MEMORY.md files — no cross-session search. Add a SQLite FTS5 archive layer to the memory pipeline.
+
+**B — Auto-skill suggestion**
+Hermes auto-creates skills when an agent uses 5+ tool calls in a single successful task (written via `skill_manage` tool with patch/edit/create actions). ClawCode skills are manually authored YAML. Add LLM-driven skill suggestion after repeated task patterns are detected.
+
+**C — Skill patch/edit action**
+Hermes supports progressive skill refinement (patch → edit → create). ClawCode skills are create-only. Add patch/edit lifecycle to the skill_manage equivalent.
+
+**Priority:** Medium — architectural gaps, not feature requests. A is highest-value (retrieval quality directly affects agent performance).
