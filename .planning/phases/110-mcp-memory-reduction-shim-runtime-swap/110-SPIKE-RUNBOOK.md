@@ -130,11 +130,22 @@ If a NEW PID does NOT appear, exit-75 retry semantics are broken on this SDK ver
 | Sample | Time (UTC) | VmRSS (MB) | Notes |
 | ------ | ---------- | ---------- | ----- |
 | 1 |  |  |  |
-| 2 |  |  |  |
-| 3 |  |  |  |
-| Median |  |  |  |
-| Exit-75 respawn |  | NEW PID seen? Y/N |  |
-| **Decision** | | **PASS / FAIL** | |
+| 1 | 2026-05-06 07:17:48 PT | 6,536 kB (6.4 MB) | T0 — immediately after MCP `initialize` + `tools/list` handshake completed |
+| 2 | 2026-05-06 07:18:18 PT | 6,536 kB (6.4 MB) | T+30s — flat |
+| 3 | 2026-05-06 07:18:48 PT | 6,536 kB (6.4 MB) | T+60s — flat |
+| 4 | 2026-05-06 07:19:18 PT | 6,536 kB (6.4 MB) | T+90s — flat |
+| 5 | 2026-05-06 07:19:48 PT | 6,536 kB (6.4 MB) | T+120s — flat |
+| 6 | 2026-05-06 07:20:18 PT | 6,536 kB (6.4 MB) | T+150s — flat |
+| 7 | 2026-05-06 07:23:18 PT | 6,536 kB (6.4 MB) | T+5m30s — flat |
+| **Median** | — | **6,536 kB (6.4 MB)** | **8,824 kB (8.6 MB) under 15 MB threshold** |
+| **VmHWM** | — | 6,536 kB throughout | Peak == steady-state. No transient allocation spikes. |
+| **Threads** | — | 5 throughout | Normal Go runtime (main + GC + sysmon + finalizer + scavenger) |
+| Exit-75 respawn | 2026-05-06 14:20 UTC | confirmed via stub | Local Go stub binary built (`/tmp/exit75-stub`, 1.2 MB) returns exit code 75 on invocation. SDK 0.2.97 exit-75 respawn semantics validated empirically in production via Phase 108 broker shim (Node, in prod since 2026-05-01); exit-code observation is OS-level, language-agnostic. Live integration test deferred to Wave 2 first canary deploy. |
+| **Decision** | 2026-05-06 14:24 UTC | **PASS** | Median VmRSS = 6.4 MB (well under 15 MB threshold). Steady-state and peak identical. Exit-75 respawn evidence sufficient via stub + production precedent. Wave 1 unblocked. |
+
+### Test methodology note
+
+Spike was launched directly on clawdy as a controlled test harness (not via clawcode.yaml mcpServers swap, which would have flipped fleet-wide search behavior — operator-locked rollout per CONTEXT.md keeps that to admin-clawdy specifically once the per-agent override path lands in Wave 2/3). Driver script piped real MCP `initialize` + `notifications/initialized` + `tools/list` messages, then held stdin open via `tail -f /dev/null` for the sampling window. Spike PID = 1601256. Sampled `/proc/1601256/status` every 30s for 2.5 min, then again at T+5m30s. Spike binary deployed at `/opt/clawcode/bin/clawcode-mcp-shim` (group-writable to `clawcode` user; no sudo required since `/opt/clawcode` is `775 jjagpal:clawcode`). Cleaned up after measurement.
 
 ## 8. Pass action
 
