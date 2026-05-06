@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, statSync, rmSync, re
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
-import { selectPrebuild, install } from "../postinstall-shim.cjs";
+import { selectPrebuild, install, runMain } from "../postinstall-shim.cjs";
 
 describe("selectPrebuild", () => {
   it("Test 1: linux x64 selects amd64 prebuild path", () => {
@@ -83,5 +83,87 @@ describe("install", () => {
     expect(() =>
       install({ pkgRoot: tmp, target, platform: "linux", arch: "arm64" }),
     ).toThrowError(/prebuild missing/i);
+  });
+});
+
+describe("runMain (entry point)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "postinstall-shim-main-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("Test 7: skips with visible notice when prebuilds/ directory absent (dev / source-checkout)", () => {
+    // No prebuilds/ dir at all — should skip, not throw, not silently.
+    const messages: string[] = [];
+    const errors: string[] = [];
+    const target = join(tmp, "node_modules", ".bin", "clawcode-mcp-shim");
+    const result = runMain({
+      pkgRoot: tmp,
+      target,
+      log: (m: string) => messages.push(m),
+      errlog: (m: string) => errors.push(m),
+    });
+
+    expect(result.skipped).toBe(true);
+    expect(existsSync(target)).toBe(false); // no install occurred
+    expect(messages.join("\n")).toMatch(/prebuilds\/ not present/i);
+    expect(errors).toHaveLength(0); // not an error path
+  });
+
+  it("Test 8: installs normally when prebuilds/ exists with the right arch", () => {
+    // Lay down a fake prebuild for whatever arch the test host actually runs.
+    // Easiest: use linux-amd64 and force platform/arch via process.* override
+    // NOT possible from runMain — runMain consumes process.platform/arch.
+    // So skip this case if host is not linux/x64. The selectPrebuild +
+    // install tests above cover the override path; this test verifies
+    // runMain's wiring on hosts that match a SUPPORTED key.
+    const isSupportedHost =
+      (process.platform === "linux" && process.arch === "x64") ||
+      (process.platform === "linux" && process.arch === "arm64");
+    if (!isSupportedHost) {
+      // On unsupported hosts, runMain would throw via install() — covered by Test 9.
+      return;
+    }
+    const archDir = process.arch === "x64" ? "linux-amd64" : "linux-arm64";
+    const prebuildDir = join(tmp, "prebuilds", archDir);
+    mkdirSync(prebuildDir, { recursive: true });
+    writeFileSync(join(prebuildDir, "clawcode-mcp-shim"), "#!/bin/sh\necho fake\n", {
+      mode: 0o644,
+    });
+
+    const messages: string[] = [];
+    const target = join(tmp, "node_modules", ".bin", "clawcode-mcp-shim");
+    const result = runMain({
+      pkgRoot: tmp,
+      target,
+      log: (m: string) => messages.push(m),
+    });
+
+    expect(result.skipped).toBe(false);
+    expect(existsSync(target)).toBe(true);
+    expect(messages.join("\n")).toMatch(/installed binary at/);
+  });
+
+  it("Test 9: throws when prebuilds/ exists but arch-specific binary missing (corrupt tarball)", () => {
+    // Make prebuilds/ exist but empty — no per-arch dir.
+    mkdirSync(join(tmp, "prebuilds"), { recursive: true });
+    const target = join(tmp, "node_modules", ".bin", "clawcode-mcp-shim");
+
+    if (!(process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64"))) {
+      // selectPrebuild throws first on unsupported host — that's also fail-loud
+      expect(() => runMain({ pkgRoot: tmp, target, log: () => {}, errlog: () => {} })).toThrow(
+        /no prebuilt binary for/i,
+      );
+      return;
+    }
+
+    expect(() => runMain({ pkgRoot: tmp, target, log: () => {}, errlog: () => {} })).toThrow(
+      /prebuild missing/i,
+    );
   });
 });

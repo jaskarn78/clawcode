@@ -10,9 +10,17 @@
     "dev": "tsx src/cli/index.ts",
     "build": "tsup && npm run copy-assets",
     "copy-assets": "mkdir -p dist/dashboard/static && cp -r src/dashboard/static/. dist/dashboard/static/",
+    "postinstall": "node scripts/install/postinstall-shim.cjs",
     "test": "vitest run --reporter=verbose",
     "typecheck": "tsc --noEmit"
   },
+  "files": [
+    "dist/",
+    "prebuilds/",
+    "scripts/install/",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.97",
     "@anthropic-ai/tokenizer": "^0.0.4",
