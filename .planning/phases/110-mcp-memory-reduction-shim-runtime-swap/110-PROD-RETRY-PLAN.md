@@ -23,20 +23,54 @@ The new dist/binary on master is structurally identical to what's already on cla
 
 ## Sequence (operator-approved gates only)
 
-### Gate A — Pre-flight BRAVE_API_KEY check (BEFORE Plan 110-05 Task 2 flip)
+### Gate A — BRAVE_API_KEY pipeline is BROKEN on prod (root cause confirmed)
 
-The user's open question: does prod's Node search-mcp shim actually return real `web_search` results today? The earlier "Brave API key missing" error from admin-clawdy needs to be ruled out as an existing-config issue (not a Phase 110 regression).
+**Read-only investigation (PM session) found the root cause without any prod restart. Detailed evidence below; the fix is independent of Phase 110.**
 
-**Operator action** (no Claude execution required):
-1. Pick an agent currently on Node search shim — admin-clawdy preferred (operator-owned), or fin-acquisition (Ramy-quiet check via Discord MCP first if using fin-acquisition).
-2. Send via Discord channel: *"Use web_search to find today's date. Reply YYYY-MM-DD only."*
-3. Observe:
-   - **GREEN** — agent returns `2026-05-06` with sources → BRAVE_API_KEY pipeline is working today; not a Phase 110 regression risk; advance to Gate B.
-   - **RED** — agent returns "Brave API key missing" or empty results → daemon-side config issue, blocks Stage 0b rollout. File a separate phase to fix BRAVE_API_KEY env passthrough; do NOT proceed.
+#### Evidence
 
-> Why not self-execute: Claude's prod ssh inspection is denied per current permission boundaries. Operator-driven Discord prompt is the lowest-touch path that also doubles as production traffic validation.
+1. `/etc/clawcode/env` on clawdy contains: ANTHROPIC_API_KEY, OP_SERVICE_ACCOUNT_TOKEN, GITHUB_TOKEN, PATH, CLAWCODE_ADMIN_DISCORD_USER_IDS, CLAWCODE_DASHBOARD_HOST, HF_HOME, CLAWCODE_OPENAI_LOG_BODIES, FAL_API_KEY, GEMINI_API_KEY, FINMENTUM_OP_TOKEN, POLYGON_API_KEY. **No `BRAVE_API_KEY`.**
+2. `/etc/clawcode/clawcode.yaml` line 103: `BRAVE_API_KEY: ${BRAVE_API_KEY}` — pure shell-style env passthrough on the legacy `brave-search` Python MCP block. Other secrets in the same yaml use `op://clawdbot/...` (FINNHUB_API_KEY, MYSQL_*, FAL_API_KEY, etc.). **Brave is the only one configured to inherit from env, with no fallback.**
+3. `/etc/clawcode/clawcode.yaml` has NO top-level `search:` block and NO `defaults.search` block — search config is fully default.
+4. `src/search/providers/brave.ts:100`:
+   ```ts
+   const apiKey = env[config.brave.apiKeyEnv];
+   if (!apiKey || apiKey.length === 0) {
+     return Object.freeze({
+       ok: false,
+       error: makeError("invalid_argument",
+         `missing Brave API key (env var ${config.brave.apiKeyEnv} is unset)`),
+     });
+   }
+   ```
+   The Phase 71 BraveClient reads `process.env[config.brave.apiKeyEnv]` (default `BRAVE_API_KEY`) at request time. Returns `invalid_argument` if unset.
+5. `src/manager/daemon.ts:3061`: `const braveClient = createBraveClient(searchCfg);` — the daemon constructs BraveClient with `env=process.env` (default arg). The daemon process's env is the systemd `EnvironmentFile=/etc/clawcode/env` contents — which lacks `BRAVE_API_KEY` per (1).
+6. `src/manager/session-config.ts` op:// resolution applies to per-agent `mcpServers[].env` overrides only — NOT to `process.env` of the daemon process itself.
+7. journalctl last 24h: **0 `web_search` or `search-tool-call` events**. Nobody has tried web_search in a day. The "search MCP clients ready (lazy — no boot-time network)" line at boot is just BraveClient construction, no key validation.
 
-**Resume signal:** `gate-a-green` or `gate-a-red <details>`.
+**Conclusion:** BRAVE_API_KEY pipeline is broken on prod RIGHT NOW. Every `web_search` call returns `invalid_argument: missing Brave API key (env var BRAVE_API_KEY is unset)`. The admin-clawdy error this morning was REAL and is a pre-existing config gap — NOT a Phase 110 regression. The Node search shim has the same problem the Go shim would have because neither shim handles the key — the DAEMON does, and the daemon's env doesn't have the key.
+
+**This is NOT a Phase 110 blocker** in the sense that flipping the search canary doesn't change the BRAVE pipeline outcome. It IS a separate BLOCKER for the Stage 0b user-facing claim "search works on the new Go shim" because there's nothing for either shim to demonstrate.
+
+#### Two-part fix (separate from Phase 110)
+
+**Option 1 (fastest):** Add `BRAVE_API_KEY=<key>` to `/etc/clawcode/env`. Operator obtains the key, ssh's to clawdy, edits the env file (sudo). Daemon picks it up on next restart. No code change. **Phase 110 search canary then proceeds normally.**
+
+**Option 2 (matches op:// pattern of other secrets):** Add a yaml-level `defaults.search.brave.apiKey: op://clawdbot/Brave/api-key` field, modify `daemon.ts` to op-resolve it at boot before constructing BraveClient, pass resolved value into `createBraveClient` as a third arg or via a custom env. Code change required (~30 LOC + tests).
+
+**Recommendation:** Option 1 unblocks Stage 0b TODAY. File Option 2 as a separate phase ("BRAVE_API_KEY op:// resolution parity") for the "all secrets via 1Password" cleanup goal.
+
+#### Operator action (Gate A, post-fix-decision)
+
+1. Decide Option 1 or Option 2.
+2. If Option 1: provision the key (operator obtains from Brave Search API dashboard), append to `/etc/clawcode/env` on clawdy, daemon restart required (use Phase 999.6 snapshot/restore — same as deploy procedure).
+3. After fix is in place, send a Discord prompt to admin-clawdy: *"Use web_search to find today's date. Reply YYYY-MM-DD only."*
+4. **GREEN** — agent returns `2026-05-06` with sources → advance to Gate B.
+5. **RED** — different error than "missing API key" → escalate; investigate further before Stage 0b.
+
+> Why this needs operator action, not Claude: provisioning a new secret + daemon restart is exactly the kind of action gated by `feedback_no_auto_deploy.md` and `feedback_ramy_active_no_deploy.md`. Even though Claude has read-only ssh authorized, writing secrets and restarting systemd are out.
+
+**Resume signal:** `gate-a-fixed` (after the env fix + verification prompt returns real results) or `gate-a-deferred` (rollout proceeds without resolving Brave; cgroup-pressure-relief value of Phase 110 stands alone independent of search-result-quality).
 
 ### Gate B — Ramy-quiet Discord MCP check
 
