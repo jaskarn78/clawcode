@@ -32,8 +32,8 @@ import {
   runStartupReconciliation,
   ORPHAN_THRESHOLD_MS,
 } from "../tasks/reconciler.js";
-import { loadConfig, resolveAllAgents, defaultOpRefResolver } from "../config/loader.js";
-import type { OpRefResolver } from "../config/loader.js";
+import { loadConfig, resolveAllAgents, defaultOpRefResolver, resolveShimCommand } from "../config/loader.js";
+import type { OpRefResolver, ShimRuntime } from "../config/loader.js";
 // Phase 104 — single SecretsResolver instance threads through every
 // op:// resolution site (Discord botToken, loader sync wrapper, per-agent
 // opEnvResolver). See SUMMARY.md for the three call-site rewrites.
@@ -4262,11 +4262,24 @@ export async function startDaemon(
         }
         // Loader-auto-injected shim patterns. These are NOT in
         // mcpServersConfig (they're injected per-agent inside
-        // resolveAgentConfig) but they show up in /proc as `clawcode
-        // <type>-mcp` cmdlines. We synthesize their patterns here using
-        // the same buildMcpCommandRegexes helper so the bare-package-name
-        // alternation logic stays a single source of truth.
+        // resolveAgentConfig) but they show up in /proc with the cmdline
+        // shape that `resolveShimCommand(<type>, <runtime>)` produces.
+        // Phase 110 Stage 0b: command/args MUST be derived from the same
+        // `defaults.shimRuntime.<type>` selector that the loader reads,
+        // otherwise an operator who flips a flag → static would see the
+        // running Go binary become invisible to /api/fleet-stats (the
+        // Stage 0a regex `clawcode <type>-mcp` would never match
+        // `/usr/local/bin/clawcode-mcp-shim --type <type>`). Both call-
+        // sites import resolveShimCommand to keep the spawn shape and
+        // the proc-scan regex shape in lockstep — single source of
+        // truth in src/config/loader.ts.
         const shimRuntimeCfg = config.defaults.shimRuntime;
+        const browserRuntime: ShimRuntime = shimRuntimeCfg?.browser ?? "node";
+        const searchRuntime: ShimRuntime = shimRuntimeCfg?.search ?? "node";
+        const imageRuntime: ShimRuntime = shimRuntimeCfg?.image ?? "node";
+        const browserCmd = resolveShimCommand("browser", browserRuntime);
+        const searchCmd = resolveShimCommand("search", searchRuntime);
+        const imageCmd = resolveShimCommand("image", imageRuntime);
         const autoInjected: ReadonlyArray<{
           label: string;
           command: string;
@@ -4275,27 +4288,30 @@ export async function startDaemon(
         }> = [
           {
             label: "browser",
-            command: "clawcode",
-            args: ["browser-mcp"],
-            runtime: shimRuntimeCfg?.browser ?? "node",
+            command: browserCmd.command,
+            args: browserCmd.args,
+            runtime: browserRuntime,
           },
           {
             label: "search",
-            command: "clawcode",
-            args: ["search-mcp"],
-            runtime: shimRuntimeCfg?.search ?? "node",
+            command: searchCmd.command,
+            args: searchCmd.args,
+            runtime: searchRuntime,
           },
           {
             label: "image",
-            command: "clawcode",
-            args: ["image-mcp"],
-            runtime: shimRuntimeCfg?.image ?? "node",
+            command: imageCmd.command,
+            args: imageCmd.args,
+            runtime: imageRuntime,
           },
           {
             // Phase 108 broker shim. Both `--pool 1password` (legacy
             // form, current loader auto-inject) and `--type 1password`
             // (Phase 110 alias) match because the regex includes the
             // bare-package-name alternation `\bmcp-broker-shim\b`.
+            // Broker is NOT in scope for Stage 0b (operator-locked —
+            // see CONTEXT.md "mcp-broker-shim inclusion: NO — defer to
+            // Stage 0c"). Hardcoded "node" is correct.
             label: "1password",
             command: "clawcode",
             args: ["mcp-broker-shim", "--pool", "1password"],
