@@ -48,8 +48,9 @@ Ramy-quiet check via Discord MCP **before any prod restart**.
 - ✅ Daemon restarted: PID 1945993 (uptime 2h28m, mem peak 13.4 GB) → PID 2157589 (current). Phase 999.6 snapshot/restore preserved agent state.
 - ✅ Boot secrets: `secrets: pre-resolve complete {resolved:15, failed:0}` — Path 2 op:// infrastructure exercised on prod with zero failures
 - ✅ All 5 main agents warm (Admin Clawdy 15:18:32, fin-acquisition 15:18:47, research 15:18:59, fin-research 15:19:15, personal 15:26:28 — needed manual `clawcode restart personal` due to Phase 999.33 boot-storm)
-- ❌ **No canary flipped** — every agent still on Node search/image/browser baseline. Stage 0b RSS savings still 0 GiB.
-- ✅ 0 exit-75 / TEMPFAIL events since restart. 0 panics.
+- ✅ **GATE C COMPLETE** — Admin Clawdy on Go static search shim. yaml edited 2026-05-06 22:41 UTC (`agents.Admin Clawdy.shimRuntime.search: static`). Daemon restart required (NOT just per-agent restart — see ROLLOUT-LOG §2.8). Go shim PID 2195136, **VmRSS 6.4 MB vs Node baseline 153.9 MB → 96% reduction per agent**. 0 exit-75 / TEMPFAIL.
+- 🟡 Image + Browser canaries — not flipped. Awaiting search 24-48h watch GREEN.
+- 🟡 24-48h watch in progress (started 2026-05-06 22:42 UTC).
 
 ### On claude-bot (dev)
 - Dev daemon running at `/home/jjagpal/.clawcode-dev-110/manager/clawcode.sock`

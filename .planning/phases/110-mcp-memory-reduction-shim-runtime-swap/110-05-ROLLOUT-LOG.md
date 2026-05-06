@@ -42,9 +42,9 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"; echo "PRE PID=$PRE_PID VmRSS_kB=$PRE_RSS"
 
 | Field        | Value                |
 | ------------ | -------------------- |
-| Captured at  | _yyyy-mm-ddThh:mmZ_  |
-| PRE PID      | _<node-pid>_         |
-| PRE VmRSS    | _<kB>_ (~140-160 MB expected, Node baseline) |
+| Captured at  | 2026-05-06 22:42 UTC |
+| PRE PID      | (Admin Clawdy used mcp-broker pool; no per-agent Node search-mcp child observed) |
+| PRE VmRSS    | Peer Node search-mcp baseline measured: 157,564 kB (153.9 MB) — sample from non-Admin agent |
 
 ### 2.2 Flip — per-agent override on admin-clawdy
 
@@ -116,16 +116,25 @@ Expected fields:
 
 ### 2.7 Phase 1 outcome
 
-| Field                         | Value (filled by operator) |
+| Field                         | Value (recorded 2026-05-06 22:42 UTC) |
 | ----------------------------- | -------------------------- |
-| Flip time (UTC)               |                            |
-| ConfigWatcher hot-reload OK?  | YES / NO                   |
-| Daemon PID unchanged?         | YES / NO                   |
-| New shim PID                  |                            |
-| Highest VmRSS in 30-min window | _kB_                       |
-| Smoke-test result             | PASS / FAIL                |
-| journalctl errors (30 min)    | _count_                    |
-| Decision                      | PROCEED to watch / ABORT   |
+| Flip time (UTC)               | 2026-05-06 22:41 UTC (yaml insert at line 776 — `shimRuntime: { search: static }` after Admin Clawdy.wakeOrder) |
+| ConfigWatcher hot-reload OK?  | **PARTIAL** — ConfigWatcher detected the change ("config hot-reloaded {subsystems:[],agents:[]}") and emitted `"Config field 'agents.Admin Clawdy.shimRuntime' changed but requires daemon restart to take effect"`. Per-agent `clawcode restart "Admin Clawdy"` did NOT pick up the override (daemon's pre-computed shim command was cached). Required full systemctl restart. **NOTE: this contradicts the resume doc's claim that single-agent restart is sufficient — see "Operator finding" below.** |
+| Daemon PID unchanged?         | NO — full systemctl restart required (PID 2157589 → 2193955). Phase 999.6 snapshot/restore preserved 4 of 5 main agents; personal stalled per Phase 999.33 boot-storm. |
+| New shim PID                  | 2195136 (parent claude PID 2194602, agent=Admin Clawdy verified via `/proc/2195136/environ:CLAWCODE_AGENT`) |
+| Highest VmRSS at flip + 1 min | **6,504 kB (6.4 MB)** — well under the 15,360 kB / 15 MB ceiling |
+| Peer Node search-mcp baseline | 157,564 kB (153.9 MB) — sample from a non-Admin-Clawdy agent post-restart |
+| Per-agent savings             | ~151 MB (96% reduction Go-vs-Node) |
+| Cgroup memory peak            | 13.3 GB pre-restart → 7.3 GB post-restart (delta dominated by daemon-restart memory cleanup, not the canary) |
+| Smoke-test result             | DEFERRED — operator-driven Discord prompt to admin-clawdy `web_search` not yet sent |
+| journalctl errors             | 0 exit-75 / TEMPFAIL / panic-shim events since restart |
+| Decision                      | **PROCEED to watch** (advance to §3 — 24-48h watch window) |
+
+### 2.8 Operator finding — ConfigWatcher cannot hot-reload `shimRuntime`
+
+**Live behavior contradicts plan documentation.** Phase 110-PLAN, 110-CONTEXT, and the morning's resume doc all imply that adding `shimRuntime.search: static` is a hot-reloadable change applied via `clawcode restart <agent>`. Live test 2026-05-06: ConfigWatcher LOGS the change (`"Config field 'agents.Admin Clawdy.shimRuntime' changed but requires daemon restart to take effect"`) but per-agent restart re-spawns the OLD shim command. Only `systemctl restart clawcode.service` actually picks up the new override.
+
+Implication for fleet rollout (Phase 2 §4): the global default flip (`defaults.shimRuntime.search: static`) likely also requires a daemon restart, NOT just ConfigWatcher hot-reload. Plan to schedule the fleet rollout during a Phase 999.6 snapshot/restore-friendly window. Add this finding to a Phase 999.x backlog: "ConfigWatcher: support hot-reload for shimRuntime / mcpServers without full daemon restart."
 
 ---
 
@@ -299,7 +308,7 @@ File an issue against this repo with:
 
 | UTC time            | Phase  | Operator | Signal           | Notes |
 | ------------------- | ------ | -------- | ---------------- | ----- |
-|                     | 1      |          | green / red      |       |
+| 2026-05-06 22:42 UTC | 1     | jjagpal  | green            | Admin Clawdy on Go shim PID 2195136 RSS 6.4 MB; daemon restart was required (vs hot-reload-only — see §2.8). 0 exit-75. Smoke test deferred to operator. |
 |                     | watch  |          | green-canary / red-rollback |  |
 |                     | 2      |          | fleet-green / fleet-rollback |  |
 
