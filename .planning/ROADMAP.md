@@ -1674,6 +1674,46 @@ Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempot
 
 **Promotion target:** future milestone (post-v2.7). No Phase 110 dependency.
 
+### Phase 999.41: Generalize API-error-dominated-session guard to dream-pass + session-flush + all summarization paths (BACKLOG)
+
+**Goal:** The "Credit balance is too low" / "API Error: 429" false-positive text keeps re-surfacing in Discord-visible content despite Phase 105's fix at `restart-greeting.ts:isApiErrorDominatedSession`. Phase 105 only guards the restart-greeting summarization path; other summarization sites (dream-pass `themedReflection`, session-flush summaries, possibly context-compaction summaries) don't apply the same guard, so when an agent's session history is API-error-dominated, those pipelines reliably produce misleading "Credit balance is too low" outputs even on OAuth/Max accounts where credit balance is not a real concept.
+
+**Trigger:** 2026-05-06 — after the Phase 110 PM deploy + Brave fix, operator pinged ClawdyV2 to recall context of an earlier message. ClawdyV2 reported: *"my session flushes from earlier today are all 'Credit balance is too low' (no preserved content)"*. Operator suspects the same false-positive Haiku summarization is leaking into dream output too. Phase 105 (restart-greeting) hardened ONE summarization site; the underlying class of bug is "any LLM summarization of an API-error-dominated session reliably produces misleading 'credit balance' / 'auth failed' / 'rate limit' text."
+
+**Sub-scope candidates:**
+
+1. **Audit summarization sites.** Find every code path that takes session history (or any LLM-conversation transcript) and feeds it to Haiku/Sonnet for summarization. Known sites:
+   - `src/manager/restart-greeting.ts` — already guarded (Phase 105)
+   - `src/manager/dream-pass.ts` — runs a single-shot dream over agent's session via `dispatchTurn`; if the LLM returns a response containing API-error fingerprints, those land in `themedReflection`
+   - **Session-flush summary** — operator-observed in screenshot; needs file-finder pass
+   - **Context-compaction summary** (when agent hits context window) — possibly affected
+   - **CLI `clawcode dream <agent>` direct invocation** — same dream-pass code path
+   - **Memory consolidation** (Phase 999.39 dreams-path tied) — may share summarization shape
+
+2. **Promote `isApiErrorDominatedSession` + `API_ERROR_FINGERPRINTS` to a shared module.** Currently lives at `src/manager/restart-greeting.ts:249-269`. Move to `src/shared/api-error-detection.ts` (or similar) so all summarization sites can import the same fingerprint set + 50%-threshold detector. Single source of truth for what "this session is API-error dominated" means.
+
+3. **Per-site verbatim recovery message.** restart-greeting has `PLATFORM_ERROR_RECOVERY_MESSAGE`. dream-pass doesn't have an equivalent — when API-error-dominated, dream-pass should return `kind: "failed", error: "skipped: prior session was API-error dominated"` or a verbatim no-op themedReflection. Same for session-flush + context-compact.
+
+4. **Output-side guard.** Some summarization outputs come from the LLM itself returning text that looks like an API error (e.g., Haiku summarizing "API Error: 401" → "Credit balance is too low"). Add an output-scan: after summarization completes, run `API_ERROR_FINGERPRINTS` on the SUMMARY itself; if matched, replace with the verbatim recovery message. Belt-and-suspenders against the LLM "obeying instructions" but still leaking the misleading phrase.
+
+5. **Telemetry for API-error-dominated detections.** Counter metric: `summarization.api_error_dominated_detected{path=restart-greeting|dream|flush|compact}`. Helps confirm the guard is working in prod and surface platform-incident rates.
+
+6. **Test fixture corpus.** Lock the canonical "API-error-dominated" sessions as test fixtures so all summarization paths regression-test against the same input set. Currently each path has its own (or zero) test coverage of this.
+
+**Why deferred (not Phase 110):** Phase 110 is shim runtime, not summarization quality. Operator can keep doing what Phase 105 did — fix one path at a time when bitten — but the full audit + shared module is a separate phase.
+
+**Pre-existing primitives to reuse:**
+- `src/manager/restart-greeting.ts:isApiErrorDominatedSession` + `API_ERROR_FINGERPRINTS` (the canonical detector)
+- `PLATFORM_ERROR_RECOVERY_MESSAGE` (the verbatim recovery shape)
+- Phase 105 test corpus (`src/manager/__tests__/restart-greeting.test.ts:578` "detects 'Credit balance is too low'")
+
+**Related backlog/phases:**
+- Phase 105 (POLICY+COAL) — original Phase that introduced `isApiErrorDominatedSession`. This is its generalization.
+- Phase 999.39 (memory consolidation fail-loud, dreams path) — overlapping subsystem; coordinate planning so the two don't fight over `dream-pass.ts`.
+- Phase 107 (DREAM-OUT-03) — already added structured warn-log on parse-failed dream output; this phase extends to detect API-error-dominated INPUT before dispatch.
+
+**Promotion target:** v2.7 maintenance window or sooner if frequency of operator-visible false positives accelerates.
+
 ### Untagged maintenance ships (2026-05-04 → 2026-05-05)
 
 Three quick fixes shipped without a phase tag:
