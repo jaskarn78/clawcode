@@ -1,0 +1,106 @@
+name: npm Publish (with Go shim prebuilds)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      go_build_run_id:
+        description: 'Override go-build.yml run id (default: latest successful on master)'
+        required: false
+        type: string
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Bundle prebuilds and npm publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Resolve go-build run id
+        id: resolve_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OVERRIDE: ${{ inputs.go_build_run_id }}
+        run: |
+          if [ -n "$OVERRIDE" ]; then
+            echo "Using override run id: $OVERRIDE" >&2
+            echo "run_id=$OVERRIDE" >> "$GITHUB_OUTPUT"
+          else
+            RUN_ID=$(gh run list --workflow=go-build.yml --branch=master --status=success --limit=1 --json databaseId -q '.[0].databaseId')
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              echo "ERROR: no successful go-build.yml run on master to download artifacts from" >&2
+              exit 1
+            fi
+            echo "Resolved go-build run id: $RUN_ID" >&2
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download amd64 prebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: clawcode-mcp-shim-linux-amd64
+          path: ./_artifacts/amd64
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.resolve_run.outputs.run_id }}
+
+      - name: Download arm64 prebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: clawcode-mcp-shim-linux-arm64
+          path: ./_artifacts/arm64
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.resolve_run.outputs.run_id }}
+
+      - name: Stage prebuilds into prebuilds/<arch>/
+        run: |
+          set -euo pipefail
+          mkdir -p prebuilds/linux-amd64 prebuilds/linux-arm64
+          # go-build.yml uploads a single file per artifact named clawcode-mcp-shim-linux-<arch>;
+          # download-artifact preserves the file under the artifact's "name" (one file inside).
+          mv ./_artifacts/amd64/clawcode-mcp-shim-linux-amd64 prebuilds/linux-amd64/clawcode-mcp-shim
+          mv ./_artifacts/arm64/clawcode-mcp-shim-linux-arm64 prebuilds/linux-arm64/clawcode-mcp-shim
+          chmod +x prebuilds/linux-amd64/clawcode-mcp-shim prebuilds/linux-arm64/clawcode-mcp-shim
+
+      - name: Verify staged prebuilds
+        run: |
+          set -euo pipefail
+          for f in prebuilds/linux-amd64/clawcode-mcp-shim prebuilds/linux-arm64/clawcode-mcp-shim; do
+            test -f "$f" || { echo "Missing: $f" >&2; exit 1; }
+            test -s "$f" || { echo "Empty: $f" >&2; exit 1; }
+            test -x "$f" || { echo "Not executable: $f" >&2; exit 1; }
+            SIZE=$(stat -c %s "$f")
+            if [ "$SIZE" -gt 12582912 ]; then
+              echo "ERROR: $f exceeds 12 MB ceiling ($SIZE bytes)" >&2
+              exit 1
+            fi
+            echo "OK: $f ($SIZE bytes)"
+          done
+
+      - name: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
