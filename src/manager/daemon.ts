@@ -687,6 +687,129 @@ export async function handleSetPermissionModeIpc(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 110 Stage 0b 0B-RT-13 — list-mcp-tools IPC handler (pure, testable).
+//
+// Wave 1 daemon-side prerequisite for Waves 2-4. Future Go shims call this
+// method at boot to fetch the canonical MCP tool list for their shim type,
+// JSON-Schema-converted from the single-source-of-truth Zod definitions in
+// `src/{search,image,browser}/tools.ts`. Schemas stay single-sourced — the
+// Go shim does NOT duplicate Zod (Pitfall 4 in 110-RESEARCH.md — schema
+// drift between TS and Go).
+//
+// JSON Schema conversion uses zod/v4's NATIVE `z.toJSONSchema()` — no new
+// npm dep. (CONTEXT.md hedged "verify zod-to-json-schema in deps before
+// adding"; native availability is the answer to that verification, and
+// CLAUDE.md's "no new deps" rule prefers native.)
+//
+// Sequencing constraint (locked in 110-CONTEXT.md): this handler ships in
+// its own commit BEFORE any Go shim builds against it.
+//
+// Pure-DI shape mirrors handleSetModelIpc / handleRunDreamPassIpc. Tests
+// inject TOOL_DEFINITIONS arrays directly so the unit suite doesn't depend
+// on the search/image/browser modules' transitive imports (providers,
+// readability, playwright). Production wiring at the daemon edge passes
+// the real TOOL_DEFINITIONS imports.
+// ---------------------------------------------------------------------------
+
+import {
+  listMcpToolsRequestSchema,
+  type ListMcpToolsRequest,
+  type ListMcpToolsResponse,
+  type McpToolSchema,
+} from "../ipc/protocol.js";
+import { z as zV4 } from "zod/v4";
+// Phase 110 Stage 0b 0B-RT-13 — production wiring imports for the
+// list-mcp-tools handler. Aliased so the unit-test deps surface (which
+// passes synthetic fixtures) and the production wiring (which imports
+// the real frozen TOOL_DEFINITIONS arrays) stay distinct in greps.
+import { TOOL_DEFINITIONS as SEARCH_TOOL_DEFINITIONS } from "../search/tools.js";
+import { TOOL_DEFINITIONS as IMAGE_TOOL_DEFINITIONS } from "../image/tools.js";
+import { TOOL_DEFINITIONS as BROWSER_TOOL_DEFINITIONS } from "../browser/tools.js";
+
+/**
+ * Shape of one tool definition the handler converts. Matches the
+ * `ToolDefinition` interface exported by every shim's tools.ts (search,
+ * image, browser) — narrow structural type so tests can pass synthetic
+ * arrays without importing the full provider stack.
+ */
+export interface ListMcpToolsHandlerToolDef {
+  readonly name: string;
+  readonly description: string;
+  readonly schemaBuilder: (z_: typeof zV4) => Record<string, unknown>;
+}
+
+/**
+ * DI surface for the list-mcp-tools IPC handler. Production wiring at the
+ * daemon edge passes the real imported TOOL_DEFINITIONS arrays; unit tests
+ * pass synthetic fixtures.
+ */
+export interface ListMcpToolsIpcDeps {
+  readonly searchTools: ReadonlyArray<ListMcpToolsHandlerToolDef>;
+  readonly imageTools: ReadonlyArray<ListMcpToolsHandlerToolDef>;
+  readonly browserTools: ReadonlyArray<ListMcpToolsHandlerToolDef>;
+  /**
+   * Optional override for the JSON Schema converter. Defaults to zod/v4's
+   * native `z.toJSONSchema`. Tests can substitute a deterministic stub if
+   * native output drifts across zod minor versions.
+   */
+  readonly toJsonSchema?: (shape: unknown) => Record<string, unknown>;
+}
+
+/**
+ * Build the JSON-Schema-converted tool list for the requested shim type.
+ *
+ * Returns a NEW array (CLAUDE.md immutability — never mutates the input
+ * TOOL_DEFINITIONS arrays which are `Object.freeze`d ReadonlyArrays anyway).
+ *
+ * Throws ManagerError(-32602) on invalid params — the listMcpToolsRequestSchema
+ * Zod parser handles enum + missing-field validation in a single pass.
+ */
+export function handleListMcpToolsIpc(
+  deps: ListMcpToolsIpcDeps,
+  rawParams: unknown,
+): ListMcpToolsResponse {
+  const parsed = listMcpToolsRequestSchema.safeParse(rawParams);
+  if (!parsed.success) {
+    // -32602 invalid params per JSON-RPC 2.0 spec (mirrors Phase 86 Plan 02
+    // ModelNotAllowedError mapping at line 575).
+    throw new ManagerError(
+      `list-mcp-tools: invalid params: ${parsed.error.message}`,
+      { code: -32602 },
+    );
+  }
+  const req: ListMcpToolsRequest = parsed.data;
+
+  const defs =
+    req.shimType === "search"
+      ? deps.searchTools
+      : req.shimType === "image"
+        ? deps.imageTools
+        : deps.browserTools;
+
+  // Native zod/v4 converter; tests can override.
+  const convert =
+    deps.toJsonSchema ??
+    ((shape: unknown): Record<string, unknown> =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      zV4.toJSONSchema(shape as any) as Record<string, unknown>);
+
+  const tools: McpToolSchema[] = defs.map((def) => {
+    // schemaBuilder returns a raw shape (Record); wrap with z.object() so
+    // toJSONSchema sees the full object schema (with required[] fields).
+    const rawShape = def.schemaBuilder(zV4) as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const objectSchema = zV4.object(rawShape as any);
+    return {
+      name: def.name,
+      description: def.description,
+      inputSchema: convert(objectSchema),
+    };
+  });
+
+  return { tools };
+}
+
+// ---------------------------------------------------------------------------
 // Phase 95 Plan 03 DREAM-07 — run-dream-pass IPC handler (pure, testable).
 //
 // Operator-driven manual dream-pass trigger backing both `clawcode dream
@@ -4063,6 +4186,25 @@ export async function startDaemon(
           0,
         );
         return { pools, totalRps, totalThrottles24h };
+      }
+      // Phase 110 Stage 0b 0B-RT-13 — list-mcp-tools IPC. Closure-intercept
+      // pattern (mirrors secrets-status / broker-status / mcp-tracker-
+      // snapshot above). Pure handler `handleListMcpToolsIpc` does the
+      // Zod-shape → JSON-Schema conversion via zod/v4's NATIVE
+      // `z.toJSONSchema()` (no new npm dep). Production wiring passes the
+      // real frozen TOOL_DEFINITIONS arrays for search/image/browser; the
+      // handler returns { tools: ToolSchema[] }. Sequencing constraint
+      // (CONTEXT.md): this method ships BEFORE any Go shim builds against
+      // it (Wave 1 prerequisite for Waves 2-4).
+      case "list-mcp-tools": {
+        return handleListMcpToolsIpc(
+          {
+            searchTools: SEARCH_TOOL_DEFINITIONS,
+            imageTools: IMAGE_TOOL_DEFINITIONS,
+            browserTools: BROWSER_TOOL_DEFINITIONS,
+          },
+          params,
+        );
       }
       // Phase 999.15 TRACK-05 — mcp-tracker-snapshot intercept BEFORE
       // routeMethod (closure-intercept pattern, mirrors secrets-status
