@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 110
-stopped_at: Completed 110-03-PLAN.md
-last_updated: "2026-05-06T13:57:37.459Z"
+status: Ready to execute
+stopped_at: Completed 110-00-PLAN.md (Tasks 1+2; Task 3 operator kill-switch gate pending)
+last_updated: "2026-05-06T13:58:29.198Z"
 last_activity: 2026-05-06
 progress:
   total_phases: 56
   completed_phases: 14
   total_plans: 86
-  completed_plans: 73
+  completed_plans: 74
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 110 (MCP shim runtime swap (Stage 0b)) — EXECUTING
-Plan: 1 of 9
+Plan: 2 of 9
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 
@@ -422,6 +422,7 @@ Recent decisions affecting current work:
 - [Phase 108]: Heartbeat provider surface intentionally narrow ({getPoolStatus} only) — RED test asserts Object.keys === ['getPoolStatus'] to gate against synthetic password_read consuming 1Password rate-limit budget.
 - [Phase 110]: Postinstall dev-skip when prebuilds/ absent — preserves npm ci on source-checkout while keeping fail-loud on corrupt tarballs (110-03)
 - [Phase 110]: Artifact-name contract clawcode-mcp-shim-linux-<arch> binds go-build.yml uploads to npm-publish.yml downloads (110-03)
+- [Phase 110]: Plan 110-00 Wave 0 build artifacts shipped: 5.7 MB Go MCP spike binary, 4/4 regression tests pass, operator runbook + RSS measurement helper authored. Operator kill-switch gate (admin-clawdy live VmRSS ≤ 15 MB + exit-75 respawn) PENDING — Wave 1 (Plan 110-01) blocked until operator approves.
 
 ### v2.1 closing decisions (for reference)
 
@@ -603,11 +604,12 @@ Recent decisions affecting current work:
 | Phase 108 P02 | 13m | 2 tasks | 2 files |
 | Phase 108 P04 | 60min | 4 tasks | 12 files |
 | Phase 110 P03 | 7 | 3 tasks | 5 files |
+| Phase 110 P00 | 25min | 2 tasks | 7 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-06
-Stopped at: Completed 110-03-PLAN.md
+Stopped at: Completed 110-00-PLAN.md (Tasks 1+2; Task 3 operator kill-switch gate pending)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
