@@ -1,7 +1,7 @@
 # Phase 110 Stage 0b — Resume Brief (post-context-clear)
 
-**Last updated:** 2026-05-06 (evening session, post-canary-confirmed)
-**Status:** **GATE C COMPLETE + SMOKE TEST CONFIRMED. Admin Clawdy on Go search shim (6.7 MB RSS, 96% reduction). Brave search working end-to-end. personal agent stopped (autoStart=false). 24-48h watch window in progress since 22:42 UTC.**
+**Last updated:** 2026-05-06 (evening session, expanded canary 23:30 UTC)
+**Status:** **4 agents on Go shims (Admin Clawdy + general + projects + research) — all 3 types (search/image/browser) per agent. 12 Go shim procs at 6.5-7 MB each. 0 exit-75/TEMPFAIL/panic. Remaining agents (fin-acquisition, fin-research, finmentum-content-creator, fin-tax, fin-playground) still on Node baseline.**
 
 ## TL;DR for next session
 
@@ -51,9 +51,10 @@ Ramy-quiet check via Discord MCP **before any prod restart**.
 - ✅ All 4 active agents warm: Admin Clawdy, fin-acquisition, research, fin-research
 - ✅ **personal agent STOPPED** — `clawcode stop personal` executed ~23:10 UTC. autoStart=false in yaml. Will not auto-start on next daemon restart. (Phase 999.33 boot-storm relief.)
 - ✅ **GATE C COMPLETE** — Admin Clawdy on Go static search shim. yaml edited 2026-05-06 22:41 UTC. Daemon restart required (NOT just per-agent restart — see ROLLOUT-LOG §2.8). Go shim PID 2195136, **VmRSS 6.4 MB vs Node baseline 153.9 MB → 96% reduction per agent**. 0 exit-75 / TEMPFAIL.
-- ✅ **SMOKE TEST CONFIRMED** — Admin Clawdy called `web_search` through Go shim PID 2195136 and returned real Brave results (`2026-05-06 https://www.calendardate.com/todays.htm`). Confirmed ~23:00 UTC via Discord. This is the first real production traffic through the Go search shim.
-- 🟡 Image + Browser canaries — not flipped. Awaiting search 24-48h watch GREEN.
-- 🟡 24-48h watch in progress (started 2026-05-06 22:42 UTC). Watch window closes ~2026-05-08 22:42 UTC.
+- ✅ **SMOKE TEST CONFIRMED** — Admin Clawdy called `web_search` through Go shim PID 2195136 and returned real Brave results (`2026-05-06 https://www.calendardate.com/todays.htm`). Confirmed ~23:00 UTC via Discord.
+- ✅ **EXPANDED CANARY (23:30 UTC)** — operator accelerated rollout. Added `search: static, image: static, browser: static` to `general`, `projects`, `research`. Daemon restart at 23:17 UTC. All 7 active agents warm (including 4 on Go shims). 12 Go shim procs running at 6.5-7 MB each. yaml backup `bak-pre-fleet-shim-1778109394`.
+- 🟡 Remaining Node-baseline agents: fin-acquisition, fin-research, finmentum-content-creator, fin-tax, fin-playground. No shimRuntime set yet.
+- 🟡 No active 24-48h watch obligation — operator chose to skip single-agent gate.
 
 ### On claude-bot (dev)
 - Dev daemon running at `/home/jjagpal/.clawcode-dev-110/manager/clawcode.sock`

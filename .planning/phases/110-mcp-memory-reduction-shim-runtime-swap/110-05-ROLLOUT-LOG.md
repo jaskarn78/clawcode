@@ -172,35 +172,42 @@ Implication for fleet rollout (Phase 2 §4): the global default flip (`defaults.
 | **GREEN**       | `green-canary`     | All checks pass for 24-48h. Advance to Phase 2 (fleet rollout).                 |
 | **RED**         | `red-rollback`     | ANY anomaly (crash, RSS spike, tool failure, FD leak). Execute §6 rollback now. |
 
-> Decision recorded by operator (UTC time + signal): __________________________
+> Decision recorded by operator (UTC time + signal): **ACCELERATED** — operator skipped 24-48h watch and expanded canary to 4 agents (general, projects, research + Admin Clawdy) on 2026-05-06 23:30 UTC. See §2.9 below.
+
+### 2.9 Expanded canary — general + projects + research (2026-05-06 23:30 UTC)
+
+Operator authorized acceleration: skip 24-48h single-agent watch; flip search+image+browser shimRuntime on `general`, `projects`, and `research` in the same restart window.
+
+| Agent | search | image | browser | Warm-path-ready? |
+|---|---|---|---|---|
+| Admin Clawdy | ✅ static | ✅ static | ✅ static | ✅ 16:17:49 UTC |
+| fin-acquisition | node | node | node | ✅ 16:18:02 UTC |
+| research | ✅ static | ✅ static | ✅ static | ✅ 16:18:12 UTC |
+| fin-research | node | node | node | ✅ 16:18:23 UTC |
+| finmentum-content-creator | node | node | node | ✅ 16:18:43 UTC |
+| general | ✅ static | ✅ static | ✅ static | ✅ 16:18:55 UTC |
+| projects | ✅ static | ✅ static | ✅ static | ✅ 16:19:05 UTC |
+
+Go shim process count: **12** (4 agents × 3 types). All PIDs confirmed; all RSS 6.5–7.0 MB. Zero exit-75 / TEMPFAIL / panic in journalctl.
+
+Yaml backup: `/etc/clawcode/clawcode.yaml.bak-pre-fleet-shim-1778109394`
 
 ---
 
 ## 4. Phase 2 — Fleet Rollout (Task 3 checkpoint)
 
-> **Gate:** Phase 2 only proceeds after Phase 1 GREEN signal.
+> **Gate:** Phase 2 now means flipping remaining agents (fin-acquisition, fin-research, finmentum-content-creator, fin-tax, fin-playground) — those not yet on Go shims.
 
-### 4.1 Flip — global default + remove per-agent override
+### 4.1 Flip — remaining agents or global default
 
-Edit `clawcode.yaml` on clawdy:
+Either add per-agent shimRuntime overrides for the remaining agents, OR set global default and let per-agent overrides take precedence where shimRuntime is already set. Requires daemon restart per §2.8.
 
-```yaml
-defaults:
-  shimRuntime:
-    search: static    # was: node
-agents:
-  admin-clawdy:
-    # shimRuntime override REMOVED — now picks up global default
-```
-
-Save. ConfigWatcher hot-reload triggers; daemon PID does NOT change. All 11 fleet agents' search MCP children cycle within ~5 minutes.
-
-### 4.2 Verify all 11 agents flipped
+### 4.2 Verify remaining agents flipped
 
 ```bash
-sleep 300   # 5-minute stabilization window
-pgrep -af 'clawcode search-mcp' | wc -l                  # expect: 0 (zero Node search shims fleet-wide)
-pgrep -af 'clawcode-mcp-shim --type search' | wc -l      # expect: 11 (one per fleet agent)
+# After restart
+pgrep -af 'clawcode-mcp-shim --type search' | wc -l   # expect: matches autoStart=true agent count
+pgrep -af 'clawcode search-mcp' | wc -l                # expect: 0 (all Node search shims gone)
 ```
 
 ### 4.3 Aggregate RSS measurement
