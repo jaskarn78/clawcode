@@ -1649,6 +1649,31 @@ Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempot
 
 **Risk callout:** permission model mistakes here have real blast radius — accidentally letting any agent post to any subagent thread breaks isolation guarantees subagents currently rely on. Operator decision on default permission model gates execution.
 
+### Phase 999.40: Daemon-side response cache for repeated MCP tool calls (BACKLOG)
+
+**Goal:** Cache MCP tool-call responses (e.g. `web_search`) at the daemon layer with content-keyed lookups. When an agent re-asks the same query within a TTL window, the daemon returns the cached result instead of re-hitting brave/exa/openai. Speeds up second-and-later identical queries from ~2-5s to <50ms. Helps both Node and Go shim runtimes equally — not Phase 110-specific.
+
+**Trigger:** 2026-05-06 — during Phase 110 dev validation latency benchmark, observed Anthropic API + search-backend round-trip dominates per-turn latency (~2-5s of the ~3s typical turn). Repeated identical queries gave near-identical results from brave/exa, suggesting cache hits would be safe and fast. Operator request to add to backlog.
+
+**Sub-scope candidates:**
+1. **Cache key derivation** — content-hash of `(tool_name, normalized_query)`. For `web_search`, normalize query whitespace + case-fold. For `search_documents`, key on `(agent, query, top_k)`.
+2. **TTL per tool** — config-driven defaults: `web_search` 5 min (fresh news matters), `search_documents` 30 min, `image_generate` 0 (always re-generate). Operator override per-tool.
+3. **Storage** — better-sqlite3 in `~/.clawcode/manager/tool-cache.db`. Schema: `(key, tool, query, response_json, created_at, expires_at)`.
+4. **Eviction** — LRU + size cap (e.g. 100 MB default). Evict expired entries on each lookup.
+5. **Cache stamping** — response wrapped with `cached: true | { age_ms, source: "cache" }` so agents can decide whether to trust or refresh.
+6. **Bypass mechanism** — agent can pass `bypass_cache: true` in tool args to force re-fetch.
+7. **Per-agent isolation** — search results are public-data so cross-agent OK; document-search is per-agent.
+8. **Observability** — `clawcode tool-cache-stats` CLI showing hit rate, size, top-cached keys.
+
+**Why deferred:** out of Phase 110 scope (Phase 110 is shim runtime, not tool dispatch). Best done as standalone phase with independent rollout.
+
+**Pre-existing primitives to reuse:**
+- better-sqlite3 (already pinned, used for memory + tasks DBs)
+- Phase 90 RRF retrieval (similar cache-on-content pattern)
+- Phase 104 op:// cache (similar TTL + storage pattern)
+
+**Promotion target:** future milestone (post-v2.7). No Phase 110 dependency.
+
 ### Untagged maintenance ships (2026-05-04 → 2026-05-05)
 
 Three quick fixes shipped without a phase tag:
