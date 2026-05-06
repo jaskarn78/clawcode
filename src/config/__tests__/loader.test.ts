@@ -868,8 +868,8 @@ describe("resolveAgentConfig - mcpServers", () => {
   // -------------------------------------------------------------------------
   describe("Phase 110 Stage 0b — runtime-conditional auto-inject", () => {
     const SHIM_TYPES = ["browser", "search", "image"] as const;
-    const STATIC_PATH = "/usr/local/bin/clawcode-mcp-shim";
-    const PYTHON_PATH = "/usr/local/bin/clawcode-mcp-shim.py";
+    const STATIC_PATH = "/opt/clawcode/bin/clawcode-mcp-shim";
+    const PYTHON_PATH = "/opt/clawcode/bin/clawcode-mcp-shim.py";
 
     for (const type of SHIM_TYPES) {
       it(`${type}: default (no shimRuntime) keeps 'clawcode ${type}-mcp' (byte-identical to Stage 0a)`, () => {
@@ -892,7 +892,7 @@ describe("resolveAgentConfig - mcpServers", () => {
         expect(entry!.args).toEqual([`${type}-mcp`]);
       });
 
-      it(`${type}: 'static' rewrites to /usr/local/bin/clawcode-mcp-shim --type ${type}`, () => {
+      it(`${type}: 'static' rewrites to /opt/clawcode/bin/clawcode-mcp-shim --type ${type}`, () => {
         const d: DefaultsConfig = {
           ...defaults,
           shimRuntime: {
@@ -911,7 +911,7 @@ describe("resolveAgentConfig - mcpServers", () => {
         expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
       });
 
-      it(`${type}: 'python' rewrites to python3 /usr/local/bin/clawcode-mcp-shim.py --type ${type}`, () => {
+      it(`${type}: 'python' rewrites to python3 /opt/clawcode/bin/clawcode-mcp-shim.py --type ${type}`, () => {
         const d: DefaultsConfig = {
           ...defaults,
           shimRuntime: {

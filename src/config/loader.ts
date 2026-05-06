@@ -45,8 +45,14 @@ import type {
 // fails the operator's tooling surfaces the failure directly — the
 // operator-locked decision is fail-loud, not silent degradation.
 // ---------------------------------------------------------------------------
-export const STATIC_SHIM_PATH = "/usr/local/bin/clawcode-mcp-shim";
-export const PYTHON_SHIM_PATH = "/usr/local/bin/clawcode-mcp-shim.py";
+// Phase 110 Stage 0b — install root is `/opt/clawcode/` on the canonical
+// production host (clawdy). That directory is `jjagpal:clawcode 0775` so the
+// deploy user writes without sudo while the clawcode daemon (group
+// `clawcode`) reads+executes. Matches /opt/clawcode/dist, /opt/clawcode/
+// scripts, /opt/clawcode/clawcode.yaml convention. /usr/local/bin was the
+// planner's initial guess and would have required sudo grants we don't have.
+export const STATIC_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim";
+export const PYTHON_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim.py";
 
 export type ShimType = "search" | "image" | "browser";
 export type ShimRuntime = "node" | "static" | "python";

@@ -1632,8 +1632,8 @@ export const defaultsSchema = z.object({
   // loader rewrites command/args without a daemon restart.
   //
   // - "node":   current behavior — `clawcode <type>-mcp` Node shim (~147 MB RSS each)
-  // - "static": Go binary at /usr/local/bin/clawcode-mcp-shim --type <type> (target <10 MB RSS)
-  // - "python": (reserved) python3 translator at /usr/local/bin/clawcode-mcp-shim.py;
+  // - "static": Go binary at /opt/clawcode/bin/clawcode-mcp-shim --type <type> (target <10 MB RSS)
+  // - "python": (reserved) python3 translator at /opt/clawcode/bin/clawcode-mcp-shim.py;
   //             no implementation in Stage 0b. Widening the enum together
   //             with "static" lets a future Python pivot ship without
   //             another schema migration.

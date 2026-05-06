@@ -41,7 +41,7 @@ describe("classifyShimRuntime — Phase 110 Stage 0b cmdline classification", ()
   it("classifies `clawcode-mcp-shim --type <T>` as 'static' (basename match)", () => {
     expect(
       classifyShimRuntime([
-        "/usr/local/bin/clawcode-mcp-shim",
+        "/opt/clawcode/bin/clawcode-mcp-shim",
         "--type",
         "search",
       ]),
@@ -66,7 +66,7 @@ describe("classifyShimRuntime — Phase 110 Stage 0b cmdline classification", ()
     expect(
       classifyShimRuntime([
         "python3",
-        "/usr/local/bin/clawcode-mcp-shim.py",
+        "/opt/clawcode/bin/clawcode-mcp-shim.py",
         "--type",
         "browser",
       ]),
@@ -352,7 +352,7 @@ describe("buildFleetStats — Phase 110 Stage 0b mixed runtime aggregation", () 
           uid: 1000,
           // Operator flipped defaults.shimRuntime.search → "static".
           // Loader spawned the Go binary; cmdline reflects that shape.
-          cmdline: ["/usr/local/bin/clawcode-mcp-shim", "--type", "search"],
+          cmdline: ["/opt/clawcode/bin/clawcode-mcp-shim", "--type", "search"],
           startTimeJiffies: 1,
         },
         401: {

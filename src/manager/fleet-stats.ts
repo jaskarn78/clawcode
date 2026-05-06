@@ -46,7 +46,7 @@ export function cmdlineMatchesClaude(cmdline: readonly string[]): boolean {
  *                 (or `mcp-broker-shim`) running under the bundled Node
  *                 CLI — current production runtime.
  *   - "static":   Stage 0b's static-binary alternate runtime — Go binary
- *                 deployed at /usr/local/bin/clawcode-mcp-shim, dispatched
+ *                 deployed at /opt/clawcode/bin/clawcode-mcp-shim, dispatched
  *                 via `--type <search|image|browser>`. Recognized by basename.
  *   - "python":   Stage 0b's python-wrapper alternate runtime (reserved —
  *                 implementation deferred). Recognized via the
@@ -65,7 +65,7 @@ export type McpRuntime = "node" | "static" | "python" | "external";
  * targets vs. external servers).
  *
  * Match strategy: argv0 basename (path-agnostic). The Wave 2 deploy
- * installs the Go binary at /usr/local/bin/clawcode-mcp-shim, but a dev
+ * installs the Go binary at /opt/clawcode/bin/clawcode-mcp-shim, but a dev
  * build may live at any path. Matching the basename keeps both code paths
  * in scope without an explicit allowlist.
  *

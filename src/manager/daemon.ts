@@ -4269,7 +4269,7 @@ export async function startDaemon(
         // otherwise an operator who flips a flag → static would see the
         // running Go binary become invisible to /api/fleet-stats (the
         // Stage 0a regex `clawcode <type>-mcp` would never match
-        // `/usr/local/bin/clawcode-mcp-shim --type <type>`). Both call-
+        // `/opt/clawcode/bin/clawcode-mcp-shim --type <type>`). Both call-
         // sites import resolveShimCommand to keep the spawn shape and
         // the proc-scan regex shape in lockstep — single source of
         // truth in src/config/loader.ts.
