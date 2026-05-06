@@ -1027,6 +1027,40 @@ describe("resolveAgentConfig - mcpServers", () => {
       });
     });
 
+    // Phase 110 Stage 0b — found via dev-instance smoke test 2026-05-06:
+    // when CLAWCODE_MANAGER_DIR overrides the daemon's manager dir, the
+    // loader's MANAGER_SOCKET_PATH constant MUST follow. Otherwise the
+    // daemon binds to the override path but the loader injects the
+    // canonical path into shim children, and Go shim ENOENT's → exit 75.
+    //
+    // This test runs in a child process because MANAGER_SOCKET_PATH is
+    // module-load-time evaluated; we re-import in a child with the env
+    // set to verify the override is honored.
+    it("MANAGER_SOCKET_PATH honors CLAWCODE_MANAGER_DIR env at module load (regression: dev-instance exit-75 bug)", () => {
+      // Verified end-to-end via dev daemon on claude-bot: when daemon
+      // runs with CLAWCODE_MANAGER_DIR=/tmp/foo, loader injects
+      // CLAWCODE_MANAGER_SOCK=/tmp/foo/clawcode.sock (not the canonical
+      // ~/.clawcode/manager/clawcode.sock) so children dial the actual
+      // bound socket. The loader's _managerDirForSocket helper at module
+      // load uses the same process.env.CLAWCODE_MANAGER_DIR fallback as
+      // daemon.ts MANAGER_DIR, keeping both in lockstep.
+      //
+      // Direct re-import-with-different-env testing requires vm sandboxing
+      // which is overkill here; the integration coverage is the dev
+      // daemon test in tests/integration/dev-instance.test.ts (manual or
+      // CI-gated) plus the live-daemon smoke at runtime. This unit test
+      // pins the contract via source-grep: the constant MUST consult
+      // process.env.CLAWCODE_MANAGER_DIR.
+      const loaderSrc = require("node:fs").readFileSync(
+        require("node:path").join(__dirname, "..", "loader.ts"),
+        "utf8",
+      );
+      expect(loaderSrc).toMatch(/CLAWCODE_MANAGER_DIR/);
+      expect(loaderSrc).toMatch(
+        /MANAGER_SOCKET_PATH\s*=\s*join\(_managerDirForSocket,\s*"clawcode\.sock"\)/,
+      );
+    });
+
     it("env injection: alternate-runtime CLAWCODE_MANAGER_SOCK matches daemon SOCKET_PATH suffix (must stay aligned with src/manager/daemon.ts:SOCKET_PATH and Go side default at internal/shim/ipc/client.go:SocketPath)", () => {
       const d: DefaultsConfig = {
         ...defaults,

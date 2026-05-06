@@ -52,8 +52,19 @@ import type {
 // `clawcode`) reads+executes. Matches /opt/clawcode/dist, /opt/clawcode/
 // scripts, /opt/clawcode/clawcode.yaml convention. /usr/local/bin was the
 // planner's initial guess and would have required sudo grants we don't have.
-export const STATIC_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim";
-export const PYTHON_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim.py";
+//
+// CLAWCODE_STATIC_SHIM_PATH / CLAWCODE_PYTHON_SHIM_PATH env overrides
+// allow a parallel dev daemon (running as a different user, on a
+// different config) to exercise an alternate binary location without
+// rebuilding or touching production. Default values match the canonical
+// install. The override is intentional defense-in-depth — same pattern
+// as CLAWCODE_MANAGER_SOCK on the IPC side.
+export const STATIC_SHIM_PATH =
+  process.env.CLAWCODE_STATIC_SHIM_PATH ??
+  "/opt/clawcode/bin/clawcode-mcp-shim";
+export const PYTHON_SHIM_PATH =
+  process.env.CLAWCODE_PYTHON_SHIM_PATH ??
+  "/opt/clawcode/bin/clawcode-mcp-shim.py";
 
 // Phase 110 Stage 0b — daemon IPC socket path (mirrors
 // `SOCKET_PATH` in src/manager/daemon.ts:1638). Recomputed inline
@@ -65,17 +76,23 @@ export const PYTHON_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim.py";
 // of MANAGER_DIR cannot silently break alternate-runtime shims that
 // were spawned with the old default baked in.
 //
+// MUST honor CLAWCODE_MANAGER_DIR identically to daemon.ts MANAGER_DIR.
+// When the daemon's manager dir moves (e.g. for a parallel dev
+// instance), the loader's injected env must follow so the shim
+// children dial the actual bound socket. This was the dev-instance
+// bug found 2026-05-06: dev daemon bound /home/jjagpal/.clawcode-dev-
+// 110/manager/clawcode.sock but loader injected the canonical
+// /home/jjagpal/.clawcode/manager/clawcode.sock — Go shim ENOENT'd
+// → exit 75 → warm-path failed.
+//
 // Both sides MUST stay aligned with daemon.ts SOCKET_PATH. Drift is
 // caught by:
 //   - Go side: TestSocketPathDefaultMatchesDaemonConvention
 //   - TS side: shim-runtime-env-injection assertions in
 //     src/config/__tests__/loader.test.ts
-export const MANAGER_SOCKET_PATH = join(
-  homedir(),
-  ".clawcode",
-  "manager",
-  "clawcode.sock",
-);
+const _managerDirForSocket =
+  process.env.CLAWCODE_MANAGER_DIR ?? join(homedir(), ".clawcode", "manager");
+export const MANAGER_SOCKET_PATH = join(_managerDirForSocket, "clawcode.sock");
 
 export type ShimType = "search" | "image" | "browser";
 export type ShimRuntime = "node" | "static" | "python";
