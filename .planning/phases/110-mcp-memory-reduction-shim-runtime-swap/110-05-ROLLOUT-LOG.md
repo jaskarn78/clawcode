@@ -89,6 +89,12 @@ Trigger one `web_search` tool call from admin-clawdy (via Discord channel or dir
 - No panic in `journalctl -u clawcode --since '5 minutes ago' | grep -E 'panic|TEMPFAIL|exit 75'`
 - Claude proc for admin-clawdy did not respawn unexpectedly
 
+**Result (2026-05-06 ~23:00 UTC): PASS**
+- Admin Clawdy returned `2026-05-06 https://www.calendardate.com/todays.htm` — real Brave search result
+- Agent self-reported its proc tree showing Go shim PID 2195136 at 6,672 kB RSS vs Node image-mcp + browser-mcp at 147-150 MB
+- 0 panics / TEMPFAIL / exit-75 in journalctl since flip
+- Claude proc stable (no unexpected respawn)
+
 ### 2.5 Three RSS samples across 30 minutes
 
 | Sample | UTC time             | New PID | VmRSS (kB) | VmRSS (MB) | Tool call success | journalctl error count (last 10 min) |
@@ -126,7 +132,7 @@ Expected fields:
 | Peer Node search-mcp baseline | 157,564 kB (153.9 MB) — sample from a non-Admin-Clawdy agent post-restart |
 | Per-agent savings             | ~151 MB (96% reduction Go-vs-Node) |
 | Cgroup memory peak            | 13.3 GB pre-restart → 7.3 GB post-restart (delta dominated by daemon-restart memory cleanup, not the canary) |
-| Smoke-test result             | DEFERRED — operator-driven Discord prompt to admin-clawdy `web_search` not yet sent |
+| Smoke-test result             | **CONFIRMED GREEN** — Admin Clawdy called `web_search` via Go shim (PID 2195136) and returned `2026-05-06 https://www.calendardate.com/todays.htm` with real Brave results. Agent self-reported proc tree confirming Go shim RSS 6,672 kB vs Node peers at 147-150 MB. Confirmed 2026-05-06 ~23:00 UTC via Discord. |
 | journalctl errors             | 0 exit-75 / TEMPFAIL / panic-shim events since restart |
 | Decision                      | **PROCEED to watch** (advance to §3 — 24-48h watch window) |
 

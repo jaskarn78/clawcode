@@ -1,27 +1,28 @@
 # Phase 110 Stage 0b — Resume Brief (post-context-clear)
 
-**Last updated:** 2026-05-06 (PM session, post-deploy)
-**Status:** **PM dist + binary DEPLOYED to clawdy. BRAVE_API_KEY provisioned in /etc/clawcode/env via op://. Daemon restarted at 15:18 PT; all 5 main agents warm. NO canary flipped — every agent still on Node baseline.** Phase 110 RSS savings still 0 GiB (canary flips are the next operator step).
+**Last updated:** 2026-05-06 (evening session, post-canary-confirmed)
+**Status:** **GATE C COMPLETE + SMOKE TEST CONFIRMED. Admin Clawdy on Go search shim (6.7 MB RSS, 96% reduction). Brave search working end-to-end. personal agent stopped (autoStart=false). 24-48h watch window in progress since 22:42 UTC.**
 
 ## TL;DR for next session
 
-Phase 110 Stage 0b code-side is COMPLETE on master:
+Phase 110 Stage 0b code-side COMPLETE on master. Prod canary active and smoke-tested:
 
-- search Go shim (110-04) — shipped to clawdy this morning; Plan 110-05 canary unflipped
-- image Go shim (110-06 Tasks 1+2) — on master, dev-green; binary contains active code path; clawdy still runs older binary where image case is a stub
-- browser Go shim (110-07 Tasks 1+2) — on master, dev-green; same situation as image
-- 110-PROD-RETRY-PLAN.md — operator's gated checklist for resuming the rollout (Gates A-H)
+- search Go shim (110-04) — shipped; canary ACTIVE on Admin Clawdy (Gate C done); 24-48h watch in progress
+- image Go shim (110-06) — on master, dev-green; prod binary active; canary NOT yet flipped (gated on search GREEN)
+- browser Go shim (110-07) — on master, dev-green; prod binary active; canary NOT yet flipped (gated on search GREEN)
+- BRAVE_API_KEY — RESOLVED both ways: `/etc/clawcode/env` has literal key (Path 1) + code-level op:// resolution shipped (Path 2)
+- personal agent — stopped (`clawcode stop personal`); autoStart=false in yaml; will NOT auto-start on daemon restart
 
-Dev validation results (PM session):
+Dev validation results (full session):
 - `go test ./...` GREEN across all 4 packages (search, image, browser, ipc)
-- Live-daemon binary smoke: `--type image` registers 3 tools, `--type browser` registers 6 tools — full path through daemon `list-mcp-tools` IPC verified
-- 21-test dev harness PASS (search regression-free with new binary)
+- Live-daemon binary smoke: `--type image` registers 3 tools, `--type browser` registers 6 tools
+- 21-test dev harness PASS
 - 50-prompt stress test PASS (0 RSS growth, 0 respawns, 0 exit-75)
+- Prod smoke: Admin Clawdy returned real Brave results (`2026-05-06 https://www.calendardate.com/todays.htm`) via Go shim PID 2195136
 
-Open questions:
-- BRAVE_API_KEY env passthrough — investigation deferred to operator-driven Discord prompt (Gate A in 110-PROD-RETRY-PLAN.md). Prod ssh inspection denied by permissions.
+Open questions: **NONE blocking watch window.**
 
-Plan 110-08 (cleanup) — still not started; gated on browser fleet GREEN.
+Plan 110-08 (cleanup) — not started; gated on browser fleet GREEN.
 
 Ramy-quiet check via Discord MCP **before any prod restart**.
 
@@ -47,10 +48,12 @@ Ramy-quiet check via Discord MCP **before any prod restart**.
 - ✅ Backups preserved: `dist.bak-pre-110-final-pm-20260506-151645/`, `clawcode-mcp-shim.bak-pre-110-final-pm-20260506-151645`, `clawcode-mcp-shim.bak-pre-110-canary-retry-…` (morning's), `clawcode.yaml.bak-pre-110-revert-…`, env `bak-pre-brave` (sed in-place backup)
 - ✅ Daemon restarted: PID 1945993 (uptime 2h28m, mem peak 13.4 GB) → PID 2157589 (current). Phase 999.6 snapshot/restore preserved agent state.
 - ✅ Boot secrets: `secrets: pre-resolve complete {resolved:15, failed:0}` — Path 2 op:// infrastructure exercised on prod with zero failures
-- ✅ All 5 main agents warm (Admin Clawdy 15:18:32, fin-acquisition 15:18:47, research 15:18:59, fin-research 15:19:15, personal 15:26:28 — needed manual `clawcode restart personal` due to Phase 999.33 boot-storm)
-- ✅ **GATE C COMPLETE** — Admin Clawdy on Go static search shim. yaml edited 2026-05-06 22:41 UTC (`agents.Admin Clawdy.shimRuntime.search: static`). Daemon restart required (NOT just per-agent restart — see ROLLOUT-LOG §2.8). Go shim PID 2195136, **VmRSS 6.4 MB vs Node baseline 153.9 MB → 96% reduction per agent**. 0 exit-75 / TEMPFAIL.
+- ✅ All 4 active agents warm: Admin Clawdy, fin-acquisition, research, fin-research
+- ✅ **personal agent STOPPED** — `clawcode stop personal` executed ~23:10 UTC. autoStart=false in yaml. Will not auto-start on next daemon restart. (Phase 999.33 boot-storm relief.)
+- ✅ **GATE C COMPLETE** — Admin Clawdy on Go static search shim. yaml edited 2026-05-06 22:41 UTC. Daemon restart required (NOT just per-agent restart — see ROLLOUT-LOG §2.8). Go shim PID 2195136, **VmRSS 6.4 MB vs Node baseline 153.9 MB → 96% reduction per agent**. 0 exit-75 / TEMPFAIL.
+- ✅ **SMOKE TEST CONFIRMED** — Admin Clawdy called `web_search` through Go shim PID 2195136 and returned real Brave results (`2026-05-06 https://www.calendardate.com/todays.htm`). Confirmed ~23:00 UTC via Discord. This is the first real production traffic through the Go search shim.
 - 🟡 Image + Browser canaries — not flipped. Awaiting search 24-48h watch GREEN.
-- 🟡 24-48h watch in progress (started 2026-05-06 22:42 UTC).
+- 🟡 24-48h watch in progress (started 2026-05-06 22:42 UTC). Watch window closes ~2026-05-08 22:42 UTC.
 
 ### On claude-bot (dev)
 - Dev daemon running at `/home/jjagpal/.clawcode-dev-110/manager/clawcode.sock`
