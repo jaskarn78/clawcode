@@ -1,10 +1,11 @@
 // Package main — Phase 110 Stage 0b production MCP shim entrypoint.
 //
-// Single-binary MCP shim with --type dispatch. Wave 2 (this build)
-// supports search end-to-end via the daemon's `list-mcp-tools` +
-// `search-tool-call` IPC methods. Image and browser dispatch to stubs
-// that exit SHIM_EXIT_USAGE (64) until plans 110-06 (image) and 110-07
-// (browser) extend Register for those types.
+// Single-binary MCP shim with --type dispatch. All three shim types
+// (search, image, browser) are wired through the same daemon IPC
+// surface (`list-mcp-tools` + `<type>-tool-call`):
+//   - search:  plan 110-04 (Wave 2 — shipped)
+//   - image:   plan 110-06 (Wave 4 — this build)
+//   - browser: plan 110-07 (Wave 5 — this build)
 package main
 
 import (
@@ -13,6 +14,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/jjagpal/clawcode-shim/internal/shim/browser"
+	"github.com/jjagpal/clawcode-shim/internal/shim/image"
 	"github.com/jjagpal/clawcode-shim/internal/shim/search"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -68,18 +71,21 @@ func main() {
 			os.Exit(SHIM_EXIT_TEMPFAIL)
 		}
 	case "image":
-		// Stub — Wave 3 (plan 110-06) extends this case with the real
-		// image Register call. Until then, exit USAGE so operators see
-		// a clear "not implemented" signal.
-		logger.Error("image shim not yet implemented in Stage 0b Wave 2 — see plan 110-06 (image)",
-			"serverType", *serverType)
-		os.Exit(SHIM_EXIT_USAGE)
+		if err := image.Register(server); err != nil {
+			// Boot-time IPC failure (daemon unreachable, list-mcp-tools
+			// failed, or CLAWCODE_AGENT unset). Exit 75 so SDK respawns
+			// once the daemon is back up.
+			logger.Error("image.Register failed", "err", err)
+			os.Exit(SHIM_EXIT_TEMPFAIL)
+		}
 	case "browser":
-		// Stub — Wave 4 (plan 110-07) extends this case with the real
-		// browser Register call. Until then, exit USAGE.
-		logger.Error("browser shim not yet implemented in Stage 0b Wave 2 — see plan 110-07 (browser)",
-			"serverType", *serverType)
-		os.Exit(SHIM_EXIT_USAGE)
+		if err := browser.Register(server); err != nil {
+			// Boot-time IPC failure (daemon unreachable, list-mcp-tools
+			// failed, or CLAWCODE_AGENT unset). Exit 75 so SDK respawns
+			// once the daemon is back up.
+			logger.Error("browser.Register failed", "err", err)
+			os.Exit(SHIM_EXIT_TEMPFAIL)
+		}
 	default:
 		logger.Error("unknown serverType", "serverType", *serverType)
 		os.Exit(SHIM_EXIT_USAGE)
