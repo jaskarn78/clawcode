@@ -279,6 +279,14 @@ export const IPC_METHODS = [
   // surface; consumed by `clawcode broker-status` CLI for live operator
   // visibility into 1P quota pressure across the fleet.
   "broker-status",
+  // Phase 110 Stage 0b 0B-RT-13 — daemon-side IPC method that returns the
+  // current TOOL_DEFINITIONS for a given shim type, JSON-Schema-converted
+  // from the existing TypeScript Zod definitions in
+  // src/{search,image,browser}/tools.ts. Future Wave 2-4 Go shims call
+  // this at boot to fetch tool schemas, keeping Zod single-sourced (no
+  // schema duplication into Go). Sequencing constraint (CONTEXT.md):
+  // ships in its own commit BEFORE any Go shim builds against it.
+  "list-mcp-tools",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
@@ -376,3 +384,50 @@ export const SecretsInvalidateResponseSchema = z.object({
   invalidated: z.union([z.literal("all"), z.string()]),
 });
 export type SecretsInvalidateResponse = z.infer<typeof SecretsInvalidateResponseSchema>;
+
+/**
+ * Phase 110 Stage 0b 0B-RT-13 — `list-mcp-tools` IPC contract.
+ *
+ * Future Wave 2-4 Go shims call this method at boot to fetch the canonical
+ * MCP tool list for their shim type, JSON-Schema-converted from the
+ * single-source-of-truth TypeScript Zod definitions in
+ * `src/{search,image,browser}/tools.ts`. Keeps schemas single-sourced —
+ * the Go shim does NOT duplicate Zod definitions (Pitfall 4 in 110-RESEARCH.md).
+ *
+ * Method shape (locked in 110-CONTEXT.md):
+ *   - Request:  { shimType: "search" | "image" | "browser" }
+ *   - Response: { tools: ToolSchema[] }
+ *     where each ToolSchema mirrors the MCP `tools/list` response item:
+ *       { name: string, description: string, inputSchema: object (JSON Schema) }
+ *
+ * Adds ~1 ms IPC round-trip on shim boot — negligible.
+ *
+ * Sequencing constraint: this contract + its handler ship BEFORE any Go
+ * shim builds against it (Wave 1 prerequisite for Waves 2-4).
+ */
+export const listMcpToolsRequestSchema = z.object({
+  shimType: z.enum(["search", "image", "browser"]),
+});
+export type ListMcpToolsRequest = z.infer<typeof listMcpToolsRequestSchema>;
+
+/**
+ * One tool entry in the response, mirroring the MCP `tools/list` shape.
+ *
+ * `inputSchema` is opaque to the daemon — it's the JSON-Schema-converted
+ * Zod schema. The daemon serializes; the Go shim passes it through to
+ * `mcp.AddTool` verbatim. Validating the inner schema would require
+ * pinning a JSON-Schema dialect here; instead we accept any object so
+ * the converter (zod/v4 native `z.toJSONSchema`) can evolve without a
+ * second migration here.
+ */
+export const mcpToolSchemaSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  inputSchema: z.record(z.string(), z.unknown()),
+});
+export type McpToolSchema = z.infer<typeof mcpToolSchemaSchema>;
+
+export const listMcpToolsResponseSchema = z.object({
+  tools: z.array(mcpToolSchemaSchema),
+});
+export type ListMcpToolsResponse = z.infer<typeof listMcpToolsResponseSchema>;
