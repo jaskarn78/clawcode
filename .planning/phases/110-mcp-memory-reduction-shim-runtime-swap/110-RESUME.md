@@ -1,7 +1,7 @@
 # Phase 110 Stage 0b — Resume Brief (post-context-clear)
 
-**Last updated:** 2026-05-06 (PM session)
-**Status:** Search Go binary on clawdy; canary unflipped. **Image (110-06) + Browser (110-07) Tasks 1+2 done in PM session — code on master, validated in dev, NOT redeployed to clawdy.**
+**Last updated:** 2026-05-06 (PM session, post-deploy)
+**Status:** **PM dist + binary DEPLOYED to clawdy. BRAVE_API_KEY provisioned in /etc/clawcode/env via op://. Daemon restarted at 15:18 PT; all 5 main agents warm. NO canary flipped — every agent still on Node baseline.** Phase 110 RSS savings still 0 GiB (canary flips are the next operator step).
 
 ## TL;DR for next session
 
@@ -40,14 +40,16 @@ Ramy-quiet check via Discord MCP **before any prod restart**.
 
 ## Current state (verified 2026-05-06)
 
-### On clawdy (prod)
-- ✅ New dist deployed: `/opt/clawcode/dist/cli/index.js` (2.3 MB, has per-agent shimRuntime + env overrides)
-- ✅ Go binary deployed: `/opt/clawcode/bin/clawcode-mcp-shim` (5.4 MB, modelcontextprotocol/go-sdk v1.6.0)
-- ✅ Backups preserved: `/opt/clawcode/dist.bak-pre-110-final-*`, `/etc/clawcode/clawcode.yaml.bak-pre-110-revert-*`
-- ❌ **No canary flipped** — every running agent is on Node search-mcp baseline
-- 5 active agents: Admin Clawdy, fin-acquisition, research, fin-research, personal (all warm)
-- 3 stopped (autoStart=false): finmentum-content-creator, general, projects
-- 1 orphan Go shim still alive (PID was 1966758, ~7 MB RSS, harmless — gets cleaned next daemon restart)
+### On clawdy (prod) — post-PM-deploy 2026-05-06 15:18 PT
+- ✅ **PM dist deployed**: `/opt/clawcode/dist/cli/index.js` (2.30 MB, sha256 `ba56faf5…`) — image+browser cases now ACTIVE (no longer stubs)
+- ✅ **PM Go binary deployed**: `/opt/clawcode/bin/clawcode-mcp-shim` (5.69 MB, sha256 `8656243a…`) — image.Register + browser.Register wired
+- ✅ **BRAVE_API_KEY provisioned**: `/etc/clawcode/env` now contains the key (resolved from `op://clawdbot/Brave Search API Key/credential`); systemd EnvironmentFile picks it up; daemon process.env has BRAVE_API_KEY set
+- ✅ Backups preserved: `dist.bak-pre-110-final-pm-20260506-151645/`, `clawcode-mcp-shim.bak-pre-110-final-pm-20260506-151645`, `clawcode-mcp-shim.bak-pre-110-canary-retry-…` (morning's), `clawcode.yaml.bak-pre-110-revert-…`, env `bak-pre-brave` (sed in-place backup)
+- ✅ Daemon restarted: PID 1945993 (uptime 2h28m, mem peak 13.4 GB) → PID 2157589 (current). Phase 999.6 snapshot/restore preserved agent state.
+- ✅ Boot secrets: `secrets: pre-resolve complete {resolved:15, failed:0}` — Path 2 op:// infrastructure exercised on prod with zero failures
+- ✅ All 5 main agents warm (Admin Clawdy 15:18:32, fin-acquisition 15:18:47, research 15:18:59, fin-research 15:19:15, personal 15:26:28 — needed manual `clawcode restart personal` due to Phase 999.33 boot-storm)
+- ❌ **No canary flipped** — every agent still on Node search/image/browser baseline. Stage 0b RSS savings still 0 GiB.
+- ✅ 0 exit-75 / TEMPFAIL events since restart. 0 panics.
 
 ### On claude-bot (dev)
 - Dev daemon running at `/home/jjagpal/.clawcode-dev-110/manager/clawcode.sock`
