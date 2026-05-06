@@ -1629,8 +1629,16 @@ export async function handleMarketplaceProbeOpItemsIpc(
 
 /**
  * Base directory for manager runtime files.
+ *
+ * Phase 110 Stage 0b — `CLAWCODE_MANAGER_DIR` env override allows a
+ * parallel dev daemon (running as the same user, separate config) to
+ * bind sockets, write registry, and snapshot to a fully isolated path
+ * without colliding with another daemon's manager files. Same defense-
+ * in-depth pattern as `CLAWCODE_MANAGER_SOCK` (Go shim side) and
+ * `CLAWCODE_STATIC_SHIM_PATH` (loader side). Default is canonical.
  */
-export const MANAGER_DIR = join(homedir(), ".clawcode", "manager");
+export const MANAGER_DIR =
+  process.env.CLAWCODE_MANAGER_DIR ?? join(homedir(), ".clawcode", "manager");
 
 /**
  * Path to the Unix domain socket.
