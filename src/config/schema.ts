@@ -1147,6 +1147,33 @@ export const agentSchema = z.object({
    */
   autoStart: z.boolean().optional(),
   /**
+   * Phase 110 Stage 0b — per-agent shimRuntime override. Mirrors the
+   * shape of `defaultsSchema.shimRuntime` but each field is optional so
+   * the loader can fall through (per-agent → defaults → "node") without
+   * forcing operators to specify all three types when overriding one.
+   *
+   * Use case: per-agent canary rollout. Set
+   * `agents.<name>.shimRuntime.search: static` to flip ONE agent to the
+   * Go binary while the rest of the fleet stays on Node. Survives
+   * agent-restart (loader re-resolves on every spawn) which the prior
+   * inline-mcpServers-override workaround did not.
+   *
+   * Each field accepts the same enum as defaults.shimRuntime:
+   *   - "node":   per-agent `clawcode <type>-mcp` (Node, ~147 MB RSS)
+   *   - "static": Go binary at /opt/clawcode/bin/clawcode-mcp-shim --type X
+   *   - "python": (reserved) python3 translator
+   *
+   * Crash-fallback (LOCKED): same as fleet-wide — no try/catch around
+   * the alternate-runtime path. Operator-locked decision is fail-loud.
+   */
+  shimRuntime: z
+    .object({
+      search: z.enum(["node", "static", "python"]).optional(),
+      image: z.enum(["node", "static", "python"]).optional(),
+      browser: z.enum(["node", "static", "python"]).optional(),
+    })
+    .optional(),
+  /**
    * Phase 999.25 — wake-order priority for boot-time auto-start.
    *
    * Lower numbers boot first. Agents without `wakeOrder` boot LAST in YAML

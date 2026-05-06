@@ -366,9 +366,18 @@ export function resolveAgentConfig(
     return env;
   };
 
+  // Phase 110 Stage 0b — per-agent shimRuntime override fall-through.
+  // Resolution order: per-agent setting → defaults → "node" baseline.
+  // Per-agent override is what makes Phase 110-05's canary rollout work:
+  // flip ONE agent to "static" without touching the fleet default. The
+  // override survives agent-restart because the loader re-resolves on
+  // every spawn — the prior inline-mcpServers workaround did not.
+  const resolveRuntime = (type: ShimType): ShimRuntime =>
+    agent.shimRuntime?.[type] ?? defaults.shimRuntime?.[type] ?? "node";
+
   const browserEnabled = defaults.browser?.enabled !== false;
   if (browserEnabled && !resolvedMcpMap.has("browser")) {
-    const runtime: ShimRuntime = defaults.shimRuntime?.browser ?? "node";
+    const runtime = resolveRuntime("browser");
     const { command, args } = resolveShimCommand("browser", runtime);
     resolvedMcpMap.set("browser", {
       name: "browser",
@@ -382,7 +391,7 @@ export function resolveAgentConfig(
 
   const searchEnabled = defaults.search?.enabled !== false;
   if (searchEnabled && !resolvedMcpMap.has("search")) {
-    const runtime: ShimRuntime = defaults.shimRuntime?.search ?? "node";
+    const runtime = resolveRuntime("search");
     const { command, args } = resolveShimCommand("search", runtime);
     resolvedMcpMap.set("search", {
       name: "search",
@@ -396,7 +405,7 @@ export function resolveAgentConfig(
 
   const imageEnabled = defaults.image?.enabled !== false;
   if (imageEnabled && !resolvedMcpMap.has("image")) {
-    const runtime: ShimRuntime = defaults.shimRuntime?.image ?? "node";
+    const runtime = resolveRuntime("image");
     const { command, args } = resolveShimCommand("image", runtime);
     resolvedMcpMap.set("image", {
       name: "image",

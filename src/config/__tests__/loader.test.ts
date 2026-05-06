@@ -949,6 +949,84 @@ describe("resolveAgentConfig - mcpServers", () => {
       expect(search!.env).not.toHaveProperty("CLAWCODE_MANAGER_SOCK");
     });
 
+    // Phase 110 Stage 0b — per-agent shimRuntime override (Plan 110-05's
+    // canary rollout primitive). Loader resolution order: per-agent →
+    // defaults → "node". The per-agent path survives agent-restart, which
+    // the inline-mcpServers workaround did not (cause of the 2026-05-06
+    // admin-clawdy canary regression at 09:14:57 — agent-restart spawned
+    // Node search-mcp instead of honoring the operator-added inline
+    // override).
+    it("per-agent override: agent.shimRuntime.search='static' beats defaults (defaults left at node)", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "static" },
+      };
+      const resolved = resolveAgentConfig(a, defaults, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      expect(search!.command).toBe(STATIC_PATH);
+      expect(search!.args).toEqual(["--type", "search"]);
+      // Other types fall through to defaults (node).
+      const image = resolved.mcpServers.find((s) => s.name === "image");
+      expect(image!.command).toBe("clawcode");
+      expect(image!.args).toEqual(["image-mcp"]);
+    });
+
+    it("per-agent override: agent.shimRuntime.search='node' beats defaults.shimRuntime.search='static' (operator force-back-to-node)", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "node" },
+      };
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(a, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      // Per-agent "node" wins over defaults "static" — operator can opt
+      // a single agent OUT of a fleet-wide canary.
+      expect(search!.command).toBe("clawcode");
+      expect(search!.args).toEqual(["search-mcp"]);
+      // Env: node runtime → no CLAWCODE_MANAGER_SOCK.
+      expect(search!.env).not.toHaveProperty("CLAWCODE_MANAGER_SOCK");
+    });
+
+    it("per-agent override: partial — only search overridden, image/browser fall through to defaults", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "static" },
+      };
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "node", image: "python", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(a, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      const image = resolved.mcpServers.find((s) => s.name === "image");
+      const browser = resolved.mcpServers.find((s) => s.name === "browser");
+      // Per-agent: search → static
+      expect(search!.command).toBe(STATIC_PATH);
+      // Defaults: image → python (per-agent didn't set image)
+      expect(image!.command).toBe("python3");
+      // Defaults: browser → node
+      expect(browser!.command).toBe("clawcode");
+    });
+
+    it("per-agent override: env injection respects per-agent runtime, not defaults", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "static" },
+      };
+      const resolved = resolveAgentConfig(a, defaults, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      // Static runtime via per-agent → CLAWCODE_MANAGER_SOCK injected.
+      expect(search!.env).toMatchObject({
+        CLAWCODE_AGENT: "test",
+        CLAWCODE_MANAGER_SOCK: expect.stringMatching(
+          /\.clawcode\/manager\/clawcode\.sock$/,
+        ),
+      });
+    });
+
     it("env injection: alternate-runtime CLAWCODE_MANAGER_SOCK matches daemon SOCKET_PATH suffix (must stay aligned with src/manager/daemon.ts:SOCKET_PATH and Go side default at internal/shim/ipc/client.go:SocketPath)", () => {
       const d: DefaultsConfig = {
         ...defaults,
