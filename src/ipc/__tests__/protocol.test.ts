@@ -162,6 +162,11 @@ describe("IPC_METHODS", () => {
       "fleet-stats",
       // Phase 109-A — 1Password broker pool status (rps/throttle counters).
       "broker-status",
+      // Phase 110 Stage 0b 0B-RT-13 — daemon-side IPC method that returns
+      // JSON-Schema-converted TOOL_DEFINITIONS for a given shim type.
+      // Future Wave 2-4 Go shims call this at boot to fetch tool schemas
+      // (keeps Zod single-sourced — no schema duplication into Go).
+      "list-mcp-tools",
     ]);
   });
 });
