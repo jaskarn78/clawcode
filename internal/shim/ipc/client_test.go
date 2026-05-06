@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -246,7 +247,44 @@ func TestSocketPathEnvOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SocketPath default: %v", err)
 	}
-	if !strings.HasSuffix(got, ".clawcode/manager/manager.sock") {
-		t.Fatalf("default path: got %q, want suffix .clawcode/manager/manager.sock", got)
+	if !strings.HasSuffix(got, ".clawcode/manager/clawcode.sock") {
+		t.Fatalf("default path: got %q, want suffix .clawcode/manager/clawcode.sock", got)
+	}
+}
+
+// TestSocketPathDefaultMatchesDaemonConvention pins the Go default to the
+// exact same path the TypeScript daemon binds at
+// src/manager/daemon.ts:SOCKET_PATH (~/.clawcode/manager/clawcode.sock).
+//
+// If either side renames, this test fails. Add to the failure message a
+// reminder to update both in lockstep — the bug this guards against is
+// the 2026-05-06 admin-clawdy canary failure where the Go default was
+// "manager.sock" while the daemon bound "clawcode.sock", so net.Dial
+// returned ENOENT and the shim exited 75 before MCP initialize.
+func TestSocketPathDefaultMatchesDaemonConvention(t *testing.T) {
+	t.Setenv("CLAWCODE_MANAGER_SOCK", "")
+	got, err := SocketPath()
+	if err != nil {
+		t.Fatalf("SocketPath: %v", err)
+	}
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		t.Fatalf("UserHomeDir: %v", homeErr)
+	}
+	want := filepath.Join(home, ".clawcode", "manager", "clawcode.sock")
+	if got != want {
+		t.Fatalf("SocketPath default = %q, want %q (must match daemon SOCKET_PATH at src/manager/daemon.ts; rename one side without the other and the shim cannot dial the daemon)", got, want)
+	}
+}
+
+// TestSocketPathHonorsOverride pins the env-override branch.
+func TestSocketPathHonorsOverride(t *testing.T) {
+	t.Setenv("CLAWCODE_MANAGER_SOCK", "/tmp/custom.sock")
+	got, err := SocketPath()
+	if err != nil {
+		t.Fatalf("SocketPath: %v", err)
+	}
+	if got != "/tmp/custom.sock" {
+		t.Fatalf("SocketPath override = %q, want /tmp/custom.sock", got)
 	}
 }

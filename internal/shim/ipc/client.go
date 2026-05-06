@@ -31,11 +31,15 @@ import (
 // SocketPath returns the daemon's unix socket path.
 //
 // Honors the CLAWCODE_MANAGER_SOCK environment variable as an override;
-// falls back to ~/.clawcode/manager/manager.sock (matching the
-// TypeScript daemon's default at src/manager/daemon.ts).
+// falls back to ~/.clawcode/manager/clawcode.sock (matching the
+// TypeScript daemon's SOCKET_PATH constant at src/manager/daemon.ts).
 //
 // The override is intended for tests and custom installs where the
-// default home-relative path is not appropriate.
+// default home-relative path is not appropriate. The Node loader
+// (src/config/loader.ts) ALSO sets this env explicitly when spawning
+// alternate-runtime shims, as defense-in-depth against future drift —
+// but the default below MUST stay aligned with the daemon's binding so
+// the binary works even when launched without the env override.
 func SocketPath() (string, error) {
 	if override := os.Getenv("CLAWCODE_MANAGER_SOCK"); override != "" {
 		return override, nil
@@ -44,7 +48,7 @@ func SocketPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
-	return filepath.Join(home, ".clawcode", "manager", "manager.sock"), nil
+	return filepath.Join(home, ".clawcode", "manager", "clawcode.sock"), nil
 }
 
 // Request is the JSON-RPC 2.0 request envelope written to the daemon.

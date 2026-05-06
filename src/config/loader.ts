@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { readFile, access } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve as pathResolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { configSchema } from "./schema.js";
@@ -53,6 +54,28 @@ import type {
 // planner's initial guess and would have required sudo grants we don't have.
 export const STATIC_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim";
 export const PYTHON_SHIM_PATH = "/opt/clawcode/bin/clawcode-mcp-shim.py";
+
+// Phase 110 Stage 0b — daemon IPC socket path (mirrors
+// `SOCKET_PATH` in src/manager/daemon.ts:1638). Recomputed inline
+// rather than imported because daemon.ts already imports from
+// loader.ts and the resulting cycle would break tsup bundling. The
+// Go shim's IPC client (internal/shim/ipc/client.go SocketPath) has
+// the same default; this constant is what the loader injects via
+// CLAWCODE_MANAGER_SOCK as defense-in-depth, so a future relocation
+// of MANAGER_DIR cannot silently break alternate-runtime shims that
+// were spawned with the old default baked in.
+//
+// Both sides MUST stay aligned with daemon.ts SOCKET_PATH. Drift is
+// caught by:
+//   - Go side: TestSocketPathDefaultMatchesDaemonConvention
+//   - TS side: shim-runtime-env-injection assertions in
+//     src/config/__tests__/loader.test.ts
+export const MANAGER_SOCKET_PATH = join(
+  homedir(),
+  ".clawcode",
+  "manager",
+  "clawcode.sock",
+);
 
 export type ShimType = "search" | "image" | "browser";
 export type ShimRuntime = "node" | "static" | "python";
@@ -327,6 +350,22 @@ export function resolveAgentConfig(
   // path, no pre-detection of binary existence. If a "static" spawn
   // fails, the operator's tooling surfaces the failure directly — the
   // operator-locked decision is fail-loud, not silent degradation.
+  // Phase 110 Stage 0b — env injection helper for auto-injected shims.
+  // Always sets CLAWCODE_AGENT (every runtime needs it). Adds
+  // CLAWCODE_MANAGER_SOCK as defense-in-depth for non-`node` runtimes —
+  // the Go binary's SocketPath() default (~/.clawcode/manager/clawcode.sock)
+  // already matches the daemon's binding, but explicit env injection
+  // survives any future relocation of MANAGER_DIR without a Go-side
+  // rebuild. Node runtime imports the constant directly, so no env
+  // override is needed (and would be redundant).
+  const buildShimEnv = (runtime: ShimRuntime): Record<string, string> => {
+    const env: Record<string, string> = { CLAWCODE_AGENT: agent.name };
+    if (runtime !== "node") {
+      env.CLAWCODE_MANAGER_SOCK = MANAGER_SOCKET_PATH;
+    }
+    return env;
+  };
+
   const browserEnabled = defaults.browser?.enabled !== false;
   if (browserEnabled && !resolvedMcpMap.has("browser")) {
     const runtime: ShimRuntime = defaults.shimRuntime?.browser ?? "node";
@@ -335,7 +374,7 @@ export function resolveAgentConfig(
       name: "browser",
       command,
       args: [...args],
-      env: { CLAWCODE_AGENT: agent.name },
+      env: buildShimEnv(runtime),
       // Phase 85 TOOL-01 — browser MCP is mandatory when auto-injected.
       optional: false,
     });
@@ -349,7 +388,7 @@ export function resolveAgentConfig(
       name: "search",
       command,
       args: [...args],
-      env: { CLAWCODE_AGENT: agent.name },
+      env: buildShimEnv(runtime),
       // Phase 85 TOOL-01 — search MCP is mandatory when auto-injected.
       optional: false,
     });
@@ -363,7 +402,7 @@ export function resolveAgentConfig(
       name: "image",
       command,
       args: [...args],
-      env: { CLAWCODE_AGENT: agent.name },
+      env: buildShimEnv(runtime),
       // Phase 85 TOOL-01 — image MCP is mandatory when auto-injected.
       optional: false,
     });

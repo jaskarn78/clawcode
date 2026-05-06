@@ -907,8 +907,16 @@ describe("resolveAgentConfig - mcpServers", () => {
         expect(entry!.command).toBe(STATIC_PATH);
         expect(entry!.args).toEqual(["--type", type]);
         // CLAWCODE_AGENT env passthrough preserved across all runtimes —
-        // the inner translator still needs the agent identity.
-        expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
+        // the inner translator still needs the agent identity. Phase 110
+        // Stage 0b adds CLAWCODE_MANAGER_SOCK as defense-in-depth so a
+        // future relocation of MANAGER_DIR cannot silently break shim
+        // children spawned with the old default baked in.
+        expect(entry!.env).toEqual({
+          CLAWCODE_AGENT: "test",
+          CLAWCODE_MANAGER_SOCK: expect.stringMatching(
+            /\.clawcode\/manager\/clawcode\.sock$/,
+          ),
+        });
       });
 
       it(`${type}: 'python' rewrites to python3 /opt/clawcode/bin/clawcode-mcp-shim.py --type ${type}`, () => {
@@ -925,9 +933,37 @@ describe("resolveAgentConfig - mcpServers", () => {
         expect(entry).toBeDefined();
         expect(entry!.command).toBe("python3");
         expect(entry!.args).toEqual([PYTHON_PATH, "--type", type]);
-        expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
+        expect(entry!.env).toEqual({
+          CLAWCODE_AGENT: "test",
+          CLAWCODE_MANAGER_SOCK: expect.stringMatching(
+            /\.clawcode\/manager\/clawcode\.sock$/,
+          ),
+        });
       });
     }
+
+    it("env injection: node runtime gets CLAWCODE_AGENT only (no CLAWCODE_MANAGER_SOCK — Node imports the daemon constant directly)", () => {
+      const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      expect(search!.env).toEqual({ CLAWCODE_AGENT: "test" });
+      expect(search!.env).not.toHaveProperty("CLAWCODE_MANAGER_SOCK");
+    });
+
+    it("env injection: alternate-runtime CLAWCODE_MANAGER_SOCK matches daemon SOCKET_PATH suffix (must stay aligned with src/manager/daemon.ts:SOCKET_PATH and Go side default at internal/shim/ipc/client.go:SocketPath)", () => {
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      expect(search!.env!.CLAWCODE_MANAGER_SOCK).toMatch(
+        /\.clawcode\/manager\/clawcode\.sock$/,
+      );
+      // Pin: the file basename MUST be `clawcode.sock`, not `manager.sock`.
+      // The 2026-05-06 admin-clawdy canary failure was caused by the Go
+      // shim's default being `manager.sock` — guard against future drift.
+      expect(search!.env!.CLAWCODE_MANAGER_SOCK).not.toMatch(/manager\.sock$/);
+    });
 
     it("per-type independence: search=static, image=node, browser=python yields three different commands", () => {
       const d: DefaultsConfig = {
