@@ -41,6 +41,7 @@ import { captureDiscordExchange } from "./capture.js";
 import { MessageCoalescer } from "./message-coalescer.js";
 import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js";
 import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
+import { runVisionPrePass } from "./vision-pre-pass.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -440,6 +441,19 @@ export class DiscordBridge {
           downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
         }
 
+        // Phase 113 — vision pre-pass: resize + Haiku analysis for images
+        let visionAnalyses = new Map<string, string>();
+        if (downloadResults) {
+          const visionCfg = this.sessionManager.getAgentConfig(sessionName);
+          if (visionCfg?.vision?.enabled === true) {
+            visionAnalyses = await runVisionPrePass(
+              downloadResults,
+              { timeoutMs: 30_000 },
+              this.log,
+            );
+          }
+        }
+
         // Fetch the referenced message if this is a reply, so the agent sees
         // the quoted content (not just an opaque message_id).
         let referencedMessage: Message | undefined;
@@ -451,7 +465,7 @@ export class DiscordBridge {
           }
         }
 
-        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
+        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage, undefined, visionAnalyses);
         // End the receive span right before dispatching to the session (end_to_end still open)
         try { receiveSpan?.end(); } catch { /* non-fatal */ }
         await this.streamAndPostResponse(message, sessionName, formattedMessage, turn);
@@ -535,6 +549,19 @@ export class DiscordBridge {
       downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
     }
 
+    // Phase 113 — vision pre-pass: resize + Haiku analysis for images
+    let visionAnalyses = new Map<string, string>();
+    if (downloadResults) {
+      const visionCfg = this.sessionManager.getAgentConfig(agentName);
+      if (visionCfg?.vision?.enabled === true) {
+        visionAnalyses = await runVisionPrePass(
+          downloadResults,
+          { timeoutMs: 30_000 },
+          this.log,
+        );
+      }
+    }
+
     // Fetch the referenced message if this is a reply, so the agent sees
     // the quoted content (not just an opaque message_id).
     let referencedMessage: Message | undefined;
@@ -546,7 +573,7 @@ export class DiscordBridge {
       }
     }
 
-    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
+    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage, undefined, visionAnalyses);
     // End the receive span right before session dispatch; end_to_end remains open
     try { receiveSpan?.end(); } catch { /* non-fatal */ }
     await this.streamAndPostResponse(message, agentName, formattedMessage, turn);
@@ -1032,6 +1059,7 @@ export function formatDiscordMessage(
   downloadResults?: readonly DownloadResult[],
   referencedMessage?: Message,
   agentTz?: string,
+  visionAnalyses?: ReadonlyMap<string, string>,
 ): string {
   const parts = [
     `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${renderAgentVisibleTimestamp(message.createdAt, agentTz)}">`,
@@ -1046,16 +1074,21 @@ export function formatDiscordMessage(
       parts.push(`\n${metadata}`);
     }
 
-    // Add multimodal reading hints for successfully downloaded images
+    // Add vision analysis or fallback file-path hint for each downloaded image
     for (const result of downloadResults) {
       if (
         result.success &&
         result.path !== null &&
         isImageAttachment(result.attachmentInfo.contentType)
       ) {
-        parts.push(
-          `(Image downloaded -- read the file at ${result.path} to see its contents)`,
-        );
+        const analysis = visionAnalyses?.get(result.path);
+        if (analysis) {
+          parts.push(`<screenshot-analysis>\n${analysis}\n</screenshot-analysis>`);
+        } else {
+          parts.push(
+            `(Image downloaded -- read the file at ${result.path} to see its contents)`,
+          );
+        }
       }
     }
   } else if (message.attachments.size > 0) {

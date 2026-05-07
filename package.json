@@ -23,6 +23,7 @@
   ],
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.97",
+    "@anthropic-ai/sdk": "^0.80.0",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@huggingface/transformers": "^4.0.1",
     "@mozilla/readability": "^0.6.0",
@@ -38,6 +39,7 @@
     "mysql2": "^3.22.1",
     "nanoid": "^5.1.7",
     "p-retry": "^8.0.0",
+    "sharp": "^0.34.5",
     "pdf-parse": "^2.4.5",
     "pino": "^9",
     "playwright-core": "^1.59.1",

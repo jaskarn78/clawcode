@@ -1380,6 +1380,17 @@ export const agentSchema = z.object({
       tools: toolsConfigSchema.optional(),
     })
     .optional(),
+  // Phase 113 — per-agent Haiku vision pre-pass for image attachments.
+  // When enabled, image attachments are resized and analysed by Haiku before
+  // the main agent turn, injecting <screenshot-analysis> into the message.
+  // Default false so the fleet opts in per-agent. Auth via OAuth token
+  // (haiku-direct.ts), never ANTHROPIC_API_KEY.
+  vision: z
+    .object({
+      enabled: z.boolean().default(false),
+      preserveImage: z.boolean().default(false),
+    })
+    .optional(),
 });
 
 /**

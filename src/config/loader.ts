@@ -630,6 +630,7 @@ export function resolveAgentConfig(
       : {}),
     slashCommands: agent.slashCommands,
     perf: agent.perf ?? defaults.perf ?? undefined,
+    vision: agent.vision ?? undefined,
   };
 }
 

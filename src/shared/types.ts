@@ -431,6 +431,11 @@ export type ResolvedAgentConfig = {
       }>>;
     };
   };
+  // Phase 113 — per-agent Haiku vision pre-pass config.
+  readonly vision?: {
+    readonly enabled: boolean;
+    readonly preserveImage: boolean;
+  };
 };
 
 /**
