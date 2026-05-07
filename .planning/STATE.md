@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 110-04-PLAN.md
-last_updated: "2026-05-06T14:37:53.725Z"
-last_activity: 2026-05-06
+status: Phase 110 SHIPPED — awaiting next phase
+stopped_at: Completed Phase 110 (plan 110-08 — Stage 0b cleanup path A)
+last_updated: "2026-05-07T00:00:00.000Z"
+last_activity: 2026-05-07
 progress:
   total_phases: 56
-  completed_phases: 14
+  completed_phases: 15
   total_plans: 86
-  completed_plans: 77
+  completed_plans: 81
 ---
 
 # Project State
@@ -21,12 +21,13 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** Phase 110 — MCP shim runtime swap (Stage 0b)
+**Current focus:** Phase 110 SHIPPED 2026-05-07 — Stage 0b complete; awaiting next phase selection.
 
 ## Current Position
 
-Phase: 110 (MCP shim runtime swap (Stage 0b)) — EXECUTING
-Plan: 3 of 9
+Phase: 110 (MCP shim runtime swap, Stage 0b) — SHIPPED 2026-05-07
+Plan: 9 of 9 (all SHIPPED)
+Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 

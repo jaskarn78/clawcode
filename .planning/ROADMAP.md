@@ -714,7 +714,7 @@ Plans:
 
 ---
 
-### Phase 110: MCP memory reduction — foundational scaffolding (Stage 0a SHIPPED 2026-05-03; later stages active)
+### Phase 110: MCP memory reduction — shim runtime swap (Stage 0a SHIPPED 2026-05-03; Stage 0b SHIPPED 2026-05-07; Stage 1+ continues elsewhere)
 
 **Goal:** Multi-stage MCP memory-reduction effort. Stage 0a (foundational scaffolding, no behavior change) lands the schema + observability + CLI surface for the upcoming shim-runtime swap (Stage 0b) and broker generalization (Stage 1).
 
@@ -737,7 +737,7 @@ Plans:
 
 **Stage 0b Requirements:** [0B-RT-00, 0B-RT-01, 0B-RT-02, 0B-RT-03, 0B-RT-04, 0B-RT-05, 0B-RT-06, 0B-RT-07, 0B-RT-08, 0B-RT-09, 0B-RT-10, 0B-RT-11, 0B-RT-12, 0B-RT-13]
 
-**Plans:** 8/9 plans executed (Stage 0b doc-cleanup committed 2026-05-07; rollback drill PENDING operator window)
+**Plans:** 9/9 plans SHIPPED
 - [x] 110-00-PLAN.md — Wave 0 spike + kill-switch gate (minimal Go shim, RSS measurement on admin-clawdy)
 - [x] 110-01-PLAN.md — Daemon `list-mcp-tools` IPC method (ships first, before any Go shim builds against it)
 - [x] 110-02-PLAN.md — Schema enum widening + loader auto-inject + fleet-stats classifier
@@ -746,9 +746,9 @@ Plans:
 - [x] 110-05-PLAN.md — Search rollout (admin-clawdy canary flipped 2026-05-06; smoke confirmed; 4-agent expanded canary same day)
 - [x] 110-06-PLAN.md — Image Go shim implementation + rollout (code on master 2026-05-06; prod binary active; canary on 4 agents)
 - [x] 110-07-PLAN.md — Browser Go shim implementation + rollout (code on master 2026-05-06; prod binary active; canary on 4 agents)
-- [~] 110-08-PLAN.md — Cleanup decision PATH A (keep Node fallback) recorded 2026-05-07 in `110-CLEANUP-DECISION.md`; deprecation notices added to Node shim CLI files; CLAUDE.md reference landed. Rollback drill (0B-RT-11) PENDING operator window — held per `feedback_ramy_active_no_deploy`.
+- [x] 110-08-PLAN.md — Cleanup decision PATH A (keep Node fallback) SHIPPED 2026-05-07 in commit `155537a`. 0B-RT-11 rollback drill DEFERRED with rationale (path A changed nothing the daily Stage 0b rollout hadn't already exercised in reverse; ramy-active-no-deploy posture). See `110-CLEANUP-DECISION.md` + `110-08-SUMMARY.md`.
 
-**Status:** Stage 0a SHIPPED 2026-05-03; Stage 0b code SHIPPED 2026-05-06 (commits `5aa5ab6`+`d5dfac40` lineage); Stage 0b doc-cleanup SHIPPED 2026-05-07 (path A — Node shims retained as flippable fallback). Final 0B-RT-11 rollback drill on `admin-clawdy` pending a quiet operator window. Stage 1a active. ≥ 2.7 GiB RSS savings confirmed in plan 110-07 measurements.
+**Status:** SHIPPED. Stage 0a SHIPPED 2026-05-03 (`5aa5ab6`); Stage 0b code SHIPPED 2026-05-06 (plans 110-04..07); Stage 0b doc-cleanup SHIPPED 2026-05-07 (`155537a`, path A — Node shims retained as flippable fallback). Final RSS savings ≥ 2.7 GiB confirmed in plan 110-07 measurements. 0B-RT-11 drill formally DEFERRED in 110-CLEANUP-DECISION.md. Phase 110 = COMPLETE; future shim-runtime work (Stage 0c mcp-broker-shim, Stage 1a Python externals broker) tracked separately.
 
 **Note on number reuse:** the original Phase 110 ROADMAP entry was scoped as "Retroactive sequential renumbering for shipped 999.x items". That backlog scope was renumbered to **Phase 114** when this MCP memory-reduction work shipped under the 110 commit tag. See Phase 114 below.
 

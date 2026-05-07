@@ -38,21 +38,31 @@ without a code change.
 
 ## Rollback verification (0B-RT-11)
 
-**Status:** PENDING operator drill
+**Status:** DEFERRED — operator closed Phase 110 on 2026-05-07 without
+performing the live `static → node → static` flip drill.
 
-The plan calls for a deliberate `static → node → static` flip on
-`admin-clawdy`'s `shimRuntime.search` to verify the rollback path is
-working post-cleanup. Per `feedback_no_auto_deploy` and
-`feedback_ramy_active_no_deploy`, the flip is held until the operator
-explicitly authorises it in a quiet window. Once executed, this section
-is updated with:
+**Rationale for deferral:**
 
-- Date / time of drill
-- Agent flipped (admin-clawdy)
-- Shim type flipped (search)
-- Observed Node shim PID / log line confirming Node runtime spawned
-- Flip-back observation confirming Go static runtime restored
-- Final RSS measurement (sanity check Stage 0b savings preserved)
+- The path-A change is doc-only — zero code, schema, or loader change
+  shipped, so there is nothing in the cleanup commit that could break
+  the rollback path that was already exercised every day during the
+  Stage 0b rollout (plans 110-04 through 110-07: every agent's first
+  flip from `node` → `static` ran the same loader branch in reverse).
+- The fallback path is structurally indistinguishable from the
+  forward path: `resolveShimCommand`'s `case "node":` branch is the
+  same code that selected the Node shim every day prior to the
+  Stage 0b rollout. Nothing in plan 110-08 modified it.
+- Operator posture: `feedback_ramy_active_no_deploy` is in effect and
+  there is no pressing reason to touch the running daemon.
+- If a Go-shim regression ever surfaces and the rollback is invoked
+  for real, the drill will happen as part of the incident response
+  and the result is captured by the incident itself.
+
+**Re-opening:** if 0B-RT-11 ever needs to be drilled (post-incident
+audit, follow-up phase, or operator request), spawn a small follow-up
+plan that runs `clawcode admin-clawdy config set shimRuntime.search
+node`, observes the next shim spawn, then flips back to `static`. No
+code change required to execute.
 
 ## Cross-references
 
