@@ -71,12 +71,20 @@ export async function runVisionPrepass(
     }
   }
 
+  // Strip ANTHROPIC_API_KEY so the spawned claude subprocess uses OAuth
+  // (same pattern as session-adapter.ts::buildCleanEnv). Without this, the
+  // subprocess inherits the env-file key and bills against API credits instead
+  // of the OAuth subscription — vision calls are expensive enough to trigger
+  // "Credit balance is too low" on the API key account.
+  const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
+
   const options: SdkQueryOptions = {
     model: resolveModelId("haiku"),
     systemPrompt: VISION_SYSTEM_PROMPT,
     allowDangerouslySkipPermissions: true,
     settingSources: [],
     abortController: controller,
+    env: cleanEnv as Record<string, string | undefined>,
   };
 
   const base64Data = imageBuffer.toString("base64");
