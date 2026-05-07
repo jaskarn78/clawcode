@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 110 SHIPPED — awaiting next phase
-stopped_at: Completed Phase 110 (plan 110-08 — Stage 0b cleanup path A)
-last_updated: "2026-05-07T00:00:00.000Z"
+status: Executing Phase 115
+stopped_at: Completed 110-04-PLAN.md
+last_updated: "2026-05-07T23:50:40.333Z"
 last_activity: 2026-05-07
 progress:
-  total_phases: 56
+  total_phases: 60
   completed_phases: 15
-  total_plans: 86
-  completed_plans: 81
+  total_plans: 87
+  completed_plans: 82
+  percent: 94
 ---
 
 # Project State
@@ -21,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** Phase 110 SHIPPED 2026-05-07 — Stage 0b complete; awaiting next phase selection.
+**Current focus:** Phase 115 — Memory + context + prompt-cache redesign
 
 ## Current Position
 
-Phase: 110 (MCP shim runtime swap, Stage 0b) — SHIPPED 2026-05-07
-Plan: 9 of 9 (all SHIPPED)
+Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
+Plan: 1 of 10
 Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -77,6 +78,7 @@ Nine commits landed beyond the 2026-05-02 fix wave, organized into a hardening +
 **Commits:** `40deda6` (core), `115fdc7` (apiKey:null auth fix), `5dfac40` (PNG media type fix)
 
 **What shipped:**
+
 - `haiku-direct.ts` — `callHaikuDirect` + `callHaikuVision` via `@anthropic-ai/sdk` directly with OAuth Bearer token (`claudeAiOauth.accessToken` from `~/.claude/.credentials.json`). Bypasses `sdk.query()` subprocess entirely — no `ANTHROPIC_API_KEY` inheritance, bills OAuth subscription.
 - `image-resizer.ts` — sharp resize to ≤1568px before vision API call.
 - `vision-pre-pass.ts` — parallel Haiku 4.5 vision calls for all image attachments; injects `<screenshot-analysis>` blocks; empty/failed analyses fall back to existing file-path hint.
@@ -85,6 +87,7 @@ Nine commits landed beyond the 2026-05-02 fix wave, organized into a hardening +
 - `schema.ts` / `types.ts` / `loader.ts` — `vision: { enabled, preserveImage }` per-agent config.
 
 **Prod fixes found during smoke test:**
+
 1. `apiKey: null` required — SDK prioritizes `ANTHROPIC_API_KEY` env over `authToken` when both present.
 2. Always pass `"image/png"` to API — `resizeImageForVision` always outputs PNG regardless of Discord attachment content-type.
 
@@ -632,7 +635,7 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-06
+Last activity: 2026-05-07
 Stopped at: Completed 110-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
