@@ -753,7 +753,7 @@ Plans:
 
 ---
 
-### Phase 113: Image ingest pipeline — local resize + Haiku 4.5 vision pre-pass (PENDING — renumbered from original Phase 109)
+### Phase 113: Image ingest pipeline — local resize + Haiku 4.5 vision pre-pass (SHIPPED — commit `5dfac40`, 2026-05-07)
 
 **Goal:** Cut response latency and token cost on screenshot-heavy turns (operator + Ramy share frequent screenshots). Two layered optimizations to the image-ingest path: (1) local resize before forwarding to Claude, (2) parallel Haiku 4.5 vision pre-pass that produces a structured `<screenshot-analysis>` text block, letting the main agent skip vision entirely on the dominant case (chat screenshots, error messages, dashboards — text-extraction-shaped queries).
 

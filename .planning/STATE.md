@@ -71,6 +71,24 @@ Nine commits landed beyond the 2026-05-02 fix wave, organized into a hardening +
 - Phase 110 commit-tag bound to MCP memory-reduction work (Stage 0a shipped, later stages active). Original "Retroactive 999.x renumbering" scope renumbered to **Phase 114**.
 - Phase 999.25 commit-tag bound to "Agent boot wake-order priority" (shipped 2026-05-01). The 2026-05-04 PR #9 was tagged `feat(999.25)` for "subagent relay on work-completion" but renumbered to **Phase 999.30** in ROADMAP.
 
+## Phase 113 — Image ingest pipeline (SHIPPED 2026-05-07)
+
+**Commits:** `40deda6` (core), `115fdc7` (apiKey:null auth fix), `5dfac40` (PNG media type fix)
+
+**What shipped:**
+- `haiku-direct.ts` — `callHaikuDirect` + `callHaikuVision` via `@anthropic-ai/sdk` directly with OAuth Bearer token (`claudeAiOauth.accessToken` from `~/.claude/.credentials.json`). Bypasses `sdk.query()` subprocess entirely — no `ANTHROPIC_API_KEY` inheritance, bills OAuth subscription.
+- `image-resizer.ts` — sharp resize to ≤1568px before vision API call.
+- `vision-pre-pass.ts` — parallel Haiku 4.5 vision calls for all image attachments; injects `<screenshot-analysis>` blocks; empty/failed analyses fall back to existing file-path hint.
+- `summarize-with-haiku.ts` — rewritten to delegate to `callHaikuDirect` (same auth fix).
+- `bridge.ts` — vision pre-pass wired in both thread + channel handlers; `formatDiscordMessage` updated to accept `visionAnalyses` map.
+- `schema.ts` / `types.ts` / `loader.ts` — `vision: { enabled, preserveImage }` per-agent config.
+
+**Prod fixes found during smoke test:**
+1. `apiKey: null` required — SDK prioritizes `ANTHROPIC_API_KEY` env over `authToken` when both present.
+2. Always pass `"image/png"` to API — `resizeImageForVision` always outputs PNG regardless of Discord attachment content-type.
+
+**Vision enabled agents:** Admin Clawdy, fin-acquisition, general, projects, research.
+
 ## Performance Metrics
 
 **v2.7 milestone (2026-04-26 → 2026-05-01, 5 days):**
