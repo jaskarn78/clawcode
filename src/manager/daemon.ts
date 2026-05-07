@@ -221,6 +221,8 @@ import type { ClawhubCache } from "../marketplace/clawhub-cache.js";
 import { resolveMarketplaceSources } from "../config/loader.js";
 import type { Logger } from "pino";
 import { runConsolidation } from "../memory/consolidation.js";
+import { summarizeWithHaiku } from "./summarize-with-haiku.js";
+import { callHaikuDirect } from "./haiku-direct.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
 import type {
   CacheHitRateStatus,
@@ -2518,7 +2520,7 @@ export async function startDaemon(
             memoryDir,
             memoryStore,
             embedder,
-            summarize: (prompt: string) => manager.dispatchTurn(agentConfig.name, prompt),
+            summarize: (prompt: string) => summarizeWithHaiku(prompt, {}),
           };
           await runConsolidation(deps, consolidationConfig);
         },
@@ -3529,40 +3531,34 @@ export async function startDaemon(
               }
             },
           };
-          const { makeRootOrigin: makeDreamOrigin } = await import(
-            "./turn-origin.js"
-          );
           const dreamDispatch = async (dispatchReq: {
             model: string;
             systemPrompt: string;
             userPrompt: string;
             maxOutputTokens: number;
           }) => {
-            // Wraps turnDispatcher.dispatch into the narrow shape the
-            // dream-pass primitive consumes. The actual prompt is a single
-            // LLM round-trip — no streaming, no Discord. Model + thinking
-            // tokens are governed by the agent's runtime SDK handle (set
-            // via /clawcode-model or agents.*.model); per-pass override
-            // is deferred (would require a fork-session) — the modelOverride
-            // flag at the IPC layer only logs the operator intent for now.
+            // Phase 999.39 — direct OAuth path via callHaikuDirect.
+            // dream-pass is a one-shot LLM call (no session context, no tools).
+            // Previously routed through turnDispatcher.dispatch → sdk.query() →
+            // ANTHROPIC_API_KEY (wrong auth on subscription-only deployments).
+            // dispatchReq.model is "haiku" by default (dream config default);
+            // model override is a future follow-up.
             try {
-              const text = await turnDispatcher.dispatch(
-                makeDreamOrigin("scheduler", `dream-pass:${agent}`),
-                agent,
-                `${dispatchReq.systemPrompt}\n\n${dispatchReq.userPrompt}`,
+              const text = await callHaikuDirect(
+                dispatchReq.systemPrompt,
+                dispatchReq.userPrompt,
                 {},
               );
-              // Token counts unavailable in the wrapper response surface;
-              // approximate via chars/4 heuristic (consistent with
-              // dream-prompt-builder's budget estimator).
+              // Token counts unavailable from direct call; approximate via
+              // chars/4 heuristic (consistent with dream-prompt-builder's budget).
               const inApprox = Math.ceil(
                 (dispatchReq.systemPrompt.length +
                   dispatchReq.userPrompt.length) /
                   4,
               );
-              const outApprox = Math.ceil((text ?? "").length / 4);
+              const outApprox = Math.ceil(text.length / 4);
               return {
-                rawText: text ?? "",
+                rawText: text,
                 tokensIn: inApprox,
                 tokensOut: outApprox,
               };
