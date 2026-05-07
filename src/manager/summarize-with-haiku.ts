@@ -68,17 +68,12 @@ export async function summarizeWithHaiku(
     }
   }
 
-  // Strip ANTHROPIC_API_KEY so the subprocess uses OAuth subscription auth
-  // rather than the env-file API key — same pattern as session-adapter.ts.
-  const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
-
   const options: SdkQueryOptions = {
     model: resolveModelId("haiku"),
     systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
     allowDangerouslySkipPermissions: true,
     settingSources: [],
     abortController: controller,
-    env: cleanEnv as Record<string, string | undefined>,
   };
 
   const q = sdk.query({ prompt, options });
