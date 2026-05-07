@@ -41,7 +41,6 @@
     "pdf-parse": "^2.4.5",
     "pino": "^9",
     "playwright-core": "^1.59.1",
-    "sharp": "^0.33.5",
     "sqlite-vec": "^0.1.9",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"

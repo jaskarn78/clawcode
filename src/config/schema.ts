@@ -1186,23 +1186,6 @@ export const agentSchema = z.object({
     })
     .optional(),
   /**
-   * Phase 113 — Haiku vision pre-pass config.
-   *
-   * When enabled (default), Discord image attachments are resized locally
-   * and sent through a one-shot Haiku call before reaching the main agent.
-   * The structured `<screenshot-analysis>` block replaces the file-path hint,
-   * letting Sonnet/Opus process only text (no vision tool call needed).
-   *
-   * preserveImage: when true, keep the original file-path hint alongside the
-   * analysis. Use for design/visual agents that need the raw image. Default false.
-   */
-  vision: z
-    .object({
-      enabled: z.boolean().default(true),
-      preserveImage: z.boolean().default(false),
-    })
-    .optional(),
-  /**
    * Phase 999.25 — wake-order priority for boot-time auto-start.
    *
    * Lower numbers boot first. Agents without `wakeOrder` boot LAST in YAML

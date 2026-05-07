@@ -28,7 +28,6 @@ import {
 import { formatReactionEvent } from "./reactions.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
-import { runVisionPrepassForFile } from "../manager/vision-prepass.js";
 import type { WebhookManager } from "./webhook-manager.js";
 import type { DeliveryQueue } from "./delivery-queue.js";
 import { checkChannelAccess } from "../security/acl-parser.js";
@@ -441,27 +440,6 @@ export class DiscordBridge {
           downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
         }
 
-        // Phase 113 — Haiku vision pre-pass for image attachments
-        const threadAgentConfig = this.sessionManager.getAgentConfig(sessionName);
-        const threadVisionEnabled = threadAgentConfig?.vision?.enabled !== false;
-        const threadPreserveImage = threadAgentConfig?.vision?.preserveImage ?? false;
-        const threadVisionAnalyses = new Map<string, string>();
-        if (threadVisionEnabled && downloadResults) {
-          const t0 = Date.now();
-          let successCount = 0;
-          await Promise.all(
-            downloadResults
-              .filter(r => r.success && r.path !== null && isImageAttachment(r.attachmentInfo.contentType))
-              .map(async r => {
-                const analysis = await runVisionPrepassForFile(r.path!);
-                if (analysis) { threadVisionAnalyses.set(r.path!, analysis); successCount++; }
-              }),
-          );
-          if (downloadResults.some(r => isImageAttachment(r.attachmentInfo.contentType))) {
-            this.log.info({ agent: sessionName, visionSuccessCount: successCount, visionLatencyMs: Date.now() - t0 }, "vision-prepass complete");
-          }
-        }
-
         // Fetch the referenced message if this is a reply, so the agent sees
         // the quoted content (not just an opaque message_id).
         let referencedMessage: Message | undefined;
@@ -473,7 +451,7 @@ export class DiscordBridge {
           }
         }
 
-        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage, undefined, threadVisionAnalyses, threadPreserveImage);
+        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
         // End the receive span right before dispatching to the session (end_to_end still open)
         try { receiveSpan?.end(); } catch { /* non-fatal */ }
         await this.streamAndPostResponse(message, sessionName, formattedMessage, turn);
@@ -557,27 +535,6 @@ export class DiscordBridge {
       downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
     }
 
-    // Phase 113 — Haiku vision pre-pass for image attachments
-    const channelAgentConfig = this.sessionManager.getAgentConfig(agentName);
-    const channelVisionEnabled = channelAgentConfig?.vision?.enabled !== false;
-    const channelPreserveImage = channelAgentConfig?.vision?.preserveImage ?? false;
-    const channelVisionAnalyses = new Map<string, string>();
-    if (channelVisionEnabled && downloadResults) {
-      const t0 = Date.now();
-      let successCount = 0;
-      await Promise.all(
-        downloadResults
-          .filter(r => r.success && r.path !== null && isImageAttachment(r.attachmentInfo.contentType))
-          .map(async r => {
-            const analysis = await runVisionPrepassForFile(r.path!);
-            if (analysis) { channelVisionAnalyses.set(r.path!, analysis); successCount++; }
-          }),
-      );
-      if (downloadResults.some(r => isImageAttachment(r.attachmentInfo.contentType))) {
-        this.log.info({ agent: agentName, visionSuccessCount: successCount, visionLatencyMs: Date.now() - t0 }, "vision-prepass complete");
-      }
-    }
-
     // Fetch the referenced message if this is a reply, so the agent sees
     // the quoted content (not just an opaque message_id).
     let referencedMessage: Message | undefined;
@@ -589,7 +546,7 @@ export class DiscordBridge {
       }
     }
 
-    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage, undefined, channelVisionAnalyses, channelPreserveImage);
+    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
     // End the receive span right before session dispatch; end_to_end remains open
     try { receiveSpan?.end(); } catch { /* non-fatal */ }
     await this.streamAndPostResponse(message, agentName, formattedMessage, turn);
@@ -1075,8 +1032,6 @@ export function formatDiscordMessage(
   downloadResults?: readonly DownloadResult[],
   referencedMessage?: Message,
   agentTz?: string,
-  visionAnalyses?: ReadonlyMap<string, string>,
-  preserveImage = false,
 ): string {
   const parts = [
     `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${renderAgentVisibleTimestamp(message.createdAt, agentTz)}">`,
@@ -1091,22 +1046,16 @@ export function formatDiscordMessage(
       parts.push(`\n${metadata}`);
     }
 
-    // Add vision analysis or fallback file-path hint for image attachments
+    // Add multimodal reading hints for successfully downloaded images
     for (const result of downloadResults) {
       if (
         result.success &&
         result.path !== null &&
         isImageAttachment(result.attachmentInfo.contentType)
       ) {
-        const analysis = visionAnalyses?.get(result.path);
-        if (analysis) {
-          parts.push(`<screenshot-analysis>\n${analysis}\n</screenshot-analysis>`);
-          if (preserveImage) {
-            parts.push(`(Image downloaded -- read the file at ${result.path} to see its contents)`);
-          }
-        } else {
-          parts.push(`(Image downloaded -- read the file at ${result.path} to see its contents)`);
-        }
+        parts.push(
+          `(Image downloaded -- read the file at ${result.path} to see its contents)`,
+        );
       }
     }
   } else if (message.attachments.size > 0) {
