@@ -307,3 +307,45 @@ describe("tickOrphanClaudeReaper", () => {
     expect(cap2.lines()).toEqual([]);
   });
 });
+
+// -----------------------------------------------------------------------------
+// Structural invariant — schema default minAgeSeconds vs polled-discovery budget
+//
+// Production hotfix 2026-05-07: the schema default (30) exactly equalled the
+// polled-discovery budget (MCP_POLL_INTERVAL_MS × MCP_POLL_MAX_ATTEMPTS / 1000
+// = 30s), leaving zero buffer. Under contended parallel boots the reaper
+// killed legitimate-but-not-yet-tracked claude subprocesses on the first 60s
+// tick, looping `consecutiveFailures` upward and surfacing as exit-143
+// crashes on every first-message-after-idle for Admin Clawdy.
+//
+// This test pins the inequality: the schema default MUST exceed the discovery
+// budget by at least 3×, so any future change to either constant fails CI
+// before the race recurs.
+// -----------------------------------------------------------------------------
+describe("orphan-claude-reaper schema-default vs polled-discovery invariant", () => {
+  it("minAgeSeconds default >= 3× MCP_POLL window", async () => {
+    const { MCP_POLL_INTERVAL_MS, MCP_POLL_MAX_ATTEMPTS } = await import(
+      "../../manager/session-manager.js"
+    );
+    const { defaultsSchema } = await import("../../config/schema.js");
+
+    const polledDiscoverySec = (MCP_POLL_INTERVAL_MS * MCP_POLL_MAX_ATTEMPTS) / 1000;
+    // Resolve the zod default for orphanClaudeReaper.minAgeSeconds.
+    // The field is .optional() on defaultsSchema, so we explicitly pass `{}`
+    // for orphanClaudeReaper to materialize the inner .default(120). Parsing
+    // the inner schema directly avoids needing to satisfy the rest of
+    // defaultsSchema's required fields.
+    const reaperSchema = defaultsSchema.shape.orphanClaudeReaper.unwrap();
+    const parsed = reaperSchema.parse({});
+    const reaperDefault = parsed.minAgeSeconds;
+
+    // Sanity: zod default fired (object materialized).
+    expect(reaperDefault).toBeDefined();
+    expect(typeof reaperDefault).toBe("number");
+
+    // The structural inequality. 3× the polled-discovery budget gives slow,
+    // contended parallel-boot startups room to register before the reaper sees
+    // them. 30s budget × 3 = 90s; bumping above 90 stays safe.
+    expect(reaperDefault!).toBeGreaterThanOrEqual(polledDiscoverySec * 3);
+  });
+});

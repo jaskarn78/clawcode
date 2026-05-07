@@ -19,9 +19,13 @@ import {
  * MIN_AGE_SEC = 5 → discoverClaudeSubprocessPid filters candidates younger
  * than 5s, so the dying-first-PID (typically dies within 2-3s) is excluded.
  */
-const MCP_POLL_INTERVAL_MS = 5000;
-const MCP_POLL_MAX_ATTEMPTS = 6;
-const MCP_POLL_MIN_AGE_SEC = 5;
+// Exported so the orphan-claude-reaper structural-invariant test can pin
+// `schemaDefault.minAgeSeconds >= MCP_POLL_INTERVAL_MS * MCP_POLL_MAX_ATTEMPTS / 1000 * safetyMultiplier`.
+// Without this link, the two timing constants drift independently and
+// regress the polled-discovery race that Phase 109-B keeps reintroducing.
+export const MCP_POLL_INTERVAL_MS = 5000;
+export const MCP_POLL_MAX_ATTEMPTS = 6;
+export const MCP_POLL_MIN_AGE_SEC = 5;
 
 /**
  * Phase 999.15 TRACK-02 — fake-timer-friendly sleep helper. Uses setTimeout

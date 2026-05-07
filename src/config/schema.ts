@@ -1622,7 +1622,13 @@ export const defaultsSchema = z.object({
   orphanClaudeReaper: z
     .object({
       mode: z.enum(["off", "alert", "reap"]).default("alert"),
-      minAgeSeconds: z.number().int().positive().default(30),
+      // 120s = 4× the polled-discovery budget (MCP_POLL_INTERVAL_MS×MCP_POLL_MAX_ATTEMPTS
+      // = 30s in src/manager/session-manager.ts). The previous default of 30s exactly
+      // matched the discovery budget, leaving zero buffer — under contended parallel
+      // boots the reaper killed legitimate-but-not-yet-tracked claude subprocesses.
+      // Pinned by the structural-invariant test in
+      // src/mcp/__tests__/orphan-claude-reaper.test.ts.
+      minAgeSeconds: z.number().int().positive().default(120),
     })
     .optional(),
   // Phase 999.25 — subagent completion relay. Decouples
