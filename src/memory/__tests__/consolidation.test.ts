@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { isErrorSummary } from "../error-guard.js";
 import { MemoryStore } from "../store.js";
 import type { EmbeddingService } from "../embedder.js";
 import type { ConsolidationConfig } from "../schema.js";
@@ -59,6 +60,29 @@ function createDailyLogs(dir: string, dates: readonly string[]): void {
     writeFileSync(filePath, `# Session Log: ${date}\n\n## 10:00:00 [user]\nSome content for ${date}\n`);
   }
 }
+
+describe("isErrorSummary", () => {
+  it("detects credit balance errors", () => {
+    expect(isErrorSummary("Credit balance is too low to complete this request.")).toBe(true);
+  });
+
+  it("detects API error codes", () => {
+    expect(isErrorSummary("API Error: 402 — request rejected")).toBe(true);
+    expect(isErrorSummary("API Error: 429 rate limit")).toBe(true);
+  });
+
+  it("detects authentication errors", () => {
+    expect(isErrorSummary("Failed to authenticate with the API.")).toBe(true);
+    expect(isErrorSummary("authentication_error: invalid token")).toBe(true);
+    expect(isErrorSummary("permission_error returned by server")).toBe(true);
+  });
+
+  it("returns false for valid summary text", () => {
+    expect(isErrorSummary("## Key Facts\n- Worked on memory consolidation")).toBe(false);
+    expect(isErrorSummary("This week the team focused on improving the agent pipeline.")).toBe(false);
+    expect(isErrorSummary("")).toBe(false);
+  });
+});
 
 describe("Consolidation Pipeline", () => {
   let tempDir: string;
@@ -432,6 +456,77 @@ describe("Consolidation Pipeline", () => {
 
       // Should have created a monthly digest
       expect(result.monthlyDigestsCreated).toBe(1);
+
+      deps.memoryStore.close();
+    });
+
+    it("skips weekly digest and records error when summarize returns API error text", async () => {
+      const deps = createTestDeps(tempDir);
+      (deps.summarize as ReturnType<typeof vi.fn>).mockResolvedValue(
+        "Credit balance is too low to complete this request.",
+      );
+
+      const dates = [
+        "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08",
+        "2026-01-09", "2026-01-10", "2026-01-11",
+      ];
+      createDailyLogs(tempDir, dates);
+      for (const date of dates) {
+        deps.memoryStore.recordSessionLog({
+          date,
+          filePath: join(tempDir, `${date}.md`),
+          entryCount: 1,
+        });
+      }
+
+      const config: ConsolidationConfig = {
+        enabled: true,
+        weeklyThreshold: 7,
+        monthlyThreshold: 4,
+        schedule: "0 3 * * *",
+      };
+
+      const result = await runConsolidation(deps, config);
+
+      expect(result.weeklyDigestsCreated).toBe(0);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toContain("error response");
+
+      const digestDir = join(tempDir, "digests");
+      const files = existsSync(digestDir) ? readdirSync(digestDir) : [];
+      expect(files.filter((f) => f.startsWith("weekly-"))).toHaveLength(0);
+
+      deps.memoryStore.close();
+    });
+
+    it("skips monthly digest and records error when summarize returns API error text", async () => {
+      const deps = createTestDeps(tempDir);
+      (deps.summarize as ReturnType<typeof vi.fn>).mockResolvedValue(
+        "API Error: 402 — Credit balance is too low.",
+      );
+
+      const digestDir = join(tempDir, "digests");
+      mkdirSync(digestDir, { recursive: true });
+      writeFileSync(join(digestDir, "weekly-2026-W02.md"), "# Week 2\n");
+      writeFileSync(join(digestDir, "weekly-2026-W03.md"), "# Week 3\n");
+      writeFileSync(join(digestDir, "weekly-2026-W04.md"), "# Week 4\n");
+      writeFileSync(join(digestDir, "weekly-2026-W05.md"), "# Week 5\n");
+
+      const config: ConsolidationConfig = {
+        enabled: true,
+        weeklyThreshold: 7,
+        monthlyThreshold: 4,
+        schedule: "0 3 * * *",
+      };
+
+      const result = await runConsolidation(deps, config);
+
+      expect(result.monthlyDigestsCreated).toBe(0);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toContain("error response");
+
+      const files = readdirSync(digestDir);
+      expect(files.filter((f) => f.startsWith("monthly-"))).toHaveLength(0);
 
       deps.memoryStore.close();
     });

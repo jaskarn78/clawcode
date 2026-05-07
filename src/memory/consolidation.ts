@@ -30,6 +30,7 @@ import type {
   MonthlyDigest,
   ConsolidationResult,
 } from "./consolidation.types.js";
+import { isErrorSummary } from "./error-guard.js";
 
 /** Maximum combined character length before truncation of daily logs. */
 const MAX_PROMPT_CHARS = 30000;
@@ -528,6 +529,13 @@ export async function runConsolidation(
       const prompt = buildWeeklySummarizationPrompt(dailyLogs);
       const llmContent = await deps.summarize(prompt);
 
+      if (isErrorSummary(llmContent)) {
+        errors.push(
+          `Weekly consolidation skipped for ${weekGroup.year}-W${weekGroup.week}: summarize returned error response — ${llmContent.slice(0, 200)}`,
+        );
+        continue;
+      }
+
       // Write digest (markdown + SQLite)
       await writeWeeklyDigest(deps, weekGroup, llmContent);
       weeklyDigestsCreated += 1;
@@ -562,6 +570,13 @@ export async function runConsolidation(
       // Build prompt and summarize
       const prompt = buildMonthlySummarizationPrompt(weeklyDigests);
       const llmContent = await deps.summarize(prompt);
+
+      if (isErrorSummary(llmContent)) {
+        errors.push(
+          `Monthly consolidation skipped for ${monthGroup.year}-${String(monthGroup.month).padStart(2, "0")}: summarize returned error response — ${llmContent.slice(0, 200)}`,
+        );
+        continue;
+      }
 
       // Write digest (markdown + SQLite)
       await writeMonthlyDigest(deps, monthGroup, llmContent);
