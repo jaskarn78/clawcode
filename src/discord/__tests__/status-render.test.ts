@@ -146,49 +146,50 @@ function makeInput(overrides: StubInputOverrides = {}): BuildStatusDataInput {
 }
 
 describe("renderStatus — R-01..R-07 line shape (Phase 93 + 103 reshape)", () => {
-  it("R-01 happy path renders ALL 9 lines with concrete values", () => {
+  it("R-01 happy path renders ALL 10 lines with concrete values", () => {
     const out = renderStatus(makeData()).split("\n");
-    expect(out).toHaveLength(9);
+    expect(out).toHaveLength(10);
     expect(out[0]).toBe("🦞 ClawCode v1.2.8 (abc1234)");
-    expect(out[1]).toBe("🧠 Model: sonnet · 🔑 sdk");
-    expect(out[2]).toBe("🔁 Consolidated: never");
+    expect(out[1]).toBe("🤖 Agent: fin");
+    expect(out[2]).toBe("🧠 Model: sonnet · 🔑 sdk");
+    expect(out[3]).toBe("🔁 Consolidated: never");
     // Context defaults to "unknown" when fillPercentage undefined; Dreamt: never when no dream.
-    expect(out[3]).toBe("📚 Context: unknown · 💤 Dreamt: never");
+    expect(out[4]).toBe("📚 Context: unknown · 💤 Dreamt: never");
     // Phase 103 — Tokens emits "n/a" when tokensIn/Out undefined.
-    expect(out[4]).toBe("🧮 Tokens: n/a");
+    expect(out[5]).toBe("🧮 Tokens: n/a");
     // Last 12 chars of SAMPLE_SESSION_ID via slice(-12) — assert via computed
     // expected so test stays robust to id-shape drift.
     const expectedSession = `…${SAMPLE_SESSION_ID.slice(-12)}`;
-    expect(out[5]).toContain(expectedSession);
-    expect(out[5]).toContain(" • updated ");
-    expect(out[6]).toBe("📋 Task: idle");
+    expect(out[6]).toContain(expectedSession);
+    expect(out[6]).toContain(" • updated ");
+    expect(out[7]).toBe("📋 Task: idle");
     // Phase 103 — Fast/Harness/Elevated DROPPED; Reasoning is now a label.
-    expect(out[7]).toBe(
+    expect(out[8]).toBe(
       "⚙️ Runtime: SDK session · Think: medium · Reasoning: medium effort · Permissions: default",
     );
     // Phase 103 — Activation from registry (undefined → "unknown"); Queue from
     // hasActiveTurn (false → "idle").
-    expect(out[8]).toBe("👥 Activation: unknown · 🪢 Queue: idle");
+    expect(out[9]).toBe("👥 Activation: unknown · 🪢 Queue: idle");
   });
 
   it("R-02 hasActiveTurn=true → Task: busy AND Queue: 1 in-flight", () => {
     const out = renderStatus(makeData({ hasActiveTurn: true })).split("\n");
-    expect(out[6]).toBe("📋 Task: busy");
-    expect(out[8]).toContain("🪢 Queue: 1 in-flight");
+    expect(out[7]).toBe("📋 Task: busy");
+    expect(out[9]).toContain("🪢 Queue: 1 in-flight");
   });
 
   it("R-03 liveModel undefined falls back to configModel", () => {
     const out = renderStatus(
       makeData({ liveModel: undefined, configModel: "haiku" }),
     ).split("\n");
-    expect(out[1]).toBe("🧠 Model: haiku · 🔑 sdk");
+    expect(out[2]).toBe("🧠 Model: haiku · 🔑 sdk");
   });
 
   it("R-04 both models missing → Model: unknown", () => {
     const out = renderStatus(
       makeData({ liveModel: undefined, configModel: undefined }),
     ).split("\n");
-    expect(out[1]).toBe("🧠 Model: unknown · 🔑 sdk");
+    expect(out[2]).toBe("🧠 Model: unknown · 🔑 sdk");
   });
 
   it("R-05 missing commit sha → (unknown)", () => {
@@ -200,12 +201,12 @@ describe("renderStatus — R-01..R-07 line shape (Phase 93 + 103 reshape)", () =
     const out = renderStatus(
       makeData({ sessionId: undefined, lastActivityAt: undefined }),
     ).split("\n");
-    expect(out[5]).toBe("🧵 Session: unknown • updated unknown");
+    expect(out[6]).toBe("🧵 Session: unknown • updated unknown");
   });
 
   it("R-07 lastActivityAt undefined but sessionId set → updated unknown", () => {
     const out = renderStatus(makeData({ lastActivityAt: undefined })).split("\n");
-    expect(out[5]).toBe(
+    expect(out[6]).toBe(
       `🧵 Session: …${SAMPLE_SESSION_ID.slice(-12)} • updated unknown`,
     );
   });
@@ -261,7 +262,7 @@ describe("buildStatusData — R-08 defensive read", () => {
 
     const out = renderStatus(data);
     expect(out).not.toContain("Failed to read status");
-    expect(out.split("\n")).toHaveLength(9);
+    expect(out.split("\n")).toHaveLength(10);
   });
 });
 
@@ -407,16 +408,11 @@ describe("renderUsageBars (OBS-08)", () => {
     ).toBe("");
   });
 
-  it("renders 5h session line when five_hour snapshot present", () => {
+  it("five_hour snapshot alone produces no output (5h line removed)", () => {
     const out = renderUsageBars([
-      snapshot({
-        rateLimitType: "five_hour",
-        utilization: 0.5,
-        resetsAt: Date.now() + 3_600_000,
-      }),
+      snapshot({ rateLimitType: "five_hour", utilization: 0.5 }),
     ]);
-    expect(out).toContain("5h session:");
-    expect(out).toContain("▓▓▓▓▓░░░░░ 50%");
+    expect(out).toBe("");
   });
 
   it("renders 7-day weekly line when seven_day snapshot present", () => {
@@ -431,17 +427,18 @@ describe("renderUsageBars (OBS-08)", () => {
     expect(out).toContain("71%");
   });
 
-  it("renders BOTH lines when both snapshots present", () => {
+  it("renders only 7-day line even when both snapshots present", () => {
     const out = renderUsageBars([
       snapshot({ rateLimitType: "five_hour", utilization: 0.5 }),
       snapshot({ rateLimitType: "seven_day", utilization: 0.7 }),
     ]);
-    expect(out.split("\n").filter((l) => l.length > 0)).toHaveLength(2);
+    expect(out.split("\n").filter((l) => l.length > 0)).toHaveLength(1);
+    expect(out).toContain("7-day weekly:");
   });
 
   it("output begins with newline so it appends cleanly to renderStatus", () => {
     const out = renderUsageBars([
-      snapshot({ rateLimitType: "five_hour", utilization: 0.5 }),
+      snapshot({ rateLimitType: "seven_day", utilization: 0.7 }),
     ]);
     expect(out.startsWith("\n")).toBe(true);
   });

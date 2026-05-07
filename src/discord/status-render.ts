@@ -314,12 +314,15 @@ export function renderStatus(data: StatusData): string {
   // Line 0 — version + commit sha
   const versionLine = `🦞 ClawCode v${data.agentVersion} (${data.commitSha ?? "unknown"})`;
 
-  // Line 1 — model + key source. ClawCode authenticates via SDK (not
+  // Line 1 — which agent this status is for.
+  const agentLine = `🤖 Agent: ${data.agentName}`;
+
+  // Line 2 — model + key source. ClawCode authenticates via SDK (not
   // OAuth/API key), so the "🔑" annotation is hard-coded "sdk".
   const modelDisplay = data.liveModel ?? data.configModel ?? "unknown";
   const modelLine = `🧠 Model: ${modelDisplay} · 🔑 sdk`;
 
-  // Line 2 — last consolidation timestamp (replaces the always-n/a Fallbacks field).
+  // Line 3 — last consolidation timestamp (replaces the always-n/a Fallbacks field).
   const consolidatedLabel =
     data.lastConsolidationAt !== undefined
       ? `${formatDistanceToNow(data.lastConsolidationAt, { addSuffix: false })} ago`
@@ -383,6 +386,7 @@ export function renderStatus(data: StatusData): string {
 
   return [
     versionLine,
+    agentLine,
     modelLine,
     consolidatedLine,
     contextLine,
@@ -496,13 +500,6 @@ export function renderUsageBars(
   const sevenDay = snapshots.find((s) => s.rateLimitType === "seven_day");
   const lines: string[] = [];
 
-  if (fiveHour) {
-    const reset =
-      fiveHour.resetsAt !== undefined
-        ? formatDistanceToNow(fiveHour.resetsAt, { addSuffix: true })
-        : "unknown";
-    lines.push(`5h session: ${renderBar(fiveHour.utilization)} · resets ${reset}`);
-  }
   if (sevenDay) {
     const reset =
       sevenDay.resetsAt !== undefined
