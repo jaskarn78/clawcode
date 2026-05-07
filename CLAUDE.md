@@ -33,6 +33,17 @@ confirmation in the same turn ("deploy" / "ship it"). Pre-existing
 `feedback_no_auto_deploy` and `feedback_ramy_active_no_deploy` memories
 still apply — the script makes deploys easier, not automatic.
 
+## MCP shim runtime (Phase 110 Stage 0b)
+
+The production MCP shim runtime is the **static Go binary** at
+`/usr/local/bin/clawcode-mcp-shim --type {search,image,browser}`, selected by
+the default `defaults.shimRuntime.{search,image,browser}: "static"` config.
+The Node shim CLI commands (`clawcode {search,image,browser}-mcp` in
+`src/cli/commands/{search,image,browser}-mcp.ts`) are retained as a
+**flippable emergency-rollback path** — set `shimRuntime.<type>: "node"` to
+spawn the Node shim instead. Cleanup decision (path A — keep fallback) and
+rationale: `.planning/phases/110-mcp-memory-reduction-shim-runtime-swap/110-CLEANUP-DECISION.md`.
+
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 

@@ -737,7 +737,7 @@ Plans:
 
 **Stage 0b Requirements:** [0B-RT-00, 0B-RT-01, 0B-RT-02, 0B-RT-03, 0B-RT-04, 0B-RT-05, 0B-RT-06, 0B-RT-07, 0B-RT-08, 0B-RT-09, 0B-RT-10, 0B-RT-11, 0B-RT-12, 0B-RT-13]
 
-**Plans:** 5/9 plans executed
+**Plans:** 8/9 plans executed (Stage 0b doc-cleanup committed 2026-05-07; rollback drill PENDING operator window)
 - [x] 110-00-PLAN.md — Wave 0 spike + kill-switch gate (minimal Go shim, RSS measurement on admin-clawdy)
 - [x] 110-01-PLAN.md — Daemon `list-mcp-tools` IPC method (ships first, before any Go shim builds against it)
 - [x] 110-02-PLAN.md — Schema enum widening + loader auto-inject + fleet-stats classifier
@@ -746,9 +746,9 @@ Plans:
 - [x] 110-05-PLAN.md — Search rollout (admin-clawdy canary flipped 2026-05-06; smoke confirmed; 4-agent expanded canary same day)
 - [x] 110-06-PLAN.md — Image Go shim implementation + rollout (code on master 2026-05-06; prod binary active; canary on 4 agents)
 - [x] 110-07-PLAN.md — Browser Go shim implementation + rollout (code on master 2026-05-06; prod binary active; canary on 4 agents)
-- [ ] 110-08-PLAN.md — Cleanup decision (keep Node fallback OR remove) + rollback drill (remaining fleet: fin-acquisition, fin-research, finmentum-content-creator, fin-tax, fin-playground)
+- [~] 110-08-PLAN.md — Cleanup decision PATH A (keep Node fallback) recorded 2026-05-07 in `110-CLEANUP-DECISION.md`; deprecation notices added to Node shim CLI files; CLAUDE.md reference landed. Rollback drill (0B-RT-11) PENDING operator window — held per `feedback_ramy_active_no_deploy`.
 
-**Status:** Stage 0a SHIPPED 2026-05-03; Stage 0b PLANNED 2026-05-05 (9 plans, 6 waves, target ≥ 2.7 GiB RSS savings); Stage 1a active. No production behavior changes from Stage 0a; every dial defaults to current behavior.
+**Status:** Stage 0a SHIPPED 2026-05-03; Stage 0b code SHIPPED 2026-05-06 (commits `5aa5ab6`+`d5dfac40` lineage); Stage 0b doc-cleanup SHIPPED 2026-05-07 (path A — Node shims retained as flippable fallback). Final 0B-RT-11 rollback drill on `admin-clawdy` pending a quiet operator window. Stage 1a active. ≥ 2.7 GiB RSS savings confirmed in plan 110-07 measurements.
 
 **Note on number reuse:** the original Phase 110 ROADMAP entry was scoped as "Retroactive sequential renumbering for shipped 999.x items". That backlog scope was renumbered to **Phase 114** when this MCP memory-reduction work shipped under the 110 commit tag. See Phase 114 below.
 
