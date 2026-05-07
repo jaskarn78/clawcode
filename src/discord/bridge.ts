@@ -737,15 +737,24 @@ export class DiscordBridge {
         "failed to route message",
       );
 
-      // Exit 143 = SDK idle-timeout SIGTERM. The session is gone but the
-      // recovery path will restart it in ~10s (2s backoff + 8s warmup).
-      // Retry once after 12s so the user's message isn't silently dropped.
-      // Only one retry per original message (retryCount guards infinite loops).
-      const isIdleTimeout = errorMsg.includes("code 143") && retryCount === 0;
-      if (isIdleTimeout) {
+      // Crash-recovery retry: the SDK kills idle sessions (exit 143) after
+      // ~38min, and a message arriving during the restart window throws
+      // "Agent 'X' is not running". Both should retry — losing user messages
+      // because the session was rebooting is bad UX.
+      //
+      // Recovery delay scales with consecutiveFailures: failure 1 → ~2s,
+      // 2 → ~4s, 3 → ~8s, plus warmup (~7-12s for MCP init). So worst case
+      // for 1-2 consecutive failures is ~17s; 3 consecutive is ~20s.
+      //
+      // First retry: 20s (covers failure 1-2 cleanly).
+      // Second retry: +15s (catches failure 3 if first retry was still early).
+      // Retries cap at 2 so we never loop infinitely on a permanently-broken agent.
+      const isCrashRecovery = errorMsg.includes("code 143") || errorMsg.includes("is not running");
+      if (isCrashRecovery && retryCount < 2) {
+        const delayMs = retryCount === 0 ? 20_000 : 15_000;
         setTimeout(() => {
-          void this.streamAndPostResponse(message, sessionName, formattedMessage, undefined, 0, 1);
-        }, 12_000);
+          void this.streamAndPostResponse(message, sessionName, formattedMessage, undefined, 0, retryCount + 1);
+        }, delayMs);
         try { await message.react("⏳"); } catch { /* non-fatal */ }
         return;
       }
