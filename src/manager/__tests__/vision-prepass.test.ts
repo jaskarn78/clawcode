@@ -96,6 +96,18 @@ describe("runVisionPrepass", () => {
     expect(content[1].type).toBe("text");
   });
 
+  it("returns empty string when SDK returns API error text as a successful result", async () => {
+    const mockSdk = makeMockSdk([{ type: "result", subtype: "success", result: "Credit balance is too low to complete this request." }]);
+    vi.doMock("@anthropic-ai/claude-agent-sdk", () => mockSdk);
+
+    const { runVisionPrepass: fn, _resetSdkCacheForTests: reset } = await import("../vision-prepass.js");
+    reset();
+
+    const buf = Buffer.from("fake-image-data");
+    const result = await fn(buf, "image/jpeg");
+    expect(result).toBe("");
+  });
+
   it("respects an already-aborted signal", async () => {
     const mockSdk = makeMockSdk([{ type: "result", subtype: "success", result: "TEXT: hello" }]);
     vi.doMock("@anthropic-ai/claude-agent-sdk", () => mockSdk);

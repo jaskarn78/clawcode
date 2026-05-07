@@ -16,6 +16,7 @@
 import { readFile } from "node:fs/promises";
 import { resolveModelId } from "./model-resolver.js";
 import { resizeForVision } from "../discord/image-resize.js";
+import { isErrorSummary } from "../memory/error-guard.js";
 import type { SdkModule, SdkQueryOptions, SdkUserMessage } from "./sdk-types.js";
 
 const VISION_SYSTEM_PROMPT =
@@ -109,7 +110,11 @@ export async function runVisionPrepass(
         typeof msg.result === "string" &&
         msg.result.length > 0
       ) {
-        result = msg.result;
+        // Guard: SDK returns API error text as a successful result — same
+        // class of bug fixed in consolidation worker (999.39). Treat as failure.
+        if (!isErrorSummary(msg.result)) {
+          result = msg.result;
+        }
         break;
       }
     }
