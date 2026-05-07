@@ -145,6 +145,12 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   //     Stage 1a wiring picks up edits without a restart.
   "defaults.shimRuntime",
   "defaults.brokers",
+  // Phase 109-B — orphan-claude reaper config. Mode/minAgeSeconds edits
+  // hot-reload via the daemon's onTickAfter closure, which reads
+  // `config.defaults.orphanClaudeReaper` on each 60s tick. The closure-
+  // capture fix (same PR that landed subagentReaper reloadable) ensures
+  // the ModeGetter sees the post-reload value without a daemon restart.
+  "defaults.orphanClaudeReaper",
   // Phase 999.X — subagent-thread reaper config. Mode/idle/minAge edits
   // hot-reload through the existing ConfigReloader path (Phase 109-B
   // precedent — same shape as defaults.orphanClaudeReaper above). The
