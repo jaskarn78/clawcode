@@ -1594,9 +1594,12 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Defer reply immediately (allows up to 15 min for response)
+    // Defer reply immediately (allows up to 15 min for response).
+    // clawcode-status is ephemeral so the operator can dismiss it.
     try {
-      await interaction.deferReply();
+      await interaction.deferReply(
+        commandName === "clawcode-status" ? { ephemeral: true } : {},
+      );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log.error({ commandName, channelId, error: msg }, "failed to defer reply");
@@ -4360,7 +4363,7 @@ export class SlashCommandHandler {
     const isFleet = cmd.name === "clawcode-fleet";
 
     try {
-      await interaction.deferReply({ ephemeral: !isFleet });
+      await interaction.deferReply({ ephemeral: true });
     } catch (error) {
       this.log.error(
         { command: cmd.name, error: (error as Error).message },
