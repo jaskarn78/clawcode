@@ -14,7 +14,6 @@ import type { DownloadResult } from "./attachment-types.js";
 import { isImageAttachment } from "./attachments.js";
 import { resizeImageForVision } from "./image-resizer.js";
 import { callHaikuVision } from "../manager/haiku-direct.js";
-import type { VisionMediaType } from "../manager/haiku-direct.js";
 
 const VISION_SYSTEM_PROMPT =
   "You are a visual content analyzer. Respond ONLY with the requested structured analysis. No commentary, no preamble.";
@@ -52,7 +51,6 @@ export async function runVisionPrePass(
   const entries = await Promise.all(
     imageResults.map(async (r) => {
       const path = r.path;
-      const mediaType = resolveMediaType(r.attachmentInfo.contentType);
       const t0 = Date.now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -62,7 +60,7 @@ export async function runVisionPrePass(
           VISION_SYSTEM_PROMPT,
           VISION_USER_PROMPT,
           buffer,
-          mediaType,
+          "image/png",  // resizeImageForVision always outputs PNG regardless of input format
           { signal: controller.signal },
         );
         if (!analysis) return null;
@@ -86,12 +84,4 @@ export async function runVisionPrePass(
   return new Map(
     entries.filter((e): e is [string, string] => e !== null),
   );
-}
-
-function resolveMediaType(contentType: string | null): VisionMediaType {
-  if (!contentType) return "image/png";
-  if (contentType.includes("jpeg") || contentType.includes("jpg")) return "image/jpeg";
-  if (contentType.includes("gif")) return "image/gif";
-  if (contentType.includes("webp")) return "image/webp";
-  return "image/png";
 }
