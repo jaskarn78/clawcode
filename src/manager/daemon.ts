@@ -119,7 +119,7 @@ import {
   handleSecretsStatus,
   handleSecretsInvalidate,
 } from "./secrets-ipc-handler.js";
-import { readRegistry, reconcileRegistry, writeRegistry } from "./registry.js";
+import { readRegistry, reconcileRegistry, updateEntry, writeRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
 import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
@@ -3254,6 +3254,63 @@ export async function startDaemon(
       }
       return handleMarketplaceRemoveIpc(deps);
     }
+    // skill-create — agent-initiated skill authoring via daemon IPC.
+    // Writes SKILL.md to skillsPath, rescans catalog, re-links agent workspace,
+    // and persists the skill name to the agent's YAML config. Exists because
+    // agent processes cannot write to skillsPath directly (tool ACL restriction).
+    if (method === "skill-create") {
+      const agentName = validateStringParam(params, "agent");
+      const skillName = validateStringParam(params, "name");
+      const content = validateStringParam(params, "content");
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(skillName)) {
+        throw new ManagerError(
+          `Invalid skill name '${skillName}' — must match [a-z0-9][a-z0-9-]*`,
+        );
+      }
+      const agentIdx = (resolvedAgents as ResolvedAgentConfig[]).findIndex(
+        (a) => a.name === agentName,
+      );
+      if (agentIdx === -1) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+      const skillDir = join(skillsPath, skillName);
+      const skillFile = join(skillDir, "SKILL.md");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(skillFile, content, "utf-8");
+      const freshCatalog = await scanSkillsDirectory(skillsPath, log);
+      const agentCfg = (resolvedAgents as ResolvedAgentConfig[])[agentIdx]!;
+      const alreadyAssigned = agentCfg.skills.includes(skillName);
+      const updatedSkills = alreadyAssigned
+        ? agentCfg.skills
+        : [...agentCfg.skills, skillName];
+      if (!alreadyAssigned) {
+        (resolvedAgents as ResolvedAgentConfig[])[agentIdx] = Object.freeze({
+          ...agentCfg,
+          skills: updatedSkills,
+        });
+        try {
+          await updateAgentSkills({
+            existingConfigPath: configPath,
+            agentName,
+            skillName,
+            op: "add",
+          });
+        } catch (err) {
+          log.warn(
+            { agent: agentName, skill: skillName, error: (err as Error).message },
+            "skill-create: YAML persist failed — skill linked in-memory only",
+          );
+        }
+      }
+      await linkAgentSkills(
+        join((resolvedAgents as ResolvedAgentConfig[])[agentIdx]!.workspace, "skills"),
+        updatedSkills,
+        freshCatalog,
+        log,
+      );
+      log.info({ agent: agentName, skill: skillName, path: skillFile }, "skill created");
+      return Object.freeze({ created: true, skill: skillName, path: skillFile });
+    }
     // Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin list + install IPC.
     // Closure-based intercept parallel to the skill marketplace handlers
     // above. Writes to agents[*].mcpServers via updateAgentMcpServers.
@@ -5361,6 +5418,37 @@ export async function startDaemon(
     );
     return false;
   });
+
+  // Clean up stale "starting" or "running" statuses for skipped agents.
+  // reconcileRegistry ignores "starting" entries entirely, so an agent that
+  // stalled during warmup (e.g. MCP timeout on a previous boot) keeps that
+  // status forever — the fleet shows it as "starting" indefinitely. "running"
+  // is also stale: if the session never resumed or was not attempted
+  // (autoStart=false), the registry should reflect that the agent is stopped.
+  {
+    const skippedNames = new Set(
+      resolvedAgents
+        .filter((cfg) => !autoStartAgents.includes(cfg))
+        .map((cfg) => cfg.name),
+    );
+    if (skippedNames.size > 0) {
+      try {
+        let reg = await readRegistry(REGISTRY_PATH);
+        let changed = false;
+        for (const entry of reg.entries) {
+          if (skippedNames.has(entry.name) && (entry.status === "starting" || entry.status === "running")) {
+            reg = updateEntry(reg, entry.name, { status: "stopped" });
+            changed = true;
+            log.info({ agent: entry.name, was: entry.status }, "cleared stale active status for autoStart=false agent");
+          }
+        }
+        if (changed) await writeRegistry(REGISTRY_PATH, reg);
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, "failed to clear stale registry statuses for skipped agents (non-fatal)");
+      }
+    }
+  }
+
   // Phase 999.25 — sort by wakeOrder (lower = earlier). `undefined` becomes
   // Infinity so unordered agents boot LAST. Stable sort: ties + same-priority
   // groups preserve YAML order. Boot remains sequential (startAll uses

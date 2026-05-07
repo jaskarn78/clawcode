@@ -591,6 +591,7 @@ export class DiscordBridge {
     formattedMessage: string,
     turn?: Turn,
     drainDepth = 0,
+    retryCount = 0,
   ): Promise<void> {
     const channelId = message.channelId;
 
@@ -735,6 +736,19 @@ export class DiscordBridge {
         { agent: sessionName, channel: channelId, error: errorMsg },
         "failed to route message",
       );
+
+      // Exit 143 = SDK idle-timeout SIGTERM. The session is gone but the
+      // recovery path will restart it in ~10s (2s backoff + 8s warmup).
+      // Retry once after 12s so the user's message isn't silently dropped.
+      // Only one retry per original message (retryCount guards infinite loops).
+      const isIdleTimeout = errorMsg.includes("code 143") && retryCount === 0;
+      if (isIdleTimeout) {
+        setTimeout(() => {
+          void this.streamAndPostResponse(message, sessionName, formattedMessage, undefined, 0, 1);
+        }, 12_000);
+        try { await message.react("⏳"); } catch { /* non-fatal */ }
+        return;
+      }
 
       // Phase 100-fu — QUEUE_FULL coalescing.
       //
