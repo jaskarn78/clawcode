@@ -44,7 +44,7 @@ let cachedClient: Anthropic | null = null;
 async function getClient(): Promise<Anthropic> {
   if (cachedClient) return cachedClient;
   const token = await loadOAuthToken();
-  cachedClient = new Anthropic({ authToken: token });
+  cachedClient = new Anthropic({ apiKey: null, authToken: token });
   return cachedClient;
 }
 
