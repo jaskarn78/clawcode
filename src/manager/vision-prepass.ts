@@ -71,12 +71,20 @@ export async function runVisionPrepass(
     }
   }
 
+  // Use global settings so the subprocess loads OAuth credentials from
+  // ~/.claude/ — same auth path as the main agents. Strip ANTHROPIC_API_KEY
+  // so the API key account is never charged (OAuth subscription covers vision).
+  // tools:[] prevents any tool loading since this is a one-shot vision call.
+  const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
+
   const options: SdkQueryOptions = {
     model: resolveModelId("haiku"),
     systemPrompt: VISION_SYSTEM_PROMPT,
     allowDangerouslySkipPermissions: true,
-    settingSources: [],
+    settingSources: ["global"],
+    tools: [],
     abortController: controller,
+    env: cleanEnv as Record<string, string | undefined>,
   };
 
   const base64Data = imageBuffer.toString("base64");
