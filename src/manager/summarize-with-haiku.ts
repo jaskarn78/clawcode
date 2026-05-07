@@ -68,18 +68,12 @@ export async function summarizeWithHaiku(
     }
   }
 
-  // Use global settings to load OAuth credentials — same auth path as agents.
-  // Strip ANTHROPIC_API_KEY so the API key account is never billed.
-  const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
-
   const options: SdkQueryOptions = {
     model: resolveModelId("haiku"),
     systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
     allowDangerouslySkipPermissions: true,
-    settingSources: ["global"],
-    tools: [],
+    settingSources: [],
     abortController: controller,
-    env: cleanEnv as Record<string, string | undefined>,
   };
 
   const q = sdk.query({ prompt, options });
