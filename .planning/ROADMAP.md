@@ -20,7 +20,7 @@
 - :white_check_mark: **v2.5 Cutover Parity Verification** - Phases 92-93 (shipped 2026-04-25)
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
-- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, **115**, 999.7, 999.18-20, 999.34-36, 999.38-42 (proposed 2026-05-07)
+- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, **115** (folds 999.40, 999.41, partial 999.42), 999.7, 999.18-20, 999.34-36, 999.38, 999.39, 999.42-residual (proposed 2026-05-07)
 
 ## Phases
 
@@ -854,7 +854,28 @@ Plans:
 
 14. **Diagnostic baseopts dump as operator toggle** — promote the temporary patch we deployed today (`src/manager/session-adapter.ts` — `debugDumpBaseOptions` helper) from a hard-coded fin-acq + Admin Clawdy allowlist to a config flag `agents[*].debug.dumpBaseOptionsOnSpawn: bool`. Default off. Writes to `/home/clawcode/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json`. Eliminates the need to redeploy when the next incident strikes.
 
+15. **MCP tool-response cache (folds Phase 999.40)** — daemon-side content-keyed cache for repeated MCP tool calls. Per-tool TTL: `web_search`/`brave_search`/`exa_search` 5min, `search_documents` 30min, `mysql_query` 60s for explicit-read queries (gated on a `cacheable: true` hint or tool-name allowlist; never cache `INSERT`/`UPDATE`/`DELETE`), `google_workspace_*_get` 5min, `image_generate` 0 (never), `spawn_subagent_thread` 0 (never — each call is unique work). Storage: better-sqlite3 in `~/.clawcode/manager/tool-cache.db` with `(key, tool, agent_or_null, response_json, created_at, expires_at)`. Eviction: LRU + 100MB default cap. Bypass: agent can pass `bypass_cache: true` in tool args. Cache stamping: response wrapped with `cached: { age_ms, source }` so agents can decide whether to trust or refresh. Per-agent isolation for `search_documents` (agent-scoped); cross-agent OK for `web_search` (public data). **Direct leverage for the observed 120s `mysql_query` p50 and the ~14s cache-miss penalty on first_token.**
+
+16. **Response-timing benchmark + dashboard integration** — formal harness to measure Phase 115 impact, integrated cleanly with the existing performance panel. Three deliverables:
+    (a) **Benchmark suite** — `scripts/bench/115-perf.ts` with five canonical scenarios per agent: (i) cold-start first-turn, (ii) Discord-paced single-turn ack (no tools), (iii) tool-heavy turn (3+ MCP calls including mysql + search), (iv) memory-recall turn (asks "what did we discuss with X on Y date" — exercises the new lazy-load tool surface), (v) extended-thinking turn. Each scenario captures p50/p95/p99 across the existing trace segments (`first_token`, `first_visible_token`, `context_assemble`, `tool_call`, `end_to_end`).
+    (b) **Pre/post-115 baseline** — run the suite against current state BEFORE shipping any 115 sub-scope (locks in the "broken" baseline including today's 5,200ms first-token p50, 288s end-to-end p95, 92.8% cache hit on fin-acq). Re-run after each major sub-scope ships. Comparison report under `.planning/phases/115-*/perf-comparisons/`.
+    (c) **Dashboard surface** — new metrics fit cleanly into the existing performance panel:
+       - Add `tier1_inject_chars` + `tier1_budget_pct` to the per-agent panel (visualizes the bounded-tier headroom)
+       - Add `tool_cache_hit_rate` + `tool_cache_size_mb` next to `prompt_cache_hit_rate`
+       - Add `lazy_recall_call_count` (per-turn count of `clawcode_memory_*` tool invocations) — proxy for whether the agent is actually using lazy recall
+       - Add `prompt_bloat_warnings_24h` (count of sub-scope 13a `[diag] likely-prompt-bloat` log entries)
+       - The trace segments stay byte-identical so historical SLO comparisons still work.
+
+**Concrete perf targets (anchored in observed 2026-05-07 fin-acquisition numbers):**
+- **first_token p50** — 5,200 → ≤ 2,000 ms (the existing SLO target). Smaller stable prefix (sub-scope 1) + tool cache (15) + lazy recall replacing always-injected memory (7) compound here.
+- **end_to_end p95** — 288,713 → ≤ 30,000 ms target (60s SLO probably right for tool-heavy turns; current value is dominated by `mysql_query` at 120s and tool retry loops).
+- **mysql_query p50** — 120,659 → ≤ 5,000 ms via cache hits on read-only patterns; cold misses unchanged.
+- **stable-prefix size p95** — currently ~33K chars worst case → ≤ 8K tokens hard cap.
+- **prompt_cache_hit_rate** — fin-acq holds 92.8% (Ramy-paced); idle agents currently <30%. Goal: ≥60% across all agents (gap closed by sub-scope 5 cache-breakpoint placement and either sub-scope 6 1h-TTL recovery OR Discord-cadence batching).
+- **tool_cache_hit_rate** — new metric, target ≥40% on agents with repetitive read patterns (fin-acq, fin-research, finmentum-content-creator).
+
 **Folds in (partial or full scope absorbed):**
+- **Phase 999.40** — "Daemon-side response cache for repeated MCP tool calls" — fully absorbed as sub-scope 15. 999.40 will be marked SUPERSEDED-BY-115 in roadmap.
 - **Phase 999.41** — "Generalize API-error-dominated session guard to dream-pass + session-flush + all summarization paths" — same family of bug; the session-end Haiku summarization that captures error text as memory content lives at the boundary between sub-scopes 8 and 13.
 - **Phase 999.42** — "Hermes-parity memory + auto-skill gaps" — sub-scopes 7, 10, 11 absorb the FTS5 + tier model parts; auto-skill creation (Hermes 5+ tool-calls trigger) explicitly NOT in 115 scope, stays in 999.42 for a follow-on phase.
 - **Phase 999.41 specific carve-out:** the rolling-summary fail-loud guard for `summarize-with-haiku.ts` ships as part of sub-scope 13(a) since the diagnostic surface is shared.
@@ -1753,7 +1774,13 @@ Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempot
 
 **Risk callout:** permission model mistakes here have real blast radius — accidentally letting any agent post to any subagent thread breaks isolation guarantees subagents currently rely on. Operator decision on default permission model gates execution.
 
-### Phase 999.40: Daemon-side response cache for repeated MCP tool calls (BACKLOG)
+### Phase 999.40: Daemon-side response cache for repeated MCP tool calls (SUPERSEDED — folded into Phase 115 sub-scope 15)
+
+**Status:** SUPERSEDED 2026-05-07 — fully absorbed as Phase 115 sub-scope 15 (MCP tool-response cache). All sub-scope candidates listed below are carried forward into 115 planning. See `.planning/ROADMAP.md` Phase 115 entry for the active scope. Original entry preserved below for git-history searchability.
+
+---
+
+### Phase 999.40 (original): Daemon-side response cache for repeated MCP tool calls
 
 **Goal:** Cache MCP tool-call responses (e.g. `web_search`) at the daemon layer with content-keyed lookups. When an agent re-asks the same query within a TTL window, the daemon returns the cached result instead of re-hitting brave/exa/openai. Speeds up second-and-later identical queries from ~2-5s to <50ms. Helps both Node and Go shim runtimes equally — not Phase 110-specific.
 
