@@ -614,7 +614,7 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
   // (UI-01 compliance — NOT free-text). Zero LLM turn cost per invocation.
   {
     name: "clawcode-tools",
-    description: "Show MCP tool readiness for the bound agent",
+    description: "Show MCP tool status and refresh live for the bound agent",
     claudeCommand: "",
     control: true,
     ipcMethod: "list-mcp-status",
@@ -626,22 +626,6 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
         required: false,
       },
     ],
-  },
-  // Phase 91 Plan 05 SYNC-08 / UI-01 — daemon-routed OpenClaw ↔ ClawCode
-  // sync status view. Reads ~/.clawcode/manager/sync-state.json + tails
-  // ~/.clawcode/manager/sync.jsonl via ipcMethod "list-sync-status". The
-  // inline handler in slash-commands.ts renders the reply as a native
-  // Discord EmbedBuilder (UI-01 compliance — NOT free-text). Zero LLM
-  // turn cost per invocation. Fleet-level (no per-agent argument): the
-  // sync state is singleton for the fin-acquisition topology.
-  {
-    name: "clawcode-sync-status",
-    description:
-      "Show current OpenClaw ↔ ClawCode sync status and any active conflicts",
-    claudeCommand: "",
-    control: true,
-    ipcMethod: "list-sync-status",
-    options: [],
   },
   // Phase 95 Plan 03 DREAM-07 / UI-01 — operator-driven manual dream-pass
   // trigger. Admin-only ephemeral; the inline-short-circuit handler in
@@ -663,31 +647,6 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
         type: 3,
         description: "Agent name to dream",
         required: true,
-      },
-    ],
-  },
-  // Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — daemon-routed cutover verify.
-  // Reads CUTOVER-GAPS.json (Plan 92-02) and renders ONE ephemeral embed per
-  // destructive gap (or batched if > 10) with Accept/Reject/Defer buttons.
-  // The buttons use the `cutover-{agent}-{gapId}:{action}` customId namespace
-  // (collision-safe — see daemon-cutover-button.test.ts D2). Operator clicks
-  // route through ipcMethod "cutover-button-action" → daemon's pure
-  // handleCutoverButtonActionIpc → applyDestructiveFix or audit-only ledger row.
-  // Inline-short-circuit handler in slash-commands.ts mirrors the Phase 85/86/
-  // 87/88/91 pattern. Zero LLM turn cost per invocation (UI-01).
-  {
-    name: "clawcode-cutover-verify",
-    description:
-      "Surface destructive cutover gaps for the bound agent (Accept/Reject/Defer per gap)",
-    claudeCommand: "",
-    control: true,
-    ipcMethod: "cutover-verify-summary",
-    options: [
-      {
-        name: "agent",
-        type: 3,
-        description: "Agent name (defaults to the channel's bound agent)",
-        required: false,
       },
     ],
   },

@@ -240,43 +240,6 @@ type ToolsIpcResponse = {
   readonly servers: ReadonlyArray<ToolsIpcServer>;
 };
 
-// ---------------------------------------------------------------------------
-// Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status IPC response shape.
-//
-// Matches the daemon's `list-sync-status` handler (src/manager/daemon.ts).
-// Duplicated here instead of imported so slash-commands stays decoupled
-// from the src/sync module graph (same discipline as ToolsIpcResponse).
-// ---------------------------------------------------------------------------
-
-type SyncStatusIpcConflict = {
-  readonly path: string;
-  readonly sourceHash: string;
-  readonly destHash: string;
-  readonly detectedAt: string;
-};
-
-type SyncStatusIpcLastCycle = {
-  readonly cycleId: string;
-  readonly status: string;
-  readonly filesAdded?: number;
-  readonly filesUpdated?: number;
-  readonly filesRemoved?: number;
-  readonly filesSkippedConflict?: number;
-  readonly bytesTransferred?: number;
-  readonly durationMs: number;
-  readonly timestamp: string;
-  readonly error?: string;
-  readonly reason?: string;
-};
-
-type SyncStatusIpcResponse = {
-  readonly authoritativeSide: "openclaw" | "clawcode";
-  readonly lastSyncedAt: string | null;
-  readonly conflictCount: number;
-  readonly conflicts: ReadonlyArray<SyncStatusIpcConflict>;
-  readonly lastCycle: SyncStatusIpcLastCycle | null;
-};
-
 /**
  * Embed colour driven by the worst-state server in the set.
  * Exported for test convenience / future reuse by the dashboard.
@@ -426,36 +389,6 @@ type SkillInstallOutcomeWire =
       readonly skill: string;
       readonly reason: string;
     };
-
-/**
- * Phase 92 Plan 04 — Format a DestructiveButtonOutcome for the operator.
- *
- * The IPC response is the wire-shape of cutover/types.ts DestructiveButtonOutcome
- * but typed loosely here to keep the slash-commands module decoupled from the
- * full union. Callers pass `{kind, error?, gapKind?}` after IPC dispatch.
- */
-function formatCutoverOutcome(outcome: {
-  kind: string;
-  error?: string;
-  gapKind?: string;
-}): string {
-  switch (outcome.kind) {
-    case "accepted-applied":
-      return `Cutover gap accepted and applied${outcome.gapKind ? ` (${outcome.gapKind})` : ""}. Pre-change snapshot recorded in the ledger.`;
-    case "accepted-apply-failed":
-      return `Apply failed${outcome.gapKind ? ` (${outcome.gapKind})` : ""}: ${outcome.error ?? "unknown error"}. Audit row appended.`;
-    case "rejected":
-      return `Cutover gap rejected${outcome.gapKind ? ` (${outcome.gapKind})` : ""}. Target unchanged; reject row recorded.`;
-    case "deferred":
-      return `Deferred${outcome.gapKind ? ` (${outcome.gapKind})` : ""}. Re-running verify will re-surface this gap.`;
-    case "expired":
-      return "The interaction expired before a button was clicked.";
-    case "invalid-customId":
-      return "Cutover button click failed: invalid customId or gap not found.";
-    default:
-      return `Cutover outcome: ${outcome.kind}`;
-  }
-}
 
 function renderInstallOutcome(
   outcome: SkillInstallOutcomeWire,
@@ -1452,35 +1385,6 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status inline handler.
-    // Eighth application of the inline-handler-short-circuit-before-
-    // CONTROL_COMMANDS pattern established by /clawcode-tools (Phase 85)
-    // and extended by /clawcode-model (86), /clawcode-permissions (87),
-    // /clawcode-skills-browse + /clawcode-skills (88), /clawcode-plugins-browse
-    // and /clawcode-clawhub-auth (90). Routes through the daemon-direct
-    // `list-sync-status` IPC (zero LLM turn cost) and renders a native
-    // Discord EmbedBuilder via the pure buildSyncStatusEmbed function
-    // in sync-status-embed.ts. Carved out BEFORE the generic CONTROL_COMMANDS
-    // dispatch so the EmbedBuilder path can't be short-circuited by the
-    // text-formatting branch in handleControlCommand.
-    if (commandName === "clawcode-sync-status") {
-      await this.handleSyncStatusCommand(interaction);
-      return;
-    }
-
-    // Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — /clawcode-cutover-verify
-    // inline handler. Ninth application of the inline-handler-short-circuit-
-    // before-CONTROL_COMMANDS pattern (Phase 85/86/87/88/91). Renders one
-    // ephemeral embed per destructive cutover gap with Accept/Reject/Defer
-    // buttons (customId prefix `cutover-` — collision-safe with all existing
-    // namespaces). Carved out BEFORE the generic CONTROL_COMMANDS dispatch
-    // so the embed-batch path can't be short-circuited by the text-formatting
-    // branch in handleControlCommand.
-    if (commandName === "clawcode-cutover-verify") {
-      await this.handleCutoverVerifyCommand(interaction);
-      return;
-    }
-
     // Phase 95 Plan 03 DREAM-07 / UI-01 — /clawcode-dream inline handler.
     // 10th application of the inline-handler-short-circuit-before-
     // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92). Admin-only
@@ -2002,82 +1906,111 @@ export class SlashCommandHandler {
     // runs for this surface.
     const nowDate = new Date();
     const now = nowDate.getTime();
-    const rows: readonly ProbeRowOutput[] = Object.freeze(
-      response.servers.map((s) => {
-        const stateLike: ProbeRowState = { capabilityProbe: s.capabilityProbe };
-        const alternatives = s.alternatives ?? [];
-        return buildProbeRow(s.name, stateLike, alternatives, nowDate);
-      }),
-    );
 
-    // D-11 pagination — Discord caps embeds at 25 fields; if the snapshot
-    // exceeds the cap, we still render only the first page in the embed
-    // (the select-menu pagination component is reserved for a future
-    // interactive plan; this plan keeps the read-only display surface).
-    const pages = paginateRows(rows, EMBED_LINE_CAP);
-    const firstPage = pages[0] ?? [];
+    const buildEmbed = (resp: ToolsIpcResponse): { embed: EmbedBuilder; row: ActionRowBuilder<ButtonBuilder> } => {
+      const rows: readonly ProbeRowOutput[] = Object.freeze(
+        resp.servers.map((s) => {
+          const stateLike: ProbeRowState = { capabilityProbe: s.capabilityProbe };
+          const alternatives = s.alternatives ?? [];
+          return buildProbeRow(s.name, stateLike, alternatives, new Date());
+        }),
+      );
 
-    const embed = new EmbedBuilder()
-      .setTitle(`MCP Tools · ${agentName}`)
-      .setColor(resolveEmbedColor(response.servers));
+      const pages = paginateRows(rows, EMBED_LINE_CAP);
+      const firstPage = pages[0] ?? [];
 
-    if (pages.length > 1) {
-      embed.setFooter({
-        text: `Showing first ${EMBED_LINE_CAP} of ${rows.length} servers (Discord embed cap)`,
-      });
-    }
+      const e = new EmbedBuilder()
+        .setTitle(`MCP Tools · ${agentName}`)
+        .setColor(resolveEmbedColor(resp.servers));
 
-    for (let i = 0; i < firstPage.length; i++) {
-      const row = firstPage[i]!;
-      const s = response.servers[i]!;
-      // Connect-test status emoji (Phase 85) — keeps backwards-compat with
-      // the existing field-name shape; the capability-probe emoji is
-      // surfaced INSIDE the value so both axes show side-by-side.
-      const connectEmoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
-      // Only annotate optional servers that aren't ready — a ready optional
-      // doesn't need the annotation (operator cares about "what's down, and
-      // does it matter?").
-      const optSuffix = s.optional && s.status !== "ready" ? " (optional)" : "";
-      const lastSuccess = s.lastSuccessAt
-        ? `${formatRelativeTime(now - s.lastSuccessAt)} ago`
-        : "never";
-      // TOOL-04 end-to-end — pass the lastError string VERBATIM into the
-      // embed field. No rewording, no wrapping. Plan 01's readiness module
-      // captures the raw transport error; we just render it.
-      const errLine = s.lastError ? `\nerror: ${s.lastError}` : "";
-
-      // Phase 94 Plan 07 D-11 — capability probe column. Status emoji +
-      // last-good ISO + relative + recovery suggestion (when degraded).
-      // Lines composed conditionally so a "ready" server stays compact.
-      const probeLines: string[] = [];
-      const probeLastGood = row.lastSuccessIso
-        ? `last good: ${row.lastSuccessIso}${row.lastSuccessRelative ? ` (${row.lastSuccessRelative})` : ""}`
-        : "last good: never";
-      probeLines.push(`probe: ${row.statusEmoji} ${row.status} — ${probeLastGood}`);
-      if (row.recoverySuggestion) {
-        probeLines.push(row.recoverySuggestion);
-      }
-      // D-07 / TOOL-12 — Healthy alternatives line ONLY for non-ready
-      // servers (the renderer suppresses the array for ready servers).
-      if (row.alternatives.length > 0) {
-        probeLines.push(`Healthy alternatives: ${row.alternatives.join(", ")}`);
+      if (pages.length > 1) {
+        e.setFooter({
+          text: `Showing first ${EMBED_LINE_CAP} of ${rows.length} servers (Discord embed cap)`,
+        });
       }
 
-      embed.addFields({
-        name: `${connectEmoji} ${s.name}${optSuffix}`,
-        value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}\n${probeLines.join("\n")}${errLine}`,
-        inline: false,
-      });
-    }
+      for (let i = 0; i < firstPage.length; i++) {
+        const row = firstPage[i]!;
+        const s = resp.servers[i]!;
+        const connectEmoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
+        const optSuffix = s.optional && s.status !== "ready" ? " (optional)" : "";
+        const lastSuccess = s.lastSuccessAt
+          ? `${formatRelativeTime(now - s.lastSuccessAt)} ago`
+          : "never";
+        const errLine = s.lastError ? `\nerror: ${s.lastError}` : "";
+
+        const probeLines: string[] = [];
+        const probeLastGood = row.lastSuccessIso
+          ? `last good: ${row.lastSuccessIso}${row.lastSuccessRelative ? ` (${row.lastSuccessRelative})` : ""}`
+          : "last good: never";
+        probeLines.push(`probe: ${row.statusEmoji} ${row.status} — ${probeLastGood}`);
+        if (row.recoverySuggestion) {
+          probeLines.push(row.recoverySuggestion);
+        }
+        if (row.alternatives.length > 0) {
+          probeLines.push(`Healthy alternatives: ${row.alternatives.join(", ")}`);
+        }
+
+        e.addFields({
+          name: `${connectEmoji} ${s.name}${optSuffix}`,
+          value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}\n${probeLines.join("\n")}${errLine}`,
+          inline: false,
+        });
+      }
+
+      const refreshRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`tools-refresh:${agentName}`)
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Secondary),
+      );
+
+      return { embed: e, row: refreshRow };
+    };
+
+    const { embed, row: refreshRow } = buildEmbed(response);
 
     try {
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [embed], components: [refreshRow] });
     } catch (error) {
       this.log.error(
         { command: "clawcode-tools", error: (error as Error).message },
         "failed to send tools embed",
       );
+      return;
     }
+
+    // 5-minute refresh collector — lets the operator re-check without re-running the command.
+    let refreshReply: import("discord.js").Message | undefined;
+    try {
+      refreshReply = await interaction.fetchReply() as import("discord.js").Message;
+    } catch {
+      return;
+    }
+    const collector = refreshReply.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      filter: (i: ButtonInteraction) =>
+        i.user.id === interaction.user.id &&
+        i.customId === `tools-refresh:${agentName}`,
+      time: 5 * 60 * 1000,
+    });
+
+    collector.on("collect", async (btn: ButtonInteraction) => {
+      try {
+        await btn.deferUpdate();
+      } catch {
+        return;
+      }
+      try {
+        const refreshed = (await sendIpcRequest(SOCKET_PATH, "list-mcp-status", {
+          agent: agentName,
+        })) as ToolsIpcResponse;
+        const { embed: freshEmbed, row: freshRow } = buildEmbed(refreshed);
+        await btn.editReply({ embeds: [freshEmbed], components: [freshRow] });
+      } catch {
+        /* silent — collector just skips failed refreshes */
+      }
+    });
   }
 
   /**
@@ -2595,91 +2528,6 @@ export class SlashCommandHandler {
   }
 
   /**
-   * Phase 91 Plan 05 SYNC-08 — handle /clawcode-sync-status.
-   *
-   * Reads the OpenClaw ↔ ClawCode sync snapshot via the daemon-routed
-   * `list-sync-status` IPC method (zero LLM turn cost) and replies with a
-   * native Discord EmbedBuilder built by the pure buildSyncStatusEmbed
-   * function (src/discord/sync-status-embed.ts).
-   *
-   * Reply is always ephemeral (operator-only view — conflicts include file
-   * paths that shouldn't leak into public channels). IPC failures surface
-   * verbatim in an ephemeral error message so operators see the real root
-   * cause instead of a sanitised "Sync status unavailable" placeholder.
-   *
-   * Note: unlike /clawcode-tools this command is fleet-level (not per-agent).
-   * It reads `~/.clawcode/manager/sync-state.json` which is the single
-   * source-of-truth for the fin-acquisition sync topology. No `agent`
-   * option is accepted at registration time.
-   */
-  private async handleSyncStatusCommand(
-    interaction: ChatInputCommandInteraction,
-  ): Promise<void> {
-    try {
-      await interaction.deferReply({ ephemeral: true });
-    } catch (error) {
-      this.log.error(
-        { command: "clawcode-sync-status", error: (error as Error).message },
-        "failed to defer sync-status reply",
-      );
-      return;
-    }
-
-    let response: SyncStatusIpcResponse;
-    try {
-      response = (await sendIpcRequest(
-        SOCKET_PATH,
-        "list-sync-status",
-        {},
-      )) as SyncStatusIpcResponse;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(
-        { command: "clawcode-sync-status", error: msg },
-        "list-sync-status IPC failed",
-      );
-      try {
-        await interaction.editReply(`Sync status unavailable: ${msg}`);
-      } catch {
-        /* interaction may have expired */
-      }
-      return;
-    }
-
-    // Dynamic import keeps the slash-commands module graph decoupled from
-    // sync-status-embed's discord.js EmbedBuilder reach; mirrors the
-    // Phase 88 skills-browse pattern (lazy load when the command actually
-    // fires, keeps cold-start import graph smaller).
-    const { buildSyncStatusEmbed } = await import("./sync-status-embed.js");
-
-    // Shape-align conflict entries with SyncConflict — the daemon returns
-    // only open conflicts (resolvedAt omitted); the embed consumer expects
-    // resolvedAt: null on every entry. Map once, pass immutably.
-    const embed = buildSyncStatusEmbed({
-      authoritativeSide: response.authoritativeSide,
-      lastSyncedAt: response.lastSyncedAt,
-      conflicts: response.conflicts.map((c) => ({
-        path: c.path,
-        sourceHash: c.sourceHash,
-        destHash: c.destHash,
-        detectedAt: c.detectedAt,
-        resolvedAt: null,
-      })),
-      lastCycle: response.lastCycle,
-      now: new Date(),
-    });
-
-    try {
-      await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-      this.log.error(
-        { command: "clawcode-sync-status", error: (error as Error).message },
-        "failed to send sync-status embed",
-      );
-    }
-  }
-
-  /**
    * Phase 103 OBS-07 / UI-01 — /clawcode-usage inline handler.
    *
    * Routes through the daemon-direct `list-rate-limit-snapshots` IPC method
@@ -2773,203 +2621,6 @@ export class SlashCommandHandler {
         "failed to send usage embed",
       );
     }
-  }
-
-  /**
-   * Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — /clawcode-cutover-verify
-   * inline handler.
-   *
-   * Renders the destructive-fix embed flow: queries the daemon for the
-   * agent's pending DestructiveCutoverGap[], renders ONE ephemeral embed per
-   * gap (or batched if > 10 — first pass emits up to 25 individual embeds
-   * per Claude's-Discretion), and sets up a button collector that filters
-   * `i.customId.startsWith("cutover-")` for collision-safe routing.
-   *
-   * On button click, the customId is dispatched via IPC `cutover-button-action`
-   * to the daemon's pure handleCutoverButtonActionIpc which routes through
-   * applyDestructiveFix or audit-only ledger row per the operator's choice.
-   *
-   * Plan 92-06 will wire the `cutover-verify-summary` IPC method that returns
-   * the actual gap list. For Plan 92-04 first-pass, the IPC may return an
-   * empty list — operator sees an "all clear" message in that case.
-   */
-  private async handleCutoverVerifyCommand(
-    interaction: ChatInputCommandInteraction,
-  ): Promise<void> {
-    try {
-      await interaction.deferReply({ ephemeral: true });
-    } catch (error) {
-      this.log.error(
-        {
-          command: "clawcode-cutover-verify",
-          error: (error as Error).message,
-        },
-        "failed to defer cutover-verify reply",
-      );
-      return;
-    }
-
-    // Resolve agent: explicit option > channel binding.
-    const agentArg = interaction.options.getString("agent", false);
-    const agentName =
-      agentArg ??
-      getAgentForChannel(this.routingTable, interaction.channelId);
-    if (!agentName) {
-      try {
-        await interaction.editReply(
-          "This channel is not bound to an agent. Pass `agent:<name>` explicitly.",
-        );
-      } catch {
-        /* expired */
-      }
-      return;
-    }
-
-    // Query daemon for pending destructive gaps. Plan 92-06 wires the
-    // verify-summary IPC; first-pass implementations may return an empty
-    // list while the gap source is being constructed.
-    let gaps: ReadonlyArray<unknown> = [];
-    try {
-      const resp = (await sendIpcRequest(
-        SOCKET_PATH,
-        "cutover-verify-summary",
-        { agent: agentName },
-      )) as { gaps?: ReadonlyArray<unknown> };
-      gaps = Array.isArray(resp?.gaps) ? resp.gaps : [];
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(
-        { command: "clawcode-cutover-verify", agent: agentName, error: msg },
-        "cutover-verify-summary IPC failed (Plan 92-06 wires this)",
-      );
-      try {
-        await interaction.editReply(
-          `Cutover verify is not yet wired (Plan 92-06): ${msg}`,
-        );
-      } catch {
-        /* expired */
-      }
-      return;
-    }
-
-    if (gaps.length === 0) {
-      try {
-        await interaction.editReply(
-          `No destructive cutover gaps for **${agentName}** — all clear.`,
-        );
-      } catch {
-        /* expired */
-      }
-      return;
-    }
-
-    // Lazy-import the renderer so the slash-commands cold-start graph stays
-    // independent of the cutover module surface (mirrors the sync-status
-    // embed lazy-import pattern above).
-    const { renderDestructiveGapEmbed } = await import(
-      "../cutover/destructive-embed-renderer.js"
-    );
-    const { CUTOVER_BUTTON_PREFIX } = await import("../cutover/types.js");
-
-    // Cap at 25 embeds for first pass (Claude's-Discretion: paginate-on-overflow
-    // deferred). Discord allows up to 10 embeds per single message; we send
-    // each gap as its own ephemeral followUp so each carries its own button row.
-    const MAX_GAPS = 25;
-    const renderable = gaps.slice(0, MAX_GAPS) as ReadonlyArray<{
-      kind: string;
-      identifier: string;
-      severity: string;
-    }>;
-
-    // Render the first gap as the deferred reply edit; subsequent gaps as
-    // followUp messages so each retains its own component row + button TTL.
-    let firstSent = false;
-    for (const gapRaw of renderable) {
-      // Cast through unknown — the renderer asserts the gap shape via its
-      // exhaustive switch + assertNever fallthrough, so a malformed shape
-      // throws synchronously rather than silently rendering an empty embed.
-      try {
-        const rendered = renderDestructiveGapEmbed(
-          agentName,
-          gapRaw as Parameters<typeof renderDestructiveGapEmbed>[1],
-        );
-        if (!firstSent) {
-          await interaction.editReply({
-            embeds: [rendered.embed],
-            components: rendered.components.map((row) => row),
-          });
-          firstSent = true;
-        } else {
-          await interaction.followUp({
-            embeds: [rendered.embed],
-            components: rendered.components.map((row) => row),
-            ephemeral: true,
-          });
-        }
-      } catch (renderErr) {
-        const msg =
-          renderErr instanceof Error ? renderErr.message : String(renderErr);
-        this.log.warn(
-          {
-            command: "clawcode-cutover-verify",
-            gap: gapRaw,
-            error: msg,
-          },
-          "cutover gap render failed (skipping)",
-        );
-      }
-    }
-
-    // Set up a button collector with prefix-startsWith filter. Note: this
-    // collects on the channel (not the message) so followUp embeds also
-    // route through this filter.
-    const channel = interaction.channel;
-    if (!channel) return;
-    const collector = channel.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      filter: (i: ButtonInteraction) =>
-        i.user.id === interaction.user.id &&
-        i.customId.startsWith(CUTOVER_BUTTON_PREFIX),
-      // 30-minute TTL per Claude's-Discretion (operators may step away to
-      // verify content before clicking Accept on outdated-memory-file).
-      time: 30 * 60 * 1000,
-    });
-
-    collector.on("collect", async (btn: ButtonInteraction) => {
-      try {
-        await btn.deferUpdate();
-      } catch {
-        /* may be expired */
-      }
-      try {
-        const outcome = (await sendIpcRequest(
-          SOCKET_PATH,
-          "cutover-button-action",
-          { customId: btn.customId, agent: agentName },
-        )) as { kind: string; error?: string; gapKind?: string };
-
-        const reply = formatCutoverOutcome(outcome);
-        try {
-          await btn.followUp({ content: reply, ephemeral: true });
-        } catch {
-          /* expired */
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.log.warn(
-          { command: "clawcode-cutover-verify", error: msg },
-          "cutover-button-action IPC failed",
-        );
-        try {
-          await btn.followUp({
-            content: `Cutover action failed: ${msg}`,
-            ephemeral: true,
-          });
-        } catch {
-          /* expired */
-        }
-      }
-    });
   }
 
   /**
