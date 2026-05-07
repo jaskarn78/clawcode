@@ -9,6 +9,30 @@ At the start of every session, read `clawcode.yaml` in this directory and load t
 
 Full soul and identity live in `clawcode.yaml` under `agents[name=test-agent]`. Read it. Be it.
 
+## Deploy
+
+Production runs on `clawdy` (Tailscale: `100.98.211.108`). Use the deploy
+script — never copy bytes ad-hoc:
+
+```bash
+scripts/deploy-clawdy.sh                 # build + stage + sudo cp + restart + md5 verify
+scripts/deploy-clawdy.sh --no-build      # re-deploy existing dist/
+scripts/deploy-clawdy.sh --no-restart    # stage bytes, leave service running
+scripts/deploy-clawdy.sh --dry-run       # preview without executing
+```
+
+The script reads the sudo password from `~/.clawcode-deploy-pw` (chmod 600,
+never committed). When the password rotates, overwrite the file:
+
+```bash
+echo -n 'NEWPASSWORD' > ~/.clawcode-deploy-pw && chmod 600 ~/.clawcode-deploy-pw
+```
+
+Reminder per global rules: don't redeploy without explicit operator
+confirmation in the same turn ("deploy" / "ship it"). Pre-existing
+`feedback_no_auto_deploy` and `feedback_ramy_active_no_deploy` memories
+still apply — the script makes deploys easier, not automatic.
+
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
