@@ -88,8 +88,12 @@ export type StatusData = Readonly<{
   hasActiveTurn: boolean;
   /** Phase 103 OBS-01 — context-zone fill ratio 0-1, undefined when no data. */
   contextFillPercentage: number | undefined;
-  /** Phase 103 OBS-02 — successful compactions since daemon start. */
-  compactionCount: number;
+  /** ms epoch of newest file in {memoryPath}/memory/digests/, undefined if none. */
+  lastConsolidationAt: number | undefined;
+  /** ms epoch of newest file in {memoryPath}/dreams/, undefined if none. */
+  lastDreamAt: number | undefined;
+  /** Wikilink count from the last dream section in the newest dream log. */
+  lastDreamWikilinks: number | undefined;
   /** Phase 103 OBS-01 — UsageTracker session aggregate; undefined when missing. */
   tokensIn: number | undefined;
   tokensOut: number | undefined;
@@ -116,7 +120,6 @@ export type BuildStatusDataInput = Readonly<{
     | "getModelForAgent"
     | "getPermissionModeForAgent"
     | "getSessionHandle"
-    | "getCompactionCountForAgent"
     | "getContextFillPercentageForAgent"
     | "getActivationAtForAgent"
     | "getUsageTracker"
@@ -126,6 +129,9 @@ export type BuildStatusDataInput = Readonly<{
   agentVersion: string;
   commitSha: string | undefined;
   now: number;
+  lastConsolidationAt: number | undefined;
+  lastDreamAt: number | undefined;
+  lastDreamWikilinks: number | undefined;
 }>;
 
 /** Try/catch wrapper that collapses thrown accessors to a fallback. */
@@ -150,7 +156,10 @@ function tryRead<T>(fn: () => T, fallback: T): T {
  *   - lastActivityAt via tracker.getDatabase() MAX(timestamp) lookup
  */
 export function buildStatusData(input: BuildStatusDataInput): StatusData {
-  const { sessionManager, resolvedAgents, agentName, agentVersion, commitSha, now } = input;
+  const {
+    sessionManager, resolvedAgents, agentName, agentVersion, commitSha, now,
+    lastConsolidationAt, lastDreamAt, lastDreamWikilinks,
+  } = input;
 
   const effort = tryRead<string>(
     () => sessionManager.getEffortForAgent(agentName),
@@ -179,12 +188,6 @@ export function buildStatusData(input: BuildStatusDataInput): StatusData {
       : false;
 
   const configModel = resolvedAgents.find((a) => a.name === agentName)?.model;
-
-  // Phase 103 OBS-02 — compaction counter mirror.
-  const compactionCount = tryRead<number>(
-    () => sessionManager.getCompactionCountForAgent(agentName),
-    0,
-  );
 
   // Phase 103 OBS-01 — context-zone fillPercentage from HeartbeatRunner.
   const contextFillPercentage = tryRead<number | undefined>(
@@ -252,7 +255,9 @@ export function buildStatusData(input: BuildStatusDataInput): StatusData {
     lastActivityAt,
     hasActiveTurn,
     contextFillPercentage,
-    compactionCount,
+    lastConsolidationAt,
+    lastDreamAt,
+    lastDreamWikilinks,
     tokensIn,
     tokensOut,
     activationAt,
@@ -314,15 +319,25 @@ export function renderStatus(data: StatusData): string {
   const modelDisplay = data.liveModel ?? data.configModel ?? "unknown";
   const modelLine = `🧠 Model: ${modelDisplay} · 🔑 sdk`;
 
-  // Line 2 — Fallbacks remain `n/a` — no current source (Research §11).
-  const fallbacksLine = "🔄 Fallbacks: n/a";
+  // Line 2 — last consolidation timestamp (replaces the always-n/a Fallbacks field).
+  const consolidatedLabel =
+    data.lastConsolidationAt !== undefined
+      ? `${formatDistanceToNow(data.lastConsolidationAt, { addSuffix: false })} ago`
+      : "never";
+  const consolidatedLine = `🔁 Consolidated: ${consolidatedLabel}`;
 
-  // Line 3 — Context % from HeartbeatRunner zone; Compactions live count.
+  // Line 3 — Context % from HeartbeatRunner zone; last dream + wikilink count.
   const contextPctLabel =
     data.contextFillPercentage !== undefined
       ? `${Math.round(data.contextFillPercentage * 100)}%`
       : "unknown";
-  const contextLine = `📚 Context: ${contextPctLabel} · 🧹 Compactions: ${data.compactionCount}`;
+  const dreamLabel =
+    data.lastDreamAt !== undefined
+      ? `${formatDistanceToNow(data.lastDreamAt, { addSuffix: false })} ago`
+      : "never";
+  const dreamWikilinks =
+    data.lastDreamWikilinks !== undefined ? ` (${data.lastDreamWikilinks} links)` : "";
+  const contextLine = `📚 Context: ${contextPctLabel} · 💤 Dreamt: ${dreamLabel}${dreamWikilinks}`;
 
   // Line 4 — Tokens from UsageTracker session aggregate. Both fields must be
   // defined (tokens_in alone is meaningless); else honest n/a.
@@ -369,7 +384,7 @@ export function renderStatus(data: StatusData): string {
   return [
     versionLine,
     modelLine,
-    fallbacksLine,
+    consolidatedLine,
     contextLine,
     tokensLine,
     sessionLine,

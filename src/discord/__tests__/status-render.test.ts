@@ -35,7 +35,7 @@ const TWENTY_FOUR_MIN_AGO = NOW - 24 * 60 * 1000;
 function makeData(overrides: Partial<StatusData> = {}): StatusData {
   return {
     agentName: "fin",
-    agentVersion: "0.2.0",
+    agentVersion: "1.2.8",
     commitSha: "abc1234",
     liveModel: "sonnet",
     configModel: "sonnet",
@@ -45,7 +45,9 @@ function makeData(overrides: Partial<StatusData> = {}): StatusData {
     lastActivityAt: TWENTY_FOUR_MIN_AGO,
     hasActiveTurn: false,
     contextFillPercentage: undefined,
-    compactionCount: 0,
+    lastConsolidationAt: undefined,
+    lastDreamAt: undefined,
+    lastDreamWikilinks: undefined,
     tokensIn: undefined,
     tokensOut: undefined,
     activationAt: undefined,
@@ -64,13 +66,15 @@ type StubInputOverrides = {
   permissionMode?: string;
   sessionId?: string;
   hasActiveTurn?: boolean;
-  compactionCount?: number;
   contextFillPercentage?: number | undefined;
   activationAt?: number | undefined;
   sessionUsage?: UsageAggregate | undefined;
   /** When provided AND sessionUsage is set, used as the latest event timestamp. */
   lastEventTs?: string;
   configModel?: string;
+  lastConsolidationAt?: number | undefined;
+  lastDreamAt?: number | undefined;
+  lastDreamWikilinks?: number | undefined;
 };
 
 function makeInput(overrides: StubInputOverrides = {}): BuildStatusDataInput {
@@ -79,7 +83,6 @@ function makeInput(overrides: StubInputOverrides = {}): BuildStatusDataInput {
   const permissionMode = overrides.permissionMode ?? "bypass";
   const sessionId = overrides.sessionId ?? SAMPLE_SESSION_ID;
   const hasActiveTurn = overrides.hasActiveTurn ?? false;
-  const compactionCount = overrides.compactionCount ?? 0;
   const contextFillPercentage = overrides.contextFillPercentage;
   const activationAt = overrides.activationAt;
   const sessionUsage = overrides.sessionUsage;
@@ -111,7 +114,6 @@ function makeInput(overrides: StubInputOverrides = {}): BuildStatusDataInput {
         sessionId,
         hasActiveTurn: () => hasActiveTurn,
       }) as unknown,
-    getCompactionCountForAgent: (_n: string) => compactionCount,
     getContextFillPercentageForAgent: (_n: string) => contextFillPercentage,
     getActivationAtForAgent: (_n: string) => activationAt,
     getUsageTracker: (_n: string) => usageTracker,
@@ -121,7 +123,6 @@ function makeInput(overrides: StubInputOverrides = {}): BuildStatusDataInput {
     | "getModelForAgent"
     | "getPermissionModeForAgent"
     | "getSessionHandle"
-    | "getCompactionCountForAgent"
     | "getContextFillPercentageForAgent"
     | "getActivationAtForAgent"
     | "getUsageTracker"
@@ -135,9 +136,12 @@ function makeInput(overrides: StubInputOverrides = {}): BuildStatusDataInput {
     sessionManager,
     resolvedAgents,
     agentName: "fin",
-    agentVersion: "0.2.0",
+    agentVersion: "1.2.8",
     commitSha: "abc1234",
     now: NOW,
+    lastConsolidationAt: overrides.lastConsolidationAt,
+    lastDreamAt: overrides.lastDreamAt,
+    lastDreamWikilinks: overrides.lastDreamWikilinks,
   };
 }
 
@@ -145,12 +149,11 @@ describe("renderStatus — R-01..R-07 line shape (Phase 93 + 103 reshape)", () =
   it("R-01 happy path renders ALL 9 lines with concrete values", () => {
     const out = renderStatus(makeData()).split("\n");
     expect(out).toHaveLength(9);
-    expect(out[0]).toBe("🦞 ClawCode v0.2.0 (abc1234)");
+    expect(out[0]).toBe("🦞 ClawCode v1.2.8 (abc1234)");
     expect(out[1]).toBe("🧠 Model: sonnet · 🔑 sdk");
-    expect(out[2]).toBe("🔄 Fallbacks: n/a");
-    // Phase 103 — Context defaults to "unknown" when fillPercentage undefined,
-    // Compactions emits the live count (0 in default fixture).
-    expect(out[3]).toBe("📚 Context: unknown · 🧹 Compactions: 0");
+    expect(out[2]).toBe("🔁 Consolidated: never");
+    // Context defaults to "unknown" when fillPercentage undefined; Dreamt: never when no dream.
+    expect(out[3]).toBe("📚 Context: unknown · 💤 Dreamt: never");
     // Phase 103 — Tokens emits "n/a" when tokensIn/Out undefined.
     expect(out[4]).toBe("🧮 Tokens: n/a");
     // Last 12 chars of SAMPLE_SESSION_ID via slice(-12) — assert via computed
@@ -190,7 +193,7 @@ describe("renderStatus — R-01..R-07 line shape (Phase 93 + 103 reshape)", () =
 
   it("R-05 missing commit sha → (unknown)", () => {
     const out = renderStatus(makeData({ commitSha: undefined })).split("\n");
-    expect(out[0]).toBe("🦞 ClawCode v0.2.0 (unknown)");
+    expect(out[0]).toBe("🦞 ClawCode v1.2.8 (unknown)");
   });
 
   it("R-06 missing session id → Session: unknown • updated unknown", () => {
@@ -222,9 +225,6 @@ describe("buildStatusData — R-08 defensive read", () => {
       },
       getSessionHandle: () => undefined,
       // Phase 103 — new accessors also throw to validate defensive reads.
-      getCompactionCountForAgent: () => {
-        throw new Error("not running");
-      },
       getContextFillPercentageForAgent: () => {
         throw new Error("not running");
       },
@@ -240,17 +240,20 @@ describe("buildStatusData — R-08 defensive read", () => {
       sessionManager: throwingSm,
       resolvedAgents,
       agentName: "ghost",
-      agentVersion: "0.2.0",
+      agentVersion: "1.2.8",
       commitSha: undefined,
       now: NOW,
+      lastConsolidationAt: undefined,
+      lastDreamAt: undefined,
+      lastDreamWikilinks: undefined,
     });
     expect(data.liveModel).toBeUndefined();
     expect(data.effort).toBe("unknown");
     expect(data.permissionMode).toBe("unknown");
     expect(data.sessionId).toBeUndefined();
     expect(data.hasActiveTurn).toBe(false);
-    // Phase 103 — defensive defaults for new fields.
-    expect(data.compactionCount).toBe(0);
+    expect(data.lastConsolidationAt).toBeUndefined();
+    expect(data.lastDreamAt).toBeUndefined();
     expect(data.contextFillPercentage).toBeUndefined();
     expect(data.activationAt).toBeUndefined();
     expect(data.tokensIn).toBeUndefined();
@@ -263,10 +266,37 @@ describe("buildStatusData — R-08 defensive read", () => {
 });
 
 describe("/clawcode-status — Phase 103 OBS-01/02/03 wiring", () => {
-  it("emits Compactions count from getCompactionCountForAgent", () => {
-    const out = renderStatus(buildStatusData(makeInput({ compactionCount: 3 })));
-    expect(out).toContain("🧹 Compactions: 3");
-    expect(out).not.toContain("🧹 Compactions: n/a");
+  it("emits Consolidated: never when no digest files", () => {
+    const out = renderStatus(buildStatusData(makeInput({ lastConsolidationAt: undefined })));
+    expect(out).toContain("🔁 Consolidated: never");
+  });
+
+  it("emits Consolidated: X ago when lastConsolidationAt is set", () => {
+    const oneHourAgo = Date.now() - 3_600_000;
+    const out = renderStatus(buildStatusData(makeInput({ lastConsolidationAt: oneHourAgo })));
+    expect(out).toMatch(/🔁 Consolidated: about 1 hour ago/);
+  });
+
+  it("emits Dreamt: never when no dream files", () => {
+    const out = renderStatus(buildStatusData(makeInput({ lastDreamAt: undefined })));
+    expect(out).toContain("💤 Dreamt: never");
+  });
+
+  it("emits Dreamt: X ago with link count when lastDreamAt + wikilinks set", () => {
+    const twoHoursAgo = Date.now() - 7_200_000;
+    const out = renderStatus(
+      buildStatusData(makeInput({ lastDreamAt: twoHoursAgo, lastDreamWikilinks: 3 })),
+    );
+    expect(out).toMatch(/💤 Dreamt: about 2 hours ago \(3 links\)/);
+  });
+
+  it("emits Dreamt: X ago WITHOUT link count when wikilinks undefined", () => {
+    const twoHoursAgo = Date.now() - 7_200_000;
+    const out = renderStatus(
+      buildStatusData(makeInput({ lastDreamAt: twoHoursAgo, lastDreamWikilinks: undefined })),
+    );
+    expect(out).toMatch(/💤 Dreamt: about 2 hours ago$/m);
+    expect(out).not.toContain("links)");
   });
 
   it("emits Context % from getContextFillPercentageForAgent", () => {
@@ -326,9 +356,10 @@ describe("/clawcode-status — Phase 103 OBS-01/02/03 wiring", () => {
     expect(out).not.toContain("Harness:");
   });
 
-  it("STILL emits Fallbacks: n/a (Research §Summary — no current source)", () => {
+  it("DOES NOT emit Fallbacks: (replaced by Consolidated)", () => {
     const out = renderStatus(buildStatusData(makeInput({})));
-    expect(out).toContain("🔄 Fallbacks: n/a");
+    expect(out).not.toContain("Fallbacks:");
+    expect(out).toContain("🔁 Consolidated:");
   });
 
   it("renders Reasoning as a label (not n/a)", () => {
@@ -337,10 +368,10 @@ describe("/clawcode-status — Phase 103 OBS-01/02/03 wiring", () => {
     expect(out).not.toContain("Reasoning: n/a");
   });
 
-  it("renders Compactions: 0 (NOT n/a) when no compactions yet", () => {
-    const out = renderStatus(buildStatusData(makeInput({ compactionCount: 0 })));
-    expect(out).toContain("🧹 Compactions: 0");
-    expect(out).not.toContain("🧹 Compactions: n/a");
+  it("DOES NOT emit Compactions: (replaced by Dreamt)", () => {
+    const out = renderStatus(buildStatusData(makeInput({})));
+    expect(out).not.toContain("Compactions:");
+    expect(out).toContain("💤 Dreamt:");
   });
 });
 

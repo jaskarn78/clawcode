@@ -28,7 +28,7 @@ import {
 } from "discord.js";
 import { execSync } from "node:child_process";
 import { isAbsolute, join } from "node:path";
-import { statSync } from "node:fs";
+import { statSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
@@ -162,13 +162,7 @@ const GSD_LONG_RUNNERS: ReadonlySet<string> = new Set([
   "gsd-execute-phase",
 ]);
 
-/**
- * Phase 93 Plan 01 — version sourced from src/cli/index.ts L118
- * (`.version("0.2.0")`). Hard-coded so the status renderer doesn't depend on
- * Commander's dynamic version surface (no circular import, no runtime cost).
- * Bump this in lockstep with the CLI when minting a release.
- */
-const CLAWCODE_VERSION = "0.2.0";
+import { CLAWCODE_VERSION } from "../shared/version.js";
 
 /**
  * Phase 93 Plan 01 — best-effort short git sha for /clawcode-status. Mirrors
@@ -1683,6 +1677,35 @@ export class SlashCommandHandler {
     // a generic "Failed to read status" wipe.
     if (commandName === "clawcode-status") {
       try {
+        const agentCfg = this.resolvedAgents.find((a) => a.name === agentName);
+        const memBase = agentCfg?.memoryPath ?? "";
+
+        const newestMtime = (dir: string): number | undefined => {
+          try {
+            if (!existsSync(dir)) return undefined;
+            const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+            if (files.length === 0) return undefined;
+            return Math.max(...files.map((f) => statSync(join(dir, f)).mtimeMs));
+          } catch {
+            return undefined;
+          }
+        };
+
+        const lastDreamWikilinkCount = (dir: string): number | undefined => {
+          try {
+            if (!existsSync(dir)) return undefined;
+            const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+            if (files.length === 0) return undefined;
+            const content = readFileSync(join(dir, files[files.length - 1]!), "utf-8");
+            const matches = [...content.matchAll(/\*\*New wikilinks \((\d+)\):\*\*/g)];
+            if (matches.length === 0) return undefined;
+            return parseInt(matches[matches.length - 1]![1]!, 10);
+          } catch {
+            return undefined;
+          }
+        };
+
+        const dreamsDir = join(memBase, "dreams");
         const data = buildStatusData({
           sessionManager: this.sessionManager,
           resolvedAgents: this.resolvedAgents,
@@ -1690,6 +1713,9 @@ export class SlashCommandHandler {
           agentVersion: CLAWCODE_VERSION,
           commitSha: resolveCommitSha(),
           now: Date.now(),
+          lastConsolidationAt: newestMtime(join(memBase, "memory", "digests")),
+          lastDreamAt: newestMtime(dreamsDir),
+          lastDreamWikilinks: lastDreamWikilinkCount(dreamsDir),
         });
         const baseRender = renderStatus(data);
 

@@ -1,6 +1,6 @@
 {
   "name": "clawcode",
-  "version": "0.2.0",
+  "version": "1.2.8",
   "type": "module",
   "description": "Multi-agent orchestration system built natively on Claude Code",
   "bin": {
