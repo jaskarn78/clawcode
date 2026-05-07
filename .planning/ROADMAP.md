@@ -20,7 +20,7 @@
 - :white_check_mark: **v2.5 Cutover Parity Verification** - Phases 92-93 (shipped 2026-04-25)
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
-- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 97, 100, 101, 114, 999.5, 999.7, 999.18-20, 999.34-42 (proposed 2026-05-07)
+- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, 999.7, 999.18-20, 999.34-36, 999.38-42 (proposed 2026-05-07)
 
 ## Phases
 
