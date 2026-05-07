@@ -20,7 +20,7 @@
 - :white_check_mark: **v2.5 Cutover Parity Verification** - Phases 92-93 (shipped 2026-04-25)
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
-- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, 999.7, 999.18-20, 999.34-36, 999.38-42 (proposed 2026-05-07)
+- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, **115**, 999.7, 999.18-20, 999.34-36, 999.38-42 (proposed 2026-05-07)
 
 ## Phases
 
@@ -783,6 +783,109 @@ Plans:
 **Plans:** 0 plans (TBD — likely 3 plans: resize substrate, Haiku pre-pass + analysis injection, deploy gate + metrics).
 
 **Originally numbered:** Phase 109 (renumbered 2026-05-05 after the 109 commit tag was used for the MCP/Secret Resilience bundle).
+
+---
+
+### Phase 115: Memory + context + prompt-cache redesign — bounded prompts, lazy recall, real cache reuse
+
+**Goal:** Eliminate the entire class of agent-going-dark failures triggered by unbounded system-prompt growth. Replace today's "inject everything every turn" memory model with a bounded always-injected tier + tool-mediated lazy recall + properly placed Anthropic cache breakpoints. Restore real prompt-cache hit rates across the fleet (regressed silently 2026-03-06 from 1h to 5m TTL upstream). Improve agent responsiveness (latency) AND memory retention (recall over multi-week timescales) simultaneously.
+
+**Trigger:** 2026-05-07 fin-acquisition incident. Ramy mid-thread; fin-acq failed every turn for ~2.5 hours with Anthropic 400 `invalid_request_error` rejections that surfaced as misleading "out of extra usage. Add more at claude.ai/settings/usage" billing-cap text. Investigation chased model-bucket caps, account caps, OAuth refresh, cwd misconfig, CLI version, and SDK version before discovering the actual root cause: **fin-acq's `systemPrompt.append` had bloated to 32,989 chars (3.4× admin-clawdy's 9,587) due to Phase 90 hybrid-RRF retrieval surfacing stale session-summary memories + unbounded MEMORY.md auto-load + uncapped IDENTITY/capability blocks**. Operator + agent cost: ~3 hours, Ramy mid-thread blocked, 50+ failed-turn retries on prod account. Diagnosis required deploying a custom diagnostic patch to dump assembly state because no daemon-side observability surfaced this class of failure.
+
+**Research outputs (read these before planning):**
+- `.planning/research/115-memory-redesign/codebase-memory-retrieval.md` — current memory subsystem map, 21 specific pain points with file:line citations
+- `.planning/research/115-memory-redesign/codebase-prompt-assembly.md` — current prompt assembly trace, "warn-and-keep" no-op confirmation, all uncapped sources
+- `.planning/research/115-memory-redesign/sota-hermes-architecture.md` — Hermes 20K-char cap + FTS5+vec + 3-phase compression + cache-breakpoint placement (operator anchor reference)
+- `.planning/research/115-memory-redesign/sota-hierarchical-memory.md` — Letta 4-tier (core/recall/archival/buffer) + sleep-time-compute paper alignment with our Phase 95
+- `.planning/research/115-memory-redesign/sota-memory-products.md` — Mem0 / Zep / Cognee / Anthropic memory tool / ChatGPT memory comparison matrix
+- `.planning/research/115-memory-redesign/sota-synthesis.md` — convergent SOTA pattern + Phase 115 design recommendation
+- `.planning/research/115-memory-redesign/perf-caching-retrieval.md` — Anthropic prompt caching deep-dive, **2026-03-06 CLI 1h→5m TTL regression** (GitHub anthropics/claude-code#46829), `excludeDynamicSections: true` not currently set, embedding-model + int8-quantization upgrade path
+
+**Headline operator-priority alignment:**
+- *Agent responsiveness speed* → cache-breakpoint repositioning + 1h-TTL recovery + lazy memory recall + smaller stable prefix + bge-small int8 vectors
+- *Memory retention* → tool-mediated recall over arbitrary horizon (no "Apr 26 was the last solid memory" because everything's still searchable, just not preloaded)
+
+**Pre-existing primitives we can reuse:**
+- Phase 52 stable-prefix tracking + `latestStablePrefixByAgent` cache + `priorHotStableToken` cache-bust check
+- Phase 53 `enforceSummaryBudget` (the only correctly-bounded persistent-store reader today) — model for real budget enforcement
+- Phase 90 MEM-03 `retrieveMemoryChunks` hybrid-RRF — the right per-turn retrieval primitive, just needs filters + smaller budget
+- Phase 95 dream-pass — already produces `promotionCandidates` / `suggestedConsolidations` / `themedReflection` that today never reach the prompt; Letta sleep-time-compute paper (arXiv:2504.13171) confirms our Phase 95 design is correct, just unwired
+- Phase 105 `callHaikuDirect` OAuth-bearer path — reusable for any in-line "compress-on-overflow" enforcement
+- Phase 99 sub-scope N SDK-level `disallowedTools` — same wiring pattern for new memory tools
+- Phase 100 GSD-04 per-agent cwd plumbing — same shape for per-agent prompt budget config
+- `mutableSuffix` shape on the SDK options — already supports prepend-to-user-msg content, the natural place for per-turn lazy-recall results
+
+**Sub-scope candidates (refine in discuss-phase):**
+
+1. **Hard size budget on always-injected tier** — replace today's `enforceWarnAndKeep` no-op for `identity` and `soul` sections with real `drop-lowest-importance` / `head-tail-truncate` / `summarize-on-overflow` strategies. Per-section budgets in tokens (not chars), enforced at assembly time. Rendered prefix has a hard total cap (target: 8-12K tokens, head-tail truncation fallback). Mirrors Hermes' `CONTEXT_FILE_MAX_CHARS = 20_000` constant.
+
+2. **Quick-win: set `excludeDynamicSections: true` in baseOptions** — the SDK type defs document this flag (`sdk-types.ts:73,90`); currently not set anywhere in `src/`. Moves per-machine sections (cwd, env info, memory paths, git status) out of the system prompt into the first user message → improves cross-agent prompt-cache reuse. One-line change behind a config flag, low risk.
+
+3. **Cap and wire dead `memoryRetrievalTokenBudget`** — the knob exists in config but `session-manager.ts:565-582` doesn't forward it to `retrieveMemoryChunks`. Wire it through, default to a sane value (target: 1500-2000 tokens), document per-agent overrides.
+
+4. **Tag/source filter at hybrid-RRF retrieval** — exclude memories tagged `session-summary`, `mid-session`, `raw-fallback` from the per-turn `<memory-context>` injection by default. Prevents the kind of pollution-feedback-loop we saw today. Operator-overridable per-agent.
+
+5. **Cache-breakpoint placement optimization** — restructure stable prefix so static identity (SOUL fingerprint + IDENTITY.md head + capability manifest skeleton + skill catalogue) lands BEFORE the breakpoint, dynamic memory + recent-reflections snippet AFTER. Mirrors Hermes pattern. Goal: stable prefix changes only on config change, not on memory write.
+
+6. **1h cache TTL recovery investigation + path** — the 2026-03-06 CLI regression silently dropped default cache TTL from 1h to 5m. Two paths to evaluate during discuss-phase: (a) wait for upstream fix + monitor issue #46829, (b) implement direct-SDK fast-path for short Discord acks (mirrors `callHaikuDirect`) keeping CLI for tool-heavy turns. Decision based on measured tool_use rate from `traces.db`.
+
+7. **Lazy-load memory tools (Anthropic memory_20250818 contract)** — three new MCP tools exposed to every agent, replacing the always-on injection of stale session content:
+   - `clawcode_memory_search` — FTS5 + sqlite-vec hybrid search, returns top-K snippets with memory IDs
+   - `clawcode_memory_recall <id>` — fetch full memory body by ID (lazy expansion of search hits)
+   - `clawcode_memory_edit` / `_create` — Anthropic memory_20250818 view/create/str_replace contract on the Tier 1 markdown files (so the agent can curate its own MEMORY.md)
+   - `clawcode_memory_archive` — agent-curated promotion from Tier 2 (chunks) into Tier 1 (markdown)
+   
+   System-prompt instruction teaches the agent the lazy-load protocol ("for older context, search memory first instead of assuming you remember"). Eliminates the "Apr 26 was last solid memory" failure mode — old context is always one tool-call away.
+
+8. **Re-wire Phase 95 dreaming as the Tier 1 consolidation engine** — Phase 95 already produces `promotionCandidates` + `suggestedConsolidations` that today are written to `memory/dreams/YYYY-MM-DD.md` for operator review only. Auto-apply with operator-veto: dream-pass writes consolidated entries into Tier 1 MEMORY.md, dedupes against existing, demotes superseded chunks. Adds a "priority pass" trigger when the bounded tier nears its char cap. Letta arXiv:2504.13171 sleep-time-compute paper confirms this is the correct architecture.
+
+9. **Three-phase tool-output compression (Hermes pattern)** — audit `src/memory/compaction.ts` against Hermes' 3-phase split: (Phase 1) replace old tool outputs with 1-line summaries with NO LLM call (free win); (Phase 2) summarize old turns; (Phase 3) drop oldest. If Phase 1 is missing or weak, ship the cheap-no-LLM phase first.
+
+10. **Embedding upgrade — bge-small-en-v1.5 (or Jina v5-nano) + int8 quantization in sqlite-vec** — current `Xenova/all-MiniLM-L6-v2` is 2019-vintage (MTEB ~56). Modern small models (MTEB ~71, MRL-truncatable, ~30MB) plus int8 quantization yield ~92% storage reduction at equal-or-better recall. Operator confirmed memory does not need to be human-readable — opens the door to compressed vectors. Ships as a re-embed migration over the existing memory store.
+
+11. **Tier 1 (file-backed semantic) vs Tier 2 (chunk-backed episodic) formal split** — convergent SOTA pattern across Hermes / Letta / Mem0 / Anthropic memory tool. Tier 1 is the curated, bounded, always-injected layer (markdown files: SOUL/IDENTITY/MEMORY/USER, hard char cap). Tier 2 is the unbounded chunk store with hybrid retrieval, surfaced only via lazy-load tools. `# Session: ...` summaries permanently stored in Tier 2, never auto-injected. MEMORY.md becomes the operator-curated subset of Tier 2, regenerated by Phase 95 dreaming.
+
+12. **Cross-agent consolidation transactionality** — admin-clawdy's interrupted consolidation today wrote to multiple agent stores then crashed mid-procedure, leaving inconsistent state. Wrap multi-agent memory writes in a coordinator with rollback semantics (or write-ahead-log replay). At minimum: per-agent write batches must be atomic and tagged with a consolidation_run_id so a partial failure is recoverable.
+
+13. **Operator-side observability** — three concrete additions:
+    (a) **`prompt-bloat-suspected` classifier** — when SDK returns `invalid_request_error` AND latestStablePrefix size > X chars, log structured `[diag] likely-prompt-bloat agent=N promptChars=M`. Surface to `/clawcode-status` + dashboard.
+    (b) **Consolidation run-log** — admin-clawdy writes `{run_id, target_agents, memories_added, status, errors}` to a known path so operator has audit trail.
+    (c) **Bootstrap-truncation surface** — when MEMORY.md / IDENTITY.md exceed cap, emit daemon-side warn (currently the truncation marker is silently embedded INSIDE the agent's own prompt where the operator never sees it).
+
+14. **Diagnostic baseopts dump as operator toggle** — promote the temporary patch we deployed today (`src/manager/session-adapter.ts` — `debugDumpBaseOptions` helper) from a hard-coded fin-acq + Admin Clawdy allowlist to a config flag `agents[*].debug.dumpBaseOptionsOnSpawn: bool`. Default off. Writes to `/home/clawcode/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json`. Eliminates the need to redeploy when the next incident strikes.
+
+**Folds in (partial or full scope absorbed):**
+- **Phase 999.41** — "Generalize API-error-dominated session guard to dream-pass + session-flush + all summarization paths" — same family of bug; the session-end Haiku summarization that captures error text as memory content lives at the boundary between sub-scopes 8 and 13.
+- **Phase 999.42** — "Hermes-parity memory + auto-skill gaps" — sub-scopes 7, 10, 11 absorb the FTS5 + tier model parts; auto-skill creation (Hermes 5+ tool-calls trigger) explicitly NOT in 115 scope, stays in 999.42 for a follow-on phase.
+- **Phase 999.41 specific carve-out:** the rolling-summary fail-loud guard for `summarize-with-haiku.ts` ships as part of sub-scope 13(a) since the diagnostic surface is shared.
+
+**Out of scope (deferred, named for clarity):**
+- Auto-skill creation pipeline (stays in 999.42)
+- Cross-host memory sync (single-host only this phase)
+- Cross-agent KG (each agent's memory remains isolated)
+- Switching off better-sqlite3 + sqlite-vec
+- Operator-readable memory format (operator confirmed not required — int8 quantized vectors fine)
+
+**Acceptance criteria (sketch — refine in discuss-phase):**
+- fin-acquisition's stable-prefix size at session start is ≤ 12K tokens, measured via the diagnostic dump
+- Across the fleet, p95 stable-prefix size is ≤ 10K tokens
+- Cache-hit rate, measured via `traces.db` cache_read_input_tokens / cache_creation_input_tokens, is ≥ 70% on agents with sub-5min turn cadence (admin-clawdy, fin-acq during Ramy windows) — and the path to recovering this on idle agents is documented even if not shipped
+- Agent-asked-recall: a fin-acq turn that asks "what did we discuss with Ana Bencker on May 6" succeeds via lazy-load tool call without operator priming
+- No agent's `<memory-context>` injection contains rows tagged `session-summary` / `mid-session` / `raw-fallback`
+- The diagnostic dump file path is operator-readable on demand without redeploy
+- Anthropic 400 `invalid_request_error` with usage-cap text returns a `[diag] likely-prompt-bloat` log line within the same turn
+
+**Plans:** TBD — discuss-phase first to lock decisions on (a) Tier 1 char cap target, (b) whether to ship 1h-TTL direct-SDK path in this phase or defer, (c) embedding model choice (bge-small vs Jina vs gte-small vs stay), (d) auto-apply-with-veto policy for Phase 95 promotion, (e) per-agent vs per-workspace tier scoping (finmentum family shares basePath per Phase 99). Then plan-phase breaks into ~6-10 atomic plans.
+
+**Status:** Pending — opened 2026-05-07 evening after the fin-acquisition incident. Research complete (4 parallel agents, 7 docs in `.planning/research/115-memory-redesign/`). **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme directly.
+
+**Backups left from incident response (do not garbage-collect until phase ships):**
+- `.bak-pre-cwd-fix-20260507-150422` + `.bak-pre-resumegap-20260507-144315` (yaml)
+- `.bak-pre-billing-cleanup-20260507-154551` + `.bak-pre-poison-fix-20260507-144315` + `.bak-pre-summary-purge-20260507-153416` + `.bak-postcleanup-20260507-143641` (fin-acq DB)
+- `.credentials.json.bak-relogin-1778192734`
+
+**Temporary debug code to revert before shipping:**
+- `src/manager/session-adapter.ts` — `debugDumpBaseOptions` helper + `import { writeFile }` + dump call sites in createSession / resumeSession (currently allowlist of fin-acquisition + Admin Clawdy). Sub-scope 14 promotes this to a config flag form.
 
 ---
 
