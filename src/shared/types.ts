@@ -172,6 +172,23 @@ export type ResolvedAgentConfig = {
    */
   readonly excludeDynamicSections?: boolean;
   /**
+   * Phase 115 sub-scope 5 (Plan 04) — populated by loader.ts from
+   * agent.cacheBreakpointPlacement ?? defaults.cacheBreakpointPlacement
+   * (zod default "static-first"). Controls the assembled stable-prefix
+   * section ordering: "static-first" (default) places static sections
+   * (identity, soul, skills, tools, fs-capability, delegates) BEFORE the
+   * CACHE_BREAKPOINT_MARKER and dynamic sections (hot memories, graph
+   * context) AFTER, recovering prompt-cache hit rate on turns where only
+   * dynamic content changed; "legacy" keeps the pre-115-04 interleaved
+   * order with no marker. Consumed by session-config.ts to pass into
+   * `assembleContext` via AssembleOptions.cacheBreakpointPlacement. Reload
+   * classification: NEXT-SESSION only — placement is baked into the
+   * assembled stable prefix at session create/resume. Optional at the
+   * type level for back-compat with existing ResolvedAgentConfig test
+   * factories; consumers default to "static-first".
+   */
+  readonly cacheBreakpointPlacement?: "static-first" | "legacy";
+  /**
    * Phase 90 MEM-02 — ALWAYS populated by loader.ts from
    * agent.memoryScannerEnabled ?? defaults.memoryScannerEnabled.
    * When false, daemon.ts skips the MemoryScanner construction for

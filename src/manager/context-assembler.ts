@@ -343,6 +343,123 @@ export const INJECTED_MEMORY_MAX_CHARS = 16_000;
  */
 export const STABLE_PREFIX_MAX_TOKENS = 8_000;
 
+// ── Phase 115 Plan 04 sub-scope 5 — cache-breakpoint placement constants ───
+
+/**
+ * Phase 115 Plan 04 sub-scope 5 — cache-breakpoint marker.
+ *
+ * This sentinel string sits between the static and dynamic portions of the
+ * assembled stable prefix when `cacheBreakpointPlacement === "static-first"`.
+ *
+ * The SDK / Claude Code CLI handles cache breakpoint placement automatically
+ * (we cannot directly set `cache_control` on the preset+append form per the
+ * Phase 52 LOCKED SDK shape). The marker is HTML-comment syntax — invisible
+ * to LLM parsing in markdown but greppable in our trace pipeline. Anthropic's
+ * prompt cache sees the marker as just bytes in the cached append; the
+ * marker's only role is letting downstream consumers (Plan 115-08
+ * dashboard / observability) hash-split the static vs dynamic portions for
+ * diagnostics — and to make the architectural intent grep-visible in source.
+ *
+ * NOTE: Phase 115 Plan 04's narrow scope only PLACES the marker. The
+ * follow-on `staticPrefixHash` computation + traces.db `static_prefix_hash`
+ * column + per-agent cache-bust diag log live in Plan 115-08 closeout
+ * (operator-observability features). See 115-04-SUMMARY.md "Deferred"
+ * section for the deliberate scope split.
+ */
+export const CACHE_BREAKPOINT_MARKER = "\n\n<!-- phase115-cache-breakpoint -->\n\n";
+
+/**
+ * Phase 115 Plan 04 sub-scope 5 — section-placement classification.
+ *
+ * Each `ContextSources` field that lands in the assembled output is
+ * classified as one of:
+ *
+ *   - `"static"`         — rarely changes; only on config / identity rotation
+ *                          / skill change / MCP server flap. Placed BEFORE
+ *                          the cache-breakpoint marker so the bytes prior
+ *                          to the marker are stable across most turns.
+ *   - `"dynamic"`        — may change between turns due to memory writes,
+ *                          hot-tier composition, or per-turn graph state.
+ *                          Placed AFTER the cache-breakpoint marker so
+ *                          changes here don't invalidate the static prefix.
+ *   - `"mutable-suffix"` — never lands in the stable prefix at all (Phase 52
+ *                          mutable-suffix design). Listed here for
+ *                          completeness so SECTION_PLACEMENT is
+ *                          exhaustive over `ContextSources`.
+ *
+ * The four carved identity sub-source fields (Phase 115 Plan 03 T01) are
+ * each classified separately. Per advisor guidance + 115-03's design,
+ * `identityMemoryAutoload` is treated as STATIC at the outer placement
+ * level — it is bounded by `INJECTED_MEMORY_MAX_CHARS` and rarely changes
+ * between turns (memory writes are async). When the agent edits MEMORY.md
+ * mid-life, the static prefix legitimately changes; that's the rare event
+ * `[diag] static-prefix-cache-bust` (Plan 115-08) will surface.
+ *
+ * Order: all STATIC first (in the existing order), then BREAKPOINT_MARKER,
+ * then all DYNAMIC. Mutable-suffix entries don't participate.
+ *
+ * EXHAUSTIVENESS: this record covers every `keyof ContextSources` field so
+ * a future add to `ContextSources` either explicitly lands in this map or
+ * fails the type-check (`Record<keyof ContextSources, SectionPlacement>`).
+ */
+export type SectionPlacement = "static" | "dynamic" | "mutable-suffix";
+
+export const SECTION_PLACEMENT: Record<keyof ContextSources, SectionPlacement> = Object.freeze({
+  // STATIC — operator-curated / config-driven, rarely changes turn-to-turn.
+  systemPromptDirectives: "static",
+  identity: "static",                       // legacy compound identity field
+  identitySoulFingerprint: "static",        // Phase 115-03 carved sub-source
+  identityFile: "static",                   // Phase 115-03 carved sub-source
+  identityCapabilityManifest: "static",     // Phase 115-03 carved sub-source
+  identityMemoryAutoload: "static",         // Phase 115-03 carved sub-source — bounded by INJECTED_MEMORY_MAX_CHARS
+  identityMemoryAutoloadSource: "static",   // Phase 115-03 typed Tier 1 metadata (informational only)
+  soul: "static",
+  skillsHeader: "static",
+  toolDefinitions: "static",
+  filesystemCapabilityBlock: "static",
+  delegatesBlock: "static",
+  // Phase 53 Plan 03 lazy-skill compression sources — the rendered output
+  // is part of skillsHeader (static); these auxiliary inputs don't
+  // independently land in the stable prefix.
+  skills: "static",
+  skillUsage: "static",
+  currentUserMessage: "static",
+  lastAssistantMessage: "static",
+  lazySkillsConfig: "static",
+  hotMemoriesEntries: "static",  // raw input — rendered output is hotMemories (dynamic)
+
+  // DYNAMIC — may change turn-to-turn within the stable prefix.
+  hotMemories: "dynamic",                   // composition changes when access_count flips
+  graphContext: "dynamic",                  // per-turn graph slice (when wired)
+
+  // MUTABLE-SUFFIX — never lands in stable prefix; lives in mutable suffix.
+  conversationContext: "mutable-suffix",
+  resumeSummary: "mutable-suffix",
+  perTurnSummary: "mutable-suffix",
+  recentHistory: "mutable-suffix",          // SDK-owned, measured-only here
+  contextSummary: "mutable-suffix",         // legacy summary field
+  discordBindings: "mutable-suffix",
+});
+
+/**
+ * Phase 115 Plan 04 sub-scope 5 — cache-breakpoint placement mode.
+ *
+ *   - `"static-first"` (default): all static sections before the
+ *                                  CACHE_BREAKPOINT_MARKER, dynamic after.
+ *                                  Mirrors Hermes' static-then-dynamic pattern.
+ *                                  Recovers cache reuse on every turn that
+ *                                  does NOT mutate config / identity.
+ *   - `"legacy"`:                  pre-Phase-115 interleaved order
+ *                                  (identity → soul → hotMemories → tools →
+ *                                  fs-capability → delegates → graphContext).
+ *                                  Revert path; no marker emitted; bytes
+ *                                  match pre-115-04 master byte-for-byte
+ *                                  for snapshot-style regression tests.
+ */
+export type CacheBreakpointPlacement = "static-first" | "legacy";
+
+export const DEFAULT_CACHE_BREAKPOINT_PLACEMENT: CacheBreakpointPlacement = "static-first";
+
 // ── Phase 53 Plan 02 — per-section budget surface ──────────────────────────
 
 /**
@@ -483,6 +600,25 @@ export type AssembleOptions = {
   readonly log?: {
     readonly error?: (obj: Record<string, unknown>, msg?: string) => void;
   };
+  /**
+   * Phase 115 Plan 04 sub-scope 5 — cache-breakpoint placement mode.
+   *
+   * When `"static-first"` (default), the assembler reorders `stableParts`
+   * so all static sections (per `SECTION_PLACEMENT`) come BEFORE the
+   * `CACHE_BREAKPOINT_MARKER` and all dynamic sections come AFTER. This
+   * lets the prompt-cache reuse the static portion across turns where only
+   * dynamic content (hot memories, graph context) changed.
+   *
+   * When `"legacy"`, the assembler emits the pre-115-04 interleaved order
+   * with NO marker. The `legacy` mode exists as a revert path so operators
+   * can flip back per-agent if static-first triggers an unanticipated
+   * regression. Default is `"static-first"`.
+   *
+   * Threaded from `defaults.cacheBreakpointPlacement` /
+   * `agents.<name>.cacheBreakpointPlacement` per the loader. Optional —
+   * legacy callers and tests omit this and get the default behavior.
+   */
+  readonly cacheBreakpointPlacement?: CacheBreakpointPlacement;
 };
 
 /**

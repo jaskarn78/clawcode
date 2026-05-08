@@ -599,6 +599,16 @@ export function resolveAgentConfig(
       agent.excludeDynamicSections !== undefined
         ? agent.excludeDynamicSections
         : defaults.excludeDynamicSections,
+    // Phase 115 sub-scope 5 (Plan 04) — per-agent cacheBreakpointPlacement
+    // beats defaults. Both sides are zod-validated as enum literals so `??`
+    // is safe; explicit `!== undefined` retained for symmetry with the
+    // surrounding excludeDynamicSections / memoryScannerEnabled patterns.
+    // The agent field is .optional() and the defaults field is default-
+    // bearing, so the resolved value is always one of the two enum values.
+    cacheBreakpointPlacement:
+      agent.cacheBreakpointPlacement !== undefined
+        ? agent.cacheBreakpointPlacement
+        : defaults.cacheBreakpointPlacement,
     // Phase 90 MEM-02 — scanner gate. Use explicit `!== undefined` check so
     // `memoryScannerEnabled: false` in an agent yaml wins over a true default
     // (mirrors memoryAutoLoad shape).

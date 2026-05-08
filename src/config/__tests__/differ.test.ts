@@ -23,6 +23,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
       memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
       excludeDynamicSections: true, // Phase 115 sub-scope 2
+      cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04

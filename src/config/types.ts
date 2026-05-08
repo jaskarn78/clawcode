@@ -233,4 +233,12 @@ export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // immediate change must run: `clawcode restart <agent>`.
   "agents.*.excludeDynamicSections",
   "defaults.excludeDynamicSections",
+  // Phase 115 sub-scope 5 (Plan 04) — cacheBreakpointPlacement is captured
+  // into the assembled stable prefix at session create/resume time (the
+  // marker placement is baked into systemPrompt.append). Same architectural
+  // pattern as excludeDynamicSections above. A clawcode.yaml edit takes
+  // effect ONLY on the NEXT agent restart. Operators wanting an immediate
+  // change must run: `clawcode restart <agent>`.
+  "agents.*.cacheBreakpointPlacement",
+  "defaults.cacheBreakpointPlacement",
 ]);

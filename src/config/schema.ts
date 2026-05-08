@@ -1141,6 +1141,14 @@ export const agentSchema = z.object({
   // message). Reload classification: NEXT-SESSION only — the systemPrompt
   // option is captured in baseOptions at session create/resume.
   excludeDynamicSections: z.boolean().optional(),
+  // Phase 115 sub-scope 5 (Plan 04) — per-agent override for the
+  // cache-breakpoint placement mode. When omitted, resolver falls back to
+  // `defaults.cacheBreakpointPlacement` (default "static-first"). Set
+  // "legacy" to revert to pre-115 interleaved stable-prefix ordering with
+  // NO breakpoint marker — operator-controlled rollback path. Reload
+  // classification: NEXT-SESSION only — placement is captured into the
+  // assembled stable prefix at session create/resume.
+  cacheBreakpointPlacement: z.enum(["static-first", "legacy"]).optional(),
   // Phase 90 MEM-02 — per-agent gate for the chokidar scanner. Default true
   // (via defaults.memoryScannerEnabled). Set to false to skip scanner start
   // for an agent whose memory/ is managed externally.
@@ -1486,6 +1494,17 @@ export const defaultsSchema = z.object({
   // CONTEXT.md sub-scope 2 lock; set false to revert to pre-115 behavior.
   // Reload classification: NEXT-SESSION only.
   excludeDynamicSections: z.boolean().default(true),
+  // Phase 115 sub-scope 5 (Plan 04) — fleet-wide cache-breakpoint placement
+  // mode. "static-first" (default): static sections (identity, soul, skills,
+  // tools, fs-capability, delegates) land BEFORE the breakpoint marker;
+  // dynamic sections (hot memories, graph context) land AFTER. Mirrors
+  // Hermes static-then-dynamic placement; the operator-priority goal is
+  // recovering prompt-cache hit rate by stabilizing the bytes prior to the
+  // marker across most turns. "legacy" — pre-115 interleaved order, no
+  // marker emitted — revert path. Reload classification: NEXT-SESSION only.
+  cacheBreakpointPlacement: z
+    .enum(["static-first", "legacy"])
+    .default("static-first"),
   // Phase 90 MEM-02 — fleet-wide scanner on/off. Default true — every
   // agent starts a chokidar watcher on its {workspace}/memory/**/*.md.
   memoryScannerEnabled: z.boolean().default(true),
@@ -1955,6 +1974,11 @@ export const configSchema = z.object({
     memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"],
     // Phase 115 sub-scope 2 — fleet-wide default mirrors defaultsSchema.
     excludeDynamicSections: true,
+    // Phase 115 sub-scope 5 (Plan 04) — fleet-wide default mirrors
+    // defaultsSchema. "static-first" places static sections before the
+    // CACHE_BREAKPOINT_MARKER and dynamic sections after; "legacy"
+    // preserves pre-115-04 interleaved order with no marker (revert path).
+    cacheBreakpointPlacement: "static-first" as const,
     memoryScannerEnabled: true,
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,
