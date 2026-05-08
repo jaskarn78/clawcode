@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 115-09-PLAN.md (closeout — code complete; awaiting operator deploy)
-last_updated: "2026-05-08T08:07:00.137Z"
+status: awaiting operator deploy (Ramy gate + CLAUDE.md feedback_no_auto_deploy)
+stopped_at: Completed 999.36-00-PLAN.md (sub-bug A typing fix shipped + sub-bugs B/D diag instrumentation in place — Plans 02/03 deferred until 24h+ prod observation cycle)
+last_updated: "2026-05-08T17:16:45.445Z"
 last_activity: 2026-05-08
 progress:
-  total_phases: 60
+  total_phases: 62
   completed_phases: 16
-  total_plans: 97
-  completed_plans: 92
-  percent: 95
+  total_plans: 101
+  completed_plans: 93
+  percent: 92
 ---
 
 # Project State
@@ -470,6 +470,7 @@ Recent decisions affecting current work:
 - [Phase 115]: Sub-scope 6-B: PENDING-OPERATOR → de-facto DEFER. Routes to Phase 116 once operator runs audit CLI post-deploy.
 - [Phase 115]: Cross-agent coordinator built as new abstraction (not retrofit). Per-agent runConsolidation preserved verbatim; coordinator wraps fleet-level orchestration.
 - [Phase 115]: Manual rollback semantics — partial-failed batches require explicit operator rollback(runId) call (CONTEXT D-10 three-tier policy).
+- [Phase 999.36]: Sub-bug A typing indicator fix shipped (TYPING_REFRESH_MS=8000, D-05 cadence pin); sub-bugs B+D fixes deferred to Plans 03+02 until 24h+ prod observation confirms D-06 (chunk-boundary seam) and D-12 (premature-fire source)
 
 ### v2.1 closing decisions (for reference)
 
@@ -663,11 +664,12 @@ Recent decisions affecting current work:
 | Phase 115 P07 | 28 | 4 tasks | 15 files |
 | Phase 115 P08 | 41min | 3 tasks | 17 files |
 | Phase 115 P09 | 28min | 5 tasks | 12 files |
+| Phase 999.36 P00 | 22min | 5 tasks | 5 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-08
-Stopped at: Completed 115-09-PLAN.md (closeout — code complete; awaiting operator deploy)
+Stopped at: Completed 999.36-00-PLAN.md (sub-bug A typing fix shipped + sub-bugs B/D diag instrumentation in place — Plans 02/03 deferred until 24h+ prod observation cycle)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
