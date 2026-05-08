@@ -26,6 +26,9 @@ import { makeRootOrigin } from "../manager/turn-origin.js";
 // instead of a silent thread until the subagent finishes its turn.
 import { ProgressiveMessageEditor } from "./streaming.js";
 import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
+// Sub-bug A (999.36 / D-04, D-05) typing-indicator emit loop for subagent
+// thread dispatch. See src/discord/subagent-typing-loop.ts.
+import { startTypingLoop } from "./subagent-typing-loop.js";
 
 /**
  * Phase 100 GSD-06 — pure helper: extract the parent agent's GSD project
@@ -681,6 +684,9 @@ export class SubagentThreadSpawner {
     autoRelay: boolean,
     autoArchive: boolean,
   ): Promise<void> {
+    // Sub-bug A handle declared outside the try so the finally block can
+    // stop it whether the stream succeeded or threw (see import comment).
+    let typingHandle: { stop: () => void } | null = null;
     try {
       const prompt = task
         ? task
@@ -699,6 +705,16 @@ export class SubagentThreadSpawner {
       const placeholder = await thread.send("🔄 Working...");
       const editable = (placeholder ?? {}) as { edit?: (content: string) => Promise<unknown> };
       const canEdit = typeof editable.edit === "function";
+
+      // Phase 999.36 sub-bug A (D-04, D-05) — fire typing indicator continuously
+      // through the subagent's stream so the operator sees activity even during
+      // 5-min boot waits. Mirrors bridge.ts:357-377 + 606-611 pattern.
+      // Stopped in the finally block below before the autoRelay/autoArchive
+      // chain so the indicator clears once the visible message is delivered.
+      typingHandle = startTypingLoop(
+        thread as unknown as { sendTyping?: () => Promise<unknown> },
+        this.log,
+      );
 
       // Phase 100-fu — log streaming startup so the next overflow-related
       // failure has a breadcrumb (canEdit=true means we'll use the
@@ -795,6 +811,11 @@ export class SubagentThreadSpawner {
         { sessionName, error: (err as Error).message, hadTask: Boolean(task) },
         "subagent initial message failed",
       );
+    } finally {
+      // Stop the typing indicator BEFORE the autoRelay/autoArchive chain so
+      // the operator doesn't see typing during relay/archive cleanup.
+      // Wrapped in try so clearInterval can never block the post-reply chain.
+      try { typingHandle?.stop(); } catch { /* non-fatal */ }
     }
     // Phase 100 follow-up — post-reply chain. Runs even if the initial
     // message failed, because the operator wanted notification and a
