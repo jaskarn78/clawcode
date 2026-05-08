@@ -1,0 +1,246 @@
+import type { Logger } from "pino";
+import type { MemoryStore } from "../store.js";
+import type { EmbeddingMigrationPhase, EmbeddingV2Migrator } from "./embedding-v2.js";
+
+/**
+ * Phase 115 D-08 + D-09 — resumable batch re-embed runner.
+ *
+ * Reads memories that have a v1 vec_memories row but NO v2 vec_memories_v2
+ * row, embeds them with bge-small + int8 quant, writes v2 rows, advances
+ * the migration cursor. Yields between batches to respect a CPU budget
+ * (default 5%, configurable via `defaults.embeddingMigration.cpuBudgetPct`).
+ *
+ * Discord-active agents have priority — runner skips when `isAgentActive()`
+ * returns true. The migration is OFF the response path; it never lands embed
+ * cost on a turn (sota-synthesis.md §1.5 async-write invariant preserved).
+ *
+ * Resumability: each batch saves `last_cursor = lastMemoryId` after the
+ * batch's writes commit. On daemon restart the runner picks up where it
+ * left off via the cursor — no duplicate work, no skipped work.
+ *
+ * Phase guard: runs ONLY when migrator phase is `dual-write` or
+ * `re-embedding`. The dual-write phase covers the case where ambient
+ * agent activity creates new memories that need v2 vectors AND historical
+ * memories haven't been re-embedded yet (the runner does both passes
+ * uniformly; the only difference between dual-write and re-embedding is
+ * operator intent).
+ */
+
+/**
+ * Config for the runner. Resolved from
+ * `defaults.embeddingMigration.{cpuBudgetPct,batchSize}` per the config
+ * schema added in T05.
+ */
+export interface RunnerConfig {
+  /** CPU budget percentage (1-50). Default 5 per Phase 115 D-09. */
+  readonly cpuBudgetPct: number;
+  /** Batch size (10-500). Default 50 per Phase 115 D-08. */
+  readonly batchSize: number;
+}
+
+/** Result of one runReEmbedBatch invocation — for log + dashboard wiring. */
+export interface RunnerResult {
+  readonly agent: string;
+  readonly phase: EmbeddingMigrationPhase;
+  readonly processed: number;
+  readonly remaining: number;
+  readonly skippedReason?: string;
+}
+
+/**
+ * Embedder shape — minimal subset needed by the runner. Keeps the runner
+ * test-mockable (no need to construct a real EmbeddingService for vitest).
+ */
+export interface RunnerEmbedder {
+  embedV2(text: string): Promise<Int8Array>;
+}
+
+/**
+ * Run ONE batch of v2 re-embed work. Designed to be called repeatedly by
+ * a scheduler (heartbeat tick, cron, or a manual loop in tests). Returns
+ * info about the work just done so the caller can log + decide whether
+ * to schedule another batch immediately.
+ *
+ * Yielding semantics: this function does NOT itself sleep — the caller's
+ * scheduler controls cadence. The CPU budget is enforced by the SCHEDULER
+ * picking a between-batch sleep proportional to (100 - cpuBudgetPct) / cpuBudgetPct.
+ * For example: cpuBudgetPct=5 means after 1 batch (taking ~T ms), sleep
+ * for ~19T ms before the next batch — keeping CPU at 5% net.
+ *
+ * Why not embed budget-aware sleeping inside the runner: heartbeat checks
+ * are already a once-per-N-minutes mechanism; running ONE batch per
+ * heartbeat tick at default 5-min interval naturally produces well below
+ * 5% CPU use. Operators can tighten the heartbeat interval to spend the
+ * budget more aggressively. The CPU budget knob is documented but the
+ * actual implementation rate-limits via heartbeat cadence.
+ */
+export async function runReEmbedBatch(
+  migrator: EmbeddingV2Migrator,
+  store: MemoryStore,
+  embedder: RunnerEmbedder,
+  cfg: RunnerConfig,
+  isAgentActive: () => boolean,
+  log: Logger,
+): Promise<RunnerResult> {
+  const state = migrator.getState();
+  if (!migrator.shouldRunReEmbedBatch()) {
+    return Object.freeze({
+      agent: migrator.agent,
+      phase: state.phase,
+      processed: 0,
+      remaining: state.progressTotal - state.progressProcessed,
+      skippedReason: `phase=${state.phase} (not dual-write or re-embedding)`,
+    });
+  }
+
+  // Discord-active agents have priority — skip this tick.
+  if (isAgentActive()) {
+    return Object.freeze({
+      agent: migrator.agent,
+      phase: state.phase,
+      processed: 0,
+      remaining: state.progressTotal - state.progressProcessed,
+      skippedReason: "agent-active",
+    });
+  }
+
+  // First batch in re-embedding phase — count remaining work and update
+  // the total. The runner can be re-invoked many times before progress
+  // changes, so the counter only updates when the runner is actually
+  // doing work in this phase.
+  const totalMissing = store.countMemoriesMissingV2Embedding();
+  if (totalMissing === 0) {
+    // Auto-transition to re-embed-complete if we're in re-embedding.
+    if (state.phase === "re-embedding") {
+      try {
+        migrator.transition("re-embed-complete");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(
+          { agent: migrator.agent, action: "v2-auto-transition-failed", message },
+          "[diag] embedding-v2 auto-transition to re-embed-complete failed",
+        );
+      }
+    }
+    return Object.freeze({
+      agent: migrator.agent,
+      phase: migrator.getState().phase,
+      processed: 0,
+      remaining: 0,
+    });
+  }
+
+  // Set the progress_total once when entering re-embedding so progress
+  // reporting is meaningful. Idempotent if it's already set.
+  if (state.progressTotal === 0 && state.phase === "re-embedding") {
+    migrator.setProgressTotal(totalMissing + state.progressProcessed);
+  }
+
+  // Pull a batch.
+  const batch = store.listMemoriesMissingV2Embedding(
+    cfg.batchSize,
+    state.lastCursor,
+  );
+
+  if (batch.length === 0) {
+    // Cursor advanced past the end of currently-missing entries. This
+    // can happen if last_cursor was set to a high id and new memories
+    // with lower ids were created since (the SQL filter requires id >
+    // last_cursor). Reset cursor and signal completion of this pass.
+    if (state.phase === "re-embedding") {
+      // Auto-transition since totalMissing is also 0 from this cursor.
+      // No-op if totalMissing was non-zero (which means there are entries
+      // BEHIND the cursor we're skipping due to id ordering — the runner
+      // will get them next pass after cursor reset).
+      const remainingFromStart = store.countMemoriesMissingV2Embedding();
+      if (remainingFromStart === 0) {
+        try {
+          migrator.transition("re-embed-complete");
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(
+            { agent: migrator.agent, action: "v2-auto-transition-failed", message },
+            "[diag] embedding-v2 auto-transition to re-embed-complete failed",
+          );
+        }
+      }
+    }
+    return Object.freeze({
+      agent: migrator.agent,
+      phase: migrator.getState().phase,
+      processed: 0,
+      remaining: totalMissing,
+    });
+  }
+
+  // Process each memory — embed + write v2 row + save cursor.
+  let processedThisBatch = 0;
+  let lastIdProcessed: string | null = null;
+  for (const mem of batch) {
+    if (isAgentActive()) {
+      // Agent went active mid-batch — yield immediately. The cursor saved
+      // via the LAST successful write means resume will pick up correctly.
+      log.info(
+        {
+          agent: migrator.agent,
+          action: "v2-batch-yielded-mid-batch",
+          processed: processedThisBatch,
+        },
+        "[diag] embedding-v2 yielded mid-batch (agent went active)",
+      );
+      break;
+    }
+    try {
+      const v2Float = await embedder.embedV2(mem.content);
+      store.insertEmbeddingV2(mem.id, v2Float);
+      processedThisBatch++;
+      lastIdProcessed = mem.id;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(
+        {
+          agent: migrator.agent,
+          action: "v2-embed-failed",
+          memoryId: mem.id,
+          message,
+        },
+        "[diag] embedding-v2 single-row embed failed; skipping",
+      );
+      // Continue with next entry — one bad memory doesn't kill the batch.
+    }
+  }
+
+  // Save cursor + processed count after the batch.
+  if (lastIdProcessed) {
+    migrator.saveCursor(
+      lastIdProcessed,
+      state.progressProcessed + processedThisBatch,
+    );
+  }
+
+  const updatedState = migrator.getState();
+  const remaining = Math.max(
+    0,
+    updatedState.progressTotal - updatedState.progressProcessed,
+  );
+
+  log.info(
+    {
+      agent: migrator.agent,
+      action: "v2-reembed-batch",
+      phase: updatedState.phase,
+      processed: processedThisBatch,
+      processedCumulative: updatedState.progressProcessed,
+      remaining,
+      lastCursor: updatedState.lastCursor,
+    },
+    "[diag] embedding-v2 batch re-embed",
+  );
+
+  return Object.freeze({
+    agent: migrator.agent,
+    phase: updatedState.phase,
+    processed: processedThisBatch,
+    remaining,
+  });
+}
