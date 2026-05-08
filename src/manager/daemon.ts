@@ -250,6 +250,7 @@ import {
   type SloEntry,
 } from "../performance/slos.js";
 import type { TraceStore } from "../performance/trace-store.js";
+import type { TraceCollector } from "../performance/trace-collector.js";
 import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-summary-cron.js";
 import { isDiscordRateLimitError } from "../discord/streaming.js";
 import { nanoid } from "nanoid";
@@ -7754,6 +7755,20 @@ async function routeMethod(
     // resolution layer.
     case "clawcode-memory-search": {
       const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer. Increment
+      // FIRST so observability is recorded even if the handler throws on
+      // an unknown agent or empty store. Best-effort — TraceCollector
+      // method is missing on legacy daemons, hence the typeof guard
+      // (mirrors session-config.ts recordTier1TruncationEvent pattern).
+      const tcSearch = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcSearch && typeof tcSearch.recordLazyRecallCall === "function") {
+        tcSearch.recordLazyRecallCall(agentName, "clawcode_memory_search");
+      }
+
       const query = validateStringParam(params, "query");
       const k = typeof params.k === "number" ? params.k : 10;
       const includeTags = Array.isArray(params.includeTags)
@@ -7781,6 +7796,16 @@ async function routeMethod(
 
     case "clawcode-memory-recall": {
       const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer.
+      const tcRecall = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcRecall && typeof tcRecall.recordLazyRecallCall === "function") {
+        tcRecall.recordLazyRecallCall(agentName, "clawcode_memory_recall");
+      }
+
       const memoryId = validateStringParam(params, "memoryId");
 
       const store = manager.getMemoryStore(agentName);
@@ -7799,6 +7824,16 @@ async function routeMethod(
 
     case "clawcode-memory-edit": {
       const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer.
+      const tcEdit = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcEdit && typeof tcEdit.recordLazyRecallCall === "function") {
+        tcEdit.recordLazyRecallCall(agentName, "clawcode_memory_edit");
+      }
+
       const path = validateStringParam(params, "path") as "MEMORY.md" | "USER.md";
       const mode = validateStringParam(params, "mode") as
         | "view"
@@ -7834,6 +7869,16 @@ async function routeMethod(
 
     case "clawcode-memory-archive": {
       const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer.
+      const tcArchive = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcArchive && typeof tcArchive.recordLazyRecallCall === "function") {
+        tcArchive.recordLazyRecallCall(agentName, "clawcode_memory_archive");
+      }
+
       const chunkId = validateStringParam(params, "chunkId");
       const targetPath = validateStringParam(params, "targetPath") as
         | "MEMORY.md"

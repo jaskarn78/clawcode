@@ -49,7 +49,11 @@ export class TraceCollector {
    */
   startTurn(turnId: string, agent: string, channelId: string | null): Turn {
     const childLog = this.log.child({ agent, turnId });
-    return new Turn(turnId, agent, channelId, this.store, childLog);
+    const turn = new Turn(turnId, agent, channelId, this.store, childLog, this);
+    // Phase 115 Plan 05 T04 — register so `recordLazyRecallCall` can fold
+    // the increment in directly. Unregistration happens at Turn.end().
+    this.registerActiveTurn(agent, turn);
+    return turn;
   }
 
   /**
@@ -94,6 +98,99 @@ export class TraceCollector {
       return 0;
     }
   }
+
+  /**
+   * Phase 115 Plan 05 T04 — record one lazy-recall tool invocation.
+   *
+   * Per CONTEXT.md sub-scope 7, the four lazy-load tools (`clawcode_memory_search`,
+   * `_recall`, `_edit`, `_archive`) are the agent-facing surface that converts
+   * the model from "always-injected memory" to "tool-mediated lazy recall."
+   * This method increments the per-agent call counter the dashboard surfaces
+   * (column `lazy_recall_call_count` in traces.db, slot opened by 115-00-T02).
+   *
+   * Per-turn association: when a Turn is active for `agent`, the increment
+   * folds into the active turn buffer and lands in the `lazy_recall_call_count`
+   * column at turn-end. When NO active turn exists (e.g. the tool fired
+   * outside a Discord turn loop — heartbeat-driven, daemon-initiated probes),
+   * a per-agent rolling counter accumulates and gets attached to the next
+   * turn that ends for the agent.
+   *
+   * Failure-isolated — a counter failure NEVER blocks the tool path. Errors
+   * are logged at warn level and dropped.
+   *
+   * @param agent — agent whose lazy-recall counter should be incremented
+   * @param tool  — tool name for the structured log line
+   *                ('clawcode_memory_search' | 'clawcode_memory_recall' |
+   *                'clawcode_memory_edit' | 'clawcode_memory_archive')
+   */
+  recordLazyRecallCall(agent: string, tool: string): void {
+    try {
+      // Try the active-turn registry first.
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpLazyRecallCount(tool);
+        return;
+      }
+      // No active turn — bump the per-agent rolling counter that the next
+      // ended turn will pick up.
+      const rolling = this.pendingLazyRecallByAgent.get(agent) ?? 0;
+      this.pendingLazyRecallByAgent.set(agent, rolling + 1);
+
+      // Best-effort structured trace line so operators can grep
+      // `lazy_recall_call agent=X tool=Y` in journalctl. Never throws.
+      this.log.debug(
+        { agent, tool, action: "lazy-recall-call" },
+        "[trace] lazy_recall_call_count incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, tool, err: msg, action: "lazy-recall-record-failed" },
+        "[trace] recordLazyRecallCall failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — drain the per-agent rolling lazy-recall counter
+   * accumulated since the last turn end. Returns the count and clears the
+   * slot. Called from Turn.end() so the column reflects every recorded
+   * call. Tests rely on this to assert the counter is correctly attributed.
+   */
+  drainPendingLazyRecallCount(agent: string): number {
+    const n = this.pendingLazyRecallByAgent.get(agent) ?? 0;
+    if (n > 0) this.pendingLazyRecallByAgent.delete(agent);
+    return n;
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — register an active Turn so `recordLazyRecallCall`
+   * can fold the increment in directly. Called from Turn constructor; the
+   * Turn unregisters on `end()`.
+   *
+   * Stored as a single-Turn-per-agent slot. ClawCode runs at most one Turn
+   * per agent at a time (Phase 50 invariant); concurrent Turns per agent
+   * are not supported.
+   */
+  registerActiveTurn(agent: string, turn: Turn): void {
+    this.activeTurns.set(agent, turn);
+  }
+
+  unregisterActiveTurn(agent: string, turn: Turn): void {
+    if (this.activeTurns.get(agent) === turn) {
+      this.activeTurns.delete(agent);
+    }
+  }
+
+  // Phase 115 Plan 05 T04 — per-agent rolling lazy-recall counter for tool
+  // calls that fire OUTSIDE an active Turn (heartbeat probes, daemon-driven
+  // memory operations, etc.). Drained into the next Turn that ends for
+  // the agent.
+  private readonly pendingLazyRecallByAgent = new Map<string, number>();
+
+  // Phase 115 Plan 05 T04 — per-agent active-Turn registry. Single slot
+  // per agent (Phase 50 invariant: at most one Turn per agent at a time).
+  private readonly activeTurns = new Map<string, Turn>();
 }
 
 /**
@@ -139,6 +236,20 @@ export class Turn {
    * field at `end()` because the Turn itself is the GC root.
    */
   private _toolCache: ToolCache | undefined = undefined;
+  /**
+   * Phase 115 Plan 05 T04 — per-turn lazy-recall call counter. Incremented
+   * by `bumpLazyRecallCount` from the four `clawcode_memory_*` IPC handlers
+   * in daemon.ts. Drained into the `lazyRecallCallCount` column in
+   * traces.db at `end()` time.
+   */
+  private lazyRecallCallCount = 0;
+  /**
+   * Phase 115 Plan 05 T04 — back-reference to the parent collector so the
+   * Turn can pull rolling lazy-recall counts from outside-of-turn calls
+   * at `end()` time. Optional so legacy bench-harness Turns (instantiated
+   * directly) keep working.
+   */
+  private readonly collector: TraceCollector | undefined;
 
   constructor(
     id: string,
@@ -146,6 +257,7 @@ export class Turn {
     channelId: string | null,
     store: TraceStore,
     log: Logger,
+    collector?: TraceCollector,
   ) {
     this.id = id;
     this.agent = agent;
@@ -153,6 +265,32 @@ export class Turn {
     this.store = store;
     this.log = log;
     this.startedAtMs = Date.now();
+    this.collector = collector;
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — record one lazy-recall tool call within this
+   * turn. Folded into the `lazyRecallCallCount` column at `end()`. No-op
+   * after `end()` (post-commit).
+   *
+   * `tool` is the tool name (e.g. 'clawcode_memory_search'). It only
+   * appears in the structured debug log line — the persisted column is
+   * an aggregate count, not a per-tool histogram (sub-scope 7 dashboard
+   * only needs the rate, not the breakdown — Plan 115-09 closeout).
+   */
+  bumpLazyRecallCount(tool: string): void {
+    if (this.committed) return;
+    this.lazyRecallCallCount += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        tool,
+        count: this.lazyRecallCallCount,
+        action: "lazy-recall-call",
+      },
+      "[trace] lazy_recall_call_count incremented",
+    );
   }
 
   /**
@@ -238,6 +376,15 @@ export class Turn {
     if (this.committed) return;
     this.committed = true;
     const endedAtMs = Date.now();
+
+    // Phase 115 Plan 05 T04 — drain any pending out-of-turn lazy-recall
+    // calls accumulated for this agent and add them to the per-turn count.
+    let lazyRecallCallCount = this.lazyRecallCallCount;
+    if (this.collector) {
+      lazyRecallCallCount += this.collector.drainPendingLazyRecallCount(this.agent);
+      this.collector.unregisterActiveTurn(this.agent, this);
+    }
+
     const base = {
       id: this.id,
       agent: this.agent,
@@ -260,6 +407,11 @@ export class Turn {
           }
         : {}),
       ...(this.turnOrigin ? { turnOrigin: this.turnOrigin } : {}),
+      // Phase 115 Plan 05 T04 — only attach when non-zero so legacy turn
+      // shape stays NULL on the column for turns that never invoked a
+      // lazy-recall tool. Mirrors the cache-telemetry-snapshot conditional
+      // spread above.
+      ...(lazyRecallCallCount > 0 ? { lazyRecallCallCount } : {}),
     });
     try {
       this.store.writeTurn(record);

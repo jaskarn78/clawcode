@@ -225,6 +225,9 @@ export class TraceStore {
               ? 1
               : 0,
           t.turnOrigin ? JSON.stringify(t.turnOrigin) : null, // Phase 57 Plan 02
+          // Phase 115 Plan 05 T04: lazy_recall_call_count. Producer optional
+          // — turns that never invoked a clawcode_memory_* tool land NULL.
+          t.lazyRecallCallCount ?? null,
         );
         for (const span of t.spans) {
           this.stmts.insertSpan.run(
@@ -645,12 +648,16 @@ export class TraceStore {
       // Last 6 columns are nullable — Phase 50 callers pass NULL for all of them,
       // Phase 52 callers pass NULL for turn_origin. Phase 57 Plan 03 migrates
       // DiscordBridge + TaskScheduler to provide the turn_origin JSON blob.
+      // Phase 115 Plan 05 T04: lazy_recall_call_count column slot opened in
+      // Plan 115-00 migrateSchema(); writes wired here. Legacy callers pass
+      // NULL via the `lazyRecallCallCount ?? null` fallback in writeTurn().
       insertTrace: this.db.prepare(`
         INSERT OR REPLACE INTO traces
           (id, agent, started_at, ended_at, total_ms, discord_channel_id, status,
            cache_read_input_tokens, cache_creation_input_tokens, input_tokens,
-           prefix_hash, cache_eviction_expected, turn_origin)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           prefix_hash, cache_eviction_expected, turn_origin,
+           lazy_recall_call_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertSpan: this.db.prepare(`
         INSERT INTO trace_spans
