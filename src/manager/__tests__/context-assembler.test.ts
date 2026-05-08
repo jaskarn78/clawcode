@@ -77,7 +77,14 @@ describe("DEFAULT_BUDGETS", () => {
 });
 
 describe("assembleContext", () => {
-  it("with all sources populated returns sections in order", () => {
+  it("with all sources populated returns sections in order (Phase 115-04 static-first default)", () => {
+    // Phase 115 Plan 04 sub-scope 5 — DEFAULT_CACHE_BREAKPOINT_PLACEMENT
+    // is "static-first": all static sections (identity, tools) land BEFORE
+    // the breakpoint marker; dynamic sections (hot memories, graph context)
+    // land AFTER. Mutable sections (discord, summary) sit in the mutable
+    // suffix as before. The legacy interleaved order is regression-pinned
+    // separately by `context-assembler-cache-breakpoint.test.ts` legacy-mode
+    // tests.
     const sources = makeSources({
       identity: "I am an agent",
       hotMemories: "- memory 1\n- memory 2",
@@ -90,16 +97,19 @@ describe("assembleContext", () => {
     const result = joinAssembled(assembleContext(sources));
 
     const identityIdx = result.indexOf("I am an agent");
-    const memoriesIdx = result.indexOf("## Key Memories");
     const toolsIdx = result.indexOf("## Available Tools");
+    const memoriesIdx = result.indexOf("## Key Memories");
     const graphIdx = result.indexOf("## Related Context");
     const discordIdx = result.indexOf("## Discord");
     const summaryIdx = result.indexOf("## Context Summary");
 
+    // Static sections come first (identity → tools).
     expect(identityIdx).toBeGreaterThanOrEqual(0);
-    expect(memoriesIdx).toBeGreaterThan(identityIdx);
-    expect(toolsIdx).toBeGreaterThan(memoriesIdx);
-    expect(graphIdx).toBeGreaterThan(toolsIdx);
+    expect(toolsIdx).toBeGreaterThan(identityIdx);
+    // Then dynamic sections (hot memories → graph context).
+    expect(memoriesIdx).toBeGreaterThan(toolsIdx);
+    expect(graphIdx).toBeGreaterThan(memoriesIdx);
+    // Mutable suffix follows the entire stable prefix.
     expect(discordIdx).toBeGreaterThan(graphIdx);
     expect(summaryIdx).toBeGreaterThan(discordIdx);
   });
@@ -146,16 +156,23 @@ describe("assembleContext", () => {
     expect(memContent.length).toBeLessThan(bullets.length);
   });
 
-  it("omits identity section when identity is empty", () => {
+  it("omits identity section when identity is empty (Phase 115-04 static-first default)", () => {
     const sources = makeSources({
       hotMemories: "- some memory",
     });
 
     const result = joinAssembled(assembleContext(sources));
 
-    // Should start with the memories section, no empty identity
+    // No empty identity in the static portion. Hot memories (dynamic) lands
+    // AFTER the cache-breakpoint marker. Phase 115-04 default placement.
     expect(result).toContain("## Key Memories");
-    expect(result.indexOf("## Key Memories")).toBe(0);
+    expect(result).toContain("phase115-cache-breakpoint");
+    // Marker comes before memories (memories is in the dynamic-after-marker
+    // portion).
+    const markerIdx = result.indexOf("phase115-cache-breakpoint");
+    const memoriesIdx = result.indexOf("## Key Memories");
+    expect(markerIdx).toBeGreaterThanOrEqual(0);
+    expect(memoriesIdx).toBeGreaterThan(markerIdx);
   });
 
   it("omits graphContext section when empty", () => {

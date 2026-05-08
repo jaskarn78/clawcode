@@ -1295,7 +1295,42 @@ function assembleContextInternal(
   const conversationContext = sources.conversationContext ?? "";
 
   // ── Placement ────────────────────────────────────────────────────────────
-  const stableParts: string[] = [];
+  //
+  // Phase 115 Plan 04 sub-scope 5 — cache-breakpoint placement.
+  //
+  // The assembler builds two ordered lists per-mode:
+  //
+  //   - `staticParts`   — operator-curated / config-driven sections that
+  //                       rarely change between turns. Per `SECTION_PLACEMENT`:
+  //                       systemPromptDirectives, identity (compound or
+  //                       carved), soul, skills + tool definitions, the
+  //                       filesystem capability block, delegates block.
+  //   - `dynamicParts`  — sections whose content may change between turns:
+  //                       hot memories (when not punted to mutable suffix
+  //                       by Phase 52 stable_token mismatch) and graph
+  //                       context. Hot-tier composition can change when
+  //                       access_count flips; graph context is intended
+  //                       to carry per-turn graph slices when wired.
+  //
+  // Output ordering by mode:
+  //
+  //   - `"static-first"` (default): staticParts → CACHE_BREAKPOINT_MARKER →
+  //                                 dynamicParts. Mirrors Hermes static-then-
+  //                                 dynamic pattern; the bytes BEFORE the
+  //                                 marker stay identical across turns where
+  //                                 only dynamic content changed, recovering
+  //                                 prompt-cache reuse on the static portion.
+  //   - `"legacy"`:                 pre-115-04 interleaved order — preserves
+  //                                 byte-shape for snapshot-style regression
+  //                                 tests and provides an operator-controlled
+  //                                 revert path. NO marker emitted.
+  //
+  // Default placement is `"static-first"` (DEFAULT_CACHE_BREAKPOINT_PLACEMENT).
+  const placement: CacheBreakpointPlacement =
+    opts?.cacheBreakpointPlacement ?? DEFAULT_CACHE_BREAKPOINT_PLACEMENT;
+
+  const staticParts: string[] = [];
+  const dynamicParts: string[] = [];
   const mutableParts: string[] = [];
 
   // Phase 94 TOOL-10 / D-10 — system-prompt directives are operator-mandated
@@ -1306,21 +1341,28 @@ function assembleContextInternal(
   // DISABLED — required for prompt-cache hash stability when all
   // directives are disabled by operator override).
   if (sources.systemPromptDirectives && sources.systemPromptDirectives.length > 0) {
-    stableParts.push(sources.systemPromptDirectives);
+    staticParts.push(sources.systemPromptDirectives);
   }
 
   // Identity stays in stablePrefix (no section header — fingerprint has its own formatting)
   if (identityOut) {
-    stableParts.push(identityOut);
+    staticParts.push(identityOut);
   }
 
   // Soul in stablePrefix (carved out from identity when session-config supplies it)
   if (soulOut) {
-    stableParts.push(soulOut);
+    staticParts.push(soulOut);
   }
 
   // Hot-tier placement — Phase 52 stable_token logic applied to the
   // (possibly importance-truncated) rendered hot-tier string.
+  //
+  // Phase 115 Plan 04 sub-scope 5: when hot-tier stays in stable (Phase 52
+  // token match OR no prior token), it lands in `dynamicParts` so it
+  // sits AFTER the cache-breakpoint marker in static-first mode (hot
+  // composition can change when access_count flips). When hot-tier
+  // composition just changed (token mismatch), Phase 52 punts it to the
+  // mutable suffix for THIS turn only — that path is unchanged.
   const currentHotToken = computeHotStableToken(hotInput.rendered);
   if (hotInput.rendered) {
     const hotBlock = "## Key Memories\n\n" + hotInput.rendered;
@@ -1330,7 +1372,7 @@ function assembleContextInternal(
     if (hotInMutable) {
       mutableParts.push(hotBlock);
     } else {
-      stableParts.push(hotBlock);
+      dynamicParts.push(hotBlock);
     }
   }
 
@@ -1340,7 +1382,7 @@ function assembleContextInternal(
     .filter((s) => s && s.length > 0)
     .join("\n\n");
   if (toolsCombined) {
-    stableParts.push(
+    staticParts.push(
       "## Available Tools\n\n" +
         truncateToBudget(toolsCombined, budgets.toolDefinitions),
     );
@@ -1374,7 +1416,7 @@ function assembleContextInternal(
   // stable-prefix hash and triggers fleet-wide Anthropic cache miss on
   // deploy. Static-grep on this very file pins the byte order.
   if (sources.filesystemCapabilityBlock && sources.filesystemCapabilityBlock.length > 0) {
-    stableParts.push(
+    staticParts.push(
       "<tool_status></tool_status>\n" +
         sources.filesystemCapabilityBlock +
         "\n<dream_log_recent></dream_log_recent>",
@@ -1391,12 +1433,14 @@ function assembleContextInternal(
   // NO fleet-wide cache invalidation on Phase 999.13 deploy (Pitfall 2 in
   // 999.13-RESEARCH.md).
   if (sources.delegatesBlock && sources.delegatesBlock.length > 0) {
-    stableParts.push(sources.delegatesBlock);
+    staticParts.push(sources.delegatesBlock);
   }
 
-  // Graph context (Phase 41/52) stable
+  // Graph context (Phase 41/52) — DYNAMIC per Phase 115 sub-scope 5
+  // (intended to carry per-turn graph slices when wired upstream; today
+  // most call sites pass empty string and the source is short-circuited).
   if (sources.graphContext) {
-    stableParts.push(
+    dynamicParts.push(
       "## Related Context\n\n" +
         truncateToBudget(sources.graphContext, budgets.graphContext),
     );
@@ -1438,6 +1482,109 @@ function assembleContextInternal(
     conversation_context: countTokens(conversationContext), // Phase 67
   });
 
+  // ── Phase 115 Plan 04 sub-scope 5 — assemble stable prefix per placement ──
+  //
+  // `"static-first"` (default): staticParts → MARKER → dynamicParts.
+  //   Cache-breakpoint marker sits at the static→dynamic boundary so the
+  //   bytes BEFORE the marker stay identical across turns where only
+  //   dynamic content (hot memories, graph context) changed.
+  //
+  //   Edge case — when both lists are empty, the stable prefix is the empty
+  //   string: NO marker is emitted (avoids `\n\n<!-- ... -->\n\n` leaking
+  //   into otherwise-empty stable prefixes). When only one side has content,
+  //   the marker is STILL emitted to preserve the placement contract — Plan
+  //   115-08 hash-split logic (deferred) reads the marker as the boundary;
+  //   suppressing it here would conflate "no dynamic content this turn" with
+  //   "static-only single-block prefix".
+  //
+  // `"legacy"`: pre-115-04 interleaved order with NO marker.
+  //   Order: systemPromptDirectives → identity → soul → hotMemories →
+  //          tools → filesystemCapability → delegates → graphContext.
+  //   Preserved for operator-controlled revert.
+  //
+  // The hot-tier in-mutable path (Phase 52 token-mismatch) bypasses this
+  // placement entirely — it never enters either staticParts or dynamicParts.
+  let stableParts: string[];
+  if (placement === "legacy") {
+    // Interleave to match pre-115-04 order: identity → hot → tools → graph.
+    // Reuse the partitioned arrays — the order within each was preserved by
+    // the partition pass above. Hot-tier (when stable) goes between identity
+    // (in staticParts at index 1 or 2) and tools (in staticParts at index 3+).
+    //
+    // Algorithm: rebuild legacy interleaving from the source fields directly
+    // for unambiguous semantic ordering. This does NOT re-execute any of
+    // the truncation/budget passes — they all already ran before the
+    // partitioning. We just route the SAME computed strings into the legacy
+    // interleaved array.
+    const legacyParts: string[] = [];
+    if (sources.systemPromptDirectives && sources.systemPromptDirectives.length > 0) {
+      legacyParts.push(sources.systemPromptDirectives);
+    }
+    if (identityOut) legacyParts.push(identityOut);
+    if (soulOut) legacyParts.push(soulOut);
+    // Hot-tier in legacy lands AFTER soul / BEFORE tools (pre-115-04 order).
+    // Only when it stayed in stable (not punted to mutable by Phase 52
+    // stable_token mismatch). Re-derive that decision from the same logic.
+    if (hotInput.rendered) {
+      const priorToken = opts?.priorHotStableToken;
+      const hotInMutable =
+        priorToken !== undefined && priorToken !== currentHotToken;
+      if (!hotInMutable) {
+        legacyParts.push("## Key Memories\n\n" + hotInput.rendered);
+      }
+    }
+    if (toolsCombined) {
+      legacyParts.push(
+        "## Available Tools\n\n" +
+          truncateToBudget(toolsCombined, budgets.toolDefinitions),
+      );
+    }
+    if (sources.filesystemCapabilityBlock && sources.filesystemCapabilityBlock.length > 0) {
+      legacyParts.push(
+        "<tool_status></tool_status>\n" +
+          sources.filesystemCapabilityBlock +
+          "\n<dream_log_recent></dream_log_recent>",
+      );
+    }
+    if (sources.delegatesBlock && sources.delegatesBlock.length > 0) {
+      legacyParts.push(sources.delegatesBlock);
+    }
+    if (sources.graphContext) {
+      legacyParts.push(
+        "## Related Context\n\n" +
+          truncateToBudget(sources.graphContext, budgets.graphContext),
+      );
+    }
+    stableParts = legacyParts;
+  } else {
+    // static-first: emit marker if (and only if) at least one side has
+    // content. Empty-prefix edge case yields "" with no marker leak.
+    const hasStatic = staticParts.length > 0;
+    const hasDynamic = dynamicParts.length > 0;
+    if (hasStatic && hasDynamic) {
+      // staticParts.join("\n\n") + MARKER + dynamicParts.join("\n\n")
+      // The MARKER carries its own surrounding "\n\n" pair so we emit it
+      // as a single element between the two lists rather than relying on
+      // the outer .join("\n\n") to insert the right separator.
+      stableParts = [
+        staticParts.join("\n\n"),
+        CACHE_BREAKPOINT_MARKER,
+        dynamicParts.join("\n\n"),
+      ];
+    } else if (hasStatic) {
+      // Static only — no dynamic content this turn. Still emit marker so
+      // hash-split consumers can find the boundary at end-of-static.
+      stableParts = [staticParts.join("\n\n"), CACHE_BREAKPOINT_MARKER];
+    } else if (hasDynamic) {
+      // Dynamic only — emit marker at the start so hash-split consumers
+      // see staticPrefixHash = sha256("") deterministically.
+      stableParts = [CACHE_BREAKPOINT_MARKER, dynamicParts.join("\n\n")];
+    } else {
+      // Both empty — no marker leak.
+      stableParts = [];
+    }
+  }
+
   // Phase 115 Plan 03 sub-scope 1 / D-02 — emergency outer-cap fallback.
   //
   // After per-section enforcement, if the joined stable prefix STILL exceeds
@@ -1446,6 +1593,13 @@ function assembleContextInternal(
   // well under 8K — but it's the structural safety net Phase 115 D-02
   // commits to. The error log is operator-grep-friendly so a recurring
   // fallback signal triggers a deeper audit.
+  //
+  // NOTE: in static-first mode, the join separator between successive
+  // staticParts entries is "\n\n", but the MARKER element itself already
+  // carries its own surrounding "\n\n" (it's a sentinel that defines its
+  // own bordering whitespace). joining with "\n\n" between produces an
+  // extra "\n\n" pair around the marker — by design, the marker sits in a
+  // visually-clear paragraph break.
   const joinedStable = stableParts.join("\n\n");
   const stablePrefix = enforceTotalStablePrefixBudget(
     joinedStable,
