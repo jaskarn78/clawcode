@@ -824,14 +824,47 @@ export function buildCleanEnv(): Record<string, string | undefined> {
  * resumeSession) use it below. NEVER replace with a raw `string` systemPrompt —
  * that loses the preset's cache scaffolding (CONTEXT D-01 LOCKED).
  *
- * Phase 115 sub-scope 2 — `excludeDynamicSections` parameter forwards to the
- * SDK. When true (default, per loader.ts → ResolvedAgentConfig.
- * excludeDynamicSections), the SDK strips per-machine dynamic sections
- * (cwd, auto-memory paths, git status) from the cached system prompt and
- * re-injects them as the first user message — improves cross-agent
- * prompt-cache reuse. Has no effect when systemPrompt is a string (custom
- * prompt), but our preset shape honors it. Per Phase 115 D-02 the flag is
- * default-on with explicit revert path via per-agent / defaults config.
+ * # SDK shape invariant (LOCKED — DO NOT MODIFY)
+ *
+ *   { type: "preset",
+ *     preset: "claude_code",
+ *     append: <stablePrefix>,
+ *     excludeDynamicSections: <bool> }
+ *
+ * This shape is locked across phases because the Claude Code CLI subprocess
+ * owns the actual API request; the daemon hands it the preset+append form
+ * as a *routing instruction* — "this stuff is stable, please cache it."
+ * Replacing this with a raw `string` systemPrompt would strip the preset's
+ * cache scaffolding and bypass `excludeDynamicSections`.
+ *
+ * Phase history (lock invariants — each phase only adds bytes / flags
+ * INSIDE the locked shape; none has changed the shape itself):
+ *
+ *   - **Phase 52 Plan 02:** introduced the preset+append separation.
+ *     `append` carries the daemon-assembled stable prefix; mutable
+ *     content goes through the user-message preamble instead.
+ *   - **Phase 115 sub-scope 2 (Plan 115-01):** added the
+ *     `excludeDynamicSections` flag (defaults true). When true, the
+ *     SDK strips per-machine dynamic sections (cwd, auto-memory paths,
+ *     git status) from the cached system prompt and re-injects them
+ *     as the first user message — improves cross-agent prompt-cache
+ *     reuse. Has no effect when systemPrompt is a string (custom
+ *     prompt), but our preset shape honors it. Per Phase 115 D-02 the
+ *     flag is default-on with explicit revert path via per-agent /
+ *     defaults config.
+ *   - **Phase 115 sub-scope 5 (Plan 115-04):** the `append` value now
+ *     contains a `<!-- phase115-cache-breakpoint -->` HTML-comment
+ *     marker between the static and dynamic portions of the stable
+ *     prefix (when `cacheBreakpointPlacement === "static-first"`,
+ *     which is the default). The marker is INSIDE the cached append
+ *     bytes — Anthropic's prompt cache sees it as just bytes; the
+ *     marker's only role is letting downstream observability
+ *     (Plan 115-08) hash-split the static vs dynamic portions for
+ *     diagnostics. The SDK call shape itself is UNCHANGED — only the
+ *     content of `stablePrefix` carries the marker.
+ *
+ * NEVER replace this with a raw `string` systemPrompt — that loses the
+ * preset's cache scaffolding AND silently drops the breakpoint marker.
  */
 export function buildSystemPromptOption(
   stablePrefix: string,
