@@ -60,3 +60,18 @@ src/memory/__tests__/conversation-brief.test.ts
 
 Both failures persist with `git stash` applied (i.e., pre-existing on master before any 115-06 changes). One assertion is `result.skipped === true` (line 499) where the actual value is `false`. Out of scope for 115-06; logging here per execution-flow Rule SCOPE BOUNDARY.
 
+
+## src/manager/__tests__/ — 16 pre-existing failures (not introduced by 115-06)
+
+**Discovered during post-execution advisor-suggested cross-suite check.**
+
+```
+src/manager/__tests__/daemon-openai.test.ts (10 tests | 7 failed)
+src/manager/__tests__/daemon-warmup-probe.test.ts (24 tests | 1 failed)
+src/manager/__tests__/bootstrap-integration.test.ts (4 tests | 2 failed)
+src/manager/__tests__/session-config.test.ts (58 tests | 4 failed)
+src/manager/__tests__/dream-prompt-builder.test.ts (12 tests | 2 failed)
+```
+
+Verified pre-existing via `git stash`-and-rerun: failures persist with all 115-06 changes stashed (master state pre-115-06). Out of scope per execution-flow Rule SCOPE BOUNDARY.
+

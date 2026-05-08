@@ -141,10 +141,34 @@ export class MemoryStore {
 
   /**
    * Insert a new memory with its embedding.
-   * Both the memories table and vec_memories table are updated atomically.
+   *
+   * Phase 1-114 contract: writes `memories` + `vec_memories` rows
+   * atomically inside one `db.transaction()`.
+   *
+   * Phase 115 D-08 dual-write extension: when `opts.embeddingV2` is
+   * provided, ALSO writes `vec_memories_v2` inside the SAME transaction.
+   * Phase 107 atomic-cascade invariant: either all THREE rows commit
+   * (memories + vec_memories + vec_memories_v2) or NONE do — a throw
+   * inside the transaction (e.g. v2 INSERT fails) rolls back the v1
+   * write too.
+   *
+   * The opts.embeddingV2 path is consumed by:
+   *   - The wave-4 dual-write hook in MemoryStore callers (when
+   *     EmbeddingV2Migrator.currentWriteVersions() includes "v2").
+   *   - The `insertWithDualWrite` convenience wrapper below (this plan).
    */
-  insert(input: CreateMemoryInput, embedding: Float32Array): MemoryEntry {
+  insert(
+    input: CreateMemoryInput,
+    embedding: Float32Array,
+    opts?: { embeddingV2?: Int8Array },
+  ): MemoryEntry {
     try {
+      if (opts?.embeddingV2 && opts.embeddingV2.length !== 384) {
+        throw new MemoryError(
+          `Phase 115 v2 embedding must be 384-dim int8; got ${opts.embeddingV2.length}`,
+          this.dbPath,
+        );
+      }
       // Phase 80 MEM-02 — origin_id path skips dedup entirely. Idempotency
       // by hash is the contract; content-similarity merging is a different
       // semantic that does not apply to migrated imports.
@@ -166,7 +190,13 @@ export class MemoryStore {
             embedding,
           });
 
-          // Re-extract links after merge
+          // Re-extract links after merge.
+          //
+          // Phase 115 D-08 — when dedup merges into an existing memory
+          // and the caller also passed a v2 embedding, write the v2
+          // row for the EXISTING memory id atomically inside this same
+          // transaction. mergeMemory() updates the v1 vec; we mirror
+          // that for v2 (INSERT OR REPLACE so re-merge is idempotent).
           this.db.transaction(() => {
             const mergedTargets = extractWikilinks(input.content);
             this.stmts.deleteLinksFrom.run(dedupResult.existingId);
@@ -176,6 +206,12 @@ export class MemoryStore {
               if (exists) {
                 this.stmts.insertLink.run(dedupResult.existingId, targetId, targetId, mergeNow);
               }
+            }
+            if (opts?.embeddingV2) {
+              this.stmts.insertVecV2.run(
+                dedupResult.existingId,
+                int8ToBuffer(opts.embeddingV2),
+              );
             }
           })();
 
@@ -243,6 +279,14 @@ export class MemoryStore {
           return;
         }
         this.stmts.insertVec.run(id, embedding);
+        // Phase 115 D-08 — atomic dual-write. v2 row written inside the
+        // SAME transaction as v1 + memories. A throw here (e.g. vec_int8
+        // type rejection, disk-full) rolls back the v1 + memories
+        // writes too — Phase 107 atomic-cascade invariant preserved
+        // for the insert side, mirroring the delete side.
+        if (opts?.embeddingV2) {
+          this.stmts.insertVecV2.run(id, int8ToBuffer(opts.embeddingV2));
+        }
 
         // Extract wikilinks and create edges to existing targets
         const targets = extractWikilinks(input.content);
@@ -558,60 +602,23 @@ export class MemoryStore {
   }
 
   /**
-   * Phase 115 D-08 — combined dual-write helper. Inserts the memory row,
-   * the v1 vec_memories row (Float32Array), AND the v2 vec_memories_v2
-   * row (Int8Array) ALL inside one `db.transaction()`. Phase 107 atomic-
-   * cascade invariant preserved — either all three rows commit or none do.
+   * Phase 115 D-08 — combined dual-write helper. Thin wrapper over
+   * `insert(input, embedding, { embeddingV2 })`. All three rows
+   * (memories + vec_memories + vec_memories_v2) commit inside ONE
+   * `db.transaction()` — either all three land or none do. Phase 107
+   * atomic-cascade invariant preserved across the insert side
+   * (matching the delete side).
    *
-   * Used by the dual-write hook in (future) MemoryStore.insertWithMigration
-   * dispatch. This plan ships the primitive; wave 4's migration kickoff
-   * actually flips the dispatch to use it.
-   *
-   * Returns the inserted memory entry exactly like `insert()` does, so the
-   * caller can chain the same downstream behavior (auto-link, etc.). The
-   * v2 row is written with `INSERT OR REPLACE` so calling twice with the
-   * same id just updates the v2 vector.
+   * If the v2 INSERT throws (e.g. vec_int8 type rejection, disk-full),
+   * the v1 + memories writes roll back too. Regression-pinned by
+   * `embedding-v2-cascade-delete.test.ts` insert-atomicity test.
    */
   insertWithDualWrite(
     input: CreateMemoryInput,
     embeddingV1: Float32Array,
     embeddingV2: Int8Array,
   ): MemoryEntry {
-    if (embeddingV2.length !== 384) {
-      throw new MemoryError(
-        `Phase 115 v2 embedding must be 384-dim int8; got ${embeddingV2.length}`,
-        this.dbPath,
-      );
-    }
-    // Use the existing insert() path for memories + vec_memories (preserves
-    // dedup, importance calc, wikilink extraction, auto-link). Then write
-    // v2 in a follow-up SQL — but per Phase 107, the v2 write MUST be in
-    // the same transaction as the v1 write. Since insert() already opens
-    // its own transaction, we wrap with an explicit caller-side savepoint
-    // approach: insert() commits its txn; then we open a new txn for v2.
-    // This is acceptable for dual-write because the v2 write is INSERT OR
-    // REPLACE (idempotent) — if the daemon dies between the two, the
-    // migration runner picks up the missing v2 row on its next batch.
-    //
-    // Phase 107 invariant is for DELETE cascades (no orphan vec_memories
-    // when memories deletes), NOT inserts. The insert side's atomicity is
-    // a "best effort + reconcilable" model: if v1 commits but v2 doesn't,
-    // the v2 vector is missing → migration runner picks it up. The
-    // INVERSE — v2 commits, v1 doesn't — cannot happen because we run
-    // v1 first.
-    const entry = this.insert(input, embeddingV1);
-    // Detect idempotent-skip via origin_id: if `insert()` returned an
-    // existing entry rather than creating a new one, its createdAt is
-    // older than the function's first call moment. We don't have that
-    // marker here, so we detect via accessCount=0 + a tighter check:
-    // origin_id collision means insert() returned the existing row
-    // verbatim. To be safe, only write v2 when the insert was real.
-    // Since `insert()` doesn't return a discriminator, we INSERT OR
-    // REPLACE the v2 vector — idempotent on collision (overwrites with
-    // the same bytes). The cost is 1 wasted vec_int8 SQL call on the
-    // origin_id collision path, which is negligible.
-    this.stmts.insertVecV2.run(entry.id, int8ToBuffer(embeddingV2));
-    return entry;
+    return this.insert(input, embeddingV1, { embeddingV2 });
   }
 
   /**

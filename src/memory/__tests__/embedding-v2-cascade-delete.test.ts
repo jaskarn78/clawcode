@@ -351,6 +351,109 @@ describe("embedding-v2 cascade-delete (Phase 115 D-08)", () => {
     ).toThrow(/384/);
   });
 
+  it("insert(input, embedding, {embeddingV2}) caller-side length validation — bad v2 length rejected before txn opens", () => {
+    store = createTestStore();
+    expect(countMemories(store)).toBe(0);
+    expect(countV1(store)).toBe(0);
+    expect(countV2(store)).toBe(0);
+
+    const v1 = randomEmbedding();
+    expect(() =>
+      store.insert(
+        { content: "alpha", source: "manual", skipDedup: true },
+        v1,
+        { embeddingV2: new Int8Array(256) },
+      ),
+    ).toThrow(/384/);
+    // Length-rejection happens BEFORE the transaction opens, so no rows
+    // anywhere — neither memories nor vec_memories nor vec_memories_v2.
+    expect(countMemories(store)).toBe(0);
+    expect(countV1(store)).toBe(0);
+    expect(countV2(store)).toBe(0);
+  });
+
+  it("insert atomicity — v2 INSERT throw INSIDE txn rolls back v1 + memories (Phase 107 invariant on insert side)", () => {
+    store = createTestStore();
+    const v1 = randomEmbedding();
+    const v2 = quantizeInt8(randomEmbedding());
+
+    // Inject a SQL function that throws when invoked. We override the
+    // existing `vec_int8` function with a no-op that throws — this is
+    // the function the insertVecV2 prepared statement calls inline.
+    // better-sqlite3's `function()` API replaces the existing function
+    // for this connection only. The throw happens INSIDE the
+    // db.transaction() block, after v1 + memories rows have already
+    // been written — better-sqlite3 must roll all three back.
+    const db = store.getDatabase();
+    db.function("vec_int8_test_failure", () => {
+      throw new Error("simulated mid-transaction v2 INSERT failure");
+    });
+    // We can't easily swap the existing `vec_int8` SQL function (it's
+    // built into sqlite-vec). But we CAN spy on the prepared statement
+    // we WRITE TO — the insertVecV2 statement is a private member of
+    // MemoryStore. The cleanest path: spy on the underlying db object's
+    // exec / prepare and detect the v2 INSERT path.
+    //
+    // Observable approach: monkey-patch the v2 column. We DROP the v2
+    // virtual table immediately before the dual-write call so the v2
+    // INSERT INSIDE the transaction throws "no such table". Better-
+    // sqlite3 rolls back the v1 + memories writes on the thrown error.
+    db.exec("DROP TABLE vec_memories_v2");
+
+    expect(() =>
+      store.insert(
+        { content: "alpha", source: "manual", skipDedup: true },
+        v1,
+        { embeddingV2: v2 },
+      ),
+    ).toThrow();
+
+    // Atomicity: NONE of the three rows persisted. The v1 + memories
+    // INSERT (which would have succeeded on its own) was rolled back
+    // by the same db.transaction() that wraps the v2 write.
+    expect(countMemories(store)).toBe(0);
+    expect(countV1(store)).toBe(0);
+    // vec_memories_v2 table is dropped, so we don't count it. The
+    // important assertion is that memories + vec_memories rolled back.
+
+    // Recreate the table so the rest of the suite (including afterEach
+    // close) doesn't trip.
+    db.exec(
+      "CREATE VIRTUAL TABLE vec_memories_v2 USING vec0(memory_id TEXT PRIMARY KEY, embedding int8[384] distance_metric=cosine)",
+    );
+  });
+
+  it("insert(input, embedding, {embeddingV2}) writes all three rows atomically — happy path", () => {
+    store = createTestStore();
+    const v1 = randomEmbedding();
+    const v2 = quantizeInt8(randomEmbedding());
+
+    const entry = store.insert(
+      { content: "alpha", source: "manual", skipDedup: true },
+      v1,
+      { embeddingV2: v2 },
+    );
+
+    expect(entry.id).toBeDefined();
+    expect(countMemories(store)).toBe(1);
+    expect(countV1(store)).toBe(1);
+    expect(countV2(store)).toBe(1);
+  });
+
+  it("insert without {embeddingV2} option — Phase 1-114 contract preserved (only memories + vec_memories rows)", () => {
+    store = createTestStore();
+    const entry = store.insert(
+      { content: "legacy", source: "manual", skipDedup: true },
+      randomEmbedding(),
+    );
+
+    expect(entry.id).toBeDefined();
+    expect(countMemories(store)).toBe(1);
+    expect(countV1(store)).toBe(1);
+    // No v2 row written — pre-115 callers see no behavior change.
+    expect(countV2(store)).toBe(0);
+  });
+
   it("insertWithDualWrite writes all three rows; v2 KNN returns the inserted id", () => {
     store = createTestStore();
     const v1 = randomEmbedding();
