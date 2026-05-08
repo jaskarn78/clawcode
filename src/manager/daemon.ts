@@ -5151,6 +5151,15 @@ export async function startDaemon(
           subagentCompletion?: { enabled?: boolean };
         }).subagentCompletion;
         const enabled = sc?.enabled !== false;
+        // Phase 999.36 sub-bug D diag (D-12) — source-tagged completion-fired
+        // log so one observation cycle on prod identifies which firing path
+        // produces the premature autoRelay/autoArchive race. Plan 02 will
+        // use these tags to gate completion on streamFullyDrained &&
+        // deliveryConfirmed (D-13) without changing behavior here.
+        log.info(
+          { source: "explicit-tool", agent: agentName },
+          "[diag] subagent-complete-fired",
+        );
         return relayAndMarkCompletedByAgentName(
           {
             readThreadRegistry: () =>
@@ -5747,6 +5756,20 @@ export async function startDaemon(
           enabled: completionEnabled,
           log: mcpLog.child({ subsystem: "subagent-completion-sweep" }),
           relayAndMarkCompleted: async (threadId: string) => {
+            // Phase 999.36 sub-bug D diag (D-12) — quiescence-sweep
+            // firing log. quiescenceMinutes is the live-config snapshot
+            // captured above so the value matches what the sweep just
+            // tested against. idleSeconds is left out here (binding lives
+            // inside the sweep tick, not in this closure) — Plan 02 will
+            // pull it from the binding shape if needed.
+            mcpLog.info(
+              {
+                threadId,
+                source: "quiescence-sweep",
+                quiescenceMinutes,
+              },
+              "[diag] subagent-complete-fired",
+            );
             return relayAndMarkCompletedByThreadId(
               {
                 readThreadRegistry: () =>
@@ -7347,6 +7370,19 @@ async function routeMethod(
               "session-end relay skipped — completion already relayed",
             );
           } else {
+            // Phase 999.36 sub-bug D diag (D-12) — session-end firing log.
+            // This path fires when the subagent's claude session naturally
+            // ends and neither the explicit-tool nor quiescence-sweep
+            // beat it to the relay. Plan 02 will use this tag to confirm
+            // session-end is the intended terminal path (not premature).
+            logger.info(
+              {
+                source: "session-end",
+                threadId: result.threadId,
+                sessionName: result.sessionName,
+              },
+              "[diag] subagent-complete-fired",
+            );
             await subagentThreadSpawner.relayCompletionToParent(result.threadId);
           }
         } catch (err) {
