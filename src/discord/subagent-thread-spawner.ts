@@ -413,14 +413,26 @@ export class SubagentThreadSpawner {
           }
           cursor += 2000;
         }
+        // Phase 999.36 sub-bug B diag (D-08) — chunk-boundary state for the
+        // pipeline-side truncation hypothesis (D-06). Plan 03 will use these
+        // fields to confirm the off-by-3 seam between editor's 1997-char
+        // truncate (line ~346: slice(0, 1997) + "...") and overflow loop's
+        // cursor=2000 starting point (line ~388). The same diag scheme is
+        // applied to the postInitialMessage overflow loop below for
+        // cross-validation across both relay + initial-post paths.
         this.log.info(
           {
             threadId,
             parentAgent: binding.agentName,
+            relayLen: trimmed.length, // operator's prompt size into parent
             totalLength: finalWrapped.length,
+            editorCutoffIndex: 1997, // editor's slice(0, 1997) + "..."
+            overflowStartCursor: 2000, // overflow loop's cursor = 2000
+            seamGapBytes: 2000 - 1997, // bytes 1997-1999 silently dropped
             chunksSent,
             lastError,
             fullySent: cursor >= finalWrapped.length,
+            endReason: lastError ? "send-failed" : "drained",
           },
           "subagent relay overflow chunks summary",
         );
@@ -799,9 +811,17 @@ export class SubagentThreadSpawner {
             sessionName,
             threadId: thread.id,
             totalLength: text.length,
+            // Same chunk-boundary diag scheme as relayCompletionToParent
+            // above (see Plan 999.36-00 D-08 comment block there). Pinned
+            // here too so a single grep on the field name finds both call
+            // sites in one query.
+            editorCutoffIndex: 1997,
+            overflowStartCursor: 2000,
+            seamGapBytes: 2000 - 1997,
             chunksSent,
             lastError,
             fullySent: cursor >= text.length,
+            endReason: lastError ? "send-failed" : "drained",
           },
           "subagent overflow chunks summary",
         );
