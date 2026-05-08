@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 115-05-PLAN.md
-last_updated: "2026-05-08T06:03:06.595Z"
+stopped_at: Completed 115-07-PLAN.md
+last_updated: "2026-05-08T06:44:20.656Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 60
   completed_phases: 15
   total_plans: 97
-  completed_plans: 89
-  percent: 92
+  completed_plans: 90
+  percent: 93
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
-Plan: 7 of 10
+Plan: 8 of 10
 Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -459,6 +459,9 @@ Recent decisions affecting current work:
 - [Phase 115]: Plan 115-05: dream-veto-pending JSONL persistence at ~/.clawcode/manager/dream-veto-pending.jsonl (mirrors consolidation-run-log.ts) instead of per-agent SQLite — fleet-wide cron sweep simpler to operate
 - [Phase 115]: Plan 115-05: dreamResultSchema gained optional action + targetMode (additive-optional pattern) for Row-3 mutating-detection — legacy LLM responses without these fields treated as additive (Row 2 default)
 - [Phase 115]: Plan 115-05: D-05 priority pass shortens isAgentIdle threshold from configured idleMinutes to PRIORITY_IDLE_MINUTES (5) at tick time — does NOT change cron firing cadence (kept change surface narrow)
+- [Phase 115]: Plan 115-07: per-agent isolation locked at policy layer + verified at runtime via SQL assertions over agent_or_null column (search_documents per-agent, web_search/brave_search/exa_search cross-agent)
+- [Phase 115]: Plan 115-07: live coverage scope is narrower than policy table — search_documents + web_search/_fetch_url + image_generate wired today; mysql_query / brave_search / exa_search / google_workspace_* are policy-only pending broker integration
+- [Phase 115]: Plan 115-07: tool_cache_size_mb deviation — fleet-wide signal goes through closure intercept of case cache IPC, not per-Turn rollups (would have misled per-agent percentile reads)
 
 ### v2.1 closing decisions (for reference)
 
@@ -649,11 +652,12 @@ Recent decisions affecting current work:
 | Phase 115 P04 | 70min | 3 tasks | 11 files |
 | Phase 115 P06 | 18min | 5 tasks | 15 files |
 | Phase 115 P05 | 40min | 4 tasks | 16 files |
+| Phase 115 P07 | 28 | 4 tasks | 15 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-08
-Stopped at: Completed 115-05-PLAN.md
+Stopped at: Completed 115-07-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)

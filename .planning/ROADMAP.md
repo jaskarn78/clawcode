@@ -906,7 +906,7 @@ Plans:
 - The diagnostic dump file path is operator-readable on demand without redeploy
 - Anthropic 400 `invalid_request_error` with usage-cap text returns a `[diag] likely-prompt-bloat` log line within the same turn
 
-**Plans:** 7/10 plans executed
+**Plans:** 8/10 plans executed
 
 Plans:
 - [x] 115-00-PLAN.md — Wave 0: baseline benchmark suite + pre-115 broken numbers lock
@@ -916,7 +916,7 @@ Plans:
 - [x] 115-04-PLAN.md — Wave 2: cache-breakpoint placement reorder (static-then-dynamic stable-prefix)
 - [x] 115-05-PLAN.md — Wave 2: lazy-load memory tools (4 new MCP tools) + Phase 95 dreaming as Tier 1 consolidation engine (D-10 hybrid policy)
 - [x] 115-06-PLAN.md — Wave 2: embedding upgrade (bge-small-en-v1.5 + int8) + dual-write migration machinery
-- [ ] 115-07-PLAN.md — Wave 3: MCP tool-response cache (folds Phase 999.40)
+- [x] 115-07-PLAN.md — Wave 3: MCP tool-response cache (folds Phase 999.40)
 - [ ] 115-08-PLAN.md — Wave 3: tool-latency methodology audit + parallel-tool-call instrumentation + tool_use_rate measurement (sub-scope 6-A gate)
 - [ ] 115-09-PLAN.md — Wave 4: closeout (cross-agent consolidation transactionality + dashboard surface + gated direct-SDK fast-path + post-115 benchmark + perf comparison report)
 
