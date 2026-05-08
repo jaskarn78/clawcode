@@ -1792,6 +1792,46 @@ export const defaultsSchema = z.object({
       browser: z.enum(["node", "static", "python"]).default("node"),
     })
     .optional(),
+  // Phase 115 D-08 + D-09 — embedding-v2 migration knobs. Default values
+  // match the Phase 115 D-09 cost discipline: 5% CPU budget, 50-row
+  // batch. These are knobs not constants; operator can dial both via
+  // hot-reload on a per-fleet basis. The pausedAgents array lets the
+  // operator pause migration for one or more agents (independent of the
+  // per-agent state machine — agent stays in dual-write/re-embedding,
+  // but the heartbeat-driven runner skips it). Schema-only this plan;
+  // wave 4's migration kickoff actually wires the runner reads.
+  embeddingMigration: z
+    .object({
+      cpuBudgetPct: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .default(5)
+        .describe(
+          "Phase 115 D-09 — CPU budget for the v2 re-embed batch worker. Default 5%.",
+        ),
+      batchSize: z
+        .number()
+        .int()
+        .min(10)
+        .max(500)
+        .default(50)
+        .describe(
+          "Phase 115 D-08 — re-embed batch size. Default 50 entries per batch.",
+        ),
+      pausedAgents: z
+        .array(z.string())
+        .default(() => [])
+        .describe(
+          "List of agents whose v2 re-embed batch is paused (operator-controlled).",
+        ),
+    })
+    // Optional (mirrors shimRuntime / brokers schema-only-default pattern)
+    // — schema ships in this plan, runtime wiring lands in wave 4. Operators
+    // who don't override see undefined; the runner fills in the cpuBudgetPct
+    // / batchSize / pausedAgents defaults at consumption time.
+    .optional(),
   // Phase 110 Stage 0a — broker dispatch table. Server-id keyed map for
   // generalizing Phase 108's OnePasswordMcpBroker to typed multi-server
   // pools (one broker proc per server-id, N agents → 1 child). Schema

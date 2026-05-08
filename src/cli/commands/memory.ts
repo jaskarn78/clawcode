@@ -4,6 +4,7 @@ import { SOCKET_PATH } from "../../manager/daemon.js";
 import { ManagerNotRunningError } from "../../shared/errors.js";
 import { cliLog, cliError } from "../output.js";
 import { registerMemoryBackfillCommand } from "./memory-backfill.js";
+import { registerMigrateEmbeddingsCommand } from "./memory-migrate-embeddings.js";
 
 /**
  * A single memory search result from the IPC response.
@@ -298,6 +299,13 @@ export function registerMemoryCommand(program: Command): void {
 
   // Phase 90 Plan 07 WIRE-06 — `clawcode memory backfill <agent>` subcommand.
   registerMemoryBackfillCommand(memoryCmd);
+
+  // Phase 115 D-08 — `clawcode memory migrate-embeddings <subcommand>`
+  // operator surface for the embedding-v2 (bge-small + int8) migration.
+  // Subcommands: status / start / re-embed / pause / resume / force-cutover
+  // / rollback / v1-dropped. Backed by IPC methods registered in
+  // src/ipc/protocol.ts.
+  registerMigrateEmbeddingsCommand(memoryCmd);
 
   // Phase 107 VEC-CLEAN-03 — `clawcode memory cleanup-orphans [-a <agent>]`
   // operator subcommand. Removes vec_memories rows whose memory_id no

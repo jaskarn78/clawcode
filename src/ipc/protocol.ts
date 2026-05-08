@@ -87,6 +87,16 @@ export const IPC_METHODS = [
   // MemoryStore via manager.getMemoryStore(agent) and calls
   // store.cleanupOrphans() per agent. Returns { results: [...] }.
   "memory-cleanup-orphans",
+  // Phase 115 D-08 — embedding-v2 migration IPC surface. Operator-driven
+  // via `clawcode memory migrate-embeddings <subcommand>` CLI. Each one
+  // takes `agent` (single agent) or omits it (all agents). State machine
+  // lives in src/memory/migrations/embedding-v2.ts; daemon-side handlers
+  // construct EmbeddingV2Migrator per-agent on each call (no shared
+  // singleton — Phase 90 per-agent isolation lock).
+  "embedding-migration-status",
+  "embedding-migration-transition",
+  "embedding-migration-pause",
+  "embedding-migration-resume",
   // Phase 999.8 follow-up — operator-triggered tier-maintenance backfill.
   // Runs the same `TierManager.runMaintenance()` the heartbeat runs every
   // 6h, but on-demand for one agent or all agents at once. Used to seed

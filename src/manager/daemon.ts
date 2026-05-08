@@ -4500,6 +4500,194 @@ export async function startDaemon(
         }
         return { results };
       }
+      // Phase 115 D-08 — embedding-v2 migration IPC handlers. Closure-
+      // intercept pattern (mirrors memory-cleanup-orphans above). Per-
+      // agent migrator constructed on each call; no shared singleton.
+      // Phase 90 per-agent isolation preserved.
+      case "embedding-migration-status": {
+        const { EmbeddingV2Migrator } = await import(
+          "../memory/migrations/embedding-v2.js"
+        );
+        const agentParam =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? (params as { agent: string }).agent
+            : null;
+        const targets = agentParam
+          ? [agentParam]
+          : resolvedAgents.map((a) => a.name);
+        const results: Array<{
+          agent: string;
+          phase: string;
+          progressProcessed: number;
+          progressTotal: number;
+          lastCursor: string | null;
+          startedAt: string | null;
+          completedAt: string | null;
+          paused: boolean;
+          error?: string;
+        }> = [];
+        const pausedSet = new Set(
+          (config.defaults as { embeddingMigration?: { pausedAgents?: readonly string[] } })
+            .embeddingMigration?.pausedAgents ?? [],
+        );
+        for (const agent of targets) {
+          const store = manager.getMemoryStore(agent);
+          if (!store) {
+            results.push({
+              agent,
+              phase: "no-store",
+              progressProcessed: 0,
+              progressTotal: 0,
+              lastCursor: null,
+              startedAt: null,
+              completedAt: null,
+              paused: pausedSet.has(agent),
+              error: "memory store not available",
+            });
+            continue;
+          }
+          try {
+            const m = new EmbeddingV2Migrator(store.getDatabase(), agent);
+            const s = m.getState();
+            results.push({
+              agent,
+              phase: s.phase,
+              progressProcessed: s.progressProcessed,
+              progressTotal: s.progressTotal,
+              lastCursor: s.lastCursor,
+              startedAt: s.startedAt,
+              completedAt: s.completedAt,
+              paused: pausedSet.has(agent),
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`[embedding-migration-status] ${agent} failed: ${msg}`);
+            results.push({
+              agent,
+              phase: "error",
+              progressProcessed: 0,
+              progressTotal: 0,
+              lastCursor: null,
+              startedAt: null,
+              completedAt: null,
+              paused: pausedSet.has(agent),
+              error: msg,
+            });
+          }
+        }
+        return { results };
+      }
+      case "embedding-migration-transition": {
+        const { EmbeddingV2Migrator } = await import(
+          "../memory/migrations/embedding-v2.js"
+        );
+        const p = params as { agent?: string; toPhase?: string } | undefined;
+        const agent = p?.agent;
+        const toPhase = p?.toPhase;
+        if (!agent || typeof agent !== "string") {
+          return { ok: false, error: "agent param required" };
+        }
+        if (!toPhase || typeof toPhase !== "string") {
+          return { ok: false, error: "toPhase param required" };
+        }
+        const store = manager.getMemoryStore(agent);
+        if (!store) {
+          return { ok: false, error: "memory store not available" };
+        }
+        try {
+          const m = new EmbeddingV2Migrator(store.getDatabase(), agent);
+          // For re-embedding entry, seed progress_total with the
+          // current count of memories missing v2 vectors.
+          if (toPhase === "re-embedding") {
+            const total = store.countMemoriesMissingV2Embedding();
+            m.transition(
+              "re-embedding",
+              total + m.getState().progressProcessed,
+            );
+          } else {
+            m.transition(
+              toPhase as Parameters<typeof m.transition>[0],
+            );
+          }
+          const s = m.getState();
+          log.info(
+            {
+              agent,
+              action: "embedding-migration-transition",
+              fromPhase: "(see new state)",
+              toPhase: s.phase,
+            },
+            "[diag] embedding-v2 migration transitioned",
+          );
+          return { ok: true, phase: s.phase };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: msg };
+        }
+      }
+      case "embedding-migration-pause": {
+        // Pause = add to defaults.embeddingMigration.pausedAgents.
+        // Persisted state lives in the runtime config; the heartbeat
+        // runner consults this list before processing. NOTE: this plan
+        // ships the IPC + state-machine machinery; the heartbeat runner
+        // wiring (which actually skips paused agents) lands in wave 4.
+        const p = params as { agent?: string } | undefined;
+        const agent = p?.agent;
+        if (!agent || typeof agent !== "string") {
+          return { ok: false, error: "agent param required" };
+        }
+        const cfgEm = (config.defaults as {
+          embeddingMigration?: {
+            cpuBudgetPct?: number;
+            batchSize?: number;
+            pausedAgents?: string[];
+          };
+        }).embeddingMigration;
+        const paused = new Set<string>(cfgEm?.pausedAgents ?? []);
+        paused.add(agent);
+        if (!cfgEm) {
+          (config.defaults as {
+            embeddingMigration?: {
+              cpuBudgetPct?: number;
+              batchSize?: number;
+              pausedAgents?: string[];
+            };
+          }).embeddingMigration = {
+            cpuBudgetPct: 5,
+            batchSize: 50,
+            pausedAgents: [...paused],
+          };
+        } else {
+          cfgEm.pausedAgents = [...paused];
+        }
+        log.info(
+          { agent, action: "embedding-migration-pause" },
+          "[diag] embedding-v2 migration paused for agent",
+        );
+        return { ok: true, paused: [...paused] };
+      }
+      case "embedding-migration-resume": {
+        const p = params as { agent?: string } | undefined;
+        const agent = p?.agent;
+        if (!agent || typeof agent !== "string") {
+          return { ok: false, error: "agent param required" };
+        }
+        const cfgEm = (config.defaults as {
+          embeddingMigration?: {
+            cpuBudgetPct?: number;
+            batchSize?: number;
+            pausedAgents?: string[];
+          };
+        }).embeddingMigration;
+        const paused = new Set<string>(cfgEm?.pausedAgents ?? []);
+        paused.delete(agent);
+        if (cfgEm) cfgEm.pausedAgents = [...paused];
+        log.info(
+          { agent, action: "embedding-migration-resume" },
+          "[diag] embedding-v2 migration resumed for agent",
+        );
+        return { ok: true, paused: [...paused] };
+      }
       // Phase 999.25 — subagent-complete intercept BEFORE routeMethod
       // (closure-intercept pattern, mirrors secrets-status +
       // mcp-tracker-snapshot above). The handler closes over `config`
