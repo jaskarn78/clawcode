@@ -543,7 +543,13 @@ export class SubagentThreadSpawner {
       `Thread: "${config.threadName}" (ID: ${thread.id})`,
       `Parent channel: ${channelId}`,
       `Parent agent: ${config.parentAgentName}`,
+      `Your session name: ${sessionName}`,
       "Respond to messages in this thread only.",
+      // Phase 999.36 sub-bug C (D-09) — explicit instruction so file
+      // uploads route to THIS thread, not to a sibling agent's channel
+      // via shared-workspace identity drift. Pair with daemon-side
+      // resolveShareFileChannel fix at daemon.ts case "share-file".
+      `When calling clawcode_share_file, pass agent="${sessionName}" (your session name above) — NOT "${config.parentAgentName}". This routes the upload to THIS thread.`,
     ];
     const delegationContext = normalizedDelegateTo
       ? [
