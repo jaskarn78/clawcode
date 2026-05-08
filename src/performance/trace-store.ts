@@ -52,6 +52,9 @@ type PreparedStatements = {
   readonly cacheTelemetryAggregates: Statement;
   readonly cacheTelemetryTrend: Statement;
   readonly cacheEffectStats: Statement;
+  // Phase 115 Plan 05 T03 — D-05 priority dream-pass trigger.
+  readonly insertTier1TruncationEvent: Statement;
+  readonly countTier1TruncationEventsSince: Statement;
 };
 
 /**
@@ -618,6 +621,19 @@ export class TraceStore {
         FOREIGN KEY(turn_id) REFERENCES traces(id) ON DELETE CASCADE
       );
 
+      -- Phase 115 Plan 05 T03 — D-05 priority dream-pass trigger.
+      -- Records each tier-1 truncation event (when MEMORY.md exceeded
+      -- INJECTED_MEMORY_MAX_CHARS at session-config.ts assembly time and
+      -- the 70/20 head-tail truncation fired). Indexed by (agent, event_at)
+      -- so dream-cron can query the 24h count in O(log n).
+      CREATE TABLE IF NOT EXISTS tier1_truncation_events (
+        agent TEXT NOT NULL,
+        event_at INTEGER NOT NULL,
+        dropped_chars INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_tier1_truncation_events_agent_time
+        ON tier1_truncation_events(agent, event_at);
+
       CREATE INDEX IF NOT EXISTS idx_traces_agent_started ON traces(agent, started_at);
       CREATE INDEX IF NOT EXISTS idx_spans_turn_name ON trace_spans(turn_id, name);
     `);
@@ -742,7 +758,71 @@ export class TraceStore {
           AND t.started_at >= @since
           AND t.cache_read_input_tokens IS NOT NULL
       `),
+      // Phase 115 Plan 05 T03 — D-05 priority dream-pass trigger.
+      // Per-event row insert for tier-1 truncation count tracking.
+      insertTier1TruncationEvent: this.db.prepare(`
+        INSERT INTO tier1_truncation_events (agent, event_at, dropped_chars)
+        VALUES (?, ?, ?)
+      `),
+      // Phase 115 Plan 05 T03 — counts events for one agent in a [since, now]
+      // window. dream-cron consumes this to decide priority-pass scheduling.
+      countTier1TruncationEventsSince: this.db.prepare(`
+        SELECT COUNT(*) AS n
+        FROM tier1_truncation_events
+        WHERE agent = @agent
+          AND event_at >= @since
+      `),
     };
+  }
+
+  /**
+   * Phase 115 Plan 05 T03 — record a tier-1 truncation event (D-05 trigger
+   * counter). Called from session-config.ts when MEMORY.md exceeded
+   * INJECTED_MEMORY_MAX_CHARS at assembly time. The dream-cron tick
+   * queries `countTier1TruncationEventsSince` and fires a priority pass
+   * when 2+ events fired in 24h for the same agent.
+   *
+   * Per-agent isolation: agent is treated as opaque — the per-agent
+   * traces.db invariant (Phase 90) ensures cross-agent collision is
+   * impossible. The column is indexed so 24h count queries are O(log n).
+   */
+  recordTier1TruncationEvent(agent: string, droppedChars = 0): void {
+    try {
+      this.stmts.insertTier1TruncationEvent.run(
+        agent,
+        Date.now(),
+        droppedChars,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `recordTier1TruncationEvent failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 05 T03 — count tier-1 truncation events for an agent
+   * since `sinceMs` (epoch ms). Used by dream-cron's
+   * `shouldFirePriorityPass` to compute the 2-in-24h trigger.
+   *
+   * Returns 0 when no events recorded — never throws on missing rows.
+   */
+  countTier1TruncationEventsSince(agent: string, sinceMs: number): number {
+    try {
+      const row = this.stmts.countTier1TruncationEventsSince.get({
+        agent,
+        since: sinceMs,
+      }) as { readonly n: number } | undefined;
+      return row?.n ?? 0;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `countTier1TruncationEventsSince failed: ${msg}`,
+        this.dbPath,
+      );
+    }
   }
 }
 

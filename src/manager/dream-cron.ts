@@ -30,6 +30,65 @@ import type {
 } from "./idle-window-detector.js";
 
 /**
+ * Phase 115 Plan 05 T03 — D-05 priority dream-pass trigger constants.
+ *
+ * When tier-1 truncation fires `PRIORITY_THRESHOLD` times within
+ * `PRIORITY_WINDOW_MS` for the same agent, the cron tick switches the
+ * idle-window threshold from the agent's normal `dream.idleMinutes` to
+ * `PRIORITY_IDLE_MINUTES` (5 minutes per CONTEXT.md D-05).
+ */
+export const PRIORITY_THRESHOLD = 2;
+export const PRIORITY_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const PRIORITY_IDLE_MINUTES = 5;
+
+/**
+ * Phase 115 Plan 05 T03 — interface for the truncation-event consumer.
+ *
+ * Production wiring (daemon edge) passes a thin wrapper over the agent's
+ * TraceCollector.countTruncationEventsSince. Tests inject a stub. The
+ * shape is narrow on purpose so the cron module doesn't pull TraceCollector
+ * into its dependency graph (preserves the pure-DI invariant).
+ */
+export interface TruncationEventCounter {
+  countTruncationEventsSince(agent: string, sinceMs: number): number;
+}
+
+/**
+ * Phase 115 Plan 05 T03 — D-05 priority trigger gate.
+ *
+ * Returns true when `PRIORITY_THRESHOLD` or more tier-1 truncation events
+ * fired for this agent in the last `PRIORITY_WINDOW_MS`. Logs a single
+ * warn line per priority firing for operator visibility.
+ *
+ * Pure function — no side effects beyond logging. Caller is responsible
+ * for shortening the idle-minutes threshold accordingly.
+ */
+export function shouldFirePriorityPass(
+  agent: string,
+  counter: TruncationEventCounter,
+  log: { readonly warn: (msg: string) => void },
+  now: () => Date,
+): boolean {
+  const sinceMs = now().getTime() - PRIORITY_WINDOW_MS;
+  let events = 0;
+  try {
+    events = counter.countTruncationEventsSince(agent, sinceMs);
+  } catch {
+    // Counter failure is non-fatal — treat as "no priority" so cron keeps
+    // firing on the normal cadence. The TraceCollector wrapper already
+    // logs its own warn on failure.
+    return false;
+  }
+  if (events >= PRIORITY_THRESHOLD) {
+    log.warn(
+      `[diag] priority-dream-pass-trigger agent=${agent} events=${events} threshold=${PRIORITY_THRESHOLD}`,
+    );
+    return true;
+  }
+  return false;
+}
+
+/**
  * Cron handle returned by the factory — trims the surface to just `.stop()`.
  */
 export interface DreamCronHandle {
@@ -85,6 +144,32 @@ export interface DreamCronDeps {
   };
   /** Override for tests — defaults to real croner. */
   readonly cronFactory?: DreamCronFactory;
+  /**
+   * Phase 115 Plan 05 T03 — D-05 priority dream-pass trigger.
+   *
+   * Optional truncation-event counter. When supplied, each cron tick
+   * consults `shouldFirePriorityPass`; when 2+ events fired in 24h for
+   * the agent, the idle-window threshold is shortened from the configured
+   * `dream.idleMinutes` to `PRIORITY_IDLE_MINUTES` (5 minutes), and the
+   * priority signal is propagated to applyDreamResult via D-10 Row 5.
+   *
+   * Omitting this dep keeps Phase 95 D-04 behavior verbatim — useful for
+   * legacy tests / agents that don't have a TraceCollector wired.
+   */
+  readonly truncationEventCounter?: TruncationEventCounter;
+  /**
+   * Phase 115 Plan 05 T03 — when truncationEventCounter triggers a priority
+   * pass, the registration calls applyDreamResult through this priority-
+   * aware override. Production wiring threads applyDreamResultD10 here.
+   *
+   * If absent, priority signal is logged but the legacy applyDreamResult
+   * is invoked unchanged (graceful degradation).
+   */
+  readonly applyDreamResultPriority?: (
+    agent: string,
+    outcome: DreamPassOutcome,
+    isPriorityPass: boolean,
+  ) => Promise<DreamApplyOutcome>;
 }
 
 export interface DreamCronRegistration {
@@ -116,9 +201,26 @@ export function registerDreamCron(deps: DreamCronDeps): DreamCronRegistration {
   const pattern = `*/${deps.dreamConfig.idleMinutes} * * * *`;
 
   const handle = factory(pattern, { name: "dream" }, async () => {
+    // Phase 115 Plan 05 T03 — D-05 priority dream-pass gate.
+    // Consult the truncation-event counter (if wired) to decide whether to
+    // shorten the idle threshold AND propagate the priority signal to the
+    // applier (D-10 Row 5).
+    let isPriority = false;
+    if (deps.truncationEventCounter) {
+      isPriority = shouldFirePriorityPass(
+        deps.agentName,
+        deps.truncationEventCounter,
+        deps.log,
+        deps.now,
+      );
+    }
+    const effectiveIdleMinutes = isPriority
+      ? PRIORITY_IDLE_MINUTES
+      : deps.dreamConfig.idleMinutes;
+
     const idle = deps.isAgentIdle({
       lastTurnAt: deps.getLastTurnAt(),
-      idleMinutes: deps.dreamConfig.idleMinutes,
+      idleMinutes: effectiveIdleMinutes,
       now: deps.now,
     });
     if (!idle.idle) {
@@ -129,9 +231,18 @@ export function registerDreamCron(deps: DreamCronDeps): DreamCronRegistration {
     }
     try {
       const outcome = await deps.runDreamPass(deps.agentName);
-      const applied = await deps.applyDreamResult(deps.agentName, outcome);
+      // Priority signal propagated to applier when wired; falls through
+      // to legacy single-arg applier otherwise (Phase 95 D-04 unchanged).
+      const applied = deps.applyDreamResultPriority
+        ? await deps.applyDreamResultPriority(
+            deps.agentName,
+            outcome,
+            isPriority,
+          )
+        : await deps.applyDreamResult(deps.agentName, outcome);
       deps.log.info(
-        `[dream] ${deps.agentName} ${applied.kind}: ${JSON.stringify(applied)}`,
+        `[dream] ${deps.agentName} ${applied.kind} ` +
+          `(isPriorityPass=${isPriority}): ${JSON.stringify(applied)}`,
       );
     } catch (err) {
       deps.log.error(

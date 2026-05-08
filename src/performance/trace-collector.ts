@@ -51,6 +51,49 @@ export class TraceCollector {
     const childLog = this.log.child({ agent, turnId });
     return new Turn(turnId, agent, channelId, this.store, childLog);
   }
+
+  /**
+   * Phase 115 Plan 05 T03 — record a tier-1 truncation event (D-05 trigger).
+   *
+   * Called from session-config.ts when MEMORY.md exceeds
+   * INJECTED_MEMORY_MAX_CHARS at assembly time and the head-tail
+   * truncation fires. Persists into the `tier1_truncation_events` table
+   * for the dream-cron 2-in-24h priority-pass trigger.
+   *
+   * Failure-isolated — observability never blocks the parent path.
+   * Errors are logged at warn level but never propagated.
+   */
+  recordTier1TruncationEvent(agent: string, droppedChars = 0): void {
+    try {
+      this.store.recordTier1TruncationEvent(agent, droppedChars);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, droppedChars, err: msg, action: "tier1-truncation-record-failed" },
+        "[trace] recordTier1TruncationEvent failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 05 T03 — count tier-1 truncation events in a window.
+   *
+   * Used by dream-cron's `shouldFirePriorityPass` to compute the 2-in-24h
+   * trigger condition. Returns 0 on error (fail-safe — never block dream
+   * scheduling on observability failures).
+   */
+  countTruncationEventsSince(agent: string, sinceMs: number): number {
+    try {
+      return this.store.countTier1TruncationEventsSince(agent, sinceMs);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, sinceMs, err: msg, action: "tier1-truncation-count-failed" },
+        "[trace] countTier1TruncationEventsSince failed (non-fatal); returning 0",
+      );
+      return 0;
+    }
+  }
 }
 
 /**
