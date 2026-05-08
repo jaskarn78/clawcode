@@ -574,6 +574,14 @@ export function resolveAgentConfig(
     // since topK=0 would be invalid (positive int constraint).
     memoryRetrievalTopK:
       agent.memoryRetrievalTopK ?? defaults.memoryRetrievalTopK,
+    // Phase 115 sub-scope 2 — per-agent excludeDynamicSections beats defaults.
+    // Use explicit `!== undefined` check (NOT `??`) because operator can set
+    // `agent.excludeDynamicSections: false` and that MUST beat
+    // `defaults.excludeDynamicSections: true`.
+    excludeDynamicSections:
+      agent.excludeDynamicSections !== undefined
+        ? agent.excludeDynamicSections
+        : defaults.excludeDynamicSections,
     // Phase 90 MEM-02 — scanner gate. Use explicit `!== undefined` check so
     // `memoryScannerEnabled: false` in an agent yaml wins over a true default
     // (mirrors memoryAutoLoad shape).

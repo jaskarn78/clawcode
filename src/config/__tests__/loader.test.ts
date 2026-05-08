@@ -35,6 +35,7 @@ describe("resolveAgentConfig", () => {
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
     memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
@@ -589,6 +590,7 @@ describe("resolveAgentConfig - mcpServers", () => {
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
     memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
@@ -1563,6 +1565,7 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
     memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
@@ -1970,6 +1973,7 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
       memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
@@ -2116,6 +2120,7 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
       memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
@@ -2360,6 +2365,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       greetCoolDownMs: 300_000,
       memoryAutoLoad: true,
       memoryRetrievalTokenBudget: 2000,
+      excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5,
       memoryScannerEnabled: true,
       memoryFlushIntervalMs: 900_000,

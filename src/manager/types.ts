@@ -155,6 +155,16 @@ export type AgentSessionConfig = {
   readonly debug?: {
     readonly dumpBaseOptionsOnSpawn: boolean;
   };
+  /**
+   * Phase 115 sub-scope 2 — operator-toggle for the SDK
+   * `systemPrompt.excludeDynamicSections` flag. UNDEFINED for legacy call
+   * sites; when set, session-adapter passes it through verbatim to the SDK.
+   * Down-stream of buildSessionConfig which resolves it from
+   * ResolvedAgentConfig (always populated, default true). Stays optional
+   * here for back-compat with existing AgentSessionConfig builders (e.g. the
+   * bootstrap path in session-config.ts which has a different return shape).
+   */
+  readonly excludeDynamicSections?: boolean;
 };
 
 /**

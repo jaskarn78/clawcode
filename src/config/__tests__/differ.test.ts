@@ -21,6 +21,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       // Phase 90 MEM-01 — defaults carry the zod-populated value.
       memoryAutoLoad: true,
       memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04

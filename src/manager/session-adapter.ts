@@ -823,16 +823,51 @@ export function buildCleanEnv(): Record<string, string | undefined> {
  * Exported for tests + external callers; internal callers (createSession /
  * resumeSession) use it below. NEVER replace with a raw `string` systemPrompt —
  * that loses the preset's cache scaffolding (CONTEXT D-01 LOCKED).
+ *
+ * Phase 115 sub-scope 2 — `excludeDynamicSections` parameter forwards to the
+ * SDK. When true (default, per loader.ts → ResolvedAgentConfig.
+ * excludeDynamicSections), the SDK strips per-machine dynamic sections
+ * (cwd, auto-memory paths, git status) from the cached system prompt and
+ * re-injects them as the first user message — improves cross-agent
+ * prompt-cache reuse. Has no effect when systemPrompt is a string (custom
+ * prompt), but our preset shape honors it. Per Phase 115 D-02 the flag is
+ * default-on with explicit revert path via per-agent / defaults config.
  */
 export function buildSystemPromptOption(
   stablePrefix: string,
+  excludeDynamicSections?: boolean,
 ):
-  | { readonly type: "preset"; readonly preset: "claude_code"; readonly append: string }
-  | { readonly type: "preset"; readonly preset: "claude_code" } {
+  | {
+      readonly type: "preset";
+      readonly preset: "claude_code";
+      readonly append: string;
+      readonly excludeDynamicSections?: boolean;
+    }
+  | {
+      readonly type: "preset";
+      readonly preset: "claude_code";
+      readonly excludeDynamicSections?: boolean;
+    } {
+  // Spread-conditional: omit excludeDynamicSections when the caller did
+  // not pass a value (legacy callers / tests stay byte-identical to the
+  // pre-115 shape). When passed, forward verbatim — SDK accepts true|false.
+  const dyn =
+    excludeDynamicSections !== undefined
+      ? { excludeDynamicSections }
+      : ({} as Record<string, never>);
   if (stablePrefix.length > 0) {
-    return { type: "preset" as const, preset: "claude_code" as const, append: stablePrefix };
+    return {
+      type: "preset" as const,
+      preset: "claude_code" as const,
+      append: stablePrefix,
+      ...dyn,
+    };
   }
-  return { type: "preset" as const, preset: "claude_code" as const };
+  return {
+    type: "preset" as const,
+    preset: "claude_code" as const,
+    ...dyn,
+  };
 }
 
 /**
@@ -874,7 +909,14 @@ export class SdkSessionAdapter implements SessionAdapter {
       effort: narrowEffortForSdkOption(config.effort),
       cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
-      systemPrompt: buildSystemPromptOption(config.systemPrompt),
+      // Phase 115 sub-scope 2 — `excludeDynamicSections` forwarded so the SDK
+      // strips per-machine dynamic sections (cwd, auto-memory, git status) out
+      // of the cached system prompt and re-injects them as the first user
+      // message; resumeSession (below) MUST mirror this — Rule 3 symmetric edit.
+      systemPrompt: buildSystemPromptOption(
+        config.systemPrompt,
+        config.excludeDynamicSections,
+      ),
       permissionMode: "bypassPermissions",
       settingSources: config.settingSources ?? ["project"],
       env: buildCleanEnv(),
@@ -892,6 +934,22 @@ export class SdkSessionAdapter implements SessionAdapter {
         ? { disallowedTools: [...config.disallowedTools] }
         : {}),
     };
+
+    // Phase 115 sub-scope 2 (115-sub2-flag) — diagnostic trace so the first
+    // production deploy can confirm the flag is reaching the SDK. console.info
+    // chosen over pino because session-adapter intentionally has no DI'd
+    // logger (matches the existing PromptBloatLogger interface pattern at
+    // line 192 — adapter stays framework-agnostic). Daemon captures stdout
+    // into structured logs via systemd. Single-line JSON for grep + dashboard.
+    console.info(
+      "phase115-quickwin",
+      JSON.stringify({
+        agent: config.name,
+        excludeDynamicSections: config.excludeDynamicSections,
+        action: "115-sub2-flag",
+        flow: "create",
+      }),
+    );
 
     // Phase 115 sub-scope 14 — diagnostic baseopts dump (T01 transition state).
     // Both gates active: hardcoded allowlist OR per-agent flag. T03 removes the
@@ -937,7 +995,13 @@ export class SdkSessionAdapter implements SessionAdapter {
       effort: narrowEffortForSdkOption(config.effort),
       cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
-      systemPrompt: buildSystemPromptOption(config.systemPrompt),
+      // Phase 115 sub-scope 2 — symmetric mirror of createSession above
+      // (Rule 3 symmetric-edits). A resumed session MUST carry the same
+      // excludeDynamicSections setting as the original create call.
+      systemPrompt: buildSystemPromptOption(
+        config.systemPrompt,
+        config.excludeDynamicSections,
+      ),
       permissionMode: "bypassPermissions",
       settingSources: config.settingSources ?? ["project"],
       resume: sessionId,
@@ -953,6 +1017,18 @@ export class SdkSessionAdapter implements SessionAdapter {
         ? { disallowedTools: [...config.disallowedTools] }
         : {}),
     };
+
+    // Phase 115 sub-scope 2 (115-sub2-flag) — symmetric diagnostic mirror of
+    // createSession (Rule 3). flow:"resume" so operator can distinguish.
+    console.info(
+      "phase115-quickwin",
+      JSON.stringify({
+        agent: config.name,
+        excludeDynamicSections: config.excludeDynamicSections,
+        action: "115-sub2-flag",
+        flow: "resume",
+      }),
+    );
 
     // Phase 115 sub-scope 14 — diagnostic baseopts dump on resume (T01
     // transition state). Symmetric mirror of createSession above — Rule 3

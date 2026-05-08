@@ -1120,6 +1120,14 @@ export const agentSchema = z.object({
   // omitted, resolver falls back to defaults.memoryRetrievalTopK (5 per
   // D-RETRIEVAL). Reloadable (next turn picks up the new value).
   memoryRetrievalTopK: z.number().int().positive().max(50).optional(),
+  // Phase 115 sub-scope 2 — per-agent override for the SDK
+  // systemPrompt.excludeDynamicSections flag. When omitted, resolver falls
+  // back to defaults.excludeDynamicSections (default true). Set false to
+  // restore pre-115 behavior (dynamic sections like cwd/env/git remain
+  // inside the system prompt rather than re-injected as the first user
+  // message). Reload classification: NEXT-SESSION only — the systemPrompt
+  // option is captured in baseOptions at session create/resume.
+  excludeDynamicSections: z.boolean().optional(),
   // Phase 90 MEM-02 — per-agent gate for the chokidar scanner. Default true
   // (via defaults.memoryScannerEnabled). Set to false to skip scanner start
   // for an agent whose memory/ is managed externally.
@@ -1441,6 +1449,14 @@ export const defaultsSchema = z.object({
   // into the mutable suffix. 2000 tokens ≈ ~8000 chars; keeps the per-turn
   // payload well under any sane model's context ceiling.
   memoryRetrievalTokenBudget: z.number().int().positive().default(2000),
+  // Phase 115 sub-scope 2 — fleet-wide default for the SDK
+  // systemPrompt.excludeDynamicSections flag. When true, per-machine
+  // dynamic sections (cwd, auto-memory paths, git status) are stripped
+  // from the cached system prompt and re-injected as the first user
+  // message — improves cross-agent prompt-cache reuse. Default true per
+  // CONTEXT.md sub-scope 2 lock; set false to revert to pre-115 behavior.
+  // Reload classification: NEXT-SESSION only.
+  excludeDynamicSections: z.boolean().default(true),
   // Phase 90 MEM-02 — fleet-wide scanner on/off. Default true — every
   // agent starts a chokidar watcher on its {workspace}/memory/**/*.md.
   memoryScannerEnabled: z.boolean().default(true),
@@ -1901,6 +1917,8 @@ export const configSchema = z.object({
     // topK=5 + token budget 2000 per D-RETRIEVAL.
     memoryRetrievalTopK: 5,
     memoryRetrievalTokenBudget: 2000,
+    // Phase 115 sub-scope 2 — fleet-wide default mirrors defaultsSchema.
+    excludeDynamicSections: true,
     memoryScannerEnabled: true,
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,

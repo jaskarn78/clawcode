@@ -293,6 +293,11 @@ export async function buildSessionConfig(
       ...(config.disallowedTools && config.disallowedTools.length > 0
         ? { disallowedTools: config.disallowedTools }
         : {}),
+      // Phase 115 sub-scope 2 — propagate excludeDynamicSections through
+      // the bootstrap path too so the SDK strips dynamic sections even on
+      // first-spawn agents (Rule 3 symmetric edit; matches the main return
+      // below). Always populated from ResolvedAgentConfig (default true).
+      excludeDynamicSections: config.excludeDynamicSections,
     };
   }
 
@@ -925,5 +930,12 @@ export async function buildSessionConfig(
     // settingSources / gsd / disallowedTools pattern above). T03 of this plan
     // makes this the SOLE gate after removing the hardcoded allowlist.
     ...(config.debug ? { debug: config.debug } : {}),
+    // Phase 115 sub-scope 2 — propagate `excludeDynamicSections` from
+    // ResolvedAgentConfig (always populated by loader, default true) into
+    // AgentSessionConfig so session-adapter's buildSystemPromptOption can
+    // forward it to the SDK. Pass through verbatim — the SDK ignores this
+    // flag when systemPrompt is a string (custom prompt), but our preset
+    // shape ({type:"preset",preset:"claude_code",append:...}) honors it.
+    excludeDynamicSections: config.excludeDynamicSections,
   };
 }

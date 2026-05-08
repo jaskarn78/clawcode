@@ -131,6 +131,19 @@ export type ResolvedAgentConfig = {
    */
   readonly memoryRetrievalTopK: number;
   /**
+   * Phase 115 sub-scope 2 — populated by loader.ts from
+   * agent.excludeDynamicSections ?? defaults.excludeDynamicSections (zod
+   * default true). When true, the SDK strips per-machine dynamic sections
+   * (cwd, auto-memory paths, git status) from the cached system prompt and
+   * re-injects them as the first user message — improves cross-agent
+   * prompt-cache reuse. Consumed by session-config.ts's buildSessionConfig
+   * to thread into AgentSessionConfig and on into the SDK options.
+   * Reload classification: NEXT-SESSION only. Optional at the type level
+   * for back-compat with ~20 existing ResolvedAgentConfig test factories;
+   * consumers default to true (matches defaults.excludeDynamicSections).
+   */
+  readonly excludeDynamicSections?: boolean;
+  /**
    * Phase 90 MEM-02 — ALWAYS populated by loader.ts from
    * agent.memoryScannerEnabled ?? defaults.memoryScannerEnabled.
    * When false, daemon.ts skips the MemoryScanner construction for
