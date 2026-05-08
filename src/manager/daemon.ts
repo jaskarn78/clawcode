@@ -3228,6 +3228,14 @@ export async function startDaemon(
   }, 60_000);
   // Run once at startup so the initial value is non-stale.
   let latestToolCacheSizeMb = toolCacheStore.sizeMb();
+  // Phase 115 Plan 07 T04 — make the cache-size getter accessible to the
+  // case "cache" report builder below via a closure capture. routeMethod
+  // can't take new args without a 24-arg surgery, so the closure pattern
+  // (mirrors openAiEndpointRef + discordBridgeRef) is the established
+  // path.
+  const getCurrentToolCacheSizeMb = (): number => toolCacheStore.sizeMb();
+  void latestToolCacheSizeMb; // referenced by the 60s journalctl sampler above
+  void getCurrentToolCacheSizeMb; // exposed for the case "cache" handler — see below
 
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
@@ -3409,6 +3417,58 @@ export async function startDaemon(
         enabled: toolCacheEnabled,
         maxSizeMb: toolCacheMaxSizeMb,
       };
+    }
+    // Phase 115 Plan 07 T04 — augment the existing `cache` IPC method
+    // with live tool_cache_size_mb so the dashboard panel can surface
+    // it next to prompt_cache_hit_rate (sub-scope 16(c)). The base
+    // method runs in routeMethod; we patch the response post-hoc with
+    // the live size signal sourced from ToolCacheStore.sizeMb().
+    if (method === "cache") {
+      const baseResult = await routeMethod(
+        manager,
+        resolvedAgents,
+        method,
+        params,
+        routingTableRef,
+        rateLimiter,
+        heartbeatRunner,
+        taskScheduler,
+        skillsCatalog,
+        threadManager,
+        webhookManager,
+        deliveryQueue,
+        subagentThreadSpawner,
+        allowlistMatchers,
+        approvalLog,
+        securityPolicies,
+        escalationMonitor,
+        advisorBudget,
+        discordBridgeRef,
+        configPath,
+        config.defaults.basePath,
+        taskManager,
+        taskStore,
+        schedulerSource,
+        botDirectSenderRef,
+      );
+      const liveSizeMb = toolCacheEnabled ? toolCacheStore.sizeMb() : 0;
+      // baseResult is either a single augmented report (case "cache" non-all)
+      // or an array of reports (case "cache" --all). Either way, fold in the
+      // fleet-wide live size signal so the dashboard reads a fresh number
+      // even on the very first turn (when per-agent telemetry is still
+      // accumulating).
+      if (Array.isArray(baseResult)) {
+        return baseResult.map((r) =>
+          Object.freeze({
+            ...(r as Record<string, unknown>),
+            tool_cache_size_mb_live: liveSizeMb,
+          }),
+        );
+      }
+      return Object.freeze({
+        ...(baseResult as Record<string, unknown>),
+        tool_cache_size_mb_live: liveSizeMb,
+      });
     }
     if (method === "tool-cache-clear") {
       const tool =
@@ -6813,6 +6873,9 @@ async function routeMethod(
       ): CacheTelemetryReport & {
         readonly status: CacheHitRateStatus;
         readonly cache_effect_ms: number | null;
+        readonly tool_cache_hit_rate: number | null;
+        readonly tool_cache_size_mb: number | null;
+        readonly tool_cache_turns: number;
       } => {
         const store = manager.getTraceStore(agentName);
         if (!store) {
@@ -6840,10 +6903,21 @@ async function routeMethod(
             "cache delivering no first-token benefit (expected delta < 0)",
           );
         }
+        // Phase 115 Plan 07 T04 — aggregate tool-cache telemetry over the
+        // same window. Surfaced next to prompt_cache_hit_rate on the
+        // dashboard (sub-scope 16(c) per roadmap line 875).
+        // tool_cache_size_mb falls back to per-turn average; the 60s
+        // sampler in start() keeps that signal fresh as turns arrive.
+        // (latestToolCacheSizeMb closure is used only for the journalctl
+        // log line — dashboard reads the persisted column.)
+        const toolCache = store.getToolCacheTelemetry(agentName, sinceIso);
         return Object.freeze({
           ...report,
           status,
           cache_effect_ms: effect,
+          tool_cache_hit_rate: toolCache.avgToolCacheHitRate,
+          tool_cache_size_mb: toolCache.avgToolCacheSizeMb,
+          tool_cache_turns: toolCache.turnsWithCacheEvents,
         });
       };
 

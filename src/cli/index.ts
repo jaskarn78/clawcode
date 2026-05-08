@@ -44,6 +44,10 @@ import { registerRunCommand } from "./commands/run.js";
 import { registerCostsCommand } from "./commands/costs.js";
 import { registerLatencyCommand } from "./commands/latency.js";
 import { registerCacheCommand } from "./commands/cache.js";
+// Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response cache CLI.
+// `clawcode tool-cache {status|clear|inspect}` operator surface.
+// Distinct from `clawcode cache` (Phase 52 prompt-cache hit-rate).
+import { registerToolCacheCommand } from "./commands/tool-cache.js";
 import { registerToolsCommand } from "./commands/tools.js";
 import { registerBenchCommand } from "./commands/bench.js";
 import { registerContextAuditCommand } from "./commands/context-audit.js";
@@ -193,6 +197,8 @@ registerRunCommand(program);
 registerCostsCommand(program);
 registerLatencyCommand(program);
 registerCacheCommand(program);
+// Phase 115 Plan 07 sub-scope 15 — registers `clawcode tool-cache`.
+registerToolCacheCommand(program);
 registerToolsCommand(program);
 registerBenchCommand(program);
 registerContextAuditCommand(program);

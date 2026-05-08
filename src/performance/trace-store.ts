@@ -487,6 +487,59 @@ export class TraceStore {
   }
 
   /**
+   * Phase 115 Plan 07 T04 — aggregate tool-cache telemetry over the
+   * agent + since window. Returns:
+   *   - avgToolCacheHitRate — average of `tool_cache_hit_rate` across turns
+   *     that wrote a non-null value (turns with cache events).
+   *   - avgToolCacheSizeMb — average of the `tool_cache_size_mb` samples.
+   *   - turnsWithCacheEvents — count of turns that had ≥1 cache event.
+   *
+   * NULL avgToolCacheHitRate bubbles up when no turns had cache events
+   * (e.g., the cache hasn't been exercised yet, or the agent's tools are
+   * all no-cache/zero-TTL types). Dashboard renders "—" in that case.
+   */
+  getToolCacheTelemetry(
+    agent: string,
+    sinceIso: string,
+  ): {
+    readonly avgToolCacheHitRate: number | null;
+    readonly avgToolCacheSizeMb: number | null;
+    readonly turnsWithCacheEvents: number;
+  } {
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT
+             AVG(tool_cache_hit_rate) AS avg_hit_rate,
+             AVG(tool_cache_size_mb)  AS avg_size_mb,
+             COUNT(tool_cache_hit_rate) AS turns_with_events
+           FROM traces
+           WHERE agent = @agent
+             AND started_at >= @since
+             AND tool_cache_hit_rate IS NOT NULL`,
+        )
+        .get({ agent, since: sinceIso }) as
+        | {
+            avg_hit_rate: number | null;
+            avg_size_mb: number | null;
+            turns_with_events: number;
+          }
+        | undefined;
+      return Object.freeze({
+        avgToolCacheHitRate: row?.avg_hit_rate ?? null,
+        avgToolCacheSizeMb: row?.avg_size_mb ?? null,
+        turnsWithCacheEvents: row?.turns_with_events ?? 0,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getToolCacheTelemetry failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
    * Phase 52 Plan 03: compute the cache-effect first-token stats for the
    * `cache_effect_ms` metric surfaced on the `clawcode cache` CLI and
    * dashboard Prompt Cache panel.

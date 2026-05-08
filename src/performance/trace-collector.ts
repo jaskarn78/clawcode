@@ -274,6 +274,7 @@ export class TraceCollector {
     return { hits, misses };
   }
 
+
   // Phase 115 Plan 07 T03 — per-agent rolling tool-cache hit / miss counters
   // for tool calls firing OUTSIDE an active Turn (heartbeat / daemon-driven
   // probes). Drained into the next Turn that ends for the agent.
@@ -537,6 +538,11 @@ export class Turn {
     const totalCacheEvents = toolCacheHits + toolCacheMisses;
     const toolCacheHitRate =
       totalCacheEvents > 0 ? toolCacheHits / totalCacheEvents : null;
+    // Note — `tool_cache_size_mb` is a fleet-wide signal sourced from
+    // ToolCacheStore.sizeMb() and surfaced via the `tool-cache-status`
+    // IPC, not a per-turn column. We leave the persisted column NULL on
+    // the per-turn write side; the dashboard reads the live size via the
+    // IPC handler when the cache panel renders.
 
     const base = {
       id: this.id,
@@ -570,7 +576,11 @@ export class Turn {
       // percentile rollups can distinguish "no cache events this turn" from
       // "0% hit rate" (which has signal — implies misses but no hits).
       ...(toolCacheHitRate !== null
-        ? { toolCacheHitRate, toolCacheHitCount: toolCacheHits, toolCacheMissCount: toolCacheMisses }
+        ? {
+            toolCacheHitRate,
+            toolCacheHitCount: toolCacheHits,
+            toolCacheMissCount: toolCacheMisses,
+          }
         : {}),
     });
     try {

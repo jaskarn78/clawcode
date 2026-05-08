@@ -566,6 +566,43 @@ function renderCachePanel(body, report) {
       ? "Cache effect: insufficient data (< 20 turns)"
       : `Cache effect: ${Math.round(report.cache_effect_ms)} ms faster first-token on hits`;
 
+  // Phase 115 Plan 07 T04 (sub-scope 16(c)) — tool cache metrics rendered
+  // alongside prompt_cache_hit_rate. Both signals live in the same panel
+  // so operators can compare LLM prompt-cache health against MCP
+  // tool-response cache health at a glance.
+  //
+  // The daemon's case "cache" augmented report includes:
+  //   tool_cache_hit_rate (number|null) — rolling avg over the window
+  //   tool_cache_size_mb  (number|null) — fleet-wide cache size sample
+  //   tool_cache_turns    (number)      — turns with ≥1 cache event
+  //
+  // Rendered as a single `tool cache` subtitle line (intentionally tucked
+  // below the prompt-cache row to keep the existing layout intact).
+  const toolCacheHitRate =
+    report && typeof report.tool_cache_hit_rate === "number"
+      ? report.tool_cache_hit_rate
+      : null;
+  const toolCacheSizeMb =
+    report && typeof report.tool_cache_size_mb === "number"
+      ? report.tool_cache_size_mb
+      : report && typeof report.tool_cache_size_mb_live === "number"
+        ? report.tool_cache_size_mb_live
+        : null;
+  const toolCacheTurns =
+    report && typeof report.tool_cache_turns === "number"
+      ? report.tool_cache_turns
+      : 0;
+  let toolCacheSubtitle;
+  if (toolCacheHitRate === null && toolCacheTurns === 0) {
+    toolCacheSubtitle = "tool cache: no events yet";
+  } else {
+    const hitRateText =
+      toolCacheHitRate === null ? "—" : formatPercent(toolCacheHitRate);
+    const sizeText =
+      toolCacheSizeMb === null ? "—" : `${toolCacheSizeMb.toFixed(1)} MB`;
+    toolCacheSubtitle = `tool cache: ${hitRateText} · ${sizeText} (${toolCacheTurns} turn${toolCacheTurns === 1 ? "" : "s"})`;
+  }
+
   body.classList.remove("panel-placeholder");
   body.innerHTML = `<table class="cache-table">
     <thead><tr><th>Hit Rate</th><th>Cache Reads</th><th>Cache Writes</th><th>Input Tokens</th><th>Turns</th></tr></thead>
@@ -579,7 +616,8 @@ function renderCachePanel(body, report) {
   </table>
   <div class="cache-subtitle">Hit rate = cache reads / (cache reads + cache writes + input tokens)</div>
   <div class="cache-subtitle">SLO: healthy &ge; 60%, breach &lt; 30% · p50 ${escapeHtml(p50Text)} · p95 ${escapeHtml(p95Text)}</div>
-  <div class="cache-subtitle">${escapeHtml(effectSubtitle)}</div>`;
+  <div class="cache-subtitle">${escapeHtml(effectSubtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(toolCacheSubtitle)}</div>`;
 }
 
 /**
