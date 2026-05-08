@@ -113,6 +113,7 @@ import {
   writeThreadRegistry,
   removeBinding,
   getBindingForThread,
+  getBindingForSession,
   getBindingsForAgent,
 } from "../discord/thread-registry.js";
 import { collectAllOpRefs } from "./secrets-collector.js";
@@ -155,6 +156,11 @@ import { ChannelType, type CategoryChannel, type GuildTextBasedChannel, type Tex
 import { provisionAgent } from "./agent-provisioner.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
+// Phase 999.36 sub-bug C (D-09, D-10) — pure resolver for share-file
+// channel routing. Consults the thread binding registry FIRST so subagent
+// invocations route to their bound thread instead of falling back to a
+// sibling agent's primary channel via shared-workspace identity drift.
+import { resolveShareFileChannel } from "./tools/share-file-channel-resolver.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
 import {
   provisionWebhooks,
@@ -6688,9 +6694,30 @@ async function routeMethod(
       const channelIdParam =
         typeof params.channel_id === "string" ? params.channel_id : undefined;
 
-      const agentConfig = configs.find((c) => c.name === agentName);
+      // Phase 999.36 sub-bug C (D-09, D-10) [Rule 3 - blocking deviation
+      // from plan's action block] — read the thread registry FIRST and
+      // resolve the subagent binding by sessionName. The agent-config
+      // lookup below uses the PARENT agent's name when `agentName` is
+      // actually a subagent sessionName (subagents are spawned dynamically
+      // and their sessionNames are NOT in the static `configs[]` list, so
+      // the pre-fix lookup threw "Agent not found" for any subagent that
+      // followed Task 4's prompt instruction to pass its own sessionName).
+      // Subagents legitimately inherit the parent's workspace, memoryPath,
+      // and fileAccess for security gating (allowedRoots) — only the
+      // channel routing differs (binding.threadId vs parent.channels[0]).
+      const threadRegistryForShare = await readThreadRegistry(
+        THREAD_REGISTRY_PATH,
+      );
+      const subagentBinding = getBindingForSession(
+        threadRegistryForShare,
+        agentName,
+      );
+      const lookupName = subagentBinding
+        ? subagentBinding.agentName
+        : agentName;
+      const agentConfig = configs.find((c) => c.name === lookupName);
       if (!agentConfig) {
-        throw new ManagerError(`Agent '${agentName}' not found in config`);
+        throw new ManagerError(`Agent '${lookupName}' not found in config`);
       }
 
       const bridge = discordBridgeRef.current;
@@ -6741,11 +6768,23 @@ async function routeMethod(
         );
       }
 
-      // Default channel: explicit param, otherwise first configured channel.
-      const channelId = channelIdParam ?? agentConfig.channels[0];
+      // Phase 999.36 sub-bug C (D-09, D-10) — route through a pure helper
+      // that consults the thread binding registry FIRST. For subagent
+      // invocations (where `agentName` is actually the sessionName like
+      // `fin-acquisition-sub-OV9rkf`), the helper resolves to the bound
+      // thread, NOT to the parent agent's primary channel. For regular
+      // agent invocations, the helper falls through to the existing
+      // `agentConfig.channels[0]` behavior — backwards compatible.
+      // (threadRegistryForShare is read above for the agentConfig lookup.)
+      const channelId = resolveShareFileChannel(
+        agentName,
+        channelIdParam,
+        threadRegistryForShare,
+        agentConfig,
+      );
       if (!channelId) {
         throw new ManagerError(
-          `Agent '${agentName}' has no Discord channels configured and no channel_id provided`,
+          `Agent '${agentName}' has no Discord channels configured, no thread binding, and no channel_id provided`,
         );
       }
 
