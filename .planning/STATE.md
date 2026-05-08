@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 115-08-PLAN.md
-last_updated: "2026-05-08T07:32:48.656Z"
+stopped_at: Completed 115-09-PLAN.md (closeout — code complete; awaiting operator deploy)
+last_updated: "2026-05-08T08:07:00.137Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 60
-  completed_phases: 15
+  completed_phases: 16
   total_plans: 97
-  completed_plans: 91
-  percent: 94
+  completed_plans: 92
+  percent: 95
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 ## Current Position
 
-Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
-Plan: 9 of 10
-Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
+Phase: 115 (Memory + context + prompt-cache redesign) — CODE COMPLETE (10 of 10 plans shipped)
+Status: awaiting operator deploy (Ramy gate + CLAUDE.md feedback_no_auto_deploy)
+Latest commit: `1148d79` — docs(115-09) T05 phase-115 closeout receipt
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 
@@ -467,6 +467,9 @@ Recent decisions affecting current work:
 - [Phase 115]: Plan 115-08: tool_use_rate persisted in separate tool_use_rate_snapshots table (not back-written to turn rows) so the metric is independent of turn cadence. PRIMARY KEY (agent, computed_at) makes same-millisecond writes idempotent. Plan 115-09 reads via getLatestToolUseRateSnapshot OR via on-the-fly compute.
 - [Phase 115]: Plan 115-08: PARALLEL-TOOL-01 directive landed in DEFAULT_SYSTEM_PROMPT_DIRECTIVES (parallel-tool-calls key, default-enabled fleet-wide). Text scoped to mutually-orthogonal lookups so dependent calls cannot regress (THREAT-3 mitigation). Operator override wins per Phase 94 D-09/D-10 pattern.
 - [Phase 115]: Plan 115-08: 30% threshold + fin-acq exclusion locked in three sites (CLI literal 0.3, IPC handler 0.30, wave-2-checkpoint.md). Each has a CONTEXT D-12 provenance comment. Future operator changing the threshold MUST touch all three.
+- [Phase 115]: Sub-scope 6-B: PENDING-OPERATOR → de-facto DEFER. Routes to Phase 116 once operator runs audit CLI post-deploy.
+- [Phase 115]: Cross-agent coordinator built as new abstraction (not retrofit). Per-agent runConsolidation preserved verbatim; coordinator wraps fleet-level orchestration.
+- [Phase 115]: Manual rollback semantics — partial-failed batches require explicit operator rollback(runId) call (CONTEXT D-10 three-tier policy).
 
 ### v2.1 closing decisions (for reference)
 
@@ -659,11 +662,12 @@ Recent decisions affecting current work:
 | Phase 115 P05 | 40min | 4 tasks | 16 files |
 | Phase 115 P07 | 28 | 4 tasks | 15 files |
 | Phase 115 P08 | 41min | 3 tasks | 17 files |
+| Phase 115 P09 | 28min | 5 tasks | 12 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-08
-Stopped at: Completed 115-08-PLAN.md
+Stopped at: Completed 115-09-PLAN.md (closeout — code complete; awaiting operator deploy)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
