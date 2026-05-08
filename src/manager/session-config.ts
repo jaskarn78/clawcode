@@ -911,6 +911,29 @@ export async function buildSessionConfig(
       bootstrapTurn = undefined; /* never let tracing block startup */
     }
   }
+  // Phase 115 Plan 03 sub-scope 1 / T02 — D-02 outer-cap fallback log sink.
+  // Adapter that forwards `error` calls to the structured pino logger.
+  // Optional — if `deps.log` lacks `error`, the cap fallback still runs but
+  // emits no log line.
+  const capFallbackLog = deps.log
+    ? {
+        error: (obj: Record<string, unknown>, msg?: string) => {
+          // SessionConfigLoggerLike narrows to {warn}; callers pass full pino
+          // loggers in production where `.error` does exist. Cast through
+          // unknown for the optional method probe.
+          const fullLog = deps.log as unknown as {
+            error?: (o: Record<string, unknown>, m?: string) => void;
+          };
+          if (typeof fullLog.error === "function") {
+            fullLog.error(obj, msg);
+          } else {
+            // Fallback: use warn at higher verbosity if error isn't available.
+            deps.log?.warn(obj, msg);
+          }
+        },
+      }
+    : undefined;
+
   let assembled;
   try {
     assembled = bootstrapTurn
@@ -921,6 +944,8 @@ export async function buildSessionConfig(
             priorHotStableToken: deps.priorHotStableToken,
             memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
             onBudgetWarning,
+            agentName: config.name,
+            log: capFallbackLog,
           },
           bootstrapTurn,
         )
@@ -928,6 +953,8 @@ export async function buildSessionConfig(
           priorHotStableToken: deps.priorHotStableToken,
           memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
           onBudgetWarning,
+          agentName: config.name,
+          log: capFallbackLog,
         });
     bootstrapTurn?.end("success");
   } catch (err) {

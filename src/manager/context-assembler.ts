@@ -347,8 +347,15 @@ export type SectionName =
 /**
  * Strategy applied to a section that exceeded its per-section budget.
  *
- *   - `warn-and-keep`          identity + soul: user persona never truncated
- *   - `drop-lowest-importance` hot_tier: drop lowest-importance rows
+ *   - `warn-and-keep`          [DEPRECATED] Phase 53 era — identity / soul never
+ *                              truncated. REPLACED by `drop-lowest-importance`
+ *                              for identity in Phase 115 Plan 03 D-03; the
+ *                              literal string is retained here only because
+ *                              external test fixtures may pin the value.
+ *   - `drop-lowest-importance` identity (Phase 115) + hot_tier: progressive
+ *                              priority-ordered drop. For identity: SOUL
+ *                              fingerprint > IDENTITY.md > capability >
+ *                              MEMORY.md (drops MEMORY.md first).
  *   - `truncate-bullets`       skills_header / fallback hot_tier: drop trailing bullets
  *   - `passthrough`            recent_history / summaries: measured, not truncated
  */
@@ -445,6 +452,21 @@ export type AssembleOptions = {
   readonly priorHotStableToken?: string;
   readonly memoryAssemblyBudgets?: MemoryAssemblyBudgets;
   readonly onBudgetWarning?: (event: BudgetWarningEvent) => void;
+  /**
+   * Phase 115 Plan 03 sub-scope 1 / T02 — agent name for the
+   * stable-prefix-cap-fallback emergency log. Optional; the cap fallback
+   * still fires without it (the log just omits the agent attribution).
+   */
+  readonly agentName?: string;
+  /**
+   * Phase 115 Plan 03 sub-scope 1 / T02 — minimal logger sink for the
+   * D-02 outer-cap fallback. Only `error` is required. When omitted, the
+   * cap fallback still truncates but emits no log line. Production callers
+   * (session-config.ts) pass `deps.log` here.
+   */
+  readonly log?: {
+    readonly error?: (obj: Record<string, unknown>, msg?: string) => void;
+  };
 };
 
 /**
@@ -603,28 +625,217 @@ function mergeBudgets(
 }
 
 /**
- * D-03: identity / soul NEVER truncate. Emit warn event and return input
- * unchanged. Empty string short-circuits (no warn fires).
+ * Phase 115 Plan 03 sub-scope 1 / D-04 — Hermes 70/20 head-tail truncation.
+ *
+ * Drops the middle 10% with a marker:
+ *   `[TRUNCATED — N chars dropped]`
+ *
+ * Used by `enforceDropLowestImportance` (identity sub-sources) and by
+ * `enforceTotalStablePrefixBudget` (outer-cap fallback). Returns input
+ * unchanged when already under `targetChars`. Marker text is intentionally
+ * generic; the upstream MEMORY.md auto-load site (session-config.ts) uses
+ * a richer marker `[TRUNCATED — N chars dropped, dream-pass priority requested]`
+ * so its truncation is agent-actionable.
  */
-function enforceWarnAndKeep(
-  text: string,
-  section: SectionName,
-  budget: number,
+function headTailTruncate(text: string, targetChars: number): string {
+  if (text.length <= targetChars) return text;
+  const headLen = Math.floor(targetChars * 0.7);
+  const tailLen = Math.floor(targetChars * 0.2);
+  const dropped = text.length - headLen - tailLen;
+  const head = text.slice(0, headLen);
+  const tail = text.slice(-tailLen);
+  return `${head}\n\n[TRUNCATED — ${dropped} chars dropped]\n\n${tail}`;
+}
+
+/**
+ * Phase 115 Plan 03 sub-scope 1 / T02 — drop-lowest-importance for the
+ * compound identity aggregate.
+ *
+ * Importance order (highest priority first → never truncated):
+ *   1. SOUL fingerprint     (always preserved verbatim — extractor-bounded ≤1200 chars)
+ *   2. IDENTITY.md          (head-tail truncated when needed)
+ *   3. capability manifest  (bullet-truncated when needed)
+ *   4. MEMORY.md autoload   (separately bounded by INJECTED_MEMORY_MAX_CHARS;
+ *                            head-tail truncated FIRST when total still over)
+ *
+ * Steps when over budget:
+ *   A — head-tail-truncate `identityMemoryAutoload` toward 70% of itself
+ *       repeatedly until budget is met OR memory is < 100 tokens.
+ *   B — bullet-truncate `identityCapabilityManifest` so the identity total
+ *       fits under budget.
+ *   C — head-tail-truncate `identityFile`.
+ *   SOUL fingerprint is NEVER touched.
+ *
+ * Fires a single budget warning when any drop happened.
+ *
+ * The composed identity output is rendered the same way as
+ * `composeCarvedIdentity`: SOUL + IDENTITY.md + capability + MEMORY.md
+ * header + body. Returns the rendered string + total dropped tokens for
+ * observability.
+ */
+function enforceDropLowestImportance(
+  carved: {
+    readonly identitySoulFingerprint: string;
+    readonly identityFile: string;
+    readonly identityCapabilityManifest: string;
+    readonly identityMemoryAutoload: string;
+  },
+  budgetTokens: number,
   warn?: (e: BudgetWarningEvent) => void,
-): string {
-  if (!text) return "";
-  const tokens = countTokens(text);
-  if (tokens > budget && warn) {
+): { readonly rendered: string; readonly droppedTokens: number } {
+  // Compose first, measure, short-circuit when under budget (no work).
+  const renderInitial = composeCarvedIdentity({
+    identity: "",
+    hotMemories: "",
+    toolDefinitions: "",
+    graphContext: "",
+    discordBindings: "",
+    contextSummary: "",
+    identitySoulFingerprint: carved.identitySoulFingerprint,
+    identityFile: carved.identityFile,
+    identityCapabilityManifest: carved.identityCapabilityManifest,
+    identityMemoryAutoload: carved.identityMemoryAutoload,
+  } as ContextSources);
+
+  const initialTokens = countTokens(renderInitial);
+  if (initialTokens <= budgetTokens) {
+    return { rendered: renderInitial, droppedTokens: 0 };
+  }
+
+  // Mutable working copy for the truncation passes. SOUL fingerprint stays
+  // verbatim throughout — extractor-bounded ≤1200 chars and operator-curated.
+  let memoryAuto = carved.identityMemoryAutoload;
+  let capManifest = carved.identityCapabilityManifest;
+  let identityFile = carved.identityFile;
+
+  // Helper to recompute tokens against the running truncated values.
+  const measure = (): number =>
+    countTokens(
+      composeCarvedIdentity({
+        identity: "",
+        hotMemories: "",
+        toolDefinitions: "",
+        graphContext: "",
+        discordBindings: "",
+        contextSummary: "",
+        identitySoulFingerprint: carved.identitySoulFingerprint,
+        identityFile,
+        identityCapabilityManifest: capManifest,
+        identityMemoryAutoload: memoryAuto,
+      } as ContextSources),
+    );
+
+  // Step A — repeatedly halve MEMORY.md until budget met or floor hit.
+  // Floor: 100 tokens (≈400 chars) — below this, further halving wastes
+  // useful context with marker overhead.
+  let total = initialTokens;
+  let safety = 12; // cap iterations: after 12 halvings of 16K we're ≤ 4 chars.
+  while (
+    total > budgetTokens &&
+    countTokens(memoryAuto) > 100 &&
+    safety-- > 0
+  ) {
+    const targetChars = Math.max(400, Math.floor(memoryAuto.length * 0.7));
+    if (targetChars >= memoryAuto.length) break; // can't shrink further
+    memoryAuto = headTailTruncate(memoryAuto, targetChars);
+    total = measure();
+  }
+
+  // Step B — bullet-truncate capability manifest to fit remaining budget.
+  if (total > budgetTokens && capManifest.length > 0) {
+    const overTokens = total - budgetTokens;
+    const overChars = overTokens * 4;
+    const newManifestChars = Math.max(0, capManifest.length - overChars);
+    if (newManifestChars < capManifest.length) {
+      capManifest = truncateToBudget(
+        capManifest,
+        Math.max(0, Math.floor(newManifestChars / 4)),
+      );
+    }
+    total = measure();
+  }
+
+  // Step C — head-tail truncate IDENTITY.md as last resort. SOUL fingerprint
+  // remains verbatim no matter what.
+  if (total > budgetTokens && identityFile.length > 0) {
+    const overTokens = total - budgetTokens;
+    const overChars = overTokens * 4;
+    const newIdFileChars = Math.max(400, identityFile.length - overChars);
+    if (newIdFileChars < identityFile.length) {
+      identityFile = headTailTruncate(identityFile, newIdFileChars);
+    }
+    total = measure();
+  }
+
+  const rendered = composeCarvedIdentity({
+    identity: "",
+    hotMemories: "",
+    toolDefinitions: "",
+    graphContext: "",
+    discordBindings: "",
+    contextSummary: "",
+    identitySoulFingerprint: carved.identitySoulFingerprint,
+    identityFile,
+    identityCapabilityManifest: capManifest,
+    identityMemoryAutoload: memoryAuto,
+  } as ContextSources);
+
+  const finalTokens = countTokens(rendered);
+  const droppedTokens = Math.max(0, initialTokens - finalTokens);
+
+  // Fire one warn for the section as a whole.
+  if (warn) {
     warn(
       Object.freeze({
-        section,
-        beforeTokens: tokens,
-        budgetTokens: budget,
-        strategy: "warn-and-keep",
+        section: "identity",
+        beforeTokens: initialTokens,
+        budgetTokens,
+        strategy: "drop-lowest-importance",
       }),
     );
   }
-  return text;
+
+  return { rendered, droppedTokens };
+}
+
+/**
+ * Phase 115 Plan 03 sub-scope 1 / D-02 — total stable-prefix outer cap.
+ *
+ * 8K-token hard cap on the assembled stable prefix. When per-section
+ * enforcement still leaves us over, this fires an emergency head-tail
+ * truncate across the WHOLE prefix and logs a `stable-prefix-cap-fallback`
+ * line so the operator sees we hit the safety net.
+ *
+ * Returns the (possibly truncated) joined string. The caller plugs the
+ * result back into the `stableParts` array as a single element so the
+ * assembler doesn't need to know about the truncation.
+ */
+function enforceTotalStablePrefixBudget(
+  joined: string,
+  maxTokens: number,
+  log:
+    | {
+        error?: (obj: Record<string, unknown>, msg?: string) => void;
+      }
+    | undefined,
+  agentName: string | undefined,
+): string {
+  const total = countTokens(joined);
+  if (total <= maxTokens) return joined;
+  const targetChars = maxTokens * 4;
+  const truncated = headTailTruncate(joined, targetChars);
+  if (log?.error) {
+    log.error(
+      {
+        agent: agentName,
+        beforeTokens: total,
+        afterTokens: countTokens(truncated),
+        action: "stable-prefix-cap-fallback",
+      },
+      "[diag] stable-prefix-cap-fallback emergency truncation fired — per-section budgets failed to keep total under cap",
+    );
+  }
+  return truncated;
 }
 
 /**
@@ -815,37 +1026,89 @@ function assembleContextInternal(
   //
   // When upstream populates the four carved sub-source fields
   // (identitySoulFingerprint, identityFile, identityCapabilityManifest,
-  // identityMemoryAutoload), compose the compound identity from them
-  // (T01). T02 will then route this through `enforceDropLowestImportance`
-  // instead of `enforceWarnAndKeep`.
+  // identityMemoryAutoload), route through `enforceDropLowestImportance`:
+  // SOUL fingerprint is verbatim-protected (highest importance), and the
+  // other three are progressively truncated (memory → capability →
+  // identityFile) until budget fits.
   //
   // When any of the four sub-source fields is undefined (legacy callers,
   // existing tests passing only `sources.identity`), fall through to the
-  // pre-115 compound-string path so existing tests keep working.
+  // pre-115 head-tail-truncate path: identity over budget gets head-tail
+  // truncated as a single block. (This is the new D-03 default; previous
+  // `enforceWarnAndKeep` no-op is GONE per Phase 115 D-03.)
   const useCarvedIdentity =
     sources.identitySoulFingerprint !== undefined ||
     sources.identityFile !== undefined ||
     sources.identityCapabilityManifest !== undefined ||
     sources.identityMemoryAutoload !== undefined;
-  const composedIdentity = useCarvedIdentity
-    ? composeCarvedIdentity(sources)
-    : sources.identity;
-  const identityOut = enforceWarnAndKeep(
-    composedIdentity,
-    "identity",
-    phaseBudgets.identity,
-    warn,
-  );
 
-  // 2. soul — WARN-and-keep (D-03). When the upstream folds SOUL into identity
-  //    and passes sources.soul === "" / undefined, the soul count is 0
-  //    (accurate for the current session-config behavior).
-  const soulOut = enforceWarnAndKeep(
-    sources.soul ?? "",
-    "soul",
-    phaseBudgets.soul,
-    warn,
-  );
+  let identityOut: string;
+  if (useCarvedIdentity) {
+    const carvedResult = enforceDropLowestImportance(
+      {
+        identitySoulFingerprint: sources.identitySoulFingerprint ?? "",
+        identityFile: sources.identityFile ?? "",
+        identityCapabilityManifest: sources.identityCapabilityManifest ?? "",
+        identityMemoryAutoload: sources.identityMemoryAutoload ?? "",
+      },
+      phaseBudgets.identity,
+      warn,
+    );
+    identityOut = carvedResult.rendered;
+  } else {
+    // Legacy path — single compound identity string. Phase 115 D-03 replaces
+    // the old `warn-and-keep` no-op with real head-tail truncation. Tests
+    // that pin "identity is preserved verbatim regardless of budget" are
+    // updated atomically per the Phase 115 plan note that this is a
+    // BREAKING contract change. SOUL fingerprint protection in the carved
+    // path requires the carved fields; the legacy compound path can't
+    // distinguish SOUL from MEMORY.md, so the whole compound block is
+    // head-tail truncated when over budget.
+    const tokens = countTokens(sources.identity);
+    if (sources.identity && tokens > phaseBudgets.identity) {
+      const targetChars = phaseBudgets.identity * 4;
+      identityOut = headTailTruncate(sources.identity, targetChars);
+      if (warn) {
+        warn(
+          Object.freeze({
+            section: "identity",
+            beforeTokens: tokens,
+            budgetTokens: phaseBudgets.identity,
+            strategy: "drop-lowest-importance",
+          }),
+        );
+      }
+    } else {
+      identityOut = sources.identity;
+    }
+  }
+
+  // 2. soul — Phase 115 D-03 + D-04 head-tail truncate when over budget.
+  //    With D-02 budget = 0 (folded into identity), any non-empty soul
+  //    triggers a warn + truncation. When the upstream folds SOUL into
+  //    identity and passes `sources.soul === ""`, this short-circuits.
+  let soulOut = sources.soul ?? "";
+  if (soulOut) {
+    const soulTokens = countTokens(soulOut);
+    if (soulTokens > phaseBudgets.soul) {
+      // Head-tail truncate to budget*4 chars, OR to 1-char + marker when
+      // budget is 0 (special-case the D-02 folded-into-identity locked value).
+      const targetChars = Math.max(1, phaseBudgets.soul * 4);
+      soulOut = phaseBudgets.soul > 0
+        ? headTailTruncate(soulOut, targetChars)
+        : ""; // D-02 lock — soul is folded into identity; budget=0 drops content.
+      if (warn) {
+        warn(
+          Object.freeze({
+            section: "soul",
+            beforeTokens: soulTokens,
+            budgetTokens: phaseBudgets.soul,
+            strategy: "drop-lowest-importance",
+          }),
+        );
+      }
+    }
+  }
 
   // 3. skills_header — Phase 53 Plan 03 lazy-skill compression, then
   //    Phase 53 Plan 02 bullet-truncation on the rendered result.
@@ -1023,9 +1286,25 @@ function assembleContextInternal(
     conversation_context: countTokens(conversationContext), // Phase 67
   });
 
+  // Phase 115 Plan 03 sub-scope 1 / D-02 — emergency outer-cap fallback.
+  //
+  // After per-section enforcement, if the joined stable prefix STILL exceeds
+  // STABLE_PREFIX_MAX_TOKENS (8K), head-tail-truncate the whole prefix as a
+  // last resort. This shouldn't normally fire — per-section budgets sum to
+  // well under 8K — but it's the structural safety net Phase 115 D-02
+  // commits to. The error log is operator-grep-friendly so a recurring
+  // fallback signal triggers a deeper audit.
+  const joinedStable = stableParts.join("\n\n");
+  const stablePrefix = enforceTotalStablePrefixBudget(
+    joinedStable,
+    STABLE_PREFIX_MAX_TOKENS,
+    opts?.log,
+    opts?.agentName,
+  );
+
   return Object.freeze({
     assembled: Object.freeze({
-      stablePrefix: stableParts.join("\n\n"),
+      stablePrefix,
       mutableSuffix: mutableParts.join("\n\n"),
       hotStableToken: currentHotToken,
     }),
