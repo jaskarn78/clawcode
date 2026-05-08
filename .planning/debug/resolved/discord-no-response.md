@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "test-agent not responding in Discord channel despite showing as running in clawcode status after restart"
 created: 2026-04-09T00:00:00Z
 updated: 2026-04-09T00:00:00Z
@@ -50,3 +50,10 @@ root_cause: DiscordBridge is never instantiated in daemon.ts. The bridge class (
 fix: Instantiate DiscordBridge in daemon.ts startDaemon(). Moved botToken loading earlier (shared by bridge and slash commands). Bridge connects to Discord, listens for messages in bound channels, forwards to agent sessions via sessionManager.forwardToAgent(). Added bridge.stop() to shutdown handler. Added discordBridge to return type.
 verification: Type-checks clean (no new errors in daemon.ts). Daemon unit tests pass. Needs human verification: restart daemon and send a message in the Discord channel.
 files_changed: [src/manager/daemon.ts]
+
+## Verified resolved (2026-05-07)
+
+Triaged during /gsd-progress --forensic. Fix code confirmed present on master:
+- DiscordBridge instantiation present at src/manager/daemon.ts:4627 (`discordBridge = new DiscordBridge({`)
+- src/discord/bridge.ts on master with DiscordBridge class export
+- Numerous follow-up bridge commits since the fix shipped: 925f799 (exit-143 message loss), 36ae72a (hot-reload routing), 54e4e02 (bot-direct fallback) — bridge has been continuously refined in production

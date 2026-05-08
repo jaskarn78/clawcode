@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "finmentum-db MCP crashes with ENOTFOUND op://... — unresolved 1P secret-reference placeholders in process env, AND env var names don't match mcporter.json"
 created: 2026-04-22T00:00:00Z
 updated: 2026-04-22T00:00:00Z
@@ -120,3 +120,9 @@ files_changed:
   - src/manager/daemon.ts
   - src/cli/commands/run.ts
   - src/config/__tests__/loader.test.ts
+
+## Verified resolved (2026-05-07)
+
+Triaged during /gsd-progress --forensic. Fix code confirmed present on master:
+- `OpRefResolver` / `defaultOpRefResolver` present in src/config/loader.ts and src/config/watcher.ts
+- Superseded by Phase 108 (shared 1password-mcp via daemon-managed broker, SHIPPED 2026-05-01) which introduces the broker shim pattern as the production path. The op:// resolver remains as the fallback for direct env-var refs.

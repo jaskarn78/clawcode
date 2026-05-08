@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "Investigate why ClawCode agents don't remember conversations from prior sessions. The v1.9 milestone shipped session-boundary summarization + resume auto-injection; in production on clawdy, appears broken."
 created: 2026-04-19T13:00:00Z
 updated: 2026-04-19T14:05:00Z
@@ -124,3 +124,8 @@ files_changed:
   - src/memory/conversation-brief.ts    (switch gap-check from listRecentSessions to listRecentTerminatedSessions; updated JSDoc)
   - src/memory/__tests__/conversation-store.test.ts  (+5 tests: 4 for listRecentTerminatedSessions, 1 for markSummarized idempotency)
   - src/memory/__tests__/conversation-brief.test.ts  (+3 regression tests under "regression: agents-forget-across-sessions (production ordering)")
+
+## Verified resolved (2026-05-07)
+
+Triaged during /gsd-progress --forensic. Fix code confirmed present on master:
+- `listRecentTerminatedSessions` present in src/memory/conversation-store.ts (4 hits) and src/memory/conversation-brief.ts (2 hits)

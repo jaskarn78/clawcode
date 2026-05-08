@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "memory-persistence-gaps — four distinct memory persistence gaps on branch fix/memory-persistence"
 created: 2026-04-20T00:00:00Z
 updated: 2026-04-21T00:00:00Z
@@ -135,3 +135,14 @@ commits:
 - 5a0dba1 fix(memory): periodic in-session summary flush
 - 49a39b9 fix(memory): memory_lookup default scope includes conversations
 - f863af3 fix(memory): add flushIntervalMinutes to ResolvedAgentConfig type
+
+## Verified resolved (2026-05-07)
+
+Triaged during /gsd-progress --forensic. Fix code confirmed present on master:
+- Original SHAs (4af0595, 83f91a7, 5a0dba1, 49a39b9, f863af3) not found — branch was rebased before merge
+- Replacement SHAs with identical commit subjects: 5f9c5d0 (Gap 1), 4022e94 (Gap 2), 1317ff6 (Gap 3), d143cf4 (Gap 4), c9f1a31 (type follow-up); plus a second batch (b36011a, 840159f, c42a37b, 5595d70, 7805171) — likely the master merge after a force-push rebase
+- Code markers verified on master:
+  - Gap 1: `attachCrashHandler` + `reconcileRegistry` (src/manager/session-manager.ts:947, :1890)
+  - Gap 2: `deleteTurnsForSession` (src/memory/conversation-store.ts:112, :476, :722; called at session-summarizer.ts:375)
+  - Gap 3: `flushSessionMidway` (src/memory/session-summarizer.ts:451) + `flushIntervalMinutes` (src/memory/schema.ts:99)
+  - Gap 4: `scopeIsExplicit` (src/manager/memory-lookup-handler.ts:122, :151)

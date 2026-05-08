@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "Running clawcode CLI commands produces 'Invalid API key' error"
 created: 2026-04-10T00:00:00Z
 updated: 2026-04-10T00:00:00Z
@@ -50,3 +50,8 @@ root_cause: Stale/expired ANTHROPIC_API_KEY (sk-ant-oat01-...) exported in ~/.ba
 fix: Two-part fix: (1) Strip ANTHROPIC_API_KEY from the env passed to SDK query() in SdkSessionAdapter so it always uses OAuth subscription auth. (2) User should remove the stale export from ~/.bashrc.
 verification: Self-verified — ran `clawcode run test-agent` with ANTHROPIC_API_KEY=sk-ant-oat01-INVALID in env. Agent started successfully (session created, Discord connected). All 772 tests pass. TypeScript compiles clean.
 files_changed: [src/manager/session-adapter.ts]
+
+## Verified resolved (2026-05-07)
+
+Triaged during /gsd-progress --forensic. Fix code confirmed present on master:
+- ANTHROPIC_API_KEY strip present in src/manager/session-adapter.ts:563-568 ("const { ANTHROPIC_API_KEY: _stripped, ...rest } = process.env;")

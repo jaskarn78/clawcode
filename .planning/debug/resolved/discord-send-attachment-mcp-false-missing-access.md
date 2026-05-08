@@ -1,7 +1,16 @@
+---
+status: resolved
+trigger: "send_attachment MCP returns false 50001 Missing Access despite bot perms; direct Discord REST works"
+created: 2026-04-24T00:00:00Z
+updated: 2026-05-07T00:00:00Z
+severity: medium
+---
+
 # Discord MCP send_attachment false "Missing Access" + finmentum-client-acquisition channel access
 
 **Reported:** 2026-04-24 by operator
 **Diagnostic source:** Direct Discord API + bot role inspection
+**Status note (2026-05-07, /gsd-progress triage):** No fix has shipped for Issue 1 (MCP send_attachment misroute). Issue 2 (channel access) is operator-action; status not verified — operator should confirm whether the role overwrite was added on `1481670479017414767`, otherwise this remains pending.
 
 ---
 
@@ -64,3 +73,9 @@ Grant:
 - Issue 2 → operator pings Discord admin to add the role overwrite. No code change needed.
 
 Not routing into Phase 92 scope — Phase 92 is the OpenClaw→ClawCode fin-acquisition cutover parity verifier; these are orthogonal bot-plumbing issues.
+
+## Resolution (2026-05-07)
+
+Operator confirmed both issues resolved during /gsd-progress triage:
+- Issue 1 (MCP send_attachment "Missing Access") — resolved (likely fixed by one of the bridge / bot-direct fallback commits since 2026-04-24)
+- Issue 2 (channel access on `1481670479017414767`) — operator action completed

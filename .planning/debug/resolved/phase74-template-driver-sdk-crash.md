@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "Phase 74 OpenClawTemplateDriver: POST /v1/chat/completions with model openclaw:phase74-smoke:sonnet returns 500 driver_error. Native pinned agents via same persistent-handle primitive work fine."
 created: 2026-04-19T23:50:00Z
 updated: 2026-04-20T01:10:00Z
@@ -102,3 +102,9 @@ files_changed:
   - src/openai/template-driver.ts
   - src/openai/__tests__/template-driver.test.ts
   - src/openai/__tests__/template-driver-cost-attribution.test.ts
+
+## Verified resolved (2026-05-07)
+
+Triaged during /gsd-progress --forensic. Fix code confirmed present on master:
+- `drainForSessionId` present in src/openai/template-driver.ts:226 (call site) and :389 (definition)
+- Step 1 drain comment intact at template-driver.ts:219
