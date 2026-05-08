@@ -150,3 +150,58 @@ This is the right operator instinct for production incidents. Document in operat
 ## Tags
 
 `incident` `latent-bug-pattern` `plan-checker-enhancement` `tdz` `schema-without-writer` `discord-bridge` `999.36-01-followup` `phase-115-followup` `pattern-recognition` `operator-instinct` `production-debugging`
+
+---
+
+## Addendum 2026-05-08 22:00 — wrong-cause hotfix anti-pattern
+
+**Sequel to the above:** ~30 min after the bridge-retry + TDZ hotfix landed, the operator reported typing indicators stopped working everywhere. I diagnosed it as 8s-typing-fire-stacking on a 5-token shared bucket. Operator pushed back twice ("are we sure this isn't related to the outage earlier?"). I went and shipped the rate-limit-tracker hotfix anyway because the survey question framing made "ship something" feel like the right move.
+
+The data didn't fit my hypothesis:
+- Typing fire rate: 0.35/min peak — **NORMAL, not over-firing**
+- Bucket scope: `shared` (whole-bot Cloudflare reputation), not per-channel
+- Only typing endpoint affected — messaging endpoint worked fine
+- 5-token bucket is the **stricter Cloudflare tier**, applied to flagged bots
+
+The actual cause was Cloudflare's anomaly detection flagging the bot during the outage cascade (5 daemon restarts in one day + bridge-fail-with-retries during outage = burst pattern that tripped reputation downgrade). The bot got moved to a stricter bucket; my over-firing-protection hotfix didn't address that.
+
+After the revert (`ca387d9`), operator and I agreed: **the right action was to ship NOTHING and wait for Cloudflare to relax the bucket on its own timeline (1-24h of well-behaved traffic).**
+
+### The wrong-cause anti-pattern
+
+When an incident has a **real root cause** AND a **plausible-but-wrong proximate cause**, you can ship a fix for the wrong cause and feel like you've "fixed" the incident, when actually you've just shipped a benign defensive change while the real cause heals on its own. The 429 hotfix today was exactly that — defense-in-depth code shipped under the guise of incident remediation.
+
+### Rules to internalize
+
+1. **When the data doesn't fit a hypothesis, the right action is sometimes to ship NOTHING.** "Wait + observe" is a legitimate operator response. Don't ship a hotfix just because there's a survey on the table.
+
+2. **Survey-question framing introduces ship-bias.** When I presented the operator with "ship full hotfix / ship interval-bump / ship minimal fix / wait", three of the four options were "ship". The framing implicitly anchors toward action. **The right framing was "wait until we have a fix that addresses the actual diagnosis, OR a clear signal the wait approach won't work."**
+
+3. **Operator pushback is signal, not friction.** When the operator asks "are we sure?" and you don't have a clean answer, the answer is **don't ship**. Ask one more diagnostic question, run one more test, wait one more hour. The cost of waiting is low; the cost of shipping a wrong-cause fix and claiming victory is high (clutter in the codebase, wasted operator deploy gates, and most importantly — wrong mental model of what fixed it).
+
+4. **discord.js (and similar SDKs) abstract away rate-limit signals.** Application-layer error-handling for 429s is impotent for issues the SDK already handles internally. The real recovery for Cloudflare bucket assignment is on Cloudflare's timeline, not ours. **Before shipping a "rate-limit-aware" application-layer fix, verify the SDK isn't already handling it.**
+
+5. **Reverting is easy and clean.** When the wrong-cause fix is identified, `git revert` is fast (one commit, ~5 min). Don't carry around defensive code that was shipped under wrong-diagnosis pretenses — it will mislead future debugging ("why is this here? oh, from the outage incident — but did it actually do anything?"). Either rewrite the commit message to honestly say "defensive only" OR revert.
+
+### Sequence of mistakes that led to the wrong-cause ship
+
+1. Operator reported missing typing indicators
+2. I ran data queries → saw 61 spans/hr (normal volume)
+3. I ran direct API tests → saw 429 with `shared` scope + 5-token bucket
+4. **I latched onto over-firing as the cause** despite the volume data not supporting it
+5. Operator asked "are we sure this isn't from the outage?" — first push-back
+6. I generated a survey of action options. **Three of four were "ship".** The framing was wrong.
+7. Operator picked "smallest fix only" within my survey
+8. I shipped the rate-limit tracker
+9. Operator asked again: "are we sure?" — second push-back, AFTER the deploy
+10. I finally re-examined the data, agreed with operator, reverted
+
+The mistake was step 4-6: over-anchoring on a hypothesis the data didn't support, then framing the operator's choice as "which fix to ship" instead of "ship vs wait." Steps 9-10 (revert) are the correct response, but the cycle should have ended at step 5 (operator push-back → reconsider hypothesis → wait + observe).
+
+### Updated tags
+
+Add: `wrong-cause-hotfix` `survey-bias` `over-anchoring` `discord-rate-limit` `cloudflare-reputation`
+
+### Where the bridge-retry + TDZ fixes stand
+
+The earlier hotfix (commit `85069fc`) — bridge startup retry + subagentThreadSpawner TDZ — was the RIGHT fix for that incident. Both bugs were real, both were diagnosed correctly, both still ship. Only the typing rate-limit tracker (commit `099c599`, reverted in `ca387d9`) was the wrong-cause fix.
