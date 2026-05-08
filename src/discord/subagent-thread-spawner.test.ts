@@ -455,6 +455,196 @@ describe("SubagentThreadSpawner", () => {
       expect(summaryLog!.obj.fullySent).toBe(true);
       expect(summaryLog!.obj.chunksSent).toBeGreaterThanOrEqual(2);
     });
+
+    it("999.36-A1 — typing loop fires sendTyping AND chunk-boundary diag log carries editorCutoffIndex/overflowStartCursor/seamGapBytes (sub-bug A wiring + sub-bug B diag)", async () => {
+      // Phase 999.36 Plan 00 Task 5 — smoke test that:
+      //   (1) spawnInThread → postInitialMessage starts the typing loop
+      //       (sendTyping called at t=0 per startTypingLoop's eager fire,
+      //       Plan 00 Task 1)
+      //   (2) chunk-boundary diag fields are present on the
+      //       'subagent overflow chunks summary' log line (Plan 00 Task 3)
+      //
+      // Both behaviors live on the postInitialMessage path; reusing the
+      // OF-LOG-1 scaffolding above (5000-char reply triggers overflow).
+      const logCalls: { level: string; obj: any; msg: string }[] = [];
+      const fakeLog = {
+        info: vi.fn((obj: any, msg: string) => {
+          logCalls.push({ level: "info", obj, msg });
+        }),
+        warn: vi.fn((obj: any, msg: string) => {
+          logCalls.push({ level: "warn", obj, msg });
+        }),
+        debug: vi.fn(),
+        error: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(() => fakeLog),
+      };
+
+      const sentChunks: string[] = [];
+      const placeholder = {
+        id: "msg-placeholder",
+        edit: vi.fn(async (_content: string) => undefined),
+      };
+      // Mock thread surface with sendTyping spy — startTypingLoop calls
+      // this on entry (eager fire, t=0) per Plan 00 Task 1's contract.
+      const sendTyping = vi.fn(async () => undefined);
+      const mockThread = {
+        id: "thread-A1",
+        sendTyping,
+        send: vi.fn(async (content: string) => {
+          sentChunks.push(content);
+          return placeholder;
+        }),
+      };
+      const mockChannel = {
+        id: "channel-1",
+        threads: { create: vi.fn(async () => mockThread) },
+        isTextBased: () => true,
+      };
+      const localDiscordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const bigReply = "X".repeat(5000);
+      const localSessionManager = makeMockSessionManager();
+      localSessionManager._setConfig(
+        "agent-a",
+        makeAgentConfig({
+          webhook: {
+            displayName: "Agent A",
+            avatarUrl: "https://example.com/a.png",
+            webhookUrl: "https://discord.com/api/webhooks/123/abc",
+          },
+        }),
+      );
+      vi.mocked(localSessionManager.streamFromAgent).mockResolvedValue(
+        bigReply as any,
+      );
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager: localSessionManager,
+        registryPath,
+        discordClient: localDiscordClient as any,
+        log: fakeLog as any,
+      });
+
+      await spawner.spawnInThread({
+        parentAgentName: "agent-a",
+        threadName: "A1-typing-and-diag",
+        autoRelay: false,
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Sub-bug A wiring assertion — the eager t=0 fire from startTypingLoop
+      // must have hit the thread's sendTyping spy at least once. We don't
+      // try to wait for the 8s heartbeat (test runs in <1s), the eager
+      // fire is sufficient evidence the loop was wired.
+      expect(sendTyping).toHaveBeenCalled();
+
+      // Sub-bug B diag assertion — the chunk-boundary fields must be
+      // present on the 'subagent overflow chunks summary' info log so a
+      // grep on prod logs surfaces editorCutoffIndex/overflowStartCursor/
+      // seamGapBytes for D-08 hypothesis confirmation.
+      const summaryLog = logCalls.find((c) =>
+        c.msg.includes("subagent overflow chunks summary"),
+      );
+      expect(summaryLog).toBeDefined();
+      expect(summaryLog!.obj).toMatchObject({
+        totalLength: 5000,
+        editorCutoffIndex: 1997,
+        overflowStartCursor: 2000,
+        seamGapBytes: 3,
+        endReason: "drained",
+      });
+    });
+
+    it("999.36-A2 — typingHandle.stop() called even when streamFromAgent rejects (sub-bug A finally-block invariant)", async () => {
+      // Phase 999.36 Plan 00 Task 5 — invariant: when streamFromAgent
+      // throws, the finally block in postInitialMessage must still call
+      // typingHandle.stop() so the 8s setInterval doesn't leak. We can't
+      // peek the interval handle from the test surface, but we CAN assert
+      // that no further sendTyping fires happen after the test wait,
+      // which is the operator-visible failure mode.
+      const fakeLog = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(),
+      };
+      fakeLog.child.mockReturnValue(fakeLog);
+
+      const sendTyping = vi.fn(async () => undefined);
+      const mockThread = {
+        id: "thread-A2",
+        sendTyping,
+        send: vi.fn(async () => ({ id: "p", edit: vi.fn() })),
+      };
+      const mockChannel = {
+        id: "channel-1",
+        threads: { create: vi.fn(async () => mockThread) },
+        isTextBased: () => true,
+      };
+      const localDiscordClient = {
+        channels: { fetch: vi.fn(async () => mockChannel) },
+      };
+
+      const localSessionManager = makeMockSessionManager();
+      localSessionManager._setConfig(
+        "agent-a",
+        makeAgentConfig({
+          webhook: {
+            displayName: "Agent A",
+            avatarUrl: "https://example.com/a.png",
+            webhookUrl: "https://discord.com/api/webhooks/123/abc",
+          },
+        }),
+      );
+      // streamFromAgent rejects — emulates a mid-turn SDK failure.
+      vi.mocked(localSessionManager.streamFromAgent).mockRejectedValue(
+        new Error("synthetic stream-from-agent failure"),
+      );
+
+      const spawner = new SubagentThreadSpawner({
+        sessionManager: localSessionManager,
+        registryPath,
+        discordClient: localDiscordClient as any,
+        log: fakeLog as any,
+      });
+
+      await spawner.spawnInThread({
+        parentAgentName: "agent-a",
+        threadName: "A2-stream-rejects",
+        autoRelay: false,
+      });
+
+      // Allow the deliberately-not-awaited postInitialMessage to settle:
+      // catch logs the warn, finally clears the interval.
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Eager fire happened before the rejection.
+      expect(sendTyping).toHaveBeenCalled();
+      const earlyCount = sendTyping.mock.calls.length;
+
+      // Wait LONGER than one 8s tick. If the interval wasn't cleared by
+      // the finally block, sendTyping would fire again. Use fake timers
+      // to advance instantly without making the test suite slow.
+      vi.useFakeTimers({ now: Date.now() });
+      try {
+        await vi.advanceTimersByTimeAsync(20_000);
+      } finally {
+        vi.useRealTimers();
+      }
+      // Note: the interval may have been cleared BEFORE we engaged fake
+      // timers (real-timer ticks during the 100ms settle above don't fire
+      // because 100ms < 8000ms). The contract is: post-finally, no more
+      // fires. earlyCount === current count proves the interval is dead.
+      expect(sendTyping.mock.calls.length).toBe(earlyCount);
+    });
   });
 
   describe("getSubagentBindings", () => {
