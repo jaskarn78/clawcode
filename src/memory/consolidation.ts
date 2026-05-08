@@ -19,6 +19,27 @@ import {
   appendConsolidationRun,
   type ConsolidationRunRow,
 } from "../manager/consolidation-run-log.js";
+// Phase 115 Plan 09 T02 — sub-scope 12 cross-agent consolidation
+// transactionality. The coordinator wraps fleet-level multi-agent
+// memory writes with `consolidation:<runId>` tagging + rollback. The
+// per-agent `runConsolidation` below stays the primary surface for
+// the cron handler in daemon.ts; the coordinator is the abstraction
+// the daemon will compose with when a future caller needs the
+// multi-agent atomic-batch semantic (e.g., a fleet-wide priority
+// dream-pass per CONTEXT D-05). Re-exporting here keeps the cross-
+// agent surface co-located with the per-agent surface so callers
+// that want either path import from one module.
+export {
+  CrossAgentCoordinator,
+  consolidationRunTag,
+  type CrossAgentCoordinatorDeps,
+} from "../manager/cross-agent-coordinator.js";
+export {
+  CONSOLIDATION_RUN_TAG_PREFIX,
+  type CrossAgentBatch,
+  type CrossAgentBatchStatus,
+  type CrossAgentBatchWrite,
+} from "../manager/cross-agent-coordinator.types.js";
 import {
   getISOWeek,
   getISOWeekYear,
@@ -505,13 +526,22 @@ export async function archiveWeeklyDigests(
 // ---------------------------------------------------------------------------
 
 /**
- * Run the full consolidation pipeline:
+ * Run the full consolidation pipeline (PER-AGENT — single-agent surface):
  * 1. Detect unconsolidated weeks -> summarize -> write weekly digests -> archive dailies
  * 2. Detect unconsolidated months -> summarize -> write monthly digests -> archive weeklies
  *
  * Order matters: weekly BEFORE monthly (weekly digests are input to monthly).
  * Archive LAST after confirming digest write + SQLite insert succeeded.
  * Collects errors without stopping -- partial consolidation is better than none.
+ *
+ * Cross-agent fleet-level invocation (Phase 115 Plan 09 T02 / sub-scope 12):
+ * the daemon's cron handler (src/manager/daemon.ts) calls this function
+ * once PER agent — there is no fleet-level loop here. For multi-agent
+ * atomic-batch semantics (e.g., a future fleet-wide priority dream-pass
+ * per CONTEXT D-05), wrap with `CrossAgentCoordinator` exported above —
+ * the coordinator's `coordinator.runBatch(batch)` provides
+ * `consolidation:<runId>` tagging + rollback semantics across multiple
+ * per-agent stores. See src/manager/cross-agent-coordinator.ts.
  */
 export async function runConsolidation(
   deps: ConsolidationDeps,
