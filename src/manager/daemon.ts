@@ -3482,6 +3482,120 @@ export async function startDaemon(
       const rows = toolCacheStore.inspect({ tool, agent, limit });
       return { rows, count: rows.length };
     }
+    // Phase 115 Plan 08 T03 — sub-scope 17(a/b/c) + 6-A `tool-latency-audit`
+    // IPC handler. Composes T01's split-latency percentile (per-turn
+    // tool_execution_ms / tool_roundtrip_ms) with T02's tool_use_rate
+    // computation. Output shape mirrors the CLI's
+    // ToolLatencyAuditResponse (src/cli/commands/tool-latency-audit.ts).
+    //
+    // Threshold per CONTEXT D-12: 0.30 (30%). Knob, not constant — plan
+    // 115-09 may refine. fin-acquisition is excluded from the fleet
+    // average (Ramy-paced tool-heavy workload skews the gate).
+    if (method === "tool-latency-audit") {
+      const windowHoursRaw = (params as { windowHours?: unknown }).windowHours;
+      const windowHours =
+        typeof windowHoursRaw === "number" && windowHoursRaw >= 1
+          ? windowHoursRaw
+          : 24;
+      const filterAgent =
+        typeof (params as { agent?: unknown }).agent === "string"
+          ? ((params as { agent?: string }).agent as string)
+          : undefined;
+
+      const sinceIso = new Date(
+        Date.now() - windowHours * 3_600_000,
+      ).toISOString();
+      const SUB_SCOPE_6B_THRESHOLD = 0.3;
+      const FIN_ACQ_AGENT_NAME = "fin-acquisition";
+
+      const targetAgents = filterAgent
+        ? resolvedAgents.filter((a) => a.name === filterAgent)
+        : resolvedAgents;
+
+      const rows: Array<{
+        readonly agent: string;
+        readonly turnsTotal: number;
+        readonly turnsWithTools: number;
+        readonly toolUseRate: number;
+        readonly toolExecutionMsP50: number | null;
+        readonly toolRoundtripMsP50: number | null;
+        readonly parallelToolCallRate: number | null;
+        readonly subScope6BGate: string;
+      }> = [];
+
+      let nonFinAcqSum = 0;
+      let nonFinAcqCount = 0;
+
+      for (const cfg of targetAgents) {
+        const traceStore = manager.getTraceStore(cfg.name);
+        if (!traceStore) {
+          rows.push({
+            agent: cfg.name,
+            turnsTotal: 0,
+            turnsWithTools: 0,
+            toolUseRate: 0,
+            toolExecutionMsP50: null,
+            toolRoundtripMsP50: null,
+            parallelToolCallRate: null,
+            subScope6BGate: "no-data",
+          });
+          continue;
+        }
+        const rateSnap = traceStore.computeToolUseRatePerTurn(
+          cfg.name,
+          sinceIso,
+          windowHours,
+        );
+        const split = traceStore.getSplitLatencyAggregate(cfg.name, sinceIso);
+
+        let gate: string;
+        if (cfg.name === FIN_ACQ_AGENT_NAME) {
+          gate = "fin-acq-excluded-from-gate (D-12)";
+        } else if (rateSnap.turnsTotal === 0) {
+          gate = "no-data";
+        } else if (rateSnap.rate < SUB_SCOPE_6B_THRESHOLD) {
+          gate = "below-30%-threshold";
+          nonFinAcqSum += rateSnap.rate;
+          nonFinAcqCount += 1;
+        } else {
+          gate = "above-30%-threshold";
+          nonFinAcqSum += rateSnap.rate;
+          nonFinAcqCount += 1;
+        }
+
+        rows.push({
+          agent: cfg.name,
+          turnsTotal: rateSnap.turnsTotal,
+          turnsWithTools: rateSnap.turnsWithTools,
+          toolUseRate: rateSnap.rate,
+          toolExecutionMsP50: split.toolExecutionMsP50,
+          toolRoundtripMsP50: split.toolRoundtripMsP50,
+          parallelToolCallRate: split.parallelToolCallRate,
+          subScope6BGate: gate,
+        });
+      }
+
+      const fleetAvg =
+        nonFinAcqCount > 0 ? nonFinAcqSum / nonFinAcqCount : null;
+      const decision: "ship-6B" | "defer-6B" | "no-signal" =
+        fleetAvg === null
+          ? "no-signal"
+          : fleetAvg < SUB_SCOPE_6B_THRESHOLD
+            ? "ship-6B"
+            : "defer-6B";
+
+      return {
+        computed_at: new Date().toISOString(),
+        windowHours,
+        rows,
+        fleetGate: {
+          non_fin_acq_avg_tool_use_rate: fleetAvg,
+          threshold: SUB_SCOPE_6B_THRESHOLD,
+          decision,
+          agentsCounted: nonFinAcqCount,
+        },
+      };
+    }
     // Phase 88 Plan 02 MKT-01..07 — marketplace IPC is intercepted BEFORE
     // routeMethod (same closure pattern as browser/search/image-tool-call)
     // so the existing routeMethod signature stays stable. The three

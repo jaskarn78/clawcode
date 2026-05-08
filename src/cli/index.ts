@@ -48,6 +48,10 @@ import { registerCacheCommand } from "./commands/cache.js";
 // `clawcode tool-cache {status|clear|inspect}` operator surface.
 // Distinct from `clawcode cache` (Phase 52 prompt-cache hit-rate).
 import { registerToolCacheCommand } from "./commands/tool-cache.js";
+// Phase 115 Plan 08 T03 — sub-scope 17(a/b/c) + 6-A tool-latency methodology
+// audit. `clawcode tool-latency-audit` prints per-agent execution vs
+// roundtrip latency split + tool_use_rate gate for plan 115-09 sub-scope 6-B.
+import { registerToolLatencyAuditCommand } from "./commands/tool-latency-audit.js";
 import { registerToolsCommand } from "./commands/tools.js";
 import { registerBenchCommand } from "./commands/bench.js";
 import { registerContextAuditCommand } from "./commands/context-audit.js";
@@ -199,6 +203,8 @@ registerLatencyCommand(program);
 registerCacheCommand(program);
 // Phase 115 Plan 07 sub-scope 15 — registers `clawcode tool-cache`.
 registerToolCacheCommand(program);
+// Phase 115 Plan 08 T03 — registers `clawcode tool-latency-audit`.
+registerToolLatencyAuditCommand(program);
 registerToolsCommand(program);
 registerBenchCommand(program);
 registerContextAuditCommand(program);

@@ -603,6 +603,47 @@ function renderCachePanel(body, report) {
     toolCacheSubtitle = `tool cache: ${hitRateText} · ${sizeText} (${toolCacheTurns} turn${toolCacheTurns === 1 ? "" : "s"})`;
   }
 
+  // Phase 115 Plan 08 T03 (sub-scope 17 a/b/c + 6-A) — tool-latency audit
+  // metrics rendered alongside the cache panel. The four subtitle lines
+  // surface the per-turn split-latency columns landed in T01 + the
+  // tool_use_rate measurement landed in T02. Operator can compare
+  // "tool itself slow" (tool_execution_ms_p50) vs "prompt-bloat-tax slow"
+  // (tool_roundtrip_ms_p50) at a glance, and see the parallel rate that
+  // the PARALLEL-TOOL-01 directive (sub-scope 17c) is intended to lift.
+  //
+  // The metrics travel on the same `report` object — the daemon's case
+  // "cache" handler is augmented in a follow-up patch to include them
+  // (or the dashboard fetches them from /api/tool-latency-audit when
+  // available). Until that lands, all four render as "—" with no error.
+  const toolExecP50 =
+    report && typeof report.tool_execution_ms_p50 === "number"
+      ? report.tool_execution_ms_p50
+      : null;
+  const toolRoundtripP50 =
+    report && typeof report.tool_roundtrip_ms_p50 === "number"
+      ? report.tool_roundtrip_ms_p50
+      : null;
+  const parallelToolCallRate =
+    report && typeof report.parallel_tool_call_rate === "number"
+      ? report.parallel_tool_call_rate
+      : null;
+  const toolUseRate =
+    report && typeof report.tool_use_rate === "number"
+      ? report.tool_use_rate
+      : null;
+  const splitLatencyText =
+    toolExecP50 === null && toolRoundtripP50 === null
+      ? "split latency: no signal"
+      : `split latency: exec p50 ${toolExecP50 === null ? "—" : `${toolExecP50} ms`} · roundtrip p50 ${toolRoundtripP50 === null ? "—" : `${(toolRoundtripP50 / 1000).toFixed(1)} s`}`;
+  const useRateText =
+    toolUseRate === null
+      ? "tool_use_rate: no signal"
+      : `tool_use_rate: ${formatPercent(toolUseRate)} (sub-scope 6-A gate · 30% threshold)`;
+  const parallelRateText =
+    parallelToolCallRate === null
+      ? "parallel_tool_call_rate: no signal"
+      : `parallel_tool_call_rate: ${formatPercent(parallelToolCallRate)} (turns with batch ≥ 2)`;
+
   body.classList.remove("panel-placeholder");
   body.innerHTML = `<table class="cache-table">
     <thead><tr><th>Hit Rate</th><th>Cache Reads</th><th>Cache Writes</th><th>Input Tokens</th><th>Turns</th></tr></thead>
@@ -617,7 +658,10 @@ function renderCachePanel(body, report) {
   <div class="cache-subtitle">Hit rate = cache reads / (cache reads + cache writes + input tokens)</div>
   <div class="cache-subtitle">SLO: healthy &ge; 60%, breach &lt; 30% · p50 ${escapeHtml(p50Text)} · p95 ${escapeHtml(p95Text)}</div>
   <div class="cache-subtitle">${escapeHtml(effectSubtitle)}</div>
-  <div class="cache-subtitle">${escapeHtml(toolCacheSubtitle)}</div>`;
+  <div class="cache-subtitle">${escapeHtml(toolCacheSubtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(splitLatencyText)}</div>
+  <div class="cache-subtitle">${escapeHtml(useRateText)}</div>
+  <div class="cache-subtitle">${escapeHtml(parallelRateText)}</div>`;
 }
 
 /**

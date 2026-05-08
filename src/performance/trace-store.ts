@@ -711,6 +711,11 @@ export class TraceStore {
       // prompt-bloat-tax / LLM-resume cost. parallel_tool_call_count =
       // MAX parallel batch size across the turn (1 sequential, N parallel).
       // All NULL on legacy turns + turns with no tool_use blocks.
+      // Idempotent — `PRAGMA table_info` guard above (line ~685) skips
+      // any column already present, so this is the 3rd additive ALTER
+      // landing (after 115-00 and 115-04 / 115-05 / 115-07). Re-runs of
+      // `PRAGMA table_info` on re-opens never fire the ALTER because
+      // the existing-set check above filters them out.
       ["tool_execution_ms", "INTEGER"],
       ["tool_roundtrip_ms", "INTEGER"],
       ["parallel_tool_call_count", "INTEGER"],
@@ -1088,6 +1093,104 @@ export class TraceStore {
       const msg = err instanceof Error ? err.message : "unknown";
       throw new TraceStoreError(
         `writeToolUseRateSnapshot failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 08 T03 — split-latency percentile aggregate for the
+   * tool-latency-audit CLI / dashboard.
+   *
+   * Computes p50 of the per-turn `tool_execution_ms` and `tool_roundtrip_ms`
+   * columns (sub-scope 17a producers from T01) plus the fraction of in-window
+   * tool-bearing turns whose `parallel_tool_call_count >= 2` (sub-scope 17b
+   * parallel rate). Both p50s are NULL when no in-window turn has data.
+   *
+   * Unlike `getToolPercentiles` (which slices by tool_name across spans),
+   * this aggregates the per-turn SUM columns from T01 — the right semantics
+   * for "did this turn spend 14s in tools" not "is the Read tool slow."
+   *
+   * Method scoped to one agent (callers loop). Returns frozen so the
+   * audit CLI can pass it directly into the JSON response without copy.
+   */
+  getSplitLatencyAggregate(
+    agent: string,
+    sinceIso: string,
+  ): {
+    readonly toolExecutionMsP50: number | null;
+    readonly toolRoundtripMsP50: number | null;
+    readonly parallelToolCallRate: number | null;
+    readonly turnsWithToolsInWindow: number;
+  } {
+    try {
+      // Per-turn columns; ranked nearest-rank percentile, same shape as
+      // PERCENTILE_SQL but inlined here because we want both columns at once.
+      // p50 nearest-rank: position = floor(N * 0.50), 0-indexed; index into
+      // sorted-asc duration list. SQLite's ORDER BY + LIMIT/OFFSET works.
+      const execValues = this.db
+        .prepare(
+          `SELECT tool_execution_ms FROM traces
+             WHERE agent = @agent
+               AND started_at >= @since
+               AND tool_execution_ms IS NOT NULL
+             ORDER BY tool_execution_ms`,
+        )
+        .all({ agent, since: sinceIso }) as ReadonlyArray<{
+        readonly tool_execution_ms: number;
+      }>;
+      const rtValues = this.db
+        .prepare(
+          `SELECT tool_roundtrip_ms FROM traces
+             WHERE agent = @agent
+               AND started_at >= @since
+               AND tool_roundtrip_ms IS NOT NULL
+             ORDER BY tool_roundtrip_ms`,
+        )
+        .all({ agent, since: sinceIso }) as ReadonlyArray<{
+        readonly tool_roundtrip_ms: number;
+      }>;
+      // Parallel-rate denominator = turns that had ≥1 tool. Numerator =
+      // turns with ≥2 in a single batch. Both filtered to in-window.
+      const parallelRow = this.db
+        .prepare(
+          `SELECT
+             COUNT(*) AS denom,
+             SUM(CASE WHEN parallel_tool_call_count >= 2 THEN 1 ELSE 0 END) AS num
+           FROM traces
+           WHERE agent = @agent
+             AND started_at >= @since
+             AND parallel_tool_call_count IS NOT NULL
+             AND parallel_tool_call_count > 0`,
+        )
+        .get({ agent, since: sinceIso }) as
+        | { denom: number; num: number | null }
+        | undefined;
+
+      const execP50 =
+        execValues.length > 0
+          ? execValues[Math.min(Math.floor(execValues.length * 0.5), execValues.length - 1)]!
+              .tool_execution_ms
+          : null;
+      const rtP50 =
+        rtValues.length > 0
+          ? rtValues[Math.min(Math.floor(rtValues.length * 0.5), rtValues.length - 1)]!
+              .tool_roundtrip_ms
+          : null;
+      const denom = parallelRow?.denom ?? 0;
+      const num = parallelRow?.num ?? 0;
+      const parallelRate = denom > 0 ? num / denom : null;
+
+      return Object.freeze({
+        toolExecutionMsP50: execP50,
+        toolRoundtripMsP50: rtP50,
+        parallelToolCallRate: parallelRate,
+        turnsWithToolsInWindow: denom,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getSplitLatencyAggregate failed: ${msg}`,
         this.dbPath,
       );
     }

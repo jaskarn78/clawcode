@@ -268,6 +268,32 @@ async function handleRequest(
       return;
     }
 
+    // Phase 115 Plan 08 T03 — tool-latency audit: GET /api/tool-latency-audit?windowHours=24[&agent=name]
+    // Surfaces sub-scope 17(a/b/c) split-latency + 6-A tool_use_rate + 6-B
+    // gate decision for the dashboard panel rendered alongside the Cache /
+    // Tools panels. Mirrors the CLI subcommand (src/cli/commands/tool-latency-audit.ts).
+    if (
+      method === "GET" &&
+      pathname === "/api/tool-latency-audit"
+    ) {
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const windowHours = parseInt(queryParams.get("windowHours") ?? "24", 10);
+      const agent = queryParams.get("agent") ?? undefined;
+      const params: Record<string, unknown> = {
+        windowHours: Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24,
+      };
+      if (agent) params.agent = agent;
+      try {
+        const data = await sendIpcRequest(socketPath, "tool-latency-audit", params);
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
     // Knowledge graph data: GET /api/graph/:agent
     if (
       method === "GET" &&
