@@ -228,6 +228,12 @@ export class TraceStore {
           // Phase 115 Plan 05 T04: lazy_recall_call_count. Producer optional
           // — turns that never invoked a clawcode_memory_* tool land NULL.
           t.lazyRecallCallCount ?? null,
+          // Phase 115 Plan 07 T03: tool_cache_hit_rate + tool_cache_size_mb.
+          // Producer optional — turns with zero cache-eligible tool calls
+          // land NULL on hit_rate. Size_mb is sampled by the periodic
+          // dashboard reporter (T04) and may be NULL on most turns.
+          t.toolCacheHitRate ?? null,
+          t.toolCacheSizeMb ?? null,
         );
         for (const span of t.spans) {
           this.stmts.insertSpan.run(
@@ -651,13 +657,16 @@ export class TraceStore {
       // Phase 115 Plan 05 T04: lazy_recall_call_count column slot opened in
       // Plan 115-00 migrateSchema(); writes wired here. Legacy callers pass
       // NULL via the `lazyRecallCallCount ?? null` fallback in writeTurn().
+      // Phase 115 Plan 07 T03: tool_cache_hit_rate + tool_cache_size_mb
+      // column slots wired here. Per-turn rate computed from hit/(hit+miss);
+      // turns with zero cache-eligible tool calls land NULL.
       insertTrace: this.db.prepare(`
         INSERT OR REPLACE INTO traces
           (id, agent, started_at, ended_at, total_ms, discord_channel_id, status,
            cache_read_input_tokens, cache_creation_input_tokens, input_tokens,
            prefix_hash, cache_eviction_expected, turn_origin,
-           lazy_recall_call_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           lazy_recall_call_count, tool_cache_hit_rate, tool_cache_size_mb)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertSpan: this.db.prepare(`
         INSERT INTO trace_spans

@@ -191,6 +191,94 @@ export class TraceCollector {
   // Phase 115 Plan 05 T04 — per-agent active-Turn registry. Single slot
   // per agent (Phase 50 invariant: at most one Turn per agent at a time).
   private readonly activeTurns = new Map<string, Turn>();
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache HIT.
+   *
+   * Increments the per-agent hit counter that the dashboard divides by
+   * (hit + miss) to compute `tool_cache_hit_rate`. Mirrors the
+   * `recordLazyRecallCall` pattern (rolling counter + structured debug
+   * log line) — this is best-effort observability, never on the dispatch
+   * critical path.
+   *
+   * Per-turn association is via the active-Turn registry; calls outside
+   * any turn (e.g., heartbeat-driven tool probes) bump a per-agent
+   * rolling counter that the next ended turn picks up.
+   *
+   * Failure-isolated. Errors logged at warn level, never thrown.
+   */
+  recordToolCacheHit(agent: string, tool: string): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpToolCacheHit(tool);
+        return;
+      }
+      const rolling = this.pendingToolCacheHitsByAgent.get(agent) ?? 0;
+      this.pendingToolCacheHitsByAgent.set(agent, rolling + 1);
+      this.log.debug(
+        { agent, tool, action: "tool-cache-hit-rolling" },
+        "[trace] tool_cache_hit incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, tool, err: msg, action: "tool-cache-hit-record-failed" },
+        "[trace] recordToolCacheHit failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache MISS.
+   *
+   * Same flow as `recordToolCacheHit` but for the miss counter. The
+   * dashboard computes `tool_cache_hit_rate = hits / (hits + misses)`
+   * over a sliding window — both producers required.
+   */
+  recordToolCacheMiss(agent: string, tool: string): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpToolCacheMiss(tool);
+        return;
+      }
+      const rolling = this.pendingToolCacheMissesByAgent.get(agent) ?? 0;
+      this.pendingToolCacheMissesByAgent.set(agent, rolling + 1);
+      this.log.debug(
+        { agent, tool, action: "tool-cache-miss-rolling" },
+        "[trace] tool_cache_miss incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, tool, err: msg, action: "tool-cache-miss-record-failed" },
+        "[trace] recordToolCacheMiss failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — drain rolling tool-cache hit / miss counters
+   * for the agent. Called from Turn.end() so out-of-turn cache events
+   * land on the next ended turn. Returns { hits, misses } and clears
+   * both slots.
+   */
+  drainPendingToolCacheCounters(
+    agent: string,
+  ): { readonly hits: number; readonly misses: number } {
+    const hits = this.pendingToolCacheHitsByAgent.get(agent) ?? 0;
+    const misses = this.pendingToolCacheMissesByAgent.get(agent) ?? 0;
+    if (hits > 0) this.pendingToolCacheHitsByAgent.delete(agent);
+    if (misses > 0) this.pendingToolCacheMissesByAgent.delete(agent);
+    return { hits, misses };
+  }
+
+  // Phase 115 Plan 07 T03 — per-agent rolling tool-cache hit / miss counters
+  // for tool calls firing OUTSIDE an active Turn (heartbeat / daemon-driven
+  // probes). Drained into the next Turn that ends for the agent.
+  private readonly pendingToolCacheHitsByAgent = new Map<string, number>();
+  private readonly pendingToolCacheMissesByAgent = new Map<string, number>();
 }
 
 /**
@@ -244,6 +332,15 @@ export class Turn {
    */
   private lazyRecallCallCount = 0;
   /**
+   * Phase 115 Plan 07 T03 — per-turn tool-cache hit / miss counters.
+   * Incremented by `bumpToolCacheHit` / `bumpToolCacheMiss` from the
+   * `dispatchTool` cache wrapper. Drained into `tool_cache_hit_rate`
+   * column in traces.db at `end()` time as `hits / (hits + misses)`.
+   * Turns with zero cache-eligible tool calls land NULL in the column.
+   */
+  private toolCacheHits = 0;
+  private toolCacheMisses = 0;
+  /**
    * Phase 115 Plan 05 T04 — back-reference to the parent collector so the
    * Turn can pull rolling lazy-recall counts from outside-of-turn calls
    * at `end()` time. Optional so legacy bench-harness Turns (instantiated
@@ -290,6 +387,48 @@ export class Turn {
         action: "lazy-recall-call",
       },
       "[trace] lazy_recall_call_count incremented",
+    );
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache HIT within this turn.
+   * Folded into `tool_cache_hit_rate` at `end()`. No-op after `end()`.
+   *
+   * `tool` only appears in the structured debug log — the persisted
+   * column is an aggregate rate, not a per-tool histogram (Plan 115-09
+   * dashboard renders the rate, not the breakdown).
+   */
+  bumpToolCacheHit(tool: string): void {
+    if (this.committed) return;
+    this.toolCacheHits += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        tool,
+        hits: this.toolCacheHits,
+        action: "tool-cache-hit",
+      },
+      "[trace] tool_cache_hit incremented",
+    );
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache MISS within this turn.
+   * Folded into `tool_cache_hit_rate` at `end()`. No-op after `end()`.
+   */
+  bumpToolCacheMiss(tool: string): void {
+    if (this.committed) return;
+    this.toolCacheMisses += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        tool,
+        misses: this.toolCacheMisses,
+        action: "tool-cache-miss",
+      },
+      "[trace] tool_cache_miss incremented",
     );
   }
 
@@ -380,10 +519,24 @@ export class Turn {
     // Phase 115 Plan 05 T04 — drain any pending out-of-turn lazy-recall
     // calls accumulated for this agent and add them to the per-turn count.
     let lazyRecallCallCount = this.lazyRecallCallCount;
+    // Phase 115 Plan 07 T03 — drain any pending out-of-turn tool-cache
+    // hits / misses accumulated for this agent.
+    let toolCacheHits = this.toolCacheHits;
+    let toolCacheMisses = this.toolCacheMisses;
     if (this.collector) {
       lazyRecallCallCount += this.collector.drainPendingLazyRecallCount(this.agent);
+      const drained = this.collector.drainPendingToolCacheCounters(this.agent);
+      toolCacheHits += drained.hits;
+      toolCacheMisses += drained.misses;
       this.collector.unregisterActiveTurn(this.agent, this);
     }
+    // Compute hit rate. Only meaningful when at least one cache-eligible
+    // tool call happened during this turn (or rolled in from out-of-turn).
+    // Otherwise leave it null so the column reflects "no signal" rather
+    // than 0% / 100% (which would skew percentile rollups).
+    const totalCacheEvents = toolCacheHits + toolCacheMisses;
+    const toolCacheHitRate =
+      totalCacheEvents > 0 ? toolCacheHits / totalCacheEvents : null;
 
     const base = {
       id: this.id,
@@ -412,6 +565,13 @@ export class Turn {
       // lazy-recall tool. Mirrors the cache-telemetry-snapshot conditional
       // spread above.
       ...(lazyRecallCallCount > 0 ? { lazyRecallCallCount } : {}),
+      // Phase 115 Plan 07 T03 — only attach when at least one cache-eligible
+      // tool call ran (hit OR miss). Otherwise the column lands NULL so
+      // percentile rollups can distinguish "no cache events this turn" from
+      // "0% hit rate" (which has signal — implies misses but no hits).
+      ...(toolCacheHitRate !== null
+        ? { toolCacheHitRate, toolCacheHitCount: toolCacheHits, toolCacheMissCount: toolCacheMisses }
+        : {}),
     });
     try {
       this.store.writeTurn(record);

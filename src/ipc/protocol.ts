@@ -297,6 +297,14 @@ export const IPC_METHODS = [
   // schema duplication into Go). Sequencing constraint (CONTEXT.md):
   // ships in its own commit BEFORE any Go shim builds against it.
   "list-mcp-tools",
+  // Phase 115 Plan 07 sub-scope 15 — tool-cache management IPC (folds
+  // Phase 999.40). Operator-facing introspection + maintenance. Wired
+  // from `clawcode tool-cache {status|clear|inspect}` CLI subcommands
+  // in T04. Daemon-side handlers live in src/manager/daemon.ts ~line
+  // 3260 (early intercepts before routeMethod).
+  "tool-cache-status",
+  "tool-cache-clear",
+  "tool-cache-inspect",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

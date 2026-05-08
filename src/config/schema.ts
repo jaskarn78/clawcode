@@ -1832,6 +1832,49 @@ export const defaultsSchema = z.object({
     // who don't override see undefined; the runner fills in the cpuBudgetPct
     // / batchSize / pausedAgents defaults at consumption time.
     .optional(),
+  // Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response cache.
+  // Folds Phase 999.40 (now SUPERSEDED-BY-115). The cache lives at
+  // `~/.clawcode/manager/tool-cache.db` and intercepts repeated tool
+  // calls at the IPC dispatch boundary. Per-tool TTL + key-strategy
+  // defaults live in `src/mcp/tool-cache-policy.ts:DEFAULT_TOOL_CACHE_POLICY`;
+  // operators override per-tool here.
+  //
+  // Optional (mirrors shimRuntime / brokers / embeddingMigration
+  // schema-only-default pattern). When absent, runtime fills in
+  // `enabled=true` / `maxSizeMb=100` / empty policy overrides.
+  toolCache: z
+    .object({
+      enabled: z
+        .boolean()
+        .default(true)
+        .describe(
+          "Phase 115 sub-scope 15 — master switch. Set false to fully bypass the cache (e.g., debugging tool dispatch).",
+        ),
+      maxSizeMb: z
+        .number()
+        .int()
+        .min(10)
+        .max(10000)
+        .default(100)
+        .describe(
+          "Phase 115 sub-scope 15 — total cache size cap in MB. LRU evicts oldest rows when over cap. Default 100MB.",
+        ),
+      policy: z
+        .record(
+          z.string().min(1),
+          z.object({
+            ttlSeconds: z.number().int().min(0).max(86400).optional(),
+            keyStrategy: z
+              .enum(["per-agent", "cross-agent", "no-cache"])
+              .optional(),
+          }),
+        )
+        .default(() => ({}))
+        .describe(
+          "Per-tool overrides keyed by tool name. Operator can shorten TTL or flip strategy; cacheable predicate (e.g. mysql_query read-only gate) cannot be patched.",
+        ),
+    })
+    .optional(),
   // Phase 110 Stage 0a — broker dispatch table. Server-id keyed map for
   // generalizing Phase 108's OnePasswordMcpBroker to typed multi-server
   // pools (one broker proc per server-id, N agents → 1 child). Schema

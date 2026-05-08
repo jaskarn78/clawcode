@@ -1,6 +1,11 @@
 /**
  * Phase 55 Plan 02 — concurrency-capped parallel dispatch.
  *
+ * Phase 115 Plan 07 ADDS: `dispatchTool` — daemon-side tool-response cache
+ * dispatch boundary. See bottom of this file for the new export. The Phase
+ * 55 `runWithConcurrencyLimit` + `ConcurrencyGate` exports stay unchanged
+ * (still consumed by `invokeWithCache` in src/mcp/server.ts).
+ *
  * Purpose
  *   When the Claude Agent SDK dispatches multiple tool_use blocks in the
  *   SAME assistant message batch, our MCP handlers (registered in
@@ -136,5 +141,303 @@ export class ConcurrencyGate {
       const nextWaiter = this.#waiters.shift();
       if (nextWaiter) nextWaiter();
     };
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────── *
+ *  Phase 115 Plan 07 sub-scope 15 — daemon-side tool-response cache       *
+ *  dispatch (folds Phase 999.40)                                          *
+ * ────────────────────────────────────────────────────────────────────── */
+
+import type { Logger } from "pino";
+import type { ToolCacheStore, PutRow } from "./tool-cache-store.js";
+import {
+  buildCacheKey,
+  resolveToolCachePolicy,
+  stampCachedResponse,
+  type CacheKeyStrategy,
+  type CacheStamped,
+  type ToolCachePolicy,
+} from "./tool-cache-policy.js";
+
+/**
+ * Trace recording surface for tool-cache hits / misses. Mirrors the
+ * `recordLazyRecallCall` pattern in trace-collector.ts (Plan 115-05 T04).
+ *
+ * Both methods are best-effort — failures NEVER block the dispatch path.
+ */
+export interface ToolCacheTraceRecorder {
+  recordToolCacheHit(agent: string, tool: string): void;
+  recordToolCacheMiss(agent: string, tool: string): void;
+}
+
+/**
+ * Dispatch options for the daemon-side tool-cache wrapper.
+ *
+ * `upstream` is the underlying tool invocation — runs ONLY on cache miss.
+ * The result is JSON-stringified for storage; ensure the upstream returns
+ * a JSON-serializable value (or a frozen plain object).
+ */
+export interface DispatchToolOptions<T> {
+  readonly tool: string;
+  readonly args: Record<string, unknown>;
+  readonly agentName: string;
+  readonly cacheStore: ToolCacheStore;
+  readonly maxSizeMb: number;
+  readonly userPolicy?: Readonly<
+    Record<
+      string,
+      Partial<{ ttlSeconds: number; keyStrategy: CacheKeyStrategy }>
+    >
+  >;
+  readonly upstream: () => Promise<T>;
+  readonly log?: Logger;
+  readonly traceCollector?: ToolCacheTraceRecorder;
+}
+
+/**
+ * dispatchTool — daemon-side cache-aware tool invocation.
+ *
+ * Flow (per Phase 115 sub-scope 15 spec):
+ *   1. If `args.bypass_cache === true` → upstream call, no cache touch.
+ *   2. Resolve effective policy (defaults + operator overrides).
+ *   3. If `keyStrategy === "no-cache"` OR `ttlSeconds <= 0` → upstream, no cache.
+ *   4. If policy.cacheable(args) returns false → upstream, no cache (e.g.
+ *      mysql_query write-shaped query).
+ *   5. Build cache key via the policy's keyStrategy:
+ *        per-agent  → key includes agentName (Phase 90 lock)
+ *        cross-agent → key OMITS agentName (public data shared)
+ *   6. Cache GET. On hit:
+ *        - record trace hit
+ *        - return stamped response: { cached: { age_ms, source }, data }
+ *   7. Cache MISS: run upstream, store result with TTL, record trace miss,
+ *      return RAW upstream result (unwrapped — agents tell hits from misses
+ *      by the presence of the `cached` envelope).
+ *
+ * Per-agent vs cross-agent isolation is grep-verifiable:
+ *   - agent_or_null: agentName  (per-agent put — Phase 90 isolation)
+ *   - agent_or_null: null       (cross-agent put — shared public data)
+ *
+ * Failure isolation: cache GET / PUT errors NEVER fail the upstream call.
+ * The cache is a perf optimization, not a correctness boundary.
+ */
+export async function dispatchTool<T>(
+  opts: DispatchToolOptions<T>,
+): Promise<T | CacheStamped<T>> {
+  const {
+    tool,
+    args,
+    agentName,
+    cacheStore,
+    maxSizeMb,
+    userPolicy,
+    upstream,
+    log,
+    traceCollector,
+  } = opts;
+
+  // 1. Explicit bypass — agent forces a fresh call.
+  if (args.bypass_cache === true) {
+    log?.debug(
+      { tool, agent: agentName, action: "tool-cache-bypass" },
+      "[diag] tool-cache-bypass",
+    );
+    return upstream();
+  }
+
+  // 2. Resolve effective policy (defaults + operator overrides).
+  const effectivePolicy: ToolCachePolicy = resolveToolCachePolicy(
+    tool,
+    userPolicy,
+  );
+
+  // 3. No-cache strategy or zero TTL — bypass entirely.
+  if (
+    effectivePolicy.keyStrategy === "no-cache" ||
+    effectivePolicy.ttlSeconds <= 0
+  ) {
+    return upstream();
+  }
+
+  // 4. Content-validation gate (e.g., mysql_query writes).
+  if (effectivePolicy.cacheable && !effectivePolicy.cacheable(args)) {
+    log?.debug(
+      { tool, agent: agentName, action: "tool-cache-skip-not-cacheable" },
+      "[diag] tool-cache-skip",
+    );
+    return upstream();
+  }
+
+  // 5. Build cache key. Strip bypass_cache from key components — it's a
+  // dispatch flag, not a content discriminator.
+  const argsForKey: Record<string, unknown> = { ...args };
+  delete argsForKey.bypass_cache;
+  const key = buildCacheKey(
+    tool,
+    argsForKey,
+    agentName,
+    effectivePolicy.keyStrategy,
+  );
+
+  // 6. Cache GET. Failure-isolated.
+  let hit: ReturnType<ToolCacheStore["get"]> = null;
+  try {
+    hit = cacheStore.get(key);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    log?.warn(
+      { tool, agent: agentName, err: msg, action: "tool-cache-get-failed" },
+      "[diag] tool-cache get failed (non-fatal); falling through to upstream",
+    );
+  }
+
+  if (hit) {
+    try {
+      traceCollector?.recordToolCacheHit(agentName, tool);
+    } catch {
+      // Trace recording failures must never affect dispatch.
+    }
+    let cachedData: T;
+    try {
+      cachedData = JSON.parse(hit.response_json) as T;
+    } catch (err) {
+      // Corrupt row — drop and fall through to upstream. Defence-in-depth.
+      const msg = err instanceof Error ? err.message : "unknown";
+      log?.warn(
+        { tool, agent: agentName, err: msg, action: "tool-cache-corrupt-row" },
+        "[diag] tool-cache row failed to parse (non-fatal); falling through",
+      );
+      try {
+        cacheStore.clear(); // cheap fallback for the rare corruption case
+      } catch {
+        /* ignore */
+      }
+      return upstreamWithStore({
+        tool,
+        args,
+        agentName,
+        cacheStore,
+        maxSizeMb,
+        upstream,
+        effectivePolicy,
+        key,
+        traceCollector,
+        log,
+      });
+    }
+    return stampCachedResponse(cachedData, hit.created_at);
+  }
+
+  // 7. Cache MISS — run upstream and write the result.
+  try {
+    traceCollector?.recordToolCacheMiss(agentName, tool);
+  } catch {
+    /* trace recording is best-effort */
+  }
+  return upstreamWithStore({
+    tool,
+    args,
+    agentName,
+    cacheStore,
+    maxSizeMb,
+    upstream,
+    effectivePolicy,
+    key,
+    traceCollector,
+    log,
+  });
+}
+
+/**
+ * Internal helper — runs the upstream call and writes the result into the
+ * cache. Extracted so the corrupt-row fallback path in `dispatchTool` can
+ * reuse the same write logic without duplicating the put-row construction.
+ *
+ * The two `agent_or_null` literal patterns in this function are
+ * grep-verifiable per the Plan 115-07 acceptance criteria:
+ *   - Per-agent path: `agent_or_null: agentName`
+ *   - Cross-agent path: `agent_or_null: null`
+ */
+async function upstreamWithStore<T>(opts: {
+  tool: string;
+  args: Record<string, unknown>;
+  agentName: string;
+  cacheStore: ToolCacheStore;
+  maxSizeMb: number;
+  upstream: () => Promise<T>;
+  effectivePolicy: ToolCachePolicy;
+  key: string;
+  traceCollector?: ToolCacheTraceRecorder;
+  log?: Logger;
+}): Promise<T> {
+  const {
+    tool,
+    agentName,
+    cacheStore,
+    maxSizeMb,
+    upstream,
+    effectivePolicy,
+    key,
+    log,
+  } = opts;
+  const result = await upstream();
+  const now = Date.now();
+  const expiresAt = now + effectivePolicy.ttlSeconds * 1000;
+
+  let putRow: PutRow;
+  if (effectivePolicy.keyStrategy === "per-agent") {
+    // Per-agent isolation (Phase 90 lock) — store the agent name with the row
+    // so inspect/clear can filter by agent. The cache KEY already includes
+    // the agent (built by buildCacheKey), so the agent_or_null column is
+    // primarily for operator introspection + cross-agent leak detection.
+    putRow = {
+      key,
+      tool,
+      agent_or_null: agentName,
+      response_json: safeStringify(result),
+      created_at: now,
+      expires_at: expiresAt,
+    };
+  } else {
+    // Cross-agent shared (public data) — store NULL so two agents calling
+    // the same tool with the same args produce ONE row. The cache KEY also
+    // omits the agent (built by buildCacheKey), so two agents converge on
+    // the same key + same row.
+    putRow = {
+      key,
+      tool,
+      agent_or_null: null,
+      response_json: safeStringify(result),
+      created_at: now,
+      expires_at: expiresAt,
+    };
+  }
+
+  try {
+    cacheStore.put(putRow, maxSizeMb);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    log?.warn(
+      { tool, agent: agentName, err: msg, action: "tool-cache-put-failed" },
+      "[diag] tool-cache put failed (non-fatal); response returned uncached",
+    );
+  }
+  return result;
+}
+
+/**
+ * Defensive JSON.stringify — converts undefined / functions / symbols to
+ * stable null. Errors return an empty object so a single broken response
+ * shape can't poison the rest of the pipeline.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(
+      value,
+      (_key, v) => (typeof v === "bigint" ? v.toString() : v),
+      0,
+    );
+  } catch {
+    return "{}";
   }
 }

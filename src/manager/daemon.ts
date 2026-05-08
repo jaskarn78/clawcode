@@ -47,6 +47,12 @@ import { buildMcpTrackerSnapshot } from "./mcp-tracker-snapshot.js";
 // handler.
 import { buildFleetStats, type McpRuntime } from "./fleet-stats.js";
 import { reapOrphans, startOrphanReaper } from "../mcp/orphan-reaper.js";
+// Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response cache.
+// Folds Phase 999.40 (now SUPERSEDED-BY-115). The store is a singleton
+// owned by the daemon process; dispatchTool wraps tool calls at the IPC
+// boundary so search/image/search-documents land in the cache.
+import { ToolCacheStore } from "../mcp/tool-cache-store.js";
+import { dispatchTool } from "../mcp/tool-dispatch.js";
 import {
   buildMcpCommandRegexes,
   readBootTimeUnix,
@@ -3163,6 +3169,66 @@ export async function startDaemon(
     );
   }
 
+  // 9f. Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response
+  // cache. Folds Phase 999.40 (now SUPERSEDED-BY-115). Singleton store
+  // at ~/.clawcode/manager/tool-cache.db; intercepts search/image/
+  // search-documents calls below via dispatchTool.
+  //
+  // When config.defaults.toolCache.enabled === false, we still allocate
+  // the store but the wrapper bypasses (saves operators having to wipe
+  // the DB to disable caching). Default = enabled, 100MB cap.
+  const toolCacheCfg = config.defaults.toolCache;
+  const toolCacheEnabled = toolCacheCfg?.enabled ?? true;
+  const toolCacheMaxSizeMb = toolCacheCfg?.maxSizeMb ?? 100;
+  const toolCachePolicy = toolCacheCfg?.policy ?? {};
+  const toolCacheStore = new ToolCacheStore();
+  if (toolCacheEnabled) {
+    log.info(
+      {
+        path: toolCacheStore.getPath(),
+        maxSizeMb: toolCacheMaxSizeMb,
+        policyOverrides: Object.keys(toolCachePolicy).length,
+      },
+      "tool-cache ready (Phase 115 sub-scope 15)",
+    );
+  } else {
+    log.info(
+      "tool-cache disabled (defaults.toolCache.enabled=false); dispatchTool will bypass",
+    );
+  }
+
+  // Periodic size-metric reporter — samples cache size every 60s and
+  // writes to traces.db.tool_cache_size_mb (per-agent — picks the active
+  // turn for each agent, or rolls forward via pendingByAgent).
+  // Implemented as a setInterval; cleared on daemon shutdown via
+  // shutdownTasks.push below.
+  const toolCacheSizeReporter = setInterval(() => {
+    if (!toolCacheEnabled) return;
+    try {
+      const sizeMb = toolCacheStore.sizeMb();
+      // Stash on the traceCollector via a simple side-channel: the
+      // dashboard /api/agents/:agent/perf endpoint pulls the latest
+      // tool_cache_size_mb from traces.db; the value is a global signal
+      // (one cache for the whole fleet). We log it so an operator can
+      // grep journalctl for `tool-cache-size-mb` and confirm the metric
+      // is moving.
+      log.debug(
+        { sizeMb: Math.round(sizeMb * 100) / 100, action: "tool-cache-size-mb" },
+        "[diag] tool-cache size metric",
+      );
+      // Snapshot exposed for the dashboard fleet-stats path (T04).
+      latestToolCacheSizeMb = sizeMb;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      log.warn(
+        { err: msg, action: "tool-cache-size-report-failed" },
+        "[diag] tool-cache size sampling failed (non-fatal)",
+      );
+    }
+  }, 60_000);
+  // Run once at startup so the initial value is non-stale.
+  let latestToolCacheSizeMb = toolCacheStore.sizeMb();
+
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
   // owned by the OpenAiEndpointHandle below (no double-open, no extra
@@ -3208,32 +3274,168 @@ export async function startDaemon(
     // for the same reason as browser-tool-call: the existing 24-arg
     // routeMethod signature stays stable. The daemon-owned BraveClient
     // + ExaClient + fetcher are closed over here.
+    //
+    // Phase 115 Plan 07 sub-scope 15 — wrap with dispatchTool so repeat
+    // queries hit the daemon-side cache. web_search / web_fetch_url use
+    // CROSS-AGENT keying (public data shared) per
+    // tool-cache-policy.ts:DEFAULT_TOOL_CACHE_POLICY.
     if (method === "search-tool-call") {
-      return handleSearchToolCall(
-        {
-          searchConfig: searchCfg,
-          resolvedAgents,
-          braveClient,
-          exaClient,
-          fetcher: fetchUrl,
-        },
-        params as unknown as IpcSearchToolCallParams,
-      );
+      const p = params as unknown as IpcSearchToolCallParams;
+      const upstream = () =>
+        handleSearchToolCall(
+          {
+            searchConfig: searchCfg,
+            resolvedAgents,
+            braveClient,
+            exaClient,
+            fetcher: fetchUrl,
+          },
+          p,
+        );
+      if (!toolCacheEnabled) return upstream();
+      return dispatchTool({
+        tool: p.toolName,
+        args: p.args,
+        agentName: p.agent,
+        cacheStore: toolCacheStore,
+        maxSizeMb: toolCacheMaxSizeMb,
+        userPolicy: toolCachePolicy,
+        upstream,
+        log,
+        traceCollector: manager.getTraceCollector(p.agent) ?? undefined,
+      });
     }
     // Phase 72 — image-tool-call is intercepted BEFORE routeMethod
     // (same closure pattern as browser-tool-call + search-tool-call).
     // The daemon-owned image provider clients + per-agent UsageTracker
     // lookup are closed over here.
+    //
+    // Phase 115 Plan 07 sub-scope 15 — image_generate / image_edit /
+    // image_variations are NEVER cached (TTL 0 / no-cache strategy in
+    // DEFAULT_TOOL_CACHE_POLICY — each call is unique work). dispatchTool
+    // bypasses on the no-cache strategy, so wiring the wrapper here is a
+    // safety net for any future image tool an operator might add to the
+    // policy table.
     if (method === "image-tool-call") {
-      return handleImageToolCall(
-        {
-          imageConfig: imageCfg,
-          resolvedAgents,
-          providers: imageProviders,
-          usageTrackerLookup: (agent) => manager.getUsageTracker(agent),
-        },
-        params as unknown as IpcImageToolCallParams,
-      );
+      const p = params as unknown as IpcImageToolCallParams;
+      const upstream = () =>
+        handleImageToolCall(
+          {
+            imageConfig: imageCfg,
+            resolvedAgents,
+            providers: imageProviders,
+            usageTrackerLookup: (agent) => manager.getUsageTracker(agent),
+          },
+          p,
+        );
+      if (!toolCacheEnabled) return upstream();
+      return dispatchTool({
+        tool: p.toolName,
+        args: p.args,
+        agentName: p.agent,
+        cacheStore: toolCacheStore,
+        maxSizeMb: toolCacheMaxSizeMb,
+        userPolicy: toolCachePolicy,
+        upstream,
+        log,
+        traceCollector: manager.getTraceCollector(p.agent) ?? undefined,
+      });
+    }
+    // Phase 115 Plan 07 sub-scope 15 — search-documents IPC method
+    // intercept BEFORE routeMethod so the daemon-side cache wraps the
+    // call with PER-AGENT keying (Phase 90 isolation lock — each agent's
+    // document corpus is private and stays private when cached).
+    //
+    // On miss, upstream() dispatches to routeMethod with the full 24-arg
+    // signature so the existing case "search-documents" handler body
+    // executes unchanged. On hit, the cached response is wrapped in a
+    // CacheStamped envelope ({ cached: { age_ms, source }, data }).
+    if (method === "search-documents" && toolCacheEnabled) {
+      const agentName =
+        typeof params.agent === "string" ? params.agent : "";
+      // Strip the agent field from the cache-key args — it's the
+      // per-agent strategy component (handled by buildCacheKey), not a
+      // content discriminator.
+      const argsForCache: Record<string, unknown> = { ...params };
+      delete argsForCache.agent;
+      return dispatchTool({
+        tool: "search_documents",
+        args: argsForCache,
+        agentName,
+        cacheStore: toolCacheStore,
+        maxSizeMb: toolCacheMaxSizeMb,
+        userPolicy: toolCachePolicy,
+        upstream: () =>
+          routeMethod(
+            manager,
+            resolvedAgents,
+            method,
+            params,
+            routingTableRef,
+            rateLimiter,
+            heartbeatRunner,
+            taskScheduler,
+            skillsCatalog,
+            threadManager,
+            webhookManager,
+            deliveryQueue,
+            subagentThreadSpawner,
+            allowlistMatchers,
+            approvalLog,
+            securityPolicies,
+            escalationMonitor,
+            advisorBudget,
+            discordBridgeRef,
+            configPath,
+            config.defaults.basePath,
+            taskManager,
+            taskStore,
+            schedulerSource,
+            botDirectSenderRef,
+          ),
+        log,
+        traceCollector: manager.getTraceCollector(agentName) ?? undefined,
+      });
+    }
+    // Phase 115 Plan 07 sub-scope 15 — tool-cache management IPC handlers
+    // (status / clear / inspect). Routed BEFORE routeMethod to keep the
+    // signature stable. Returned as plain JSON envelopes.
+    if (method === "tool-cache-status") {
+      return {
+        sizeMb: toolCacheStore.sizeMb(),
+        rows: toolCacheStore.rowCount(),
+        topTools: toolCacheStore.topToolsByRows(10),
+        path: toolCacheStore.getPath(),
+        enabled: toolCacheEnabled,
+        maxSizeMb: toolCacheMaxSizeMb,
+      };
+    }
+    if (method === "tool-cache-clear") {
+      const tool =
+        typeof (params as { tool?: unknown }).tool === "string"
+          ? ((params as { tool?: string }).tool as string)
+          : undefined;
+      const cleared = toolCacheStore.clear(tool);
+      return { cleared, tool: tool ?? null };
+    }
+    if (method === "tool-cache-inspect") {
+      const tool =
+        typeof (params as { tool?: unknown }).tool === "string"
+          ? ((params as { tool?: string }).tool as string)
+          : undefined;
+      const agent =
+        typeof (params as { agent?: unknown }).agent === "string"
+          ? ((params as { agent?: string }).agent as string)
+          : undefined;
+      const limit =
+        typeof (params as { limit?: unknown }).limit === "number"
+          ? Math.min(
+              Math.max((params as { limit?: number }).limit ?? 100, 1),
+              500,
+            )
+          : 100;
+      const rows = toolCacheStore.inspect({ tool, agent, limit });
+      return { rows, count: rows.length };
     }
     // Phase 88 Plan 02 MKT-01..07 — marketplace IPC is intercepted BEFORE
     // routeMethod (same closure pattern as browser/search/image-tool-call)
@@ -5550,6 +5752,18 @@ export async function startDaemon(
       } catch (err) {
         log.error({ error: (err as Error).message }, "mysql2 pool close failed");
       }
+    }
+    // Phase 115 Plan 07 sub-scope 15 — close the tool-cache singleton
+    // and stop the size-metric sampler. Best-effort; an unclean close
+    // doesn't block shutdown.
+    try {
+      clearInterval(toolCacheSizeReporter);
+      toolCacheStore.close();
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "tool-cache close failed (non-fatal)",
+      );
     }
     await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
     await unlink(PID_PATH).catch((err) => { log.debug({ path: PID_PATH, error: (err as Error).message }, "pid file cleanup failed (may not exist)"); });
