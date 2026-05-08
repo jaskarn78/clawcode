@@ -7,12 +7,16 @@ Multi-agent orchestration built natively on [Claude Code](https://claude.ai/code
 ClawCode turns Claude Code into a multi-agent platform. Each agent is a persistent Claude Code session bound to a Discord channel with:
 
 - **Persistent identity** via SOUL.md / IDENTITY.md, loaded lazily at session boot
-- **Long-term memory** — per-agent SQLite + local 384-dim embeddings (zero API cost), tiered hot/warm/cold with auto-consolidation and decay
+- **Bounded memory architecture (v2.8)** — 16K-char hard-capped always-injected tier with `drop-lowest-importance` enforcement, tool-mediated lazy recall for older context, cache-breakpoint placement so prompt cache survives memory writes
+- **Long-term memory** — per-agent SQLite + local 384-dim embeddings (zero API cost), tiered hot/warm/cold with auto-consolidation and decay; optional bge-small-en-v1.5 + int8 quantization migration (~5-7 MTEB-point recall lift, ~78% storage reduction)
+- **Lazy-load memory tools (v2.8)** — `clawcode_memory_search` (FTS5 + sqlite-vec hybrid), `clawcode_memory_recall`, `clawcode_memory_edit` (path-locked), `clawcode_memory_archive` (agent-curated promotion); old context is one tool-call away, not always-injected
+- **Daemon-side tool-response cache (v2.8)** — content-keyed LRU cache for repeated MCP tool calls (per-tool TTL, per-agent isolation for `search_documents`, never caches writes)
 - **Discord integration** — each agent lives in its own channel, types in real time, handles attachments/threads/reactions/webhooks
 - **OpenAI-compatible HTTP endpoint** — `/v1/chat/completions` + `/v1/models` on port 3101; every agent reachable from any OpenAI client with per-bearer-key session continuity
-- **MCP tools auto-injected** — `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `delegate_task`, `send_message`, `browser_*`, `web_search` / `web_fetch_url`, `image_generate` / `image_edit` / `image_variations`
+- **MCP tools auto-injected** — `clawcode_memory_*`, `memory_lookup`, `spawn_subagent_thread`, `ask_advisor`, `delegate_task`, `send_message`, `browser_*`, `web_search` / `web_fetch_url`, `image_generate` / `image_edit` / `image_variations`
 - **Model tiering** — fork-based escalation (Haiku → Opus) with per-agent budgets and Discord alerts
-- **Cross-agent handoffs** — durable task store + trigger engine + policy DSL; agents delegate work asynchronously
+- **Cross-agent handoffs** — durable task store + trigger engine + policy DSL + transactional consolidation coordinator (v2.8) with rollback semantics
+- **Operator-side observability (v2.8)** — `prompt-bloat-suspected` classifier, per-agent diagnostic dump as config flag (`agents[*].debug.dumpBaseOptionsOnSpawn`), consolidation run-log audit trail, tier1 + tool-cache + lazy-recall metrics on dashboard
 - **Self-updating** — `clawcode update --restart` pulls, rebuilds, and restarts
 
 **Migration from OpenClaw** — one-shot migrator (`clawcode migrate openclaw`) ports 15-agent fleets from OpenClaw to ClawCode with full memory/workspace/identity preservation. Shipped in v2.1 — see [milestones/v2.1-ROADMAP.md](.planning/milestones/v2.1-ROADMAP.md).
@@ -94,9 +98,15 @@ journalctl -u clawcode -f       # service logs (deployment)
 
 ### Memory & Costs
 - `clawcode memory search <agent> "<query>"` — semantic search
+- `clawcode memory migrate-embeddings start|status|re-embed|pause|resume|force-cutover|rollback|v1-dropped <agent>` — bge-small + int8 migration state machine (v2.8); reversible until cutover
 - `clawcode costs [--period today|7d|30d] [--agent <name>]` — token + image spend
 - `clawcode latency <agent>` — p50/p95/p99 per-turn trace
 - `clawcode context-audit <agent>` — per-section token budgets
+
+### Performance & Observability (v2.8)
+- `clawcode tool-cache status|clear|inspect` — daemon-side MCP tool-response cache surface
+- `clawcode tool-latency-audit [--json] [--window-hours N]` — split-latency methodology (`tool_execution_ms` vs `tool_roundtrip_ms`) + parallel-tool-call rate + tool-use-rate measurement gate
+- `clawcode perf-comparison` — pre/post-115 SLO comparison harness with bench-scenario runner
 
 ### OpenAI Endpoint
 - `clawcode openai-key create <agent> [--label X]` — mint pinned bearer key
@@ -130,6 +140,7 @@ Auto-injected by the daemon for every agent:
 | Server | Tools | Source |
 |--------|-------|--------|
 | `memory` | `memory_lookup`, `search_documents` | v1.5 |
+| `clawcode_memory` | `clawcode_memory_search` (FTS5 + sqlite-vec hybrid), `clawcode_memory_recall`, `clawcode_memory_edit` (path-locked to SOUL/IDENTITY/MEMORY/USER.md), `clawcode_memory_archive` (Tier 2 → Tier 1 promotion) | v2.8 Phase 115 |
 | `collab` | `spawn_subagent_thread`, `ask_advisor`, `delegate_task`, `send_message` | v1.3, v1.8 |
 | `browser` | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_extract`, `browser_wait_for` | v2.0 Phase 70 |
 | `search` | `web_search`, `web_fetch_url` | v2.0 Phase 71 |
@@ -143,9 +154,14 @@ Disable per-server via `defaults.<server>.enabled: false` in `clawcode.yaml`, or
 
 Per-agent SQLite at `<workspace>/memory/memories.db` with sqlite-vec 384-dim vectors. Writes go through `MemoryStore.insert()` — never raw SQL. Key features:
 
-- **Auto-compaction** at configurable context-fill threshold
+- **Bounded always-injected tier** (v2.8) — `INJECTED_MEMORY_MAX_CHARS = 16000` hard cap on SOUL+IDENTITY+capability+MEMORY+USER+reflections; `STABLE_PREFIX_MAX_TOKENS = 8000` outer cap. Real `enforceDropLowestImportance` enforcement (replaces v1.7's `warn-and-keep` no-op). Head-tail 70/20 truncation fallback + daemon-side warn surfaced to dashboard. Priority dream-pass triggered when truncation fires twice in 24h.
+- **Tier 1 / Tier 2 split** (v2.8) — Tier 1 is the curated bounded markdown layer (always-injected). Tier 2 is the unbounded chunk store with hybrid retrieval, surfaced only via lazy-load tools. `clawcode_memory_archive` lets agents promote Tier 2 chunks into Tier 1 themselves.
+- **Cache-breakpoint placement** (v2.8) — static identity (SOUL fingerprint, IDENTITY, capability manifest, skills, tool defs) lands BEFORE the prompt-cache breakpoint; dynamic memory + recent reflections land AFTER. Memory writes no longer bust the cache.
+- **Phase 95 hybrid 5-row dream policy** (v2.8) — `newWikilinks` auto-apply (additive only), `promotionCandidates` ADDITIVE with priorityScore ≥ 80 auto-applied with 30-min Discord veto window, `MUTATING` promotions and `suggestedConsolidations` operator-required, forced-priority pass overrides on tier-1 overflow.
+- **Embedding upgrade path** (v2.8) — bge-small-en-v1.5 (MTEB 62.17, ~33MB ONNX) + int8 quantization in sqlite-vec, dual-write transition + background batch re-embed at 5% CPU, reversible until cutover. Runs over T+0 → T+14d post-deploy via `clawcode memory migrate-embeddings`.
+- **Auto-compaction** at configurable context-fill threshold; no-LLM tool-output prune (v2.8 Hermes-pattern Phase 1 — free win)
 - **Knowledge graph** — wikilinks + backlinks + graph-enriched search
-- **Consolidation** — daily logs → weekly/monthly digests, raw archived
+- **Consolidation** — daily logs → weekly/monthly digests, raw archived; transactional cross-agent coordinator (v2.8) with `consolidation_run_id` + rollback semantics
 - **Decay + dedup + tiered hot/warm/cold** with importance scoring
 - **Conversation memory** (v1.9) — every Discord turn captured with provenance + session-boundary summarization + resume auto-injection
 - **Shared-workspace isolation** (v2.1) — per-agent `memoryPath:` keeps `memories.db` / inbox / heartbeat / session-state distinct across agents sharing a `basePath`
@@ -187,7 +203,7 @@ Restart preserves running-agent state via the auto pre-deploy snapshot (v2.7): t
 | Runtime | Node.js 22 LTS |
 | Agent SDK | @anthropic-ai/claude-agent-sdk 0.2.x |
 | Database | better-sqlite3 + sqlite-vec |
-| Embeddings | @huggingface/transformers (local ONNX, 384-dim MiniLM) |
+| Embeddings | @huggingface/transformers (local ONNX, 384-dim MiniLM-L6 default; bge-small-en-v1.5 + int8 available via v2.8 migration) |
 | Discord | discord.js 14.x |
 | Scheduling | croner |
 | Validation | zod 4.x |
@@ -216,10 +232,12 @@ src/
   manager/      Session lifecycle, daemon, recovery, escalation, TurnDispatcher
   discord/      Bridge, routing, threads, webhooks, streaming, capture
   memory/       SQLite store, embeddings, tiers, consolidation, ConversationStore
+                migrations/  bge-small + int8 dual-write state machine (v2.8)
+                tools/       4 lazy-load MCP tools (search/recall/edit/archive — v2.8)
   heartbeat/    Health checks, context zones, auto-maintenance
   scheduler/    Cron-based task execution
   ipc/          Unix socket JSON-RPC
-  mcp/          MCP server for agent-to-agent tools
+  mcp/          MCP server, tool-cache (v2.8: store/policy/dispatcher with per-agent isolation)
   security/     Channel ACLs, allowlists, instruction-pattern detector
   collaboration/Inter-agent inbox messaging
   usage/        Token tracking, budgets, cost estimation, Discord summaries
@@ -247,6 +265,7 @@ scripts/
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full version-by-version + phase-by-phase changelog.
 
 Recent milestones:
+- **v2.8 Performance + Reliability** (2026-05-08, in progress) — Phase 115 memory + context + prompt-cache redesign: bounded always-injected tier (16K/8K caps with `enforceDropLowestImportance`), Tier 1/Tier 2 formal split, 4 lazy-load memory tools, cache-breakpoint placement (static-then-dynamic), bge-small-en-v1.5 + int8 dual-write embedding migration, daemon-side MCP tool-response cache (folds 999.40), Phase 95 hybrid 5-row dream policy, cross-agent transactional consolidation, prompt-bloat classifier + diagnostic dump as config flag, tool-latency methodology audit (split `tool_execution_ms` vs `tool_roundtrip_ms`), parallel-tool-call instrumentation. Triggered by 2026-05-07 fin-acquisition incident (32,989-char `systemPrompt.append` → Anthropic 400). 10 plans, 37 tasks across 5 waves.
 - **v2.7 Operator Self-Serve + Production Hardening** (2026-05-01) — GSD-via-Discord, /clawcode-status rich telemetry + Usage panel, daemon-side op:// secret cache, trigger-policy default-allow + coalescer storm fix, MCP lifecycle hardening, 1password-mcp broker pooling
 - **v2.6 Tool Reliability & Memory Dreaming** (2026-04-25) — capability probes, dynamic tool advertising, idle-time memory dreaming
 - **v2.5 Cutover Parity Verification** (2026-04-25) — verifier infrastructure, status/marketplace/manifest UX fixes
