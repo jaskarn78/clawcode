@@ -48,3 +48,15 @@ orchestrator's narrower `<success_criteria>` (matching the precedent
 The Phase 115-04 narrow scope (architecture: place sections, mark boundary,
 keep SDK shape) lands the structural change. Operator-visible
 observability layered on top arrives in 115-08.
+
+## conversation-brief.test.ts — 2 pre-existing failures (not introduced by 115-06)
+
+**Discovered while running full memory test suite during Plan 115-06 T03 verification.**
+
+```
+src/memory/__tests__/conversation-brief.test.ts
+  Tests  2 failed | 13 passed
+```
+
+Both failures persist with `git stash` applied (i.e., pre-existing on master before any 115-06 changes). One assertion is `result.skipped === true` (line 499) where the actual value is `false`. Out of scope for 115-06; logging here per execution-flow Rule SCOPE BOUNDARY.
+
