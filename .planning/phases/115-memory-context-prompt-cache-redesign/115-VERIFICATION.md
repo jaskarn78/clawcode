@@ -209,5 +209,118 @@ Pending items are exclusively post-deploy operator actions and measurement gates
 
 ---
 
+## Post-Deploy Audit Findings (2026-05-08)
+
+3 dashboard metric producers were missing despite schema + types + readers
+being present. Caught during post-deploy spot-check the morning after the
+Phase 115 deploy at 13:06 UTC; functional bounded-tier enforcement was
+unaffected.
+
+| Metric | Gap | Fix commit |
+|---|---|---|
+| `tier1_inject_chars` | `recordTier1Size` / `bumpTier1Size` never called from any producer; assembler had the data but no plumbing to the trace-collector | `7d2d8ae` (T01) |
+| `tier1_budget_pct` | derived from `tier1_inject_chars / INJECTED_MEMORY_MAX_CHARS`; produced co-jointly | `7d2d8ae` (T01) |
+| `prompt_bloat_warnings_24h` | `PromptBloatTraceSink` interface existed at `session-adapter.ts:196-204`; session-manager duck-typed `incrementPromptBloatWarning` onto the TraceCollector at line 2399-2403; but the method DID NOT EXIST on TraceCollector — the duck-type probe always fell through to no-op | `7d2d8ae` (T01 producer wiring) + `3767f2f` (T02 contract test) |
+
+### Functional impact
+
+Zero. The bounded-tier ENFORCEMENT (`enforceDropLowestImportance`) IS active
+in production — protecting against the 32K-char prompt-bloat that triggered
+Phase 115. The gap was purely OBSERVABILITY:
+
+- Operators couldn't see per-turn how much of the 16K bounded tier was being
+  used — making it impossible to tell whether agents were running near-cap
+  (a leading-indicator for needing dream-pass priority firing) or with lots
+  of headroom.
+- Operators couldn't see prompt-bloat warning trends — the classifier was
+  emitting `[diag] likely-prompt-bloat` log lines on every fire, but the
+  dashboard's 24h SUM aggregator was always reading 0.
+
+### Root cause
+
+Plan-checker only verified schema-side completeness during Phase 115
+verification:
+- Schema column slot opened (in `migrateSchema`) — verified
+- TypeScript field declared (in `TurnRecord`) — verified
+- Reader query exposes the column (in `getPhase115DashboardMetrics`) — verified
+- Dashboard renderer surfaces the column (in `app.js`) — verified
+- **WRITE-side coverage NOT checked**: no producer code path ever assigned
+  the field on a TurnRecord that flowed to writeTurn
+
+The schema-without-writer pattern — defining types, opening columns, adding
+readers, and building dashboard renderers WITHOUT a runtime producer to
+populate the field — slipped through every quality gate because each gate
+only checked one half of the contract.
+
+### Fix details
+
+**T01 (`7d2d8ae`):**
+- `Turn.bumpTier1Size(injectChars, capChars)` writes per-turn `tier1_*`.
+- `Turn.bumpPromptBloatWarning()` writes per-turn `prompt_bloat_warnings_24h`.
+- `TraceCollector.recordTier1Size(agent, ...)` folds via the active-turn
+  registry; no rolling counter (Tier 1 is a per-assembly snapshot).
+- `TraceCollector.incrementPromptBloatWarning(agent)` mirrors the
+  `recordLazyRecallCall` pattern — active-turn fold OR rolling counter
+  drained at next end().
+- `assembleContextInternal` returns `identityChars`;
+  `assembleContextTraced` records on Turn via duck-typed method probe so
+  legacy `{startSpan, end}` test stubs keep working.
+- `writeTurn` extends INSERT to 22 columns (was 19) — adds
+  `tier1_inject_chars`, `tier1_budget_pct`, `prompt_bloat_warnings_24h`
+  with `?? null` fallback for legacy callers.
+- Conditional spread in `Turn.end()`: only attach the new fields when
+  the producer actually fired this turn (NULL = "not measured", not 0).
+- 11 contract tests in `trace-collector-tier1-metric.test.ts`.
+
+**T02 (`3767f2f`):**
+- 9 contract tests in `trace-collector-prompt-bloat.test.ts` pinning the
+  prompt-bloat producer contract — including the
+  `PromptBloatTraceSink` duck-type interface at session-manager.ts that
+  the producer method must satisfy.
+
+### Lesson — quality-gate gap
+
+Schema-without-writer pattern slipped through plan-checker. Future phase
+quality gates should grep for write-side coverage of every new column,
+not just type+schema completeness:
+
+```bash
+# For each new column NEW_COL added in a phase:
+grep -rn "NEW_COL\|newCol" src/ | grep -E "(insertTrace|writeTurn|INSERT|UPDATE)"
+# Must yield ≥1 producer hit, not just declarations or readers.
+```
+
+Better still: a plan-checker rule that verifies every entry in
+`Phase115TurnColumns` (or any equivalent typed-column-list export) has a
+matching `?` placeholder in the prepared INSERT statement and a binding
+in `writeTurn`. The 22-vs-19 placeholder count drift was the structural
+signal we missed.
+
+### Patch deploy
+
+Required to surface metrics in dashboard. Same restart cadence as the
+original Phase 115 deploy. Pre-deploy snapshot (Phase 999.6) covers this
+patch on the same restart path.
+
+NO deploy steps appended to this commit per CLAUDE.md gate +
+`feedback_no_auto_deploy` memory + `feedback_ramy_active_no_deploy`
+memory. Operator runs `scripts/deploy-clawdy.sh` when Ramy-quiet window
+opens.
+
+### Verification of fix (post-patch)
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run src/performance src/manager/__tests__/prompt-bloat-classifier.test.ts` —
+  181/181 green (was 161, +20 new contract tests)
+- `npx vitest run src/manager/__tests__/context-assembler` — 108/108 green
+  (no regression from the duck-typed `bumpTier1Size` probe in
+  `assembleContextTraced`)
+- Dashboard `getPhase115DashboardMetrics` test (`trace-store-dashboard-metrics.test.ts`)
+  remains green — its raw-SQL UPDATE patches still work because the
+  producer is additive (callers without bumpTier1Size land NULL as before).
+
+---
+
 _Verified: 2026-05-08_
 _Verifier: Claude (gsd-verifier)_
+_Post-deploy patch: 2026-05-08 (3 producer gaps wired and tested)_
