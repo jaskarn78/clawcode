@@ -34,7 +34,7 @@ describe("resolveAgentConfig", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
-    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
     excludeDynamicSections: true, // Phase 115 sub-scope 2
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -589,7 +589,7 @@ describe("resolveAgentConfig - mcpServers", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
-    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
     excludeDynamicSections: true, // Phase 115 sub-scope 2
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -1564,7 +1564,7 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
-    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
     excludeDynamicSections: true, // Phase 115 sub-scope 2
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -1972,7 +1972,7 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
-      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
     excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -2119,7 +2119,7 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
-      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
     excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -2364,7 +2364,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       greetOnRestart: true,
       greetCoolDownMs: 300_000,
       memoryAutoLoad: true,
-      memoryRetrievalTokenBudget: 2000,
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3
       excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5,
       memoryScannerEnabled: true,

@@ -131,6 +131,19 @@ export type ResolvedAgentConfig = {
    */
   readonly memoryRetrievalTopK: number;
   /**
+   * Phase 115 sub-scope 3 — populated by loader.ts from
+   * agent.memoryRetrievalTokenBudget ?? defaults.memoryRetrievalTokenBudget.
+   * Range 500-8000 (zod-validated). Consumed by
+   * SessionManager.getMemoryRetrieverForAgent and forwarded to
+   * retrieveMemoryChunks as the per-turn <memory-context> token cap.
+   * Down from the pre-115 hardcoded 2000 default; the zod knob existed
+   * in defaultsSchema since Phase 90 MEM-03 but was never wired through —
+   * Phase 115 Plan 01 lit it up. Optional at the type level so existing
+   * ResolvedAgentConfig test factories don't need updates; consumers
+   * default to 1500 (matches defaults.memoryRetrievalTokenBudget).
+   */
+  readonly memoryRetrievalTokenBudget?: number;
+  /**
    * Phase 115 sub-scope 2 — populated by loader.ts from
    * agent.excludeDynamicSections ?? defaults.excludeDynamicSections (zod
    * default true). When true, the SDK strips per-machine dynamic sections

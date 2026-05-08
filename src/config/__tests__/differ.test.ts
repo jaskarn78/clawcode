@@ -20,7 +20,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — defaults carry the zod-populated value.
       memoryAutoLoad: true,
-      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
       excludeDynamicSections: true, // Phase 115 sub-scope 2
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02

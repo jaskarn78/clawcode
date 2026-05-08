@@ -97,7 +97,13 @@ export type RetrieveArgs = Readonly<{
   topK?: number;
   /** Default 14 per D-24. */
   timeWindowDays?: number;
-  /** Default 2000 tokens (~8000 chars) per D-RETRIEVAL. */
+  /**
+   * Default 1500 tokens (~6000 chars) per Phase 115 sub-scope 3 (was 2000
+   * pre-115 per Phase 90 D-RETRIEVAL; lowered to leave margin for sub-scope
+   * 1's tier-1 cap). Caller (SessionManager.getMemoryRetrieverForAgent) reads
+   * from ResolvedAgentConfig.memoryRetrievalTokenBudget which loader resolves
+   * from agent.X ?? defaults.X. Range enforced upstream by zod (500-8000).
+   */
   tokenBudget?: number;
   /** Test hook: override Date.now() for deterministic time-window gating. */
   now?: number;
@@ -125,7 +131,11 @@ export async function retrieveMemoryChunks(
   args: RetrieveArgs,
 ): Promise<readonly MemoryRetrievalResult[]> {
   const topK = args.topK ?? 5;
-  const tokenBudget = args.tokenBudget ?? 2000;
+  // Phase 115 sub-scope 3 — was 2000; lowered to 1500 to align with the
+  // wired-through defaults.memoryRetrievalTokenBudget. Operator override via
+  // YAML; per-agent override on agentSchema. See SessionManager.getMemoryRetriever
+  // ForAgent for the resolution chain.
+  const tokenBudget = args.tokenBudget ?? 1500;
   const windowDays = args.timeWindowDays ?? 14;
   const now = args.now ?? Date.now();
 

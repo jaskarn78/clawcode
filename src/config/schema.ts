@@ -1120,6 +1120,12 @@ export const agentSchema = z.object({
   // omitted, resolver falls back to defaults.memoryRetrievalTopK (5 per
   // D-RETRIEVAL). Reloadable (next turn picks up the new value).
   memoryRetrievalTopK: z.number().int().positive().max(50).optional(),
+  // Phase 115 sub-scope 3 — per-agent override for the per-turn
+  // <memory-context> token budget. When omitted, resolver falls back to
+  // defaults.memoryRetrievalTokenBudget (1500 per Phase 115 D-02). Range
+  // 500-8000. Reloadable — next turn picks up the new value via the
+  // getMemoryRetrieverForAgent closure re-read.
+  memoryRetrievalTokenBudget: z.number().int().min(500).max(8000).optional(),
   // Phase 115 sub-scope 2 — per-agent override for the SDK
   // systemPrompt.excludeDynamicSections flag. When omitted, resolver falls
   // back to defaults.excludeDynamicSections (default true). Set false to
@@ -1445,10 +1451,15 @@ export const defaultsSchema = z.object({
   // per D-RETRIEVAL). Reloadable — next turn picks up the new value via
   // the getMemoryRetrieverForAgent closure re-read.
   memoryRetrievalTopK: z.number().int().positive().max(50).default(5),
-  // Phase 90 MEM-03 — fleet-wide token budget for retrieved chunks injected
-  // into the mutable suffix. 2000 tokens ≈ ~8000 chars; keeps the per-turn
-  // payload well under any sane model's context ceiling.
-  memoryRetrievalTokenBudget: z.number().int().positive().default(2000),
+  // Phase 115 sub-scope 3 — fleet-wide token budget for the per-turn
+  // <memory-context> block. Down from the pre-115 hardcoded 2000 — the zod
+  // knob existed in defaultsSchema since Phase 90 MEM-03 but was never
+  // forwarded to retrieveMemoryChunks (Pain Point #1, codebase-memory-
+  // retrieval.md). Phase 115 Plan 01 wires it through and tightens the
+  // default to leave margin for sub-scope 1's tier-1 cap. 1500 ≈ ~6000
+  // chars; range 500-8000 (validated). Reloadable — next turn picks up
+  // via the getMemoryRetrieverForAgent closure re-read.
+  memoryRetrievalTokenBudget: z.number().int().min(500).max(8000).default(1500),
   // Phase 115 sub-scope 2 — fleet-wide default for the SDK
   // systemPrompt.excludeDynamicSections flag. When true, per-machine
   // dynamic sections (cwd, auto-memory paths, git status) are stripped
@@ -1916,7 +1927,10 @@ export const configSchema = z.object({
     // values in defaultsSchema above. Scanner on by default; retrieval
     // topK=5 + token budget 2000 per D-RETRIEVAL.
     memoryRetrievalTopK: 5,
-    memoryRetrievalTokenBudget: 2000,
+    // Phase 115 sub-scope 3 — was 2000 (pre-115 dead-knob default). Now
+    // 1500 (CONTEXT.md D-02). Mirror exists for the configSchema fallback
+    // when `defaults:` is OMITTED entirely from clawcode.yaml.
+    memoryRetrievalTokenBudget: 1500,
     // Phase 115 sub-scope 2 — fleet-wide default mirrors defaultsSchema.
     excludeDynamicSections: true,
     memoryScannerEnabled: true,

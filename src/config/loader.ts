@@ -574,6 +574,13 @@ export function resolveAgentConfig(
     // since topK=0 would be invalid (positive int constraint).
     memoryRetrievalTopK:
       agent.memoryRetrievalTopK ?? defaults.memoryRetrievalTopK,
+    // Phase 115 sub-scope 3 — per-agent token budget beats defaults. Both
+    // sides are positive-int constrained by zod (min 500); `??` fallback is
+    // safe since 0 is already excluded. Pre-115 left this knob dead — Phase
+    // 115 Plan 01 lit it up by also wiring it through getMemoryRetrieverFor
+    // Agent (see SessionManager).
+    memoryRetrievalTokenBudget:
+      agent.memoryRetrievalTokenBudget ?? defaults.memoryRetrievalTokenBudget,
     // Phase 115 sub-scope 2 — per-agent excludeDynamicSections beats defaults.
     // Use explicit `!== undefined` check (NOT `??`) because operator can set
     // `agent.excludeDynamicSections: false` and that MUST beat

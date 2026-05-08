@@ -574,6 +574,14 @@ export class SessionManager {
     if (!store) return undefined;
     const config = this.configs.get(agentName);
     const topK = config?.memoryRetrievalTopK ?? 5;
+    // Phase 115 sub-scope 3 — wire the previously-dead memoryRetrievalTokenBudget
+    // knob from ResolvedAgentConfig (loader populates from agent.X ??
+    // defaults.X). Pre-115 the per-turn <memory-context> always used the
+    // hardcoded 2000-token default in retrieveMemoryChunks regardless of yaml
+    // config. Now per-agent + defaults flow through. Default 1500 here matches
+    // defaults.memoryRetrievalTokenBudget so test code that builds a
+    // ResolvedAgentConfig without this field still gets the Phase 115 default.
+    const tokenBudget = config?.memoryRetrievalTokenBudget ?? 1500;
     const embedder = this.memory.embedder;
     return async (query: string) => {
       return retrieveMemoryChunks({
@@ -582,6 +590,7 @@ export class SessionManager {
         embed: (text: string) => embedder.embed(text),
         topK,
         timeWindowDays: 14,
+        tokenBudget,
       });
     };
   }
