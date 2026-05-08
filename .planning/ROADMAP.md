@@ -906,7 +906,19 @@ Plans:
 - The diagnostic dump file path is operator-readable on demand without redeploy
 - Anthropic 400 `invalid_request_error` with usage-cap text returns a `[diag] likely-prompt-bloat` log line within the same turn
 
-**Plans:** TBD — discuss-phase first to lock decisions on (a) Tier 1 char cap target, (b) whether to ship 1h-TTL direct-SDK path in this phase or defer, (c) embedding model choice (bge-small vs Jina vs gte-small vs stay), (d) auto-apply-with-veto policy for Phase 95 promotion, (e) per-agent vs per-workspace tier scoping (finmentum family shares basePath per Phase 99). Then plan-phase breaks into ~6-10 atomic plans.
+**Plans:** 10 plans across 5 waves (Wave 0 baseline; Wave 1 quick-wins + observability; Wave 2 structural backbone + cache-breakpoint + lazy-load tools + embedding migration; Wave 3 tool-cache + perf instrumentation; Wave 4 closeout). Decisions locked in `.planning/phases/115-memory-context-prompt-cache-redesign/115-CONTEXT.md` (D-01 through D-15). Plans created 2026-05-08.
+
+Plans:
+- [ ] 115-00-PLAN.md — Wave 0: baseline benchmark suite + pre-115 broken numbers lock
+- [ ] 115-01-PLAN.md — Wave 1: quick wins (excludeDynamicSections + memoryRetrievalTokenBudget wire + tag-filter at hybrid-RRF)
+- [ ] 115-02-PLAN.md — Wave 1: operator-side observability (debug flag + prompt-bloat classifier + consolidation run-log + bootstrap-truncation surface)
+- [ ] 115-03-PLAN.md — Wave 2: structural backbone (hard tier-1 budget + Tier 1/Tier 2 formal split + no-LLM tool-output prune)
+- [ ] 115-04-PLAN.md — Wave 2: cache-breakpoint placement reorder (static-then-dynamic stable-prefix)
+- [ ] 115-05-PLAN.md — Wave 2: lazy-load memory tools (4 new MCP tools) + Phase 95 dreaming as Tier 1 consolidation engine (D-10 hybrid policy)
+- [ ] 115-06-PLAN.md — Wave 2: embedding upgrade (bge-small-en-v1.5 + int8) + dual-write migration machinery
+- [ ] 115-07-PLAN.md — Wave 3: MCP tool-response cache (folds Phase 999.40)
+- [ ] 115-08-PLAN.md — Wave 3: tool-latency methodology audit + parallel-tool-call instrumentation + tool_use_rate measurement (sub-scope 6-A gate)
+- [ ] 115-09-PLAN.md — Wave 4: closeout (cross-agent consolidation transactionality + dashboard surface + gated direct-SDK fast-path + post-115 benchmark + perf comparison report)
 
 **Status:** Pending — opened 2026-05-07 evening after the fin-acquisition incident. Research complete (4 parallel agents, 7 docs in `.planning/research/115-memory-redesign/`). **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme directly.
 
