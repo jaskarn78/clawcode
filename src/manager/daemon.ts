@@ -3197,27 +3197,22 @@ export async function startDaemon(
     );
   }
 
-  // Periodic size-metric reporter — samples cache size every 60s and
-  // writes to traces.db.tool_cache_size_mb (per-agent — picks the active
-  // turn for each agent, or rolls forward via pendingByAgent).
-  // Implemented as a setInterval; cleared on daemon shutdown via
-  // shutdownTasks.push below.
+  // Periodic size-metric sampler — logs cache size every 60s to journalctl
+  // so operators can grep `tool-cache-size-mb` for trend visibility. The
+  // dashboard does NOT read this — it queries `toolCacheStore.sizeMb()`
+  // directly via the `case "cache"` IPC intercept (see ~line 3360 below)
+  // so the surfaced size is fresh without a heartbeat dependency.
   const toolCacheSizeReporter = setInterval(() => {
     if (!toolCacheEnabled) return;
     try {
       const sizeMb = toolCacheStore.sizeMb();
-      // Stash on the traceCollector via a simple side-channel: the
-      // dashboard /api/agents/:agent/perf endpoint pulls the latest
-      // tool_cache_size_mb from traces.db; the value is a global signal
-      // (one cache for the whole fleet). We log it so an operator can
-      // grep journalctl for `tool-cache-size-mb` and confirm the metric
-      // is moving.
       log.debug(
-        { sizeMb: Math.round(sizeMb * 100) / 100, action: "tool-cache-size-mb" },
+        {
+          sizeMb: Math.round(sizeMb * 100) / 100,
+          action: "tool-cache-size-mb",
+        },
         "[diag] tool-cache size metric",
       );
-      // Snapshot exposed for the dashboard fleet-stats path (T04).
-      latestToolCacheSizeMb = sizeMb;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
       log.warn(
@@ -3226,16 +3221,6 @@ export async function startDaemon(
       );
     }
   }, 60_000);
-  // Run once at startup so the initial value is non-stale.
-  let latestToolCacheSizeMb = toolCacheStore.sizeMb();
-  // Phase 115 Plan 07 T04 — make the cache-size getter accessible to the
-  // case "cache" report builder below via a closure capture. routeMethod
-  // can't take new args without a 24-arg surgery, so the closure pattern
-  // (mirrors openAiEndpointRef + discordBridgeRef) is the established
-  // path.
-  const getCurrentToolCacheSizeMb = (): number => toolCacheStore.sizeMb();
-  void latestToolCacheSizeMb; // referenced by the 60s journalctl sampler above
-  void getCurrentToolCacheSizeMb; // exposed for the case "cache" handler — see below
 
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
@@ -6906,10 +6891,10 @@ async function routeMethod(
         // Phase 115 Plan 07 T04 — aggregate tool-cache telemetry over the
         // same window. Surfaced next to prompt_cache_hit_rate on the
         // dashboard (sub-scope 16(c) per roadmap line 875).
-        // tool_cache_size_mb falls back to per-turn average; the 60s
-        // sampler in start() keeps that signal fresh as turns arrive.
-        // (latestToolCacheSizeMb closure is used only for the journalctl
-        // log line — dashboard reads the persisted column.)
+        // tool_cache_hit_rate is the per-turn average from traces.db;
+        // tool_cache_size_mb is fleet-wide and may be NULL on per-turn
+        // rollups — the live value is folded into the response by the
+        // closure intercept of `cache` IPC (see tool_cache_size_mb_live).
         const toolCache = store.getToolCacheTelemetry(agentName, sinceIso);
         return Object.freeze({
           ...report,
