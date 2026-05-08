@@ -9,6 +9,7 @@ import {
   removeBinding,
   updateActivity,
   getBindingForThread,
+  getBindingForSession,
   getBindingsForAgent,
   EMPTY_THREAD_REGISTRY,
 } from "./thread-registry.js";
@@ -213,6 +214,74 @@ describe("thread-registry", () => {
     it("returns empty array if no bindings for agent", () => {
       const result = getBindingsForAgent(EMPTY_THREAD_REGISTRY, "agent-a");
       expect(result).toEqual([]);
+    });
+  });
+
+  // Phase 999.36 sub-bug C (D-09, D-10) — sessionName lookup for the
+  // share-file routing fix. The subagent's sessionName (e.g.
+  // `fin-acquisition-sub-OV9rkf`) is the LLM-supplied identity in
+  // clawcode_share_file invocations from a subagent context. This helper
+  // disambiguates correctly when two bindings share an agentName but have
+  // distinct sessionNames.
+  describe("getBindingForSession", () => {
+    it("returns the binding when a binding with matching sessionName exists", () => {
+      const binding = makeBinding({
+        threadId: "t1",
+        agentName: "fin-acquisition",
+        sessionName: "fin-acquisition-sub-OV9rkf",
+      });
+      const registry = addBinding(EMPTY_THREAD_REGISTRY, binding);
+
+      const result = getBindingForSession(registry, "fin-acquisition-sub-OV9rkf");
+      expect(result).toEqual(binding);
+    });
+
+    it("returns undefined when no binding has the given sessionName", () => {
+      const binding = makeBinding({
+        threadId: "t1",
+        agentName: "fin-acquisition",
+        sessionName: "fin-acquisition-sub-OV9rkf",
+      });
+      const registry = addBinding(EMPTY_THREAD_REGISTRY, binding);
+
+      const result = getBindingForSession(registry, "fin-acquisition-sub-other");
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined for empty registry", () => {
+      const result = getBindingForSession(EMPTY_THREAD_REGISTRY, "any-session");
+      expect(result).toBeUndefined();
+    });
+
+    it("disambiguates two bindings with same agentName but different sessionName", () => {
+      // Pinned the exact failure class: in shared-workspace agent pairs
+      // the subagent's sessionName is the unique identity, NOT agentName.
+      // Returning the wrong binding here would route the file to the
+      // wrong thread.
+      const b1 = makeBinding({
+        threadId: "t1",
+        agentName: "fin-acquisition",
+        sessionName: "fin-acquisition-sub-OV9rkf",
+      });
+      const b2 = makeBinding({
+        threadId: "t2",
+        agentName: "fin-acquisition", // same agentName
+        sessionName: "fin-acquisition-sub-different",
+      });
+      let registry = addBinding(EMPTY_THREAD_REGISTRY, b1);
+      registry = addBinding(registry, b2);
+
+      const result1 = getBindingForSession(
+        registry,
+        "fin-acquisition-sub-OV9rkf",
+      );
+      expect(result1?.threadId).toBe("t1");
+
+      const result2 = getBindingForSession(
+        registry,
+        "fin-acquisition-sub-different",
+      );
+      expect(result2?.threadId).toBe("t2");
     });
   });
 });

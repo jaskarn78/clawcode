@@ -165,6 +165,36 @@ export function getBindingsForAgent(
 }
 
 /**
+ * Phase 999.36 sub-bug C (D-09, D-10) — find a binding by sessionName.
+ *
+ * The subagent's sessionName is the SDK-level agent identity (e.g.
+ * `fin-acquisition-sub-OV9rkf`). When the LLM in a subagent context
+ * calls `clawcode_share_file` and passes `agent: <its own sessionName>`,
+ * the daemon's IPC handler uses this helper to resolve the actual
+ * Discord thread the subagent is bound to — overriding the otherwise-
+ * incorrect fallback to `agentConfig.channels[0]`.
+ *
+ * Returns undefined for non-subagent invocations (no binding has the
+ * given sessionName) — caller MUST fall through to existing channel
+ * resolution.
+ *
+ * Disambiguates the shared-workspace failure class: when two agents in
+ * the same workspace (e.g. fin-acquisition + finmentum-content-creator)
+ * spawn subagents, each subagent's sessionName is unique even though
+ * the parent agentName field on the binding is shared by the family.
+ * Looking up by sessionName picks the correct binding deterministically.
+ *
+ * @param registry - The current registry state
+ * @param sessionName - The subagent session name to look up
+ */
+export function getBindingForSession(
+  registry: ThreadBindingRegistry,
+  sessionName: string,
+): ThreadBinding | undefined {
+  return registry.bindings.find((b) => b.sessionName === sessionName);
+}
+
+/**
  * Type guard for Node.js system errors with a code property.
  */
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
