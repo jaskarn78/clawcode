@@ -240,13 +240,8 @@ describe("typing indicator (Phase 54)", () => {
     });
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
-    // 2026-05-08 hotfix — reset typing-rate-limit-tracker module state between
-    // tests so a 429 simulated in one test doesn't leak a cooldown into the
-    // next (the tracker is module-scoped per the production design).
-    const tracker = await import("../typing-rate-limit-tracker.js");
-    tracker._resetForTests();
     mockReceiveSpan = { end: vi.fn() };
     mockTypingSpan = { end: vi.fn() };
     mockTurn = {
