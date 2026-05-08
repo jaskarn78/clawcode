@@ -120,15 +120,17 @@ export type RetrieveArgs = Readonly<{
   excludeTags?: readonly string[];
   /**
    * Phase 115 sub-scope 4 — optional logger for tag-filter diagnostics.
-   * When provided, emits `[diag] phase115-tag-filter` debug-level log lines
-   * counting dropped rows per call. Operator can wire daemon's pino
-   * instance through deps; tests pass undefined to suppress output.
+   * When provided, ALSO emits a structured debug log via the injected
+   * sink (used by tests with vi.fn()). Production always fires a
+   * `console.info("phase115-tag-filter", ...)` line independently of this
+   * sink so the daemon's stdout-captured systemd logs see the event
+   * regardless of DI. Mirrors the T01 phase115-quickwin pattern.
    */
   log?: { debug?: (obj: Record<string, unknown>, msg?: string) => void };
   /**
-   * Phase 115 sub-scope 4 — optional agent identifier surfaced in the
-   * tag-filter diagnostic so operator can attribute drops to a specific
-   * agent. Pure cosmetic / observability — not functionally required.
+   * Phase 115 sub-scope 4 — agent identifier surfaced in the tag-filter
+   * diagnostic so operator can attribute drops to a specific agent.
+   * Required for the production console.info diagnostic to be useful.
    */
   agent?: string;
   /** Test hook: override Date.now() for deterministic time-window gating. */
@@ -269,20 +271,25 @@ export async function retrieveMemoryChunks(
       source: "memory",
     });
   }
-  // Phase 115 sub-scope 4 — operator-visible diagnostic: structured debug
-  // log when the filter drops one or more rows. Helps operators spot when
-  // an agent's pollution-feedback memories are being suppressed (good
-  // signal: filter is doing work) vs always at zero (filter inactive).
+  // Phase 115 sub-scope 4 — operator-visible diagnostic when the filter
+  // drops one or more rows. Helps operators spot when an agent's
+  // pollution-feedback memories are being suppressed (good signal: filter
+  // is doing work) vs always at zero (filter inactive). Two channels:
+  //   1. console.info — fires unconditionally in production. Daemon
+  //      captures stdout into structured logs via systemd. Mirrors the
+  //      T01 phase115-quickwin pattern (session-adapter.ts).
+  //   2. args.log?.debug?.() — optional sink injected by tests via vi.fn()
+  //      (and by future operator-facing surfaces that want structured
+  //      access without grep on stdout).
   if (memTagDroppedCount > 0) {
-    args.log?.debug?.(
-      {
-        action: "phase115-tag-filter",
-        agent: args.agent,
-        dropped: memTagDroppedCount,
-        excludeTags: [...excludeTags],
-      },
-      "phase115-tag-filter dropped memories",
-    );
+    const payload = {
+      action: "phase115-tag-filter",
+      agent: args.agent,
+      dropped: memTagDroppedCount,
+      excludeTags: [...excludeTags],
+    };
+    console.info("phase115-tag-filter", JSON.stringify(payload));
+    args.log?.debug?.(payload, "phase115-tag-filter dropped memories");
   }
 
   const windowed = [...applyTimeWindowFilter(hydrated, windowDays, now)];

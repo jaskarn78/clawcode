@@ -81,6 +81,18 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "agents.*.memoryRetrievalTopK",
   "defaults.memoryRetrievalTopK",
   "defaults.memoryRetrievalTokenBudget",
+  // Phase 115 sub-scope 3 — per-agent + agents-prefix token budget.
+  // Reloadable: same closure-re-read path as memoryRetrievalTopK above.
+  // Plan 115-01 lit up this previously-dead knob; the closure in
+  // SessionManager.getMemoryRetrieverForAgent reads
+  // config?.memoryRetrievalTokenBudget on each retrieval.
+  "agents.*.memoryRetrievalTokenBudget",
+  // Phase 115 sub-scope 4 — tag-exclusion list for hybrid-RRF retrieval.
+  // Reloadable: same closure-re-read path. Locked default
+  // ["session-summary","mid-session","raw-fallback"] per CONTEXT.md
+  // sub-scope 4.
+  "agents.*.memoryRetrievalExcludeTags",
+  "defaults.memoryRetrievalExcludeTags",
   // Phase 90 MEM-02 — scanner enable flag. Reloadable semantics: a YAML
   // flip from true→false at runtime does NOT stop an already-running
   // scanner (requires daemon restart); a false→true flip starts scanners
@@ -213,4 +225,12 @@ export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "defaults.gsd.projectDir",
   "defaults.model",
   "defaults.basePath",
+  // Phase 115 sub-scope 2 — excludeDynamicSections is captured into the SDK's
+  // baseOptions inside session-adapter.ts createSession / resumeSession when
+  // the session is built; it is NOT re-read per turn. Same architectural
+  // pattern as Phase 100's settingSources / gsd above. A clawcode.yaml edit
+  // takes effect ONLY on the NEXT agent restart. Operators wanting an
+  // immediate change must run: `clawcode restart <agent>`.
+  "agents.*.excludeDynamicSections",
+  "defaults.excludeDynamicSections",
 ]);
