@@ -13,6 +13,42 @@ import {
   extractSkillMentions,
 } from "../usage/skill-usage-tracker.js";
 import { createPersistentSessionHandle } from "./persistent-session-handle.js";
+import { writeFile } from "node:fs/promises";
+
+/**
+ * 2026-05-07 fin-acq 400 diagnostic — dump baseOptions for select agents to /tmp.
+ * REMOVE WHEN ROOT CAUSE FOUND. Agent allowlist keeps noise zero on the rest of
+ * the fleet. env fields stripped to avoid leaking secrets to /tmp.
+ */
+const DEBUG_DUMP_AGENTS = new Set(["fin-acquisition", "Admin Clawdy"]);
+async function debugDumpBaseOptions(
+  agentName: string,
+  flow: "create" | "resume",
+  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+): Promise<void> {
+  if (!DEBUG_DUMP_AGENTS.has(agentName)) return;
+  try {
+    const sanitizedMcp = Array.isArray(baseOptions.mcpServers)
+      ? baseOptions.mcpServers.map((s) => ({ ...s, env: "<stripped>" }))
+      : Object.fromEntries(
+          Object.entries(baseOptions.mcpServers ?? {}).map(([k, v]) => [
+            k,
+            { ...(v as object), env: "<stripped>" },
+          ]),
+        );
+    const dump = {
+      ts: new Date().toISOString(),
+      flow,
+      agent: agentName,
+      baseOptions: { ...baseOptions, env: "<stripped>", mcpServers: sanitizedMcp },
+    };
+    const slug = agentName.replace(/\s+/g, "_");
+    const path = `/tmp/baseopts-${slug}-${flow}-${Date.now()}.json`;
+    await writeFile(path, JSON.stringify(dump, null, 2));
+  } catch {
+    /* non-fatal */
+  }
+}
 
 /**
  * Phase 52 Plan 02 — per-turn prefixHash provider contract.
@@ -649,6 +685,9 @@ export class SdkSessionAdapter implements SessionAdapter {
         : {}),
     };
 
+    // 2026-05-07 fin-acq 400 diagnostic — dump baseOptions before SDK call.
+    await debugDumpBaseOptions(config.name, "create", baseOptions);
+
     // Phase 73 Plan 01 — initial drain establishes the session ID from disk,
     // then the persistent handle owns ONE long-lived sdk.query({ prompt:
     // asyncIterable }) for the rest of the agent's lifetime. The drain query
@@ -703,6 +742,9 @@ export class SdkSessionAdapter implements SessionAdapter {
         ? { disallowedTools: [...config.disallowedTools] }
         : {}),
     };
+
+    // 2026-05-07 fin-acq 400 diagnostic — dump baseOptions before SDK call.
+    await debugDumpBaseOptions(config.name, "resume", baseOptions);
 
     // Phase 73 Plan 01 — persistent handle (no per-turn sdk.query spawn).
     return createPersistentSessionHandle(
