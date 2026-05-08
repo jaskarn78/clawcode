@@ -3437,22 +3437,80 @@ export async function startDaemon(
         botDirectSenderRef,
       );
       const liveSizeMb = toolCacheEnabled ? toolCacheStore.sizeMb() : 0;
+      // Phase 115 Plan 08 T03 — augment `case "cache"` with per-agent
+      // split-latency + tool_use_rate fields. The dashboard cache panel
+      // (`renderCachePanel` in src/dashboard/static/app.js) reads these
+      // four fields off the same `report` object that already carries
+      // tool_cache_*. Adding them here means the dashboard fetches stay
+      // unchanged — one cache fetch surfaces the full Phase 115 perf
+      // picture (prompt cache + tool cache + tool-latency methodology).
+      //
+      // Plan 115-08 own CLI (`clawcode tool-latency-audit`) reads its
+      // own dedicated IPC handler instead — different output shape +
+      // a fleet-gate roll-up. The per-agent fields here are JUST the
+      // raw inputs the dashboard renders inline.
+      //
+      // Helper: compute the four T01/T02 fields for one agent. Returns
+      // empty object on failure so cache rendering never breaks.
+      const computeSplitLatencyFields = (
+        agentName: string,
+        sinceIso: string,
+      ): Record<string, unknown> => {
+        try {
+          const ts = manager.getTraceStore(agentName);
+          if (!ts) return {};
+          const split = ts.getSplitLatencyAggregate(agentName, sinceIso);
+          // Use a 24h window for the rate signal (matches the CLI default).
+          const rateSinceIso = new Date(
+            Date.now() - 24 * 3_600_000,
+          ).toISOString();
+          const rateSnap = ts.computeToolUseRatePerTurn(
+            agentName,
+            rateSinceIso,
+            24,
+          );
+          return {
+            tool_execution_ms_p50: split.toolExecutionMsP50,
+            tool_roundtrip_ms_p50: split.toolRoundtripMsP50,
+            parallel_tool_call_rate: split.parallelToolCallRate,
+            tool_use_rate: rateSnap.rate,
+          };
+        } catch {
+          // Observability augmentation MUST NEVER break the cache fetch path.
+          return {};
+        }
+      };
+
       // baseResult is either a single augmented report (case "cache" non-all)
       // or an array of reports (case "cache" --all). Either way, fold in the
       // fleet-wide live size signal so the dashboard reads a fresh number
       // even on the very first turn (when per-agent telemetry is still
       // accumulating).
       if (Array.isArray(baseResult)) {
-        return baseResult.map((r) =>
-          Object.freeze({
-            ...(r as Record<string, unknown>),
+        return baseResult.map((r) => {
+          const base = r as Record<string, unknown>;
+          const since =
+            typeof base.since === "string" ? (base.since as string) : "24h";
+          const sinceIso = sinceToIso(since);
+          const agentName =
+            typeof base.agent === "string" ? (base.agent as string) : "";
+          return Object.freeze({
+            ...base,
             tool_cache_size_mb_live: liveSizeMb,
-          }),
-        );
+            ...computeSplitLatencyFields(agentName, sinceIso),
+          });
+        });
       }
+      const base = baseResult as Record<string, unknown>;
+      const since =
+        typeof base.since === "string" ? (base.since as string) : "24h";
+      const sinceIso = sinceToIso(since);
+      const agentName =
+        typeof base.agent === "string" ? (base.agent as string) : "";
       return Object.freeze({
-        ...(baseResult as Record<string, unknown>),
+        ...base,
         tool_cache_size_mb_live: liveSizeMb,
+        ...computeSplitLatencyFields(agentName, sinceIso),
       });
     }
     if (method === "tool-cache-clear") {

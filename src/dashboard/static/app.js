@@ -612,9 +612,11 @@ function renderCachePanel(body, report) {
   // the PARALLEL-TOOL-01 directive (sub-scope 17c) is intended to lift.
   //
   // The metrics travel on the same `report` object — the daemon's case
-  // "cache" handler is augmented in a follow-up patch to include them
-  // (or the dashboard fetches them from /api/tool-latency-audit when
-  // available). Until that lands, all four render as "—" with no error.
+  // "cache" handler (src/manager/daemon.ts) folds them in via
+  // `computeSplitLatencyFields(agentName, sinceIso)` next to the
+  // tool_cache_size_mb_live field already added by Plan 115-07. When
+  // the underlying agent has no signal (e.g., no in-window turns), the
+  // four fields are absent on `report` and the render falls back to "—".
   const toolExecP50 =
     report && typeof report.tool_execution_ms_p50 === "number"
       ? report.tool_execution_ms_p50

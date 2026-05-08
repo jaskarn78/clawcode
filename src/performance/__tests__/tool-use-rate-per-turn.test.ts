@@ -331,13 +331,14 @@ describe("Phase 115 Plan 08 T02 — PARALLEL-TOOL-01 directive (sub-scope 17c)",
     expect(directive!.text).toContain("mutually-orthogonal");
   });
 
-  it("operator override wins via resolveSystemPromptDirectives merge semantics", async () => {
-    // The Phase 94 D-09 / D-10 schema invariant: per-agent overrides merge
-    // per-key over the defaults; setting `enabled: false` in agent config
-    // disables the directive without re-stating its text. Verified via
-    // the override schema's optional fields.
+  it("operator override schema supports `enabled: false` without re-stating text (Phase 94 D-09/D-10 pattern)", async () => {
+    // Pin the override-schema shape that lets operators disable
+    // PARALLEL-TOOL-01 per-agent without copying its full text. The
+    // FULL merge-semantics flow is exercised by
+    // src/config/__tests__/loader.test.ts > LR-RESOLVE-DEFAULT-CONST-MATCHES
+    // (extended in this same plan to assert PARALLEL-TOOL-01 lands in
+    // the resolved enabled-defaults output).
     const mod = await import("../../config/schema.js");
-    // The override schema exists and has both fields optional.
     expect(mod.systemPromptDirectiveOverrideSchema).toBeDefined();
     const parsed = mod.systemPromptDirectiveOverrideSchema.parse({
       enabled: false,
@@ -345,5 +346,24 @@ describe("Phase 115 Plan 08 T02 — PARALLEL-TOOL-01 directive (sub-scope 17c)",
     expect(parsed.enabled).toBe(false);
     // text omitted is supported — text falls back to default at resolution.
     expect(parsed.text).toBeUndefined();
+  });
+
+  it("operator override actually disables PARALLEL-TOOL-01 — resolveSystemPromptDirectives merges per-key", async () => {
+    // The end-to-end check that the SUMMARY's claim ("operator override
+    // wins") is true at the resolver layer for THIS specific directive.
+    // Without this test, a future refactor of the resolver could silently
+    // break the override semantics for parallel-tool-calls only.
+    const schema = await import("../../config/schema.js");
+    const loader = await import("../../config/loader.js");
+    const out = loader.resolveSystemPromptDirectives(
+      { "parallel-tool-calls": { enabled: false } },
+      schema.DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+    );
+    const keys = out.map((d) => d.key);
+    // Override flips enabled → false, so the key should be DROPPED from
+    // the rendered output. All OTHER defaults remain enabled.
+    expect(keys).not.toContain("parallel-tool-calls");
+    expect(keys).toContain("file-sharing");
+    expect(keys).toContain("cross-agent-routing");
   });
 });

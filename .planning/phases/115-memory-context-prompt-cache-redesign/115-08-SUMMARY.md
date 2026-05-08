@@ -144,10 +144,12 @@ That changed the architecture from "rename existing to roundtrip + add execution
 
 - **`getSplitLatencyAggregate` TraceStore method** — nearest-rank p50 over the per-turn `tool_execution_ms` / `tool_roundtrip_ms` columns (T01 wrote them). `parallel_tool_call_rate` = fraction of in-window tool-bearing turns with parallel batch ≥ 2. Both p50s NULL when window has no signal; `parallelToolCallRate` NULL when `turnsWithToolsInWindow === 0`.
 
-- **Dashboard** — `GET /api/tool-latency-audit?windowHours=24[&agent=name]` route in `src/dashboard/server.ts`; 4 new subtitle lines on the cache panel body in `src/dashboard/static/app.js`:
+- **Dashboard** — `GET /api/tool-latency-audit?windowHours=24[&agent=name]` route in `src/dashboard/server.ts` (powers the CLI plus a future fleet-wide panel); 4 new subtitle lines on the per-agent cache panel body in `src/dashboard/static/app.js`:
   1. `split latency: exec p50 X ms · roundtrip p50 Y s` (or "no signal")
   2. `tool_use_rate: X% (sub-scope 6-A gate · 30% threshold)` (or "no signal")
   3. `parallel_tool_call_rate: X% (turns with batch ≥ 2)` (or "no signal")
+
+  The four data fields (`tool_execution_ms_p50`, `tool_roundtrip_ms_p50`, `parallel_tool_call_rate`, `tool_use_rate`) flow to the panel via the existing `case "cache"` IPC handler (src/manager/daemon.ts:3411-3514) — augmented inside the same closure intercept already used to fold `tool_cache_size_mb_live`. The handler's `computeSplitLatencyFields(agentName, sinceIso)` helper calls `getSplitLatencyAggregate` + `computeToolUseRatePerTurn` per-agent and spreads the result onto the existing cache report. This means the dashboard's existing 30s `/api/agents/:name/cache` poll surfaces the new metrics without a second fetch round-trip.
 
 - **`parallel-tool-call-counter.test.ts`** — 8 cases pinning the MAX semantics + post-end no-op + 0 batchSize handling + a wiring sentinel that asserts `recordParallelToolCallCount` / `addToolExecutionMs` / `addToolRoundtripMs` exist on Turn (catches a silent-no-op in `session-adapter.ts:1402` if these methods regress).
 
