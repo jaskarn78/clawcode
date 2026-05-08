@@ -97,6 +97,36 @@ export type TurnRecord = {
    * Plan 57-03 migrates DiscordBridge + TaskScheduler to provide it.
    */
   readonly turnOrigin?: TurnOrigin;
+  /**
+   * Phase 115 Plan 00 — slot for the bounded-tier injected chars (sub-scope 1).
+   * Wired by Plan 115-02 once the Tier 1 enforcement lands. NULL on legacy turns.
+   */
+  readonly tier1InjectChars?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the bounded-tier budget utilization ratio
+   * (sub-scope 1). Wired by Plan 115-02. NULL on legacy turns.
+   */
+  readonly tier1BudgetPct?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the per-turn MCP tool-cache hit rate
+   * (sub-scope 15). Wired by Plan 115-07. NULL on legacy turns.
+   */
+  readonly toolCacheHitRate?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the cumulative tool-cache size in MB
+   * (sub-scope 15). Wired by Plan 115-07. NULL on legacy turns.
+   */
+  readonly toolCacheSizeMb?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the count of `clawcode_memory_*` lazy-recall
+   * tool calls in this turn (sub-scope 7). Wired by Plan 115-05. NULL on legacy turns.
+   */
+  readonly lazyRecallCallCount?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the rolling-24h count of prompt-bloat warnings
+   * for this agent (sub-scope 13). Wired by Plan 115-02. NULL on legacy turns.
+   */
+  readonly promptBloatWarnings24h?: number | null;
 };
 
 /**

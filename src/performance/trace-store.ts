@@ -92,6 +92,36 @@ type PercentileRawRow = {
   readonly count: number | null;
 };
 
+/**
+ * Phase 115 Plan 00 — row shape exposing the six new column slots opened on
+ * the `traces` table by `migrateSchema()`. Each field is OPTIONAL because
+ * Plan 115-00 does not yet wire writes — Plans 115-02, 115-05, and 115-07
+ * land the producers. Today every row in production reads NULL on all six.
+ *
+ * Exported so that downstream Phase 115 plans (and their tests) can declare
+ * row-shape expectations without re-deriving the column list.
+ *
+ * Field ↔ producer mapping:
+ *   - tier1_inject_chars            → Plan 115-02 (sub-scope 1 Tier 1 cap)
+ *   - tier1_budget_pct              → Plan 115-02 (sub-scope 1 utilization)
+ *   - tool_cache_hit_rate           → Plan 115-07 (sub-scope 15 tool cache)
+ *   - tool_cache_size_mb            → Plan 115-07 (sub-scope 15 size telemetry)
+ *   - lazy_recall_call_count        → Plan 115-05 (sub-scope 7 lazy recall)
+ *   - prompt_bloat_warnings_24h     → Plan 115-02 (sub-scope 13 observability)
+ *
+ * The TypeScript camelCase form is mirrored on `TurnRecord` in
+ * `src/performance/types.ts` so writers compose a turn record with these
+ * fields named consistently with the rest of the schema.
+ */
+export type Phase115TurnColumns = {
+  readonly tier1_inject_chars?: number | null;
+  readonly tier1_budget_pct?: number | null;
+  readonly tool_cache_hit_rate?: number | null;
+  readonly tool_cache_size_mb?: number | null;
+  readonly lazy_recall_call_count?: number | null;
+  readonly prompt_bloat_warnings_24h?: number | null;
+};
+
 /** Raw row shape for cache-telemetry per-turn query. */
 type CacheTelemetryRow = {
   readonly cache_read_input_tokens: number | null;
@@ -500,7 +530,8 @@ export class TraceStore {
   }
 
   /**
-   * Phase 52 Plan 01 + Phase 57 Plan 02: idempotent ALTER TABLE migration.
+   * Phase 52 Plan 01 + Phase 57 Plan 02 + Phase 115 Plan 00: idempotent ALTER TABLE
+   * migration.
    *
    * Reads the existing `traces` columns via `PRAGMA table_info(traces)`, then
    * issues `ALTER TABLE ... ADD COLUMN` only for columns not already present.
@@ -513,6 +544,23 @@ export class TraceStore {
    *   - cache_eviction_expected       INTEGER (nullable 0/1 — set by Plan 52-02)
    *   - turn_origin                   TEXT    (nullable JSON blob — Phase 57 Plan 02,
    *                                            populated by TurnDispatcher in Plan 57-03)
+   *   - tier1_inject_chars            INTEGER (Phase 115 Plan 00 — column slot;
+   *                                            writes wired by Plan 115-02)
+   *   - tier1_budget_pct              REAL    (Phase 115 Plan 00 — column slot;
+   *                                            writes wired by Plan 115-02)
+   *   - tool_cache_hit_rate           REAL    (Phase 115 Plan 00 — column slot;
+   *                                            writes wired by Plan 115-07)
+   *   - tool_cache_size_mb            REAL    (Phase 115 Plan 00 — column slot;
+   *                                            writes wired by Plan 115-07)
+   *   - lazy_recall_call_count        INTEGER (Phase 115 Plan 00 — column slot;
+   *                                            writes wired by Plan 115-05)
+   *   - prompt_bloat_warnings_24h     INTEGER (Phase 115 Plan 00 — column slot;
+   *                                            writes wired by Plan 115-02)
+   *
+   * Phase 115 Plan 00 only opens the column slots — `writeTurn` is NOT extended
+   * to write to them yet. This means existing daemons can re-run the migration
+   * without producer changes, and 115-02 / 115-05 / 115-07 can ship their write
+   * logic without shipping a migration of their own.
    *
    * SQLite's `ALTER TABLE ADD COLUMN` preserves existing row values (they land
    * NULL in the new columns) so Phase 50/51 turns remain queryable.
@@ -532,6 +580,15 @@ export class TraceStore {
       ["prefix_hash", "TEXT"],
       ["cache_eviction_expected", "INTEGER"],
       ["turn_origin", "TEXT"], // Phase 57 Plan 02 — nullable JSON blob
+      // Phase 115 Plan 00 — column slots opened here so 115-02/05/07 can ship
+      // their write paths without re-shipping migration code. All NULL on
+      // legacy turns; readers MUST treat them as nullable.
+      ["tier1_inject_chars", "INTEGER"],
+      ["tier1_budget_pct", "REAL"],
+      ["tool_cache_hit_rate", "REAL"],
+      ["tool_cache_size_mb", "REAL"],
+      ["lazy_recall_call_count", "INTEGER"],
+      ["prompt_bloat_warnings_24h", "INTEGER"],
     ];
     for (const [col, type] of additions) {
       if (!existing.has(col)) {
