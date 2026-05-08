@@ -47,6 +47,11 @@ function createTestDeps(memoryDir: string): ConsolidationDeps {
     memoryStore: new MemoryStore(":memory:"),
     embedder: createMockEmbedder(),
     summarize: createMockSummarize(),
+    // Phase 115 sub-scope 13(b) — redirect run-log writes into the same
+    // tmpdir as memoryDir so the test never leaks rows into the real
+    // ~/.clawcode/manager/consolidation-runs.jsonl on the host. Rule 3 —
+    // pre-existing test infrastructure didn't know about run-log writes.
+    runLogDirOverride: memoryDir,
   };
 }
 

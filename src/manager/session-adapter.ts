@@ -171,6 +171,85 @@ async function debugDumpBaseOptions(
 }
 
 /**
+ * Phase 115 sub-scope 13(a) — `prompt-bloat-suspected` classifier.
+ *
+ * Pure function: callers supply the SDK error + the latest known stable-
+ * prefix length for the agent + a logger; the classifier decides whether
+ * to emit a `[diag] likely-prompt-bloat` warn line. Threshold 20,000 chars
+ * is initial; future plans (115-08) may refine based on observed false-
+ * positive rate.
+ *
+ * The daemon-side log line is the operator-visible contract — it surfaces
+ * in the `clawcode-status` slash command + dashboard via TraceCollector
+ * counter (when wired by 115-00-T02; until then the counter is best-effort
+ * and silently no-ops on missing column).
+ *
+ * Trigger conditions (BOTH must hold):
+ *   1. Error message contains "invalid_request_error" OR "400"
+ *   2. latestStablePrefixChars > PROMPT_BLOAT_THRESHOLD
+ *
+ * Returns `true` when the classifier fires (test-friendly handle), `false`
+ * when the error doesn't match either condition.
+ */
+export const PROMPT_BLOAT_THRESHOLD = 20_000; // chars — D-04 baseline
+
+export interface PromptBloatLogger {
+  warn(obj: Record<string, unknown>, msg?: string): void;
+}
+
+export interface PromptBloatTraceSink {
+  /**
+   * Best-effort counter increment. Implementations MUST swallow internal
+   * errors (e.g. missing `prompt_bloat_warnings_24h` column when 115-00-T02
+   * has not landed yet). Classifier is operator-visibility-first; the trace
+   * counter is a follow-on metric, not a correctness invariant.
+   */
+  incrementPromptBloatWarning(agentName: string): void;
+}
+
+export function classifyPromptBloat(
+  error: unknown,
+  latestStablePrefixChars: number,
+  agentName: string,
+  log: PromptBloatLogger,
+  traceSink?: PromptBloatTraceSink,
+): boolean {
+  const msg = (error as { message?: string } | null)?.message ?? "";
+  const isInvalidReq =
+    msg.includes("invalid_request_error") || msg.includes("400");
+  if (!isInvalidReq) return false;
+  if (latestStablePrefixChars <= PROMPT_BLOAT_THRESHOLD) return false;
+
+  log.warn(
+    {
+      agent: agentName,
+      promptChars: latestStablePrefixChars,
+      threshold: PROMPT_BLOAT_THRESHOLD,
+      action: "prompt-bloat-suspected",
+    },
+    "[diag] likely-prompt-bloat",
+  );
+
+  if (traceSink) {
+    try {
+      traceSink.incrementPromptBloatWarning(agentName);
+    } catch {
+      /*
+       * Phase 115 dependency note: traces.db.prompt_bloat_warnings_24h
+       * column is added by 115-00-T02 (separate plan, possibly different
+       * worktree/wave). Until that DDL lands, the increment may throw
+       * SQLITE_ERROR "no such column". The classifier's primary contract
+       * is the operator-visible log line above; the counter is a follow-
+       * on metric, so a missing column degrades gracefully without
+       * breaking the warn path.
+       */
+    }
+  }
+
+  return true;
+}
+
+/**
  * Phase 115 sub-scope 14 — exported for unit testing (redaction + gate
  * behaviour). Production code calls `debugDumpBaseOptions` above.
  */

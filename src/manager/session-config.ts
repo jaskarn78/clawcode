@@ -391,8 +391,27 @@ export async function buildSessionConfig(
         // acceptable: MEMORY.md is markdown prose (mostly ASCII), and the
         // assembler downstream treats the payload as opaque text.
         const buf = Buffer.from(body, "utf8");
+        const originalBytes = buf.length;
         body = buf.slice(0, MEMORY_AUTOLOAD_MAX_BYTES).toString("utf8");
-        body += "\n\n…(truncated at 50KB cap)\n";
+        // Phase 115 sub-scope 13(c) — daemon-side truncation log replaces the
+        // in-prompt marker. Operator-reported pain point: the in-prompt marker
+        // was being silently embedded INSIDE the agent's prompt where the
+        // operator never saw it AND the agent then discussed the marker as if
+        // it were a system bug. Removing the marker + adding a daemon-side
+        // log gives operators equivalent (better) visibility without
+        // confusing the agent.
+        // Removed: `body += "\n\n…(truncated at 50KB cap)\n";`
+        if (deps.log) {
+          deps.log.warn(
+            {
+              agent: config.name,
+              originalBytes,
+              capBytes: MEMORY_AUTOLOAD_MAX_BYTES,
+              action: "memory-md-truncation",
+            },
+            "[diag] memory-md-truncation",
+          );
+        }
       }
       identityStr += "\n## Long-term memory (MEMORY.md)\n\n" + body + "\n";
     } catch {

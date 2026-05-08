@@ -12,12 +12,21 @@
  */
 
 import { callHaikuDirect } from "./haiku-direct.js";
+import { logger } from "../shared/logger.js";
 
 const SUMMARIZE_SYSTEM_PROMPT =
   "You are a concise summarizer. Respond with only the requested markdown sections. Do not add commentary outside the requested structure.";
 
 /**
  * Runs a one-shot Haiku call for session summarization via direct OAuth auth.
+ *
+ * Phase 115 sub-scope 999.41 carve-out — fail-loud guard. When callHaikuDirect
+ * throws OR returns an empty string, we now emit a daemon-side
+ * `[diag] summary-fail-loud` log with `component: "summarize-with-haiku"` and
+ * `action: "summary-failed"` so silent rolling-summary failures are operator-
+ * visible. Empty returns (the original silent-fail mode) still produce an
+ * empty string for backward compat with downstream callers (consolidation
+ * pipeline already treats empty → skip via isErrorSummary).
  *
  * @param prompt   The fully-built summarization prompt.
  * @param opts     Caller-supplied abort signal.
@@ -27,7 +36,44 @@ export async function summarizeWithHaiku(
   prompt: string,
   opts: { readonly signal?: AbortSignal },
 ): Promise<string> {
-  return callHaikuDirect(SUMMARIZE_SYSTEM_PROMPT, prompt, opts);
+  try {
+    const result = await callHaikuDirect(
+      SUMMARIZE_SYSTEM_PROMPT,
+      prompt,
+      opts,
+    );
+    if (typeof result !== "string" || result.length === 0) {
+      // Empty / non-string returns from callHaikuDirect were previously
+      // silent-fail modes — sub-scope 999.41 makes them log-loud so the
+      // operator + run-log surface the underlying failure.
+      logger.error(
+        {
+          component: "summarize-with-haiku",
+          action: "summary-failed",
+          reason: "empty-or-non-string-result",
+          promptChars: prompt.length,
+        },
+        "[diag] summary-fail-loud",
+      );
+      return "";
+    }
+    return result;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.error(
+      {
+        component: "summarize-with-haiku",
+        action: "summary-failed",
+        reason: reason.length > 200 ? reason.slice(0, 200) : reason,
+        promptChars: prompt.length,
+      },
+      "[diag] summary-fail-loud",
+    );
+    // Preserve back-compat: callers (consolidation pipeline) check the
+    // returned text via isErrorSummary; an empty string is the well-known
+    // "skip this cycle" signal. Re-throwing here would break that contract.
+    return "";
+  }
 }
 
 /** Test-only: kept for backward compat — no SDK cache to reset in this module. */

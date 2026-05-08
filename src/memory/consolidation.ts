@@ -10,8 +10,15 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync, copyFileSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, basename } from "node:path";
 import { logger } from "../shared/logger.js";
+// Phase 115 sub-scope 13(b) — consolidation run-log writer.
+// Cross-agent transactional integrity surface; foundation for plan 115-09.
+import {
+  appendConsolidationRun,
+  type ConsolidationRunRow,
+} from "../manager/consolidation-run-log.js";
 import {
   getISOWeek,
   getISOWeekYear,
@@ -57,6 +64,20 @@ export type ConsolidationDeps = {
   readonly memoryStore: MemoryStore;
   readonly embedder: EmbeddingService;
   readonly summarize: (prompt: string) => Promise<string>;
+  /**
+   * Phase 115 sub-scope 13(b) — optional agent label threaded into the
+   * consolidation run-log JSONL row's `target_agents` field. The daemon
+   * passes `agentConfig.name`; tests may omit it (the runner emits an
+   * empty `target_agents: []` array in that case so log readers can
+   * still distinguish "ran for unknown agent" from "ran for X" via the
+   * presence/contents of the array).
+   */
+  readonly runLabel?: string;
+  /**
+   * Phase 115 sub-scope 13(b) — optional override for the consolidation
+   * run-log directory. Tests can redirect away from `~/.clawcode/manager/`.
+   */
+  readonly runLogDirOverride?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -510,6 +531,38 @@ export async function runConsolidation(
     });
   }
 
+  // Phase 115 sub-scope 13(b) — consolidation run-log started row.
+  // run_id is stable across the started → completed/failed transitions so
+  // reducers can compute the latest state per run. Wrapped in try/catch so
+  // a log-write failure NEVER aborts the consolidation runner.
+  const runId = randomBytes(8).toString("hex"); // 16-char URL-safe-ish id
+  const startedAt = new Date().toISOString();
+  const targetAgents: readonly string[] = deps.runLabel ? [deps.runLabel] : [];
+  try {
+    await appendConsolidationRun(
+      {
+        run_id: runId,
+        target_agents: targetAgents,
+        memories_added: 0,
+        status: "started",
+        errors: [],
+        started_at: startedAt,
+      },
+      deps.runLogDirOverride,
+    );
+  } catch (err) {
+    // Log write failure must NEVER break consolidation. The daemon log
+    // surfaces the issue; the runner still proceeds.
+    logger.warn(
+      {
+        action: "consolidation-run-log-append-failed",
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "[diag] consolidation-run-log unwriteable (non-fatal)",
+    );
+  }
+
   // --- Phase 1: Weekly consolidation ---
   const weekGroups = detectUnconsolidatedWeeks(
     deps.memoryDir,
@@ -590,6 +643,38 @@ export async function runConsolidation(
       const msg = error instanceof Error ? error.message : "Unknown error";
       errors.push(`Monthly consolidation failed for ${monthGroup.year}-${monthGroup.month}: ${msg}`);
     }
+  }
+
+  // Phase 115 sub-scope 13(b) — consolidation run-log terminal row.
+  // Status: `completed` when the runner reached this point with no
+  // collected errors; `failed` when at least one weekly/monthly cycle
+  // accumulated an error in the `errors[]` array. Wrapped in its own
+  // try/catch so log failure NEVER mutates the returned ConsolidationResult.
+  const memoriesAdded = weeklyDigestsCreated + monthlyDigestsCreated;
+  const terminalStatus: ConsolidationRunRow["status"] =
+    errors.length > 0 ? "failed" : "completed";
+  try {
+    await appendConsolidationRun(
+      {
+        run_id: runId,
+        target_agents: targetAgents,
+        memories_added: memoriesAdded,
+        status: terminalStatus,
+        errors: errors.map((e) => (e.length > 200 ? e.slice(0, 200) : e)),
+        started_at: startedAt,
+        completed_at: new Date().toISOString(),
+      },
+      deps.runLogDirOverride,
+    );
+  } catch (err) {
+    logger.warn(
+      {
+        action: "consolidation-run-log-append-failed",
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "[diag] consolidation-run-log unwriteable on terminal (non-fatal)",
+    );
   }
 
   return Object.freeze({

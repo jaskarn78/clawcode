@@ -2521,6 +2521,10 @@ export async function startDaemon(
             memoryStore,
             embedder,
             summarize: (prompt: string) => summarizeWithHaiku(prompt, {}),
+            // Phase 115 sub-scope 13(b) — agent label threaded into the
+            // consolidation run-log so operators can correlate JSONL rows
+            // back to the specific agent's consolidation cycle.
+            runLabel: agentConfig.name,
           };
           await runConsolidation(deps, consolidationConfig);
         },

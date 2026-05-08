@@ -36,6 +36,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 import type { SessionAdapter, SessionHandle } from "./session-adapter.js";
+// Phase 115 sub-scope 13(a) — `prompt-bloat-suspected` classifier.
+// Pure function; runs inside the agent crash handler when the SDK error
+// matches `invalid_request_error` AND the latest stable prefix exceeds
+// the threshold (initial 20K chars, may be tuned per 115-08).
+import { classifyPromptBloat } from "./session-adapter.js";
 import type { BackoffConfig } from "./types.js";
 import { DEFAULT_BACKOFF_CONFIG } from "./types.js";
 import { readRegistry, writeRegistry, updateEntry, createEntry } from "./registry.js";
@@ -2353,6 +2358,44 @@ export class SessionManager {
     handle: SessionHandle,
   ): void {
     handle.onError((error: Error) => {
+      // Phase 115 sub-scope 13(a) — prompt-bloat classifier.
+      // Runs FIRST so the [diag] log line is correlated with this exact crash;
+      // any subsequent crash-handling work (summarize, recovery, mcp teardown)
+      // is independent. Failure-isolated: classifier errors NEVER block the
+      // existing crash-recovery path.
+      try {
+        const stablePrefix =
+          this.latestStablePrefixByAgent.get(name) ?? "";
+        const traceCollector = this.memory.traceCollectors.get(name);
+        const traceSink = traceCollector
+          ? {
+              incrementPromptBloatWarning: (agent: string): void => {
+                // Phase 115 sub-scope 13(a) dependency note: 115-00-T02
+                // adds a `prompt_bloat_warnings_24h` column on traces.db.
+                // Until that DDL lands in this worktree, the increment
+                // method may not exist on TraceCollector — invoke
+                // defensively. Classifier remains operator-visible via
+                // the warn log line even when the counter is dark.
+                const sink = traceCollector as unknown as {
+                  incrementPromptBloatWarning?: (agent: string) => void;
+                };
+                if (typeof sink.incrementPromptBloatWarning === "function") {
+                  sink.incrementPromptBloatWarning(agent);
+                }
+                /* else: column/method not yet present — best-effort no-op */
+              },
+            }
+          : undefined;
+        classifyPromptBloat(
+          error,
+          stablePrefix.length,
+          name,
+          this.log,
+          traceSink,
+        );
+      } catch {
+        /* classifier MUST NEVER break the crash-recovery path */
+      }
       // Phase 65: crash the ConversationStore session
       const convSessionId = this.activeConversationSessionIds.get(name);
       const convStoreForCrash = this.memory.conversationStores.get(name);
