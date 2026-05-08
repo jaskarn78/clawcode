@@ -1806,11 +1806,11 @@ Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempot
 - **C (P0 correctness)** — Cross-channel file leak. fin-acquisition's Schwab AIP markdown landed in finmentum-content-creator's primary channel `1486348188763029648` instead of Ramy's thread `1481670479017414767`. Compliance-relevant for Finmentum (PII risk in different scenario). Daemon IPC `share-file` falls back to `agentConfig.channels[0]` for an LLM-supplied agent name; subagent identity drift across shared workspace = wrong channel. Fix: resolve via thread registry by `sessionName` first; fall through only when no binding exists (CONTEXT D-09, D-10, D-11).
 - **D (P0)** — Premature `subagent_complete` event firing. Parent's autoRelay summary lands announcing "Phase 2 complete" while the subagent's actual final chunks never arrived. Compounds with sub-bug B (cumulative effect: confident summary while last 2 minutes silently disappeared). Fix: gate completion event on `streamFullyDrained && deliveryConfirmed` AND-clause; quiescence-sweep emits `subagent_idle_warning` instead of firing relay (CONTEXT D-12, D-13, D-14).
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [x] 999.36-00-PLAN.md — Sub-bug A typing indicator + Sub-bug B/D diagnostics (Wave 0)
-- [ ] 999.36-01-PLAN.md — Sub-bug C cross-channel file leak — agent identity → thread binding routing (Wave 1)
+- [x] 999.36-01-PLAN.md — Sub-bug C cross-channel file leak — agent identity → thread binding routing (Wave 1)
 - [ ] 999.36-02-PLAN.md — Sub-bug D premature completion gate — streamFullyDrained AND deliveryConfirmed (Wave 2)
 - [ ] 999.36-03-PLAN.md — Sub-bug B chunk-boundary fix — close the off-by-3 seam in editor truncate vs overflow start (Wave 3)
 
