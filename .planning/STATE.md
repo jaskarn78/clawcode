@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 115-01-PLAN.md (3 tasks shipped, 22 new tests green)
-last_updated: "2026-05-08T02:19:04.031Z"
+stopped_at: "Completed 115-03-PLAN.md (4 tasks shipped: T01+T02 carved-source identity + drop-lowest enforcement + 8K outer cap; T03 Tier1/Tier2 typed split; T04 no-LLM tool-output prune)"
+last_updated: "2026-05-08T03:08:01.541Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 60
   completed_phases: 15
   total_plans: 97
-  completed_plans: 85
-  percent: 88
+  completed_plans: 86
+  percent: 89
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
-Plan: 2 of 10
+Plan: 4 of 10
 Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -448,6 +448,9 @@ Recent decisions affecting current work:
 - [Phase 110]: Use native zod/v4 z.toJSONSchema() for list-mcp-tools handler instead of zod-to-json-schema npm package — zero new deps, satisfies CLAUDE.md no-new-deps rule, native converter produces correct required[] output
 - [Phase 110]: Inlined STATIC_SHIM_PATH/PYTHON_SHIM_PATH/resolveShimCommand in src/config/loader.ts (single source of truth) so daemon.ts fleet-stats handler imports the same helper that the loader uses — keeps spawn shape and proc-scan regex shape in lockstep when an operator flips defaults.shimRuntime.<type>
 - [Phase 115]: Plan 115-01 quick wins: excludeDynamicSections=true (default-on), memoryRetrievalTokenBudget wired through (default 1500 down from 2000), tag-filter at hybrid-RRF drops session-summary/mid-session/raw-fallback memories (locked default per CONTEXT sub-scope 4)
+- [Phase 115]: Plan 115-03: replaced enforceWarnAndKeep no-op with real drop-lowest-importance enforcement; INJECTED_MEMORY_MAX_CHARS=16K (D-01) + STABLE_PREFIX_MAX_TOKENS=8K (D-02 outer cap with emergency head-tail-truncate fallback); SOUL fingerprint verbatim-protected (never drops); MEMORY.md drops first when over budget
+- [Phase 115]: Plan 115-03 T03: MemoryTier1Source / MemoryTier2Source TypeScript discriminated-union types in src/memory/types.ts use string-literal 'tier' discriminators (avoids colliding with pre-existing MemoryTier hot/warm/cold storage tier and MemorySource string union); union alias exported as TypedMemorySource (NOT MemorySource) to preserve back-compat; ContextSources.identityMemoryAutoloadSource is the field name 115-04 will consume
+- [Phase 115]: Plan 115-03 T04: shipped no-LLM Hermes Phase 1 tool-output prune (src/memory/tool-output-prune.ts pruneToolOutputs replaces old tool outputs with [tool output pruned: <tool> @ <ts>] markers; pure synchronous, <50ms regression-pinned; default keepRecentN=3); CompactionManager.compactToolOutputs() pre-compaction hook; Phases 2 + 3 (LLM mid-summarization + drop oldest) explicitly DEFERRED per CONTEXT.md out-of-scope line 32
 
 ### v2.1 closing decisions (for reference)
 
@@ -634,11 +637,12 @@ Recent decisions affecting current work:
 | Phase 110 P02 | 20min | 3 tasks | 6 files |
 | Phase 110 P04 | 30 minutes | 3 tasks | 7 files |
 | Phase 115 P01 | 50min | 3 tasks | 12 files |
+| Phase 115 P03 | 95min | 4 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-08
-Stopped at: Completed 115-01-PLAN.md (3 tasks shipped, 22 new tests green)
+Stopped at: Completed 115-03-PLAN.md (4 tasks shipped: T01+T02 carved-source identity + drop-lowest enforcement + 8K outer cap; T03 Tier1/Tier2 typed split; T04 no-LLM tool-output prune)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
