@@ -269,9 +269,46 @@ export class DiscordBridge {
       this.log.error({ error: error.message }, "Discord client error");
     });
 
-    await this.client.login(this.botToken);
-    this.deliveryQueue?.start();
-    this.running = true;
+    // 2026-05-08 hotfix — Discord-side outages (Service Unavailable / Internal
+    // Server Error during gateway shard recovery) used to leave the bridge
+    // permanently dead because there was no startup retry. The bot would come
+    // up healthy but blind to Discord; only a manual daemon restart could
+    // recover. Now: 5 attempts with exponential backoff (0s, 5s, 15s, 30s, 60s
+    // — total ~110s window) so a transient Discord outage at deploy time
+    // doesn't require operator intervention. Final failure still logs at
+    // error and lets the daemon continue (existing fallback path); operator
+    // can run `clawcode discord-reconnect` (TODO) or restart manually if all
+    // 5 attempts fail.
+    const RETRY_DELAYS_MS = [0, 5_000, 15_000, 30_000, 60_000];
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+      const delay = RETRY_DELAYS_MS[attempt] ?? 0;
+      if (delay > 0) {
+        this.log.warn(
+          { attempt: attempt + 1, totalAttempts: RETRY_DELAYS_MS.length, delayMs: delay, lastError: lastError instanceof Error ? lastError.message : String(lastError) },
+          "Discord bridge login retrying after backoff",
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      try {
+        await this.client.login(this.botToken);
+        this.deliveryQueue?.start();
+        this.running = true;
+        if (attempt > 0) {
+          this.log.info({ attemptsUsed: attempt + 1 }, "Discord bridge connected after retry");
+        }
+        return;
+      } catch (err) {
+        lastError = err;
+        this.log.error(
+          { attempt: attempt + 1, totalAttempts: RETRY_DELAYS_MS.length, error: err instanceof Error ? err.message : String(err) },
+          "Discord bridge login attempt failed",
+        );
+      }
+    }
+    // All retries exhausted — re-throw to preserve the existing "bridge failed
+    // to start" log line + fallback in daemon.ts (manual webhook mode).
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   /**

@@ -1815,6 +1815,24 @@ export async function startDaemon(
   // silently ignoring yaml edits.
   let config = await loadConfig(configPath);
 
+  // 4z. 2026-05-08 hotfix — forward-declaration of `subagentThreadSpawner`
+  // hoisted to top-of-function. The actual assignment lives at the original
+  // SubagentThreadSpawner instantiation site (~line 5396). Pre-fix this was
+  // a single `const` declaration there; route handlers + IPC closures defined
+  // EARLIER in the function captured `subagentThreadSpawner` lexically and
+  // dispatched on incoming requests BEFORE the const declaration line ran.
+  // Result: any IPC request landing during the ~5s startup window threw
+  // `Cannot access 'subagentThreadSpawner' before initialization` (TDZ) at
+  // level 50 in the ipc-server component. Splitting into early `let`
+  // declaration (initialized to `null`) + later assignment ends the TDZ at
+  // the declaration point; route handlers see `null` during boot (which
+  // they already handle gracefully via `subagentThreadSpawner ? ... : ...`)
+  // and pick up the real value once the assignment lands. Bug introduced
+  // by 999.36-01 wiring; production-visible 2026-05-08 14:14:29 UTC during
+  // the Discord-outage restart cycle when `clawcode status` triggered an
+  // early IPC request mid-boot.
+  let subagentThreadSpawner: SubagentThreadSpawner | null = null;
+
   // 4a. Phase 104 SEC-01/SEC-04 — single SecretsResolver instance for the
   // whole daemon lifetime. Pre-resolves every op:// URI in the config in
   // parallel BEFORE the loader's sync resolver runs, so subsequent boot
@@ -5166,15 +5184,18 @@ export async function startDaemon(
           { source: "explicit-tool", agent: agentName },
           "[diag] subagent-complete-fired",
         );
+        // 2026-05-08 hotfix: capture into local const so TS narrows across
+        // the closure boundary (post-TDZ-fix the outer is `let`, which TS
+        // doesn't narrow inside the arrow-function below even with a check).
+        const spawnerLocal = subagentThreadSpawner;
         return relayAndMarkCompletedByAgentName(
           {
             readThreadRegistry: () =>
               readThreadRegistry(THREAD_REGISTRY_PATH),
             writeThreadRegistry: (next) =>
               writeThreadRegistry(THREAD_REGISTRY_PATH, next),
-            relayCompletionToParent: subagentThreadSpawner
-              ? (threadId) =>
-                  subagentThreadSpawner.relayCompletionToParent(threadId)
+            relayCompletionToParent: spawnerLocal
+              ? (threadId) => spawnerLocal.relayCompletionToParent(threadId)
               : null,
             now: () => Date.now(),
             log: log.child({ subsystem: "subagent-completion" }),
@@ -5393,7 +5414,9 @@ export async function startDaemon(
   webhookManagerRef.current = webhookManager;
 
   // 11b2. Create SubagentThreadSpawner for IPC-driven subagent thread creation
-  const subagentThreadSpawner = discordBridge
+  // 2026-05-08 hotfix: assignment-only (declaration moved up to step 4z to
+  // end TDZ for early-IPC-request handlers — see comment there).
+  subagentThreadSpawner = discordBridge
     ? new SubagentThreadSpawner({
         sessionManager: manager,
         registryPath: THREAD_REGISTRY_PATH,
@@ -5602,11 +5625,13 @@ export async function startDaemon(
     // try/catch so a failure in one does NOT block the other or propagate
     // to startOrphanReaper (which would crash the 60s tick loop).
     const sweepEnabled = idleMs > 0 && subagentThreadSpawner != null;
+    // 2026-05-08 hotfix: snapshot for TS narrowing post-TDZ-fix (outer is `let`).
+    const sweepSpawner = subagentThreadSpawner;
     const onTickAfter = async () => {
-      if (sweepEnabled) {
+      if (sweepEnabled && sweepSpawner) {
         try {
           await sweepStaleBindings({
-            spawner: subagentThreadSpawner,
+            spawner: sweepSpawner,
             registryPath: THREAD_REGISTRY_PATH,
             now: Date.now(),
             idleMs,
