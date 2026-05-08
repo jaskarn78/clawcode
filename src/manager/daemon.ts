@@ -3469,11 +3469,28 @@ export async function startDaemon(
             rateSinceIso,
             24,
           );
+          // Phase 115 Plan 09 T04 — sub-scope 16(c) dashboard surface.
+          // Folds tier1_* / lazy_recall / prompt_bloat aggregates onto the
+          // same `cache` report so the dashboard renders the four new
+          // metrics inline with prompt_cache + tool_cache + split-latency.
+          // The 24h window matches the rate signal above so all dashboard
+          // subtitle lines share one temporal frame.
+          const phase115 = ts.getPhase115DashboardMetrics(
+            agentName,
+            rateSinceIso,
+          );
           return {
             tool_execution_ms_p50: split.toolExecutionMsP50,
             tool_roundtrip_ms_p50: split.toolRoundtripMsP50,
             parallel_tool_call_rate: split.parallelToolCallRate,
             tool_use_rate: rateSnap.rate,
+            // sub-scope 16(c) dashboard fields. NULL bubbles up when the
+            // 115-02 writers haven't fired yet for this agent — dashboard
+            // renders "—" gracefully.
+            tier1_inject_chars: phase115.latestTier1InjectChars,
+            tier1_budget_pct: phase115.latestTier1BudgetPct,
+            lazy_recall_call_count: phase115.lazyRecallCalls24h,
+            prompt_bloat_warnings_24h: phase115.promptBloatWarnings24h,
           };
         } catch {
           // Observability augmentation MUST NEVER break the cache fetch path.

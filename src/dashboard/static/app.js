@@ -646,6 +646,73 @@ function renderCachePanel(body, report) {
       ? "parallel_tool_call_rate: no signal"
       : `parallel_tool_call_rate: ${formatPercent(parallelToolCallRate)} (turns with batch ≥ 2)`;
 
+  // Phase 115 Plan 09 T04 (sub-scope 16(c)) — four new dashboard metric
+  // subtitle lines for the per-agent cache panel. Surfaces:
+  //   - tier1_inject_chars + tier1_budget_pct (115-02 sub-scope 1 cap)
+  //   - lazy_recall_call_count (115-05 sub-scope 7 lazy recall tools)
+  //   - prompt_bloat_warnings_24h (115-02 sub-scope 13 observability)
+  //
+  // Trace segments stay byte-identical (per ROADMAP line 877) — this
+  // adds new SUBTITLE lines alongside the existing layout, doesn't
+  // rename anything. tier1_budget_pct over 90% renders as a warning
+  // ("near cap") so operators see truncation pressure before it fires.
+  // tier1-truncation event count would be a 7th subtitle line; today
+  // the count is implicit in tier1_budget_pct — when truncation fires,
+  // the budget pct stays pinned at 100%, which the warning surface
+  // catches.
+  const tier1InjectChars =
+    report && typeof report.tier1_inject_chars === "number"
+      ? report.tier1_inject_chars
+      : null;
+  const tier1BudgetPct =
+    report && typeof report.tier1_budget_pct === "number"
+      ? report.tier1_budget_pct
+      : null;
+  let tier1Subtitle;
+  if (tier1InjectChars === null && tier1BudgetPct === null) {
+    tier1Subtitle = "tier 1: no signal yet (115-02 writes pending)";
+  } else {
+    const charsText =
+      tier1InjectChars === null
+        ? "—"
+        : `${tier1InjectChars.toLocaleString()} chars`;
+    const pctText =
+      tier1BudgetPct === null
+        ? "—"
+        : `${formatPercent(tier1BudgetPct)} of 16K cap`;
+    const nearCap = tier1BudgetPct !== null && tier1BudgetPct > 0.9;
+    tier1Subtitle = `tier 1: ${charsText} (${pctText})${nearCap ? " · near cap" : ""}`;
+  }
+
+  // tier1-truncation event count over 24h — defensive read of optional field
+  // that 115-02 may surface in a follow-on patch. Today daemon doesn't
+  // populate it; render only when present.
+  const tier1TruncationCount =
+    report && typeof report.tier1_truncation_count_24h === "number"
+      ? report.tier1_truncation_count_24h
+      : null;
+  if (tier1TruncationCount !== null && tier1TruncationCount > 0) {
+    tier1Subtitle += ` · ${tier1TruncationCount} truncations/24h`;
+  }
+
+  const lazyRecallCalls =
+    report && typeof report.lazy_recall_call_count === "number"
+      ? report.lazy_recall_call_count
+      : null;
+  const lazyRecallSubtitle =
+    lazyRecallCalls === null
+      ? "lazy recall (24h): no signal yet (115-05 writes pending)"
+      : `lazy recall (24h): ${lazyRecallCalls.toLocaleString()} tool call${lazyRecallCalls === 1 ? "" : "s"}`;
+
+  const promptBloatWarnings =
+    report && typeof report.prompt_bloat_warnings_24h === "number"
+      ? report.prompt_bloat_warnings_24h
+      : null;
+  const promptBloatSubtitle =
+    promptBloatWarnings === null
+      ? "prompt bloat warnings (24h): no signal yet (115-02 writes pending)"
+      : `prompt bloat warnings (24h): ${promptBloatWarnings}${promptBloatWarnings > 0 ? " · classifier-triggered" : ""}`;
+
   body.classList.remove("panel-placeholder");
   body.innerHTML = `<table class="cache-table">
     <thead><tr><th>Hit Rate</th><th>Cache Reads</th><th>Cache Writes</th><th>Input Tokens</th><th>Turns</th></tr></thead>
@@ -663,7 +730,10 @@ function renderCachePanel(body, report) {
   <div class="cache-subtitle">${escapeHtml(toolCacheSubtitle)}</div>
   <div class="cache-subtitle">${escapeHtml(splitLatencyText)}</div>
   <div class="cache-subtitle">${escapeHtml(useRateText)}</div>
-  <div class="cache-subtitle">${escapeHtml(parallelRateText)}</div>`;
+  <div class="cache-subtitle">${escapeHtml(parallelRateText)}</div>
+  <div class="cache-subtitle">${escapeHtml(tier1Subtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(lazyRecallSubtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(promptBloatSubtitle)}</div>`;
 }
 
 /**

@@ -627,6 +627,106 @@ export class TraceStore {
     }
   }
 
+  /**
+   * Phase 115 Plan 09 T04 — sub-scope 16(c) dashboard surface aggregation.
+   *
+   * Aggregates the four Phase 115 metrics that the dashboard renders
+   * alongside `tool_cache_hit_rate` (115-07) and the split-latency
+   * fields (115-08):
+   *   - latestTier1InjectChars      → most-recent value (NULL if no rows)
+   *   - latestTier1BudgetPct        → most-recent value (NULL if no rows)
+   *   - lazyRecallCalls24h          → SUM over the window (0 if no rows)
+   *   - promptBloatWarnings24h      → SUM over the window (0 if no rows)
+   *
+   * "Most recent" semantics for tier1_*: the dashboard shows the live
+   * state of the cap (was the LAST turn under or over budget?). A 24h
+   * average obscures fresh problems. SUM semantics for lazy_recall +
+   * prompt_bloat: those are event counts; aggregating them as a sum
+   * over the window is the natural display (e.g., "12 lazy recall
+   * tool calls in 24h").
+   *
+   * NULL bubble-up: tier1_* fields return NULL when no rows in the
+   * window have non-NULL writes (e.g., agent newly started; 115-02
+   * writes not yet wired in production). The dashboard renders "—".
+   * Sum fields return 0 in the same situation — counts default to 0.
+   *
+   * @param agent agent label
+   * @param sinceIso ISO 8601 lower bound (inclusive)
+   * @returns frozen aggregate object
+   */
+  getPhase115DashboardMetrics(
+    agent: string,
+    sinceIso: string,
+  ): {
+    readonly latestTier1InjectChars: number | null;
+    readonly latestTier1BudgetPct: number | null;
+    readonly lazyRecallCalls24h: number;
+    readonly promptBloatWarnings24h: number;
+  } {
+    try {
+      // Single SELECT computes all four — cheaper than 4 round trips.
+      // tier1_* via "ORDER BY started_at DESC LIMIT 1" semantics expressed
+      // as a sub-select on the same window. lazy_recall + prompt_bloat
+      // via SUM with COALESCE→0 so empty windows return 0 instead of NULL.
+      const row = this.db
+        .prepare(
+          `SELECT
+             (SELECT tier1_inject_chars
+                FROM traces
+                WHERE agent = @agent
+                  AND started_at >= @since
+                  AND tier1_inject_chars IS NOT NULL
+                ORDER BY started_at DESC
+                LIMIT 1)                                            AS latest_tier1_inject_chars,
+             (SELECT tier1_budget_pct
+                FROM traces
+                WHERE agent = @agent
+                  AND started_at >= @since
+                  AND tier1_budget_pct IS NOT NULL
+                ORDER BY started_at DESC
+                LIMIT 1)                                            AS latest_tier1_budget_pct,
+             COALESCE(SUM(lazy_recall_call_count), 0)               AS lazy_recall_calls,
+             COALESCE(SUM(prompt_bloat_warnings_24h), 0)            AS prompt_bloat_warnings
+           FROM traces
+           WHERE agent = @agent
+             AND started_at >= @since`,
+        )
+        .get({ agent, since: sinceIso }) as
+        | {
+            latest_tier1_inject_chars: number | null;
+            latest_tier1_budget_pct: number | null;
+            lazy_recall_calls: number;
+            prompt_bloat_warnings: number;
+          }
+        | undefined;
+
+      return Object.freeze({
+        latestTier1InjectChars:
+          typeof row?.latest_tier1_inject_chars === "number"
+            ? row.latest_tier1_inject_chars
+            : null,
+        latestTier1BudgetPct:
+          typeof row?.latest_tier1_budget_pct === "number"
+            ? row.latest_tier1_budget_pct
+            : null,
+        lazyRecallCalls24h:
+          typeof row?.lazy_recall_calls === "number"
+            ? row.lazy_recall_calls
+            : 0,
+        promptBloatWarnings24h:
+          typeof row?.prompt_bloat_warnings === "number"
+            ? row.prompt_bloat_warnings
+            : 0,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getPhase115DashboardMetrics failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
   /** Close the underlying database connection. */
   close(): void {
     this.db.close();
