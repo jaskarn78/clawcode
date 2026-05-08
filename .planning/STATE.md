@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: "Completed 115-03-PLAN.md (4 tasks shipped: T01+T02 carved-source identity + drop-lowest enforcement + 8K outer cap; T03 Tier1/Tier2 typed split; T04 no-LLM tool-output prune)"
-last_updated: "2026-05-08T03:08:01.541Z"
+stopped_at: Completed 115-04-PLAN.md
+last_updated: "2026-05-08T03:45:00.495Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 60
   completed_phases: 15
   total_plans: 97
-  completed_plans: 86
-  percent: 89
+  completed_plans: 87
+  percent: 90
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
-Plan: 4 of 10
+Plan: 5 of 10
 Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -451,6 +451,7 @@ Recent decisions affecting current work:
 - [Phase 115]: Plan 115-03: replaced enforceWarnAndKeep no-op with real drop-lowest-importance enforcement; INJECTED_MEMORY_MAX_CHARS=16K (D-01) + STABLE_PREFIX_MAX_TOKENS=8K (D-02 outer cap with emergency head-tail-truncate fallback); SOUL fingerprint verbatim-protected (never drops); MEMORY.md drops first when over budget
 - [Phase 115]: Plan 115-03 T03: MemoryTier1Source / MemoryTier2Source TypeScript discriminated-union types in src/memory/types.ts use string-literal 'tier' discriminators (avoids colliding with pre-existing MemoryTier hot/warm/cold storage tier and MemorySource string union); union alias exported as TypedMemorySource (NOT MemorySource) to preserve back-compat; ContextSources.identityMemoryAutoloadSource is the field name 115-04 will consume
 - [Phase 115]: Plan 115-03 T04: shipped no-LLM Hermes Phase 1 tool-output prune (src/memory/tool-output-prune.ts pruneToolOutputs replaces old tool outputs with [tool output pruned: <tool> @ <ts>] markers; pure synchronous, <50ms regression-pinned; default keepRecentN=3); CompactionManager.compactToolOutputs() pre-compaction hook; Phases 2 + 3 (LLM mid-summarization + drop oldest) explicitly DEFERRED per CONTEXT.md out-of-scope line 32
+- [Phase 115]: 115-04: cacheBreakpointPlacement enum (static-first | legacy) with default static-first; SDK shape locked; identityMemoryAutoload classified static at outer placement (per advisor + 115-03 design); SECTION_PLACEMENT exhaustive over keyof ContextSources
 
 ### v2.1 closing decisions (for reference)
 
@@ -638,11 +639,12 @@ Recent decisions affecting current work:
 | Phase 110 P04 | 30 minutes | 3 tasks | 7 files |
 | Phase 115 P01 | 50min | 3 tasks | 12 files |
 | Phase 115 P03 | 95min | 4 tasks | 11 files |
+| Phase 115 P04 | 70min | 3 tasks | 11 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-08
-Stopped at: Completed 115-03-PLAN.md (4 tasks shipped: T01+T02 carved-source identity + drop-lowest enforcement + 8K outer cap; T03 Tier1/Tier2 typed split; T04 no-LLM tool-output prune)
+Stopped at: Completed 115-04-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
