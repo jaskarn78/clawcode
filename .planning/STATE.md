@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 115-07-PLAN.md
-last_updated: "2026-05-08T06:44:20.656Z"
+stopped_at: Completed 115-08-PLAN.md
+last_updated: "2026-05-08T07:32:48.656Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 60
   completed_phases: 15
   total_plans: 97
-  completed_plans: 90
-  percent: 93
+  completed_plans: 91
+  percent: 94
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
-Plan: 8 of 10
+Plan: 9 of 10
 Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -462,6 +462,11 @@ Recent decisions affecting current work:
 - [Phase 115]: Plan 115-07: per-agent isolation locked at policy layer + verified at runtime via SQL assertions over agent_or_null column (search_documents per-agent, web_search/brave_search/exa_search cross-agent)
 - [Phase 115]: Plan 115-07: live coverage scope is narrower than policy table — search_documents + web_search/_fetch_url + image_generate wired today; mysql_query / brave_search / exa_search / google_workspace_* are policy-only pending broker integration
 - [Phase 115]: Plan 115-07: tool_cache_size_mb deviation — fleet-wide signal goes through closure intercept of case cache IPC, not per-Turn rollups (would have misled per-agent percentile reads)
+- [Phase 115]: Plan 115-08: Premise-inversion in T01 — existing tool_call.<name> span IS execution-side; added tool_roundtrip_ms as separate per-batch wall-clock measurement (LLM emit-tool_use → next parent assistant).
+- [Phase 115]: Plan 115-08: parallel_tool_call_count uses MAX semantics (not SUM) across the turn — sequential turns land 1, parallel batches land N. Subsumes the > 0 'had any tool' check used by tool_use_rate computation while preserving the parallel-vs-serial signal.
+- [Phase 115]: Plan 115-08: tool_use_rate persisted in separate tool_use_rate_snapshots table (not back-written to turn rows) so the metric is independent of turn cadence. PRIMARY KEY (agent, computed_at) makes same-millisecond writes idempotent. Plan 115-09 reads via getLatestToolUseRateSnapshot OR via on-the-fly compute.
+- [Phase 115]: Plan 115-08: PARALLEL-TOOL-01 directive landed in DEFAULT_SYSTEM_PROMPT_DIRECTIVES (parallel-tool-calls key, default-enabled fleet-wide). Text scoped to mutually-orthogonal lookups so dependent calls cannot regress (THREAT-3 mitigation). Operator override wins per Phase 94 D-09/D-10 pattern.
+- [Phase 115]: Plan 115-08: 30% threshold + fin-acq exclusion locked in three sites (CLI literal 0.3, IPC handler 0.30, wave-2-checkpoint.md). Each has a CONTEXT D-12 provenance comment. Future operator changing the threshold MUST touch all three.
 
 ### v2.1 closing decisions (for reference)
 
@@ -653,11 +658,12 @@ Recent decisions affecting current work:
 | Phase 115 P06 | 18min | 5 tasks | 15 files |
 | Phase 115 P05 | 40min | 4 tasks | 16 files |
 | Phase 115 P07 | 28 | 4 tasks | 15 files |
+| Phase 115 P08 | 41min | 3 tasks | 17 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-08
-Stopped at: Completed 115-07-PLAN.md
+Stopped at: Completed 115-08-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)
