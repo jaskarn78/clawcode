@@ -64,6 +64,30 @@ export const TOOL_DEFINITIONS = {
     description: "Save knowledge, decisions, or important context to long-term memory",
     ipcMethod: "memory-save",
   },
+  // Phase 115 sub-scope 7 — lazy-load memory tools. Replace the always-
+  // injected memory model with tool-mediated recall: search returns
+  // 500-char snippets + memory IDs; recall fetches the full body on
+  // demand; edit / archive let the agent curate Tier 1 (MEMORY.md / USER.md).
+  clawcode_memory_search: {
+    description:
+      "Search this agent's memory (FTS5 + sqlite-vec hybrid). Returns top-K snippets with memory IDs.",
+    ipcMethod: "clawcode-memory-search",
+  },
+  clawcode_memory_recall: {
+    description:
+      "Fetch the full body of a memory by ID (returned from clawcode_memory_search hits).",
+    ipcMethod: "clawcode-memory-recall",
+  },
+  clawcode_memory_edit: {
+    description:
+      "Edit your Tier 1 memory file (MEMORY.md or USER.md). Modes: view / create / append / str_replace.",
+    ipcMethod: "clawcode-memory-edit",
+  },
+  clawcode_memory_archive: {
+    description:
+      "Promote a found chunk into MEMORY.md or USER.md (agent-curated Tier 2 → Tier 1 archive).",
+    ipcMethod: "clawcode-memory-archive",
+  },
   ask_advisor: {
     description: "Ask opus for advice on a complex decision without switching sessions",
     ipcMethod: "ask-advisor",
@@ -728,6 +752,162 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text" as const, text: `Failed to save memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // ── Phase 115 sub-scope 7 — lazy-load memory tools ─────────────────────
+  //
+  // Four tools that convert the agent from "always-injected memory" to
+  // "tool-mediated lazy recall." See plan 115-05 for the threat model.
+  //
+  // SECURITY notes:
+  //   - clawcode_memory_edit's `path` arg is z.enum(["MEMORY.md", "USER.md"])
+  //     ONLY. Operator-curated identity files (SOUL.md / IDENTITY.md) are
+  //     intentionally excluded — the agent CANNOT edit them.
+  //   - The `agent` arg matches the existing memory_lookup / memory_save
+  //     pattern: the daemon resolves the per-agent MemoryStore via
+  //     `manager.getMemoryStore(agent)`, so cross-agent recall is impossible
+  //     at the daemon-side IPC handler boundary.
+  //
+  // Tool: clawcode_memory_search — FTS5 + sqlite-vec hybrid search.
+  server.tool(
+    "clawcode_memory_search",
+    "Search this agent's memory (FTS5 + sqlite-vec hybrid). Returns top-K snippets with memory IDs. " +
+      "Use clawcode_memory_recall(memoryId) to fetch full body.",
+    {
+      query: z.string().describe("What to search for in your memory"),
+      k: z.number().int().min(1).max(50).default(10).describe("Top-K hits to return (1-50)"),
+      includeTags: z.array(z.string()).optional().describe("Only return memories with at least one of these tags"),
+      excludeTags: z.array(z.string()).optional().describe("Drop memories whose tags intersect this list"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ query, k, includeTags, excludeTags, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-search", {
+          agent,
+          query,
+          k,
+          includeTags,
+          excludeTags,
+        })) as {
+          hits: ReadonlyArray<Record<string, unknown>>;
+          agentName: string;
+        };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to search memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Tool: clawcode_memory_recall — fetch full body by id.
+  server.tool(
+    "clawcode_memory_recall",
+    "Fetch the full body of a memory by ID. Use the memoryId returned from a clawcode_memory_search hit.",
+    {
+      memoryId: z.string().describe("Memory ID returned from clawcode_memory_search"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ memoryId, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-recall", {
+          agent,
+          memoryId,
+        })) as Record<string, unknown>;
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to recall memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Tool: clawcode_memory_edit — Anthropic memory_20250818 contract on Tier 1 files.
+  server.tool(
+    "clawcode_memory_edit",
+    "Edit your Tier 1 memory file. Path is locked to MEMORY.md or USER.md only. " +
+      "Modes: view (read), create (overwrite), append, str_replace.",
+    {
+      path: z.enum(["MEMORY.md", "USER.md"]).describe("Tier 1 file to edit (locked enum)"),
+      mode: z.enum(["view", "create", "str_replace", "append"]).describe("Edit operation"),
+      oldStr: z.string().optional().describe("For str_replace: the existing string to replace"),
+      newStr: z.string().optional().describe("For str_replace: the replacement string"),
+      content: z.string().optional().describe("For create / append: the content to write"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ path, mode, oldStr, newStr, content, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-edit", {
+          agent,
+          path,
+          mode,
+          oldStr,
+          newStr,
+          content,
+        })) as { ok: boolean; after?: string; error?: string };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to edit memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Tool: clawcode_memory_archive — agent-curated Tier 2 → Tier 1 promotion.
+  server.tool(
+    "clawcode_memory_archive",
+    "Promote a found memory chunk into MEMORY.md or USER.md (agent-curated archive). " +
+      "Bypasses the dream-pass review window — your decision is operator-trusted.",
+    {
+      chunkId: z.string().describe("Chunk ID to promote (returned from clawcode_memory_search)"),
+      targetPath: z.enum(["MEMORY.md", "USER.md"]).describe("Target Tier 1 file"),
+      wrappingPrefix: z.string().optional().describe("Optional prefix prepended to the chunk body (e.g. heading)"),
+      wrappingSuffix: z.string().optional().describe("Optional suffix appended to the chunk body"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ chunkId, targetPath, wrappingPrefix, wrappingSuffix, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-archive", {
+          agent,
+          chunkId,
+          targetPath,
+          wrappingPrefix,
+          wrappingSuffix,
+        })) as { ok: boolean; error?: string };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to archive memory: ${msg}` }],
           isError: true,
         };
       }

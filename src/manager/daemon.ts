@@ -160,6 +160,13 @@ import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.
 import { chunkText, chunkPdf } from "../documents/chunker.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
+// Phase 115 sub-scope 7 — lazy-load memory tools (T01).
+import {
+  clawcodeMemorySearch,
+  clawcodeMemoryRecall,
+  clawcodeMemoryEdit,
+  clawcodeMemoryArchive,
+} from "../memory/tools/index.js";
 // Phase 999.8 Plan 01 — pure handler for memory-graph IPC with configurable LIMIT.
 import { handleMemoryGraphIpc } from "./memory-graph-handler.js";
 import { startOfWeek } from "date-fns";
@@ -7736,6 +7743,135 @@ async function routeMethod(
       const embedding = await embedder.embed(content);
       const entry = store.insert({ content, source: "conversation", importance, tags }, embedding);
       return { id: entry.id };
+    }
+
+    // ── Phase 115 sub-scope 7 — lazy-load memory tools ─────────────────
+    //
+    // The four MCP tool handlers. Each resolves the agent context via
+    // `validateStringParam(params, "agent")` (mirrors memory-save / memory-
+    // lookup), then dispatches to the pure tool function with the per-
+    // agent MemoryStore. Cross-agent isolation is enforced at this
+    // resolution layer.
+    case "clawcode-memory-search": {
+      const agentName = validateStringParam(params, "agent");
+      const query = validateStringParam(params, "query");
+      const k = typeof params.k === "number" ? params.k : 10;
+      const includeTags = Array.isArray(params.includeTags)
+        ? (params.includeTags as string[])
+        : undefined;
+      const excludeTags = Array.isArray(params.excludeTags)
+        ? (params.excludeTags as string[])
+        : undefined;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+      const embedder = manager.getEmbedder();
+      const lazyLoadLog = logger.child({ component: "clawcode-memory-search" });
+
+      const result = await clawcodeMemorySearch(
+        { query, k, includeTags, excludeTags },
+        { store, embedder, agentName, log: lazyLoadLog },
+      );
+      return result;
+    }
+
+    case "clawcode-memory-recall": {
+      const agentName = validateStringParam(params, "agent");
+      const memoryId = validateStringParam(params, "memoryId");
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+
+      const result = await clawcodeMemoryRecall(
+        { memoryId },
+        { store, agentName },
+      );
+      return result;
+    }
+
+    case "clawcode-memory-edit": {
+      const agentName = validateStringParam(params, "agent");
+      const path = validateStringParam(params, "path") as "MEMORY.md" | "USER.md";
+      const mode = validateStringParam(params, "mode") as
+        | "view"
+        | "create"
+        | "str_replace"
+        | "append";
+      const oldStr = typeof params.oldStr === "string" ? params.oldStr : undefined;
+      const newStr = typeof params.newStr === "string" ? params.newStr : undefined;
+      const content = typeof params.content === "string" ? params.content : undefined;
+
+      const cfg = manager.getAgentConfig(agentName) ?? configs.find((a) => a.name === agentName);
+      const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+      if (memoryRoot.length === 0) {
+        throw new ManagerError(
+          `Memory root not found for agent '${agentName}' (agent may not be configured)`,
+        );
+      }
+
+      const editLog = logger.child({ component: "clawcode-memory-edit" });
+      const result = await clawcodeMemoryEdit(
+        { path, mode, oldStr, newStr, content },
+        {
+          memoryRoot,
+          agentName,
+          log: {
+            warn: (obj, msg) => editLog.warn(obj, msg),
+            error: (obj, msg) => editLog.error(obj, msg),
+          },
+        },
+      );
+      return result;
+    }
+
+    case "clawcode-memory-archive": {
+      const agentName = validateStringParam(params, "agent");
+      const chunkId = validateStringParam(params, "chunkId");
+      const targetPath = validateStringParam(params, "targetPath") as
+        | "MEMORY.md"
+        | "USER.md";
+      const wrappingPrefix =
+        typeof params.wrappingPrefix === "string" ? params.wrappingPrefix : undefined;
+      const wrappingSuffix =
+        typeof params.wrappingSuffix === "string" ? params.wrappingSuffix : undefined;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+      const cfg = manager.getAgentConfig(agentName) ?? configs.find((a) => a.name === agentName);
+      const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+      if (memoryRoot.length === 0) {
+        throw new ManagerError(
+          `Memory root not found for agent '${agentName}' (agent may not be configured)`,
+        );
+      }
+
+      const archiveLog = logger.child({ component: "clawcode-memory-archive" });
+      const result = await clawcodeMemoryArchive(
+        { chunkId, targetPath, wrappingPrefix, wrappingSuffix },
+        {
+          store,
+          memoryRoot,
+          agentName,
+          log: {
+            info: (obj, msg) => archiveLog.info(obj, msg),
+            warn: (obj, msg) => archiveLog.warn(obj, msg),
+            error: (obj, msg) => archiveLog.error(obj, msg),
+          },
+        },
+      );
+      return result;
     }
 
     case "memory-graph": {

@@ -172,6 +172,15 @@ export function buildCapabilityManifest(
     "- **Conversation memory**: Prior session summaries auto-resume on session start (Phase 64). Working memory of recent turns preserved across daemon restarts.",
   );
 
+  // ---- 10a. Lazy-load memory tools (Phase 115 sub-scope 7) ----
+  // Always rendered alongside conversation memory: the four lazy-load
+  // memory tools are exposed to every agent unless explicitly disallowed.
+  // The bullet lists them; the longer Memory protocol section below
+  // teaches the agent WHEN to call each.
+  bullets.push(
+    "- **Lazy memory recall**: `clawcode_memory_search` (FTS5+vec hybrid), `clawcode_memory_recall` (full body by id), `clawcode_memory_edit` (str_replace / append on MEMORY.md / USER.md), `clawcode_memory_archive` (promote a chunk into Tier 1).",
+  );
+
   // ---- 11. Recursion guard ----
   // Only rendered when the agent has the subagent-thread skill — the
   // guard is informational about how the SDK enforces "subagents cannot
@@ -206,5 +215,18 @@ export function buildCapabilityManifest(
   const header =
     "## Your ClawCode Capabilities\n\nYou are running on ClawCode — a multi-agent orchestration system. The following features are CURRENTLY ENABLED for you (do NOT claim ignorance about these):\n\n";
 
-  return header + bullets.join("\n") + "\n";
+  // Phase 115 sub-scope 7 — Memory protocol prose. Teaches the agent the
+  // lazy-load protocol: "Your curated memory is in MEMORY.md and USER.md.
+  // For older context, call clawcode_memory_search before assuming you
+  // remember." Comes AFTER the capabilities bullets so it lands in the
+  // cached stable prefix, but separate from the bullet list so the LLM
+  // reads it as instructions, not as a feature list.
+  const memoryProtocol =
+    "\n## Memory protocol (Phase 115)\n\n" +
+    "Your curated memory is in MEMORY.md and USER.md, always shown above. " +
+    "For older context, call `clawcode_memory_search` before assuming you remember. " +
+    "Record significant new facts via `clawcode_memory_edit` (str_replace / append on MEMORY.md or USER.md). " +
+    "Promote a found chunk to permanent memory via `clawcode_memory_archive(chunkId)`.\n";
+
+  return header + bullets.join("\n") + memoryProtocol;
 }
