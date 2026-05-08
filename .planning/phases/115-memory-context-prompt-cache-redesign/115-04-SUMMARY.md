@@ -74,7 +74,7 @@ patterns-established:
 requirements-completed: []  # PLAN.md frontmatter `requirements:` is empty — sub-scope 5 is tracked in CONTEXT.md / ROADMAP.md, not as numbered requirements.
 
 # Metrics
-duration: ~70min (active work across T01 + T02 + T03; build + test cycles; advisor consultation pre-T01)
+duration: ~85min (active work across T01 + T02 + T03 + T04; build + test cycles; advisor consultation pre-T01 AND advisor self-check pre-completion catching the T04 wiring gap)
 completed: 2026-05-08
 ---
 
@@ -86,14 +86,19 @@ This is the architectural backbone of Phase 115's "agent responsiveness speed" S
 
 ## Performance
 
-- **Duration:** ~70 min (active work)
+- **Duration:** ~85 min (active work; advisor self-check before declaring done caught the T04 wiring gap and prevented shipping dead-code revert path)
 - **Started:** 2026-05-08T03:14Z (T01 first commit `b9268a8`)
-- **Completed:** 2026-05-08T03:42Z (T03 commit `84b81a0`) + ~10 min for SUMMARY
-- **Tasks:** 3 (T01, T02, T03)
-- **Files modified:** 11 (1 new test file + 1 deferred-items.md + 9 source/test/snapshot files modified)
-- **Commits:** 3 atomic + final SUMMARY commit
+- **Completed:** 2026-05-08T03:50Z (T04 fix commit `3b266ec`) + ~10 min for SUMMARY
+- **Tasks:** 4 (T01, T02, T03, T04)
+- **Files modified:** 13 (1 new test file + 1 deferred-items.md + 11 source/test/snapshot files modified)
+- **Commits:** 4 atomic + final SUMMARY commit
 
 ## Accomplishments
+
+> **NOTE on task ordering in this section:** The accomplishments are
+> presented in narrative order (T01 → T02 → T03 → T04 fix). T04 lands
+> AFTER T03 below in chronological order — see the bordered block in the
+> Deviations section for the advisor-caught wiring gap that T04 fixed.
 
 ### T01 (commit `b9268a8`) — Add SECTION_PLACEMENT, CACHE_BREAKPOINT_MARKER, cacheBreakpointPlacement config flag
 
@@ -119,6 +124,20 @@ This is the architectural backbone of Phase 115's "agent responsiveness speed" S
 - Updated `__snapshots__/session-config.test.ts.snap` for the `'back-compat-byte-identical'` test — marker bytes are the intentional Phase 115-04 delta; snapshot now captures the NEW byte baseline.
 - Pre-existing test failures (16 across 8 files) verified unchanged — `comm -23 post-T02 pre-T02-baseline` returns empty. Documented in `deferred-items.md`.
 
+### T04 (commit `3b266ec`) — Fix: wire cacheBreakpointPlacement through session-config to assembler
+
+**This fix landed AFTER T03 SUMMARY draft was written, caught by the advisor self-check before declaring done.** Without this fix, T01-T03 shipped a dead-code revert path: the config flag would have been read by the loader and stored on `ResolvedAgentConfig` but NEVER reached the assembler — `agents.X.cacheBreakpointPlacement: "legacy"` in `clawcode.yaml` would have produced no behavioral change.
+
+- `src/manager/session-config.ts`: thread `config.cacheBreakpointPlacement` into BOTH `assembleContextTraced` and `assembleContext` call sites (symmetric edit, matching the `excludeDynamicSections` wiring pattern at line ~1052).
+- `src/manager/__tests__/session-config.test.ts`: new describe block `'Phase 115 Plan 04 — cacheBreakpointPlacement config wiring'` with 3 tests pinning the wiring at the `buildSessionConfig` boundary:
+  1. default (no override on `ResolvedAgentConfig`) → systemPrompt contains the marker (default fires)
+  2. explicit `"legacy"` → systemPrompt does NOT contain the marker (revert path active — operators CAN actually flip per-agent)
+  3. explicit `"static-first"` → systemPrompt contains the marker (parity with default)
+
+**Why T01-T03 tests didn't catch this:** they passed `cacheBreakpointPlacement` directly via `AssembleOptions` in unit-test fixtures, bypassing the config-to-assembler wiring entirely. The wiring gap was only visible in the integration path through `buildSessionConfig`.
+
+**Verification:** `grep -n "cacheBreakpointPlacement" src/manager/session-config.ts` now returns 3 matches (was 0 before this fix).
+
 ### T03 (commit `84b81a0`) — SDK invariant docstring + integration test
 
 - `src/manager/session-adapter.ts` (`buildSystemPromptOption`): extended docstring with explicit `"# SDK shape invariant (LOCKED — DO NOT MODIFY)"` header documenting:
@@ -134,7 +153,7 @@ This is the architectural backbone of Phase 115's "agent responsiveness speed" S
 
 ## Task Commits
 
-Each task was committed atomically per the plan's hard ordering (T01 → T02 → T03):
+Each task was committed atomically per the plan's hard ordering (T01 → T02 → T03 → T04 fix):
 
 1. **T01: SECTION_PLACEMENT + CACHE_BREAKPOINT_MARKER + cacheBreakpointPlacement config flag** — `b9268a8` (feat)
    - 8 files: context-assembler.ts (+~120 lines), schema.ts, loader.ts, types.ts (config), shared/types.ts, loader.test.ts, differ.test.ts, context-assembler-cache-breakpoint.test.ts (new, +~330 lines).
@@ -148,6 +167,10 @@ Each task was committed atomically per the plan's hard ordering (T01 → T02 →
    - 2 files: session-adapter.ts (+~30 lines docstring), context-assembler-cache-breakpoint.test.ts (extended +~70 lines for 2 integration tests).
    - Net: +99 lines / -8 lines.
 
+4. **T04: wire cacheBreakpointPlacement through session-config to assembler (advisor-flagged fix)** — `3b266ec` (fix)
+   - 2 files: session-config.ts (thread config field into both assembleContext call sites), session-config.test.ts (3 wiring regression tests).
+   - Net: +65 lines.
+
 ## Files Created/Modified
 
 **Created:**
@@ -158,6 +181,7 @@ Each task was committed atomically per the plan's hard ordering (T01 → T02 →
 **Modified (source):**
 - `src/manager/context-assembler.ts` — T01: SECTION_PLACEMENT + MARKER + placement type + AssembleOptions field; T02: assembleContextInternal partition + mode-branch assembly
 - `src/manager/session-adapter.ts` — T03: extended buildSystemPromptOption docstring (function body byte-unchanged)
+- `src/manager/session-config.ts` — T04: thread config.cacheBreakpointPlacement through to AssembleOptions at both assembleContext call sites
 - `src/config/schema.ts` — T01: agent + defaults + configSchema-default schemas
 - `src/config/loader.ts` — T01: resolver
 - `src/config/types.ts` — T01: NON_RELOADABLE_FIELDS
@@ -165,6 +189,7 @@ Each task was committed atomically per the plan's hard ordering (T01 → T02 →
 
 **Modified (tests + snapshots):**
 - `src/manager/__tests__/context-assembler.test.ts` — T02: 2 tests updated for static-first default
+- `src/manager/__tests__/session-config.test.ts` — T04: 3 new tests pinning the config-to-assembler wiring
 - `src/manager/__tests__/__snapshots__/session-config.test.ts.snap` — T02: back-compat-byte-identical snapshot updated
 - `src/config/__tests__/loader.test.ts` — T01: 6 fixture lines added (sed-applied)
 - `src/config/__tests__/differ.test.ts` — T01: 1 fixture line added
@@ -215,8 +240,21 @@ None.
 
 ---
 
-**Total deviations:** 3 (1 scope alignment per orchestrator vs PLAN.md; 1 test fixture update; 1 snapshot baseline update).
-**Impact on plan:** All deviations narrow scope or update tests for the intentional contract change; no scope creep introduced. The simpler T01/T02/T03 land the architectural placement contract that Plan 115-08 will layer observability onto.
+**4. [Rule 1 - Bug] T04 wiring fix: cacheBreakpointPlacement was dead-code at integration boundary**
+
+- **Found during:** advisor self-check BEFORE declaring plan done.
+- **Issue:** T01 added `cacheBreakpointPlacement` to schema, loader, types.ts, RELOADABLE_FIELDS, and ResolvedAgentConfig. T02 added the assembler-side branch logic. But session-config.ts NEVER threaded `config.cacheBreakpointPlacement` into AssembleOptions — operator-set `agents.X.cacheBreakpointPlacement: "legacy"` in clawcode.yaml would have produced ZERO behavioral change. The "operator-controlled revert path" was dead code.
+- **Fix:** Added `cacheBreakpointPlacement: config.cacheBreakpointPlacement` to BOTH `assembleContextTraced` and `assembleContext` call sites in `buildSessionConfig` (symmetric edit, matching the `excludeDynamicSections` wiring pattern at line ~1052). Added 3 regression tests at the buildSessionConfig boundary.
+- **Why T01-T03 tests didn't catch it:** they passed `cacheBreakpointPlacement` directly via `AssembleOptions` in unit-test fixtures, bypassing the config-to-assembler wiring entirely. The wiring gap was only visible in the integration path.
+- **Verification:** `grep -n "cacheBreakpointPlacement" src/manager/session-config.ts` returns 3 matches post-fix (was 0 pre-fix).
+- **Files modified:** `src/manager/session-config.ts`, `src/manager/__tests__/session-config.test.ts`.
+- **Committed in:** `3b266ec`.
+- **Significance:** Without this fix, the safety net for the fleet-wide cache invalidation deploy (one-time fleet cache miss when the marker is added) would not have been there. The operator's emergency-revert path would have been broken.
+
+---
+
+**Total deviations:** 4 (1 scope alignment per orchestrator vs PLAN.md; 1 test fixture update; 1 snapshot baseline update; 1 advisor-caught wiring bug fix).
+**Impact on plan:** Three of four are narrowed scope / contract updates; the fourth is the critical wiring fix that prevented shipping a dead-code revert path. Advisor self-check surfaced the gap BEFORE plan declared done — the cost of one extra round-trip prevented an operationally-painful deploy regression.
 
 ## Issues Encountered
 
@@ -256,16 +294,17 @@ None for this plan. Operator action limited to the next deploy window:
 ## Self-Check
 
 Acceptance criteria from the orchestrator's `<success_criteria>`:
-- [x] All 3 tasks executed (T01, T02, T03)
+- [x] All tasks executed (T01, T02, T03 per plan + T04 advisor-caught wiring fix)
 - [x] T01: SECTION_PLACEMENT record exported from context-assembler.ts (`Record<keyof ContextSources, "static" | "dynamic" | "mutable-suffix">`) — verified via `grep -nc "SECTION_PLACEMENT" src/manager/context-assembler.ts` returns 4 matches
 - [x] T02: stableParts.push order verified — all static fields appear BEFORE all dynamic fields in static-first mode (test pinned in cache-breakpoint.test.ts T02 suite)
 - [x] T03: `[CACHE_BREAKPOINT_MARKER]` placeholder present at the static→dynamic boundary — verified via grep returning 7 matches in context-assembler.ts
-- [x] Each task committed individually (b9268a8 → 0253984 → 84b81a0)
+- [x] T04: `config.cacheBreakpointPlacement` wired through `buildSessionConfig` to `AssembleOptions` — verified via `grep -nc "cacheBreakpointPlacement" src/manager/session-config.ts` returns 3 matches (was 0 before the fix; would have been a dead-code shipping bug)
+- [x] Each task committed individually (b9268a8 → 0253984 → 84b81a0 → 3b266ec)
 - [x] SUMMARY.md at .planning/phases/115-memory-context-prompt-cache-redesign/115-04-SUMMARY.md (this file)
 - [x] STATE.md + ROADMAP.md updated (state-update step, separate commit follows)
 - [x] `npx tsc --noEmit` clean (verified after each commit; final tsc 0 errors)
 - [x] Existing 87 context-assembler tests still green (87 baseline + 21 new = 108 total pass)
-- [x] New 115-04 tests green (21 cache-breakpoint tests pass)
+- [x] New 115-04 tests green (21 cache-breakpoint tests + 3 session-config wiring tests = 24 new pass)
 
 T01 PLAN.md acceptance grep checks (where applicable to the narrowed scope):
 - [x] `grep -n "CACHE_BREAKPOINT_MARKER\|phase115-cache-breakpoint" src/manager/context-assembler.ts` returns ≥3 matches → 7 matches
@@ -298,6 +337,7 @@ Commits exist (verified via `git log --oneline`):
 - `b9268a8` (T01) — FOUND.
 - `0253984` (T02) — FOUND.
 - `84b81a0` (T03) — FOUND.
+- `3b266ec` (T04 advisor-fix) — FOUND.
 
 Out-of-scope checks NOT applicable (deferred to Plan 115-08 per orchestrator narrow scope):
 - staticPrefixHash field — DEFERRED
