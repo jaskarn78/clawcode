@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode — Fleet Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          display: ['Fraunces', 'serif'],
+          sans: ['Geist', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+        },
+        colors: {
+          bg: { deep: '#0a0a0e', s1: '#12121a', s2: '#1a1a26', s3: '#23232f' },
+          accent: { pink: '#ff3366', cyan: '#00e5ff', gold: '#d4a574' },
+          slo: { ok: '#00e676', warn: '#ffb300', bad: '#ff1744' },
+          fg: { 1: '#e8e6e3', 2: '#a8a8b8', 3: '#6a6a78' },
+        },
+        animation: {
+          'fade-up': 'fadeUp 0.4s ease forwards',
+          'slide-in': 'slideIn 0.25s ease forwards',
+          'pulse-soft': 'pulseSoft 2s ease-in-out infinite',
+        },
+        keyframes: {
+          fadeUp: { '0%': { opacity: '0', transform: 'translateY(8px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+          slideIn: { '0%': { opacity: '0', transform: 'translateX(32px)' }, '100%': { opacity: '1', transform: 'translateX(0)' } },
+          pulseSoft: { '0%,100%': { opacity: '1' }, '50%': { opacity: '0.5' } },
+        },
+      },
+    },
+  };
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  body { font-family: 'Geist', sans-serif; background: #0a0a0e; }
+  .grain-overlay {
+    position: fixed; inset: 0; z-index: 999; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    opacity: 0.035; mix-blend-mode: overlay;
+  }
+  .radial-bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse at 15% 30%, rgba(255,51,102,0.06) 0%, transparent 45%),
+      radial-gradient(ellipse at 85% 70%, rgba(0,229,255,0.04) 0%, transparent 45%),
+      radial-gradient(ellipse at 50% 50%, rgba(10,10,14,0.8) 0%, transparent 70%);
+  }
+  .sidebar-nav { width: 240px; flex-shrink: 0; }
+  .nav-item { transition: all 0.15s ease; }
+  .nav-item:hover { background: rgba(255,255,255,0.04); }
+  .nav-item.active { background: rgba(255,51,102,0.08); border-right: 2px solid #ff3366; }
+  .agent-tile { transition: transform 0.15s ease, box-shadow 0.15s ease; opacity: 0; }
+  .agent-tile:hover { transform: scale(1.005); box-shadow: 0 24px 48px rgba(0,0,0,0.6); }
+  .agent-tile.visible { animation: fadeUp 0.4s ease forwards; }
+  .progress-bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+  .sparkline { display: flex; align-items: flex-end; gap: 2px; height: 24px; }
+  .spark-bar { flex: 1; border-radius: 1px; min-height: 2px; transition: opacity 0.15s ease; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-running { background: #00e676; box-shadow: 0 0 6px rgba(0,230,118,0.6); animation: pulseSoft 2s ease-in-out infinite; }
+  .breach-banner { border-left: 3px solid #ffb300; }
+  .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 200; display: none; backdrop-filter: blur(4px); }
+  .drawer-backdrop.open { display: block; }
+  .drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 60%; z-index: 201; background: #12121a; border-left: 1px solid rgba(255,255,255,0.06); transform: translateX(100%); transition: transform 0.25s ease; overflow-y: auto; }
+  .drawer.open { transform: translateX(0); animation: slideIn 0.25s ease forwards; animation-fill-mode: forwards; }
+  .palette-backdrop { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,0.6); display: none; backdrop-filter: blur(8px); align-items: flex-start; justify-content: center; padding-top: 15vh; }
+  .palette-backdrop.open { display: flex; }
+  .palette { width: 560px; background: #1a1a26; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 40px 80px rgba(0,0,0,0.8); overflow: hidden; animation: fadeUp 0.2s ease; }
+  .palette-item { transition: background 0.1s ease; cursor: pointer; }
+  .palette-item:hover, .palette-item.selected { background: rgba(255,51,102,0.08); }
+  .model-badge { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+  .badge-opus { background: rgba(212,165,116,0.15); color: #d4a574; border: 1px solid rgba(212,165,116,0.3); }
+  .badge-sonnet { background: rgba(0,229,255,0.1); color: #00e5ff; border: 1px solid rgba(0,229,255,0.2); }
+  .badge-haiku { background: rgba(0,230,118,0.1); color: #00e676; border: 1px solid rgba(0,230,118,0.2); }
+  .mcp-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .fin-acq-tile { grid-column: span 1; position: relative; }
+  .ramy-crown { position: absolute; top: 10px; right: 10px; }
+  .dormant-strip { opacity: 0; animation: fadeUp 0.4s ease 0.5s forwards; }
+  @keyframes pulseSoft { 0%,100% { opacity:1; } 50% { opacity: 0.5; } }
+</style>
+</head>
+<body class="min-h-screen text-fg-1">
+  <div class="grain-overlay"></div>
+  <div class="radial-bg"></div>
+
+  <!-- COMMAND PALETTE -->
+  <div class="palette-backdrop" id="palette-backdrop" onclick="closePalette(event)">
+    <div class="palette" onclick="event.stopPropagation()">
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-white/5">
+        <i data-lucide="search" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+        <input id="palette-input" type="text" placeholder="Search agents, actions, metrics..."
+          class="flex-1 bg-transparent text-fg-1 text-sm outline-none placeholder-fg-3"
+          oninput="filterPalette(this.value)" onkeydown="handlePaletteKey(event)">
+        <span class="text-fg-3 text-xs font-mono bg-bg-s3 px-1.5 py-0.5 rounded">ESC</span>
+      </div>
+      <div id="palette-list" class="py-1 max-h-80 overflow-y-auto"></div>
+      <div class="px-4 py-2 border-t border-white/5 flex gap-4 text-xs text-fg-3">
+        <span><kbd class="font-mono">↑↓</kbd> navigate</span>
+        <span><kbd class="font-mono">↵</kbd> select</span>
+        <span><kbd class="font-mono">ESC</kbd> close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- DETAIL DRAWER BACKDROP -->
+  <div class="drawer-backdrop" id="drawer-backdrop" onclick="closeDrawer()">
+  </div>
+  <!-- DETAIL DRAWER -->
+  <div class="drawer" id="agent-drawer">
+    <div class="p-6" id="drawer-content">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <!-- LAYOUT WRAPPER -->
+  <div class="relative z-10 flex min-h-screen">
+
+    <!-- SIDEBAR NAV (240px) -->
+    <aside class="sidebar-nav bg-bg-s1 border-r border-white/5 flex flex-col sticky top-0 h-screen">
+      <!-- Logo -->
+      <div class="px-5 py-4 border-b border-white/5">
+        <div class="flex items-center gap-2">
+          <span class="font-mono font-bold text-accent-pink text-lg">{/}</span>
+          <span class="font-display font-semibold text-fg-1 text-base tracking-tight">ClawCode</span>
+        </div>
+        <div class="flex items-center gap-2 mt-1.5">
+          <div class="status-dot status-running"></div>
+          <span class="text-xs text-fg-3 font-mono">clawdy · connected</span>
+        </div>
+      </div>
+
+      <!-- Nav sections -->
+      <nav class="flex-1 py-3 overflow-y-auto">
+        <div class="px-3 mb-1">
+          <span class="text-xs font-mono text-fg-3 uppercase tracking-widest px-2">Fleet</span>
+        </div>
+        <a href="#" class="nav-item active flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-1">
+          <i data-lucide="layout-grid" class="w-4 h-4"></i> Overview
+        </a>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="bot" class="w-4 h-4"></i> Agents
+        </a>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="bar-chart-2" class="w-4 h-4"></i> Comparison
+        </a>
+
+        <div class="px-3 mb-1 mt-4">
+          <span class="text-xs font-mono text-fg-3 uppercase tracking-widest px-2">Data</span>
+        </div>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="brain" class="w-4 h-4"></i> Memory
+        </a>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="dollar-sign" class="w-4 h-4"></i> Costs
+        </a>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="git-fork" class="w-4 h-4"></i> Graph
+        </a>
+
+        <div class="px-3 mb-1 mt-4">
+          <span class="text-xs font-mono text-fg-3 uppercase tracking-widest px-2">Ops</span>
+        </div>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="check-square" class="w-4 h-4"></i> Tasks
+        </a>
+        <a href="#" class="nav-item flex items-center gap-3 px-4 py-2.5 mx-1 rounded-md text-sm text-fg-2">
+          <i data-lucide="settings" class="w-4 h-4"></i> Settings
+        </a>
+      </nav>
+
+      <!-- Bottom: SLO summary -->
+      <div class="p-4 border-t border-white/5">
+        <div class="text-xs text-fg-3 mb-2 font-mono">SLO Status</div>
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs text-fg-2">Healthy</span>
+          <span class="text-xs font-mono text-slo-ok">5</span>
+        </div>
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs text-fg-2">Breaching</span>
+          <span class="text-xs font-mono text-slo-warn">2</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-fg-2">Critical</span>
+          <span class="text-xs font-mono text-fg-3">0</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 flex flex-col min-w-0">
+
+      <!-- TOP HEADER BAR -->
+      <header class="bg-bg-s1/80 backdrop-blur border-b border-white/5 px-6 py-0 flex items-center justify-between h-14 sticky top-0 z-50">
+        <div class="flex items-center gap-2 text-sm text-fg-3">
+          <span class="text-fg-2">Fleet</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span class="text-fg-1">Overview</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <!-- Cmd+K hint -->
+          <button onclick="openPalette()" class="flex items-center gap-2 text-xs text-fg-3 bg-bg-s3 border border-white/5 rounded-md px-3 py-1.5 hover:border-white/10 transition-colors">
+            <i data-lucide="search" class="w-3 h-3"></i>
+            <span>Search agents...</span>
+            <kbd class="font-mono text-fg-3 ml-2">⌘K</kbd>
+          </button>
+          <!-- Notif bell -->
+          <button class="relative p-2 rounded-md hover:bg-white/5 transition-colors">
+            <i data-lucide="bell" class="w-4 h-4 text-fg-2"></i>
+            <span class="absolute top-1 right-1 w-2 h-2 bg-slo-warn rounded-full"></span>
+          </button>
+          <!-- Avatar -->
+          <div class="w-7 h-7 rounded-full bg-gradient-to-br from-accent-pink to-accent-cyan flex items-center justify-center text-xs font-mono font-bold text-white">J</div>
+        </div>
+      </header>
+
+      <!-- F01: SLO BREACH BANNER -->
+      <div class="breach-banner bg-slo-warn/5 border-b border-slo-warn/20 px-6 py-3 flex items-center justify-between" id="breach-banner">
+        <div class="flex items-center gap-3">
+          <i data-lucide="alert-triangle" class="w-4 h-4 text-slo-warn flex-shrink-0"></i>
+          <div>
+            <span class="text-xs font-mono text-slo-warn font-medium">2 SLO BREACHES ACTIVE</span>
+            <span class="text-xs text-fg-3 ml-3">research first_token p50 2,120ms (target ≤ 2,000ms sonnet) · finmentum-content-creator first_token p50 2,080ms (target ≤ 2,000ms)</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="text-xs text-slo-warn hover:text-fg-1 transition-colors font-mono">drill down</button>
+          <button onclick="document.getElementById('breach-banner').style.display='none'" class="p-1 hover:bg-white/5 rounded transition-colors">
+            <i data-lucide="x" class="w-3 h-3 text-fg-3"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- F01: FLEET SUMMARY STATS -->
+      <div class="px-6 py-4 bg-bg-s1/30 border-b border-white/5">
+        <div class="flex items-center gap-8">
+          <div>
+            <span class="text-xs text-fg-3 font-mono uppercase tracking-wider">Active</span>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span class="font-display text-2xl font-semibold text-slo-ok">7</span>
+              <span class="text-xs text-fg-3 font-mono">/ 10 agents</span>
+            </div>
+          </div>
+          <div class="w-px h-8 bg-white/5"></div>
+          <div>
+            <span class="text-xs text-fg-3 font-mono uppercase tracking-wider">SLO Breaching</span>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span class="font-display text-2xl font-semibold text-slo-warn">2</span>
+              <span class="text-xs text-fg-3 font-mono">model-aware</span>
+            </div>
+          </div>
+          <div class="w-px h-8 bg-white/5"></div>
+          <div>
+            <span class="text-xs text-fg-3 font-mono uppercase tracking-wider">Prompt Bloat</span>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span class="font-display text-2xl font-semibold text-slo-ok">0</span>
+              <span class="text-xs text-fg-3 font-mono">warnings 24h</span>
+            </div>
+          </div>
+          <div class="w-px h-8 bg-white/5"></div>
+          <div>
+            <span class="text-xs text-fg-3 font-mono uppercase tracking-wider">Avg Cache Hit</span>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span class="font-display text-2xl font-semibold text-accent-cyan">44%</span>
+              <span class="text-xs text-fg-3 font-mono">fleet avg</span>
+            </div>
+          </div>
+          <div class="w-px h-8 bg-white/5"></div>
+          <!-- F09: Migration summary -->
+          <div>
+            <span class="text-xs text-fg-3 font-mono uppercase tracking-wider">Migration</span>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span class="text-xs font-mono text-accent-gold bg-accent-gold/10 px-2 py-0.5 rounded border border-accent-gold/20">dual-write</span>
+              <span class="text-xs text-fg-3 font-mono">7 agents</span>
+            </div>
+          </div>
+          <div class="ml-auto flex items-center gap-2 text-xs text-fg-3">
+            <div class="status-dot status-running"></div>
+            <span class="font-mono">live · SSE</span>
+            <span class="text-fg-3/50">·</span>
+            <span class="font-mono">last sync 2s ago</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- MAIN CONTENT AREA -->
+      <div class="flex-1 px-6 py-6">
+        <div class="flex items-center justify-between mb-5">
+          <h1 class="font-display text-xl font-semibold text-fg-1 tracking-tight">Active Agents</h1>
+          <div class="flex items-center gap-2">
+            <button class="text-xs text-fg-3 bg-bg-s3 border border-white/5 rounded px-3 py-1.5 hover:border-white/10 transition-colors flex items-center gap-1.5">
+              <i data-lucide="filter" class="w-3 h-3"></i> Filter
+            </button>
+            <button class="text-xs text-fg-3 bg-bg-s3 border border-white/5 rounded px-3 py-1.5 hover:border-white/10 transition-colors flex items-center gap-1.5">
+              <i data-lucide="sliders-horizontal" class="w-3 h-3"></i> Sort
+            </button>
+          </div>
+        </div>
+
+        <!-- F03: AGENT TILE GRID -->
+        <div class="grid grid-cols-3 gap-4" id="agent-grid">
+          <!-- Tiles rendered by JS -->
+        </div>
+
+        <!-- DORMANT AGENTS FOOTER (F03) -->
+        <div class="dormant-strip mt-4">
+          <button id="dormant-toggle" onclick="toggleDormant()" class="w-full flex items-center justify-between bg-bg-s1/50 border border-white/5 rounded-lg px-5 py-3 hover:bg-bg-s2/50 transition-colors group">
+            <div class="flex items-center gap-3">
+              <i data-lucide="moon" class="w-3.5 h-3.5 text-fg-3"></i>
+              <span class="text-sm text-fg-3">3 dormant agents</span>
+              <div class="flex gap-1.5">
+                <span class="text-xs font-mono text-fg-3/60 bg-bg-s3 px-2 py-0.5 rounded">personal</span>
+                <span class="text-xs font-mono text-fg-3/60 bg-bg-s3 px-2 py-0.5 rounded">fin-playground</span>
+                <span class="text-xs font-mono text-fg-3/60 bg-bg-s3 px-2 py-0.5 rounded">fin-tax</span>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-fg-3/60 group-hover:text-fg-3 transition-colors">autoStart: false</span>
+              <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-fg-3" id="dormant-chevron"></i>
+            </div>
+          </button>
+          <div id="dormant-expanded" class="hidden border border-t-0 border-white/5 rounded-b-lg bg-bg-s1/30 px-5 py-4">
+            <div class="grid grid-cols-3 gap-3">
+              <div class="bg-bg-s2/50 border border-white/5 rounded-lg p-4 opacity-50">
+                <div class="flex items-center gap-2 mb-2">
+                  <div class="w-2 h-2 rounded-full bg-fg-3"></div>
+                  <span class="text-sm text-fg-2 font-medium">personal</span>
+                  <span class="model-badge badge-sonnet ml-auto">sonnet</span>
+                </div>
+                <span class="text-xs text-fg-3 font-mono">stopped · autoStart: false</span>
+              </div>
+              <div class="bg-bg-s2/50 border border-white/5 rounded-lg p-4 opacity-50">
+                <div class="flex items-center gap-2 mb-2">
+                  <div class="w-2 h-2 rounded-full bg-fg-3"></div>
+                  <span class="text-sm text-fg-2 font-medium">fin-playground</span>
+                  <span class="model-badge badge-sonnet ml-auto">sonnet</span>
+                </div>
+                <span class="text-xs text-fg-3 font-mono">stopped · autoStart: false</span>
+              </div>
+              <div class="bg-bg-s2/50 border border-white/5 rounded-lg p-4 opacity-50">
+                <div class="flex items-center gap-2 mb-2">
+                  <div class="w-2 h-2 rounded-full bg-fg-3"></div>
+                  <span class="text-sm text-fg-2 font-medium">fin-tax</span>
+                  <span class="model-badge badge-sonnet ml-auto">sonnet</span>
+                </div>
+                <span class="text-xs text-fg-3 font-mono">stopped · autoStart: false</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+const fleet = [
+  { name: "Admin Clawdy", status: "running", uptime: "3h 12m", model: "opus", tier: "high",
+    tier1Chars: 5298, tier1Pct: 33.1, tier1Max: 16000,
+    firstTokenP50: 2840, firstTokenSlo: 3500, firstTokenStatus: "healthy",
+    toolCacheHit: 0.12, toolCacheSizeMb: 8.4,
+    lazyRecallCalls24h: 14, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "1password", status: "ready" }, { name: "search", status: "ready" }, { name: "browser", status: "ready" }, { name: "image", status: "ready" }],
+    activity24h: [3,5,4,8,12,9,7,6,11,15,9,4], lastTurn: "4m ago",
+  },
+  { name: "fin-acquisition", status: "running", uptime: "3h 4m", model: "sonnet", tier: "low",
+    tier1Chars: 12421, tier1Pct: 77.6, tier1Max: 16000,
+    firstTokenP50: 1840, firstTokenSlo: 2000, firstTokenStatus: "healthy",
+    toolCacheHit: 0.43, toolCacheSizeMb: 22.1,
+    lazyRecallCalls24h: 47, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "finmentum-db", status: "ready" }, { name: "1password", status: "ready" }, { name: "search", status: "ready" }, { name: "google-workspace", status: "ready" }, { name: "browser", status: "ready" }],
+    activity24h: [12,18,22,35,42,38,29,24,31,45,52,44], lastTurn: "2m ago", isRamy: true,
+  },
+  { name: "research", status: "running", uptime: "2h 52m", model: "sonnet", tier: "low",
+    tier1Chars: 7104, tier1Pct: 44.4, tier1Max: 16000,
+    firstTokenP50: 2120, firstTokenSlo: 2000, firstTokenStatus: "breach",
+    toolCacheHit: 0.68, toolCacheSizeMb: 14.2,
+    lazyRecallCalls24h: 9, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "brave-search", status: "ready" }, { name: "search", status: "degraded" }, { name: "browser", status: "ready" }],
+    activity24h: [5,7,9,12,15,18,14,11,10,13,16,12], lastTurn: "7m ago",
+  },
+  { name: "fin-research", status: "running", uptime: "2h 42m", model: "haiku", tier: "low",
+    tier1Chars: 4892, tier1Pct: 30.6, tier1Max: 16000,
+    firstTokenP50: 980, firstTokenSlo: 1500, firstTokenStatus: "healthy",
+    toolCacheHit: 0.71, toolCacheSizeMb: 18.6,
+    lazyRecallCalls24h: 5, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "finmentum-db", status: "ready" }, { name: "search", status: "ready" }, { name: "browser", status: "ready" }],
+    activity24h: [2,4,3,6,8,11,9,7,5,8,10,7], lastTurn: "14m ago",
+  },
+  { name: "finmentum-content-creator", status: "running", uptime: "2h 39m", model: "sonnet", tier: "low",
+    tier1Chars: 6201, tier1Pct: 38.8, tier1Max: 16000,
+    firstTokenP50: 2080, firstTokenSlo: 2000, firstTokenStatus: "breach",
+    toolCacheHit: 0.51, toolCacheSizeMb: 11.8,
+    lazyRecallCalls24h: 12, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "finmentum-content", status: "ready" }, { name: "google-workspace", status: "ready" }, { name: "image", status: "ready" }, { name: "browser", status: "ready" }],
+    activity24h: [4,6,5,8,10,9,7,6,8,11,9,7], lastTurn: "9m ago",
+  },
+  { name: "general", status: "running", uptime: "2h 31m", model: "sonnet", tier: "low",
+    tier1Chars: 3214, tier1Pct: 20.1, tier1Max: 16000,
+    firstTokenP50: 1640, firstTokenSlo: 2000, firstTokenStatus: "healthy",
+    toolCacheHit: 0.38, toolCacheSizeMb: 6.4,
+    lazyRecallCalls24h: 3, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "search", status: "ready" }, { name: "browser", status: "ready" }],
+    activity24h: [1,2,3,4,5,4,3,2,4,6,5,3], lastTurn: "22m ago",
+  },
+  { name: "projects", status: "running", uptime: "2h 21m", model: "sonnet", tier: "low",
+    tier1Chars: 4528, tier1Pct: 28.3, tier1Max: 16000,
+    firstTokenP50: 1920, firstTokenSlo: 2000, firstTokenStatus: "healthy",
+    toolCacheHit: 0.29, toolCacheSizeMb: 4.2,
+    lazyRecallCalls24h: 6, promptBloatWarnings24h: 0,
+    migrationPhase: "dual-write",
+    mcpServers: [{ name: "search", status: "ready" }, { name: "browser", status: "ready" }],
+    activity24h: [2,3,4,5,6,5,4,3,5,7,6,4], lastTurn: "31m ago",
+  },
+];
+
+const paletteItems = [
+  { type: "agent", label: "Jump to Admin Clawdy", icon: "bot", action: "agent:Admin Clawdy" },
+  { type: "agent", label: "Jump to fin-acquisition", icon: "bot", action: "agent:fin-acquisition" },
+  { type: "agent", label: "Jump to research", icon: "bot", action: "agent:research" },
+  { type: "action", label: "Show all SLO breaches", icon: "alert-triangle", action: "filter:slo-breaches" },
+  { type: "action", label: "Restart fin-acquisition", icon: "refresh-cw", action: "restart:fin-acquisition" },
+  { type: "action", label: "View Admin Clawdy memory", icon: "brain", action: "memory:Admin Clawdy" },
+  { type: "action", label: "Run perf-comparison", icon: "bar-chart-2", action: "cli:perf-comparison" },
+  { type: "action", label: "Open knowledge graph", icon: "git-fork", action: "nav:graph" },
+  { type: "action", label: "Toggle theme", icon: "sun", action: "theme:toggle" },
+];
+
+function getSloColor(status) {
+  if (status === 'breach') return '#ffb300';
+  if (status === 'critical') return '#ff1744';
+  return '#00e676';
+}
+
+function getTier1Color(pct) {
+  if (pct > 85) return '#ff1744';
+  if (pct > 70) return '#ffb300';
+  return '#00e676';
+}
+
+function getModelBadge(model) {
+  const classes = { opus: 'badge-opus', sonnet: 'badge-sonnet', haiku: 'badge-haiku' };
+  return `<span class="model-badge ${classes[model] || 'badge-sonnet'}">${model}</span>`;
+}
+
+function renderSparkline(data, color) {
+  const max = Math.max(...data);
+  return `<div class="sparkline">${data.map(v => {
+    const h = Math.max(2, Math.round((v / max) * 100));
+    return `<div class="spark-bar" style="height:${h}%;background:${color}88;border-radius:1px"></div>`;
+  }).join('')}</div>`;
+}
+
+function renderMcpDots(servers) {
+  return servers.slice(0, 5).map(s => {
+    const c = s.status === 'ready' ? '#00e676' : s.status === 'degraded' ? '#ffb300' : '#ff1744';
+    return `<span class="mcp-dot" style="background:${c}" title="${s.name}: ${s.status}"></span>`;
+  }).join('');
+}
+
+function renderTile(agent, idx) {
+  const sloColor = getSloColor(agent.firstTokenStatus);
+  const tier1Color = getTier1Color(agent.tier1Pct);
+  const isBreach = agent.firstTokenStatus === 'breach';
+  const isAmber = isBreach;
+
+  const borderStyle = isAmber
+    ? 'border-slo-warn/30 shadow-slo-warn/10'
+    : 'border-white/5';
+
+  const amberGlow = isAmber
+    ? 'box-shadow: 0 0 0 1px rgba(255,179,0,0.15), 0 8px 32px rgba(0,0,0,0.4);'
+    : 'box-shadow: 0 8px 32px rgba(0,0,0,0.3);';
+
+  const radarStyle = isAmber
+    ? 'background: linear-gradient(180deg, rgba(255,179,0,0.04) 0%, rgba(26,26,38,0) 100%);'
+    : 'background: linear-gradient(180deg, rgba(26,26,38,0.8) 0%, rgba(18,18,26,0) 100%);';
+
+  const raMyBadge = agent.isRamy ? `
+    <span class="ramy-crown absolute top-2.5 right-2.5 flex items-center gap-1 text-accent-gold/80 bg-accent-gold/10 border border-accent-gold/20 rounded px-1.5 py-0.5">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm2 3a1 1 0 011-1h8a1 1 0 010 2H8a1 1 0 01-1-1z"/></svg>
+      <span class="text-xs font-mono" style="font-size:9px">ramy</span>
+    </span>` : '';
+
+  return `
+    <div class="agent-tile relative bg-bg-s2 border ${borderStyle} rounded-xl p-4 cursor-pointer"
+      style="${amberGlow} animation-delay: ${idx * 60}ms"
+      onclick="openDrawer('${agent.name}')"
+      onmouseenter="this.style.transform='scale(1.005)'"
+      onmouseleave="this.style.transform='scale(1)'">
+      ${raMyBadge}
+
+      <!-- Top row: status + name + model -->
+      <div class="flex items-start gap-2 mb-3 pr-${agent.isRamy ? '16' : '0'}">
+        <div class="status-dot status-running mt-1 flex-shrink-0"></div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm font-medium text-fg-1 truncate">${agent.name}</span>
+            ${getModelBadge(agent.model)}
+          </div>
+          <span class="text-xs text-fg-3 font-mono">up ${agent.uptime}</span>
+        </div>
+      </div>
+
+      <!-- F04: Tier-1 budget meter -->
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs text-fg-3 font-mono">ctx</span>
+          <span class="text-xs font-mono" style="color:${tier1Color}">${agent.tier1Pct}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:${Math.min(agent.tier1Pct,100)}%;background:${tier1Color}"></div>
+        </div>
+        <div class="text-xs text-fg-3 font-mono mt-0.5">${agent.tier1Chars.toLocaleString()} / 16,000 chars</div>
+      </div>
+
+      <!-- F03: first-token p50 + SLO color -->
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <span class="text-xs text-fg-3 font-mono">first_token p50</span>
+          <div class="flex items-center gap-1.5 mt-0.5">
+            <span class="font-mono text-sm font-medium" style="color:${sloColor}">${agent.firstTokenP50.toLocaleString()}ms</span>
+            ${isAmber ? `<span class="text-xs font-mono bg-slo-warn/10 text-slo-warn border border-slo-warn/20 px-1 rounded">breach</span>` : ''}
+          </div>
+          <span class="text-xs text-fg-3 font-mono">≤ ${agent.firstTokenSlo.toLocaleString()}ms ${agent.model === 'opus' ? '(opus-adjusted)' : ''}</span>
+        </div>
+        <!-- F05: cache hit -->
+        <div class="text-right">
+          <span class="text-xs text-fg-3 font-mono">cache hit</span>
+          <div class="font-mono text-sm font-medium text-accent-cyan">${Math.round(agent.toolCacheHit * 100)}%</div>
+          <span class="text-xs text-fg-3 font-mono">${agent.toolCacheSizeMb}MB</span>
+        </div>
+      </div>
+
+      <!-- F09: migration pill + F08: lazy recall -->
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-xs font-mono text-accent-gold/70 bg-accent-gold/8 border border-accent-gold/15 rounded px-1.5 py-0.5">${agent.migrationPhase}</span>
+        <div class="flex items-center gap-3 text-xs font-mono text-fg-3">
+          <span title="Lazy recall calls 24h">${agent.lazyRecallCalls24h} recall</span>
+          <span title="Prompt bloat warnings" class="${agent.promptBloatWarnings24h > 0 ? 'text-slo-warn' : ''}">${agent.promptBloatWarnings24h} bloat</span>
+        </div>
+      </div>
+
+      <!-- F03: sparkline + MCP dots + last turn -->
+      <div class="flex items-end justify-between gap-2">
+        <div class="flex-1">
+          ${renderSparkline(agent.activity24h, sloColor)}
+          <div class="text-xs text-fg-3 font-mono mt-1">${agent.lastTurn}</div>
+        </div>
+        <!-- F10: MCP health dots -->
+        <div class="flex items-center gap-1.5 flex-wrap justify-end" title="MCP servers">
+          ${renderMcpDots(agent.mcpServers)}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderDrawer(agentName) {
+  const agent = fleet.find(a => a.name === agentName);
+  if (!agent) return '';
+  const sloColor = getSloColor(agent.firstTokenStatus);
+  const tier1Color = getTier1Color(agent.tier1Pct);
+  const isFinAcq = agent.name === 'fin-acquisition';
+
+  return `
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <div class="flex items-center gap-2">
+          <div class="status-dot status-running"></div>
+          <h2 class="font-display text-lg font-semibold text-fg-1">${agent.name}</h2>
+          ${getModelBadge(agent.model)}
+          ${agent.isRamy ? `<span class="text-xs font-mono text-accent-gold bg-accent-gold/10 border border-accent-gold/20 px-2 py-0.5 rounded">⭐ ramy</span>` : ''}
+        </div>
+        <p class="text-xs text-fg-3 font-mono mt-0.5">up ${agent.uptime} · last turn 2m ago</p>
+      </div>
+      <div class="flex items-center gap-2">
+        ${isFinAcq ? `<a href="mockup-agent-detail.html" class="text-xs font-mono text-accent-cyan border border-accent-cyan/30 px-3 py-1.5 rounded hover:bg-accent-cyan/10 transition-colors">Full Inspector →</a>` : ''}
+        <button onclick="closeDrawer()" class="p-2 hover:bg-white/5 rounded-lg transition-colors">
+          <i data-lucide="x" class="w-4 h-4 text-fg-3"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Metrics grid -->
+    <div class="grid grid-cols-2 gap-3 mb-6">
+      <div class="bg-bg-s3 border border-white/5 rounded-lg p-3">
+        <div class="text-xs text-fg-3 font-mono mb-1">first_token p50</div>
+        <div class="font-display text-2xl font-semibold" style="color:${sloColor}">${agent.firstTokenP50.toLocaleString()}ms</div>
+        <div class="text-xs text-fg-3 font-mono">SLO ≤ ${agent.firstTokenSlo.toLocaleString()}ms${agent.model==='opus'?' (opus-adj)':''}</div>
+      </div>
+      <div class="bg-bg-s3 border border-white/5 rounded-lg p-3">
+        <div class="text-xs text-fg-3 font-mono mb-1">cache hit rate</div>
+        <div class="font-display text-2xl font-semibold text-accent-cyan">${Math.round(agent.toolCacheHit*100)}%</div>
+        <div class="text-xs text-fg-3 font-mono">${agent.toolCacheSizeMb}MB / 100MB</div>
+      </div>
+      <div class="bg-bg-s3 border border-white/5 rounded-lg p-3">
+        <div class="text-xs text-fg-3 font-mono mb-1">ctx budget (Tier 1)</div>
+        <div class="font-display text-2xl font-semibold" style="color:${tier1Color}">${agent.tier1Pct}%</div>
+        <div class="text-xs text-fg-3 font-mono">${agent.tier1Chars.toLocaleString()} / 16,000 chars</div>
+      </div>
+      <div class="bg-bg-s3 border border-white/5 rounded-lg p-3">
+        <div class="text-xs text-fg-3 font-mono mb-1">lazy recall 24h</div>
+        <div class="font-display text-2xl font-semibold text-fg-1">${agent.lazyRecallCalls24h}</div>
+        <div class="text-xs text-fg-3 font-mono">prompt bloat: ${agent.promptBloatWarnings24h} warn</div>
+      </div>
+    </div>
+
+    <!-- F10: MCP Servers -->
+    <div class="mb-6">
+      <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-3">MCP Servers</h3>
+      <div class="space-y-1.5">
+        ${agent.mcpServers.map(s => `
+          <div class="flex items-center justify-between bg-bg-s3/50 border border-white/5 rounded-lg px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="mcp-dot" style="background:${s.status==='ready'?'#00e676':s.status==='degraded'?'#ffb300':'#ff1744'}"></span>
+              <span class="text-sm text-fg-1 font-mono">${s.name}</span>
+            </div>
+            <span class="text-xs font-mono" style="color:${s.status==='ready'?'#00e676':s.status==='degraded'?'#ffb300':'#ff1744'}">${s.status}</span>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- F09: Migration status -->
+    <div class="mb-6">
+      <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-3">Embedding Migration</h3>
+      <div class="bg-bg-s3/50 border border-white/5 rounded-lg px-4 py-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-mono text-accent-gold bg-accent-gold/10 border border-accent-gold/20 px-2 py-0.5 rounded">${agent.migrationPhase}</span>
+          <span class="text-xs text-fg-3 font-mono">started 13:08 UTC</span>
+        </div>
+        <div class="progress-bar mb-1"><div class="progress-fill bg-accent-gold" style="width:100%"></div></div>
+        <div class="text-xs text-fg-3 font-mono">Dual-write active · vec_memories → vec_memories_v2</div>
+      </div>
+    </div>
+
+    <!-- 24h sparkline -->
+    <div>
+      <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-3">Turn Activity 24h</h3>
+      <div class="bg-bg-s3/50 border border-white/5 rounded-lg px-4 py-3">
+        ${renderSparkline(agent.activity24h, sloColor)}
+        <div class="flex justify-between mt-1 text-xs text-fg-3 font-mono">
+          <span>24h ago</span><span>now</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+let currentDrawerAgent = null;
+function openDrawer(agentName) {
+  currentDrawerAgent = agentName;
+  document.getElementById('drawer-content').innerHTML = renderDrawer(agentName);
+  document.getElementById('drawer-backdrop').classList.add('open');
+  document.getElementById('agent-drawer').classList.add('open');
+  lucide.createIcons();
+}
+function closeDrawer() {
+  document.getElementById('drawer-backdrop').classList.remove('open');
+  document.getElementById('agent-drawer').classList.remove('open');
+}
+
+let paletteSelectedIdx = 0;
+let filteredItems = [...paletteItems];
+function openPalette() {
+  document.getElementById('palette-backdrop').classList.add('open');
+  document.getElementById('palette-input').value = '';
+  filteredItems = [...paletteItems];
+  renderPalette(filteredItems);
+  setTimeout(() => document.getElementById('palette-input').focus(), 50);
+}
+function closePalette(e) {
+  if (!e || e.target === document.getElementById('palette-backdrop')) {
+    document.getElementById('palette-backdrop').classList.remove('open');
+  }
+}
+function filterPalette(val) {
+  const q = val.toLowerCase();
+  filteredItems = paletteItems.filter(i => i.label.toLowerCase().includes(q));
+  paletteSelectedIdx = 0;
+  renderPalette(filteredItems);
+}
+function renderPalette(items) {
+  const list = document.getElementById('palette-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="px-4 py-6 text-center text-sm text-fg-3">No results</div>';
+    return;
+  }
+  const typeColors = { agent: '#00e5ff', action: '#d4a574' };
+  list.innerHTML = items.map((item, i) => `
+    <div class="palette-item flex items-center gap-3 px-4 py-2.5 ${i === paletteSelectedIdx ? 'selected' : ''}"
+      onclick="executePaletteAction('${item.action}')">
+      <span class="text-xs font-mono px-1.5 py-0.5 rounded" style="color:${typeColors[item.type]||'#a8a8b8'};background:${typeColors[item.type]||'#a8a8b8'}15;border:1px solid ${typeColors[item.type]||'#a8a8b8'}30">${item.type}</span>
+      <span class="text-sm text-fg-1">${item.label}</span>
+    </div>`).join('');
+  lucide.createIcons();
+}
+function handlePaletteKey(e) {
+  if (e.key === 'Escape') { closePalette(null); return; }
+  if (e.key === 'ArrowDown') { paletteSelectedIdx = Math.min(paletteSelectedIdx+1, filteredItems.length-1); renderPalette(filteredItems); return; }
+  if (e.key === 'ArrowUp') { paletteSelectedIdx = Math.max(paletteSelectedIdx-1, 0); renderPalette(filteredItems); return; }
+  if (e.key === 'Enter' && filteredItems[paletteSelectedIdx]) { executePaletteAction(filteredItems[paletteSelectedIdx].action); }
+}
+function executePaletteAction(action) {
+  closePalette(null);
+  if (action.startsWith('agent:')) { openDrawer(action.replace('agent:','')); }
+  else if (action === 'nav:graph') { alert('Knowledge graph view — not yet in this mockup'); }
+  else { console.log('Action:', action); }
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+  if (e.key === '/') {
+    const active = document.activeElement;
+    if (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA') { e.preventDefault(); openPalette(); }
+  }
+  if (e.key === 'Escape') {
+    closePalette(null);
+    closeDrawer();
+  }
+});
+
+function toggleDormant() {
+  const exp = document.getElementById('dormant-expanded');
+  const chev = document.getElementById('dormant-chevron');
+  exp.classList.toggle('hidden');
+  chev.style.transform = exp.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+
+// Render tiles with stagger
+const grid = document.getElementById('agent-grid');
+fleet.forEach((agent, idx) => {
+  const div = document.createElement('div');
+  div.innerHTML = renderTile(agent, idx);
+  const tile = div.firstElementChild;
+  grid.appendChild(tile);
+  setTimeout(() => tile.classList.add('visible'), idx * 60);
+});
+
+lucide.createIcons();
+</script>
+</body>
+</html>
