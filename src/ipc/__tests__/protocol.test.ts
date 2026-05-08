@@ -60,6 +60,13 @@ describe("IPC_METHODS", () => {
       "memory-save",
       // Phase 107 VEC-CLEAN-03 — operator-driven vec_memories orphan cleanup.
       "memory-cleanup-orphans",
+      // Phase 115 Plan 06 — embedding-v2 migration controls (per-agent
+      // state machine: idle / dual-write / re-embedding / cutover /
+      // v1-dropped / rolled-back).
+      "embedding-migration-status",
+      "embedding-migration-transition",
+      "embedding-migration-pause",
+      "embedding-migration-resume",
       "tier-maintenance-tick",
       // Subagent threads
       "spawn-subagent-thread",
@@ -167,6 +174,12 @@ describe("IPC_METHODS", () => {
       // Future Wave 2-4 Go shims call this at boot to fetch tool schemas
       // (keeps Zod single-sourced — no schema duplication into Go).
       "list-mcp-tools",
+      // Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response
+      // cache management (folds Phase 999.40). Operator inspection +
+      // maintenance via `clawcode tool-cache {status|clear|inspect}`.
+      "tool-cache-status",
+      "tool-cache-clear",
+      "tool-cache-inspect",
     ]);
   });
 });
