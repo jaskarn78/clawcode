@@ -75,3 +75,40 @@ src/manager/__tests__/dream-prompt-builder.test.ts (12 tests | 2 failed)
 
 Verified pre-existing via `git stash`-and-rerun: failures persist with all 115-06 changes stashed (master state pre-115-06). Out of scope per execution-flow Rule SCOPE BOUNDARY.
 
+
+## During Plan 115-05 execution (2026-05-08)
+
+### Pre-existing test failures NOT introduced by Plan 115-05
+
+```
+src/migration/__tests__/verifier.test.ts (2 failed) — Phase 81 verifier
+  expects MEMORY.md / CLAUDE.md / USER.md / TOOLS.md present in fixture;
+  fixture only ships agent.yaml + SOUL.md, so the assertion of "6 files
+  present" never held.
+
+src/migration/__tests__/memory-translator.test.ts (1 failed) — Phase 80
+  memory-translator regex expected 1 store.insert( call but found 2.
+
+src/cli/commands/__tests__/migrate-openclaw-complete.test.ts (1 failed)
+  — Phase 82 SC-3 happy path test timed out at 5000ms.
+```
+
+Verified out-of-scope: these test files touch `src/migration/*` and
+`src/cli/commands/migrate-openclaw-*`, which are entirely outside the
+Plan 115-05 surface (memory tools, dream auto-apply, dream cron, trace
+collector, trace store, daemon IPC handlers). Per the orchestrator's
+scope-boundary rule, logged here as deferred — NOT auto-fixed.
+
+### Plan 115-05 acceptance-criteria interpretation
+
+PLAN.md T04 step 4 said "Vitest extension to one of the existing tool tests"
+— the executor created a separate test file
+`src/performance/__tests__/trace-collector-lazy-recall.test.ts` instead of
+extending `clawcode-memory-search-tool.test.ts`. Substantively equivalent:
+the test verifies the lazy_recall_call_count counter writer at the
+TraceCollector layer, which is the correct test boundary for the writer
+(the search-tool test would have to mock the daemon IPC handler stack to
+exercise the increment). The acceptance criterion grep
+`recordLazyRecallCall` ≥4 in daemon.ts holds regardless of which test
+file pins it.
+
