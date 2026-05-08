@@ -4,15 +4,13 @@
  * Tests for `redactSecrets` + `debugDumpBaseOptions` exported via
  * `_internal_phase115` from session-adapter.ts.
  *
- * T01 transition state (this file's coverage):
- *   - dumpEnabled=true AND agent NOT in DEBUG_DUMP_AGENTS → file IS written
- *   - dumpEnabled=false AND agent IS in DEBUG_DUMP_AGENTS → file IS still written
- *     (allowlist branch active until T03 removes it)
- *   - dumpEnabled=false AND agent NOT in DEBUG_DUMP_AGENTS → no file written
- *   - redactSecrets correctness for keys, value-prefixes, circular refs
- *
- * T03 will replace the "allowlist still gets dump without flag" expectation
- * with the post-T03 invariant (flag is the SOLE gate).
+ * **T03 final state** (this file's coverage):
+ *   - `dumpEnabled=true` (regardless of agent name) → file IS written
+ *   - `dumpEnabled=false` (regardless of agent name) → no file written
+ *   - The hardcoded `DEBUG_DUMP_AGENTS` allowlist no longer exists; the
+ *     flag is the SOLE gate.
+ *   - redactSecrets correctness for keys, value-prefixes, circular refs.
+ *   - Slugification still applied to agent names with spaces.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -21,8 +19,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { _internal_phase115 } from "../session-adapter.js";
 
-const { redactSecrets, debugDumpBaseOptions, DEBUG_DUMP_AGENTS } =
-  _internal_phase115;
+const { redactSecrets, debugDumpBaseOptions } = _internal_phase115;
 
 // We dump under HOME so the helper's `pathJoin(homedir(), ".clawcode", ...)`
 // produces a temp-isolated path. We swap process.env.HOME before each test
@@ -155,14 +152,13 @@ describe("redactSecrets", () => {
   });
 });
 
-describe("debugDumpBaseOptions — T01 transition gate", () => {
-  it("writes dump file when dumpEnabled=true AND agent NOT in allowlist", async () => {
+describe("debugDumpBaseOptions — T03 final state (flag-only gate)", () => {
+  it("writes dump file when dumpEnabled=true (any agent name)", async () => {
     const baseOptions = {
       model: "haiku" as const,
       systemPrompt: { type: "preset" as const, preset: "claude_code" as const },
     };
-    const fleetAgent = "regular-agent-not-allowlisted";
-    expect(DEBUG_DUMP_AGENTS.has(fleetAgent)).toBe(false);
+    const fleetAgent = "regular-agent";
 
     await debugDumpBaseOptions(
       "create",
@@ -179,50 +175,59 @@ describe("debugDumpBaseOptions — T01 transition gate", () => {
     expect(files[0]).toMatch(/^baseopts-create-\d+\.json$/);
   });
 
-  it("STILL writes dump when dumpEnabled=false BUT agent IS in allowlist (T01 transition state)", async () => {
+  it("does NOT write dump when dumpEnabled=false even for the previously-allowlisted agents (post-T03 invariant)", async () => {
     const baseOptions = {
       model: "haiku" as const,
       systemPrompt: { type: "preset" as const, preset: "claude_code" as const },
     };
-    // The allowlist contains "fin-acquisition" and "Admin Clawdy" — pick one.
-    const allowlisted = "fin-acquisition";
-    expect(DEBUG_DUMP_AGENTS.has(allowlisted)).toBe(true);
+    // Pre-T03 these were in the hardcoded allowlist and would dump even
+    // without the flag. Post-T03 the flag is the sole gate — no dump.
+    for (const previouslyAllowlisted of ["fin-acquisition", "Admin Clawdy"]) {
+      await debugDumpBaseOptions(
+        "create",
+        previouslyAllowlisted,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        baseOptions as any,
+        false, // dumpEnabled — sole gate, off
+      );
+      const slug = previouslyAllowlisted.replace(/\s+/g, "_");
+      const dir = join(tmpHome, ".clawcode", "agents", slug, "diagnostics");
+      expect(existsSync(dir)).toBe(false);
+    }
+  });
+
+  it("does NOT write a dump when dumpEnabled=false (regardless of agent name)", async () => {
+    const baseOptions = {
+      model: "haiku" as const,
+      systemPrompt: { type: "preset" as const, preset: "claude_code" as const },
+    };
+    const fleetAgent = "another-fleet-agent";
 
     await debugDumpBaseOptions(
       "create",
-      allowlisted,
+      fleetAgent,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       baseOptions as any,
       false, // dumpEnabled
     );
 
-    const dir = join(
-      tmpHome,
-      ".clawcode",
-      "agents",
-      allowlisted,
-      "diagnostics",
-    );
-    expect(existsSync(dir)).toBe(true);
-    expect(readdirSync(dir).length).toBe(1);
-    // T03 invariant change: this expectation flips — when T03 removes the
-    // allowlist, this file SHOULD NOT be written.
+    const dir = join(tmpHome, ".clawcode", "agents", fleetAgent, "diagnostics");
+    expect(existsSync(dir)).toBe(false);
   });
 
-  it("slugifies agent name with spaces in the dir path (Admin Clawdy → Admin_Clawdy)", async () => {
+  it("slugifies agent name with spaces (Admin Clawdy → Admin_Clawdy) when dumping is enabled by flag", async () => {
     const baseOptions = {
       model: "haiku" as const,
       systemPrompt: { type: "preset" as const, preset: "claude_code" as const },
     };
     const spaced = "Admin Clawdy";
-    expect(DEBUG_DUMP_AGENTS.has(spaced)).toBe(true);
 
     await debugDumpBaseOptions(
       "resume",
       spaced,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       baseOptions as any,
-      false, // dumpEnabled — allowlist branch fires this
+      true, // dumpEnabled — flag is now the sole gate
     );
 
     const dir = join(
@@ -238,26 +243,6 @@ describe("debugDumpBaseOptions — T01 transition gate", () => {
     expect(files[0]).toMatch(/^baseopts-resume-\d+\.json$/);
   });
 
-  it("does NOT write a dump when dumpEnabled=false AND agent NOT in allowlist", async () => {
-    const baseOptions = {
-      model: "haiku" as const,
-      systemPrompt: { type: "preset" as const, preset: "claude_code" as const },
-    };
-    const fleetAgent = "another-fleet-agent";
-    expect(DEBUG_DUMP_AGENTS.has(fleetAgent)).toBe(false);
-
-    await debugDumpBaseOptions(
-      "create",
-      fleetAgent,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      baseOptions as any,
-      false, // dumpEnabled
-    );
-
-    const dir = join(tmpHome, ".clawcode", "agents", fleetAgent, "diagnostics");
-    expect(existsSync(dir)).toBe(false);
-  });
-
   it("redacts ANTHROPIC_API_KEY out of the dumped file content (env wholesale-stripped)", async () => {
     const baseOptions = {
       model: "haiku" as const,
@@ -267,7 +252,7 @@ describe("debugDumpBaseOptions — T01 transition gate", () => {
         PATH: "/usr/bin",
       },
     };
-    const agent = "fin-acquisition";
+    const agent = "any-agent";
 
     await debugDumpBaseOptions(
       "create",
@@ -285,12 +270,7 @@ describe("debugDumpBaseOptions — T01 transition gate", () => {
     expect(content).toContain("\"env\": \"<stripped>\"");
   });
 
-  it("never throws when home directory is unwriteable (failure is silent)", async () => {
-    // Force HOME to a path that resolves to a file (mkdir will fail recursively
-    // if the parent is itself a file). Easier: leave HOME pointing at tmpHome
-    // and shadow with a nonsense env var. To keep the test platform-agnostic,
-    // assert that calling with a normal config never throws when permissions
-    // happen to be fine — coverage of the catch path is intrinsic.
+  it("never throws when called (helper swallows internal errors silently)", async () => {
     const baseOptions = {
       model: "haiku" as const,
       systemPrompt: { type: "preset" as const, preset: "claude_code" as const },
@@ -298,7 +278,7 @@ describe("debugDumpBaseOptions — T01 transition gate", () => {
     await expect(
       debugDumpBaseOptions(
         "create",
-        "another-not-allowlisted",
+        "any-agent",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         baseOptions as any,
         true,

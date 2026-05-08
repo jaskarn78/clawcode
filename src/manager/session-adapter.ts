@@ -13,36 +13,15 @@ import {
   extractSkillMentions,
 } from "../usage/skill-usage-tracker.js";
 import { createPersistentSessionHandle } from "./persistent-session-handle.js";
-// Phase 115 sub-scope 14 — temporary scaffolding for the diagnostic baseopts
-// dump (T01 transition state). T03 of this plan removes this standalone
-// `writeFile` import once the hardcoded allowlist is gone — the helper will
-// keep using the same fs.promises function but reach it via a fully-qualified
-// import inside the helper body, eliminating the orphan top-of-file import.
-import { writeFile } from "node:fs/promises";
-import { mkdir } from "node:fs/promises";
+// Phase 115 sub-scope 14 — fs/os/path imports for the diagnostic baseopts
+// dump helper. T03 collapsed the previous TWO separate imports (a top-of-
+// file standalone writeFile from the 2026-05-07 hotfix + a separate mkdir)
+// into a single combined import. The hardcoded agent-name set that those
+// imports originally enabled has been removed — gating now lives entirely
+// in `agents[*].debug.dumpBaseOptionsOnSpawn`.
+import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
-
-/**
- * Phase 115 sub-scope 14 — diagnostic baseopts dump for prompt-bloat root-
- * cause investigation. Originally deployed during the 2026-05-07 fin-acq 400
- * incident as a hardcoded allowlist of `["fin-acquisition", "Admin Clawdy"]`
- * with `import { writeFile } from "node:fs/promises"` (see Plan 115-02 T01).
- *
- * **T01 transition state** (this commit): both gates active. Either the agent
- * is in the hardcoded allowlist OR the operator has set
- * `agents[*].debug.dumpBaseOptionsOnSpawn: true` in clawcode.yaml.
- *
- * **T03 final state**: the hardcoded allowlist is removed; only the config
- * flag enables dumping. See plan acceptance criteria.
- *
- * Output path: ~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json
- * — slugified agent name, ts in unix-epoch milliseconds. Secrets redacted via
- * `redactSecrets` (regex-match on key names + value-prefix detection); env +
- * mcpServers[].env stripped wholesale (defense-in-depth: unknown env vars
- * still get blanked even when the regex doesn't match).
- */
-const DEBUG_DUMP_AGENTS = new Set(["fin-acquisition", "Admin Clawdy"]);
 
 /**
  * Phase 115 sub-scope 14 — secret redaction helper for diagnostic dumps.
@@ -98,23 +77,37 @@ function redactSecrets<T>(value: T): T {
 }
 
 /**
- * Phase 115 sub-scope 14 — per-agent diagnostic dump of SDK baseOptions.
+ * Phase 115 sub-scope 14 — debug dump baseopts on agent spawn.
  *
- * Gate (T01 transition state): writes the dump iff `dumpEnabled === true`
- * OR `agentName` is in the hardcoded `DEBUG_DUMP_AGENTS` allowlist. T03
- * removes the allowlist branch — the flag becomes the SOLE gate.
+ * **History.** Pre-Phase-115: a hardcoded set of two production agent
+ * names plus a top-of-file standalone writeFile import, deployed during
+ * the 2026-05-07 incident response.
+ * **Phase 115 sub-scope 14 (this plan).** Replaced with config flag
+ * `agents[*].debug.dumpBaseOptionsOnSpawn` (default false). T01 plumbed
+ * the flag alongside the agent-name set (transition state). T03 removed
+ * the agent-name set + collapsed the duplicate writeFile import — the
+ * flag is now the SOLE gate.
  *
- * Defense-in-depth: env + mcpServers[].env are wholesale-stripped (set to
- * "<stripped>") BEFORE redactSecrets walks the rest of the structure. The
- * regex catches known patterns; the wholesale strip catches the long tail
- * (1Password tokens, Discord webhook URLs, future API keys whose names
- * don't end in _TOKEN/_KEY/_SECRET).
+ * **To enable for an agent**: set `debug: { dumpBaseOptionsOnSpawn: true }`
+ * in `clawcode.yaml` under that agent's entry, then deploy. No code
+ * change required.
  *
- * Output: per-agent under ~/.clawcode/agents/<agent>/diagnostics/. Operator-
- * readable; never written to /tmp (the original 2026-05-07 path was /tmp;
- * Phase 115 moves it under the daemon's home tree for easier cleanup +
- * permission isolation). Failures are silenced — diagnostic capture MUST
- * NEVER break session boot.
+ * **Output**: per-agent under
+ * `~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json`
+ * (slugified agent name, ts in unix-epoch milliseconds). Operator-
+ * readable; never written to /tmp (the original 2026-05-07 path was
+ * /tmp — Phase 115 moves it under the daemon's home tree for easier
+ * cleanup + permission isolation).
+ *
+ * **Redaction**: secrets are stripped via `redactSecrets` (regex-match on
+ * key names + value-prefix detection — ANTHROPIC_API_KEY, OAuth bearer,
+ * Discord token; threat-model HIGH severity for each). Defense-in-depth:
+ * env + mcpServers[].env are wholesale-stripped (set to "<stripped>")
+ * BEFORE redactSecrets walks the rest of the structure, so unknown env
+ * vars still get blanked even when the regex doesn't match.
+ *
+ * **Failure semantics**: failures are silenced — diagnostic capture MUST
+ * NEVER break session boot. The catch swallows mkdir / write errors.
  */
 async function debugDumpBaseOptions(
   flow: "create" | "resume",
@@ -122,9 +115,12 @@ async function debugDumpBaseOptions(
   baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
   dumpEnabled: boolean,
 ): Promise<void> {
-  // T01 transition gate: both paths active so fin-acquisition + Admin Clawdy
-  // keep getting dumps until T03 lands. T03 collapses to `if (!dumpEnabled) return;`
-  if (!dumpEnabled && !DEBUG_DUMP_AGENTS.has(agentName)) return;
+  // T03 final state — flag is the SOLE gate. The hardcoded agent-name set
+  // that previously fell through this branch has been removed; an operator
+  // who wants the dump for any agent (the two previously-special-cased
+  // production agents included) sets `debug.dumpBaseOptionsOnSpawn: true`
+  // in clawcode.yaml and redeploys.
+  if (!dumpEnabled) return;
   try {
     // Wholesale strip env + mcpServers[].env BEFORE redactSecrets walks the
     // rest. Defense-in-depth: regex catches known secret-key patterns; the
@@ -252,11 +248,14 @@ export function classifyPromptBloat(
 /**
  * Phase 115 sub-scope 14 — exported for unit testing (redaction + gate
  * behaviour). Production code calls `debugDumpBaseOptions` above.
+ *
+ * T03 dropped the previously-exported agent-name set from this bundle —
+ * the hardcoded allowlist no longer exists and the test surface no
+ * longer needs it.
  */
 export const _internal_phase115 = {
   redactSecrets,
   debugDumpBaseOptions,
-  DEBUG_DUMP_AGENTS,
 } as const;
 
 /**
