@@ -1170,6 +1170,19 @@ function assembleContextInternal(
   readonly sectionTokens: SectionTokenCounts;
   readonly skillsIncludedCount: number;
   readonly skillsCompressedCount: number;
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — rendered char count of
+   * the bounded-tier identity block AFTER `enforceDropLowestImportance`
+   * fires (or after the legacy head-tail truncation in the non-carved
+   * path). Surfaced via `assembleContextTraced` to the per-turn
+   * `tier1_inject_chars` column. Always >= 0; equals 0 when the
+   * identity section is empty (no soul / no MEMORY.md / no capability
+   * manifest threaded through). The cap is INJECTED_MEMORY_MAX_CHARS
+   * (16K) — the assembler enforces the cap upstream; this value is
+   * the actual rendered length so the dashboard renders the real
+   * utilization ratio.
+   */
+  readonly identityChars: number;
 } {
   const phaseBudgets = mergeBudgets(opts?.memoryAssemblyBudgets);
   const warn = opts?.onBudgetWarning;
@@ -1617,6 +1630,13 @@ function assembleContextInternal(
     sectionTokens,
     skillsIncludedCount: lazyOut.includedCount,
     skillsCompressedCount: lazyOut.compressedCount,
+    // Phase 115 post-deploy patch (2026-05-08) — surface the rendered
+    // identity char count so the traced wrapper can record
+    // `tier1_inject_chars` + `tier1_budget_pct`. `identityOut` carries
+    // the post-enforcement string (after `enforceDropLowestImportance`
+    // in the carved path or `headTailTruncate` in the legacy compound
+    // path) — its `.length` is the value the dashboard surfaces.
+    identityChars: identityOut.length,
   });
 }
 
@@ -1654,6 +1674,9 @@ export function assembleContext(
   budgets: ContextBudgets = DEFAULT_BUDGETS,
   opts?: AssembleOptions,
 ): AssembledContext {
+  // Public shape stays FROZEN — only the internal/traced result widens
+  // with `identityChars`. Untraced callers (legacy tests, bench-harness
+  // assembleContext call sites) discard the per-turn observability slot.
   return assembleContextInternal(sources, budgets, opts).assembled;
 }
 
@@ -1690,6 +1713,7 @@ export function assembleContextTraced(
       sectionTokens,
       skillsIncludedCount,
       skillsCompressedCount,
+      identityChars,
     } = assembleContextInternal(sources, budgets, opts);
     // Phase 53 Plan 02 — per-section token counts for audit aggregation.
     // Metadata key is snake_case `section_tokens` so it matches the consumer
@@ -1702,6 +1726,28 @@ export function assembleContextTraced(
       skills_included_count: skillsIncludedCount,
       skills_compressed_count: skillsCompressedCount,
     });
+    // Phase 115 post-deploy patch (2026-05-08) — record bounded-tier
+    // (Tier 1) injection size on the turn so the per-turn writer
+    // surfaces `tier1_inject_chars` + `tier1_budget_pct`. Producer
+    // guard: only fires when a Turn is threaded (bootstrap path in
+    // session-config.ts) — untraced callers (tests, bench harness)
+    // skip naturally because `turn?` short-circuits.
+    //
+    // The cap (INJECTED_MEMORY_MAX_CHARS, 16_000) is exported from
+    // this same file at line 331 — it's the same constant
+    // `enforceDropLowestImportance` enforces upstream, so the ratio
+    // is always in [0, 1] for non-empty identity blocks (and exactly
+    // 0 for empty ones).
+    //
+    // Duck-typed method probe: a fleet of legacy/stub turns in the test
+    // suite implement only `{ startSpan, end }` (minimal shape pre-115).
+    // Probe the method's existence before calling so those stubs keep
+    // working without forcing them to implement every Turn extension
+    // landed across phases. Production Turns (from TraceCollector.startTurn)
+    // always have the method — only stubs short-circuit.
+    if (turn && typeof (turn as { bumpTier1Size?: unknown }).bumpTier1Size === "function") {
+      (turn as Turn).bumpTier1Size(identityChars, INJECTED_MEMORY_MAX_CHARS);
+    }
     return assembled;
   } finally {
     span?.end();

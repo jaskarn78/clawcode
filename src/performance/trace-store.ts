@@ -272,6 +272,17 @@ export class TraceStore {
           t.toolExecutionMs ?? null,
           t.toolRoundtripMs ?? null,
           t.parallelToolCallCount ?? null,
+          // Phase 115 post-deploy patch (2026-05-08): tier1_inject_chars +
+          // tier1_budget_pct + prompt_bloat_warnings_24h. Bootstrap-turn
+          // producer (assembleContextTraced) records tier1 size after the
+          // bounded-tier identity assembly fires; classifier sink records
+          // prompt-bloat warnings after each `[diag] likely-prompt-bloat`.
+          // Producer optional — non-bootstrap turns and turns with no
+          // bloat warnings land NULL on all three (the dashboard treats
+          // NULL as "no signal this turn").
+          t.tier1InjectChars ?? null,
+          t.tier1BudgetPct ?? null,
+          t.promptBloatWarnings24h ?? null,
         );
         for (const span of t.spans) {
           this.stmts.insertSpan.run(
@@ -904,14 +915,21 @@ export class TraceStore {
       // session-adapter.ts iterateWithTracing aggregate execution + roundtrip
       // durations and track MAX parallel batch size across the turn. Turns
       // with no tool_use blocks land NULL on all three.
+      // Phase 115 post-deploy patch (2026-05-08): tier1_inject_chars +
+      // tier1_budget_pct + prompt_bloat_warnings_24h column slots — slots were
+      // opened by 115-00 migrateSchema() but NO producer wrote them in the
+      // original wave (schema-without-writer gap caught post-deploy). Writes
+      // wired here. Producers: bootstrap-turn assembly path (tier1_*) and
+      // classifyPromptBloat sink (prompt_bloat).
       insertTrace: this.db.prepare(`
         INSERT OR REPLACE INTO traces
           (id, agent, started_at, ended_at, total_ms, discord_channel_id, status,
            cache_read_input_tokens, cache_creation_input_tokens, input_tokens,
            prefix_hash, cache_eviction_expected, turn_origin,
            lazy_recall_call_count, tool_cache_hit_rate, tool_cache_size_mb,
-           tool_execution_ms, tool_roundtrip_ms, parallel_tool_call_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           tool_execution_ms, tool_roundtrip_ms, parallel_tool_call_count,
+           tier1_inject_chars, tier1_budget_pct, prompt_bloat_warnings_24h)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertSpan: this.db.prepare(`
         INSERT INTO trace_spans

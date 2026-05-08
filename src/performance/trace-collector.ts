@@ -280,6 +280,102 @@ export class TraceCollector {
   // probes). Drained into the next Turn that ends for the agent.
   private readonly pendingToolCacheHitsByAgent = new Map<string, number>();
   private readonly pendingToolCacheMissesByAgent = new Map<string, number>();
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record bounded-tier
+   * injection size for the agent's currently-active Turn. Mirrors
+   * `recordLazyRecallCall`'s active-turn pattern but does NOT use
+   * a rolling counter — Tier 1 size is a per-assembly snapshot, not
+   * a per-event count.
+   *
+   * Behavior:
+   *   - Active Turn for `agent` exists → fold into Turn.bumpTier1Size.
+   *   - No active Turn → debug log, drop. The dashboard reads the
+   *     most-recent non-NULL row via ORDER BY started_at DESC LIMIT 1
+   *     (getPhase115DashboardMetrics line 674-680), so missing one
+   *     bootstrap turn worth of data has no operator-facing impact —
+   *     the next session-restart will populate.
+   *
+   * Failure-isolated. Errors logged at warn level, never thrown.
+   */
+  recordTier1Size(agent: string, injectChars: number, capChars: number): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpTier1Size(injectChars, capChars);
+        return;
+      }
+      this.log.debug(
+        { agent, injectChars, capChars, action: "tier1-size-no-active-turn" },
+        "[trace] recordTier1Size called with no active turn — dropped",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, injectChars, capChars, err: msg, action: "tier1-size-record-failed" },
+        "[trace] recordTier1Size failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record one
+   * `[diag] likely-prompt-bloat` warning for the given agent. Called
+   * by the classifier sink at session-manager.ts:2392-2406. The sink
+   * already duck-types this method onto the TraceCollector — adding
+   * it here closes the schema-without-writer gap.
+   *
+   * Method NAME is `incrementPromptBloatWarning` to match the
+   * `PromptBloatTraceSink` interface declared at
+   * session-adapter.ts:196-204; renaming would force a session-adapter
+   * edit which the sink contract was specifically designed to avoid.
+   *
+   * Mirrors `recordLazyRecallCall`'s active-turn + rolling-counter
+   * pattern: when the classifier fires outside an active turn (rare
+   * but possible — onError hooks may run after turn.end committed
+   * for the same Discord message id), the increment lands in a
+   * per-agent rolling counter that the next ended turn drains.
+   *
+   * Failure-isolated. Errors logged at warn, never thrown.
+   */
+  incrementPromptBloatWarning(agent: string): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpPromptBloatWarning();
+        return;
+      }
+      const rolling = this.pendingPromptBloatWarningsByAgent.get(agent) ?? 0;
+      this.pendingPromptBloatWarningsByAgent.set(agent, rolling + 1);
+      this.log.debug(
+        { agent, action: "prompt-bloat-warning-rolling" },
+        "[trace] prompt_bloat_warning incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, err: msg, action: "prompt-bloat-warning-record-failed" },
+        "[trace] incrementPromptBloatWarning failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — drain rolling
+   * prompt-bloat counter for the agent. Called from Turn.end() so
+   * out-of-turn classifier fires land on the next ended turn.
+   * Returns the count and clears the slot.
+   */
+  drainPendingPromptBloatWarnings(agent: string): number {
+    const n = this.pendingPromptBloatWarningsByAgent.get(agent) ?? 0;
+    if (n > 0) this.pendingPromptBloatWarningsByAgent.delete(agent);
+    return n;
+  }
+
+  // Phase 115 post-deploy patch (2026-05-08) — per-agent rolling
+  // prompt-bloat warning counter for classifier fires that hit
+  // OUTSIDE an active Turn. Drained into the next Turn that ends.
+  private readonly pendingPromptBloatWarningsByAgent = new Map<string, number>();
 }
 
 /**
@@ -366,6 +462,31 @@ export class Turn {
   private toolRoundtripMs = 0;
   private parallelToolCallCount = 0;
   /**
+   * Phase 115 post-deploy patch (2026-05-08) — per-turn bounded-tier
+   * injection size accumulator (sub-scope 1). Set by `bumpTier1Size`
+   * after the assembler's `enforceDropLowestImportance` enforcement
+   * fires on the identity section. NULL means "not measured this turn"
+   * (most per-message turns; only bootstrap turns measure). When set,
+   * the column reflects the actual rendered char count of the carved
+   * identity block; `tier1BudgetPct` is the ratio over
+   * INJECTED_MEMORY_MAX_CHARS. Distinguishing NULL from 0 matters —
+   * 0 would be a bug signal, NULL is "out of scope this turn".
+   */
+  private tier1InjectChars: number | null = null;
+  private tier1BudgetPct: number | null = null;
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — per-turn prompt-bloat
+   * warning counter (sub-scope 13). Incremented by
+   * `bumpPromptBloatWarning`, which is called from the
+   * `classifyPromptBloat` sink at session-manager.ts:2392-2406 each
+   * time the classifier emits a `[diag] likely-prompt-bloat` log.
+   * Drained into `promptBloatWarnings24h` at `end()` — the column
+   * name carries the 24h window because the dashboard SUM-aggregates
+   * over a rolling 24h window; the per-turn writer just records the
+   * per-turn delta.
+   */
+  private promptBloatWarnings = 0;
+  /**
    * Phase 115 Plan 05 T04 — back-reference to the parent collector so the
    * Turn can pull rolling lazy-recall counts from outside-of-turn calls
    * at `end()` time. Optional so legacy bench-harness Turns (instantiated
@@ -412,6 +533,73 @@ export class Turn {
         action: "lazy-recall-call",
       },
       "[trace] lazy_recall_call_count incremented",
+    );
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record the bounded-tier
+   * (Tier 1) injection size for this turn. Called from
+   * `assembleContextTraced` immediately after the identity assembly
+   * runs, with `injectChars` = rendered identity char count and
+   * `capChars` = `INJECTED_MEMORY_MAX_CHARS` (16K). The ratio lands
+   * in `tier1BudgetPct` (clamped to [0, 1] for sane downstream math —
+   * the column type is REAL and dashboard renders as percentage).
+   *
+   * Last-write-wins on repeat calls within the same turn (the
+   * assembler runs once per bootstrap; this guards against accidental
+   * multi-write when a future caller wires per-turn re-assembly).
+   * No-op after `end()` (post-commit).
+   *
+   * `capChars` of 0 short-circuits to NULL (defensive — avoids
+   * div-by-zero; should never happen in production where the constant
+   * is 16_000).
+   */
+  bumpTier1Size(injectChars: number, capChars: number): void {
+    if (this.committed) return;
+    if (capChars <= 0) return;
+    if (injectChars < 0) return;
+    this.tier1InjectChars = injectChars;
+    // Ratio in [0, 1]. The dashboard subtitle renderer multiplies by 100
+    // for the % display and applies the 90%-budget warning threshold.
+    this.tier1BudgetPct = injectChars / capChars;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        injectChars,
+        capChars,
+        budgetPct: this.tier1BudgetPct,
+        action: "tier1-size-recorded",
+      },
+      "[trace] tier1_inject_chars + tier1_budget_pct recorded",
+    );
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record one
+   * `[diag] likely-prompt-bloat` event for this turn. Called from
+   * the `classifyPromptBloat` trace-sink at session-manager.ts when
+   * the classifier fires (invalid_request_error + stable prefix
+   * exceeds PROMPT_BLOAT_THRESHOLD = 20K chars). Folded into
+   * `promptBloatWarnings24h` column at `end()`; the dashboard
+   * SUM-aggregates across a rolling 24h window per agent.
+   *
+   * No-op after `end()` (post-commit). Prompt-bloat events typically
+   * fire during error handling on a turn that's about to crash —
+   * the classifier runs FIRST (session-manager.ts:2386) so the
+   * counter increment happens before turn.end("error") commits.
+   */
+  bumpPromptBloatWarning(): void {
+    if (this.committed) return;
+    this.promptBloatWarnings += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        count: this.promptBloatWarnings,
+        action: "prompt-bloat-warning",
+      },
+      "[trace] prompt_bloat_warnings_24h incremented",
     );
   }
 
@@ -603,11 +791,16 @@ export class Turn {
     // hits / misses accumulated for this agent.
     let toolCacheHits = this.toolCacheHits;
     let toolCacheMisses = this.toolCacheMisses;
+    // Phase 115 post-deploy patch (2026-05-08) — drain any pending
+    // out-of-turn prompt-bloat warnings (classifier fires that hit
+    // after a turn already committed but before the next started).
+    let promptBloatWarnings = this.promptBloatWarnings;
     if (this.collector) {
       lazyRecallCallCount += this.collector.drainPendingLazyRecallCount(this.agent);
       const drained = this.collector.drainPendingToolCacheCounters(this.agent);
       toolCacheHits += drained.hits;
       toolCacheMisses += drained.misses;
+      promptBloatWarnings += this.collector.drainPendingPromptBloatWarnings(this.agent);
       this.collector.unregisterActiveTurn(this.agent, this);
     }
     // Compute hit rate. Only meaningful when at least one cache-eligible
@@ -674,6 +867,27 @@ export class Turn {
             toolRoundtripMs: this.toolRoundtripMs,
             parallelToolCallCount: this.parallelToolCallCount,
           }
+        : {}),
+      // Phase 115 post-deploy patch (2026-05-08) — only attach tier1_*
+      // when bumpTier1Size was actually called this turn. NULL means
+      // "not measured this turn" (most per-message turns; only bootstrap
+      // turns measure). Distinguishing NULL from 0 matters: 0 would be a
+      // bug signal (cap divisor of zero shouldn't reach here), NULL
+      // is "out of scope". Mirrors the parallelToolCallCount > 0 conditional
+      // spread above.
+      ...(this.tier1InjectChars !== null
+        ? {
+            tier1InjectChars: this.tier1InjectChars,
+            tier1BudgetPct: this.tier1BudgetPct,
+          }
+        : {}),
+      // Phase 115 post-deploy patch (2026-05-08) — only attach
+      // promptBloatWarnings24h when at least one classifier fire happened
+      // this turn (or rolled in from out-of-turn). NULL means "no signal
+      // this turn" — preserves dashboard SUM aggregator semantics where
+      // healthy turns contribute 0 and crash turns contribute the count.
+      ...(promptBloatWarnings > 0
+        ? { promptBloatWarnings24h: promptBloatWarnings }
         : {}),
     });
     try {
