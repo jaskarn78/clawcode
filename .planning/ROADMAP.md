@@ -1796,6 +1796,33 @@ Single source of truth: `src/manager/relay-and-mark-completed.ts`. Pure, idempot
 
 **Risk callout:** permission model mistakes here have real blast radius — accidentally letting any agent post to any subagent thread breaks isolation guarantees subagents currently rely on. Operator decision on default permission model gates execution.
 
+### Phase 999.36: Subagent UX trio + sub-bug D — typing indicator, output truncation, cross-channel file leak, premature completion event (PLANNED 2026-05-08)
+
+**Goal:** Close 4 operator-reported subagent UX/correctness bugs in the same surface (`src/discord/subagent-thread-spawner.ts` + adjacent dispatch/share-file/relay paths). Bundled per operator/CONTEXT D-01 because they share helper code and one machine cycle tests all four.
+
+**Sub-bugs:**
+- **A (P1)** — No typing indicator on subagent dispatch. Operator sees empty thread for minutes during ~5min subagent boots. Wire `bridge.ts:357-377` `sendTyping()` pattern + 8s heartbeat into the subagent dispatcher (CONTEXT D-04, D-05).
+- **B (P1)** — Subagent output truncation at chunk boundaries. Confirmed via reelforge-build-v2 thread `1501361804012687504` (turn 1 cuts mid-narrative; turn 2 starts "o-end" missing "end-t") + Admin Clawdy thread `1501302129782952126` (cross-agent confirmation). Off-by-3 seam in `subagent-thread-spawner.ts:720` (`slice(0, 1997) + "..."`) vs `:756` (`cursor = 2000`) drops bytes 1997-1999 at every overflow boundary (CONTEXT D-06, D-07, D-08).
+- **C (P0 correctness)** — Cross-channel file leak. fin-acquisition's Schwab AIP markdown landed in finmentum-content-creator's primary channel `1486348188763029648` instead of Ramy's thread `1481670479017414767`. Compliance-relevant for Finmentum (PII risk in different scenario). Daemon IPC `share-file` falls back to `agentConfig.channels[0]` for an LLM-supplied agent name; subagent identity drift across shared workspace = wrong channel. Fix: resolve via thread registry by `sessionName` first; fall through only when no binding exists (CONTEXT D-09, D-10, D-11).
+- **D (P0)** — Premature `subagent_complete` event firing. Parent's autoRelay summary lands announcing "Phase 2 complete" while the subagent's actual final chunks never arrived. Compounds with sub-bug B (cumulative effect: confident summary while last 2 minutes silently disappeared). Fix: gate completion event on `streamFullyDrained && deliveryConfirmed` AND-clause; quiescence-sweep emits `subagent_idle_warning` instead of firing relay (CONTEXT D-12, D-13, D-14).
+
+**Plans:** 4 plans
+
+Plans:
+- [ ] 999.36-00-PLAN.md — Sub-bug A typing indicator + Sub-bug B/D diagnostics (Wave 0)
+- [ ] 999.36-01-PLAN.md — Sub-bug C cross-channel file leak — agent identity → thread binding routing (Wave 1)
+- [ ] 999.36-02-PLAN.md — Sub-bug D premature completion gate — streamFullyDrained AND deliveryConfirmed (Wave 2)
+- [ ] 999.36-03-PLAN.md — Sub-bug B chunk-boundary fix — close the off-by-3 seam in editor truncate vs overflow start (Wave 3)
+
+**Critical constraints (CONTEXT D-15, D-16):**
+- Code-only commits — no plan task invokes `scripts/deploy-clawdy.sh`. Activation at next operator-confirmed deploy window (Ramy gate).
+- No new MCP tools, IPC methods, or SQL columns. JSON registry shape change on ThreadBinding (`lastDeliveryAt`) is allowed — matches `completedAt` precedent from Phase 999.25.
+- Sub-bug C blast radius capped (D-02): catalogue OTHER workspace-keyed lookups in `DEFERRED-WORKSPACE-LOOKUPS.md`; do NOT fix in this phase.
+
+**Status:** PLANNED 2026-05-08 — 4 plans across 4 waves; 21 tasks total. Awaiting execution.
+
+**Promotion target:** v2.8 milestone (per ROADMAP line 23 — explicitly listed).
+
 ### Phase 999.40: Daemon-side response cache for repeated MCP tool calls (SUPERSEDED — folded into Phase 115 sub-scope 15)
 
 **Status:** SUPERSEDED 2026-05-07 — fully absorbed as Phase 115 sub-scope 15 (MCP tool-response cache). All sub-scope candidates listed below are carried forward into 115 planning. See `.planning/ROADMAP.md` Phase 115 entry for the active scope. Original entry preserved below for git-history searchability.
@@ -1891,3 +1918,21 @@ Hermes auto-creates skills when an agent uses 5+ tool calls in a single successf
 Hermes supports progressive skill refinement (patch → edit → create). ClawCode skills are create-only. Add patch/edit lifecycle to the skill_manage equivalent.
 
 **Priority:** Medium — architectural gaps, not feature requests. A is highest-value (retrieval quality directly affects agent performance).
+
+### Phase 999.43: Auto-ingest Discord file attachments into document store (BACKLOG)
+
+**Source:** Operator request 2026-05-08. Current behavior: Discord attachments are downloaded to a temp dir and passed as inline context for that turn only — not persisted or searchable after the turn ends.
+
+**Gap:** No automatic pipeline exists to save uploaded files into the RAG document store. Agents can call `ingest_document` manually, but there is no hook that fires on attachment receipt.
+
+**Proposed behavior:**
+- When a Discord message contains a file attachment, automatically call `ingest_document` on eligible file types (PDF, txt, md, csv, docx) after the Haiku vision pre-pass (Phase 113) completes
+- Tag ingested chunks with the originating agent, channel ID, and Discord message ID for provenance
+- Make ingested files immediately searchable via `search_documents` across future turns
+- Config flag per-agent: `autoIngestAttachments: true/false` (default false, opt-in)
+
+**Out of scope:** Binary/media files (images, video, audio) — those stay vision-only via Phase 113 pre-pass.
+
+**Dependencies:** Phase 113 (attachment pre-pass pipeline), existing document store (ingest_document / search_documents tools).
+
+**Promotion target:** v2.8 or next maintenance window with document store work.
