@@ -1357,6 +1357,25 @@ function wrapSdkQuery(
         readonly openedAtMs: number;
       }
     >();
+    /**
+     * Phase 115 Plan 08 T01 — per-batch roundtrip timer for sub-scope 17(a).
+     *
+     * `batchOpenedAtMs` holds the wall-clock instant at which the LATEST
+     * parent assistant message emitted a tool_use block (i.e., the moment
+     * the LLM stopped generating that turn). It is closed when the NEXT
+     * parent assistant message arrives — ANY content (text or new
+     * tool_use), capturing the SDK dispatch + actual tool runtime + result
+     * delivery + LLM resume cost.
+     *
+     * Per-batch (not per-tool) so parallel batches collapse to one
+     * wall-clock interval — the right semantic when 3 tools dispatch in
+     * parallel and `next parent assistant` arrives once after the LAST
+     * tool_result.
+     *
+     * Multi-batch turns (model emits sequential tool_use → tool_result →
+     * tool_use cycles) accumulate via Turn.addToolRoundtripMs sums.
+     */
+    let batchOpenedAtMs: number | null = null;
     const textParts: string[] = [];
     // Phase 53 Plan 03 — per-turn skill-mention capture. We also buffer
     // any block-level text from the SDK's `message.content[]: [{ type: 'text', text }]`
@@ -1371,8 +1390,38 @@ function wrapSdkQuery(
     let streamedText = "";
 
     const closeAllSpans = () => {
-      for (const entry of activeTools.values()) entry.span.end();
+      for (const entry of activeTools.values()) {
+        entry.span.end();
+        // Phase 115 Plan 08 T01 — final-batch execution-side fallback. If
+        // the SDK terminated mid-tool (error / abort / timeout) the
+        // user-message tool_result branch never fired, so addToolExecutionMs
+        // would be skipped for these spans. Compute a best-effort duration
+        // from openedAtMs at termination so the column doesn't undercount
+        // pathological turns.
+        try {
+          const executionMs = Date.now() - entry.openedAtMs;
+          (turn as { addToolExecutionMs?: (ms: number) => void })
+            .addToolExecutionMs?.(executionMs);
+        } catch {
+          // Observational only — never break.
+        }
+      }
       activeTools.clear();
+      // Phase 115 Plan 08 T01 — final-batch roundtrip fallback. If the run
+      // terminated before the LLM emitted a "next parent assistant" message
+      // (terminal error, normal completion, or final result-only path), the
+      // currently-open batch timer would otherwise be lost. Close it here
+      // so the column reflects every batch the run observed.
+      try {
+        if (batchOpenedAtMs !== null && turn) {
+          const roundtripMs = Date.now() - batchOpenedAtMs;
+          (turn as { addToolRoundtripMs?: (ms: number) => void })
+            .addToolRoundtripMs?.(roundtripMs);
+          batchOpenedAtMs = null;
+        }
+      } catch {
+        // Observational only — never break.
+      }
       if (!firstTokenEnded) {
         firstToken?.end();
         firstTokenEnded = true;
@@ -1400,6 +1449,41 @@ function wrapSdkQuery(
               (b) => (b as { type?: string }).type === "tool_use",
             ).length;
             const isParallelBatch = toolUseCount > 1;
+
+            // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency.
+            //
+            // (1) Close the prior batch's roundtrip timer FIRST. This parent
+            //     assistant message represents the LLM resuming after the
+            //     previous batch's tool_results — exactly the wall-clock
+            //     interval we want to record. Wrapped in try/catch so an
+            //     observability failure cannot break the dispatch path
+            //     (Phase 50 invariant mirrored on every observability hook).
+            try {
+              if (batchOpenedAtMs !== null && turn) {
+                const roundtripMs = Date.now() - batchOpenedAtMs;
+                (turn as { addToolRoundtripMs?: (ms: number) => void })
+                  .addToolRoundtripMs?.(roundtripMs);
+                batchOpenedAtMs = null;
+              }
+            } catch {
+              // Observational only — never break the message path.
+            }
+            // (2) Record the parallel batch size for sub-scope 17(b). Only
+            //     fire when this message HAS tool_use blocks; pure-text
+            //     parent assistant messages don't contribute to the MAX.
+            try {
+              if (toolUseCount > 0 && turn) {
+                (turn as { recordParallelToolCallCount?: (n: number) => void })
+                  .recordParallelToolCallCount?.(toolUseCount);
+                // (3) Open the next batch's roundtrip timer at the moment
+                //     this message was observed — closest available proxy
+                //     for "LLM finished generating tool_use." Will be
+                //     closed when the NEXT parent assistant arrives.
+                batchOpenedAtMs = Date.now();
+              }
+            } catch {
+              // Observational only — never break the message path.
+            }
 
             for (const raw of contentBlocks) {
               const block = raw as { type?: string; name?: string; id?: string; text?: string };
@@ -1512,6 +1596,19 @@ function wrapSdkQuery(
                 // (Phase 50 invariant mirrored on cache telemetry).
               }
               entry.span.end();
+              // Phase 115 Plan 08 T01 — sub-scope 17(a) execution-side
+              // latency aggregation. The span's duration is exactly the
+              // pure-execution interval (tool_use_emitted →
+              // tool_result_arrived) per the audit; sum across every tool
+              // call in the turn. Wrapped in try/catch so observability
+              // never breaks the message path (Phase 50 invariant).
+              try {
+                const executionMs = Date.now() - entry.openedAtMs;
+                (turn as { addToolExecutionMs?: (ms: number) => void })
+                  .addToolExecutionMs?.(executionMs);
+              } catch {
+                // Observational only — never break the message path.
+              }
               activeTools.delete(toolUseId);
             }
           }

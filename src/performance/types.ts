@@ -127,6 +127,36 @@ export type TurnRecord = {
    * for this agent (sub-scope 13). Wired by Plan 115-02. NULL on legacy turns.
    */
   readonly promptBloatWarnings24h?: number | null;
+  /**
+   * Phase 115 Plan 08 T01 — sum of pure-execution durations for every
+   * `tool_call.<name>` span in this turn (sub-scope 17a). Each span at
+   * session-adapter.ts:1419-1514 measures `tool_use_emitted →
+   * tool_result_arrived` — the SDK dispatch + actual tool runtime, NOT the
+   * LLM resume that follows. Aggregated per-turn so the dashboard can
+   * render execution-side latency distinct from the wall-clock roundtrip
+   * column below. NULL on turns with no tool_use blocks.
+   */
+  readonly toolExecutionMs?: number | null;
+  /**
+   * Phase 115 Plan 08 T01 — sum of per-batch roundtrip durations for every
+   * tool_use batch in this turn (sub-scope 17a). Each roundtrip opens when
+   * the first tool_use block appears in a parent assistant message and
+   * closes when the NEXT parent assistant message arrives — i.e., the
+   * full wall-clock between "LLM emitted tool_use" and "LLM resumed
+   * generation". Difference (roundtrip - execution) is the prompt-bloat
+   * tax / LLM-resume cost — the headline 60-700s p95 numbers are this
+   * column, not toolExecutionMs. NULL on turns with no tool_use blocks.
+   */
+  readonly toolRoundtripMs?: number | null;
+  /**
+   * Phase 115 Plan 08 T01 — MAX parallel batch size across all parent
+   * assistant messages in this turn (sub-scope 17b). 1 for sequential-only
+   * turns; N for any turn that emitted ≥1 batch with N tool_use blocks.
+   * Subsumes the `> 0` "had any tool" check used by T02's
+   * tool_use_rate_per_turn computation. NULL on turns with no tool_use
+   * blocks.
+   */
+  readonly parallelToolCallCount?: number | null;
 };
 
 /**

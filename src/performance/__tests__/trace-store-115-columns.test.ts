@@ -33,6 +33,10 @@ const PHASE_115_COLUMNS = [
   "tool_cache_size_mb",
   "lazy_recall_call_count",
   "prompt_bloat_warnings_24h",
+  // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency columns.
+  "tool_execution_ms",
+  "tool_roundtrip_ms",
+  "parallel_tool_call_count",
 ] as const;
 
 describe("trace-store 115 column migration", () => {
@@ -103,6 +107,10 @@ describe("trace-store 115 column migration", () => {
       expect(byName.get("tool_cache_size_mb")).toBe("REAL");
       expect(byName.get("lazy_recall_call_count")).toBe("INTEGER");
       expect(byName.get("prompt_bloat_warnings_24h")).toBe("INTEGER");
+      // Phase 115 Plan 08 T01 — sub-scope 17(a/b) columns.
+      expect(byName.get("tool_execution_ms")).toBe("INTEGER");
+      expect(byName.get("tool_roundtrip_ms")).toBe("INTEGER");
+      expect(byName.get("parallel_tool_call_count")).toBe("INTEGER");
     } finally {
       store.close();
     }
@@ -118,6 +126,10 @@ describe("trace-store 115 column migration", () => {
       tool_cache_size_mb: 7.5,
       lazy_recall_call_count: 3,
       prompt_bloat_warnings_24h: 0,
+      // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency columns.
+      tool_execution_ms: 150,
+      tool_roundtrip_ms: 12_700,
+      parallel_tool_call_count: 3,
     };
     const noFields: Phase115TurnColumns = {};
     const nullFields: Phase115TurnColumns = {
@@ -127,6 +139,10 @@ describe("trace-store 115 column migration", () => {
       tool_cache_size_mb: null,
       lazy_recall_call_count: null,
       prompt_bloat_warnings_24h: null,
+      // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency columns.
+      tool_execution_ms: null,
+      tool_roundtrip_ms: null,
+      parallel_tool_call_count: null,
     };
     expect(allFields).toBeDefined();
     expect(noFields).toBeDefined();

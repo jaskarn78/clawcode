@@ -123,6 +123,10 @@ export type Phase115TurnColumns = {
   readonly tool_cache_size_mb?: number | null;
   readonly lazy_recall_call_count?: number | null;
   readonly prompt_bloat_warnings_24h?: number | null;
+  // Phase 115 Plan 08 T01 — tool-latency methodology audit (sub-scope 17a/b).
+  readonly tool_execution_ms?: number | null;
+  readonly tool_roundtrip_ms?: number | null;
+  readonly parallel_tool_call_count?: number | null;
 };
 
 /** Raw row shape for cache-telemetry per-turn query. */
@@ -234,6 +238,12 @@ export class TraceStore {
           // dashboard reporter (T04) and may be NULL on most turns.
           t.toolCacheHitRate ?? null,
           t.toolCacheSizeMb ?? null,
+          // Phase 115 Plan 08 T01: tool_execution_ms + tool_roundtrip_ms +
+          // parallel_tool_call_count. Producer optional — turns with no
+          // tool_use blocks land NULL on all three.
+          t.toolExecutionMs ?? null,
+          t.toolRoundtripMs ?? null,
+          t.parallelToolCallCount ?? null,
         );
         for (const span of t.spans) {
           this.stmts.insertSpan.run(
@@ -621,6 +631,17 @@ export class TraceStore {
    *                                            writes wired by Plan 115-05)
    *   - prompt_bloat_warnings_24h     INTEGER (Phase 115 Plan 00 — column slot;
    *                                            writes wired by Plan 115-02)
+   *   - tool_execution_ms             INTEGER (Phase 115 Plan 08 T01 — sum of
+   *                                            tool_call.<name> span durations;
+   *                                            execution side of the split)
+   *   - tool_roundtrip_ms             INTEGER (Phase 115 Plan 08 T01 — sum of
+   *                                            per-batch wall-clock durations
+   *                                            from tool_use emit to next
+   *                                            parent-assistant message; the
+   *                                            prompt-bloat-tax side)
+   *   - parallel_tool_call_count      INTEGER (Phase 115 Plan 08 T01 — MAX
+   *                                            parallel batch size across the
+   *                                            turn; sub-scope 17(b))
    *
    * Phase 115 Plan 00 only opens the column slots — `writeTurn` is NOT extended
    * to write to them yet. This means existing daemons can re-run the migration
@@ -654,6 +675,17 @@ export class TraceStore {
       ["tool_cache_size_mb", "REAL"],
       ["lazy_recall_call_count", "INTEGER"],
       ["prompt_bloat_warnings_24h", "INTEGER"],
+      // Phase 115 Plan 08 T01 — sub-scope 17(a)/(b) tool-latency methodology
+      // audit. tool_execution_ms (sum of per-tool execution durations,
+      // already captured by tool_call.<name> spans) and tool_roundtrip_ms
+      // (full wall-clock between LLM emit-tool_use → next parent-assistant
+      // message arrival; new measurement). Difference =
+      // prompt-bloat-tax / LLM-resume cost. parallel_tool_call_count =
+      // MAX parallel batch size across the turn (1 sequential, N parallel).
+      // All NULL on legacy turns + turns with no tool_use blocks.
+      ["tool_execution_ms", "INTEGER"],
+      ["tool_roundtrip_ms", "INTEGER"],
+      ["parallel_tool_call_count", "INTEGER"],
     ];
     for (const [col, type] of additions) {
       if (!existing.has(col)) {
@@ -713,13 +745,19 @@ export class TraceStore {
       // Phase 115 Plan 07 T03: tool_cache_hit_rate + tool_cache_size_mb
       // column slots wired here. Per-turn rate computed from hit/(hit+miss);
       // turns with zero cache-eligible tool calls land NULL.
+      // Phase 115 Plan 08 T01: tool_execution_ms + tool_roundtrip_ms +
+      // parallel_tool_call_count column slots. Producers in
+      // session-adapter.ts iterateWithTracing aggregate execution + roundtrip
+      // durations and track MAX parallel batch size across the turn. Turns
+      // with no tool_use blocks land NULL on all three.
       insertTrace: this.db.prepare(`
         INSERT OR REPLACE INTO traces
           (id, agent, started_at, ended_at, total_ms, discord_channel_id, status,
            cache_read_input_tokens, cache_creation_input_tokens, input_tokens,
            prefix_hash, cache_eviction_expected, turn_origin,
-           lazy_recall_call_count, tool_cache_hit_rate, tool_cache_size_mb)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           lazy_recall_call_count, tool_cache_hit_rate, tool_cache_size_mb,
+           tool_execution_ms, tool_roundtrip_ms, parallel_tool_call_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertSpan: this.db.prepare(`
         INSERT INTO trace_spans

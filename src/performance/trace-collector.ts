@@ -342,6 +342,30 @@ export class Turn {
   private toolCacheHits = 0;
   private toolCacheMisses = 0;
   /**
+   * Phase 115 Plan 08 T01 — per-turn tool-latency split-metric accumulators
+   * (sub-scope 17a/b).
+   *
+   * - toolExecutionMs: sum of pure-execution durations from each
+   *   `tool_call.<name>` span (tool_use_emitted → tool_result_arrived).
+   *   Producer is the existing span lifecycle in session-adapter.ts:1419-1514;
+   *   the addToolExecutionMs helper folds each span's duration in.
+   * - toolRoundtripMs: sum of per-batch wall-clock durations
+   *   (tool_use_emitted → next parent assistant message arrived). Producer
+   *   is session-adapter.ts iterateWithTracing — open at first tool_use of
+   *   a parent assistant message, close on next parent assistant message.
+   * - parallelToolCallCount: MAX(tool_use blocks across any single parent
+   *   assistant message in the turn). Producer is session-adapter.ts'
+   *   per-message `toolUseCount` scan at line ~1399-1402.
+   *
+   * All three remain at sentinel values (0 for sums, 0 for max) when no
+   * tool_use blocks fired in the turn. Turn.end() converts the sentinel
+   * to NULL in the persisted record (so dashboard percentile queries can
+   * distinguish "no tool calls this turn" from "0ms execution").
+   */
+  private toolExecutionMs = 0;
+  private toolRoundtripMs = 0;
+  private parallelToolCallCount = 0;
+  /**
    * Phase 115 Plan 05 T04 — back-reference to the parent collector so the
    * Turn can pull rolling lazy-recall counts from outside-of-turn calls
    * at `end()` time. Optional so legacy bench-harness Turns (instantiated
@@ -431,6 +455,61 @@ export class Turn {
       },
       "[trace] tool_cache_miss incremented",
     );
+  }
+
+  /**
+   * Phase 115 Plan 08 T01 — fold one tool_call.<name> span's pure-execution
+   * duration into the per-turn `tool_execution_ms` accumulator. Called
+   * from session-adapter.ts at the same point the existing span ends
+   * (matching `parent_tool_use_id` user message arrives). Sums across
+   * every tool span in the turn.
+   *
+   * No-op after `end()` (post-commit).
+   */
+  addToolExecutionMs(durationMs: number): void {
+    if (this.committed) return;
+    if (durationMs > 0) this.toolExecutionMs += durationMs;
+  }
+
+  /**
+   * Phase 115 Plan 08 T01 — fold one batch-roundtrip duration into the
+   * per-turn `tool_roundtrip_ms` accumulator. A batch-roundtrip opens
+   * when the first tool_use block appears in a parent assistant message
+   * and closes when the NEXT parent assistant message arrives — capturing
+   * the SDK dispatch + actual tool execution + result delivery + LLM
+   * resume cost. Per-batch (not per-tool) so parallel batches collapse
+   * to a single wall-clock interval.
+   *
+   * Sums across every batch in the turn (multi-batch turns where the
+   * model emits sequential tool_use → tool_result cycles).
+   *
+   * No-op after `end()` (post-commit).
+   */
+  addToolRoundtripMs(durationMs: number): void {
+    if (this.committed) return;
+    if (durationMs > 0) this.toolRoundtripMs += durationMs;
+  }
+
+  /**
+   * Phase 115 Plan 08 T01 — record the parallel tool-use batch size for
+   * one parent assistant message. The persisted column is the MAX
+   * batch size observed in any one message during this turn:
+   * sequential-only turns land 1; turns with at least one N-block
+   * parallel batch land N. Subsumes the `> 0` "had any tool" check used
+   * by Plan 08 T02's `tool_use_rate_per_turn` computation while
+   * preserving the sub-scope 17(b) parallel-vs-serial signal.
+   *
+   * Producer is session-adapter.ts iterateWithTracing — at the
+   * per-message tool_use scan (~line 1399-1402), it already counts
+   * `toolUseCount`; this method records that count.
+   *
+   * No-op after `end()` (post-commit).
+   */
+  recordParallelToolCallCount(batchSize: number): void {
+    if (this.committed) return;
+    if (batchSize > this.parallelToolCallCount) {
+      this.parallelToolCallCount = batchSize;
+    }
   }
 
   /**
@@ -580,6 +659,20 @@ export class Turn {
             toolCacheHitRate,
             toolCacheHitCount: toolCacheHits,
             toolCacheMissCount: toolCacheMisses,
+          }
+        : {}),
+      // Phase 115 Plan 08 T01 — only attach the three split-latency fields
+      // when at least one tool_use batch fired this turn (signal: max
+      // parallel count > 0). Turns without tool calls land NULL on all
+      // three columns so percentile rollups distinguish "no tool calls"
+      // from "0ms execution / 0 batch size" (which would be a buggy producer
+      // signal). Producer must call recordParallelToolCallCount(>=1) for
+      // any turn that fired a tool_use, even sequential single-call turns.
+      ...(this.parallelToolCallCount > 0
+        ? {
+            toolExecutionMs: this.toolExecutionMs,
+            toolRoundtripMs: this.toolRoundtripMs,
+            parallelToolCallCount: this.parallelToolCallCount,
           }
         : {}),
     });
