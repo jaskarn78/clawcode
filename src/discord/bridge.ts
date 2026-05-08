@@ -26,6 +26,13 @@ import {
   isImageAttachment,
 } from "./attachments.js";
 import { formatReactionEvent } from "./reactions.js";
+// 2026-05-08 hotfix — typing rate-limit tracker; honors `retry-after` on 429
+// so the bot stops spamming sendTyping when Discord puts it in cooldown.
+import {
+  shouldFireTyping,
+  markRateLimited,
+  isRateLimitError,
+} from "./typing-rate-limit-tracker.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { WebhookManager } from "./webhook-manager.js";
@@ -395,8 +402,17 @@ export class DiscordBridge {
     let span: Span | undefined;
     try {
       span = turn?.startSpan("typing_indicator", {});
+      // 2026-05-08 hotfix — skip fire if channel is in 429 cooldown.
+      if (!shouldFireTyping(message.channelId)) {
+        return;
+      }
       if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
         void message.channel.sendTyping().catch((err) => {
+          // 2026-05-08 hotfix — record cooldown on 429 so subsequent fires
+          // skip until the bucket reopens (vs continuing to spam every 8s).
+          if (isRateLimitError(err)) {
+            markRateLimited(message.channelId, err, this.log);
+          }
           this.log.debug(
             { error: (err as Error).message, channelId: message.channelId },
             "sendTyping failed — observational, non-fatal",
@@ -642,8 +658,15 @@ export class DiscordBridge {
 
     try {
       typingInterval = setInterval(() => {
+        // 2026-05-08 hotfix — skip fire if channel is in 429 cooldown,
+        // record cooldown if this fire returns 429.
+        if (!shouldFireTyping(message.channelId)) return;
         if ("sendTyping" in message.channel && typeof message.channel.sendTyping === "function") {
-          void message.channel.sendTyping();
+          void message.channel.sendTyping().catch((err) => {
+            if (isRateLimitError(err)) {
+              markRateLimited(message.channelId, err, this.log);
+            }
+          });
         }
       }, 8000);
 
