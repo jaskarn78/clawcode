@@ -20,7 +20,7 @@
 - :white_check_mark: **v2.5 Cutover Parity Verification** - Phases 92-93 (shipped 2026-04-25)
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
-- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, **115** (folds 999.40, 999.41, partial 999.42), 999.7, 999.18-20, 999.34-36, 999.38, 999.39, 999.42-residual (proposed 2026-05-07)
+- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, **115** (folds 999.40, 999.41, partial 999.42), **116** (folds 999.38), 999.7, 999.18-20, 999.34-36, 999.39, 999.42-residual (proposed 2026-05-07; updated 2026-05-08 to add 116 + absorb 999.38)
 
 ## Phases
 
@@ -929,6 +929,79 @@ Plans:
 
 **Temporary debug code to revert before shipping:**
 - `src/manager/session-adapter.ts` — `debugDumpBaseOptions` helper + `import { writeFile }` + dump call sites in createSession / resumeSession (currently allowlist of fin-acquisition + Admin Clawdy). Sub-scope 14 promotes this to a config flag form.
+
+---
+
+### Phase 116: Dashboard redesign — modern UI, mobile-first, basic+advanced modes, in-UI config editor, conversations view, task assignment (folds 999.38)
+
+**Goal:** Replace the current static-HTML+SSE dashboard (described by operator as "pretty awful") with a comprehensive modern operator interface that scales from mobile to desktop, has Basic + Advanced view modes, surfaces every metric ClawCode already collects (including the 9 new Phase 115 metrics), and adds three operator-workflow features the current dashboard lacks entirely: in-UI agent config editing, active+past conversations browser, and task assignment with Kanban tracking. Bundles Phase 999.38 (per-model SLO recalibration) as feature F02 — the fix for "every opus tile shows red" lands in the scaffolding wave alongside the new SLO threshold infrastructure.
+
+**Trigger:** Operator review 2026-05-08. After Phase 115 deploy surfaced 9 new metrics with no UI home, operator requested comprehensive redesign. v1 mockup (Fraunces editorial dark) was rejected as "advanced view vibes"; v2 mockup (Cabinet Grotesk modern soft-dark, Linear/Vercel/Cal.com aesthetic) accepted as locked direction. Adds operator-workflow features F26 (config editor), F27 (conversations), F28 (task assignment) on top of v1's 25 features.
+
+**Locked decisions (28 features ranked across 4 tiers — see `116-CONTEXT.md` for full spec):**
+
+- **Tier 1 (v1, ~12-18h):** F01 SLO breach banner, **F02 per-model SLO recalibration (folds 999.38)**, F03 agent tile grid, F04 tier-1 budget meter, F05 tool cache gauge, F06 Cmd+K palette, F07 tool latency split panel (`tool_execution_ms` vs `tool_roundtrip_ms`), F08 prompt-bloat + lazy-recall counters, F09 embedding migration tracker, F10 MCP server health
+- **Tier 1.5 (~24-37h):** F26 in-UI agent config editor with YAML diff + hot-reload OR save+restart, F27 conversations view (active streaming + past FTS5 search), F28 Kanban task assignment with drag-and-drop columns + spawn-subagent option
+- **Tier 2 (~15-25h):** F11 three-panel agent inspector (Letta-ADE-inspired), F12 trace waterfall, F13 cross-agent IPC inbox, F14 memory subsystem panel, F15 dream-pass queue visibility, F16 fleet comparison table, F17 cost dashboard
+- **Tier 3 polish (~6-10h):** F18-F25 (heatmap, swim-lane, notifications, themes, audit log, /graph + /tasks integration)
+
+**Tech stack (locked from research):** Vite + React 19 + shadcn/ui + Tailwind 3.4 + Recharts 3 + TanStack Query + Lucide icons. Validated 9/10 fit by simple10/agents-observe (closest analogue per RESEARCH.md). Serves as static SPA from existing daemon — no new process.
+
+**Aesthetic (locked from v2 mockup):** Cabinet Grotesk display + Geist body + JetBrains Mono data; soft dark `#0e0e12` base + emerald `#10b981` primary; hot pink `#ff3366` (operator brand thread) RELEGATED to active-streaming-only indicators; warm gold `#eab308` for premium states (Ramy crown on fin-acquisition). Mobile-first responsive across 5 breakpoints (375 / 768 / 1024 / 1280 / 1920).
+
+**Two-mode strategy:**
+- **Basic mode (default):** answers "is anything broken?" — single status banner + agent rows with last message snippets + 3 quick actions, hides 12+ power-user panels
+- **Advanced mode:** full F01-F25 power-user dashboard
+- Persistent toggle via localStorage; mobile defaults to basic regardless
+
+**Reuses existing:**
+- Phase 115 metrics (`tier1_inject_chars`, `tool_cache_hit_rate`, `tool_execution_ms`/`tool_roundtrip_ms`, `lazy_recall_call_count`, `prompt_bloat_warnings_24h`, embedding migration phase) — all already populated in `traces.db` with no backend work needed for surfacing
+- Phase 88 ConfigWatcher (for F26 hot-reload save mode)
+- Phase v1.8 durable task store + state machine (for F28 backend)
+- Phase v1.9 ConversationStore FTS5 (for F27 past-search backend)
+- Existing 15+ `/api/*` endpoints from current dashboard server
+- Existing `updateAgentModel` / `updateAgentSkills` / `updateAgentMcpServers` atomic YAML writers (for F26 backend)
+
+**Folds in:**
+- **Phase 999.38** — "Dashboard SLO recalibration per model" — fully absorbed as F02. The fix for "every opus tile shows red" lands in this phase's scaffolding wave alongside the new per-model threshold config in `slos.ts`. 999.38 closes when this phase ships.
+
+**Out of scope (deferred, named for clarity):**
+- F19 swim-lane timeline (canvas-based concurrent agent activity) — Tier 3 polish, defer to follow-on phase if UI shows demand
+- F23 audit log surface — relevant but separable; could be its own small phase after dashboard ships
+- Approval-driven governance UI (Mission Control pattern) — single-operator tool, not needed
+- Multi-framework adapters (CrewAI / LangGraph / etc.) — ClawCode is Claude-only by design
+- Session replay / time-travel debugging — high storage cost, deferred
+- OpenTelemetry instrumentation — overkill for tightly-coupled daemon
+- i18n — single-operator, English-only
+
+**Sub-scope candidates (refine in plan-phase):**
+
+1. **Scaffolding wave** — Vite + React + shadcn project bootstrap in `src/dashboard/client/`; build pipeline integration with daemon; routes scaffold (`/dashboard/v2` serves new SPA, old `/` unchanged); F02 per-model SLO threshold config in `slos.ts` + `clawcode.yaml` schema; smoke test that SPA renders + connects to existing SSE.
+
+2. **Tier 1 v1 wave** — F01-F10 (Tier 1 features). Closes the 999.38 visual problem (per-model SLOs) and surfaces all Phase 115 metrics that have producers but no UI homes.
+
+3. **Operator-workflow wave** — F26 config editor + F27 conversations view + F28 task assignment. The three features the current dashboard lacks entirely.
+
+4. **Tier 2 wave** — F11 agent detail drawer + F12-F17 (waterfall, IPC inbox, memory panel, dream-pass queue, comparison table, cost dashboard). The deep-dive surfaces.
+
+5. **Polish wave** — F18-F25 (heatmap, themes, notifications, audit log, /graph + /tasks integration) + cutover (remove old `static/` directory after parity verified).
+
+6. **Closeout** — perf-comparison report (mobile + desktop performance baselines), VERIFICATION.md, post-deploy operator review.
+
+**Acceptance criteria (sketch — refine in plan-phase):**
+- Mobile preview at 375px is functional and feels native (operator opens dashboard on phone, can see what's broken without zooming or horizontal-scrolling)
+- Basic mode answers "is anything broken?" within 2 seconds of glance
+- All Phase 115 metrics that have producers (9 columns) surface in at least one panel
+- F02 per-model SLO recalibration eliminates "every opus tile shows red" — opus agents show green/amber based on opus-specific thresholds derived from observed fleet data
+- F26 config editor: operator can change `fin-acquisition` model from sonnet to opus via UI, see YAML diff, save with hot-reload OR restart, audit trail entry written
+- F27 conversations: operator can search "Schwab AIP" across all agents' transcripts via FTS5; active streaming view shows in-flight tool calls
+- F28 tasks: operator creates task via Cmd+K → Kanban Backlog column, drags to Scheduled → assigned agent picks it up via existing TaskScheduler
+- Cmd+K palette indexes agents + actions + recent SLO breaches + tool errors
+- Existing `/` route serves old static dashboard during rollout; cutover after operator confirmation; old `static/` removed after 2-week soak
+
+**Plans:** TBD — plan-phase first to break into ~6 atomic plans across 5 waves. Estimated 60-90 executor hours total (comparable to Phase 115's wave 2 structural backbone).
+
+**Status:** Pending — opened 2026-05-08 evening after operator review of v1 + v2 mockups. Research complete (`RESEARCH.md` + `116-CONTEXT.md` + 7-file v2 mockup). **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme and unblocks the "every opus tile shows red" frustration that 999.38 was scoped to address standalone.
 
 ---
 
