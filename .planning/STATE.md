@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 115
-stopped_at: Completed 110-04-PLAN.md
-last_updated: "2026-05-07T23:50:40.333Z"
-last_activity: 2026-05-07
+status: Ready to execute
+stopped_at: Completed 115-01-PLAN.md (3 tasks shipped, 22 new tests green)
+last_updated: "2026-05-08T02:19:04.031Z"
+last_activity: 2026-05-08
 progress:
   total_phases: 60
   completed_phases: 15
-  total_plans: 87
-  completed_plans: 82
-  percent: 94
+  total_plans: 97
+  completed_plans: 85
+  percent: 88
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 115 (Memory + context + prompt-cache redesign) — EXECUTING
-Plan: 1 of 10
+Plan: 2 of 10
 Latest commit: `155537a` — Stage 0b cleanup path A (keep Node fallback)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -447,6 +447,7 @@ Recent decisions affecting current work:
 - [Phase 110]: Plan 110-00 Wave 0 build artifacts shipped: 5.7 MB Go MCP spike binary, 4/4 regression tests pass, operator runbook + RSS measurement helper authored. Operator kill-switch gate (admin-clawdy live VmRSS ≤ 15 MB + exit-75 respawn) PENDING — Wave 1 (Plan 110-01) blocked until operator approves.
 - [Phase 110]: Use native zod/v4 z.toJSONSchema() for list-mcp-tools handler instead of zod-to-json-schema npm package — zero new deps, satisfies CLAUDE.md no-new-deps rule, native converter produces correct required[] output
 - [Phase 110]: Inlined STATIC_SHIM_PATH/PYTHON_SHIM_PATH/resolveShimCommand in src/config/loader.ts (single source of truth) so daemon.ts fleet-stats handler imports the same helper that the loader uses — keeps spawn shape and proc-scan regex shape in lockstep when an operator flips defaults.shimRuntime.<type>
+- [Phase 115]: Plan 115-01 quick wins: excludeDynamicSections=true (default-on), memoryRetrievalTokenBudget wired through (default 1500 down from 2000), tag-filter at hybrid-RRF drops session-summary/mid-session/raw-fallback memories (locked default per CONTEXT sub-scope 4)
 
 ### v2.1 closing decisions (for reference)
 
@@ -632,11 +633,12 @@ Recent decisions affecting current work:
 | Phase 110 P01 | 7m | 2 tasks | 4 files |
 | Phase 110 P02 | 20min | 3 tasks | 6 files |
 | Phase 110 P04 | 30 minutes | 3 tasks | 7 files |
+| Phase 115 P01 | 50min | 3 tasks | 12 files |
 
 ## Session Continuity
 
-Last activity: 2026-05-07
-Stopped at: Completed 110-04-PLAN.md
+Last activity: 2026-05-08
+Stopped at: Completed 115-01-PLAN.md (3 tasks shipped, 22 new tests green)
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 
 ## Open Bugs (post-999.15 deploy)

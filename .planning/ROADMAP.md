@@ -906,12 +906,12 @@ Plans:
 - The diagnostic dump file path is operator-readable on demand without redeploy
 - Anthropic 400 `invalid_request_error` with usage-cap text returns a `[diag] likely-prompt-bloat` log line within the same turn
 
-**Plans:** 10 plans across 5 waves (Wave 0 baseline; Wave 1 quick-wins + observability; Wave 2 structural backbone + cache-breakpoint + lazy-load tools + embedding migration; Wave 3 tool-cache + perf instrumentation; Wave 4 closeout). Decisions locked in `.planning/phases/115-memory-context-prompt-cache-redesign/115-CONTEXT.md` (D-01 through D-15). Plans created 2026-05-08.
+**Plans:** 3/10 plans executed
 
 Plans:
-- [ ] 115-00-PLAN.md — Wave 0: baseline benchmark suite + pre-115 broken numbers lock
-- [ ] 115-01-PLAN.md — Wave 1: quick wins (excludeDynamicSections + memoryRetrievalTokenBudget wire + tag-filter at hybrid-RRF)
-- [ ] 115-02-PLAN.md — Wave 1: operator-side observability (debug flag + prompt-bloat classifier + consolidation run-log + bootstrap-truncation surface)
+- [x] 115-00-PLAN.md — Wave 0: baseline benchmark suite + pre-115 broken numbers lock
+- [x] 115-01-PLAN.md — Wave 1: quick wins (excludeDynamicSections + memoryRetrievalTokenBudget wire + tag-filter at hybrid-RRF)
+- [x] 115-02-PLAN.md — Wave 1: operator-side observability (debug flag + prompt-bloat classifier + consolidation run-log + bootstrap-truncation surface)
 - [ ] 115-03-PLAN.md — Wave 2: structural backbone (hard tier-1 budget + Tier 1/Tier 2 formal split + no-LLM tool-output prune)
 - [ ] 115-04-PLAN.md — Wave 2: cache-breakpoint placement reorder (static-then-dynamic stable-prefix)
 - [ ] 115-05-PLAN.md — Wave 2: lazy-load memory tools (4 new MCP tools) + Phase 95 dreaming as Tier 1 consolidation engine (D-10 hybrid policy)
