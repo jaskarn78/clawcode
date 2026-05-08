@@ -40,12 +40,13 @@ describe("systemPromptDirectiveSchema (Phase 94 TOOL-10)", () => {
 });
 
 describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
-  it("REG-DEFAULTS-PRESENT: ships D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes plus freshness + derivative-work + trusted-operator + discord-format plus mutate-verify (12 directives total)", () => {
+  it("REG-DEFAULTS-PRESENT: ships D-09/D-07 default keys plus subagent-routing + memory-recall + propose-alternatives + long-output-to-file + verify-file-writes plus freshness + derivative-work + trusted-operator + discord-format plus mutate-verify plus parallel-tool-calls (13 directives total)", () => {
     const keys = Object.keys(DEFAULT_SYSTEM_PROMPT_DIRECTIVES).sort();
     // Phase 99 added subagent-routing; Phase 100-fu added memory-recall-before-uncertainty,
     // propose-alternatives, long-output-to-file, and verify-file-writes; Phase 999.1 added
-    // freshness, derivative-work, trusted-operator, discord-format; Phase 999.22 adds mutate-verify
-    // (12 directives total).
+    // freshness, derivative-work, trusted-operator, discord-format; Phase 999.22 added
+    // mutate-verify; Phase 115 Plan 08 T02 (sub-scope 17c) adds parallel-tool-calls
+    // (13 directives total).
     expect(keys).toEqual([
       "cross-agent-routing",
       "derivative-work",
@@ -55,6 +56,7 @@ describe("DEFAULT_SYSTEM_PROMPT_DIRECTIVES (Phase 94 D-09 + D-07)", () => {
       "long-output-to-file",
       "memory-recall-before-uncertainty",
       "mutate-verify",
+      "parallel-tool-calls",
       "propose-alternatives",
       "subagent-routing",
       "trusted-operator",
@@ -304,6 +306,7 @@ describe("defaultsSchema.systemPromptDirectives (Phase 94 D-10)", () => {
         "long-output-to-file",
         "memory-recall-before-uncertainty",
         "mutate-verify",
+        "parallel-tool-calls",
         "propose-alternatives",
         "subagent-routing",
         "trusted-operator",

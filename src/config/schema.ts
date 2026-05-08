@@ -367,6 +367,39 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
       "Do not say \"Set.\", \"Done.\", \"Live.\", \"Saved.\", or \"Updated.\" when you didn't actually perform the write in the current turn — even if the desired state is already present from a prior session. Passive-success framing implies you just did it; if you didn't, the operator may take a downstream action (reload, deploy, retry) that breaks production. Instead say \"<state> is already present (<source>: mtime=<ts>, value=`<paste>`)\" or \"I have not changed <target> in this turn.\"\n\n" +
       "If verification fails OR cannot be performed (read tool unavailable, target inaccessible, mutation went through a layer you can't observe), report failure or uncertainty — never success. Better: \"I attempted <action> on <target> but cannot verify the result (<reason>); please confirm before relying on this.\"",
   }),
+  // Phase 115 Plan 08 T02 — sub-scope 17(c): parallel tool calls (PARALLEL-TOOL-01).
+  //
+  // Operator-observed pain (115-RESEARCH dashboard analysis): tool_call.<name>
+  // p50 / p95 latencies on built-in Claude Code tools (Read 77s, Edit 37s,
+  // Glob 88s, Bash 86s, Grep 47s) reflect SDK round-trip not pure execution
+  // (see Plan 08 T01 audit). Wall-clock is dominated by sequential dispatch
+  // when an agent reads 4 files one-at-a-time instead of in one parallel batch.
+  //
+  // Phase 115 Plan 08 T02 introduces measurement (parallel_tool_call_count
+  // column + tool_use_rate_per_turn snapshots) — but measurement alone won't
+  // shift agent behavior. This directive is the prompt-side push to use
+  // parallel emission when calls are mutually-orthogonal.
+  //
+  // Pattern follows Phase 999.1 / 999.22 locked-additive directives:
+  //   - default-enabled fleet-wide
+  //   - operator override wins (resolveSystemPromptDirectives merges
+  //     per-agent overrides over defaults — disabling here is a single
+  //     `enabled: false` flip in clawcode.yaml)
+  //   - text precisely scoped to "mutually-orthogonal" lookups so the
+  //     directive does NOT trigger regression on dependent calls
+  //
+  // Pinned by static-grep (T02 acceptance):
+  //   - "PARALLEL-TOOL-01" — directive id
+  //   - "parallel tool_use blocks" — canonical phrase
+  "parallel-tool-calls": Object.freeze({
+    enabled: true,
+    // PARALLEL-TOOL-01 — issued under sub-scope 17(c) of Phase 115 Plan 08.
+    text:
+      "PARALLEL-TOOL-01: When you need to read multiple files, run multiple independent searches, or perform several mutually-orthogonal lookups, emit MULTIPLE parallel tool_use blocks IN A SINGLE assistant message rather than calling them sequentially. The Claude Code SDK supports parallel tool execution natively; sequential dispatch is wasteful when the calls don't depend on each other.\n\n" +
+      "Example (correct): one assistant message containing tool_use blocks for [Read file A], [Read file B], [Grep pattern X], [Glob '**/*.ts'] when those four lookups are independent.\n\n" +
+      "Example (wrong): four sequential turns, each with one tool_use, when the only reason for the sequence is that you didn't notice you could batch them.\n\n" +
+      "DO NOT use this pattern when calls are dependent — if Read B's path is computed from Read A's content, those must stay sequential. Only batch mutually-orthogonal lookups.",
+  }),
 });
 
 /**

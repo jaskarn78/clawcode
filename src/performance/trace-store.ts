@@ -55,6 +55,11 @@ type PreparedStatements = {
   // Phase 115 Plan 05 T03 — D-05 priority dream-pass trigger.
   readonly insertTier1TruncationEvent: Statement;
   readonly countTier1TruncationEventsSince: Statement;
+  // Phase 115 Plan 08 T02 — sub-scope 6-A measurement gate.
+  readonly countTotalTurnsInWindow: Statement;
+  readonly countTurnsWithToolsInWindow: Statement;
+  readonly insertToolUseRateSnapshot: Statement;
+  readonly latestToolUseRateSnapshot: Statement;
 };
 
 /**
@@ -127,6 +132,29 @@ export type Phase115TurnColumns = {
   readonly tool_execution_ms?: number | null;
   readonly tool_roundtrip_ms?: number | null;
   readonly parallel_tool_call_count?: number | null;
+};
+
+/**
+ * Phase 115 Plan 08 T02 — sub-scope 6-A measurement gate row.
+ *
+ * One snapshot per agent per computation window. The gate decision in
+ * plan 115-09 reads the fleet non-fin-acq average of `rate` over a 24h
+ * window and SHIPs sub-scope 6-B (1h-TTL direct-SDK fast-path) when
+ * the average is below the 0.30 starting threshold (CONTEXT D-12).
+ *
+ * Snapshots accumulate in a separate table — they are NOT back-written
+ * to a turn row — so the metric is independent of turn cadence. Old
+ * snapshots are unread by gate queries using `computed_at >= now - 24h`
+ * and pruned at the same retention cadence as the parent traces.db
+ * (operator-runnable cleanup; never auto-deleted on the dispatch path).
+ */
+export type ToolUseRateSnapshot = {
+  readonly agent: string;
+  readonly computedAt: number;       // epoch ms
+  readonly windowHours: number;      // e.g., 24
+  readonly turnsTotal: number;
+  readonly turnsWithTools: number;
+  readonly rate: number;             // turnsWithTools / max(turnsTotal, 1)
 };
 
 /** Raw row shape for cache-telemetry per-turn query. */
@@ -728,6 +756,27 @@ export class TraceStore {
       CREATE INDEX IF NOT EXISTS idx_tier1_truncation_events_agent_time
         ON tier1_truncation_events(agent, event_at);
 
+      -- Phase 115 Plan 08 T02 — sub-scope 6-A measurement gate.
+      -- Per-agent rolling tool_use_rate_per_turn snapshot. The gate value
+      -- for sub-scope 6-B (1h-TTL direct-SDK fast-path SHIP/DEFER decision
+      -- in plan 115-09) is the fleet non-fin-acq average of rate over a
+      -- 24h window. Held in its own table rather than back-written to a
+      -- random turn's row so the metric is independent of turn cadence.
+      -- Cleanup is implicit — old rows are unread by gate queries using
+      -- computed_at >= since-window. PRIMARY KEY ensures idempotent
+      -- writes across multiple snapshots in the same millisecond.
+      CREATE TABLE IF NOT EXISTS tool_use_rate_snapshots (
+        agent TEXT NOT NULL,
+        computed_at INTEGER NOT NULL,
+        window_hours INTEGER NOT NULL,
+        turns_total INTEGER NOT NULL,
+        turns_with_tools INTEGER NOT NULL,
+        rate REAL NOT NULL,
+        PRIMARY KEY (agent, computed_at)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tool_use_rate_snapshots_agent_time
+        ON tool_use_rate_snapshots(agent, computed_at);
+
       CREATE INDEX IF NOT EXISTS idx_traces_agent_started ON traces(agent, started_at);
       CREATE INDEX IF NOT EXISTS idx_spans_turn_name ON trace_spans(turn_id, name);
     `);
@@ -879,6 +928,45 @@ export class TraceStore {
         WHERE agent = @agent
           AND event_at >= @since
       `),
+      // Phase 115 Plan 08 T02 — sub-scope 6-A measurement gate.
+      // started_at is ISO 8601 (TEXT) per traces table schema; the @since
+      // bind is also ISO 8601 so lexicographic comparison is correct.
+      countTotalTurnsInWindow: this.db.prepare(`
+        SELECT COUNT(*) AS n
+        FROM traces
+        WHERE agent = @agent
+          AND started_at >= @since
+      `),
+      // Phase 115 Plan 08 T02 — count turns where parallel_tool_call_count
+      // (the producer wired in T01) recorded ≥1 tool_use block.
+      // parallel_tool_call_count > 0 is the "had any tool" flag — see
+      // T01 Turn.end conditional spread (gate is parallelToolCallCount > 0).
+      countTurnsWithToolsInWindow: this.db.prepare(`
+        SELECT COUNT(*) AS n
+        FROM traces
+        WHERE agent = @agent
+          AND started_at >= @since
+          AND parallel_tool_call_count IS NOT NULL
+          AND parallel_tool_call_count > 0
+      `),
+      // Phase 115 Plan 08 T02 — write snapshot. PRIMARY KEY (agent,
+      // computed_at) makes repeat writes within the same millisecond
+      // idempotent without REPLACE — caller advances computed_at by
+      // window cadence in production.
+      insertToolUseRateSnapshot: this.db.prepare(`
+        INSERT OR REPLACE INTO tool_use_rate_snapshots
+          (agent, computed_at, window_hours, turns_total, turns_with_tools, rate)
+        VALUES (@agent, @computedAt, @windowHours, @turnsTotal, @turnsWithTools, @rate)
+      `),
+      // Phase 115 Plan 08 T02 — read latest snapshot for an agent. Powers
+      // the CLI tool-latency-audit (T03) and the plan 115-09 gate query.
+      latestToolUseRateSnapshot: this.db.prepare(`
+        SELECT agent, computed_at, window_hours, turns_total, turns_with_tools, rate
+        FROM tool_use_rate_snapshots
+        WHERE agent = @agent
+        ORDER BY computed_at DESC
+        LIMIT 1
+      `),
     };
   }
 
@@ -927,6 +1015,115 @@ export class TraceStore {
       const msg = err instanceof Error ? err.message : "unknown";
       throw new TraceStoreError(
         `countTier1TruncationEventsSince failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 08 T02 — compute `tool_use_rate_per_turn` for one agent
+   * over a rolling window (sub-scope 6-A measurement gate).
+   *
+   * `rate = turns_with_tools / max(turns_total, 1)` — empty windows
+   * return rate=0 rather than NaN so plan 115-09 gate query treats them
+   * as "no signal" (which they are).
+   *
+   * `since` is ISO 8601 — the same format `traces.started_at` uses, so
+   * the prepared statement compares text lexicographically without a
+   * cast. Caller derives from `new Date(Date.now() - windowHours * 3600000).toISOString()`.
+   *
+   * NEVER throws on a fresh / empty traces.db — count queries return 0
+   * naturally and the rate is well-defined at 0.
+   */
+  computeToolUseRatePerTurn(
+    agent: string,
+    sinceIso: string,
+    windowHours: number,
+  ): ToolUseRateSnapshot {
+    try {
+      const totalRow = this.stmts.countTotalTurnsInWindow.get({
+        agent,
+        since: sinceIso,
+      }) as { readonly n: number } | undefined;
+      const toolRow = this.stmts.countTurnsWithToolsInWindow.get({
+        agent,
+        since: sinceIso,
+      }) as { readonly n: number } | undefined;
+      const turnsTotal = totalRow?.n ?? 0;
+      const turnsWithTools = toolRow?.n ?? 0;
+      const rate = turnsTotal > 0 ? turnsWithTools / turnsTotal : 0;
+      return Object.freeze<ToolUseRateSnapshot>({
+        agent,
+        computedAt: Date.now(),
+        windowHours,
+        turnsTotal,
+        turnsWithTools,
+        rate,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `computeToolUseRatePerTurn failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 08 T02 — persist a snapshot row produced by
+   * `computeToolUseRatePerTurn`. Composes with the periodic computation
+   * in daemon.ts (heartbeat-driven sub-scope 6-A scheduler in T03).
+   */
+  writeToolUseRateSnapshot(snapshot: ToolUseRateSnapshot): void {
+    try {
+      this.stmts.insertToolUseRateSnapshot.run({
+        agent: snapshot.agent,
+        computedAt: snapshot.computedAt,
+        windowHours: snapshot.windowHours,
+        turnsTotal: snapshot.turnsTotal,
+        turnsWithTools: snapshot.turnsWithTools,
+        rate: snapshot.rate,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `writeToolUseRateSnapshot failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 08 T02 — fetch the latest snapshot for an agent,
+   * or `undefined` if no snapshot has been computed yet (e.g., a fresh
+   * agent that hasn't tripped the heartbeat scheduler). Powers the
+   * CLI `clawcode tool-latency-audit` (T03) operator surface.
+   */
+  getLatestToolUseRateSnapshot(agent: string): ToolUseRateSnapshot | undefined {
+    try {
+      const row = this.stmts.latestToolUseRateSnapshot.get({ agent }) as
+        | {
+            readonly agent: string;
+            readonly computed_at: number;
+            readonly window_hours: number;
+            readonly turns_total: number;
+            readonly turns_with_tools: number;
+            readonly rate: number;
+          }
+        | undefined;
+      if (!row) return undefined;
+      return Object.freeze<ToolUseRateSnapshot>({
+        agent: row.agent,
+        computedAt: row.computed_at,
+        windowHours: row.window_hours,
+        turnsTotal: row.turns_total,
+        turnsWithTools: row.turns_with_tools,
+        rate: row.rate,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getLatestToolUseRateSnapshot failed: ${msg}`,
         this.dbPath,
       );
     }

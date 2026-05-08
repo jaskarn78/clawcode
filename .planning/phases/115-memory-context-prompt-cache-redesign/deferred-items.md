@@ -112,3 +112,33 @@ exercise the increment). The acceptance criterion grep
 `recordLazyRecallCall` ≥4 in daemon.ts holds regardless of which test
 file pins it.
 
+
+## During Plan 115-08 execution (2026-05-08)
+
+### Test-list updates (NOT pre-existing failures — fixed inline)
+
+Plan 115-08 T02 ships sub-scope 17(c) — adds the `parallel-tool-calls`
+default directive (PARALLEL-TOOL-01). The directive landing changes the
+sorted directive-list returned by `resolveSystemPromptDirectives` and the
+keys in `DEFAULT_SYSTEM_PROMPT_DIRECTIVES`. Three existing tests pin those
+lists:
+
+| Test file | Test | Resolution |
+|---|---|---|
+| `schema-system-prompt-directives.test.ts` | `REG-DEFAULTS-PRESENT` | Updated to 13-key list (added `parallel-tool-calls` between `mutate-verify` and `propose-alternatives`). |
+| `schema-system-prompt-directives.test.ts` | `REG-V25-BACKCOMPAT` | Updated to 13-key list (same insertion). |
+| `loader.test.ts` | `LR-RESOLVE-DEFAULT-CONST-MATCHES` | Pre-existing failure ALSO repaired (test fixture had drifted off all post-Phase-99 directives, not just `parallel-tool-calls`). Now exhaustive — fixes the deferred-items entry from Plan 115-04. |
+
+Note on the loader test: it was already failing at master HEAD before
+Plan 115-08 began (deferred-items entry from 115-04 confirms). I extended
+its expected list to include ALL 13 currently-shipped directives rather
+than restoring it to the pre-115-08 broken-7-key state. This converts the
+pre-existing-deferred failure into a passing test going forward — net
+positive for fleet coverage.
+
+### Genuinely pre-existing failures NOT touched by Plan 115-08
+
+| Test file | Test | Notes |
+|---|---|---|
+| `src/config/__tests__/schema.test.ts` | `PR11: parse-regression` | Same as Plan 115-04 — needs in-tree `clawcode.yaml` not present in workspace tree. |
+| `src/config/__tests__/clawcode-yaml-phase100*.test.ts` | suite-level | Same as Plan 115-04 — same missing `clawcode.yaml`. |

@@ -2314,15 +2314,24 @@ describe("resolveSystemPromptDirectives (Phase 94 TOOL-10)", () => {
     );
     // Phase 99 added subagent-routing; Phase 100-fu added
     // memory-recall-before-uncertainty, propose-alternatives,
-    // long-output-to-file, and verify-file-writes. Sorted alphabetically
+    // long-output-to-file, and verify-file-writes; Phase 999.1 added
+    // freshness, derivative-work, trusted-operator, discord-format;
+    // Phase 999.22 added mutate-verify; Phase 115 Plan 08 T02
+    // (sub-scope 17c) adds parallel-tool-calls. Sorted alphabetically
     // by key for prompt-cache hash determinism.
     expect(out.map((d) => d.key)).toEqual([
       "cross-agent-routing",
+      "derivative-work",
+      "discord-format",
       "file-sharing",
+      "freshness",
       "long-output-to-file",
       "memory-recall-before-uncertainty",
+      "mutate-verify",
+      "parallel-tool-calls",
       "propose-alternatives",
       "subagent-routing",
+      "trusted-operator",
       "verify-file-writes",
     ]);
     // D-09 file-sharing verbatim text reaches the resolver output
