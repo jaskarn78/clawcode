@@ -44,12 +44,13 @@ key-files:
   modified:
     - src/config/schema.ts — defaults + agentSchema for excludeDynamicSections, memoryRetrievalTokenBudget (lowered 2000→1500), memoryRetrievalExcludeTags
     - src/config/loader.ts — thread three new fields through resolveAgentConfig with the agent.X ?? defaults.X pattern
+    - src/config/types.ts — register Phase 115 fields in RELOADABLE_FIELDS (memoryRetrievalTokenBudget, memoryRetrievalExcludeTags — closure-re-read each turn) + NON_RELOADABLE_FIELDS (excludeDynamicSections — baseOptions captured at session create/resume; matches Phase 100 settingSources / gsd precedent)
     - src/shared/types.ts — three new optional fields on ResolvedAgentConfig
     - src/manager/types.ts — optional excludeDynamicSections on AgentSessionConfig
     - src/manager/session-config.ts — propagate excludeDynamicSections through both buildSessionConfig return paths (main + bootstrap-needed)
     - src/manager/session-adapter.ts — extend buildSystemPromptOption(stablePrefix, excludeDynamicSections); both call sites in createSession + resumeSession; phase115-quickwin diagnostic
     - src/manager/session-manager.ts — getMemoryRetrieverForAgent reads tokenBudget + excludeTags from config and forwards to retrieveMemoryChunks
-    - src/memory/memory-retrieval.ts — RetrieveArgs extended with excludeTags / log / agent; filter inside memoriesScored loop; 2000→1500 default; phase115-tag-filter diagnostic
+    - src/memory/memory-retrieval.ts — RetrieveArgs extended with excludeTags / log / agent; filter inside memoriesScored loop; 2000→1500 default; phase115-tag-filter diagnostic via console.info (production-visible) AND optional log sink (test-injectable)
     - src/config/__tests__/differ.test.ts + src/config/__tests__/loader.test.ts — defaults-shape fixtures updated 2000→1500 and adding the three new fields (6 fixtures total across both files)
 
 key-decisions:
@@ -88,7 +89,9 @@ completed: 2026-05-08
 
 - **`excludeDynamicSections: true` shipped (T01).** New `defaults.excludeDynamicSections` (zod default true) + per-agent `agentSchema.excludeDynamicSections` optional override. Threaded through `ResolvedAgentConfig` → `AgentSessionConfig` (optional passthrough) → `buildSystemPromptOption(stablePrefix, excludeDynamicSections)`. Both `createSession` and `resumeSession` call sites pass the resolved value (Rule 3 symmetric edit). The SDK preset shape `{type:"preset",preset:"claude_code",append:stablePrefix,excludeDynamicSections}` is preserved. `console.info("phase115-quickwin", JSON.stringify({...}))` diagnostic line lands at both call sites so first deploy can confirm the flag is reaching the SDK.
 - **`memoryRetrievalTokenBudget` lit up (T02).** Pre-115 the zod knob existed in `defaultsSchema` but `SessionManager.getMemoryRetrieverForAgent` never forwarded it — the per-turn `<memory-context>` always used `retrieveMemoryChunks`'s hardcoded 2000-token default regardless of yaml config (Pain Point #1, codebase-memory-retrieval.md). Now: schema range tightened to `min(500).max(8000).default(1500)`, loader threads `agent.X ?? defaults.X` into `ResolvedAgentConfig`, the closure reads `config?.memoryRetrievalTokenBudget ?? 1500` and forwards via the new `tokenBudget` arg. `retrieveMemoryChunks` default also lowered 2000 → 1500. Operator can revert per-agent or fleet-wide.
-- **Tag-filter at hybrid-RRF (T03).** New `defaults.memoryRetrievalExcludeTags` zod default `["session-summary", "mid-session", "raw-fallback"]` + per-agent override. `RetrieveArgs` extended with `excludeTags` / `log` / `agent` fields. Filter applied inside the existing `for (const m of memoriesScored)` hydration loop where `getMemoryForRetrieval` already returns tags — no extra DB query, zero N+1. Memory rows whose tags intersect `excludeTags` are dropped before time-window + token-budget passes. `[diag] phase115-tag-filter` debug log fires on the daemon's logger (passed via deps) when ≥1 row dropped, with structured `{action,agent,dropped,excludeTags}` payload.
+- **Tag-filter at hybrid-RRF (T03).** New `defaults.memoryRetrievalExcludeTags` zod default `["session-summary", "mid-session", "raw-fallback"]` + per-agent override. `RetrieveArgs` extended with `excludeTags` / `log` / `agent` fields. Filter applied inside the existing `for (const m of memoriesScored)` hydration loop where `getMemoryForRetrieval` already returns tags — no extra DB query, zero N+1. Memory rows whose tags intersect `excludeTags` are dropped before time-window + token-budget passes. Production diagnostic via `console.info("phase115-tag-filter", ...)` fires unconditionally on every drop (mirrors T01's phase115-quickwin pattern; daemon captures stdout via systemd); an optional `log` sink supports DI for tests + future operator surfaces.
+
+- **Polish fixes (post-review).** Two follow-up edits landed in commit `c3439c4` after the advisor flagged loose ends: (a) the original tag-filter diagnostic used `args.log?.debug?.(...)` with both args optional, and the production caller in `getMemoryRetrieverForAgent` passed no `log` argument — so the line never fired in production. Fixed by adding the unconditional `console.info` channel alongside the optional sink. (b) Three new schema fields weren't registered in `src/config/types.ts` reload-classification table — added entries so the config-watcher's behavior matches the JSDoc claims (memoryRetrievalTokenBudget + memoryRetrievalExcludeTags as RELOADABLE; excludeDynamicSections as NON_RELOADABLE per Phase 100 settingSources precedent).
 
 ## Task Commits
 
@@ -98,6 +101,8 @@ completed: 2026-05-08
    - schema 2000→1500 default + range constraint, loader threading, ResolvedAgentConfig field, getMemoryRetrieverForAgent forwards tokenBudget, memory-retrieval default 2000→1500, 6 new tests
 3. **T03 — `feat(115-01): exclude session-summary/mid-session/raw-fallback memories from <memory-context> at hybrid-RRF (sub-scope 4)`** — `0aececa`
    - schema (defaults + per-agent locked tag list), loader threading with `!== undefined` check (empty-array opt-out), ResolvedAgentConfig field, retrieveMemoryChunks excludeTags/log/agent params, filter inside hydration loop, getMemoryRetrieverForAgent forwards excludeTags, 9 new tests
+4. **Polish — `feat(115-01): register reload classification + ensure phase115-tag-filter fires in production`** — `c3439c4`
+   - Added `console.info` diagnostic alongside the optional `log` sink (production-visible mirroring T01's phase115-quickwin pattern); registered reload classifications in `src/config/types.ts` (memoryRetrievalTokenBudget + memoryRetrievalExcludeTags as RELOADABLE; excludeDynamicSections as NON_RELOADABLE)
 
 ## Files Created/Modified
 
