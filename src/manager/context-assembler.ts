@@ -41,7 +41,7 @@
 import { createHash } from "node:crypto";
 import type { Turn } from "../performance/trace-collector.js";
 import { countTokens } from "../performance/token-count.js";
-import type { MemoryEntry } from "../memory/types.js";
+import type { MemoryEntry, MemoryTier1Source } from "../memory/types.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 
 export type ContextBudgets = {
@@ -123,6 +123,22 @@ export type ContextSources = {
    * at the upstream load site). Dropped first in over-budget steps.
    */
   readonly identityMemoryAutoload?: string;
+  /**
+   * Phase 115 Plan 03 sub-scope 11 — typed Tier 1 source descriptor for the
+   * MEMORY.md auto-load. Optional and additive: when present it carries the
+   * same body that `identityMemoryAutoload` carries (`source.content`) plus
+   * the file path + cap metadata that downstream consumers (Plan 115-04
+   * lazy-load tools, observability sub-scope 13c diagnostics) need to
+   * surface where the content came from.
+   *
+   * Back-compat contract: `identityMemoryAutoload` (raw string) remains the
+   * field the assembler renders from. `identityMemoryAutoloadSource` is
+   * threaded for INFORMATIONAL use by downstream callers — it does NOT
+   * change the rendering path. When both are populated they MUST agree
+   * (`identityMemoryAutoload === identityMemoryAutoloadSource.content`).
+   * Plan 115-04 reads this field by name; do not rename it.
+   */
+  readonly identityMemoryAutoloadSource?: MemoryTier1Source;
   /**
    * Phase 53 Plan 02 — SOUL.md body carved out from identity. When the upstream
    * session-config already folds SOUL into identity, pass `""` here and the
