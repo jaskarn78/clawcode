@@ -1515,3 +1515,56 @@ describe("Phase 999.13 — back-compat byte-stability", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 115 Plan 04 sub-scope 5 — cacheBreakpointPlacement wiring regression.
+//
+// The architectural contract: ResolvedAgentConfig.cacheBreakpointPlacement
+// MUST be threaded from session-config.ts into AssembleOptions so the
+// operator-controlled config knob actually reaches the assembler. Without
+// this wiring, an operator setting `agents.X.cacheBreakpointPlacement: "legacy"`
+// in clawcode.yaml gets NO behavioral change — the revert path is dead code.
+//
+// This test pins the wiring at the buildSessionConfig boundary. Asserts:
+//   - default (no override) → systemPrompt contains the breakpoint marker
+//     (defaults.cacheBreakpointPlacement zod-default 'static-first' fires)
+//   - explicit "legacy" → systemPrompt does NOT contain the marker
+//     (revert path produces pre-115-04 byte-shape)
+// ---------------------------------------------------------------------------
+describe("Phase 115 Plan 04 — cacheBreakpointPlacement config wiring", () => {
+  it("default (no override on ResolvedAgentConfig) → systemPrompt contains the breakpoint marker", async () => {
+    // The session-config caller threads `config.cacheBreakpointPlacement`
+    // into AssembleOptions. ResolvedAgentConfig field is optional at the
+    // type level (per shared/types.ts) but the loader resolver always
+    // populates it from defaults.cacheBreakpointPlacement (zod default
+    // "static-first"). When undefined (legacy fixture), the assembler
+    // falls back to DEFAULT_CACHE_BREAKPOINT_PLACEMENT which is also
+    // "static-first" — so the marker SHOULD appear regardless.
+    const config = makeConfig({
+      identity: "I am a 115-04 wiring test agent",
+      // Note: `cacheBreakpointPlacement` deliberately NOT set on the fixture
+      // to mirror the path through assembleContextInternal where opts is
+      // undefined and the default fires.
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("phase115-cache-breakpoint");
+  });
+
+  it("explicit 'legacy' override → systemPrompt does NOT contain the breakpoint marker (revert path active)", async () => {
+    const config = makeConfig({
+      identity: "I am a 115-04 legacy-mode agent",
+      cacheBreakpointPlacement: "legacy",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("phase115-cache-breakpoint");
+  });
+
+  it("explicit 'static-first' override → systemPrompt contains the marker (parity with default)", async () => {
+    const config = makeConfig({
+      identity: "I am a 115-04 explicit static-first agent",
+      cacheBreakpointPlacement: "static-first",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("phase115-cache-breakpoint");
+  });
+});

@@ -946,6 +946,14 @@ export async function buildSessionConfig(
             onBudgetWarning,
             agentName: config.name,
             log: capFallbackLog,
+            // Phase 115 Plan 04 sub-scope 5 — thread the resolved
+            // cacheBreakpointPlacement through to the assembler so the
+            // operator-controlled config flag is actually consumed. Default
+            // is "static-first" (zod default in defaultsSchema); operators
+            // can flip per-agent or fleet-wide via clawcode.yaml. The flag
+            // is captured into systemPrompt.append at session create/resume
+            // (NON_RELOADABLE_FIELDS) — agent restart required to take effect.
+            cacheBreakpointPlacement: config.cacheBreakpointPlacement,
           },
           bootstrapTurn,
         )
@@ -955,6 +963,10 @@ export async function buildSessionConfig(
           onBudgetWarning,
           agentName: config.name,
           log: capFallbackLog,
+          // Phase 115 Plan 04 sub-scope 5 — see assembleContextTraced branch
+          // above for rationale. Symmetric edit (same pattern as
+          // excludeDynamicSections wiring further down at line ~1052).
+          cacheBreakpointPlacement: config.cacheBreakpointPlacement,
         });
     bootstrapTurn?.end("success");
   } catch (err) {
