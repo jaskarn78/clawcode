@@ -42,6 +42,9 @@ import {
  * Phase 36-41 auto-linker). Pinned shape:
  *   - newWikilinks: from/to/rationale
  *   - promotionCandidates: chunkId/currentPath/rationale/priorityScore (0..100)
+ *     PLUS optional action / targetMode for Phase 115 D-10 row-3 detection
+ *     (mutating-vs-additive fork). Legacy LLM responses that omit these
+ *     fields are treated as additive (Row-2 semantics under D-10).
  *   - themedReflection: free-form narrative
  *   - suggestedConsolidations: sources[]/newPath/rationale
  */
@@ -59,6 +62,19 @@ export const dreamResultSchema = z.object({
       currentPath: z.string(),
       rationale: z.string(),
       priorityScore: z.number().min(0).max(100),
+      /**
+       * Phase 115 D-10 — optional action verb. Legacy schema omitted this
+       * field (treated as "add"). When the LLM emits "edit" or "merge",
+       * Phase 115 D-10 Row-3 detection routes the candidate to operator-
+       * required regardless of priorityScore.
+       */
+      action: z.enum(["add", "edit", "merge"]).optional(),
+      /**
+       * Phase 115 D-10 — optional target mode. "overwrite" implies the
+       * promotion is mutating (Row-3); "append" or absent implies additive
+       * (Row-2 default).
+       */
+      targetMode: z.enum(["append", "overwrite"]).optional(),
     }),
   ),
   themedReflection: z.string(),
