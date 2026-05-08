@@ -20,7 +20,7 @@
 - :white_check_mark: **v2.5 Cutover Parity Verification** - Phases 92-93 (shipped 2026-04-25)
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
-- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101, 114, **115** (folds 999.40, 999.41, partial 999.42), **116** (folds 999.38), 999.7, 999.18-20, 999.34-36, 999.39, 999.42-residual (proposed 2026-05-07; updated 2026-05-08 to add 116 + absorb 999.38)
+- :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101 (engine), 114, **115** (folds 999.40, 999.41, partial 999.42), **116** (folds 999.38), **999.43** (auto-ingest hook, depends on 101), 999.7, 999.18-20, 999.34-36, 999.39, 999.42-residual (proposed 2026-05-07; updated 2026-05-08 to add 116 + absorb 999.38; 2026-05-08 promote 999.43 from BACKLOG with enriched two-axis priority spec, depends on 101)
 
 ## Phases
 
@@ -1992,20 +1992,118 @@ Hermes supports progressive skill refinement (patch → edit → create). ClawCo
 
 **Priority:** Medium — architectural gaps, not feature requests. A is highest-value (retrieval quality directly affects agent performance).
 
-### Phase 999.43: Auto-ingest Discord file attachments into document store (BACKLOG)
+### Phase 999.43: Auto-ingest Discord file attachments into document store with two-axis priority (ACTIVE — promoted 2026-05-08, depends on Phase 101)
 
-**Source:** Operator request 2026-05-08. Current behavior: Discord attachments are downloaded to a temp dir and passed as inline context for that turn only — not persisted or searchable after the turn ends.
+**Source:** Operator request 2026-05-08, enriched 2026-05-08 with two-axis priority + content classification spec after operator clarified: *"in fin-acq uploads client interaction screenshots, or client pdfs or any type of files, they should have much higher priority weight than if he sends a screenshot of a webpage for a form he's trying to fill out or a random image that's less likely to be queried in the future."*
 
-**Gap:** No automatic pipeline exists to save uploaded files into the RAG document store. Agents can call `ingest_document` manually, but there is no hook that fires on attachment receipt.
+**Goal:** When an operator-flagged agent receives a Discord attachment, automatically ingest eligible file types into the RAG document store with two-axis priority weighting, so subsequent queries surface high-signal client documents above low-signal ephemeral uploads. Closes the gap between the existing manual-ingest flow (`ingest_document` MCP tool) and the daily Discord-attachment workflow.
 
-**Proposed behavior:**
-- When a Discord message contains a file attachment, automatically call `ingest_document` on eligible file types (PDF, txt, md, csv, docx) after the Haiku vision pre-pass (Phase 113) completes
-- Tag ingested chunks with the originating agent, channel ID, and Discord message ID for provenance
-- Make ingested files immediately searchable via `search_documents` across future turns
-- Config flag per-agent: `autoIngestAttachments: true/false` (default false, opt-in)
+**Trigger:** Current behavior: Discord attachments are downloaded to a temp dir and passed as inline context for that turn only — not persisted or searchable after the turn ends. Operator's daily workflow (especially fin-acquisition's client interactions with Ramy) generates a stream of client PDFs, statements, screenshots — none of which become queryable via `search_documents`. Manual `ingest_document` calls would work but require the agent to opportunistically remember to invoke them, which is unreliable.
 
-**Out of scope:** Binary/media files (images, video, audio) — those stay vision-only via Phase 113 pre-pass.
+**Pre-existing primitives we can reuse:**
+- `src/discord/attachments.ts` — extract/download/cleanup pipeline for Discord attachments
+- `src/discord/vision-pre-pass.ts` (Phase 113) — Haiku vision analysis for image attachments; the classifier piggybacks on this (no extra LLM call for images)
+- Phase 49 RAG infrastructure (`ingest-document` IPC + `vec_document_chunks` + `memory_chunks_fts`) — engine target
+- `search_documents` MCP tool — query surface; gets new score-weighting parameters
+- Phase 113 attachment pipeline already runs FOR EVERY image attachment regardless of agent flag — auto-ingest hooks INTO this existing pipeline rather than duplicating
+- Phase 90 per-agent isolation lock — chunks scoped to originating agent's document store by default
+- Phase 101 (engine quality — robust PDF/scan handling) — **hard dependency**; this phase ships AFTER 101 because auto-ingest fires unreliable parsing without 101's reliable engine
 
-**Dependencies:** Phase 113 (attachment pre-pass pipeline), existing document store (ingest_document / search_documents tools).
+**Two-axis priority spec (locked from operator review 2026-05-08):**
 
-**Promotion target:** v2.8 or next maintenance window with document store work.
+**Axis 1 — Per-agent base priority** (operator-set in `clawcode.yaml`):
+```yaml
+agents:
+  - name: fin-acquisition
+    autoIngestAttachments: true
+    ingestionPriority: high      # client docs heavily queried later
+  - name: research
+    autoIngestAttachments: true
+    ingestionPriority: medium    # default
+  - name: personal
+    autoIngestAttachments: true
+    ingestionPriority: low       # ephemeral, less likely to be queried
+```
+Score multiplier: `high = 1.5×`, `medium = 1.0×`, `low = 0.7×`.
+
+**Axis 2 — Per-document content classification** (auto-classified via heuristic-first cascade):
+
+| Signal | Class |
+|---|---|
+| PDF, size > 100KB | HIGH |
+| PDF, size < 100KB | LOW (likely receipt/form) |
+| .docx / .xlsx / .csv | HIGH |
+| .md / .txt | MEDIUM |
+| Image, vision-pass detects text-heavy financial-doc content | HIGH |
+| Image, vision-pass detects webpage/UI/form | LOW |
+| Image, filename contains "Screenshot" | MEDIUM (LOW if also has form-keywords like "form"/"fill"/"checkout") |
+| Image, filename contains operator-set client-name list | HIGH |
+| Code files (.py / .js / .sql / .ts) | LOW |
+| (default fallback) | MEDIUM |
+
+Score multiplier: `high = 1.5×`, `medium = 1.0×`, `low = 0.5×`.
+
+**Final retrieval score (extends `search_documents`):**
+```
+score = base_similarity_or_bm25
+      × agent_priority_weight    (1.5 / 1.0 / 0.7)
+      × content_priority_weight  (1.5 / 1.0 / 0.5)
+      × recency_boost            (1.3× if ingested within last 7 days, else 1.0×)
+```
+
+Result: ~6× signal-to-noise spread between high-signal client-doc-from-priority-agent and low-signal one-off-screenshot-from-low-priority-agent.
+
+**Override surface (locked: dual operator + agent control):**
+- **Reaction emoji** on Discord message after upload: 🔴 = HIGH override / 🟡 = MEDIUM override / 🟢 = LOW override (operator-only via existing reaction-handling pipeline)
+- **MCP tool `clawcode_rag_set_priority(doc_id, level)`** — agent-callable; agent self-classifies when it has judgment about what it just received (e.g., fin-acq sees a client statement and self-tags HIGH). Existing PHASE-95 dream-pass policy patterns apply for trust + audit.
+- **CLI override:** `clawcode rag set-priority <doc-id> <high|medium|low>` for retroactive operator adjustment
+- **Bulk reclassify:** `clawcode rag reclassify --agent fin-acquisition --rule "Screenshot*=low"` for systemic miscategorization fix
+
+**Sub-scope candidates (refine in plan-phase):**
+
+1. **Discord attachment receipt hook** — extend `src/discord/bridge.ts` to fire `attachmentReceived` event after Phase 113 vision pre-pass completes (for images) or after download (for non-images). Hook reads agent's `autoIngestAttachments` flag; if true, dispatches to the auto-ingest path.
+
+2. **Eligibility filter + heuristic classifier** — new `src/documents/auto-ingest-classifier.ts` implementing the cascade above. Pure functions: `(filename, mimeType, size, visionAnalysis?) → { eligible: bool, contentClass: "high"|"medium"|"low", reason: string }`. Easy to unit-test with fixtures.
+
+3. **Per-agent + per-document priority schema additions** — extend `clawcode.yaml` schema with `agents[*].autoIngestAttachments: bool` and `agents[*].ingestionPriority: "low"|"medium"|"high"`. Extend document store schema with `agent_priority_weight` and `content_priority_weight` columns on `documents` (or denormalized into `vec_document_chunks` for query-time ranking).
+
+4. **Score-weighting in `search_documents`** — extend the existing tool's ranking pass to apply the multiplicative score formula. Add `recency_boost` lookup against `ingested_at` timestamp. Verify via test fixtures: high-priority client PDF + recent + high-priority agent ranks above medium baseline by ~3× factor.
+
+5. **Reaction emoji override hook** — extend Phase v1.x reaction-handling pipeline to listen for 🔴/🟡/🟢 on messages with attachments; map to `setDocPriority(doc_id, level)`. Audit log entry per override.
+
+6. **`clawcode_rag_set_priority` MCP tool** — agent-callable tool for self-classification. Operates only on docs originating from agent's own ingestion (Phase 90 isolation lock).
+
+7. **CLI commands** — `clawcode rag set-priority <doc-id> <level>` + `clawcode rag reclassify --agent <name> --rule <pattern>` for operator overrides.
+
+8. **Provenance tagging + cleanup** — every ingested doc tagged with `(agent_name, channel_id, message_id, user_id, ingested_at, source: "discord_attachment", auto_classified_class, override_class?)`. Discord message deletion does NOT cascade-delete the doc (operator audit trail per Phase 99 patterns); operator can manually purge via CLI.
+
+9. **UAT — fin-acquisition client doc retrieval** — phase ships when:
+   - fin-acquisition with `autoIngestAttachments: true` + `ingestionPriority: high` ingests Ramy's uploaded PDF statement automatically
+   - The doc is searchable via `search_documents` from any agent's context with that agent's permissions
+   - A query "what was Ramy's brokerage balance last month?" surfaces the high-priority recent statement above any incidental form screenshots also uploaded
+   - Operator reaction-emoji override (🟢 LOW on a misclassified client doc) is reflected within 30s in the score-weighting
+
+**Out of scope (deferred):**
+- Binary/media files (video, audio, archives) — eligibility filter rejects; Phase 113 vision pre-pass already handles images
+- Cross-agent document sharing — Phase 90 isolation lock unchanged; cross-agent search remains opt-in via existing pattern
+- Retention policy / cleanup cron — defer to follow-on phase if storage caps become an issue
+- LLM-based classifier (vs heuristic cascade) — defer; only escalate if heuristic miscategorization rate >20% in the first 30 days post-deploy
+- Embeddings re-computation on priority changes — score-weighting is query-time, not index-time, so priority changes apply immediately without re-embedding
+
+**Acceptance criteria (sketch — refine in plan-phase):**
+- `agents[*].autoIngestAttachments: true` config flag works; default `false` preserves current behavior
+- Eligibility cascade correctly classifies test fixtures: client tax PDF → HIGH, Stripe receipt PDF (12KB) → LOW, .xlsx → HIGH, "Screenshot 2026-05-08.png" of a webpage → MEDIUM (LOW with "form" keyword), code file → LOW
+- Score formula: `0.85 × 1.5 × 1.5 × 1.3 = 2.49` matches test calculation for high-priority recent client PDF
+- Reaction-emoji override works end-to-end: Discord message attachment → operator reacts 🟢 → score drops within 30s
+- `clawcode_rag_set_priority` agent tool works; agent operating in low-priority workspace cannot escalate own doc beyond MEDIUM (sandbox)
+- `clawcode rag reclassify` bulk operation handles 100+ docs without timing out
+
+**Dependencies:**
+- **Phase 101 (HARD)** — must ship first. Auto-ingest fires unreliable parsing without 101's robust engine handling. Sequencing: 101 ships → soak ~1 week → 999.43 builds on top.
+- Phase 113 attachment pipeline (already shipped) — vision pre-pass result feeds the classifier
+- Phase 49 RAG infrastructure (already shipped) — ingestion engine
+- Phase 90 per-agent isolation lock — chunks scoped per-agent
+
+**Plans:** TBD (run /gsd-plan-phase 999.43 after Phase 101 ships)
+
+**Status:** ACTIVE — promoted 2026-05-08 from BACKLOG with enriched two-axis priority spec. Estimated 15-25 executor hours across ~3-4 plans. **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme + unblocks fin-acquisition's daily client-doc workflow.
