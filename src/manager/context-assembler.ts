@@ -86,7 +86,43 @@ export type ContextSources = {
    * invalidation on Phase 999.13 deploy.
    */
   readonly delegatesBlock?: string;
+  /**
+   * Legacy compound identity field (Phase 53 / pre-115). Populated by
+   * upstream session-config as a single concatenation of SOUL fingerprint +
+   * IDENTITY.md + agent-name line + capability manifest + MEMORY.md auto-load.
+   *
+   * Phase 115 Plan 03 sub-scope 1 carves these into FOUR separate fields below
+   * (`identitySoulFingerprint` / `identityFile` / `identityCapabilityManifest` /
+   * `identityMemoryAutoload`) so the assembler can budget each independently
+   * via `enforceDropLowestImportance`. When any of the four sub-source fields
+   * is populated (non-undefined), the renderer uses them and IGNORES this
+   * compound `identity` field. Tests + legacy callers that still pass only
+   * `identity` continue to work — the four sub-fields default to undefined
+   * and the legacy compound rendering path runs.
+   */
   readonly identity: string;
+  /**
+   * Phase 115 Plan 03 sub-scope 1 — SOUL fingerprint (extractFingerprint
+   * output, ≤1200 chars by extractor bound). Highest importance: NEVER
+   * dropped by `drop-lowest-importance` strategy.
+   */
+  readonly identitySoulFingerprint?: string;
+  /**
+   * Phase 115 Plan 03 sub-scope 1 — IDENTITY.md raw body. Mid-priority:
+   * head-tail truncated when over budget.
+   */
+  readonly identityFile?: string;
+  /**
+   * Phase 115 Plan 03 sub-scope 1 — agent-name line + capability manifest.
+   * Mid-low priority: bullet-truncated when over budget.
+   */
+  readonly identityCapabilityManifest?: string;
+  /**
+   * Phase 115 Plan 03 sub-scope 1 — MEMORY.md auto-load body. Lowest priority
+   * within identity (already separately bounded by INJECTED_MEMORY_MAX_CHARS
+   * at the upstream load site). Dropped first in over-budget steps.
+   */
+  readonly identityMemoryAutoload?: string;
   /**
    * Phase 53 Plan 02 — SOUL.md body carved out from identity. When the upstream
    * session-config already folds SOUL into identity, pass `""` here and the
@@ -258,6 +294,39 @@ export const DEFAULT_BUDGETS: ContextBudgets = Object.freeze({
   graphContext: 2000,
 });
 
+// ── Phase 115 Plan 03 — bounded always-injected tier + outer-cap constants ──
+
+/**
+ * Phase 115 sub-scope 1 / D-01 — bounded always-injected tier hard cap.
+ *
+ * 16,000 chars ≈ 4,000 tokens. Hard cap on the MEMORY.md auto-load that
+ * folds into the identity stable-prefix section. Hermes uses 20,000 as
+ * their precedent (`CONTEXT_FILE_MAX_CHARS = 20_000`); we run tighter
+ * to leave 4K-char margin in the 8K-token outer prefix cap (D-02).
+ *
+ * REPLACES the legacy `MEMORY_AUTOLOAD_MAX_BYTES = 50 * 1024` byte cap
+ * (still exported from `config/schema.ts` for back-compat with downstream
+ * tests; the active cap on the assembly path is THIS char cap).
+ *
+ * Read by `buildSessionConfig` in session-config.ts at the MEMORY.md
+ * auto-load site (was 50KB byte truncation; now 16K char head-tail
+ * truncate with marker).
+ */
+export const INJECTED_MEMORY_MAX_CHARS = 16_000;
+
+/**
+ * Phase 115 sub-scope 1 / D-02 — total stable-prefix outer cap.
+ *
+ * 8,000 tokens. Hard P0 cap; the per-section budgets (DEFAULT_PHASE53_BUDGETS)
+ * sum into this. When per-section enforcement still leaves us over cap, an
+ * emergency head-tail truncate fires across the whole prefix (see
+ * `enforceTotalStablePrefixBudget` in T02 / Plan 115-03).
+ *
+ * P1 *delivery* targets are softer (10K fleet p95, 12K fin-acq) — those
+ * are observed-load goals; the 8K cap is the structural enforcement floor.
+ */
+export const STABLE_PREFIX_MAX_TOKENS = 8_000;
+
 // ── Phase 53 Plan 02 — per-section budget surface ──────────────────────────
 
 /**
@@ -336,15 +405,26 @@ export type MemoryAssemblyBudgets = {
 };
 
 /**
- * Phase 53 Plan 02 — starter budget defaults (conservative per D-02). The
- * phase ships machinery, not aggressive cuts; operators tune these after
- * reviewing `clawcode context-audit` output.
+ * Phase 53 Plan 02 / Phase 115 Plan 03 — per-section budgets (in TOKENS).
+ *
+ * Phase 115 D-02 lock — replaces the Phase 53 starter values:
+ *   identity   was 1000 → 4000 (the carved-up four-sub-source aggregate; ≈D-01's
+ *              16K-char MEMORY.md cap + headroom for SOUL/IDENTITY/capability)
+ *   soul       was 2000 → 0    (folded into identity; n/a — `passthrough`-style)
+ *   skills     was 1500 unchanged
+ *   hot_tier   was 3000 → 1000 (CONTEXT.md `hotMemories` line)
+ *   per_turn   was 500 unchanged
+ *   resume     was 1500 unchanged
+ *   recent_history was 8000 unchanged (SDK-owned passthrough)
+ *
+ * Identity strategy is ALSO updated at the assembler call site
+ * (`enforceWarnAndKeep` → `enforceDropLowestImportance`), see T02.
  */
 export const DEFAULT_PHASE53_BUDGETS: Required<MemoryAssemblyBudgets> = Object.freeze({
-  identity: 1000,
-  soul: 2000,
+  identity: 4000,
+  soul: 0,
   skills_header: 1500,
-  hot_tier: 3000,
+  hot_tier: 1000,
   recent_history: 8000,
   per_turn_summary: 500,
   resume_summary: 1500,
@@ -464,6 +544,41 @@ function truncateToBudget(text: string, tokenBudget: number): string {
 
   // Hard truncate for non-bullet content
   return text.slice(0, maxChars) + "...";
+}
+
+// ── Phase 115 Plan 03 sub-scope 1 — compound-identity composer ────────────
+
+/**
+ * Phase 115 Plan 03 sub-scope 1 — compose the identity stable-prefix string
+ * from the four carved sub-source fields.
+ *
+ * Order matches the legacy `identityStr` concatenation in session-config.ts
+ * pre-115 so the rendered stable prefix is byte-compatible with prior
+ * sessions for agents whose sub-source content is unchanged:
+ *
+ *   1. SOUL fingerprint + "\n\n"
+ *   2. IDENTITY.md raw body
+ *   3. agent-name line + capability manifest
+ *   4. "\n## Long-term memory (MEMORY.md)\n\n" + MEMORY.md body + "\n"
+ *
+ * Empty sub-sources are omitted (no empty headers leaked). Order is fixed —
+ * tests rely on it for stable-prefix hash continuity.
+ */
+function composeCarvedIdentity(sources: ContextSources): string {
+  const parts: string[] = [];
+  const soulFp = sources.identitySoulFingerprint ?? "";
+  if (soulFp) parts.push(soulFp + "\n");
+  const idFile = sources.identityFile ?? "";
+  if (idFile) parts.push(idFile);
+  const capManifest = sources.identityCapabilityManifest ?? "";
+  if (capManifest) parts.push(capManifest);
+  const memoryAutoload = sources.identityMemoryAutoload ?? "";
+  if (memoryAutoload) {
+    parts.push("\n## Long-term memory (MEMORY.md)\n\n" + memoryAutoload + "\n");
+  }
+  // Join with no extra separator — each sub-source already carries its own
+  // trailing newlines (matches the pre-115 `identityStr +=` concatenation).
+  return parts.join("");
 }
 
 // ── Phase 53 Plan 02 — per-section enforcement helpers ─────────────────────
@@ -696,9 +811,27 @@ function assembleContextInternal(
   const phaseBudgets = mergeBudgets(opts?.memoryAssemblyBudgets);
   const warn = opts?.onBudgetWarning;
 
-  // 1. identity — WARN-and-keep (D-03)
+  // 1. identity — Phase 115 sub-scope 1 / D-03 transition.
+  //
+  // When upstream populates the four carved sub-source fields
+  // (identitySoulFingerprint, identityFile, identityCapabilityManifest,
+  // identityMemoryAutoload), compose the compound identity from them
+  // (T01). T02 will then route this through `enforceDropLowestImportance`
+  // instead of `enforceWarnAndKeep`.
+  //
+  // When any of the four sub-source fields is undefined (legacy callers,
+  // existing tests passing only `sources.identity`), fall through to the
+  // pre-115 compound-string path so existing tests keep working.
+  const useCarvedIdentity =
+    sources.identitySoulFingerprint !== undefined ||
+    sources.identityFile !== undefined ||
+    sources.identityCapabilityManifest !== undefined ||
+    sources.identityMemoryAutoload !== undefined;
+  const composedIdentity = useCarvedIdentity
+    ? composeCarvedIdentity(sources)
+    : sources.identity;
   const identityOut = enforceWarnAndKeep(
-    sources.identity,
+    composedIdentity,
     "identity",
     phaseBudgets.identity,
     warn,

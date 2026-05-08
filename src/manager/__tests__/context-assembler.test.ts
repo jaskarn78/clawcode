@@ -782,12 +782,16 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
   });
 
   it("Test 11: no warnings when all sources fit", () => {
+    // Phase 115 Plan 03 D-02: soul budget is now 0 (folded into identity),
+    // so passing any soul content with the default budgets triggers a warn.
+    // Use the legacy Phase 53 starter values inline so this guard test
+    // exercises the no-warn path without the D-02 zero-soul fold.
     const warnings: BudgetWarningEvent[] = [];
     assembleContext(
       makeSources({ identity: "short id", soul: "short soul" }),
       DEFAULT_BUDGETS,
       {
-        memoryAssemblyBudgets: DEFAULT_PHASE53_BUDGETS,
+        memoryAssemblyBudgets: { identity: 1000, soul: 2000 },
         onBudgetWarning: (e) => warnings.push(e),
       },
     );
@@ -868,9 +872,14 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
     // Sentinel test — if any prior assembleContext behavior changed, earlier
     // describe blocks would fail. This just asserts DEFAULT_PHASE53_BUDGETS
     // is shipped frozen with all canonical keys.
+    //
+    // Phase 115 Plan 03 D-02 lock: `soul` is now 0 (folded into identity);
+    // all OTHER sections retain non-zero budgets. The previous assertion
+    // required all > 0 — that intent is now expressed as "exists with
+    // documented type" since `soul: 0` is the locked Phase 115 D-02 value.
     expect(Object.isFrozen(DEFAULT_PHASE53_BUDGETS)).toBe(true);
     expect(DEFAULT_PHASE53_BUDGETS.identity).toBeGreaterThan(0);
-    expect(DEFAULT_PHASE53_BUDGETS.soul).toBeGreaterThan(0);
+    expect(typeof DEFAULT_PHASE53_BUDGETS.soul).toBe("number"); // 0 per D-02
     expect(DEFAULT_PHASE53_BUDGETS.skills_header).toBeGreaterThan(0);
     expect(DEFAULT_PHASE53_BUDGETS.hot_tier).toBeGreaterThan(0);
     expect(DEFAULT_PHASE53_BUDGETS.recent_history).toBeGreaterThan(0);

@@ -20,6 +20,7 @@ import {
   assembleContext,
   assembleContextTraced,
   DEFAULT_BUDGETS,
+  INJECTED_MEMORY_MAX_CHARS,
 } from "./context-assembler.js";
 // Phase 999.7 — TraceCollector wired through deps for context-audit pipeline
 // restoration. Without it, the per-section section_tokens metadata is never
@@ -60,8 +61,14 @@ import {
   filterToolsByCapabilityProbe,
   type FlapHistoryEntry,
 } from "./filter-tools-by-capability-probe.js";
-// Phase 90 MEM-01 — 50KB hard cap on MEMORY.md auto-inject (D-17).
-import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
+// Phase 115 Plan 03 sub-scope 1 — MEMORY.md auto-load cap upgraded from
+// the 50KB byte cap to the 16K char cap (`INJECTED_MEMORY_MAX_CHARS`).
+// The legacy `MEMORY_AUTOLOAD_MAX_BYTES` constant remains exported from
+// `config/schema.ts` for back-compat with the schema test that pins it
+// (`src/config/__tests__/schema.test.ts:1672+`); this assembly path no
+// longer references it. Char-cap import is folded into the
+// context-assembler import block above.
+
 // Phase 999.13 DELEG-02 — per-agent specialist delegate map renderer.
 import { renderDelegatesBlock } from "../config/loader.js";
 // Phase 94 Plan 05 — TOOL-08 / TOOL-09 auto-injected built-in tools.
@@ -301,8 +308,13 @@ export async function buildSessionConfig(
     };
   }
 
-  // --- Collect identity source ---
-  let identityStr = "";
+  // --- Collect identity sources ---
+  //
+  // Phase 115 Plan 03 sub-scope 1 — carved into FOUR sub-source fields so
+  // the assembler can budget each independently via
+  // `enforceDropLowestImportance` (T02). The legacy single `identityStr`
+  // is also kept (composed at the end) for back-compat with any consumer
+  // still reading `sources.identity`.
 
   // Phase 78 CONF-01 — Read SOUL content via 3-branch precedence:
   //   config.soulFile (absolute path, lazy-read) → <workspace>/SOUL.md → inline config.soul.
@@ -328,9 +340,10 @@ export async function buildSessionConfig(
   }
   if (!soulContent) soulContent = config.soul ?? "";
 
+  let identitySoulFingerprint = "";
   if (soulContent) {
     const fingerprint = extractFingerprint(soulContent);
-    identityStr += formatFingerprint(fingerprint) + "\n\n";
+    identitySoulFingerprint = formatFingerprint(fingerprint);
   }
 
   // Phase 78 CONF-01 — Read IDENTITY content via 3-branch precedence:
@@ -357,12 +370,14 @@ export async function buildSessionConfig(
   }
   if (!identityContent) identityContent = config.identity ?? "";
 
-  if (identityContent) {
-    identityStr += identityContent;
-  }
+  const identityFile = identityContent;
 
   // Inject agent name and memory_lookup guidance (LOAD-01)
-  identityStr += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
+  // Phase 115 Plan 03 sub-scope 1 — agent-name line + capability manifest
+  // are composed into a single sub-source field so the assembler treats
+  // them as one budget-able unit (mid-low importance — bullet-truncated).
+  let identityCapabilityManifest =
+    `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
 
   // Phase 100 follow-up — capability manifest (after identity, before
   // MEMORY.md auto-load and MCP block). Sits in the cached stable prefix
@@ -374,55 +389,113 @@ export async function buildSessionConfig(
   // persisted under memory/dreams/ (2026-04-27 operator surface).
   const capabilityManifest = buildCapabilityManifest(config);
   if (capabilityManifest.length > 0) {
-    identityStr += "\n" + capabilityManifest;
+    identityCapabilityManifest += "\n" + capabilityManifest;
   }
 
-  // Phase 90 MEM-01 — MEMORY.md auto-load into stable prefix, AFTER
-  // SOUL+IDENTITY and BEFORE MCP status (per D-18). 50KB hard cap
-  // (MEMORY_AUTOLOAD_MAX_BYTES) with truncation marker per D-17.
+  // Phase 90 MEM-01 + Phase 115 Plan 03 sub-scope 1 — MEMORY.md auto-load
+  // into stable prefix, AFTER SOUL+IDENTITY and BEFORE MCP status (per D-18).
+  //
+  // Phase 115 D-01 lock — char cap of `INJECTED_MEMORY_MAX_CHARS = 16,000`
+  // REPLACES the legacy 50KB byte cap. When over cap, head-tail truncate
+  // (70/20 — Hermes precedent) with a marker between head and tail:
+  //
+  //   [TRUNCATED — N chars dropped, dream-pass priority requested]
+  //
+  // The marker text is intentionally agent-actionable: when the agent reads
+  // its own MEMORY.md and sees this, it understands that a priority dream-pass
+  // has been requested at the daemon side (D-05 — Plan 115-05 wires the
+  // consumer-side dream-cron re-schedule).
+  //
+  // Daemon-side: emit `[diag] tier1-truncation` warn (sub-scope 13c upgrade
+  // from `memory-md-truncation` — preserves the same warn channel pattern
+  // shipped in 115-02 but tags this as a TIER-1 event, distinct from random
+  // file truncation). Best-effort `recordTier1TruncationEvent` on the
+  // TraceCollector — the column slot is open in 115-00 but the method
+  // landing here defensively guards against absence (typeof check).
+  //
   // Silent fall-through on missing file (same semantics as SOUL/IDENTITY
-  // branches above — configured-but-unreadable must not crash session
-  // boot). Opt-out via config.memoryAutoLoad === false; override path via
-  // config.memoryAutoLoadPath (absolute, loader expanded ~/...).
+  // branches above). Opt-out via config.memoryAutoLoad === false; override
+  // path via config.memoryAutoLoadPath (absolute, loader expanded ~/...).
+  let identityMemoryAutoload = "";
   if (config.memoryAutoLoad !== false) {
     const memoryPath =
       config.memoryAutoLoadPath ?? join(config.workspace, "MEMORY.md");
     try {
       const raw = await readFile(memoryPath, "utf-8");
       let body = raw;
-      if (Buffer.byteLength(body, "utf8") > MEMORY_AUTOLOAD_MAX_BYTES) {
-        // Byte-level truncation (UTF-8 safe via Buffer slice + toString).
-        // Mid-multibyte-codepoint truncation is a theoretical concern but
-        // acceptable: MEMORY.md is markdown prose (mostly ASCII), and the
-        // assembler downstream treats the payload as opaque text.
-        const buf = Buffer.from(body, "utf8");
-        const originalBytes = buf.length;
-        body = buf.slice(0, MEMORY_AUTOLOAD_MAX_BYTES).toString("utf8");
-        // Phase 115 sub-scope 13(c) — daemon-side truncation log replaces the
-        // in-prompt marker. Operator-reported pain point: the in-prompt marker
-        // was being silently embedded INSIDE the agent's prompt where the
-        // operator never saw it AND the agent then discussed the marker as if
-        // it were a system bug. Removing the marker + adding a daemon-side
-        // log gives operators equivalent (better) visibility without
-        // confusing the agent.
-        // Removed: `body += "\n\n…(truncated at 50KB cap)\n";`
+      if (body.length > INJECTED_MEMORY_MAX_CHARS) {
+        // Phase 115 D-01 + D-04 — Hermes 70/20 head-tail truncation. 10%
+        // dropped from the middle. Marker is agent-actionable: it requests
+        // a priority dream-pass (D-05 trigger).
+        const headLen = Math.floor(INJECTED_MEMORY_MAX_CHARS * 0.7);
+        const tailLen = Math.floor(INJECTED_MEMORY_MAX_CHARS * 0.2);
+        const originalChars = body.length;
+        const dropped = originalChars - headLen - tailLen;
+        const head = body.slice(0, headLen);
+        const tail = body.slice(-tailLen);
+        body = `${head}\n\n[TRUNCATED — ${dropped} chars dropped, dream-pass priority requested]\n\n${tail}`;
+
+        // Phase 115 sub-scope 13(c) upgrade — daemon-side warn. Action label
+        // upgraded `memory-md-truncation` → `tier1-truncation` to distinguish
+        // tier-1-level events (Phase 115 enforcement) from earlier 50KB-byte
+        // truncation events (Phase 90 era). Operator-grep-friendly.
         if (deps.log) {
           deps.log.warn(
             {
               agent: config.name,
-              originalBytes,
-              capBytes: MEMORY_AUTOLOAD_MAX_BYTES,
-              action: "memory-md-truncation",
+              originalChars,
+              capChars: INJECTED_MEMORY_MAX_CHARS,
+              droppedChars: dropped,
+              file: "MEMORY.md",
+              action: "tier1-truncation",
             },
-            "[diag] memory-md-truncation",
+            "[diag] tier1-truncation",
           );
         }
+
+        // Phase 115 D-05 + cross-plan defensive wiring — record the event
+        // on TraceCollector so Plan 115-05's dream-cron consumer can read
+        // the count and trip a per-agent priority dream-pass when the
+        // 2-in-24h trigger fires. Method may not yet exist on the
+        // collector (115-00 opened the column slot but consumers add their
+        // own write methods). Same `typeof === "function"` guard pattern
+        // as 115-02 used for `incrementPromptBloatWarning`.
+        const tc = deps.traceCollector as
+          | (TraceCollector & {
+              recordTier1TruncationEvent?: (agent: string) => void;
+            })
+          | undefined;
+        if (tc && typeof tc.recordTier1TruncationEvent === "function") {
+          try {
+            tc.recordTier1TruncationEvent(config.name);
+          } catch {
+            // never let observability block startup
+          }
+        }
       }
-      identityStr += "\n## Long-term memory (MEMORY.md)\n\n" + body + "\n";
+      identityMemoryAutoload = body;
     } catch {
       // MEMORY.md not present OR override path unreadable — silently skip.
       // No warn log: absence is the common case on first-boot agents.
     }
+  }
+
+  // Phase 115 Plan 03 sub-scope 1 — also build the legacy compound
+  // `identityStr` so the rendered stable-prefix preserves byte-compat
+  // with pre-115 sessions for agents whose sub-sources are unchanged.
+  // The assembler now prefers the four carved fields when present (T01)
+  // and falls back to this string for tests that pass only `identity`.
+  let identityStr = "";
+  if (identitySoulFingerprint) {
+    identityStr += identitySoulFingerprint + "\n\n";
+  }
+  if (identityFile) {
+    identityStr += identityFile;
+  }
+  identityStr += identityCapabilityManifest;
+  if (identityMemoryAutoload) {
+    identityStr +=
+      "\n## Long-term memory (MEMORY.md)\n\n" + identityMemoryAutoload + "\n";
   }
 
   // --- Collect hot memories source ---
@@ -735,7 +808,20 @@ export async function buildSessionConfig(
       : undefined;
 
   const sources: ContextSources = {
+    // Legacy compound identity (kept for back-compat with consumers that
+    // read `sources.identity` directly). The four carved fields below
+    // take precedence at the assembler when any are non-undefined
+    // (Phase 115 Plan 03 sub-scope 1 / T01).
     identity: identityStr,
+    // Phase 115 Plan 03 sub-scope 1 — four carved sub-source fields. The
+    // assembler composes them into the same compound identity rendering
+    // (byte-compatible with `identityStr` above) but treats them as separate
+    // budget-able units when over the per-section budget triggers
+    // `enforceDropLowestImportance` (T02).
+    identitySoulFingerprint,
+    identityFile,
+    identityCapabilityManifest,
+    identityMemoryAutoload,
     // Phase 53 Plan 02: SOUL.md body is currently folded into `identityStr`
     // by the fingerprint+identity concatenation above. We leave `soul: ""`
     // here so section_tokens.soul reports 0 for this agent — accurate given

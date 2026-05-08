@@ -1,18 +1,26 @@
 /**
- * Phase 115 sub-scope 13(c) — MEMORY.md auto-load truncation surface.
+ * Phase 115 sub-scope 13(c) + Plan 03 sub-scope 1 — MEMORY.md auto-load
+ * truncation surface.
  *
- * Replaces the in-prompt marker `…(truncated at 50KB cap)` with a
- * daemon-side warn log `[diag] memory-md-truncation`.
+ * Plan 03 upgrade: the cap moved from the legacy 50KB byte cap to the
+ * 16K char cap (`INJECTED_MEMORY_MAX_CHARS`). The action label upgraded
+ * from `memory-md-truncation` → `tier1-truncation` to distinguish
+ * tier-1-level events. The new agent-actionable marker
+ * `[TRUNCATED — N chars dropped, dream-pass priority requested]` lands
+ * between the head and tail (70/20 head-tail split).
  *
- * Verifies:
- *   - When MEMORY.md > 50KB, the returned body does NOT contain the marker
- *   - When MEMORY.md > 50KB, deps.log.warn fires with the structured fields
- *   - When MEMORY.md ≤ 50KB, no truncation, no warn
+ * Verifies (post-Plan-115-03):
+ *   - When MEMORY.md > 16K chars, the returned body contains the
+ *     dream-pass-priority marker (NOT the legacy 50KB-cap marker).
+ *   - When MEMORY.md > 16K chars, deps.log.warn fires with action
+ *     `tier1-truncation` and structured fields including originalChars,
+ *     capChars, droppedChars, file.
+ *   - When MEMORY.md ≤ 16K chars, no truncation, no warn.
  *
  * Uses the public buildSessionConfig API with a tmp workspace + a fake
  * SessionConfigDeps. We assert on the assembled stable prefix (the
- * AgentSessionConfig.systemPrompt) for marker absence and on the captured
- * warn calls for the diagnostic.
+ * AgentSessionConfig.systemPrompt) for marker presence/absence and on
+ * the captured warn calls for the diagnostic.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -121,26 +129,34 @@ afterEach(() => {
 // suite. Each test takes 1-7s on a cold-imported module set.
 describe("session-config — Phase 115 sub-scope 13(c) MEMORY.md truncation surface", () => {
   it(
-    "when MEMORY.md > 50KB, body does NOT contain `(truncated at 50KB cap)` marker",
+    "when MEMORY.md > 16K chars, body contains the dream-pass-priority marker (Phase 115 Plan 03)",
     async () => {
-      // Generate 60KB of content. Use ASCII so byte-length ~ char-length.
-      const big = "a".repeat(60_000);
+      // Generate 25K chars of content (above 16K cap). Use ASCII so byte-length ~ char-length.
+      const big = "a".repeat(25_000);
       writeFileSync(join(workspace, "MEMORY.md"), big, "utf8");
       const { deps } = makeDeps();
       const config = makeMinimalConfig("test-agent-trunc");
 
       const result = await buildSessionConfig(config, deps);
 
+      // Legacy 50KB-cap marker is NOT present.
       expect(result.systemPrompt).not.toContain("(truncated at 50KB cap)");
       expect(result.systemPrompt).not.toContain("…(truncated");
+      // New Plan-115-03 marker IS present.
+      expect(result.systemPrompt).toContain(
+        "dream-pass priority requested",
+      );
+      expect(result.systemPrompt).toMatch(
+        /\[TRUNCATED — \d+ chars dropped, dream-pass priority requested\]/,
+      );
     },
     30_000,
   );
 
   it(
-    "when MEMORY.md > 50KB, deps.log.warn fires with structured fields",
+    "when MEMORY.md > 16K chars, deps.log.warn fires with action tier1-truncation",
     async () => {
-      const big = "a".repeat(60_000);
+      const big = "a".repeat(25_000);
       writeFileSync(join(workspace, "MEMORY.md"), big, "utf8");
       const { deps, warns } = makeDeps();
       const config = makeMinimalConfig("test-agent-trunc-2");
@@ -148,25 +164,28 @@ describe("session-config — Phase 115 sub-scope 13(c) MEMORY.md truncation surf
       await buildSessionConfig(config, deps);
 
       const truncWarns = warns.filter(
-        (w) => w.obj.action === "memory-md-truncation",
+        (w) => w.obj.action === "tier1-truncation",
       );
       expect(truncWarns).toHaveLength(1);
       expect(truncWarns[0].obj).toMatchObject({
         agent: "test-agent-trunc-2",
-        action: "memory-md-truncation",
+        action: "tier1-truncation",
+        file: "MEMORY.md",
       });
-      expect(typeof truncWarns[0].obj.originalBytes).toBe("number");
-      expect(typeof truncWarns[0].obj.capBytes).toBe("number");
-      expect(truncWarns[0].obj.originalBytes).toBeGreaterThan(50_000);
-      expect(truncWarns[0].msg).toBe("[diag] memory-md-truncation");
+      expect(typeof truncWarns[0].obj.originalChars).toBe("number");
+      expect(typeof truncWarns[0].obj.capChars).toBe("number");
+      expect(typeof truncWarns[0].obj.droppedChars).toBe("number");
+      expect(truncWarns[0].obj.originalChars).toBeGreaterThan(16_000);
+      expect(truncWarns[0].obj.capChars).toBe(16_000);
+      expect(truncWarns[0].msg).toBe("[diag] tier1-truncation");
     },
     30_000,
   );
 
   it(
-    "when MEMORY.md ≤ 50KB, no truncation and no warn fires",
+    "when MEMORY.md ≤ 16K chars, no truncation and no warn fires",
     async () => {
-      const small = "a".repeat(30_000);
+      const small = "a".repeat(12_000); // under 16K cap
       writeFileSync(join(workspace, "MEMORY.md"), small, "utf8");
       const { deps, warns } = makeDeps();
       const config = makeMinimalConfig("test-agent-small");
@@ -174,7 +193,7 @@ describe("session-config — Phase 115 sub-scope 13(c) MEMORY.md truncation surf
       await buildSessionConfig(config, deps);
 
       const truncWarns = warns.filter(
-        (w) => w.obj.action === "memory-md-truncation",
+        (w) => w.obj.action === "tier1-truncation",
       );
       expect(truncWarns).toHaveLength(0);
     },
