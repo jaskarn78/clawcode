@@ -52,6 +52,10 @@ import { registerToolCacheCommand } from "./commands/tool-cache.js";
 // audit. `clawcode tool-latency-audit` prints per-agent execution vs
 // roundtrip latency split + tool_use_rate gate for plan 115-09 sub-scope 6-B.
 import { registerToolLatencyAuditCommand } from "./commands/tool-latency-audit.js";
+// Phase 115 Plan 09 T01 — `clawcode perf-comparison` prints the four
+// perf-comparisons artifacts + the sub-scope 6-B gate decision token
+// (SHIP/DEFER/PENDING-OPERATOR). Closeout receipt for the phase.
+import { registerPerfComparisonCommand } from "./commands/perf-comparison.js";
 import { registerToolsCommand } from "./commands/tools.js";
 import { registerBenchCommand } from "./commands/bench.js";
 import { registerContextAuditCommand } from "./commands/context-audit.js";
@@ -205,6 +209,8 @@ registerCacheCommand(program);
 registerToolCacheCommand(program);
 // Phase 115 Plan 08 T03 — registers `clawcode tool-latency-audit`.
 registerToolLatencyAuditCommand(program);
+// Phase 115 Plan 09 T01 — registers `clawcode perf-comparison`.
+registerPerfComparisonCommand(program);
 registerToolsCommand(program);
 registerBenchCommand(program);
 registerContextAuditCommand(program);
