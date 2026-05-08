@@ -30,7 +30,7 @@ function turn(overrides: Partial<TurnRecord>): TurnRecord {
     endedAt: "2026-05-08T10:00:01.000Z",
     totalMs: 1000,
     channelId: "ch-1",
-    status: "ok",
+    status: "success",
     spans: [],
     ...overrides,
   };
