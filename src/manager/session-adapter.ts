@@ -13,21 +13,122 @@ import {
   extractSkillMentions,
 } from "../usage/skill-usage-tracker.js";
 import { createPersistentSessionHandle } from "./persistent-session-handle.js";
+// Phase 115 sub-scope 14 — temporary scaffolding for the diagnostic baseopts
+// dump (T01 transition state). T03 of this plan removes this standalone
+// `writeFile` import once the hardcoded allowlist is gone — the helper will
+// keep using the same fs.promises function but reach it via a fully-qualified
+// import inside the helper body, eliminating the orphan top-of-file import.
 import { writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join as pathJoin } from "node:path";
 
 /**
- * 2026-05-07 fin-acq 400 diagnostic — dump baseOptions for select agents to /tmp.
- * REMOVE WHEN ROOT CAUSE FOUND. Agent allowlist keeps noise zero on the rest of
- * the fleet. env fields stripped to avoid leaking secrets to /tmp.
+ * Phase 115 sub-scope 14 — diagnostic baseopts dump for prompt-bloat root-
+ * cause investigation. Originally deployed during the 2026-05-07 fin-acq 400
+ * incident as a hardcoded allowlist of `["fin-acquisition", "Admin Clawdy"]`
+ * with `import { writeFile } from "node:fs/promises"` (see Plan 115-02 T01).
+ *
+ * **T01 transition state** (this commit): both gates active. Either the agent
+ * is in the hardcoded allowlist OR the operator has set
+ * `agents[*].debug.dumpBaseOptionsOnSpawn: true` in clawcode.yaml.
+ *
+ * **T03 final state**: the hardcoded allowlist is removed; only the config
+ * flag enables dumping. See plan acceptance criteria.
+ *
+ * Output path: ~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json
+ * — slugified agent name, ts in unix-epoch milliseconds. Secrets redacted via
+ * `redactSecrets` (regex-match on key names + value-prefix detection); env +
+ * mcpServers[].env stripped wholesale (defense-in-depth: unknown env vars
+ * still get blanked even when the regex doesn't match).
  */
 const DEBUG_DUMP_AGENTS = new Set(["fin-acquisition", "Admin Clawdy"]);
+
+/**
+ * Phase 115 sub-scope 14 — secret redaction helper for diagnostic dumps.
+ *
+ * Walks a value structurally; for any object key matching the secret-key
+ * regex, replaces its value with "<REDACTED>". For string leaves whose
+ * content begins with a known secret value-prefix (sk-ant-, Bearer , etc.),
+ * also replaces with "<REDACTED>". Circular references emit "<CIRCULAR>"
+ * exactly once and do not loop.
+ *
+ * Permanent (kept after T03 removes the hardcoded allowlist) — every dump
+ * call routes through this helper before serialization.
+ */
+function redactSecrets<T>(value: T): T {
+  // REDACTED targets per Phase 115 threat model: ANTHROPIC_API_KEY (env var), OAuth bearer (Bearer prefix), Discord token (*_TOKEN/DISCORD_TOKEN key match).
+  // Each is HIGH severity in the 115-02 threat-model table; tests assert redaction for all three.
+  const SECRET_KEYS =
+    /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|DISCORD_TOKEN|DISCORD_BOT_TOKEN|GITHUB_TOKEN|.*_TOKEN|.*_KEY|.*_SECRET|password|credentials)$/i;
+  const SECRET_VALUE_PREFIXES = [
+    "sk-ant-", // Anthropic API key
+    "sk-", // OpenAI / generic API key
+    "ghp_", // GitHub personal access token
+    "ghs_", // GitHub server token
+    "Bearer ", // OAuth bearer literal (e.g. ~/.claude/.credentials.json)
+  ];
+
+  const seen = new WeakSet<object>();
+
+  function recurse(node: unknown): unknown {
+    if (node === null || node === undefined) return node;
+    if (typeof node === "string") {
+      for (const prefix of SECRET_VALUE_PREFIXES) {
+        if (node.startsWith(prefix)) return "<REDACTED>";
+      }
+      return node;
+    }
+    if (typeof node !== "object") return node;
+    if (seen.has(node as object)) return "<CIRCULAR>";
+    seen.add(node as object);
+    if (Array.isArray(node)) return node.map(recurse);
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (SECRET_KEYS.test(k)) {
+        out[k] = "<REDACTED>";
+      } else {
+        out[k] = recurse(v);
+      }
+    }
+    return out;
+  }
+
+  return recurse(value) as T;
+}
+
+/**
+ * Phase 115 sub-scope 14 — per-agent diagnostic dump of SDK baseOptions.
+ *
+ * Gate (T01 transition state): writes the dump iff `dumpEnabled === true`
+ * OR `agentName` is in the hardcoded `DEBUG_DUMP_AGENTS` allowlist. T03
+ * removes the allowlist branch — the flag becomes the SOLE gate.
+ *
+ * Defense-in-depth: env + mcpServers[].env are wholesale-stripped (set to
+ * "<stripped>") BEFORE redactSecrets walks the rest of the structure. The
+ * regex catches known patterns; the wholesale strip catches the long tail
+ * (1Password tokens, Discord webhook URLs, future API keys whose names
+ * don't end in _TOKEN/_KEY/_SECRET).
+ *
+ * Output: per-agent under ~/.clawcode/agents/<agent>/diagnostics/. Operator-
+ * readable; never written to /tmp (the original 2026-05-07 path was /tmp;
+ * Phase 115 moves it under the daemon's home tree for easier cleanup +
+ * permission isolation). Failures are silenced — diagnostic capture MUST
+ * NEVER break session boot.
+ */
 async function debugDumpBaseOptions(
-  agentName: string,
   flow: "create" | "resume",
+  agentName: string,
   baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+  dumpEnabled: boolean,
 ): Promise<void> {
-  if (!DEBUG_DUMP_AGENTS.has(agentName)) return;
+  // T01 transition gate: both paths active so fin-acquisition + Admin Clawdy
+  // keep getting dumps until T03 lands. T03 collapses to `if (!dumpEnabled) return;`
+  if (!dumpEnabled && !DEBUG_DUMP_AGENTS.has(agentName)) return;
   try {
+    // Wholesale strip env + mcpServers[].env BEFORE redactSecrets walks the
+    // rest. Defense-in-depth: regex catches known secret-key patterns; the
+    // wholesale strip catches everything else in the env namespace.
     const sanitizedMcp = Array.isArray(baseOptions.mcpServers)
       ? baseOptions.mcpServers.map((s) => ({ ...s, env: "<stripped>" }))
       : Object.fromEntries(
@@ -36,19 +137,48 @@ async function debugDumpBaseOptions(
             { ...(v as object), env: "<stripped>" },
           ]),
         );
-    const dump = {
+    const dumpInput = {
       ts: new Date().toISOString(),
       flow,
       agent: agentName,
-      baseOptions: { ...baseOptions, env: "<stripped>", mcpServers: sanitizedMcp },
+      baseOptions: {
+        ...baseOptions,
+        env: "<stripped>",
+        mcpServers: sanitizedMcp,
+      },
     };
+    // Apply redactSecrets to catch any remaining secret-shaped values
+    // anywhere in the structure (e.g., a stray Bearer token in headers,
+    // an ANTHROPIC_API_KEY captured in a comment, etc.).
+    const redacted = redactSecrets(dumpInput);
     const slug = agentName.replace(/\s+/g, "_");
-    const path = `/tmp/baseopts-${slug}-${flow}-${Date.now()}.json`;
-    await writeFile(path, JSON.stringify(dump, null, 2));
+    const dirPath = pathJoin(
+      homedir(),
+      ".clawcode",
+      "agents",
+      slug,
+      "diagnostics",
+    );
+    await mkdir(dirPath, { recursive: true });
+    const filePath = pathJoin(
+      dirPath,
+      `baseopts-${flow}-${Date.now()}.json`,
+    );
+    await writeFile(filePath, JSON.stringify(redacted, null, 2));
   } catch {
-    /* non-fatal */
+    /* non-fatal — diagnostic capture MUST NEVER break session boot */
   }
 }
+
+/**
+ * Phase 115 sub-scope 14 — exported for unit testing (redaction + gate
+ * behaviour). Production code calls `debugDumpBaseOptions` above.
+ */
+export const _internal_phase115 = {
+  redactSecrets,
+  debugDumpBaseOptions,
+  DEBUG_DUMP_AGENTS,
+} as const;
 
 /**
  * Phase 52 Plan 02 — per-turn prefixHash provider contract.
@@ -685,8 +815,11 @@ export class SdkSessionAdapter implements SessionAdapter {
         : {}),
     };
 
-    // 2026-05-07 fin-acq 400 diagnostic — dump baseOptions before SDK call.
-    await debugDumpBaseOptions(config.name, "create", baseOptions);
+    // Phase 115 sub-scope 14 — diagnostic baseopts dump (T01 transition state).
+    // Both gates active: hardcoded allowlist OR per-agent flag. T03 removes the
+    // allowlist; flag becomes sole gate. Failure is non-fatal (helper swallows).
+    const dumpEnabled = config.debug?.dumpBaseOptionsOnSpawn ?? false;
+    await debugDumpBaseOptions("create", config.name, baseOptions, dumpEnabled);
 
     // Phase 73 Plan 01 — initial drain establishes the session ID from disk,
     // then the persistent handle owns ONE long-lived sdk.query({ prompt:
@@ -743,8 +876,12 @@ export class SdkSessionAdapter implements SessionAdapter {
         : {}),
     };
 
-    // 2026-05-07 fin-acq 400 diagnostic — dump baseOptions before SDK call.
-    await debugDumpBaseOptions(config.name, "resume", baseOptions);
+    // Phase 115 sub-scope 14 — diagnostic baseopts dump on resume (T01
+    // transition state). Symmetric mirror of createSession above — Rule 3
+    // symmetric-edits enforced. Same gate semantics: allowlist OR flag in
+    // T01; flag-only after T03.
+    const dumpEnabled = config.debug?.dumpBaseOptionsOnSpawn ?? false;
+    await debugDumpBaseOptions("resume", config.name, baseOptions, dumpEnabled);
 
     // Phase 73 Plan 01 — persistent handle (no per-turn sdk.query spawn).
     return createPersistentSessionHandle(

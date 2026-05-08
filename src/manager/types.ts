@@ -141,6 +141,20 @@ export type AgentSessionConfig = {
    * from baseOptions so the existing 15+ agent fleet is unaffected.
    */
   readonly disallowedTools?: readonly string[];
+  /**
+   * Phase 115 sub-scope 14 — operator-toggle for the diagnostic baseopts
+   * dump. UNDEFINED for the existing fleet (no behavior change). When set,
+   * `dumpBaseOptionsOnSpawn === true` enables the per-agent baseopts dump
+   * to ~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json on
+   * every createSession/resumeSession (secrets redacted via redactSecrets
+   * in session-adapter.ts). Replaces the temporary hardcoded fin-acquisition
+   * + Admin Clawdy allowlist. Mirrors `ResolvedAgentConfig.debug` verbatim
+   * but stays optional at this boundary so existing call sites that build
+   * AgentSessionConfig don't need updates until they choose to opt in.
+   */
+  readonly debug?: {
+    readonly dumpBaseOptionsOnSpawn: boolean;
+  };
 };
 
 /**

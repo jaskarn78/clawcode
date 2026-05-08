@@ -1391,6 +1391,23 @@ export const agentSchema = z.object({
       preserveImage: z.boolean().default(false),
     })
     .optional(),
+  // Phase 115 sub-scope 14 — operator-toggle for the diagnostic baseopts
+  // dump. Default false: zero noise on the fleet. Replaces the temporary
+  // hardcoded fin-acquisition + Admin Clawdy allowlist deployed during the
+  // 2026-05-07 incident response. When true, the daemon writes a per-agent
+  // baseopts dump to ~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-
+  // <ts>.json on every createSession/resumeSession (secrets redacted via
+  // session-adapter.ts:redactSecrets). Optional + additive — every existing
+  // agent yaml parses unchanged with this field omitted.
+  debug: z.object({
+    // Phase 115 sub-scope 14 — operator-toggle for dumpBaseOptionsOnSpawn.
+    // Default false. Replaces the hardcoded fin-acquisition + Admin Clawdy
+    // allowlist deployed during the 2026-05-07 incident response. When true,
+    // daemon writes per-agent baseopts dump to ~/.clawcode/agents/<agent>/
+    // diagnostics/baseopts-<flow>-<ts>.json on every createSession /
+    // resumeSession (secrets redacted via session-adapter.ts:redactSecrets).
+    dumpBaseOptionsOnSpawn: z.boolean().default(false),
+  }).optional(),
 });
 
 /**

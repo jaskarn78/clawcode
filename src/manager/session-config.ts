@@ -898,5 +898,13 @@ export async function buildSessionConfig(
     ...(config.disallowedTools && config.disallowedTools.length > 0
       ? { disallowedTools: config.disallowedTools }
       : {}),
+    // Phase 115 sub-scope 14 — propagate `debug` block from ResolvedAgentConfig
+    // → AgentSessionConfig so the SDK adapter (session-adapter.ts) reads the
+    // operator-toggle for the diagnostic baseopts dump. Spread-conditional so
+    // the field is OMITTED for fleet agents that don't set `debug:` in yaml
+    // (preserves byte-stable equality in regression tests; matches the
+    // settingSources / gsd / disallowedTools pattern above). T03 of this plan
+    // makes this the SOLE gate after removing the hardcoded allowlist.
+    ...(config.debug ? { debug: config.debug } : {}),
   };
 }

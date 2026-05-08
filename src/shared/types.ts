@@ -436,6 +436,19 @@ export type ResolvedAgentConfig = {
     readonly enabled: boolean;
     readonly preserveImage: boolean;
   };
+  /**
+   * Phase 115 sub-scope 14 — per-agent operator-toggle for the diagnostic
+   * baseopts dump. UNDEFINED on the existing fleet (no behavior change). When
+   * `dumpBaseOptionsOnSpawn === true`, session-adapter.ts writes a per-agent
+   * baseopts dump on every createSession/resumeSession (secrets redacted).
+   * Replaces the temporary hardcoded fin-acquisition + Admin Clawdy allowlist
+   * deployed during the 2026-05-07 incident response. The schema parses
+   * `agents[*].debug` as optional; this resolved type mirrors the optional
+   * shape verbatim.
+   */
+  readonly debug?: {
+    readonly dumpBaseOptionsOnSpawn: boolean;
+  };
 };
 
 /**

@@ -631,6 +631,15 @@ export function resolveAgentConfig(
     slashCommands: agent.slashCommands,
     perf: agent.perf ?? defaults.perf ?? undefined,
     vision: agent.vision ?? undefined,
+    // Phase 115 sub-scope 14 — propagate `debug` block from agentSchema
+    // into the resolved type. UNDEFINED for the existing fleet (the field
+    // is fully optional + omitted in every agent yaml). Plan 02 T01 leaves
+    // both gates active (hardcoded allowlist OR flag); Plan 02 T03 removes
+    // the allowlist so the flag is sole gate. The schema's nested
+    // `dumpBaseOptionsOnSpawn` carries a zod default of `false`, so when
+    // an operator declares `debug: {}` (empty block), the parsed value is
+    // `{ dumpBaseOptionsOnSpawn: false }` — explicit-off rather than absent.
+    debug: agent.debug,
   };
 }
 
