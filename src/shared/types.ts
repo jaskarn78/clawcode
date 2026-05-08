@@ -144,6 +144,21 @@ export type ResolvedAgentConfig = {
    */
   readonly memoryRetrievalTokenBudget?: number;
   /**
+   * Phase 115 sub-scope 4 — populated by loader.ts from
+   * agent.memoryRetrievalExcludeTags ?? defaults.memoryRetrievalExcludeTags.
+   * Tag list whose memories are excluded from the per-turn <memory-context>
+   * block at hybrid-RRF retrieval. Locked default
+   * ["session-summary","mid-session","raw-fallback"] removes pollution-
+   * feedback memories that pre-115 leaked into the prompt as giant blobs
+   * (research codebase-memory-retrieval.md Pain Points #3 + #15). Empty
+   * array disables filtering. Consumed by
+   * SessionManager.getMemoryRetrieverForAgent and forwarded to
+   * retrieveMemoryChunks as `excludeTags`. Optional at the type level for
+   * back-compat with existing ResolvedAgentConfig factory test code;
+   * consumers default to the locked Phase 115 list.
+   */
+  readonly memoryRetrievalExcludeTags?: readonly string[];
+  /**
    * Phase 115 sub-scope 2 — populated by loader.ts from
    * agent.excludeDynamicSections ?? defaults.excludeDynamicSections (zod
    * default true). When true, the SDK strips per-machine dynamic sections

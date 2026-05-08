@@ -581,6 +581,16 @@ export function resolveAgentConfig(
     // Agent (see SessionManager).
     memoryRetrievalTokenBudget:
       agent.memoryRetrievalTokenBudget ?? defaults.memoryRetrievalTokenBudget,
+    // Phase 115 sub-scope 4 — per-agent exclusion list fully replaces
+    // defaults (does NOT merge). Use `!== undefined` (not `??`) because an
+    // empty agent array means "operator explicitly disabled filtering for
+    // this agent" — it MUST beat the locked default, not fall back. Spread
+    // the arrays so callers can't mutate the per-agent or defaults reference
+    // through the resolved config.
+    memoryRetrievalExcludeTags:
+      agent.memoryRetrievalExcludeTags !== undefined
+        ? [...agent.memoryRetrievalExcludeTags]
+        : [...defaults.memoryRetrievalExcludeTags],
     // Phase 115 sub-scope 2 — per-agent excludeDynamicSections beats defaults.
     // Use explicit `!== undefined` check (NOT `??`) because operator can set
     // `agent.excludeDynamicSections: false` and that MUST beat

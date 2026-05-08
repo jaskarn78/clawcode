@@ -1126,6 +1126,13 @@ export const agentSchema = z.object({
   // 500-8000. Reloadable — next turn picks up the new value via the
   // getMemoryRetrieverForAgent closure re-read.
   memoryRetrievalTokenBudget: z.number().int().min(500).max(8000).optional(),
+  // Phase 115 sub-scope 4 — per-agent override for the tag-exclusion list
+  // applied at hybrid-RRF retrieval. When omitted, resolver falls back to
+  // defaults.memoryRetrievalExcludeTags (locked default ["session-summary",
+  // "mid-session", "raw-fallback"] per CONTEXT.md sub-scope 4). Empty array
+  // disables filtering entirely; a populated array replaces (does NOT merge
+  // with) the defaults. Reloadable.
+  memoryRetrievalExcludeTags: z.array(z.string()).optional(),
   // Phase 115 sub-scope 2 — per-agent override for the SDK
   // systemPrompt.excludeDynamicSections flag. When omitted, resolver falls
   // back to defaults.excludeDynamicSections (default true). Set false to
@@ -1460,6 +1467,17 @@ export const defaultsSchema = z.object({
   // chars; range 500-8000 (validated). Reloadable — next turn picks up
   // via the getMemoryRetrieverForAgent closure re-read.
   memoryRetrievalTokenBudget: z.number().int().min(500).max(8000).default(1500),
+  // Phase 115 sub-scope 4 — fleet-wide tag-exclusion list applied at the
+  // hybrid-RRF memory retrieval BEFORE the chunks-side fan-out is fused
+  // with the memories-side. The locked default removes pollution-feedback
+  // memories that previously leaked into the <memory-context> block as
+  // giant blobs (research codebase-memory-retrieval.md Pain Points #3 +
+  // #15). Per-agent override available via agentSchema. Empty array
+  // disables filtering entirely; a populated array fully replaces the
+  // defaults (does NOT merge).
+  memoryRetrievalExcludeTags: z
+    .array(z.string())
+    .default(() => ["session-summary", "mid-session", "raw-fallback"]),
   // Phase 115 sub-scope 2 — fleet-wide default for the SDK
   // systemPrompt.excludeDynamicSections flag. When true, per-machine
   // dynamic sections (cwd, auto-memory paths, git status) are stripped
@@ -1931,6 +1949,10 @@ export const configSchema = z.object({
     // 1500 (CONTEXT.md D-02). Mirror exists for the configSchema fallback
     // when `defaults:` is OMITTED entirely from clawcode.yaml.
     memoryRetrievalTokenBudget: 1500,
+    // Phase 115 sub-scope 4 — locked default tag-exclusion list mirrors
+    // defaultsSchema's zod default. Mutable copy so the configSchema-level
+    // record is independent of the array literal.
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"],
     // Phase 115 sub-scope 2 — fleet-wide default mirrors defaultsSchema.
     excludeDynamicSections: true,
     memoryScannerEnabled: true,

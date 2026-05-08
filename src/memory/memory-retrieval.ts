@@ -105,6 +105,32 @@ export type RetrieveArgs = Readonly<{
    * from agent.X ?? defaults.X. Range enforced upstream by zod (500-8000).
    */
   tokenBudget?: number;
+  /**
+   * Phase 115 sub-scope 4 — exclude memories whose tags intersect this list
+   * from the memories-side fan-out before RRF fusion. Locked operator
+   * default ["session-summary","mid-session","raw-fallback"] removes
+   * pollution-feedback memories that pre-115 leaked into the prompt as
+   * giant blobs (research codebase-memory-retrieval.md Pain Points #3 +
+   * #15). Empty / undefined → filter disabled (legacy behavior). The
+   * chunks-side does NOT need this filter — memory_chunks rows don't carry
+   * these tags (file-scanner only). Defensive note: filter is applied AFTER
+   * `getMemoryForRetrieval` hydration since the helper already returns
+   * tags as part of its row read — no extra DB query.
+   */
+  excludeTags?: readonly string[];
+  /**
+   * Phase 115 sub-scope 4 — optional logger for tag-filter diagnostics.
+   * When provided, emits `[diag] phase115-tag-filter` debug-level log lines
+   * counting dropped rows per call. Operator can wire daemon's pino
+   * instance through deps; tests pass undefined to suppress output.
+   */
+  log?: { debug?: (obj: Record<string, unknown>, msg?: string) => void };
+  /**
+   * Phase 115 sub-scope 4 — optional agent identifier surfaced in the
+   * tag-filter diagnostic so operator can attribute drops to a specific
+   * agent. Pure cosmetic / observability — not functionally required.
+   */
+  agent?: string;
   /** Test hook: override Date.now() for deterministic time-window gating. */
   now?: number;
 }>;
@@ -209,9 +235,29 @@ export async function retrieveMemoryChunks(
   //   - heading: null — turn-dispatcher's renderer falls back to path on
   //     null heading, producing "### memory:<id>\n<body>" in the prompt.
   //   - score_weight: 0 — no path-derived nudge for memories.
+  //
+  // Phase 115 sub-scope 4 — `excludeTags` filter applied here AFTER the
+  // hydration call (which already returns tags via getMemoryForRetrieval).
+  // No second DB lookup needed. The filter only fires on the memories-side
+  // (chunks-side rows from MEMORY.md / file scanner don't carry these
+  // tags). When a memory's tags intersect excludeTags it is dropped from
+  // the hydrated set BEFORE time-window + token-budget passes, preventing
+  // pollution-feedback memories from consuming any of the budget. The
+  // null-meta path (memory deleted between vec-search and hydration) is
+  // counted as a stale-skip, NOT a tag-drop, so the diagnostic accurately
+  // reflects filter activity vs. data-race silently.
+  const excludeTags = args.excludeTags ?? [];
+  let memTagDroppedCount = 0;
   for (const m of memoriesScored) {
     const meta = args.store.getMemoryForRetrieval(m.memory_id);
     if (!meta) continue;
+    if (
+      excludeTags.length > 0 &&
+      meta.tags.some((t) => excludeTags.includes(t))
+    ) {
+      memTagDroppedCount += 1;
+      continue;
+    }
     hydrated.push({
       chunkId: m.memory_id,
       path: `memory:${m.memory_id}`,
@@ -222,6 +268,21 @@ export async function retrieveMemoryChunks(
       scoreWeight: 0,
       source: "memory",
     });
+  }
+  // Phase 115 sub-scope 4 — operator-visible diagnostic: structured debug
+  // log when the filter drops one or more rows. Helps operators spot when
+  // an agent's pollution-feedback memories are being suppressed (good
+  // signal: filter is doing work) vs always at zero (filter inactive).
+  if (memTagDroppedCount > 0) {
+    args.log?.debug?.(
+      {
+        action: "phase115-tag-filter",
+        agent: args.agent,
+        dropped: memTagDroppedCount,
+        excludeTags: [...excludeTags],
+      },
+      "phase115-tag-filter dropped memories",
+    );
   }
 
   const windowed = [...applyTimeWindowFilter(hydrated, windowDays, now)];

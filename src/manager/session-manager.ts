@@ -582,6 +582,15 @@ export class SessionManager {
     // defaults.memoryRetrievalTokenBudget so test code that builds a
     // ResolvedAgentConfig without this field still gets the Phase 115 default.
     const tokenBudget = config?.memoryRetrievalTokenBudget ?? 1500;
+    // Phase 115 sub-scope 4 — read the locked Phase 115 default tag-exclusion
+    // list when the resolved config lacks one (test-factory back-compat — in
+    // production, loader always populates from defaults, so the `??` only
+    // fires for unit tests building a ResolvedAgentConfig literal). The
+    // locked list is documented in CONTEXT.md sub-scope 4 and verified by
+    // grep in the plan's must_haves. Operators can fully replace per-agent.
+    const excludeTags =
+      config?.memoryRetrievalExcludeTags ??
+      (["session-summary", "mid-session", "raw-fallback"] as const);
     const embedder = this.memory.embedder;
     return async (query: string) => {
       return retrieveMemoryChunks({
@@ -591,6 +600,8 @@ export class SessionManager {
         topK,
         timeWindowDays: 14,
         tokenBudget,
+        excludeTags,
+        agent: agentName,
       });
     };
   }
