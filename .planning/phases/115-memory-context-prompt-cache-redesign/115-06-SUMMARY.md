@@ -90,10 +90,11 @@ completed: 2026-05-08
 - **Duration:** 18 min
 - **Started:** 2026-05-08T03:55:00Z
 - **Completed:** 2026-05-08T04:25:30Z
-- **Tasks:** 5 (T01–T05)
+- **Tasks:** 5 (T01–T05) + advisor-driven atomicity fix
 - **Files created:** 9
 - **Files modified:** 6
-- **New tests:** 53 (all passing)
+- **New tests:** 56 (all passing)
+- **Total commits:** 7 (5 task commits + 1 docs + 1 atomicity fix)
 
 ## Accomplishments
 
@@ -115,7 +116,9 @@ Each task was committed atomically:
 4. **T04: state machine + resumable batch runner** — `86696d7` (feat)
 5. **T05: CLI + IPC + config** — `932582f` (feat)
 
-**Plan metadata commit:** (this commit)
+**Atomicity fix (post-advisor):** `52afd36` (fix) — extended `insert(input, embedding, opts?: {embeddingV2?})` to write v2 INSIDE the same `db.transaction()` as v1 + memories. Phase 107 atomic-cascade invariant now holds on the insert side identically to the delete side.
+
+**Plan metadata commit:** `e3364da` (docs) plus this commit
 
 ## Files Created/Modified
 
@@ -196,8 +199,19 @@ Each task was committed atomically:
 
 ---
 
-**Total deviations:** 4 auto-fixed (2 bugs + 2 blocking).
-**Impact on plan:** All 4 fixes were essential for correctness or build. Deviation #1 (quantization scheme) is the highest-impact — without it, the v2 KNN distance comparisons would have produced wrong rankings, breaking the entire migration. Deviation #2 (vec_int8 binding) is similar — without it, no v2 row could be inserted. No scope creep; all fixes within the T01-T05 acceptance criteria.
+**5. [Rule 1 - Bug] Made insert() dual-write atomic (advisor catch)**
+
+- **Found during:** Post-execution advisor consult.
+- **Issue:** PLAN.md must_have requires "Dual-write transaction is ATOMIC — both vec_memories and vec_memories_v2 writes inside one db.transaction() per Phase 107 lock." Original `insertWithDualWrite` ran two separate transactions: `insert()` opened + committed one txn for v1 + memories, then `insertVecV2` ran OUTSIDE any txn. If v2 INSERT failed mid-write (vec_int8 type rejection, disk-full, table-dropped), v1 + memories rows would leak — Phase 107 atomic-cascade invariant violated on the insert side.
+- **Fix:** Extended `MemoryStore.insert(input, embedding, opts?: {embeddingV2?})` to write the v2 row INSIDE the same `db.transaction()` that wraps v1 + memories writes. A throw inside the transaction rolls back all 3 writes. Same extension applied to dedup-merge path. Length validation happens BEFORE the transaction. `insertWithDualWrite` collapsed to one-line wrapper.
+- **Files modified:** src/memory/store.ts (insert + insertWithDualWrite + dedup-merge path); src/memory/\_\_tests\_\_/embedding-v2-cascade-delete.test.ts (3 new tests covering caller-side length rejection + in-txn rollback + happy path + Phase 1-114 contract preservation).
+- **Verification:** All 16 cascade-delete tests pass including the new in-txn-rollback test (drops vec_memories_v2 table mid-test → verifies memories + vec_memories rows roll back too). 133 total in-scope memory tests pass.
+- **Committed in:** 52afd36 (post-T05 follow-up).
+
+---
+
+**Total deviations:** 5 auto-fixed (3 bugs + 2 blocking).
+**Impact on plan:** All 5 fixes were essential for correctness or build. Deviation #1 (quantization scheme) is the highest-impact — without it, the v2 KNN distance comparisons would have produced wrong rankings, breaking the entire migration. Deviation #2 (vec_int8 binding) is similar — without it, no v2 row could be inserted. Deviation #5 (insert atomicity) was advisor-caught after the initial plan-complete declaration — Phase 107 atomic-cascade invariant on insert side was violated by two-transaction pattern; fixed by extending insert() with opt.embeddingV2 inside one db.transaction(). No scope creep; all fixes within the T01-T05 acceptance criteria.
 
 ## Issues Encountered
 
@@ -219,11 +233,12 @@ This plan ships the **machinery**. The wall-clock timeline executes in productio
 
 ### Wave 4 wiring deferred
 
-Three wiring tasks are deliberately deferred to wave 4 (per plan scope — this plan ships the machinery, wave 4 kicks off the migration):
+Two wiring tasks are deliberately deferred to wave 4 (per plan scope — this plan ships the machinery, wave 4 kicks off the migration):
 
 1. **Heartbeat runner integration** — registering `embedding-v2-reembed.ts` as a heartbeat check in `src/heartbeat/check-registry.ts`. The runner is shipped; the heartbeat tick wiring is the wave-4 connection. This is the mechanism that actually triggers `runReEmbedBatch` per per-agent per-tick.
-2. **Dual-write hook in MemoryStore.insert** — flipping the default insert dispatch to call `EmbeddingService.embedV2` + `insertEmbeddingV2` when migrator phase is dual-write/re-embedding. Currently the dispatch primitive (`insertWithDualWrite`) exists; the wave-4 task is making the primary `insert(input, embedding)` path consult the migrator + dispatch accordingly.
-3. **pausedAgents persistence on daemon restart** — currently the IPC pause/resume mutates in-memory config. Wave 4 either persists to clawcode.yaml via the configWriter pattern OR moves the paused list into the per-agent migrations table metadata field.
+2. **pausedAgents persistence on daemon restart** — currently the IPC pause/resume mutates in-memory config. Wave 4 either persists to clawcode.yaml via the configWriter pattern OR moves the paused list into the per-agent migrations table metadata field.
+
+**No longer deferred (resolved by atomicity fix `52afd36`):** Dual-write hook in MemoryStore.insert. The `insert(input, embedding, opts?: {embeddingV2?})` signature now natively supports atomic dual-write — wave-4 callers consult `EmbeddingV2Migrator.currentWriteVersions()` and pass `embeddingV2` when "v2" is in the result. No further dispatcher work is needed at the storage layer.
 
 ### Phase 107 cascade invariant preserved
 
@@ -283,12 +298,18 @@ Commits (verified via `git log`):
 Tests (verified via vitest):
 - embedder-bge-small.test.ts: 11/11 passed
 - embedder-quantize.test.ts: 13/13 passed
-- embedding-v2-cascade-delete.test.ts: 12/12 passed
+- embedding-v2-cascade-delete.test.ts: 16/16 passed (12 original + 4 new atomicity tests)
 - embedding-v2-migration.test.ts: 17/17 passed
 - store-orphan-cleanup.test.ts (Phase 107 regression): 5/5 passed
 - store.test.ts (base regression): 65/65 passed
 - embedder.test.ts (v1 regression): 6/6 passed
-- **Total: 129 passed, 0 failed in scope.**
+- **Total: 133 passed, 0 failed in scope (serial run via --no-file-parallelism — store.test.ts has a pre-existing /tmp file collision flake under concurrent runs, unrelated to 115-06).**
+
+Pre-existing failures (out of scope, logged to deferred-items.md):
+- src/memory/__tests__/conversation-brief.test.ts (2 failures)
+- src/manager/__tests__/ (16 failures across 5 files: daemon-openai, daemon-warmup-probe, bootstrap-integration, session-config, dream-prompt-builder)
+
+All pre-existing failures verified pre-existing via `git stash` test (failures persist with all 115-06 changes stashed).
 
 Build (verified): `npm run build` succeeds, `clawcode memory migrate-embeddings --help` registers all 8 subcommands.
 
