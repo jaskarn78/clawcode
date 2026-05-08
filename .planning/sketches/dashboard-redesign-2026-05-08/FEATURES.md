@@ -233,6 +233,148 @@ Pattern from Helicone's cost trend.
 
 ---
 
+## Tier 1.5 — Operator workflow features (added 2026-05-08 from operator review of v1 mockup)
+
+### F26 — Agent config editor (in-UI)
+**Value:** ★★★★★ | **Cost:** M | **Phase 115 dep:** none
+
+Operator can edit agent config without leaving the dashboard or touching `clawcode.yaml` directly.
+
+- **Config card** in the agent detail drawer with editable fields:
+  - Model (dropdown — sonnet / opus / haiku, with allowedModels filter)
+  - Tier escalation (low / mid / high)
+  - Discord channel binding(s) — searchable picker showing channel name + recent message
+  - Allowed/disallowed tools — chip selector
+  - MCP server selection — toggle list with status preview
+  - Effort + budgets (daily / weekly token caps with current utilization)
+  - Workspace path (read-only, plus `memoryPath` override for shared-workspace agents)
+  - Debug flag (`dumpBaseOptionsOnSpawn` from Phase 115-02)
+- **Diff preview** before save — shows YAML diff with line-level highlighting
+- **Save action** with two confirmation modes:
+  - "Save (hot-reload)" — applies via existing ConfigWatcher pattern (Phase 88) for non-restart-required fields
+  - "Save + restart" — operator-confirmed via modal, triggers graceful agent restart
+- **Validation** — Zod schema runs client-side; errors surface inline before save
+- **Audit trail** — every save creates an entry in the audit log (F23)
+- **Backend reuse:** existing CLI commands (`clawcode model`, `clawcode openai-key`, etc.) already wrap most of this; the UI is a thin shell over a new `/api/agents/:name/config` endpoint that handles atomic YAML write via the existing `updateAgentModel` / `updateAgentSkills` / `updateAgentMcpServers` helpers.
+
+Pattern: similar to Mastra Studio's right-sidebar form generation from inputSchema, but applied to agent config rather than tool inputs.
+
+### F27 — Conversations view (active + past)
+**Value:** ★★★★★ | **Cost:** M | **Phase 115 dep:** none
+
+Two surfaces for the operator:
+
+**Active conversations panel** (real-time):
+- Per-agent indicator showing turns currently in-flight
+- Live streaming view of the assistant's response as it arrives (mirrors Discord streaming behavior already in place)
+- Tool call sequence as it happens, with progress indicator per call
+- Operator can interrupt / steer (existing `clawcode steer` pattern surfaced in UI) or just observe
+
+**Past conversations browser**:
+- Per-agent OR fleet-wide ("show all Ramy threads across fin-acq + finmentum-content-creator")
+- Search transcript text via existing FTS5 ConversationStore (Phase v1.9)
+- Filter by date range, agent, channel, instruction-pattern flags (high/medium-risk injection attempts captured by SEC-02)
+- Display as expandable thread cards: timestamp / channel / message count / preview / click-to-expand-full-transcript
+- Per-message metadata visible on hover: model used, tokens, cost, tool calls, cache hit/miss
+- Cross-references to Discord (links to original message in Discord client)
+
+Backend: ConversationStore tables already populate every Discord turn with provenance + session-boundary summarization (Phase v1.9 CONV-01/02/03). Just needs a `/api/conversations` endpoint with filter/search params.
+
+### F28 — Task assignment + tracking
+**Value:** ★★★★★ | **Cost:** M | **Phase 115 dep:** none
+
+Operator-facing task creation + assignment + tracking, replacing the existing `/tasks` page with a fleet-aware version.
+
+**Create task flow:**
+- "+ New task" button (also bound to Cmd+K → "create task")
+- Modal form:
+  - Title (required)
+  - Description (markdown, with @-mention pickup for agent names)
+  - Assign to: agent picker (single or "spawn subagent under fin-acquisition")
+  - Priority: low / medium / high / urgent (drives scheduling order)
+  - Deadline: optional date/time
+  - Tags: free-text chips for grouping
+- **Schedule:** "Run now" / "Schedule for later" (cron expression with helper UI)
+- **Output destination:** Discord channel (default = agent's primary) / specific subagent thread / dashboard-only
+
+**Task board view:**
+- Kanban columns: Backlog / Scheduled / Running / Waiting / Failed / Done
+- Each card: title, assigned agent badge, priority pill, deadline countdown, last-update timestamp
+- Drag-and-drop between columns (Backlog → Scheduled triggers run-now)
+- Click card → detail view with full task history + agent's response transcript
+- Filter by agent / priority / status / tag
+
+**Backend:** existing durable task store + state machine (Phase v1.8 LIFE-01..04) already supports this — `tasks.db` has 15-field rows, enforced state transitions, and trigger_state CRUD. The UI is a new surface over existing IPC `/api/tasks` endpoint extended with assignment + create methods.
+
+**Pattern combination:** Mission Control's Kanban task board + AgentOps' agent-aware assignment + ClawCode's existing TaskScheduler (Phase 46).
+
+---
+
+## Two-mode strategy — Basic vs Advanced (added 2026-05-08)
+
+Operator feedback: v1 mockup gave "advanced view vibes" — too dense for the daily glance use case. Solution: **two-mode interface with persistent toggle**.
+
+### Basic Mode (default for new operators / mobile / glanceable)
+
+Answers ONE question: *"Is anything broken right now? If so, where?"*
+
+Surfaces:
+- **Top banner** — single status indicator: "All systems normal" (green) / "2 agents need attention" (amber) / "Service degraded" (red)
+- **Agent list** (one row per agent, NOT a tile grid):
+  - Status dot
+  - Display name + model badge (subtle)
+  - "Active 2m ago" / "Idle 30m ago" / "Errored — view details"
+  - Last message snippet (truncated, italicized)
+  - Tap row → Conversations view for that agent (F27 active panel)
+- **Quick actions** — 3 most-used: "+ Create task" (F28), "Restart errored agent", "Send message"
+- **Settings cog** — opens config editor for selected agent (F26)
+- **Mode toggle** — persistent in header
+
+What's HIDDEN in basic mode:
+- Tier-1 budget meters
+- Tool cache stats
+- Tool latency split
+- Trace waterfalls
+- Migration tracker
+- Dream-pass queue
+- Cross-agent IPC inbox
+- MCP server health (unless degraded — then surfaced as part of "needs attention")
+
+### Advanced Mode (current redesign, for power-user / debugging)
+
+The full Tier 1 + Tier 2 feature set (F01-F25). For when the operator is debugging or doing deep analysis. All 25 features visible, three-panel inspector available.
+
+### Mode persistence
+
+- localStorage key `clawcode_dashboard_mode = "basic" | "advanced"`
+- Default: basic for new sessions; advanced for sessions that previously selected it
+- Mode toggle in header always visible: text "Basic" / "Advanced" with subtle pill indicator
+- Mobile devices default to basic regardless of prior setting (advanced is too dense for <768px)
+
+---
+
+## Mobile responsiveness (added 2026-05-08)
+
+v1 mockup was desktop-1440 only. v2 must support these breakpoints:
+
+| Breakpoint | Behavior |
+|---|---|
+| **375px** (iPhone SE) | Single column. Header collapses to logo + hamburger + status. Sidebar nav becomes drawer (tap hamburger). Agent list as full-width rows (basic mode default). Detail drawer becomes full-screen modal. Cmd+K palette becomes touch-friendly bottom sheet. |
+| **768px** (tablet portrait) | 2-column tile grid. Sidebar nav still drawer. Detail drawer = 90% modal. Tap-friendly hit targets ≥44px. |
+| **1024px** (tablet landscape / small laptop) | Sidebar nav fixed (collapsed icons-only). 2-3 column tile grid. Detail drawer = 60% slide-in. |
+| **1280px** (laptop) | Full sidebar nav with labels. 3-column tile grid. Detail drawer = 60% slide-in. |
+| **1920px** (desktop) | 4-column tile grid. Detail drawer = 50% slide-in. Two-pane layouts where applicable. |
+
+### Mobile-specific patterns
+
+- **Bottom tab nav** on mobile (replaces sidebar): `[Fleet] [Convos] [Tasks] [Settings]` — 4 tabs max
+- **Swipeable agent cards** in basic mode (swipe left = restart, swipe right = open settings) with toast-confirm pattern
+- **Pull-to-refresh** on fleet view (also re-establishes SSE if connection dropped)
+- **Optimized touch targets** — all interactive elements ≥44px
+- **Conversations view** is mobile-first natural (Discord-like message list)
+
+---
+
 ## Tier 3 — Polish pass (medium value, future iterations)
 
 ### F18 — 30-day activity heatmap (per agent)
