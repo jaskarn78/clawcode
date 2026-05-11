@@ -273,3 +273,128 @@ export function getPerToolSlo(
 // Re-export for downstream symmetry (so callers don't need a second import to
 // iterate canonical segment names).
 export { CANONICAL_SEGMENTS };
+
+// ---------------------------------------------------------------------------
+// Phase 116 F02 — per-model SLO recalibration (folds Phase 999.38).
+//
+// `DEFAULT_SLOS` above is the fleet-wide baseline (sonnet-tuned). On a fleet
+// running mixed Opus / Sonnet / Haiku agents, applying a single threshold
+// across all models surfaces every Opus turn as a breach because Opus is
+// inherently slower than Sonnet on first_token. The redesigned dashboard
+// (Plan 116-01 F03 agent tile grid) colour-codes per agent using these
+// per-model defaults; per-agent overrides via the existing
+// `agents[*].perf.slos[]` mechanism still win on a per-(segment, metric) basis.
+//
+// Threshold derivation — locked 2026-05-11 from 30-day fleet aggregate (full
+// table + rationale in Plan 116-00 T02 action block). Targets are
+// **aspirational**, not empirical p50: heavy-context operator-facing agents
+// (Admin Clawdy, fin-acquisition) currently exceed these and SHOULD render
+// red in the dashboard until Phase 115's cache-breakpoint reorder +
+// lazy-recall propagate. The point of per-model SLOs is to stop Opus tiles
+// from going red purely because Opus runs ~33% slower than Sonnet — not to
+// lower the bar.
+//
+// Source = "model-default" | "agent-override" so the UI can render the
+// provenance pill next to the gauge.
+// ---------------------------------------------------------------------------
+
+export type SloModel = "sonnet" | "opus" | "haiku";
+
+export type ModelSloThresholds = {
+  readonly first_token_p50_ms: number;
+  readonly end_to_end_p95_ms: number;
+  readonly tool_call_p95_ms: number;
+};
+
+export const DEFAULT_MODEL_SLOS: Readonly<Record<SloModel, ModelSloThresholds>> =
+  Object.freeze({
+    sonnet: Object.freeze({
+      first_token_p50_ms: 6_000,
+      end_to_end_p95_ms: 30_000,
+      tool_call_p95_ms: 30_000,
+    }),
+    opus: Object.freeze({
+      first_token_p50_ms: 8_000,
+      end_to_end_p95_ms: 40_000,
+      tool_call_p95_ms: 30_000,
+    }),
+    haiku: Object.freeze({
+      first_token_p50_ms: 2_000,
+      end_to_end_p95_ms: 15_000,
+      tool_call_p95_ms: 30_000,
+    }),
+  });
+
+/**
+ * Source tag for a resolved SLO threshold — the UI renders this so the
+ * operator can distinguish a fleet-wide model default from a per-agent
+ * override they (or the YAML) set.
+ */
+export type SloSource = "model-default" | "agent-override";
+
+/**
+ * Resolved SLO bundle for a single agent. Returned by {@link resolveSloFor}.
+ *
+ * `first_token_p50_ms` is the headline value the dashboard uses for the
+ * "first-token p50" gauge in F03 agent tiles. `source` indicates whether the
+ * value came from `agents[*].perf.slos[]` (operator override) or the fleet-wide
+ * per-model default in {@link DEFAULT_MODEL_SLOS}.
+ *
+ * The full per-model bundle is exposed via `model_defaults` so the dashboard
+ * can render end_to_end_p95 / tool_call_p95 from the same response.
+ */
+export type ResolvedAgentSlos = {
+  readonly first_token_p50_ms: number;
+  readonly source: SloSource;
+  readonly model: SloModel;
+  readonly model_defaults: ModelSloThresholds;
+};
+
+/**
+ * Pure shape of the inputs {@link resolveSloFor} reads. Declared structurally
+ * so callers don't need to import `ResolvedAgentConfig` from `src/shared/types`
+ * (which would pull in dream/memory/skills config that this helper does not
+ * need). Anything with `{ model, perf?: { slos? } }` works.
+ */
+export type ResolveSloInput = {
+  readonly model: SloModel;
+  readonly perf?: {
+    readonly slos?: readonly SloEntry[];
+  };
+};
+
+/**
+ * Resolve the effective per-agent SLO bundle.
+ *
+ * Resolution order for the headline `first_token_p50_ms`:
+ *   1. Per-agent override — if `agent.perf.slos[]` contains
+ *      `{ segment: "first_token", metric: "p50" }`, that wins
+ *      and `source = "agent-override"`.
+ *   2. Per-model default — fall back to
+ *      `DEFAULT_MODEL_SLOS[agent.model].first_token_p50_ms`
+ *      and `source = "model-default"`.
+ *
+ * Pure function; returns a frozen result. Never throws.
+ *
+ * @param agent - Resolved agent config (or structurally compatible subset).
+ */
+export function resolveSloFor(agent: ResolveSloInput): ResolvedAgentSlos {
+  const modelDefaults = DEFAULT_MODEL_SLOS[agent.model];
+  const override = agent.perf?.slos?.find(
+    (s) => s.segment === "first_token" && s.metric === "p50",
+  );
+  if (override) {
+    return Object.freeze({
+      first_token_p50_ms: override.thresholdMs,
+      source: "agent-override" as const,
+      model: agent.model,
+      model_defaults: modelDefaults,
+    });
+  }
+  return Object.freeze({
+    first_token_p50_ms: modelDefaults.first_token_p50_ms,
+    source: "model-default" as const,
+    model: agent.model,
+    model_defaults: modelDefaults,
+  });
+}

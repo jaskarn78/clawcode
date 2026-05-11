@@ -259,6 +259,7 @@ import {
   evaluateSloStatus,
   getPerToolSlo,
   mergeSloOverrides,
+  resolveSloFor,
   type SloEntry,
 } from "../performance/slos.js";
 import type { TraceStore } from "../performance/trace-store.js";
@@ -3522,6 +3523,24 @@ export async function startDaemon(
         }
       };
 
+      // Phase 116 F02 — fold the resolved per-model SLO bundle into every
+      // cache response so the dashboard agent tile (F03 in 116-01) can render
+      // the first-token p50 gauge against the right per-model threshold
+      // (sonnet 6s / opus 8s / haiku 2s) and surface the per-agent override
+      // source pill. Lookup never throws — unknown agent names degrade to
+      // omitting the slos field rather than failing the cache fetch.
+      const computeSloFields = (
+        agentName: string,
+      ): Record<string, unknown> => {
+        try {
+          const cfg = resolvedAgents.find((a) => a.name === agentName);
+          if (!cfg) return {};
+          return { slos: resolveSloFor(cfg) };
+        } catch {
+          return {};
+        }
+      };
+
       // baseResult is either a single augmented report (case "cache" non-all)
       // or an array of reports (case "cache" --all). Either way, fold in the
       // fleet-wide live size signal so the dashboard reads a fresh number
@@ -3539,6 +3558,7 @@ export async function startDaemon(
             ...base,
             tool_cache_size_mb_live: liveSizeMb,
             ...computeSplitLatencyFields(agentName, sinceIso),
+            ...computeSloFields(agentName),
           });
         });
       }
@@ -3552,6 +3572,7 @@ export async function startDaemon(
         ...base,
         tool_cache_size_mb_live: liveSizeMb,
         ...computeSplitLatencyFields(agentName, sinceIso),
+        ...computeSloFields(agentName),
       });
     }
     if (method === "tool-cache-clear") {
