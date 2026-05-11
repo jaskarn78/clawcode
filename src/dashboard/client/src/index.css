@@ -100,6 +100,55 @@
 }
 
 /* ---------------------------------------------------------------------- */
+/* shadcn/ui CSS variable layer — dark-only (theme toggle lands in        */
+/* Plan 116-06 F21). HSL values picked to map cleanly onto the Phase 116  */
+/* token palette: --background uses bg.base hue, --primary uses the       */
+/* emerald, --destructive uses the red, etc. shadcn primitives consume    */
+/* these via `bg-background` / `text-foreground` / `border` Tailwind      */
+/* utilities (defined in shadcn's default theme.extend, NOT in this       */
+/* repo's tailwind.config.js — which means the utilities resolve from     */
+/* THESE variables only).                                                  */
+/* ---------------------------------------------------------------------- */
+@layer base {
+  :root {
+    /* Surfaces — dark-mode default. Hex aliases (see token table):       */
+    /*   #0e0e12 ≈ 240 14% 6.3%  → background                             */
+    /*   #16161c ≈ 240 11% 9.8%  → card / popover                         */
+    /*   #1c1c24 ≈ 240 13% 12.5% → muted / secondary                      */
+    /*   #252530 ≈ 240 11% 17%   → input / border                         */
+    --background: 240 14% 6%;
+    --foreground: 240 6% 96%;
+
+    --card: 240 11% 10%;
+    --card-foreground: 240 6% 96%;
+
+    --popover: 240 11% 10%;
+    --popover-foreground: 240 6% 96%;
+
+    --primary: 158 64% 39%; /* #10b981 emerald */
+    --primary-foreground: 240 14% 6%;
+
+    --secondary: 240 13% 13%;
+    --secondary-foreground: 240 6% 96%;
+
+    --muted: 240 13% 13%;
+    --muted-foreground: 240 5% 65%;
+
+    --accent: 240 13% 13%;
+    --accent-foreground: 240 6% 96%;
+
+    --destructive: 0 84% 60%; /* #ef4444 red */
+    --destructive-foreground: 240 6% 96%;
+
+    --border: 240 11% 17%;
+    --input: 240 11% 17%;
+    --ring: 158 64% 39%;
+
+    --radius: 0.5rem;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
 /* App-wide base layer overrides (dark theme is the default; theme toggle */
 /* lands in Plan 116-06 F21).                                              */
 /* ---------------------------------------------------------------------- */

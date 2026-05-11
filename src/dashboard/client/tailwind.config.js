@@ -40,12 +40,60 @@ export default {
         },
         // Status palette — locked from 116-CONTEXT aesthetic section.
         // SLO gauges in F03 + agent tile borders consume these directly.
-        primary: '#10b981', // emerald — healthy / active
+        // NOTE: `primary` + `destructive` are ALSO consumed by shadcn
+        // primitives via CSS vars (--primary etc. in index.css). The hex
+        // here is the literal "primary" Tailwind utility — keep the values
+        // matched so `bg-primary` (literal #10b981) and `bg-primary`
+        // (CSS-var resolved) agree visually.
         info: '#3b82f6', // blue — informational
         warn: '#f59e0b', // amber — degraded / warning
         danger: '#ef4444', // red — breach / errored
         gold: '#eab308', // yellow — escalation / priority
         pink: '#ff3366', // magenta — accent / SLO-breach banner highlight
+
+        // shadcn/ui token utilities — every primitive in components/ui/
+        // expects these. They resolve through the CSS variables declared in
+        // index.css (`@layer base { :root { ... } }`). Using HSL channels
+        // (no commas) lets Tailwind opacity modifiers work (e.g.
+        // `bg-background/80`).
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        primary: {
+          DEFAULT: 'hsl(var(--primary))',
+          foreground: 'hsl(var(--primary-foreground))',
+        },
+        secondary: {
+          DEFAULT: 'hsl(var(--secondary))',
+          foreground: 'hsl(var(--secondary-foreground))',
+        },
+        destructive: {
+          DEFAULT: 'hsl(var(--destructive))',
+          foreground: 'hsl(var(--destructive-foreground))',
+        },
+        muted: {
+          DEFAULT: 'hsl(var(--muted))',
+          foreground: 'hsl(var(--muted-foreground))',
+        },
+        accent: {
+          DEFAULT: 'hsl(var(--accent))',
+          foreground: 'hsl(var(--accent-foreground))',
+        },
+        popover: {
+          DEFAULT: 'hsl(var(--popover))',
+          foreground: 'hsl(var(--popover-foreground))',
+        },
+        card: {
+          DEFAULT: 'hsl(var(--card))',
+          foreground: 'hsl(var(--card-foreground))',
+        },
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
       },
       fontFamily: {
         // Headings + display copy — Cabinet Grotesk (free, Indian Type
