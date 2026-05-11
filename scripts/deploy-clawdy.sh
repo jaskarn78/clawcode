@@ -4,11 +4,16 @@
 #
 # Pipeline:
 #   1. npm run build         (skip with --no-build)
+#      - tsup → dist/cli/index.js     (daemon bundle)
+#      - vite build → dist/dashboard/spa/   (Phase 116 SPA, when present)
 #   2. rsync dist/cli/index.js → clawdy:~/clawcode-staging/index.js
+#      rsync dist/dashboard/spa/ → clawdy:~/clawcode-staging-spa/   (when present)
 #   3. ssh + sudo -S         (password piped from ~/.clawcode-deploy-pw)
 #      - cp staging → /opt/clawcode/dist/cli/index.js
+#      - rsync --delete spa staging → /opt/clawcode/dist/dashboard/spa/  (when present)
+#      - chown -R clawcode:clawcode /opt/clawcode/dist/dashboard/spa
 #      - systemctl restart clawcode (skip with --no-restart)
-#   4. md5 verification both ends
+#   4. md5 verification (daemon bundle); ls check (SPA bundle)
 #
 # Password file: ~/.clawcode-deploy-pw  (chmod 600, gitignored — never lives in repo).
 # When the password rotates, just overwrite the file:
@@ -32,6 +37,10 @@ SERVICE_NAME="${CLAWCODE_DEPLOY_SERVICE:-clawcode}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_FILE="$REPO_ROOT/dist/cli/index.js"
+SPA_DIR="$REPO_ROOT/dist/dashboard/spa"
+SPA_STAGING="${CLAWCODE_DEPLOY_SPA_STAGING:-/home/jjagpal/clawcode-staging-spa}"
+SPA_DEPLOY="${CLAWCODE_DEPLOY_SPA_TARGET:-/opt/clawcode/dist/dashboard/spa}"
+SPA_OWNER="${CLAWCODE_DEPLOY_SPA_OWNER:-clawcode:clawcode}"
 
 DO_BUILD=1
 DO_RESTART=1
@@ -75,7 +84,12 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "DRY RUN — would execute:"
   [ "$DO_BUILD" = 1 ]   && echo "  npm run build"
   echo "  rsync -avz $DIST_FILE $REMOTE_USER@$HOST:$STAGING_PATH"
-  echo "  ssh $HOST 'sudo -S cp $STAGING_PATH $DEPLOY_PATH'"
+  if [ -d "$REPO_ROOT/dist/dashboard/spa" ]; then
+    echo "  rsync -avz --delete $REPO_ROOT/dist/dashboard/spa/ $REMOTE_USER@$HOST:$SPA_STAGING/"
+    echo "  ssh $HOST 'sudo -S sh -c \"cp $STAGING_PATH $DEPLOY_PATH && rsync -a --delete $SPA_STAGING/ $SPA_DEPLOY/ && chown -R $SPA_OWNER $SPA_DEPLOY\"'"
+  else
+    echo "  ssh $HOST 'sudo -S cp $STAGING_PATH $DEPLOY_PATH'"
+  fi
   [ "$DO_RESTART" = 1 ] && echo "  ssh $HOST 'sudo -S systemctl restart $SERVICE_NAME'"
   exit 0
 fi
@@ -107,10 +121,22 @@ echo "  local  md5: $LOCAL_MD5"
 # 2. Stage on clawdy
 # ---------------------------------------------------------------------------
 
-echo "→ Staging to $HOST:$STAGING_PATH"
+echo "→ Staging daemon bundle to $HOST:$STAGING_PATH"
 ssh "$HOST" "mkdir -p $(dirname "$STAGING_PATH")" >/dev/null
 rsync -az "$DIST_FILE" "$REMOTE_USER@$HOST:$STAGING_PATH"
-echo "  ✓ staged"
+echo "  ✓ daemon staged"
+
+# Stage SPA bundle if it exists (Phase 116+). Backwards compatible — if the
+# SPA dir is absent, skip without erroring.
+DEPLOY_SPA=0
+if [ -d "$SPA_DIR" ] && [ -f "$SPA_DIR/index.html" ]; then
+  DEPLOY_SPA=1
+  echo "→ Staging SPA bundle to $HOST:$SPA_STAGING/"
+  ssh "$HOST" "mkdir -p '$SPA_STAGING'" >/dev/null
+  rsync -az --delete "$SPA_DIR/" "$REMOTE_USER@$HOST:$SPA_STAGING/"
+  SPA_FILES=$(find "$SPA_DIR" -type f | wc -l)
+  echo "  ✓ SPA staged ($SPA_FILES files)"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. sudo cp + restart
@@ -120,11 +146,17 @@ echo "  ✓ staged"
 # subsequent sudo calls in the same shell may need re-auth, so we do everything
 # in a single sudo sh -c '…'.
 REMOTE_CMD="cp '$STAGING_PATH' '$DEPLOY_PATH'"
+if [ "$DEPLOY_SPA" = 1 ]; then
+  # rsync --delete keeps the deployed SPA dir in sync with the local build (drops
+  # stale hashed bundle filenames). chown so the daemon user can serve it.
+  REMOTE_CMD="$REMOTE_CMD && mkdir -p '$SPA_DEPLOY' && rsync -a --delete '$SPA_STAGING/' '$SPA_DEPLOY/' && chown -R '$SPA_OWNER' '$SPA_DEPLOY'"
+fi
 if [ "$DO_RESTART" = 1 ]; then
   REMOTE_CMD="$REMOTE_CMD && systemctl restart $SERVICE_NAME"
 fi
 
 echo "→ Deploying to $DEPLOY_PATH"
+[ "$DEPLOY_SPA" = 1 ] && echo "→ Deploying SPA to $SPA_DEPLOY"
 # -p prefix the prompt so sudo writes ONLY '' on the password line — keeps stdout clean.
 # The password is piped via stdin so it never appears on the SSH command line or in ps.
 printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' sh -c \"$REMOTE_CMD\"" 2>&1 | grep -v '^$' || true
@@ -141,7 +173,20 @@ if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
   echo "✗ md5 mismatch — deploy did not propagate" >&2
   exit 1
 fi
-echo "  ✓ md5 match"
+echo "  ✓ daemon md5 match"
+
+if [ "$DEPLOY_SPA" = 1 ]; then
+  # Verify the SPA index landed (md5-sum every asset would be overkill;
+  # presence + asset count is a reasonable smoke check).
+  REMOTE_SPA_INDEX=$(ssh "$HOST" "test -f '$SPA_DEPLOY/index.html' && echo OK || echo MISSING")
+  REMOTE_SPA_ASSETS=$(ssh "$HOST" "ls '$SPA_DEPLOY/assets/' 2>/dev/null | wc -l")
+  LOCAL_SPA_ASSETS=$(ls "$SPA_DIR/assets/" 2>/dev/null | wc -l)
+  if [ "$REMOTE_SPA_INDEX" != "OK" ] || [ "$REMOTE_SPA_ASSETS" != "$LOCAL_SPA_ASSETS" ]; then
+    echo "✗ SPA verify failed — index=$REMOTE_SPA_INDEX assets=$REMOTE_SPA_ASSETS (expected $LOCAL_SPA_ASSETS)" >&2
+    exit 1
+  fi
+  echo "  ✓ SPA verify ($REMOTE_SPA_ASSETS asset files)"
+fi
 
 if [ "$DO_RESTART" = 1 ]; then
   # Give the daemon ~3s to come up, then check active state.
