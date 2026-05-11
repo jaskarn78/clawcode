@@ -198,8 +198,10 @@ import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
 import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
 import { EscalationBudget } from "../usage/budget.js";
-import { modelSchema } from "../config/schema.js";
+import { modelSchema, agentSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
+// Phase 116-03 F26 — agent-block patcher (in-UI config editor).
+import { patchAgentInYaml } from "../config/yaml-patcher.js";
 import type { ResolvedAgentConfig, ResolvedMarketplaceSources } from "../shared/types.js";
 // Phase 86 Plan 02 MODEL-04 — atomic YAML persistence for `agents[*].model`.
 import { updateAgentModel, updateAgentSkills } from "../migration/yaml-writer.js";
@@ -5226,6 +5228,179 @@ export async function startDaemon(
           },
           agentName,
         );
+      }
+      // =====================================================================
+      // Phase 116-03 — Tier 1.5 operator workflow IPC handlers (F26/F27/F28).
+      // Closure-intercept pattern (mirrors embedding-migration-* + secrets-status
+      // above). Grouped contiguously to minimize merge surface with sibling
+      // plans. All three feature areas share this block; append further
+      // workflow IPC additions inside this fence.
+      // =====================================================================
+
+      // F26 — In-UI agent config editor.
+      //
+      // get-agent-config returns the live RESOLVED agent block (merged
+      // defaults + per-agent fields, the same shape `resolveAllAgents` hands
+      // session-adapter) PLUS the operator's RAW partial from clawcode.yaml
+      // so the editor can show "this is what you wrote" vs "this is what
+      // takes effect after merge". Restart-required vs hot-reloadable
+      // classification is sourced from RELOADABLE_FIELDS so the UI can
+      // grey out restart-only knobs without re-encoding the list.
+      case "get-agent-config": {
+        const agentName = validateStringParam(params, "agent");
+        const resolved = resolvedAgents.find((a) => a.name === agentName);
+        if (!resolved) {
+          throw new ManagerError(`Agent not found: ${agentName}`);
+        }
+        const rawAgent = config.agents.find((a) => a.name === agentName) ?? null;
+        return {
+          agent: agentName,
+          resolved,
+          raw: rawAgent,
+          // Field paths the operator MAY edit and have take effect without a
+          // daemon restart. Encoded as the local agent-block key names (not
+          // the `agents.<name>.x` form) so the UI maps 1:1 to form fields.
+          hotReloadableFields: [
+            "channels",
+            "skills",
+            "schedules",
+            "heartbeat",
+            "effort",
+            "allowedModels",
+            "greetOnRestart",
+            "greetCoolDownMs",
+            "memoryAutoLoad",
+            "memoryAutoLoadPath",
+            "memoryRetrievalTopK",
+            "memoryRetrievalTokenBudget",
+            "memoryRetrievalExcludeTags",
+            "memoryScannerEnabled",
+            "memoryFlushIntervalMs",
+            "memoryCueEmoji",
+            "systemPromptDirectives",
+            "dream",
+            "fileAccess",
+            "outputDir",
+          ],
+          restartRequiredFields: [
+            "name",
+            "workspace",
+            "memoryPath",
+            "model",
+            "settingSources",
+            "gsd",
+            "excludeDynamicSections",
+            "cacheBreakpointPlacement",
+            "soulFile",
+            "identityFile",
+          ],
+        };
+      }
+
+      // update-agent-config — Zod-validate the partial against the
+      // PARTIAL agent schema BEFORE any disk write, then call
+      // patchAgentInYaml() which does the atomic temp+rename. Rejecting
+      // invalid bodies BEFORE patching means a broken YAML never lands on
+      // disk; ConfigWatcher's reload path would otherwise be left holding
+      // the bag (the watcher logs the parse error and silently keeps the
+      // old config — operator wouldn't see why their edit didn't apply).
+      // Returns the patcher result verbatim so the UI can render
+      // "hot-reloaded: [channels, model]" vs "needs restart: [workspace]"
+      // in the save success toast. The PUT route surfaces a 400 on bad
+      // bodies; success returns 200.
+      case "update-agent-config": {
+        const agentName = validateStringParam(params, "agent");
+        const partialRaw = (params as { partial?: unknown }).partial;
+        if (typeof partialRaw !== "object" || partialRaw === null) {
+          throw new ManagerError(
+            "Missing required parameter: partial (object)",
+          );
+        }
+        // Zod partial: every agent-schema field becomes optional. We reject
+        // `name` even when supplied — operator must use `clawcode restart`
+        // and a manual yaml edit to rename an agent (memoryPath / inbox dir
+        // are coupled).
+        const partialObj = partialRaw as Record<string, unknown>;
+        if ("name" in partialObj) {
+          throw new ManagerError(
+            "Cannot patch agent `name` — rename requires a full restart + yaml edit",
+          );
+        }
+        const partialSchema = (
+          agentSchema as unknown as {
+            partial: () => { parse: (v: unknown) => Record<string, unknown> };
+          }
+        ).partial();
+        const parsed = partialSchema.parse(partialObj);
+        const result = await patchAgentInYaml({
+          existingConfigPath: configPath,
+          agentName,
+          partial: parsed,
+        });
+        if (result.outcome === "not-found") {
+          throw new ManagerError(
+            `Agent '${agentName}' not in clawcode.yaml: ${result.reason}`,
+          );
+        }
+        if (result.outcome === "file-not-found") {
+          throw new ManagerError(result.reason);
+        }
+        if (result.outcome === "no-op") {
+          return {
+            written: false,
+            reason: result.reason,
+            hotReloaded: [],
+            agentsNeedingRestart: [],
+          };
+        }
+        // result.outcome === "updated"
+        log.info(
+          {
+            agent: agentName,
+            hotReloaded: result.hotReloadedFields,
+            restartRequired: result.restartRequiredFields,
+            sha256: result.targetSha256,
+          },
+          "[F26] agent config patched on disk",
+        );
+        return {
+          written: true,
+          sha256: result.targetSha256,
+          hotReloaded: result.hotReloadedFields,
+          agentsNeedingRestart:
+            result.restartRequiredFields.length > 0 ? [agentName] : [],
+          restartRequiredFields: result.restartRequiredFields,
+        };
+      }
+
+      // hot-reload-now — force-touch the clawcode.yaml mtime so chokidar
+      // schedules an immediate reload tick. The watcher debounces at 500ms
+      // (default in ConfigWatcher constructor); after the PUT lands the
+      // operator may want hot-reloadable fields applied without waiting.
+      // We bump mtime by writing the same bytes back via temp+rename — that
+      // way the actual content hash on disk doesn't shift and audit-trail
+      // sees `(no changes detected)` if the prior update-agent-config call
+      // already wrote the file (chokidar fires; differ.diffConfigs returns
+      // empty; watcher logs debug and exits). Safe to call repeatedly.
+      case "hot-reload-now": {
+        // The simplest reliable trigger: re-read the file bytes and write
+        // them back via the same temp+rename pattern. Any chokidar listener
+        // sees one change event. We deliberately do NOT call
+        // configWatcher.reload directly — that method is private and the
+        // public `start()`/`stop()` surface doesn't expose a manual tick.
+        const { readFile, writeFile, rename } = await import(
+          "node:fs/promises"
+        );
+        const { dirname, join } = await import("node:path");
+        const bytes = await readFile(configPath, "utf8");
+        const tmp = join(
+          dirname(configPath),
+          `.clawcode.yaml.${process.pid}.${Date.now()}.touch.tmp`,
+        );
+        await writeFile(tmp, bytes, "utf8");
+        await rename(tmp, configPath);
+        log.info({ path: configPath }, "[F26] hot-reload-now: touched yaml");
+        return { ok: true, touchedAt: Date.now() };
       }
     }
 

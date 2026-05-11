@@ -305,6 +305,18 @@ export const IPC_METHODS = [
   "tool-cache-status",
   "tool-cache-clear",
   "tool-cache-inspect",
+  // Phase 116-03 — Tier 1.5 operator workflow IPC methods (F26/F27/F28).
+  // Handlers live in src/manager/daemon.ts in the closure-intercept block
+  // labeled "Phase 116-03". REST proxies in src/dashboard/server.ts in the
+  // "=== Phase 116-03 routes ===" block.
+  "get-agent-config",
+  "update-agent-config",
+  "hot-reload-now",
+  "search-conversations",
+  "list-recent-conversations",
+  "list-tasks-kanban",
+  "create-task",
+  "transition-task",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

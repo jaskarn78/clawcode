@@ -108,6 +108,39 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
 }
 
 /**
+ * Read a JSON-encoded request body. Phase 116-03 added the first non-empty
+ * POST/PUT routes to the dashboard (F26 config edits + F28 task creation /
+ * transitions). 1 MiB cap is generous for any agent-config partial; an
+ * over-cap stream throws so we surface 413 → 400 to the operator instead of
+ * accumulating an attacker-controlled allocation.
+ */
+const MAX_BODY_BYTES = 1024 * 1024;
+async function readJsonBody(
+  req: import("node:http").IncomingMessage,
+): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      throw new Error(`Request body exceeds ${MAX_BODY_BYTES} bytes`);
+    }
+    chunks.push(buf);
+  }
+  if (chunks.length === 0) {
+    throw new Error("Empty request body");
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "invalid JSON";
+    throw new Error(`Invalid JSON body: ${msg}`);
+  }
+}
+
+/**
  * Serve a static file from the static directory.
  */
 async function serveStatic(
@@ -668,6 +701,260 @@ async function handleRequest(
       return;
     }
     // === end Phase 116-02 routes ===
+
+    // =====================================================================
+    // Phase 116-03 routes — Tier 1.5 operator workflow (F26/F27/F28).
+    // Grouped contiguously after 116-02 so sibling plans can append their
+    // own block without touching this diff. All routes proxy daemon IPC
+    // methods added in the closure-intercept block in daemon.ts (search for
+    // "Phase 116-03 — Tier 1.5 operator workflow IPC handlers").
+    //
+    // F26 — agent config editor:
+    //   GET  /api/config/agents/:name           -> daemon `get-agent-config`
+    //   PUT  /api/config/agents/:name           -> daemon `update-agent-config`
+    //   POST /api/config/hot-reload             -> daemon `hot-reload-now`
+    //
+    // F27 — conversations view:
+    //   GET  /api/conversations/search          -> daemon `search-conversations`
+    //   GET  /api/conversations/:agent/recent   -> daemon `list-recent-conversations`
+    //
+    // F28 — Kanban task board:
+    //   GET  /api/tasks/kanban                  -> daemon `list-tasks-kanban`
+    //   POST /api/tasks                         -> daemon `create-task`
+    //   POST /api/tasks/:id/transition          -> daemon `transition-task`
+    // =====================================================================
+
+    // F26 — GET /api/config/agents/:name
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "config" &&
+      segments[2] === "agents"
+    ) {
+      const agentName = decodeURIComponent(segments[3]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "get-agent-config", {
+          agent: agentName,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 404, { error: message });
+      }
+      return;
+    }
+
+    // F26 — PUT /api/config/agents/:name
+    if (
+      method === "PUT" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "config" &&
+      segments[2] === "agents"
+    ) {
+      const agentName = decodeURIComponent(segments[3]!);
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "bad request body";
+        sendJson(res, 400, { error: message });
+        return;
+      }
+      if (typeof body !== "object" || body === null) {
+        sendJson(res, 400, { error: "Body must be a JSON object with `partial`" });
+        return;
+      }
+      const partial = (body as { partial?: unknown }).partial;
+      if (typeof partial !== "object" || partial === null) {
+        sendJson(res, 400, {
+          error: "Body must contain `partial` (object of agent-block fields)",
+        });
+        return;
+      }
+      try {
+        const result = await sendIpcRequest(socketPath, "update-agent-config", {
+          agent: agentName,
+          partial,
+        });
+        sendJson(res, 200, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err, agentName }, "F26 update-agent-config failed");
+        // Distinguish validation failures (Zod / missing) from server errors.
+        // Daemon throws ManagerError with the validation reason; surface as 400
+        // unless it's a transport failure (in which case 500 is fine).
+        const status =
+          message.includes("not found") || message.includes("Cannot patch")
+            ? 400
+            : 500;
+        sendJson(res, status, { error: message });
+      }
+      return;
+    }
+
+    // F26 — POST /api/config/hot-reload  (no body; forces chokidar tick)
+    if (method === "POST" && pathname === "/api/config/hot-reload") {
+      try {
+        const data = await sendIpcRequest(socketPath, "hot-reload-now", {});
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "F26 hot-reload-now failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // F27 — GET /api/conversations/search?q=&agent=&since=&limit=
+    if (method === "GET" && pathname === "/api/conversations/search") {
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const q = queryParams.get("q");
+      if (!q || q.length === 0) {
+        sendJson(res, 400, { error: "Missing required query param: q" });
+        return;
+      }
+      const agent = queryParams.get("agent") ?? null;
+      const limitRaw = queryParams.get("limit");
+      const limit = limitRaw ? Math.min(Number(limitRaw) || 50, 200) : 50;
+      const sinceMs = queryParams.get("since");
+      try {
+        const data = await sendIpcRequest(socketPath, "search-conversations", {
+          q,
+          agent,
+          limit,
+          sinceMs: sinceMs ? Number(sinceMs) : null,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err, q, agent }, "F27 conversation search failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // F27 — GET /api/conversations/:agent/recent?limit=50
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "conversations" &&
+      segments[3] === "recent"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const limitRaw = queryParams.get("limit");
+      const limit = limitRaw ? Math.min(Number(limitRaw) || 50, 200) : 50;
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "list-recent-conversations",
+          { agent: agentName, limit },
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // F28 — GET /api/tasks/kanban
+    if (method === "GET" && pathname === "/api/tasks/kanban") {
+      try {
+        const data = await sendIpcRequest(socketPath, "list-tasks-kanban", {});
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // F28 — POST /api/tasks  (create a new operator-authored task)
+    if (method === "POST" && pathname === "/api/tasks") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "bad request body";
+        sendJson(res, 400, { error: message });
+        return;
+      }
+      if (typeof body !== "object" || body === null) {
+        sendJson(res, 400, { error: "Body must be a JSON object" });
+        return;
+      }
+      try {
+        const result = await sendIpcRequest(
+          socketPath,
+          "create-task",
+          body as Record<string, unknown>,
+        );
+        sendJson(res, 201, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "F28 create-task failed");
+        sendJson(res, 400, { error: message });
+      }
+      return;
+    }
+
+    // F28 — POST /api/tasks/:id/transition
+    if (
+      method === "POST" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "tasks" &&
+      segments[3] === "transition"
+    ) {
+      const taskId = decodeURIComponent(segments[2]!);
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "bad request body";
+        sendJson(res, 400, { error: message });
+        return;
+      }
+      if (typeof body !== "object" || body === null) {
+        sendJson(res, 400, {
+          error: "Body must include { status, patch? }",
+        });
+        return;
+      }
+      const status = (body as { status?: unknown }).status;
+      if (typeof status !== "string") {
+        sendJson(res, 400, { error: "Body.status is required (string)" });
+        return;
+      }
+      const patch = (body as { patch?: unknown }).patch ?? {};
+      try {
+        const result = await sendIpcRequest(socketPath, "transition-task", {
+          task_id: taskId,
+          status,
+          patch,
+        });
+        sendJson(res, 200, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err, taskId, status }, "F28 transition-task failed");
+        // Illegal transition vs. not found vs. other → operator-actionable.
+        const code =
+          message.includes("not found") ||
+          message.includes("Illegal") ||
+          message.includes("transition")
+            ? 400
+            : 500;
+        sendJson(res, code, { error: message });
+      }
+      return;
+    }
+    // === end Phase 116-03 routes ===
 
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
