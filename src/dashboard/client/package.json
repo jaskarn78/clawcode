@@ -1,0 +1,12 @@
+{
+  "name": "clawcode-dashboard-client",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "comment": "Phase 116 — ClawCode dashboard v2 SPA. All dependencies live in the repo-root package.json (single node_modules). This manifest carries only scripts + identity so Vite has a project root to anchor at.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}
