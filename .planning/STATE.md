@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Performance + Reliability
 status: executing
-stopped_at: Completed 999.36-01-PLAN.md
-last_updated: "2026-05-11T18:51:07.205Z"
+stopped_at: Completed Plan 116-00 (10 commits) + quick tasks 260511-pw2 (post_to_agent silent drops) + 260511-pw3 (schema registry auto-discovery)
+last_updated: "2026-05-11T19:44:16.436Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 63
   completed_phases: 16
   total_plans: 108
-  completed_plans: 95
-  percent: 88
+  completed_plans: 96
+  percent: 89
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 116 (Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)) — EXECUTING
-Plan: 2 of 6
-Status: Ready to execute (116-00 shipped scaffolding; 116-01 unblocked)
+Plan: 3 of 6
+Status: Ready to execute
 Latest commit: `38deaca` — feat(116-00): T10 smoke component renders agent cards from live SSE
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -477,6 +477,9 @@ Recent decisions affecting current work:
 - [Phase 999.36]: D-02: 4 OTHER workspace-keyed lookups CATALOGUED in DEFERRED-WORKSPACE-LOOKUPS.md, NOT FIXED — operator promotes follow-up if reproduces
 - [Phase ?]: Phase 116 Plan 00: F02 backend uses sibling DEFAULT_MODEL_SLOS + resolveSloFor; existing segment-based sloOverrideSchema preserved, no schema migration
 - [Phase ?]: Phase 116 Plan 00: shadcn/ui scaffolded via manual components.json — shadcn CLI rejects Tailwind 3.4 + parent-directory node_modules; locked New York / neutral / CSS-vars config written by hand
+- [Phase ?]: Plan 116-01: useAgentLatency hook added (30s polling) — observed first_token p50 lives on /api/agents/:name/latency, not /cache (which carries only the SLO threshold)
+- [Phase ?]: Plan 116-01: F05 per-tool cache breakdown deferred to 116-02 — /api/agents/:name/cache returns fleet-wide tool_cache_hit_rate only
+- [Phase ?]: Plan 116-01: SLO breach dismissal bucketed by observed p50 rounded to 500ms (jitter ignored; genuine new spike re-shows)
 
 ### v2.1 closing decisions (for reference)
 
@@ -676,10 +679,11 @@ Recent decisions affecting current work:
 | Phase 115 P09 | 28min | 5 tasks | 12 files |
 | Phase 999.36 P00 | 22min | 5 tasks | 5 files |
 | Phase 999.36 P01 | 11 | 5 tasks | 7 files |
+| Phase 116 P01 | 65min | 6 tasks | 11 files |
 
 ## Session Continuity
 
-Last activity: 2026-05-11 (late evening)
+Last activity: 2026-05-11
 Stopped at: Completed Plan 116-00 (10 commits) + quick tasks 260511-pw2 (post_to_agent silent drops) + 260511-pw3 (schema registry auto-discovery)
 Resume: Execute Plan 116-01 (Tier 1 read-only surfaces — F01 SLO breach banner, F03 agent tile grid, F04 budget meter, F05 cache gauge, F08 prompt-bloat/lazy-recall counters). All Tier 1 data sources already exist via `/api/agents/:name/cache` + `/api/status` + `/api/fleet-stats` — no backend additions. Pure React component work using the 116-00 SPA foundation (Vite + React 19 + shadcn/ui + Tailwind + self-hosted Cabinet Grotesk/Geist/JetBrains Mono fonts).
 
