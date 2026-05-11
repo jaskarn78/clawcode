@@ -350,10 +350,54 @@ export function createPersistentSessionHandle(
     const blockTextParts: string[] = [];
     let streamedText = "";
     let interruptCalled = false;
+    /**
+     * Phase 115 Plan 08 T01 — per-batch roundtrip timer for sub-scope 17(a).
+     * Ported from session-adapter.ts:iterateWithTracing (the test-only path).
+     * Opens on the first tool_use of a parent assistant message, closes when
+     * the NEXT parent assistant arrives — wall-clock interval covering SDK
+     * dispatch + tool runtime + result delivery + LLM resume.
+     *
+     * Per-batch (not per-tool) so parallel batches collapse to one interval.
+     * Multi-batch turns accumulate via Turn.addToolRoundtripMs sums.
+     */
+    let batchOpenedAtMs: number | null = null;
 
     const closeAllSpans = (): void => {
-      for (const entry of activeTools.values()) entry.span.end();
+      for (const entry of activeTools.values()) {
+        entry.span.end();
+        // Phase 115 Plan 08 T01 — final-batch execution-side fallback. If
+        // the SDK terminated mid-tool (error / abort / timeout) the
+        // user-message tool_result branch never fired, so addToolExecutionMs
+        // would be skipped for these spans. Compute a best-effort duration
+        // from openedAtMs at termination so the column doesn't undercount
+        // pathological turns. Wrapped in try/catch — observability MUST
+        // NEVER break the message path (Phase 50 invariant).
+        try {
+          const executionMs = Date.now() - entry.openedAtMs;
+          (turn as { addToolExecutionMs?: (ms: number) => void })
+            .addToolExecutionMs?.(executionMs);
+        } catch {
+          // Observational only — never break.
+        }
+      }
       activeTools.clear();
+      // Phase 115 Plan 08 T01 — final-batch roundtrip fallback. If the run
+      // terminated before the LLM emitted a "next parent assistant" message
+      // (terminal error, normal completion, or final result-only path), the
+      // currently-open batch timer would otherwise be lost. Close it here
+      // so the column reflects every batch the run observed. Reset to null
+      // so a second invocation (success finally + catch path) cannot
+      // double-count.
+      try {
+        if (batchOpenedAtMs !== null && turn) {
+          const roundtripMs = Date.now() - batchOpenedAtMs;
+          (turn as { addToolRoundtripMs?: (ms: number) => void })
+            .addToolRoundtripMs?.(roundtripMs);
+          batchOpenedAtMs = null;
+        }
+      } catch {
+        // Observational only — never break.
+      }
       if (!firstTokenEnded) {
         firstToken?.end();
         firstTokenEnded = true;
@@ -492,6 +536,46 @@ export function createPersistentSessionHandle(
               ).length;
               const isParallelBatch = toolUseCount > 1;
 
+              // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency.
+              // Ported from session-adapter.ts:iterateWithTracing (test-only
+              // path) into the production iterateUntilResult so traces.db
+              // columns `tool_execution_ms`, `tool_roundtrip_ms`, and
+              // `parallel_tool_call_count` actually populate.
+              //
+              // (1) Close the prior batch's roundtrip timer FIRST. This
+              //     parent assistant message represents the LLM resuming
+              //     after the previous batch's tool_results — exactly the
+              //     wall-clock interval we want to record. Try/catch so an
+              //     observability failure cannot break the dispatch path
+              //     (Phase 50 invariant).
+              try {
+                if (batchOpenedAtMs !== null && turn) {
+                  const roundtripMs = Date.now() - batchOpenedAtMs;
+                  (turn as { addToolRoundtripMs?: (ms: number) => void })
+                    .addToolRoundtripMs?.(roundtripMs);
+                  batchOpenedAtMs = null;
+                }
+              } catch {
+                // Observational only — never break the message path.
+              }
+              // (2) Record the parallel batch size for sub-scope 17(b).
+              //     Only fire when this message HAS tool_use blocks;
+              //     pure-text parent assistant messages don't contribute to
+              //     the MAX.
+              try {
+                if (toolUseCount > 0 && turn) {
+                  (turn as { recordParallelToolCallCount?: (n: number) => void })
+                    .recordParallelToolCallCount?.(toolUseCount);
+                  // (3) Open the next batch's roundtrip timer at the moment
+                  //     this message was observed — closest available proxy
+                  //     for "LLM finished generating tool_use". Will be
+                  //     closed when the NEXT parent assistant arrives.
+                  batchOpenedAtMs = Date.now();
+                }
+              } catch {
+                // Observational only — never break the message path.
+              }
+
               for (const raw of contentBlocks) {
                 const block = raw as { type?: string; name?: string; id?: string; text?: string };
                 if (block.type === "text" && !firstTokenEnded) {
@@ -568,6 +652,22 @@ export function createPersistentSessionHandle(
                   // observational — never break message path
                 }
                 entry.span.end();
+                // Phase 115 Plan 08 T01 — sub-scope 17(a) execution-side
+                // latency aggregation. The span's duration is exactly the
+                // pure-execution interval (tool_use_emitted →
+                // tool_result_arrived); sum across every tool call in the
+                // turn. Wrapped in try/catch so observability never breaks
+                // the message path (Phase 50 invariant). Ported from
+                // session-adapter.ts:iterateWithTracing (test-only path) so
+                // the production caller chain actually populates
+                // `tool_execution_ms` in traces.db.
+                try {
+                  const executionMs = Date.now() - entry.openedAtMs;
+                  (turn as { addToolExecutionMs?: (ms: number) => void })
+                    .addToolExecutionMs?.(executionMs);
+                } catch {
+                  // Observational only — never break the message path.
+                }
                 activeTools.delete(toolUseId);
               }
             }
