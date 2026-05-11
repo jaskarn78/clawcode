@@ -66,6 +66,33 @@ export function useAgents(): UseQueryResult<AgentStatusPayload> {
 }
 
 /**
+ * Per-agent latency report (`/api/agents/:name/latency`).
+ *
+ * Carries `first_token_headline.{p50,p95,p99,count,slo_status,slo_threshold_ms,slo_metric}` —
+ * the OBSERVED first-token percentiles needed for F01 (SLO breach banner) and
+ * the F03 tile's SLO color. The threshold lives on `useAgentCache(name).slos`
+ * (Plan 116-00 T02 surface); the observed values live HERE.
+ *
+ * Polled every 30s — operator-acceptable refresh; the daemon's SSE bridge
+ * doesn't broadcast `latency` events today, so polling is the only signal.
+ */
+export function useAgentLatency(
+  agentName: string | null,
+  since: string = '24h',
+): UseQueryResult<unknown> {
+  return useQuery({
+    queryKey: ['agent-latency', agentName, since],
+    queryFn: () =>
+      fetchJson(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/latency?since=${encodeURIComponent(since)}`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    refetchInterval: 30_000,
+    staleTime: 30_000,
+  })
+}
+
+/**
  * Per-agent prompt cache + per-model SLO bundle (Plan 116-00 T02 surface).
  *
  * Hits `/api/agents/:name/cache?since=24h`. The response carries the augmented
