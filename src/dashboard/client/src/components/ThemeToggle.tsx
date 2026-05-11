@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/popover'
 
 export type ThemePreference = 'system' | 'light' | 'dark'
+/** Alias for cross-module use (CommandPalette). */
+export type ThemePref = ThemePreference
 
 const STORAGE_KEY = 'clawcode:theme'
 
@@ -40,6 +42,23 @@ function readStoredTheme(): ThemePreference {
     // localStorage may throw in private/sandbox modes — fall through.
   }
   return 'system'
+}
+
+/**
+ * Public canonical reader. Phase 116-postdeploy 2026-05-11: exported so
+ * CommandPalette and any future surface (settings panel, etc.) share ONE
+ * theme source-of-truth instead of forking their own localStorage keys.
+ */
+export function getStoredThemePref(): ThemePreference {
+  return readStoredTheme()
+}
+
+export function setStoredThemePref(pref: ThemePreference): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, pref)
+  } catch {
+    /* private/sandbox modes — silent */
+  }
 }
 
 function systemPrefersDark(): boolean {
@@ -55,6 +74,25 @@ function applyTheme(pref: ThemePreference): void {
   const root = document.documentElement
   if (isDark) root.classList.add('dark')
   else root.classList.remove('dark')
+}
+
+/** Public alias for cross-module DOM application. */
+export function applyThemePref(pref: ThemePreference): void {
+  applyTheme(pref)
+}
+
+/**
+ * Resolve a stored ThemePreference to the effective rendered theme.
+ * `'system'` collapses to either `'light'` or `'dark'` based on
+ * `prefers-color-scheme`. Used by Cmd+K's quick-toggle to compute
+ * the explicit opposite.
+ */
+export function resolveEffectiveTheme(
+  pref: ThemePreference,
+): 'light' | 'dark' {
+  if (pref === 'light') return 'light'
+  if (pref === 'dark') return 'dark'
+  return systemPrefersDark() ? 'dark' : 'light'
 }
 
 /**

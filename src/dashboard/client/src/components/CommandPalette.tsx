@@ -64,35 +64,39 @@ function useIsMobile(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Theme toggle — localStorage `dashboard.theme` flag flipped between
-// 'light' | 'dark'. Applied by toggling `data-theme` on <html>. The shadcn
-// CSS-var layer (added in 116-00 T07) is dark-by-default; the toggle
-// flips a `data-theme="light"` class which a future 116-06 settings plan
-// will wire to a light palette swap. For now this is a working toggle
-// that persists across reloads — full light palette is 116-06 scope.
+// Theme toggle — DELEGATES to ThemeToggle's canonical helpers.
+//
+// Phase 116-postdeploy fix 2026-05-11: CommandPalette previously had its
+// own theme persistence — localStorage key `dashboard.theme` + a
+// `data-theme` attribute. ThemeToggle (the header dropdown) uses
+// `clawcode:theme` + the `.dark` class. Two sources of truth meant Cmd+K
+// "toggle theme" wrote to a different key from the header toggle and
+// flipped a different DOM marker — light mode "doesn't work great from
+// page to page" because the two systems desynced. This module now
+// delegates to ThemeToggle's exported helpers so there is ONE source of
+// truth: localStorage `clawcode:theme` (values 'system'|'light'|'dark')
+// + the `.dark` class on <html> (set by ThemeToggle.applyTheme() which
+// also respects the FOUC-guard in index.html).
 // ---------------------------------------------------------------------------
 
-function getStoredTheme(): 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'dark'
-  const v = window.localStorage.getItem('dashboard.theme')
-  return v === 'light' ? 'light' : 'dark'
-}
-
-function applyTheme(theme: 'light' | 'dark'): void {
-  if (typeof document === 'undefined') return
-  document.documentElement.setAttribute('data-theme', theme)
-}
+import {
+  getStoredThemePref,
+  setStoredThemePref,
+  applyThemePref,
+  resolveEffectiveTheme,
+  type ThemePref,
+} from './ThemeToggle'
 
 function toggleStoredTheme(): 'light' | 'dark' {
-  const next = getStoredTheme() === 'dark' ? 'light' : 'dark'
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem('dashboard.theme', next)
-    } catch {
-      /* private mode — silent */
-    }
-  }
-  applyTheme(next)
+  // Resolve the current effective theme (handles 'system' → OS preference)
+  // and flip to the explicit opposite. Cmd+K is a quick toggle — it always
+  // produces an explicit 'light' or 'dark' (never leaves it on 'system'),
+  // matching the operator's reasonable expectation that pressing it twice
+  // returns to the original.
+  const current = resolveEffectiveTheme(getStoredThemePref())
+  const next: ThemePref = current === 'dark' ? 'light' : 'dark'
+  setStoredThemePref(next)
+  applyThemePref(next)
   return next
 }
 
@@ -212,10 +216,12 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
     return list.slice(0, 5)
   }, [breaches])
 
-  // Apply persisted theme once on mount.
-  useEffect(() => {
-    applyTheme(getStoredTheme())
-  }, [])
+  // Phase 116-postdeploy 2026-05-11: previously this re-applied the theme
+  // on Cmd+K mount via local helpers; ThemeToggle now owns theme application
+  // on its own mount + on the FOUC-guard inline script in index.html. The
+  // Cmd+K palette has no business reapplying — doing so would race the
+  // canonical ThemeToggle hook on a multi-mount scenario. (No-op intentional;
+  // keeping the effect body removed instead of leaving the orphan call.)
 
   // Global keyboard shortcut: Cmd+K (Mac) / Ctrl+K (others). Toggles open.
   useEffect(() => {
