@@ -36,6 +36,7 @@ import { useSseStatus } from '@/hooks/useSse'
 import { SloBreachBanner } from '@/components/SloBreachBanner'
 import { AgentTileGrid } from '@/components/AgentTileGrid'
 import { AgentTile } from '@/components/AgentTile'
+import { ToolLatencySplit } from '@/components/ToolLatencySplit'
 
 // ---------------------------------------------------------------------------
 // Header — connection dot, branding, view-mode toggle, settings cog.
@@ -302,8 +303,12 @@ function McpOverviewStrip(): JSX.Element | null {
 function AdvancedMode(): JSX.Element {
   return (
     <>
-      <main className="px-4 sm:px-6 py-6" data-testid="advanced-mode">
+      <main className="px-4 sm:px-6 py-6 space-y-6" data-testid="advanced-mode">
         <AgentTileGrid />
+        {/* Phase 116-02 — F07 tool latency split. Surfaces the per-turn
+            exec vs roundtrip gap across the fleet. Per-tool depth lives in
+            the 116-04 drawer. */}
+        <ToolLatencySplit />
       </main>
       <McpOverviewStrip />
     </>
