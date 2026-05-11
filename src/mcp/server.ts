@@ -133,6 +133,14 @@ export const TOOL_DEFINITIONS = {
     description: "Signal completion of a delegated task you received. Provide the structured result matching the schema's output shape. Call this at the END of your turn -- the daemon dispatches the result back to the caller.",
     ipcMethod: "task-complete",
   },
+  // Quick 260511-pw3 — schema introspection. Senders use this BEFORE
+  // delegate_task so they don't take a blind shot at an unknown schema
+  // (Admin Clawdy's 2026-05-11 `bug.report` failure mode).
+  list_agent_schemas: {
+    description:
+      "List the task schemas a target agent accepts via delegate_task. Each entry includes `callerAllowed` (whether YOU are on the per-target allowlist) and `registered` (whether the schema YAML exists in the fleet registry). Both must be true for delegate_task to succeed. Call this BEFORE delegate_task to pick a valid schema.",
+    ipcMethod: "list-agent-schemas",
+  },
 } as const;
 
 /**
@@ -1200,7 +1208,107 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ task_id: result.task_id }) }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
+        // Quick 260511-pw3 — surface the target's accepted schemas on
+        // unknown_schema rejections. IpcError.data carries
+        // {reason, schema, target, acceptedSchemas} for this branch.
+        const errData = (error as { data?: unknown }).data;
+        if (
+          errData !== null &&
+          typeof errData === "object" &&
+          "reason" in errData &&
+          (errData as { reason: unknown }).reason === "unknown_schema"
+        ) {
+          const d = errData as {
+            reason: string;
+            schema?: string;
+            target?: string;
+            acceptedSchemas?: readonly string[];
+          };
+          const accepted = d.acceptedSchemas ?? [];
+          const acceptedList = accepted.length > 0
+            ? accepted.join(", ")
+            : "(none — target agent has not declared any acceptsTasks schemas, or the registry has none of them)";
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Delegate failed: schema '${d.schema ?? schema}' is not accepted by '${d.target ?? target}'. ` +
+                  `Accepted schemas: ${acceptedList}. ` +
+                  `Call list_agent_schemas(caller, target) to inspect each schema's callerAllowed flag.`,
+              },
+            ],
+          };
+        }
         return { content: [{ type: "text" as const, text: `Delegate failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Quick 260511-pw3 — list_agent_schemas tool. Auto-injected for every
+  // agent (the clawcode MCP server is itself auto-injected). Senders call
+  // this BEFORE delegate_task to introspect what schemas the target
+  // accepts — same auto-inject pattern as `clawcode_fetch_discord_messages`.
+  server.tool(
+    "list_agent_schemas",
+    "List the task schemas a target agent accepts via delegate_task. Returns " +
+      "an array of { name, callerAllowed, registered }. Both flags must be " +
+      "true for delegate_task to succeed. Call this BEFORE delegate_task to " +
+      "pick a valid schema instead of taking a blind shot.",
+    {
+      caller: z.string().describe("Your agent name"),
+      target: z.string().describe("Target agent to introspect"),
+    },
+    async ({ caller, target }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "list-agent-schemas", {
+          caller,
+          target,
+        })) as {
+          target: string;
+          caller: string;
+          schemas: ReadonlyArray<{
+            name: string;
+            callerAllowed: boolean;
+            registered: boolean;
+          }>;
+        };
+        if (result.schemas.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Agent '${target}' declares NO accepted schemas. ` +
+                  `delegate_task will be rejected for every schema. ` +
+                  `The operator must add an \`acceptsTasks\` block to ${target}'s ` +
+                  `clawcode.yaml entry. See docs/cross-agent-schemas.md.`,
+              },
+            ],
+          };
+        }
+        // Render as a stable table the LLM can scan.
+        const lines = result.schemas.map(
+          (s) =>
+            `  - ${s.name}` +
+            ` (callerAllowed=${s.callerAllowed}, registered=${s.registered})`,
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Schemas declared by '${target}' (from clawcode.yaml acceptsTasks):\n` +
+                lines.join("\n") +
+                `\n\nNote: BOTH callerAllowed=true AND registered=true are required ` +
+                `for delegate_task to succeed. Schemas with registered=false exist in ` +
+                `${target}'s config but lack a YAML file in ~/.clawcode/task-schemas/.`,
+            },
+          ],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `list_agent_schemas failed: ${msg}` }] };
       }
     },
   );

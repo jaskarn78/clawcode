@@ -8600,7 +8600,49 @@ async function routeMethod(
       const deadline_ms = typeof params.deadline_ms === "number" ? params.deadline_ms : undefined;
       const budgetOwner = typeof params.budgetOwner === "string" ? params.budgetOwner : undefined;
       const parentTaskId = typeof params.parent_task_id === "string" ? params.parent_task_id : undefined;
-      return await taskManager.delegate({ caller, target, schema, payload, deadline_ms, budgetOwner, parentTaskId });
+      try {
+        return await taskManager.delegate({ caller, target, schema, payload, deadline_ms, budgetOwner, parentTaskId });
+      } catch (err) {
+        // Quick 260511-pw3 — translate ValidationError("unknown_schema")
+        // into a JSON-RPC error whose `data` carries the target's accepted
+        // schemas list. The IPC server forwards `error.data` to the wire
+        // (src/ipc/server.ts:121-124). MCP wrapper at delegate_task renders
+        // this list so the sender's LLM can retry with a valid schema
+        // instead of falling back to post_to_agent (which has its own
+        // silent-drop class of bug — quick 260511-pw2).
+        const { ValidationError } = await import("../tasks/errors.js");
+        if (err instanceof ValidationError && err.reason === "unknown_schema") {
+          const acceptedSchemas = taskManager.acceptedSchemasForTarget(target);
+          throw new ManagerError(err.message, {
+            // -32602 = Invalid params (JSON-RPC standard).
+            code: -32602,
+            data: {
+              reason: "unknown_schema",
+              schema,
+              target,
+              acceptedSchemas,
+            },
+          });
+        }
+        throw err;
+      }
+    }
+
+    case "list-agent-schemas": {
+      // Quick 260511-pw3 — schema introspection. Returns the target's
+      // accepted schemas with `callerAllowed` and `registered` flags so
+      // the sender's LLM can choose a valid schema before calling
+      // `delegate_task`. Fixes the discovery gap that drove Admin Clawdy's
+      // 2026-05-11 `bug.report` rejection (RESEARCH.md "where do agents
+      // declare what they accept").
+      const caller = validateStringParam(params, "caller");
+      const target = validateStringParam(params, "target");
+      const targetConfig = configs.find((c) => c.name === target);
+      if (!targetConfig) {
+        throw new ManagerError(`Target agent '${target}' not found`);
+      }
+      const schemas = taskManager.listSchemasForAgent(caller, target);
+      return { target, caller, schemas };
     }
     case "task-status": {
       const task_id = validateStringParam(params, "task_id");
