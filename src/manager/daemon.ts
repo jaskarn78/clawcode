@@ -2437,6 +2437,15 @@ export async function startDaemon(
   // Mutable ref so closures created before discordBridge initialization can still access it
   const discordBridgeRef: { current: DiscordBridge | null } = { current: null };
 
+  // Phase 116-03 F27 — late-binding ref for the dashboard's SseManager. The
+  // bridge is constructed BEFORE the dashboard (step 11b vs 11d) but its
+  // onConversationTurn closure needs to broadcast through the SseManager.
+  // Same `.current = X` pattern as discordBridgeRef — the closure reads at
+  // fire time so it picks up the post-startDashboardServer value.
+  const sseManagerRef: {
+    current: import("../dashboard/sse.js").SseManager | null;
+  } = { current: null };
+
   // Phase 100 follow-up — late-binding refs for the TriggerEngine deliveryFn.
   // TriggerEngine is constructed at boot step 6-quinquies-b (~line 1935),
   // long before WebhookManager (~line 3530) and the bot-direct sender
@@ -5402,6 +5411,263 @@ export async function startDaemon(
         log.info({ path: configPath }, "[F26] hot-reload-now: touched yaml");
         return { ok: true, touchedAt: Date.now() };
       }
+
+      // F27 — Conversations view.
+      //
+      // search-conversations runs ConversationStore.searchTurns across one
+      // agent (when `agent` param supplied) or every resolved agent (fanout
+      // + merge by bm25 ascending). Each agent's store opens lazily through
+      // SessionManager.getConversationStore — only running agents have one,
+      // so non-running entries silently skip with an empty result.
+      //
+      // Trust filter: includeUntrustedChannels is FALSE by default (SEC-01
+      // hygiene — agent-facing search-tools default the same way). The
+      // dashboard is on 127.0.0.1 + operator-scope, but defaulting to
+      // trusted-only keeps the surface aligned with the rest of the system.
+      // Operator can opt-in via `includeUntrustedChannels: true` in params.
+      case "search-conversations": {
+        const q = validateStringParam(params, "q");
+        const agentParam =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? (params as { agent: string }).agent
+            : null;
+        const limit =
+          typeof (params as { limit?: unknown }).limit === "number"
+            ? Math.max(1, Math.min((params as { limit: number }).limit, 200))
+            : 50;
+        const includeUntrustedChannels =
+          (params as { includeUntrustedChannels?: unknown })
+            .includeUntrustedChannels === true;
+        const sinceMs =
+          typeof (params as { sinceMs?: unknown }).sinceMs === "number"
+            ? (params as { sinceMs: number }).sinceMs
+            : null;
+        const targets = agentParam
+          ? [agentParam]
+          : resolvedAgents.map((a) => a.name);
+
+        type Hit = {
+          turnId: string;
+          sessionId: string;
+          role: "user" | "assistant" | "system";
+          content: string;
+          bm25Score: number;
+          createdAt: string;
+          channelId: string | null;
+          isTrustedChannel: boolean;
+          agent: string;
+        };
+        const allHits: Hit[] = [];
+        let totalMatches = 0;
+        for (const agent of targets) {
+          const store = manager.getConversationStore(agent);
+          if (!store) continue;
+          try {
+            const result = store.searchTurns(q, {
+              limit,
+              offset: 0,
+              includeUntrustedChannels,
+            });
+            totalMatches += result.totalMatches;
+            for (const r of result.results) {
+              // Optional since-cutoff filter — createdAt is ISO; cheap parse.
+              if (sinceMs !== null) {
+                const t = Date.parse(r.createdAt);
+                if (!Number.isFinite(t) || t < sinceMs) continue;
+              }
+              allHits.push({ ...r, agent });
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn({ agent, q, msg }, "[F27] search-conversations failed");
+          }
+        }
+        // FTS5 BM25 — lower = better. Stable-sort ASC then truncate to limit.
+        allHits.sort((a, b) => a.bm25Score - b.bm25Score);
+        return {
+          hits: allHits.slice(0, limit),
+          totalMatches,
+          agentsQueried: targets,
+        };
+      }
+
+      // list-recent-conversations returns the recent session metadata for
+      // one agent — used by the F27 left-pane "past sessions" list. Pulls
+      // from ConversationStore.listRecentSessions (ALL statuses including
+      // 'active' — the UI marks active sessions distinctly so the operator
+      // can see in-flight turns without waiting for stop/crash to summarize).
+      case "list-recent-conversations": {
+        const agent = validateStringParam(params, "agent");
+        const limit =
+          typeof (params as { limit?: unknown }).limit === "number"
+            ? Math.max(1, Math.min((params as { limit: number }).limit, 200))
+            : 50;
+        const store = manager.getConversationStore(agent);
+        if (!store) {
+          return { agent, sessions: [] };
+        }
+        const sessions = store.listRecentSessions(agent, limit);
+        return { agent, sessions };
+      }
+
+      // F28 — Kanban task board.
+      //
+      // list-tasks-kanban returns ALL non-purged tasks grouped by status
+      // column. Six visible columns map to eight raw statuses:
+      //   Backlog   ← pending
+      //   Scheduled ← (synthetic — operator-tagged future-deadline tasks;
+      //                today maps to pending too; future plan may add a
+      //                discriminator. Leave column present but empty for
+      //                now so the UI shape is stable.)
+      //   Running   ← running
+      //   Waiting   ← awaiting_input
+      //   Failed    ← failed | timed_out | orphaned
+      //   Done      ← complete | cancelled
+      //
+      // We expose raw_status alongside the column so a UI tooltip can
+      // distinguish e.g. `complete` from `cancelled` inside the Done column.
+      case "list-tasks-kanban": {
+        const rows = taskStore.rawDb
+          .prepare(
+            `SELECT task_id, task_type, caller_agent, target_agent, status,
+                    started_at, ended_at, heartbeat_at, chain_token_cost, error
+             FROM tasks
+             ORDER BY started_at DESC
+             LIMIT 1000`,
+          )
+          .all() as Array<{
+          task_id: string;
+          task_type: string;
+          caller_agent: string;
+          target_agent: string;
+          status: string;
+          started_at: number;
+          ended_at: number | null;
+          heartbeat_at: number;
+          chain_token_cost: number;
+          error: string | null;
+        }>;
+        const columns: Record<string, typeof rows> = {
+          Backlog: [],
+          Scheduled: [],
+          Running: [],
+          Waiting: [],
+          Failed: [],
+          Done: [],
+        };
+        for (const row of rows) {
+          switch (row.status) {
+            case "pending":
+              columns.Backlog!.push(row);
+              break;
+            case "running":
+              columns.Running!.push(row);
+              break;
+            case "awaiting_input":
+              columns.Waiting!.push(row);
+              break;
+            case "failed":
+            case "timed_out":
+            case "orphaned":
+              columns.Failed!.push(row);
+              break;
+            case "complete":
+            case "cancelled":
+              columns.Done!.push(row);
+              break;
+            default:
+              log.warn({ status: row.status, task_id: row.task_id }, "unknown task status in kanban");
+          }
+        }
+        return { columns, total: rows.length };
+      }
+
+      // create-task — operator-authored task injection. Builds a TaskRow
+      // with status='pending' (Backlog column) and a synthetic causation_id.
+      // depth=0 (operator is root; caller_agent='operator' as a sentinel).
+      // The input_digest hashes the body so the same operator-authored
+      // task can be detected if re-submitted (idempotency hint, not enforced
+      // — same as delegate-task path in router.ts).
+      case "create-task": {
+        const title = validateStringParam(params, "title");
+        const target_agent = validateStringParam(params, "target_agent");
+        const description =
+          typeof (params as { description?: unknown }).description === "string"
+            ? (params as { description: string }).description
+            : "";
+        const { randomUUID, createHash } = await import("node:crypto");
+        const task_id = randomUUID();
+        const causation_id = randomUUID();
+        const inputObj = { title, description, target_agent };
+        const input_digest = createHash("sha256")
+          .update(JSON.stringify(inputObj))
+          .digest("hex");
+        const now = Date.now();
+        const row = {
+          task_id,
+          task_type: "operator-created",
+          caller_agent: "operator",
+          target_agent,
+          causation_id,
+          parent_task_id: null,
+          depth: 0,
+          input_digest,
+          status: "pending" as const,
+          started_at: now,
+          ended_at: null,
+          heartbeat_at: now,
+          result_digest: null,
+          error: null,
+          chain_token_cost: 0,
+        };
+        taskStore.insert(row);
+        log.info(
+          { task_id, target_agent, title },
+          "[F28] operator-created task inserted",
+        );
+        return { task_id, row };
+      }
+
+      // transition-task — wraps TaskStore.transition() which itself runs
+      // assertLegalTransition before any UPDATE. Illegal transitions throw
+      // IllegalTaskTransitionError; we surface the message verbatim to the
+      // dashboard so the optimistic UI flip can be reverted with the reason
+      // displayed. The patch sub-object (result_digest / error /
+      // chain_token_cost / ended_at) is forwarded as-is.
+      case "transition-task": {
+        const task_id = validateStringParam(params, "task_id");
+        const status = validateStringParam(params, "status");
+        const patch =
+          params && typeof (params as { patch?: unknown }).patch === "object"
+            ? ((params as { patch: Record<string, unknown> }).patch)
+            : {};
+        // The TaskStatus type is the same string set the schema CHECK
+        // constraint enforces. Pass through; TaskStore.transition rejects
+        // illegal targets via assertLegalTransition.
+        const next = taskStore.transition(
+          task_id,
+          status as
+            | "pending"
+            | "running"
+            | "awaiting_input"
+            | "complete"
+            | "failed"
+            | "cancelled"
+            | "timed_out"
+            | "orphaned",
+          patch as {
+            ended_at?: number;
+            result_digest?: string | null;
+            error?: string | null;
+            chain_token_cost?: number;
+          },
+        );
+        log.info(
+          { task_id, status },
+          "[F28] task transition succeeded",
+        );
+        return { task_id, row: next };
+      }
     }
 
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);
@@ -5503,6 +5769,21 @@ export async function startDaemon(
       securityPolicies,
       botToken,
       log,
+      // Phase 116-03 F27 — fire `conversation-turn` SSE events after each
+      // recordTurn write. Metadata only (NO content). Ref reads .current at
+      // fire time so the post-startDashboardServer assignment is visible.
+      onConversationTurn: (info) => {
+        const sse = sseManagerRef.current;
+        if (!sse) return;
+        try {
+          sse.broadcast("conversation-turn", info);
+        } catch (err) {
+          log.warn(
+            { err, agentName: info.agentName, turnId: info.turnId },
+            "[F27] SSE conversation-turn broadcast failed (non-fatal)",
+          );
+        }
+      },
     });
     try {
       await discordBridge.start();
@@ -5753,6 +6034,10 @@ export async function startDaemon(
         )
       : undefined;
     dashboard = await startDashboardServer({ port: dashboardPort, host: dashboardHost, socketPath: SOCKET_PATH, webhookHandler });
+    // Phase 116-03 F27 — publish the SseManager into the late-binding ref so
+    // the bridge's onConversationTurn closure picks it up. From now on, every
+    // captureDiscordExchange call broadcasts a `conversation-turn` event.
+    sseManagerRef.current = dashboard.sseManager;
     log.info({ port: dashboardPort, host: dashboardHost }, "dashboard server started");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -35,6 +35,22 @@ export type CaptureInput = {
    */
   readonly isTrustedChannel?: boolean;
   readonly log: Logger;
+  /**
+   * Phase 116-03 F27 — optional callback fired after EACH successful
+   * recordTurn (user then assistant). Receives metadata ONLY — agent name,
+   * turn id, ISO timestamp, role. The dashboard SSE manager subscribes to
+   * broadcast a `conversation-turn` event so the operator's live UI ticks
+   * without polling. Callback is fire-and-forget; any throw is caught +
+   * logged at warn (never disrupts capture). agentName is supplied by the
+   * caller (bridge.ts has it; capture is agent-agnostic by default).
+   */
+  readonly onTurnRecorded?: (info: {
+    readonly agentName: string;
+    readonly turnId: string;
+    readonly role: "user" | "assistant";
+    readonly createdAt: string;
+  }) => void;
+  readonly agentName?: string;
 };
 
 /**
@@ -68,7 +84,7 @@ export function captureDiscordExchange(input: CaptureInput): void {
       : undefined;
 
     // Record user turn
-    input.convStore.recordTurn({
+    const userTurn = input.convStore.recordTurn({
       sessionId: input.sessionId,
       role: "user",
       content: input.userContent,
@@ -80,13 +96,40 @@ export function captureDiscordExchange(input: CaptureInput): void {
     });
 
     // Record assistant turn (no user-specific fields, no instructionFlags)
-    input.convStore.recordTurn({
+    const assistantTurn = input.convStore.recordTurn({
       sessionId: input.sessionId,
       role: "assistant",
       content: input.assistantContent,
       channelId: input.channelId,
       isTrustedChannel: input.isTrustedChannel,
     });
+
+    // Phase 116-03 F27 — fire the SSE-broadcast hook for each turn after
+    // both DB writes succeeded. Metadata only; no content. Hot-path safe —
+    // ConversationTurn is the in-memory shape recordTurn just returned, no
+    // re-read needed.
+    if (input.onTurnRecorded && input.agentName) {
+      const agentName = input.agentName;
+      try {
+        input.onTurnRecorded({
+          agentName,
+          turnId: userTurn.id,
+          role: "user",
+          createdAt: userTurn.createdAt,
+        });
+        input.onTurnRecorded({
+          agentName,
+          turnId: assistantTurn.id,
+          role: "assistant",
+          createdAt: assistantTurn.createdAt,
+        });
+      } catch (hookErr) {
+        input.log.warn(
+          { error: (hookErr as Error).message },
+          "[F27] onTurnRecorded hook threw (non-fatal)",
+        );
+      }
+    }
   } catch (err) {
     input.log.warn(
       {

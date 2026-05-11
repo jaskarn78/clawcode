@@ -70,6 +70,20 @@ export type BridgeConfig = {
   readonly securityPolicies?: ReadonlyMap<string, SecurityPolicy>;
   readonly botToken?: string;
   readonly log?: Logger;
+  /**
+   * Phase 116-03 F27 — optional hook fired after each conversation turn
+   * write (user + assistant). The daemon sets this to a closure that
+   * broadcasts a `conversation-turn` SSE event via the dashboard's
+   * SseManager. Metadata only — `{agentName, turnId, role, createdAt}`.
+   * Optional because standalone runners (src/cli/commands/run.ts) construct
+   * the bridge without a dashboard.
+   */
+  readonly onConversationTurn?: (info: {
+    readonly agentName: string;
+    readonly turnId: string;
+    readonly role: "user" | "assistant";
+    readonly createdAt: string;
+  }) => void;
 };
 
 /**
@@ -142,6 +156,15 @@ export class DiscordBridge {
   private readonly securityPolicies: ReadonlyMap<string, SecurityPolicy> | undefined;
   private readonly botToken: string;
   private readonly log: Logger;
+  /** Phase 116-03 F27 — SSE-broadcast hook for conversation turn writes. */
+  private readonly onConversationTurn:
+    | ((info: {
+        readonly agentName: string;
+        readonly turnId: string;
+        readonly role: "user" | "assistant";
+        readonly createdAt: string;
+      }) => void)
+    | undefined;
   private running = false;
   private readonly recentlySent: Set<string> = new Set();
   /**
@@ -182,6 +205,7 @@ export class DiscordBridge {
     this.securityPolicies = config.securityPolicies;
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
+    this.onConversationTurn = config.onConversationTurn;
 
     this.client = new Client({
       intents: [
@@ -752,6 +776,10 @@ export class DiscordBridge {
             // exchange here originates from an ACL-allowed (trusted) channel.
             isTrustedChannel: true,
             log: this.log,
+            // Phase 116-03 F27 — fire the dashboard SSE hook with the
+            // resolved agent (sessionName), metadata only.
+            agentName: sessionName,
+            onTurnRecorded: this.onConversationTurn,
           });
         }
       } catch (err) {
