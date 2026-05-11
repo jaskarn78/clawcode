@@ -257,3 +257,229 @@ export function useMcpServers(
     staleTime: 30_000,
   })
 }
+
+// ---------------------------------------------------------------------------
+// Phase 116-03 — Tier 1.5 operator workflow query/mutation hooks.
+// F26 config editor, F27 conversations view, F28 Kanban task board.
+// ---------------------------------------------------------------------------
+
+export type AgentConfigResponse = {
+  readonly agent: string
+  readonly resolved: Record<string, unknown>
+  readonly raw: Record<string, unknown> | null
+  readonly hotReloadableFields: readonly string[]
+  readonly restartRequiredFields: readonly string[]
+}
+
+/** F26 — fetch one agent's resolved + raw config for the editor. */
+export function useAgentConfig(
+  agentName: string | null,
+): UseQueryResult<AgentConfigResponse> {
+  return useQuery({
+    queryKey: ['agent-config', agentName],
+    queryFn: () =>
+      fetchJson<AgentConfigResponse>(
+        `/api/config/agents/${encodeURIComponent(agentName ?? '')}`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    staleTime: 5_000,
+  })
+}
+
+export type UpdateAgentConfigResponse = {
+  readonly written: boolean
+  readonly sha256?: string
+  readonly reason?: string
+  readonly hotReloaded: readonly string[]
+  readonly agentsNeedingRestart: readonly string[]
+  readonly restartRequiredFields?: readonly string[]
+}
+
+/** F26 — PUT a partial update to clawcode.yaml; returns hot-reload status. */
+export async function updateAgentConfig(
+  agentName: string,
+  partial: Record<string, unknown>,
+): Promise<UpdateAgentConfigResponse> {
+  const res = await fetch(
+    `/api/config/agents/${encodeURIComponent(agentName)}`,
+    {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partial }),
+    },
+  )
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `update-agent-config ${res.status}`)
+  }
+  return (await res.json()) as UpdateAgentConfigResponse
+}
+
+/** F26 — force chokidar to re-read clawcode.yaml on demand (no debounce wait). */
+export async function triggerHotReload(): Promise<{ ok: boolean; touchedAt?: number }> {
+  const res = await fetch('/api/config/hot-reload', {
+    method: 'POST',
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `hot-reload-now ${res.status}`)
+  }
+  return (await res.json()) as { ok: boolean; touchedAt?: number }
+}
+
+// ---------------------------------------------------------------------------
+// F27 — conversations view
+// ---------------------------------------------------------------------------
+
+export type ConversationSearchHit = {
+  readonly turnId: string
+  readonly sessionId: string
+  readonly role: 'user' | 'assistant' | 'system'
+  readonly content: string
+  readonly bm25Score: number
+  readonly createdAt: string
+  readonly channelId: string | null
+  readonly isTrustedChannel: boolean
+  readonly agent: string
+}
+
+export type ConversationSearchResult = {
+  readonly hits: readonly ConversationSearchHit[]
+  readonly totalMatches: number
+  readonly agentsQueried: readonly string[]
+}
+
+/** F27 — FTS5 search across one or all agents. */
+export function useConversationSearch(
+  query: string,
+  agent: string | null,
+  enabled: boolean,
+): UseQueryResult<ConversationSearchResult> {
+  return useQuery({
+    queryKey: ['conversation-search', query, agent],
+    queryFn: () => {
+      const params = new URLSearchParams({ q: query })
+      if (agent) params.set('agent', agent)
+      return fetchJson<ConversationSearchResult>(
+        `/api/conversations/search?${params.toString()}`,
+      )
+    },
+    enabled: enabled && query.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+export type ConversationSessionRow = {
+  readonly id: string
+  readonly agentName: string
+  readonly startedAt: string
+  readonly endedAt: string | null
+  readonly turnCount: number
+  readonly totalTokens: number | null
+  readonly status: string
+}
+
+export type RecentConversationsResponse = {
+  readonly agent: string
+  readonly sessions: readonly ConversationSessionRow[]
+}
+
+/** F27 — recent session metadata for one agent. */
+export function useRecentConversations(
+  agentName: string | null,
+): UseQueryResult<RecentConversationsResponse> {
+  return useQuery({
+    queryKey: ['recent-conversations', agentName],
+    queryFn: () =>
+      fetchJson<RecentConversationsResponse>(
+        `/api/conversations/${encodeURIComponent(agentName ?? '')}/recent?limit=50`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// F28 — Kanban task board
+// ---------------------------------------------------------------------------
+
+export type KanbanRow = {
+  readonly task_id: string
+  readonly task_type: string
+  readonly caller_agent: string
+  readonly target_agent: string
+  readonly status: string
+  readonly started_at: number
+  readonly ended_at: number | null
+  readonly heartbeat_at: number
+  readonly chain_token_cost: number
+  readonly error: string | null
+}
+
+export type KanbanColumns = {
+  readonly Backlog: readonly KanbanRow[]
+  readonly Scheduled: readonly KanbanRow[]
+  readonly Running: readonly KanbanRow[]
+  readonly Waiting: readonly KanbanRow[]
+  readonly Failed: readonly KanbanRow[]
+  readonly Done: readonly KanbanRow[]
+}
+
+export type KanbanResponse = {
+  readonly columns: KanbanColumns
+  readonly total: number
+}
+
+/** F28 — fleet task kanban grouped by 6 columns. Polls 10s + SSE invalidates. */
+export function useKanbanTasks(): UseQueryResult<KanbanResponse> {
+  return useQuery({
+    queryKey: ['tasks-kanban'],
+    queryFn: () => fetchJson<KanbanResponse>('/api/tasks/kanban'),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  })
+}
+
+/** F28 — operator-fired task transition. Optimistic UI flips before this returns. */
+export async function transitionTask(
+  taskId: string,
+  status: string,
+  patch: Record<string, unknown> = {},
+): Promise<{ task_id: string; row: KanbanRow }> {
+  const res = await fetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/transition`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, patch }),
+    },
+  )
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `transition-task ${res.status}`)
+  }
+  return (await res.json()) as { task_id: string; row: KanbanRow }
+}
+
+/** F28 — operator-created task. Lands as status='pending' in Backlog. */
+export async function createTask(input: {
+  title: string
+  description?: string
+  target_agent: string
+}): Promise<{ task_id: string; row: KanbanRow }> {
+  const res = await fetch('/api/tasks', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `create-task ${res.status}`)
+  }
+  return (await res.json()) as { task_id: string; row: KanbanRow }
+}

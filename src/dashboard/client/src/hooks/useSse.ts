@@ -38,6 +38,38 @@ export type SseEventName = (typeof SSE_EVENT_NAMES)[number]
 export type SseStatus = 'connecting' | 'open' | 'closed' | 'error'
 
 // ---------------------------------------------------------------------------
+// Phase 116-03 F27 — high-cardinality event bus for `conversation-turn`.
+//
+// The 7 events above each carry a fleet-state SNAPSHOT — setQueryData
+// overwrites whatever was there. `conversation-turn` is different: each
+// event is a per-turn DELTA at ~10-50 events/sec peak. Overwriting a single
+// cache key would mean every consumer re-renders on every turn and history
+// is lost between renders. The bus pattern below dispatches to component-
+// owned listeners; ConversationsView keeps its own in-memory ring buffer
+// and decides what to render. Payload is metadata only — `{agent, turnId,
+// ts, role}` — UI fetches full content on demand via /api/conversations/
+// :agent/recent or /api/conversations/search.
+// ---------------------------------------------------------------------------
+export type ConversationTurnEvent = {
+  readonly agent: string
+  readonly turnId: string
+  readonly role: 'user' | 'assistant'
+  readonly ts: string
+}
+
+const turnListeners = new Set<(evt: ConversationTurnEvent) => void>()
+
+/** Subscribe to live `conversation-turn` events. Returns unsubscribe. */
+export function subscribeConversationTurns(
+  fn: (evt: ConversationTurnEvent) => void,
+): () => void {
+  turnListeners.add(fn)
+  return () => {
+    turnListeners.delete(fn)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Singleton state — one EventSource per browser tab. React's StrictMode
 // double-mounts effects in dev; the singleton guard means we don't open
 // duplicate connections.
@@ -79,6 +111,25 @@ function ensureConnection(client: QueryClient): void {
       }
     })
   }
+
+  // Phase 116-03 F27 — separate listener for conversation-turn (event-bus
+  // pattern, NOT setQueryData). Fans out to every subscriber registered
+  // via subscribeConversationTurns. Throws inside a listener are swallowed
+  // so one bad consumer doesn't break the bus for others.
+  es.addEventListener('conversation-turn', (evt) => {
+    try {
+      const data = JSON.parse((evt as MessageEvent).data) as ConversationTurnEvent
+      for (const fn of turnListeners) {
+        try {
+          fn(data)
+        } catch {
+          // Listener-local error — never propagate up to the EventSource.
+        }
+      }
+    } catch {
+      // Malformed payload — same drop policy as the snapshot events above.
+    }
+  })
 }
 
 /**

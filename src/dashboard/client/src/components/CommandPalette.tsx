@@ -161,6 +161,12 @@ function AgentBreachItem(props: {
 export type CommandPaletteProps = {
   /** Callback when the user picks "Jump to agent". 116-04 wires the drawer. */
   readonly onSelectAgent?: (agent: string) => void
+  /**
+   * Phase 116-03 — callback when the operator picks "Edit config <agent>".
+   * App.tsx wires this to open the F26 ConfigEditor Dialog. Optional so
+   * older callers (tests) compile unchanged.
+   */
+  readonly onOpenConfig?: (agent: string) => void
   /** Optional uncontrolled open state hint — defaults to internal state. */
   readonly defaultOpen?: boolean
 }
@@ -302,6 +308,27 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                           {a.model}
                         </span>
                       )}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+
+              {/* Phase 116-03 F26 — quick-open the config editor for any agent. */}
+              {agents.length > 0 && props.onOpenConfig && (
+                <CommandGroup heading="Edit config">
+                  {agents.map((a) => (
+                    <CommandItem
+                      key={`config-${a.name}`}
+                      value={`config edit ${a.name}`}
+                      onSelect={() => {
+                        close()
+                        props.onOpenConfig?.(a.name)
+                      }}
+                    >
+                      <span className="font-mono">{a.name}</span>
+                      <span className="ml-auto text-[10px] text-fg-3 font-mono">
+                        F26 editor
+                      </span>
                     </CommandItem>
                   ))}
                 </CommandGroup>

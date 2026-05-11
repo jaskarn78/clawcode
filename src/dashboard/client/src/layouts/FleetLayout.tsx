@@ -327,7 +327,17 @@ function AdvancedMode(): JSX.Element {
 // Public surface
 // ---------------------------------------------------------------------------
 
-export function FleetLayout(): JSX.Element {
+export type FleetLayoutProps = {
+  /**
+   * Phase 116-03 — optional callback that opens the F26 config editor for
+   * the named agent. Currently routed through the Cmd+K palette; future
+   * plans may surface a per-tile "Edit config" button that consumes this
+   * callback. Optional so older callers compile unchanged.
+   */
+  readonly onEditAgent?: (agent: string) => void
+}
+
+export function FleetLayout(_props: FleetLayoutProps = {}): JSX.Element {
   const { mode } = useViewMode()
   const sseStatus = useSseStatus()
   const agentsQuery = useAgents()
