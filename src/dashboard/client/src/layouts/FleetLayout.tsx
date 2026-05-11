@@ -135,11 +135,12 @@ function Header(props: {
 
 function BasicAgentRow(props: {
   readonly agent: { readonly name: string; readonly model?: string; readonly status?: string }
+  readonly onSelect?: (agent: string) => void
 }): JSX.Element {
   // Reuse AgentTile but in a single-column container. The card already has
   // mobile-friendly padding and the responsive sub-components handle small
   // widths. The grid wrapper above already enforces 1-col on Basic.
-  return <AgentTile agent={props.agent} />
+  return <AgentTile agent={props.agent} onSelect={props.onSelect} />
 }
 
 function QuickActions(): JSX.Element {
@@ -210,7 +211,9 @@ function QuickActions(): JSX.Element {
   )
 }
 
-function BasicMode(): JSX.Element {
+function BasicMode(props: {
+  readonly onSelectAgent?: (agent: string) => void
+}): JSX.Element {
   const agentsQuery = useAgents()
   const payload = agentsQuery.data as
     | { agents?: ReadonlyArray<{ name: string; model?: string; status?: string }> }
@@ -233,7 +236,11 @@ function BasicMode(): JSX.Element {
             <p className="text-fg-2 font-sans">No agents reported.</p>
           )}
         {agents.map((a) => (
-          <BasicAgentRow key={a.name} agent={a} />
+          <BasicAgentRow
+            key={a.name}
+            agent={a}
+            onSelect={props.onSelectAgent}
+          />
         ))}
       </main>
       <QuickActions />
@@ -302,11 +309,13 @@ function McpOverviewStrip(): JSX.Element | null {
   )
 }
 
-function AdvancedMode(): JSX.Element {
+function AdvancedMode(props: {
+  readonly onSelectAgent?: (agent: string) => void
+}): JSX.Element {
   return (
     <>
       <main className="px-4 sm:px-6 py-6 space-y-6" data-testid="advanced-mode">
-        <AgentTileGrid />
+        <AgentTileGrid onSelectAgent={props.onSelectAgent} />
         {/* Phase 116-02 — F07 tool latency split. Surfaces the per-turn
             exec vs roundtrip gap across the fleet. Per-tool depth lives in
             the 116-04 drawer. */}
@@ -335,9 +344,15 @@ export type FleetLayoutProps = {
    * callback. Optional so older callers compile unchanged.
    */
   readonly onEditAgent?: (agent: string) => void
+  /**
+   * Phase 116-04 — opens the F11 agent detail drawer for the named agent.
+   * Threaded through to AgentTileGrid/AgentTile + SloBreachBanner so all
+   * three entry points unify on the single App-level drawer state setter.
+   */
+  readonly onSelectAgent?: (agent: string) => void
 }
 
-export function FleetLayout(_props: FleetLayoutProps = {}): JSX.Element {
+export function FleetLayout(props: FleetLayoutProps = {}): JSX.Element {
   const { mode } = useViewMode()
   const sseStatus = useSseStatus()
   const agentsQuery = useAgents()
@@ -351,16 +366,24 @@ export function FleetLayout(_props: FleetLayoutProps = {}): JSX.Element {
       <Header agentCount={agentCount} sseStatus={sseStatus} />
       <SloBreachBanner
         openAgentDrawer={(name) => {
-          // 116-04 wires the drawer. Today: log to the console so an
-          // operator clicking the link gets a clear "not yet" signal in
-          // devtools without a UI surface.
-          // eslint-disable-next-line no-console
-          console.info(
-            `[clawcode-dashboard] openAgentDrawer placeholder — agent=${name}; the real drawer ships in plan 116-04.`,
-          )
+          // Phase 116-04 — routes to the App-level drawer state setter.
+          // No more console-placeholder; falls back to a console.info ONLY
+          // when the caller forgot to thread onSelectAgent through.
+          if (props.onSelectAgent) {
+            props.onSelectAgent(name)
+          } else {
+            // eslint-disable-next-line no-console
+            console.info(
+              `[clawcode-dashboard] openAgentDrawer fallback — agent=${name}; pass onSelectAgent to FleetLayout to wire the drawer.`,
+            )
+          }
         }}
       />
-      {mode === 'basic' ? <BasicMode /> : <AdvancedMode />}
+      {mode === 'basic' ? (
+        <BasicMode onSelectAgent={props.onSelectAgent} />
+      ) : (
+        <AdvancedMode onSelectAgent={props.onSelectAgent} />
+      )}
     </div>
   )
 }

@@ -483,3 +483,259 @@ export async function createTask(input: {
   }
   return (await res.json()) as { task_id: string; row: KanbanRow }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 116-04 — Tier 2 deep-dive hooks (F11-F15).
+// Drawer transcript, trace waterfall, IPC inboxes, memory snapshot,
+// dream-pass queue. All read-mostly except veto-dream-run which is a
+// fire-and-forget operator action.
+// ---------------------------------------------------------------------------
+
+export type RecentTurnRow = {
+  readonly turnId: string
+  readonly sessionId: string
+  readonly turnIndex: number
+  readonly role: 'user' | 'assistant' | 'system'
+  readonly content: string
+  readonly tokenCount: number | null
+  readonly channelId: string | null
+  readonly discordUserId: string | null
+  readonly discordMessageId: string | null
+  readonly isTrustedChannel: boolean
+  readonly origin: string | null
+  readonly createdAt: string
+}
+
+export type RecentTurnsResponse = {
+  readonly agent: string
+  readonly turns: readonly RecentTurnRow[]
+}
+
+/** F11 — last N conversation turns for the drawer's center column. */
+export function useRecentTurns(
+  agentName: string | null,
+  limit: number = 50,
+): UseQueryResult<RecentTurnsResponse> {
+  return useQuery({
+    queryKey: ['recent-turns', agentName, limit],
+    queryFn: () =>
+      fetchJson<RecentTurnsResponse>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/recent-turns?limit=${limit}`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    // Manual refetch — SSE conversation-turn events push individual turns
+    // via subscribeConversationTurns. No polling; refetch only on agent
+    // change.
+    staleTime: Infinity,
+  })
+}
+
+export type TraceSpan = {
+  readonly name: string
+  readonly startedAt: string
+  readonly durationMs: number
+  readonly metadata: string | null
+}
+
+export type TraceTurnRow = {
+  readonly id: string
+  readonly agent: string
+  readonly startedAt: string
+  readonly endedAt: string
+  readonly totalMs: number
+  readonly discordChannelId: string | null
+  readonly status: string
+  readonly cacheEvictionExpected: boolean
+}
+
+export type TurnTraceResponse = {
+  readonly turn: TraceTurnRow
+  readonly spans: readonly TraceSpan[]
+}
+
+/** F12 — trace_spans for one turn_id. */
+export function useTurnTrace(
+  agentName: string | null,
+  turnId: string | null,
+): UseQueryResult<TurnTraceResponse> {
+  return useQuery({
+    queryKey: ['turn-trace', agentName, turnId],
+    queryFn: () =>
+      fetchJson<TurnTraceResponse>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/traces/${encodeURIComponent(turnId ?? '')}`,
+      ),
+    enabled:
+      agentName !== null && agentName !== '' && turnId !== null && turnId !== '',
+    // Traces are immutable per turn; cache forever once fetched.
+    staleTime: Infinity,
+  })
+}
+
+export type IpcInboxRow = {
+  readonly agent: string
+  readonly pending: number
+  readonly lastModified: string | null
+  readonly inboxDir: string
+  readonly error?: string
+}
+
+export type DeliveryStats = {
+  readonly pending: number
+  readonly inFlight: number
+  readonly failed: number
+  readonly delivered: number
+  readonly totalEnqueued: number
+}
+
+export type DeliveryFailureEntry = {
+  readonly id: string | number
+  readonly agentName?: string
+  readonly channelId?: string
+  readonly content?: string
+  readonly status?: string
+  readonly errorMessage?: string | null
+  readonly createdAt?: number
+  readonly lastAttemptAt?: number | null
+  readonly attempts?: number
+  readonly [key: string]: unknown
+}
+
+export type IpcInboxesResponse = {
+  readonly inboxes: readonly IpcInboxRow[]
+  readonly deliveryStats: DeliveryStats | null
+  readonly recentFailures: readonly DeliveryFailureEntry[]
+}
+
+/** F13 — cross-agent IPC inbox state + fleet delivery snapshot. */
+export function useIpcInboxes(): UseQueryResult<IpcInboxesResponse> {
+  return useQuery({
+    queryKey: ['ipc-inboxes'],
+    queryFn: () => fetchJson<IpcInboxesResponse>('/api/ipc/inboxes'),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  })
+}
+
+export type MemoryFilePreview = {
+  readonly name: string
+  readonly path: string
+  readonly preview: string | null
+  readonly totalChars: number
+  readonly lastModified: string | null
+  readonly error?: string
+}
+
+export type MemoryTierCounts = {
+  readonly hot: number
+  readonly warm: number
+  readonly cold: number
+  readonly total: number
+}
+
+export type MemoryMigrationDelta = {
+  readonly vecMemoriesRows: number | null
+  readonly vecMemoriesV2Rows: number | null
+  readonly phase: string | null
+}
+
+export type ConsolidationEntry = {
+  readonly file: string
+  readonly lastModified: string
+  readonly sizeBytes: number
+}
+
+export type MemorySnapshotResponse = {
+  readonly agent: string
+  readonly memoryPath: string | null
+  readonly files: readonly MemoryFilePreview[]
+  readonly tierCounts: MemoryTierCounts
+  readonly migrationDelta: MemoryMigrationDelta
+  readonly consolidations: readonly ConsolidationEntry[]
+  readonly editAffordance: { readonly available: boolean; readonly hint: string }
+}
+
+/** F14 — memory subsystem snapshot (READ-ONLY in v1 per 116-DEFERRED). */
+export function useMemorySnapshot(
+  agentName: string | null,
+): UseQueryResult<MemorySnapshotResponse> {
+  return useQuery({
+    queryKey: ['memory-snapshot', agentName],
+    queryFn: () =>
+      fetchJson<MemorySnapshotResponse>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/memory-snapshot`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  })
+}
+
+export type DreamEvent = {
+  readonly file: string
+  readonly lastModified: string
+  readonly headerCount: number
+}
+
+export type DreamVetoWindow = {
+  readonly runId: string
+  readonly agentName: string
+  readonly candidateCount: number
+  readonly deadline: number
+  readonly isPriorityPass: boolean
+  readonly status: string
+  readonly scheduledAt: string
+}
+
+export type DreamQueueResponse = {
+  readonly agent: string
+  readonly events: readonly DreamEvent[]
+  readonly pendingVetoWindows: readonly DreamVetoWindow[]
+  readonly dreamConfig: {
+    readonly enabled: boolean
+    readonly idleMinutes: number
+    readonly model: string
+    readonly retentionDays: number | null
+  } | null
+}
+
+/** F15 — dream-pass events + pending D-10 veto windows. */
+export function useDreamQueue(
+  agentName: string | null,
+): UseQueryResult<DreamQueueResponse> {
+  return useQuery({
+    queryKey: ['dream-queue', agentName],
+    queryFn: () =>
+      fetchJson<DreamQueueResponse>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/dream-queue`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  })
+}
+
+/** F15 — operator-fired veto on a pending D-10 window. */
+export async function vetoDreamRun(
+  agentName: string,
+  runId: string,
+  reason: string,
+): Promise<{ runId: string; vetoed: boolean; recordedAt: string }> {
+  const res = await fetch(
+    `/api/agents/${encodeURIComponent(agentName)}/dream-veto/${encodeURIComponent(runId)}`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    },
+  )
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `dream-veto ${res.status}`)
+  }
+  return (await res.json()) as {
+    runId: string
+    vetoed: boolean
+    recordedAt: string
+  }
+}

@@ -14,6 +14,12 @@
  * F26 ConfigEditor opens as a Dialog overlaid on whichever view is active —
  * no view-switch required. CommandPalette stays mounted at root so Cmd+K
  * works regardless of which view the operator is on.
+ *
+ * Phase 116-04 — adds the F11 AgentDetailDrawer at root. Three entry points
+ * unify on `setDrawerAgent`:
+ *   - AgentTile click       → FleetLayout → AgentTileGrid → AgentTile onSelect
+ *   - SloBreachBanner link  → FleetLayout → openAgentDrawer
+ *   - Cmd+K palette select  → CommandPalette → onSelectAgent
  */
 import { useState } from 'react'
 import { useSseBridge } from './hooks/useSse'
@@ -22,6 +28,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { ConfigEditor } from './components/ConfigEditor'
 import { ConversationsView } from './components/ConversationsView'
 import { TaskKanban } from './components/TaskKanban'
+import { AgentDetailDrawer } from './components/AgentDetailDrawer'
 import { Button } from '@/components/ui/button'
 
 export type DashboardView = 'fleet' | 'conversations' | 'tasks'
@@ -34,13 +41,15 @@ function App() {
 
   const [view, setView] = useState<DashboardView>('fleet')
   const [editingAgent, setEditingAgent] = useState<string | null>(null)
+  // Phase 116-04 — F11 drawer state. `null` = closed; non-null = open
+  // for that agent.
+  const [drawerAgent, setDrawerAgent] = useState<string | null>(null)
 
   return (
     <>
       {/* Phase 116-03 view-mode tab strip. Lives above FleetLayout so the
           existing header (inside FleetLayout) doesn't have to reach up
-          into App state. Router-free; minimal surface. 116-04 may replace
-          this with react-router when the per-agent detail drawer ships. */}
+          into App state. Router-free; minimal surface. */}
       <div className="border-b bg-background/60 px-4 py-2">
         <div className="mx-auto flex max-w-7xl items-center gap-2 text-sm">
           <ViewButton active={view === 'fleet'} onClick={() => setView('fleet')}>
@@ -59,7 +68,10 @@ function App() {
       </div>
 
       {view === 'fleet' && (
-        <FleetLayout onEditAgent={(name) => setEditingAgent(name)} />
+        <FleetLayout
+          onEditAgent={(name) => setEditingAgent(name)}
+          onSelectAgent={(name) => setDrawerAgent(name)}
+        />
       )}
       {view === 'conversations' && <ConversationsView />}
       {view === 'tasks' && <TaskKanban />}
@@ -73,17 +85,24 @@ function App() {
         }}
       />
 
+      {/* Phase 116-04 F11 — agent detail drawer mounted at root so any
+          entry point (tile click, SLO banner, Cmd+K) can open it. */}
+      <AgentDetailDrawer
+        agentName={drawerAgent}
+        open={drawerAgent !== null}
+        onOpenChange={(open) => {
+          if (!open) setDrawerAgent(null)
+        }}
+        onEditConfig={(name) => setEditingAgent(name)}
+      />
+
       {/* Phase 116-02 F06 — Cmd+K palette mounted at root so the global
           keyboard listener works regardless of view mode (Basic/Advanced)
-          or sub-component focus state. 116-03 also routes "Edit config <agent>"
-          through here via the optional onOpenConfig prop. */}
+          or sub-component focus state. 116-03 routes "Edit config <agent>"
+          through the optional onOpenConfig prop. 116-04 routes the
+          "jump-to-agent" target through the drawer. */}
       <CommandPalette
-        onSelectAgent={(name) => {
-          // eslint-disable-next-line no-console
-          console.info(
-            `[clawcode-dashboard] command palette: jump-to-agent (${name}) — drawer wires in 116-04.`,
-          )
-        }}
+        onSelectAgent={(name) => setDrawerAgent(name)}
         onOpenConfig={(name) => setEditingAgent(name)}
       />
     </>

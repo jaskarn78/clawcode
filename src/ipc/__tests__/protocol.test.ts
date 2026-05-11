@@ -180,6 +180,25 @@ describe("IPC_METHODS", () => {
       "tool-cache-status",
       "tool-cache-clear",
       "tool-cache-inspect",
+      // Phase 116-03 — Tier 1.5 operator workflow IPC methods (F26/F27/F28).
+      // Added retroactively here to keep the pinning test in sync with the
+      // IPC_METHODS enum — 116-03 didn't touch this test, so the assertion
+      // was already failing when 116-04 began.
+      "get-agent-config",
+      "update-agent-config",
+      "hot-reload-now",
+      "search-conversations",
+      "list-recent-conversations",
+      "list-tasks-kanban",
+      "create-task",
+      "transition-task",
+      // Phase 116-04 — Tier 2 deep-dive IPC methods (F11-F15).
+      "list-recent-turns",
+      "get-turn-trace",
+      "list-ipc-inboxes",
+      "get-memory-snapshot",
+      "get-dream-queue",
+      "veto-dream-run",
     ]);
   });
 });
