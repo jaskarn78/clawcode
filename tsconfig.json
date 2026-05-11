@@ -11,5 +11,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*", "tests/__fakes__/**/*"]
+  "include": ["src/**/*", "tests/__fakes__/**/*"],
+  "exclude": ["src/dashboard/client/**/*"]
 }

@@ -16,13 +16,75 @@ import type { DashboardServerConfig } from "./types.js";
 // dist/dashboard/static by the build script.
 const STATIC_DIR = join(import.meta.dirname, "..", "dashboard", "static");
 
+// Phase 116 — Vite-built React SPA root. Output ships to dist/dashboard/spa/
+// via `npm run build:spa` (vite.config.ts → build.outDir). Served at
+// `/dashboard/v2/*` so the v1 dashboard at `/` stays byte-identical while
+// the rewrite incrementally lands.
+const STATIC_SPA_DIR = join(import.meta.dirname, "..", "dashboard", "spa");
+
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  // Phase 116 — SPA asset MIME extensions. Self-hosted WOFF2 fonts (Cabinet
+  // Grotesk / Geist / JetBrains Mono) land under /dashboard/v2/fonts/ in T06;
+  // PNGs ship from public/ via vite's asset pipeline; .map files are
+  // sourcemaps that Vite emits when build.sourcemap is on (off in v1).
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
 };
+
+/**
+ * Phase 116 — infer the MIME type for a SPA static file from its extension.
+ * Falls back to application/octet-stream when the extension is unknown
+ * (defensive — Vite only emits the extensions in MIME_TYPES above).
+ */
+function inferMimeType(filename: string): string {
+  const dotIndex = filename.lastIndexOf(".");
+  if (dotIndex < 0) return "application/octet-stream";
+  const ext = filename.slice(dotIndex).toLowerCase();
+  return MIME_TYPES[ext] ?? "application/octet-stream";
+}
+
+/**
+ * Phase 116 — serve a SPA asset from dist/dashboard/spa.
+ *
+ * Reads the file as a Buffer (binary-safe — WOFF2 / PNG / sourcemaps would
+ * corrupt if read as utf-8). 404s on missing files rather than falling
+ * through to the SPA index — Vite-built asset paths are content-hashed and
+ * a 404 here means the build is out of sync with the page, which the
+ * operator should see, not paper over.
+ */
+async function serveSpaAsset(
+  res: ServerResponse,
+  relativePath: string,
+  contentType: string,
+): Promise<void> {
+  try {
+    const filePath = join(STATIC_SPA_DIR, relativePath);
+    const content = await readFile(filePath);
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Content-Length": content.length,
+    });
+    res.end(content);
+  } catch {
+    res.writeHead(404);
+    res.end("Not Found");
+  }
+}
 
 /**
  * Parse URL pathname and extract route segments.
@@ -126,6 +188,51 @@ async function handleRequest(
   const { pathname, segments } = parseRoute(req.url);
 
   try {
+    // -----------------------------------------------------------------
+    // Phase 116 — /dashboard/v2 SPA routes (Vite-built React shell).
+    //
+    // Three patterns to handle:
+    //   1. /dashboard/v2  or  /dashboard/v2/        → serve index.html
+    //   2. /dashboard/v2/assets/<filename>          → serve from spa/assets/
+    //   3. /dashboard/v2/<other-static-path>        → serve from spa/ (fonts,
+    //                                                  favicon, sub-public)
+    //
+    // These MUST be evaluated before the v1 `/` route so /dashboard/v2/ does
+    // not accidentally fall through. They are ALSO evaluated before /api/*
+    // so a future /api/v2/* namespace cannot collide with the SPA root.
+    //
+    // Old /  /index.html / /app.js / /styles.css / /graph / /tasks routes
+    // below are UNCHANGED — operator can still hit the v1 dashboard
+    // byte-identical to the pre-Phase-116 deploy while v2 lands.
+    // -----------------------------------------------------------------
+    if (
+      method === "GET" &&
+      (pathname === "/dashboard/v2" || pathname === "/dashboard/v2/")
+    ) {
+      await serveSpaAsset(res, "index.html", MIME_TYPES[".html"]!);
+      return;
+    }
+
+    if (method === "GET" && pathname.startsWith("/dashboard/v2/assets/")) {
+      // Strip the route prefix; what's left is "assets/<file>" relative to
+      // STATIC_SPA_DIR. Vite emits content-hashed filenames so each request
+      // unambiguously identifies one cached asset.
+      const relativePath = pathname.slice("/dashboard/v2/".length);
+      await serveSpaAsset(res, relativePath, inferMimeType(relativePath));
+      return;
+    }
+
+    if (method === "GET" && pathname.startsWith("/dashboard/v2/")) {
+      // Catch-all for SPA static under spa/ root (fonts/, favicon.svg, etc.).
+      // Strict prefix-strip — anything matching /dashboard/v2/<x> serves
+      // STATIC_SPA_DIR/<x>; if the file is missing, serveSpaAsset 404s rather
+      // than falling back to index.html (the operator should see the 404 if
+      // the build is stale).
+      const relativePath = pathname.slice("/dashboard/v2/".length);
+      await serveSpaAsset(res, relativePath, inferMimeType(relativePath));
+      return;
+    }
+
     // Static file routes
     if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
       await serveStatic(res, "index.html", MIME_TYPES[".html"]!);
