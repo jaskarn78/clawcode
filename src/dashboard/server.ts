@@ -1079,7 +1079,13 @@ async function handleRequest(
     // as `:windowId` but it's the same value — see 116-04-SUMMARY.md.
     // =====================================================================
 
-    // GET /api/agents/:name/recent-turns?limit=50&includeUntrusted=false
+    // GET /api/agents/:name/recent-turns?limit=50&includeUntrusted=false&sessionId=…
+    //
+    // 116-postdeploy Bug 2 — when `sessionId` is supplied the result is
+    // restricted to that one session's turns in chronological order (used
+    // by the F27 conversations transcript pane). When absent the original
+    // F11 drawer behaviour applies (recent N turns across all sessions,
+    // reverse-chronological).
     if (
       method === "GET" &&
       segments.length === 4 &&
@@ -1094,12 +1100,21 @@ async function handleRequest(
       const limit = limitParam ? parseInt(limitParam, 10) : 50;
       const includeUntrustedChannels =
         queryParams.get("includeUntrusted") === "true";
+      const sessionIdParam = queryParams.get("sessionId");
+      const ipcParams: Record<string, unknown> = {
+        agent: agentName,
+        limit: Number.isFinite(limit) ? limit : 50,
+        includeUntrustedChannels,
+      };
+      if (sessionIdParam && sessionIdParam.length > 0) {
+        ipcParams.sessionId = sessionIdParam;
+      }
       try {
-        const data = await sendIpcRequest(socketPath, "list-recent-turns", {
-          agent: agentName,
-          limit: Number.isFinite(limit) ? limit : 50,
-          includeUntrustedChannels,
-        });
+        const data = await sendIpcRequest(
+          socketPath,
+          "list-recent-turns",
+          ipcParams,
+        );
         sendJson(res, 200, data);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";

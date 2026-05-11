@@ -5747,6 +5747,17 @@ export async function startDaemon(
         const includeUntrustedChannels =
           (params as { includeUntrustedChannels?: unknown })
             .includeUntrustedChannels === true;
+        // 116-postdeploy Bug 2 — optional session pin. When sessionId is
+        // present the result is constrained to one session's turns in
+        // chronological ORDER ASC (so the UI can render top-to-bottom
+        // without re-sorting). Used by the F27 transcript pane added in
+        // the same fix. When absent the original DESC-by-created_at
+        // recent-turns behaviour is preserved (F11 drawer center column).
+        const sessionId =
+          typeof (params as { sessionId?: unknown }).sessionId === "string" &&
+          (params as { sessionId: string }).sessionId.length > 0
+            ? (params as { sessionId: string }).sessionId
+            : null;
         const store = manager.getConversationStore(agent);
         if (!store) {
           return { agent, turns: [] };
@@ -5757,25 +5768,33 @@ export async function startDaemon(
         // own test surface), we inline the prepared statement here. Trust
         // filter mirrors the WHERE clause in searchTurns.
         const db = store.getDatabase();
-        const sql = includeUntrustedChannels
-          ? `
-            SELECT id, session_id, turn_index, role, content, token_count,
-                   channel_id, discord_user_id, discord_message_id,
-                   is_trusted_channel, origin, created_at
-            FROM conversation_turns
-            ORDER BY created_at DESC
-            LIMIT ?
-          `
-          : `
-            SELECT id, session_id, turn_index, role, content, token_count,
-                   channel_id, discord_user_id, discord_message_id,
-                   is_trusted_channel, origin, created_at
-            FROM conversation_turns
-            WHERE is_trusted_channel = 1 OR channel_id IS NULL
-            ORDER BY created_at DESC
-            LIMIT ?
-          `;
-        const rows = db.prepare(sql).all(limit) as ReadonlyArray<{
+        const trustClause = includeUntrustedChannels
+          ? ""
+          : "AND (is_trusted_channel = 1 OR channel_id IS NULL)";
+        // The leading `WHERE 1=1` lets us append both the trust clause and
+        // the optional session_id predicate as plain `AND …` fragments
+        // without branching on which is present. SQLite's planner folds
+        // the constant predicate at prepare time.
+        const sessionClause = sessionId !== null ? "AND session_id = ?" : "";
+        // For session-pinned queries: chronological order so transcript
+        // renders top→bottom. For unfiltered queries: reverse-chronological
+        // so the F11 drawer can prepend SSE events without re-sorting.
+        const orderClause =
+          sessionId !== null
+            ? "ORDER BY turn_index ASC"
+            : "ORDER BY created_at DESC";
+        const sql = `
+          SELECT id, session_id, turn_index, role, content, token_count,
+                 channel_id, discord_user_id, discord_message_id,
+                 is_trusted_channel, origin, created_at
+          FROM conversation_turns
+          WHERE 1=1 ${trustClause} ${sessionClause}
+          ${orderClause}
+          LIMIT ?
+        `;
+        const sqlParams: Array<string | number> =
+          sessionId !== null ? [sessionId, limit] : [limit];
+        const rows = db.prepare(sql).all(...sqlParams) as ReadonlyArray<{
           id: string;
           session_id: string;
           turn_index: number;

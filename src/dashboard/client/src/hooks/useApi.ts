@@ -530,6 +530,49 @@ export function useRecentTurns(
   })
 }
 
+/**
+ * 116-postdeploy Bug 2 — F27 transcript pane.
+ *
+ * Fetches the full ordered turn list for one session (chronological
+ * ASC). Reuses the F11 `list-recent-turns` IPC handler with an optional
+ * `sessionId` param (added in the same fix) — no new daemon surface.
+ *
+ * Live updates: ConversationsView wires a `subscribeConversationTurns`
+ * listener that calls `queryClient.invalidateQueries(['session-turns',
+ * agent, sessionId])` whenever a turn event lands for the open agent.
+ * The SSE payload does not carry sessionId today, so we refetch on every
+ * matching-agent event rather than filter; the per-session refetch is
+ * cheap (single agent × LIMIT 500 against an FTS-indexed table).
+ */
+export const SESSION_TURNS_QUERY_KEY = 'session-turns' as const
+
+export function useSessionTurns(
+  agentName: string | null,
+  sessionId: string | null,
+  limit: number = 500,
+): UseQueryResult<RecentTurnsResponse> {
+  return useQuery({
+    queryKey: [SESSION_TURNS_QUERY_KEY, agentName, sessionId, limit],
+    queryFn: () => {
+      const qs = new URLSearchParams({
+        limit: String(limit),
+        sessionId: sessionId ?? '',
+      })
+      return fetchJson<RecentTurnsResponse>(
+        `/api/agents/${encodeURIComponent(
+          agentName ?? '',
+        )}/recent-turns?${qs.toString()}`,
+      )
+    },
+    enabled:
+      agentName !== null &&
+      agentName !== '' &&
+      sessionId !== null &&
+      sessionId !== '',
+    staleTime: Infinity,
+  })
+}
+
 export type TraceSpan = {
   readonly name: string
   readonly startedAt: string
