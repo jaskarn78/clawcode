@@ -1170,7 +1170,7 @@ Plans:
 
 **Status:** Shipped 2026-05-01. Snapshot manager implemented, daemon wired (shutdown writer + boot reader), schema field added, validated end-to-end in production.
 
-### Phase 999.7: Context-audit telemetry pipeline restoration + tool-call latency audit (PARTIAL — context-audit shipped 2026-05-01, tool-call profiling still open)
+### Phase 999.7: Context-audit telemetry pipeline restoration + tool-call latency audit (SHIPPED 2026-05-11)
 
 **Goal:** Two related observability gaps surfaced during the 2026-04-29 health audit:
 
@@ -1179,11 +1179,26 @@ Plans:
 
 **Trigger:** 2026-04-29 — operator health audit before Phase 106 deploy. Memory graph linking confirmed healthy (527-1426 memories per agent, 4.6K-9.6K links, auto-linker active). Cache behavior healthy. But context-audit observability is dead and tool latency is slow.
 
-**Status (2026-05-01):** Item 1 SHIPPED (local repo, deploy held). Root cause: `session-config.ts` called `assembleContext` (untraced) instead of `assembleContextTraced`. The traced wrapper is a no-op without a Turn — buildSessionConfig had no Turn to thread, so per-section `section_tokens` metadata was never written. Fix: added `traceCollector` to SessionConfigDeps; wired from session-manager.ts via `this.memory.traceCollectors.get(agentName)`; buildSessionConfig now opens a synthetic `bootstrap:<agent>:<ts>` Turn around `assembleContextTraced` and ends it with status `success`/`error`. Result: one trace row per session start (not per-turn — that's a separate refactor) with full section_tokens populated, unblocking `clawcode context-audit` reporting. Item 2 (tool-call p95 profiling) still open — needs a separate quick task once item 1's data is in production.
+**Status:** SHIPPED 2026-05-11. Item 1 shipped 2026-05-01 (local repo, deploy held — direct edit to `session-config.ts` / `buildSessionConfig`). Item 2 closed 2026-05-11 via quick task `260511-mfn` after Phase 115 Plan 08 (shipped 2026-05-08) landed the telemetry substrate that Item 2 was waiting on. Read-only audit ran against clawdy production `traces.db` files over a 168h window. **Per-tool tail-dominators identified for both Admin Clawdy and fin-acquisition** — see `.planning/quick/260511-mfn-close-out-phase-999-7-item-2-run-tool-la/260511-mfn-AUDIT-FINDINGS.md`. Headline surprise: local file tools (Read/Edit/Grep/Glob/Bash) are tail-dominators at p95 200-700s on BOTH agents, not just the expected MCP/browser/database tools. Original 2026-04-29 trigger ("216-238s p95") understated the actual tail.
 
-**Plans:** 0 plans (item 1 shipped via direct edit; item 2 TBD when promoted)
+**Plans:** 0 plans (Item 1 direct edit; Item 2 via quick task `260511-mfn`).
 
-**Side-finding (informational, not blocking):** Prefix-hash didn't visibly change at the Phase 104 deploy boundary (still `92b7...` from Phase 103). Either Phase 104 directives are in a part of the prefix excluded from the hash computation, or they're landing in a different position than expected. Cache behavior + token telemetry confirm the directives ARE in the prompt, but understanding why the hash is stable across the deploy boundary is worth a quick investigation when this phase opens.
+**Item 1 root cause (informational):** `session-config.ts` called `assembleContext` (untraced) instead of `assembleContextTraced`. The traced wrapper is a no-op without a Turn — buildSessionConfig had no Turn to thread, so per-section `section_tokens` metadata was never written. Fix: added `traceCollector` to SessionConfigDeps; wired from session-manager.ts via `this.memory.traceCollectors.get(agentName)`; buildSessionConfig now opens a synthetic `bootstrap:<agent>:<ts>` Turn around `assembleContextTraced` and ends it with status `success`/`error`. Result: one trace row per session start (not per-turn — that's a separate refactor) with full section_tokens populated, unblocking `clawcode context-audit` reporting.
+
+**Item 2 audit headline findings (2026-05-11, 168h window):**
+
+- **Admin Clawdy top-5 p95:** Edit 375s · Grep 310s · Read 297s · browser_navigate 247s · Bash 241s
+- **fin-acquisition top-5 p95:** browser_navigate 718s · Bash 646s · spawn_subagent_thread 515s · Read 324s · ToolSearch 322s
+- **mysql_query (fin-acq):** 306 calls, p95 307s — Phase 115 sub-scope 15 (MCP cache, folded into 115-07) targets this exact bottleneck; re-measure post-115 deploy in a week.
+- **Local file tools** (Read/Edit/Grep/Glob/Bash) being p95 tail-dominators was NOT in the original 999.7 scope. Either the `tool_call.<name>` span captures more than pure execution (LLM round-trip leakage) OR there's heavy queueing inside Claude Code's tool-dispatch path under concurrent agent load. Disambiguation requires Finding B fixed (see below).
+
+**Two non-blocking follow-ups captured (intentionally NOT bundled into 999.7 closure):**
+
+1. **Phase 115 Plan 08 producer regression** — split-latency columns (`tool_execution_ms`, `tool_roundtrip_ms`, `parallel_tool_call_count`) on the `traces` table are NULL for 0/63 turns post-deploy despite 132 `tool_call.*` spans in the same window. Root cause: deployed bundle missing the `session-adapter.ts` 115-08 producer call sites + `iterateUntilResult` → `iterateWithTracing` rename, despite the `trace-collector.ts` method definitions being present. Likely stale tsup/esbuild incremental cache during the 2026-05-11 14:28 UTC build. Captured as input to **Phase 116** plan-phase (F07 dependency) or a follow-up quick task.
+
+2. **`clawcode tool-latency-audit` CLI returns `Error: Invalid Request`** — likely shares root cause with #1 (same build issue would strip the closure-intercept IPC handler too). Direct SQLite read against the agent `traces.db` is the working fallback that this audit used.
+
+**Side-finding (informational, not blocking):** Prefix-hash didn't visibly change at the Phase 104 deploy boundary (still `92b7...` from Phase 103). Either Phase 104 directives are in a part of the prefix excluded from the hash computation, or they're landing in a different position than expected. Cache behavior + token telemetry confirm the directives ARE in the prompt; understanding the stable hash is left for a future investigation if it matters.
 
 ### Phase 999.8: Dashboard knowledge-graph fixes — node cap + tier colors + tier maintenance (SHIPPED 2026-04-30)
 
