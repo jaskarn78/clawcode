@@ -249,6 +249,14 @@ function FleetRow(props: {
   // Report rows up to the parent so sort + CSV operate on the aggregated set.
   // useEffect-driven so the call is a real side effect (not abuse of
   // useMemo); JSON-serialized key avoids re-reporting identical rows.
+  //
+  // IMPORTANT: every field in RowData must be STABLE across renders for
+  // this pattern to avoid a render storm. Don't add time-relative values
+  // (e.g. "X seconds ago" strings, Date.now() outputs) to RowData — they
+  // would churn rowKey every render → effect fires every render → parent
+  // setReportedRows fires every render → renders cascade. If you need a
+  // relative time in the table, compute it INSIDE the cell render path
+  // (so it derives from row.lastTurnAt, not from row itself).
   const rowKey = JSON.stringify(row)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {

@@ -51,23 +51,39 @@ const SEGMENT_ORDER = [
   'context_assemble',
 ] as const
 
-function sloColorFromStatus(status: string | null | undefined): {
+/**
+ * Map (status, observed, threshold) → bar+label color.
+ *
+ * SloStatus is `"healthy" | "breach" | "no_data"` (src/performance/types.ts).
+ * The F02 convention in AgentTile.tsx splits a breach into warn vs danger
+ * by magnitude: observed > 2× threshold → danger, > 1× → warn, else primary.
+ * We mirror that here for the per-segment gauges so a true breach renders
+ * red rather than amber when the magnitude warrants it.
+ */
+function sloColorFromStatus(
+  status: string | null | undefined,
+  observed: number | null,
+  threshold: number | null,
+): {
   readonly bar: string
   readonly label: string
 } {
-  switch (status) {
-    case 'healthy':
-    case 'ok':
-      return { bar: 'bg-primary', label: 'text-primary' }
-    case 'breach':
-    case 'warning':
-      return { bar: 'bg-warn', label: 'text-warn' }
-    case 'critical':
-    case 'exceeded':
-      return { bar: 'bg-danger', label: 'text-danger' }
-    default:
-      return { bar: 'bg-bg-s3', label: 'text-fg-3' }
+  if (status === 'no_data' || status === null || status === undefined) {
+    return { bar: 'bg-bg-s3', label: 'text-fg-3' }
   }
+  if (status === 'healthy') {
+    return { bar: 'bg-primary', label: 'text-primary' }
+  }
+  // status === 'breach' — split by magnitude. If we don't have numbers to
+  // make the magnitude call, default to danger (a breach reported by the
+  // server should never render less severe than warn).
+  if (observed !== null && threshold !== null && threshold > 0) {
+    if (observed > threshold * 2) {
+      return { bar: 'bg-danger', label: 'text-danger' }
+    }
+    return { bar: 'bg-warn', label: 'text-warn' }
+  }
+  return { bar: 'bg-danger', label: 'text-danger' }
 }
 
 export function SloSegmentGauges(props: {
@@ -113,12 +129,12 @@ export function SloSegmentGauges(props: {
 
 function SegmentBar(props: { readonly segment: Segment }): JSX.Element {
   const s = props.segment
-  const color = sloColorFromStatus(s.slo_status ?? null)
   // Bar measures p95 against threshold. Saturate at 200% so a runaway
   // p95 doesn't blow the bar offscreen.
   const observed = typeof s.p95 === 'number' ? s.p95 : null
   const threshold =
     typeof s.slo_threshold_ms === 'number' ? s.slo_threshold_ms : null
+  const color = sloColorFromStatus(s.slo_status ?? null, observed, threshold)
   const pct =
     observed === null || threshold === null || threshold === 0
       ? null

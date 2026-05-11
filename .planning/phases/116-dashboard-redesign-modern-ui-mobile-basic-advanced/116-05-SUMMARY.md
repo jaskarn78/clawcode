@@ -48,7 +48,7 @@ tech_stack:
   patterns:
     - Contiguous-block routes (continued) — "=== Phase 116-05 routes ===" block in src/dashboard/server.ts appended immediately after the 116-04 fence so 116-06 can extend without touching this diff
     - Contiguous-block daemon IPC (continued) — closure-intercept block in src/manager/daemon.ts labeled "Phase 116-05 — Fleet-scale + cost IPC handlers" houses both new handlers
-    - SPA route-level code splitting — CostDashboard is the heaviest of the new content (~70KB raw of recharts AreaChart + PieChart + their dependencies once you trace through the recharts split). Lazy-loaded via React.lazy() from the FIRST commit. The eager index chunk DROPPED from 906.90KB/275.77KB gzip (end of 116-04) to 879.89KB/267.88KB gzip — Vite's tree-shaker found shared deps that move into the CostDashboard chunk
+    - SPA route-level code splitting — CostDashboard is the heaviest of the new content (~70KB raw of recharts AreaChart + PieChart + their dependencies once you trace through the recharts split). Lazy-loaded via React.lazy() from the FIRST commit; lands as a 40.34KB / 11.37KB-gzip separate chunk that only loads when the operator navigates to /dashboard/v2/costs. Vite also extracted a NEW shared `useApi` chunk (44.77KB / 12.12KB gzip) that AgentDetailDrawer + FleetComparisonTable + the cost route all import — this counts toward cold load via modulepreload. Real apples-to-apples cold-load: 924.66KB raw / ~280KB gzip (index + useApi), vs 906.90/275.77 at end of 116-04 = +18KB raw / +5KB gzip for two new full-page surfaces + drawer enrichments. Plan budget (1MB raw / 320KB gzip) honored with headroom.
     - Client-side CSV serialization — F16 CSV export builds the string via Blob + URL.createObjectURL + temporary <a download>. Zero server round-trip, zero per-cell PII transit, no new daemon load
     - Path↔view sync without router — pushState + popstate listener with two maps (PATH_TO_VIEW / VIEW_TO_PATH). Adds a single full-page surface in O(2 lines). Documented as the pattern 116-06 should follow rather than wholesale switching to react-router
     - SPA-fallback heuristic in the catch-all static handler — paths under /dashboard/v2/<x> with NO file extension serve index.html (SPA route); paths WITH extensions keep strict-404 behavior so stale-build issues remain operator-visible
@@ -90,14 +90,21 @@ decisions:
   - F02 per-segment SLO gauges + F17 24h cost summary mounted in the AgentDetailDrawer right column (above MemoryPanel/IpcInbox/DreamQueue) via a NEW DrawerExtras.tsx — not by editing AgentDetailDrawer directly. Reason: keeps the 116-04 drawer file's diff minimal (one import + one extras mount) and gives a future plan a single file to extend for additional enrichments without re-reading the transcript/header logic.
   - F04 7-day sparkline INTENTIONALLY DEFERRED to 116-06 per advisor triage. It needs a new per-agent timeline endpoint (turn-count-per-day or first-token-p50-per-day buckets) that 116-04 explicitly flagged as missing. Documented in DrawerExtras.tsx top comment.
 metrics:
-  bundle_js_kb_eager: 879.89  # was 906.90 at end of 116-04 — DOWN 27KB
-  bundle_js_gzip_kb_eager: 267.88  # was 275.77 at end of 116-04 — DOWN ~8KB
-  bundle_js_kb_cost_dashboard_chunk: 40.34
-  bundle_js_gzip_kb_cost_dashboard_chunk: 11.37
-  bundle_js_kb_trace_waterfall_chunk: 3.65  # unchanged from 116-04
-  bundle_js_gzip_kb_trace_waterfall_chunk: 1.55
-  bundle_js_kb_use_api_chunk: 44.77  # extracted by vite; same hooks file
+  # Vite split the bundle into three eager-ish chunks (index + useApi shared)
+  # and two lazy chunks (CostDashboard, TraceWaterfall). For an apples-to-
+  # apples cold-load comparison with 116-04's single index chunk, sum the
+  # eager surfaces (index + useApi): both are pulled at cold load via
+  # <link rel=modulepreload>.
+  bundle_js_kb_index_chunk: 879.89          # was 906.90 at end of 116-04
+  bundle_js_gzip_kb_index_chunk: 267.88     # was 275.77 at end of 116-04
+  bundle_js_kb_use_api_chunk: 44.77         # NEW shared chunk this plan; eager
   bundle_js_gzip_kb_use_api_chunk: 12.12
+  bundle_js_kb_eager_cold_load: 924.66      # index + useApi = real cold-load surface
+  bundle_js_gzip_kb_eager_cold_load: 280.00 # +18KB raw / +5KB gzip vs 116-04 — within budget
+  bundle_js_kb_cost_dashboard_chunk: 40.34  # LAZY — not in cold-load count
+  bundle_js_gzip_kb_cost_dashboard_chunk: 11.37
+  bundle_js_kb_trace_waterfall_chunk: 3.65  # LAZY — unchanged from 116-04
+  bundle_js_gzip_kb_trace_waterfall_chunk: 1.55
   bundle_css_kb: 30.08  # was 29.06 at end of 116-04
   bundle_css_gzip_kb: 6.46  # was 6.26 at end of 116-04
   components_added: 4  # FleetComparisonTable, CostDashboard, DrawerExtras (with 2 sub-components), Table (ui primitive)
@@ -111,7 +118,7 @@ metrics:
 
 # Phase 116 Plan 05 Summary
 
-**One-liner:** Two new top-level SPA surfaces (F16 sortable+filterable+CSV-exportable fleet comparison table at /dashboard/v2/fleet; F17 lazy-loaded cost dashboard at /dashboard/v2/costs with today/week/month spend cards, 30d stacked-area trend chart with linear month-end projection, anomaly banner at the 2× CONTEXT threshold, per-model donut, and TOKEN-units EscalationBudget gauges) wired against 2 new REST routes + 2 new IPC handlers + 1 new UsageTracker method — all inside contiguous `=== Phase 116-05 ===` blocks that 116-06 can append after without touching this plan's diff, PLUS a path↔view sync layer that lets the SPA handle /dashboard/v2/{fleet,costs,...} deep links via pushState+popstate (zero new deps), PLUS opportunistic AgentDetailDrawer right-column enrichments (F02 per-segment SLO gauges + F17 24h cost summary) forward-pointed from the 116-04 SUMMARY — and a Vite build that actually *shrank* the eager bundle from 906.90KB to 879.89KB because the CostDashboard lazy-split pulled shared chart deps into a 40.34KB separate chunk.
+**One-liner:** Two new top-level SPA surfaces (F16 sortable+filterable+CSV-exportable fleet comparison table at /dashboard/v2/fleet; F17 lazy-loaded cost dashboard at /dashboard/v2/costs with today/week/month spend cards, 30d stacked-area trend chart with linear month-end projection, anomaly banner at the 2× CONTEXT threshold, per-model donut, and TOKEN-units EscalationBudget gauges) wired against 2 new REST routes + 2 new IPC handlers + 1 new UsageTracker method — all inside contiguous `=== Phase 116-05 ===` blocks that 116-06 can append after without touching this plan's diff, PLUS a path↔view sync layer that lets the SPA handle /dashboard/v2/{fleet,costs,...} deep links via pushState+popstate (zero new deps), PLUS opportunistic AgentDetailDrawer right-column enrichments (F02 per-segment SLO gauges + F17 24h cost summary) forward-pointed from the 116-04 SUMMARY — and a Vite build that lands the new surface at 924.66KB raw / 280KB gzip cold-load (index + eager-shared useApi chunk, vs 906.90/275.77 at end of 116-04 = +18KB raw / +5KB gzip) plus a 40.34KB lazy chunk that only loads when the operator navigates to /dashboard/v2/costs.
 
 ## Tasks Executed
 
@@ -128,7 +135,7 @@ metrics:
 | 2 | F17 cost dashboard shows today/7d/30d totals + per-agent + per-model + trend chart + anomaly alert (>2× 30d avg) | **SATISFIED** | Three SpendCard components driven by independent useCosts('today'), useCosts('week'), useCosts('month') queries — each renders the daemon's canonical aggregate. Trend chart is a Recharts stacked AreaChart over /api/costs/daily; toggle stacks by agent or by model (state-driven, no re-fetch). Per-model donut is a Recharts PieChart over the same payload reduced via modelBucket(). AnomalyBanner fires when today's total > 2× the 30-day daily average (locked from CONTEXT; suppressed when <5 days of buckets exist). The today/7d/30d cards use the daemon's existing /api/costs?period= which already covers exactly that switch. |
 | 3 | F17 budget gauges read from EscalationBudget infrastructure | **SATISFIED (TOKEN UNITS — see decision above)** | budget-status IPC reads escalationBudget (daemon-scope singleton, src/manager/daemon.ts:2469) + budgetConfigs (per-agent AgentBudgetConfig map, daemon.ts:2472). Iterates over budgetConfigs.entries() and for each (period, model) where a token limit is configured, calls escalationBudget.getUsageForPeriod(agent, model, period) (the same method EscalationBudget uses for canEscalate). Status mapping: ≥1.0 → exceeded (danger), ≥0.8 → warning (warn), else ok (primary) — same thresholds as EscalationBudget.checkAlerts. UNITS ARE TOKENS by schema; documented in the gauge subtitle and the SUMMARY decisions. The dashboard renders the gauges on a row distinct from the USD spend cards so operators see both signals without conflation. |
 | 4 | Routing: navigating to /dashboard/v2/fleet and /dashboard/v2/costs works; nav highlights current route | **SATISFIED** | Path↔view sync in App.tsx via pushState + popstate. PATH_TO_VIEW maps /dashboard/v2/fleet → 'fleet' and /dashboard/v2/costs → 'costs' (plus 3 other entries). VIEW_TO_PATH is the inverse for nav clicks. SPA-fallback in src/dashboard/server.ts now serves index.html for any extensionless path under /dashboard/v2/ (so /dashboard/v2/fleet is a valid deep link from a cold load — the catch-all heuristic skips the 404 path when there's no file extension). Nav strip rendered above the view-conditional content; ViewButton variant flips between 'default' (active) and 'ghost' (inactive) based on the current view value. Browser back/forward syncs via the popstate listener. |
-| 5 | Bundle size: SPA stays under 1MB raw / 320KB gzip. Lazy-load F17 cost dashboard if it would push past | **SATISFIED — bundle SHRANK** | Eager `index-C1DeFvtr.js`: 879.89KB raw / 267.88KB gzip — DOWN from 906.90KB / 275.77KB at end of 116-04 (−27KB raw / −8KB gzip). CostDashboard chunk: 40.34KB / 11.37KB gzip (lazy-loaded via React.lazy from the first commit). Trace waterfall chunk unchanged at 3.65KB / 1.55KB gzip. The eager bundle actually shrank because Vite's tree-shaker pushed shared recharts dependencies (chart helpers, scale calculators) into the lazy CostDashboard chunk rather than the eager bundle. Plan budget (1MB raw / 320KB gzip) honored with significant headroom. |
+| 5 | Bundle size: SPA stays under 1MB raw / 320KB gzip. Lazy-load F17 cost dashboard if it would push past | **SATISFIED** | Vite split the bundle into eager (index + useApi shared) + lazy (CostDashboard, TraceWaterfall). Apples-to-apples cold-load (index + useApi via modulepreload): **924.66KB raw / ~280KB gzip**, vs 906.90KB / 275.77KB at end of 116-04. Net +18KB raw / +5KB gzip for two new full-page surfaces (FleetComparisonTable eager, CostDashboard lazy) + opportunistic drawer enrichments — well inside the 1MB / 320KB plan budget. Per-chunk breakdown: `index-C1DeFvtr.js` 879.89/267.88, `useApi-DV1yh9Qm.js` 44.77/12.12 (eager shared), `CostDashboard-D9FZuuDQ.js` 40.34/11.37 (LAZY — loads on /dashboard/v2/costs navigation), `TraceWaterfall-veBQGpaB.js` 3.65/1.55 (LAZY — unchanged from 116-04). |
 
 **Net:** 5 of 5 must-haves SATISFIED. One unit-convention decision (budget gauges in tokens, not USD) is documented in the SUMMARY decisions section and surfaces inline as a gauge subtitle so operators see it on every page load.
 
@@ -228,7 +235,7 @@ All stubs are documented in-component or in this SUMMARY. No silent fakes — ev
 
 ## Items to surface to operator
 
-1. **Bundle size 879.89KB raw / 267.88KB gzip (eager) — DOWN from 906.90 / 275.77 at end of 116-04.** The CostDashboard lazy-split pulled shared chart dependencies out of the eager bundle. Three lazy chunks live alongside: CostDashboard (40.34/11.37), TraceWaterfall (3.65/1.55), useApi (44.77/12.12). Plan budget honored with significant headroom for 116-06.
+1. **Bundle size: cold-load (index + useApi shared, both preloaded) is 924.66KB raw / ~280KB gzip — up +18KB raw / +5KB gzip from end of 116-04** (906.90/275.77). Vite split the dashboard surface into 4 chunks: eager `index` 879.89/267.88, eager-shared `useApi` 44.77/12.12, lazy `CostDashboard` 40.34/11.37 (loads on cost-dashboard navigation), lazy `TraceWaterfall` 3.65/1.55 (loads on trace-row click). Plan budget (1MB raw / 320KB gzip) honored with healthy headroom for 116-06.
 
 2. **F16 fleet table is now the canonical "compare every agent in one view" surface.** Every column sortable, every visible row CSV-exportable. Filters compose (status × model × SLO breach). The footer Discord delivery stat is fleet-wide (the per-agent IPC delivery question requires a schema addition that 116-04 also forward-pointed).
 
