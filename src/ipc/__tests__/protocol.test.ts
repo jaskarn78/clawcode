@@ -202,6 +202,10 @@ describe("IPC_METHODS", () => {
       // Phase 116-05 — Fleet-scale + cost IPC methods (F16/F17).
       "costs-daily",
       "budget-status",
+      // Phase 116-06 — Tier 3 polish + cutover IPC methods.
+      "activity-by-day",
+      "list-dashboard-audit",
+      "dashboard-telemetry-summary",
     ]);
   });
 });

@@ -60,6 +60,9 @@ type PreparedStatements = {
   readonly countTurnsWithToolsInWindow: Statement;
   readonly insertToolUseRateSnapshot: Statement;
   readonly latestToolUseRateSnapshot: Statement;
+  // Phase 116-06 T01 — F18/F22 activity heatmap. One row per
+  // (date, agent) bucket within [since, now], turn count per bucket.
+  readonly activityByDay: Statement;
 };
 
 /**
@@ -1090,7 +1093,65 @@ export class TraceStore {
         ORDER BY computed_at DESC
         LIMIT 1
       `),
+      // Phase 116-06 T01 — F18/F22 activity heatmap. One row per
+      // (date, agent) bucket within [@since, now]. `substr(started_at,1,10)`
+      // pulls YYYY-MM-DD from the ISO 8601 column. Lexicographic @since
+      // bind (also ISO 8601) compares correctly with no cast. Plain
+      // turn count — does NOT filter by input_tokens, cache state, or
+      // status, so every recorded turn surfaces in the heatmap (including
+      // errored turns — that's a SIGNAL, not noise, for the heatmap
+      // operator question "did this agent do anything today?").
+      activityByDay: this.db.prepare(`
+        SELECT
+          substr(started_at, 1, 10) AS date,
+          agent,
+          COUNT(*) AS turn_count
+        FROM traces
+        WHERE started_at >= @since
+        GROUP BY date, agent
+        ORDER BY date, agent
+      `),
     };
+  }
+
+  /**
+   * Phase 116-06 T01 — F18 (per-agent) + F22 (fleet) activity heatmap.
+   *
+   * Returns one row per (date, agent) bucket within [sinceIso, now]:
+   *   - F18 mount: filter to one agent client-side and render the 30×7
+   *     calendar grid with intensity = turn_count.
+   *   - F22 mount: aggregate across all agents (sum per-date) for the
+   *     fleet-wide rollup.
+   *
+   * Why not aggregate fleet-wide on the daemon side? Two reasons:
+   *   1) Both F18 and F22 need the same per-agent breakdown — F22 just
+   *      sums client-side. One IPC, two consumers.
+   *   2) Per-agent rows let the heatmap surface "which agent drove
+   *      today's spike?" on hover.
+   *
+   * Empty windows return `[]` — never throws. ISO 8601 lexicographic
+   * comparison with `started_at` matches the convention every other
+   * trace-store window query uses.
+   */
+  getActivityByDay(sinceIso: string): ReadonlyArray<{
+    readonly date: string;
+    readonly agent: string;
+    readonly turn_count: number;
+  }> {
+    try {
+      const rows = this.stmts.activityByDay.all({ since: sinceIso }) as Array<{
+        date: string;
+        agent: string;
+        turn_count: number;
+      }>;
+      return Object.freeze(rows.map((r) => Object.freeze(r)));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getActivityByDay failed: ${msg}`,
+        this.dbPath,
+      );
+    }
   }
 
   /**

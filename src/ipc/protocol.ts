@@ -349,6 +349,22 @@ export const IPC_METHODS = [
   //                    the USD spend cards. See 116-05-SUMMARY decisions.
   "costs-daily",
   "budget-status",
+  // Phase 116-06 — Tier 3 polish IPC methods (F18/F20/F22/F23 + telemetry).
+  // Handlers live in src/manager/daemon.ts in the closure-intercept block
+  // labeled "Phase 116-06". REST proxies in src/dashboard/server.ts in the
+  // "=== Phase 116-06 routes ===" block.
+  //
+  //   activity-by-day        -> F18 + F22 activity heatmap (turn count per
+  //                             (date, agent) bucket within the window;
+  //                             fleet aggregate sums client-side).
+  //   list-dashboard-audit   -> F23 + T07 audit log viewer (read the JSONL
+  //                             tail; filtered by action / agent / since).
+  //   dashboard-telemetry-summary -> T07 cutover instrumentation badge:
+  //                             counts of dashboard_v2_page_view +
+  //                             dashboard_v2_error in the last 24h.
+  "activity-by-day",
+  "list-dashboard-audit",
+  "dashboard-telemetry-summary",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

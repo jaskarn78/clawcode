@@ -190,6 +190,7 @@ export async function startDashboardServer(config: DashboardServerConfig): Promi
       log,
       config.webhookHandler,
       config.cutoverRedirectEnabled,
+      config.auditTrail,
     );
   });
 
@@ -225,6 +226,7 @@ async function handleRequest(
   log: Logger,
   webhookHandler?: DashboardServerConfig["webhookHandler"],
   cutoverRedirectEnabled?: DashboardServerConfig["cutoverRedirectEnabled"],
+  dashboardAuditTrail?: DashboardServerConfig["auditTrail"],
 ): Promise<void> {
   const method = req.method ?? "GET";
   const { pathname, segments } = parseRoute(req.url);
@@ -597,6 +599,13 @@ async function handleRequest(
 
       try {
         await sendIpcRequest(socketPath, action, { name: agentName });
+        // 116-06 T04: audit log the operator action AFTER it succeeded.
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: `agent-${action}`,
+            target: agentName,
+          });
+        }
         sendJson(res, 200, { ok: true });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -674,6 +683,12 @@ async function handleRequest(
       }
       try {
         const result = await sendIpcRequest(socketPath, ipcMethod, ipcParams);
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: `migration-${action}`,
+            target: agentName,
+          });
+        }
         sendJson(res, 200, result);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -731,6 +746,12 @@ async function handleRequest(
         const data = await sendIpcRequest(socketPath, "mcp-probe", {
           agent: agentName,
         });
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "mcp-reconnect",
+            target: agentName,
+          });
+        }
         sendJson(res, 200, data);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -817,6 +838,17 @@ async function handleRequest(
           agent: agentName,
           partial,
         });
+        if (dashboardAuditTrail) {
+          // Carry the partial as metadata so the F23 viewer can render a
+          // before/after-style row. Daemon already validated the partial
+          // via zod before patching, so what we log is the schema-clean
+          // shape that actually landed on disk.
+          await dashboardAuditTrail.recordAction({
+            action: "update-agent-config",
+            target: agentName,
+            metadata: { partial: partial as Record<string, unknown> },
+          });
+        }
         sendJson(res, 200, result);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -837,6 +869,12 @@ async function handleRequest(
     if (method === "POST" && pathname === "/api/config/hot-reload") {
       try {
         const data = await sendIpcRequest(socketPath, "hot-reload-now", {});
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "hot-reload-now",
+            target: null,
+          });
+        }
         sendJson(res, 200, data);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -934,6 +972,16 @@ async function handleRequest(
           "create-task",
           body as Record<string, unknown>,
         );
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "create-task",
+            target:
+              typeof (body as { target_agent?: unknown }).target_agent === "string"
+                ? ((body as { target_agent: string }).target_agent)
+                : null,
+            metadata: body as Record<string, unknown>,
+          });
+        }
         sendJson(res, 201, result);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -978,6 +1026,13 @@ async function handleRequest(
           status,
           patch,
         });
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "transition-task",
+            target: taskId,
+            metadata: { status, patch: patch as Record<string, unknown> },
+          });
+        }
         sendJson(res, 200, result);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -1170,6 +1225,13 @@ async function handleRequest(
           runId,
           reason,
         });
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "veto-dream-run",
+            target: _agentName,
+            metadata: { runId, reason },
+          });
+        }
         sendJson(res, 200, data);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -1235,6 +1297,129 @@ async function handleRequest(
       return;
     }
     // === end Phase 116-05 routes ===
+
+    // =====================================================================
+    // Phase 116-06 routes — Tier 3 polish + cutover gate (F18/F20/F22/F23
+    // + telemetry). Same contiguous-block convention as the earlier 116-XX
+    // fences. All routes proxy daemon IPC methods registered in the
+    // "Phase 116-06" closure-intercept block in src/manager/daemon.ts.
+    //
+    // F18 + F22 — activity heatmap:
+    //   GET /api/activity?days=30&agent=X   -> daemon `activity-by-day`
+    //
+    // F20 notification feed — derives entirely from existing SSE +
+    //   /api/fleet-stats; no new backend.
+    // F21 theme toggle — pure client state (localStorage); no backend.
+    //
+    // F23 + T07 audit log:
+    //   GET  /api/audit?since=&action=&agent=&limit=  -> daemon `list-dashboard-audit`
+    //   POST /api/dashboard-telemetry                  -> append to dashboard-audit.jsonl
+    //   GET  /api/dashboard-telemetry/summary          -> daemon `dashboard-telemetry-summary`
+    //
+    // F24 graph re-skin — SPA-side React route; no new backend (re-uses
+    //   the existing `memory-graph` IPC via /api/graph/:agent).
+    //
+    // F25 already absorbed into F28 (Kanban) in Plan 116-03; no work here.
+    // T08 cutover gate — wired at GET / above (calls cutoverRedirectEnabled
+    //   closure injected by daemon.ts; 301 to /dashboard/v2/ when true).
+    // =====================================================================
+
+    // GET /api/activity?days=30&agent=X
+    // F18 (per-agent in F11 drawer) + F22 (fleet aggregate on /dashboard/v2/fleet).
+    if (method === "GET" && pathname === "/api/activity") {
+      try {
+        const queryString = (req.url ?? "").split("?")[1] ?? "";
+        const params = new URLSearchParams(queryString);
+        const daysRaw = params.get("days");
+        const days = daysRaw ? Number.parseInt(daysRaw, 10) : 30;
+        const agent = params.get("agent");
+        const ipcParams: Record<string, unknown> = {};
+        if (Number.isFinite(days)) ipcParams.days = days;
+        if (agent) ipcParams.agent = agent;
+        const data = await sendIpcRequest(socketPath, "activity-by-day", ipcParams);
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/audit?since=&action=&agent=&limit=
+    // F23 — read the dashboard audit log JSONL (tail with filters).
+    if (method === "GET" && pathname === "/api/audit") {
+      try {
+        const queryString = (req.url ?? "").split("?")[1] ?? "";
+        const qp = new URLSearchParams(queryString);
+        const ipcParams: Record<string, unknown> = {};
+        const since = qp.get("since");
+        const action = qp.get("action");
+        const agent = qp.get("agent");
+        const limit = qp.get("limit");
+        if (since) ipcParams.since = since;
+        if (action) ipcParams.action = action;
+        if (agent) ipcParams.agent = agent;
+        if (limit) {
+          const n = Number.parseInt(limit, 10);
+          if (Number.isFinite(n)) ipcParams.limit = n;
+        }
+        const data = await sendIpcRequest(socketPath, "list-dashboard-audit", ipcParams);
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // POST /api/dashboard-telemetry { event: "page-view" | "error", path?, message?, stack? }
+    // T07 — SPA-emitted telemetry. The audit-trail acts as the sink so we
+    // don't multiply on-disk JSONL files. Body bounded by MAX_BODY_BYTES.
+    if (method === "POST" && pathname === "/api/dashboard-telemetry") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "bad request body";
+        sendJson(res, 400, { error: message });
+        return;
+      }
+      if (typeof body !== "object" || body === null) {
+        sendJson(res, 400, { error: "Body must be a JSON object" });
+        return;
+      }
+      const event = (body as { event?: unknown }).event;
+      if (event !== "page-view" && event !== "error") {
+        sendJson(res, 400, { error: "event must be 'page-view' or 'error'" });
+        return;
+      }
+      if (dashboardAuditTrail) {
+        await dashboardAuditTrail.recordAction({
+          action: event === "page-view" ? "dashboard_v2_page_view" : "dashboard_v2_error",
+          target: null,
+          metadata: body as Record<string, unknown>,
+        });
+      }
+      sendJson(res, 204, {});
+      return;
+    }
+
+    // GET /api/dashboard-telemetry/summary  — T07 badge counts (24h).
+    if (method === "GET" && pathname === "/api/dashboard-telemetry/summary") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "dashboard-telemetry-summary",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+    // === end Phase 116-06 routes ===
 
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {

@@ -31,6 +31,18 @@ export type DashboardServerConfig = {
   ) => Promise<void>;
 
   /**
+   * Phase 116-06 T04/T07 — dashboard action audit log. Optional so legacy
+   * callers (tests, fixtures) keep working without a JSONL writer. When
+   * provided, every dashboard-originated mutation (the F26 PUT config, the
+   * F09 migration POSTs, the F10 MCP reconnect, the F28 task POSTs, the
+   * F15 veto, the POST /api/agents/:n/:action) calls `.recordAction(...)`
+   * after the IPC dispatch succeeds. The SPA telemetry POST appends
+   * through the same writer with `action: 'dashboard_v2_*'`. The F23
+   * viewer reads the same file via the `list-dashboard-audit` IPC.
+   */
+  readonly auditTrail?: import("./dashboard-audit-trail.js").DashboardAuditTrail;
+
+  /**
    * Phase 116-06 T08 — operator-driven cutover redirect.
    *
    * When this getter returns `true`, `GET /` responds with

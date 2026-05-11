@@ -192,6 +192,7 @@ import { ApprovalLog } from "../security/approval-log.js";
 import { parseSecurityMd } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
 import { startDashboardServer } from "../dashboard/server.js";
+import { DashboardAuditTrail } from "../dashboard/dashboard-audit-trail.js";
 import { startOpenAiEndpoint, type OpenAiEndpointHandle } from "../openai/endpoint-bootstrap.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
@@ -3273,6 +3274,23 @@ export async function startDaemon(
   // 24-arg routeMethod signature. handleBrowserToolCall is a pure-ish
   // dispatcher extracted to src/browser/daemon-handler.ts for testability.
   let openAiEndpointRef: OpenAiEndpointHandle | null = null;
+
+  // Phase 116-06 T04/T07 — dashboard action audit trail. Initialized
+  // here (BEFORE the IPC handler closure) so list-dashboard-audit and
+  // dashboard-telemetry-summary handlers can read through this
+  // reference. The dashboard server reuses the same instance via
+  // DashboardServerConfig.auditTrail; one writer, one reader, one
+  // file → no cross-process JSONL races.
+  //
+  // File path: MANAGER_DIR/dashboard-audit.jsonl. Parallel sibling to
+  // config-audit.jsonl (config-watcher) — distinct file because the
+  // schemas differ (dashboard actions are richer; see
+  // dashboard-audit-trail.ts docstring).
+  const dashboardAuditTrail = new DashboardAuditTrail({
+    filePath: join(MANAGER_DIR, "dashboard-audit.jsonl"),
+    log,
+  });
+
   const handler: IpcHandler = async (method, params) => {
     if (
       method === "openai-key-create" ||
@@ -6470,6 +6488,138 @@ export async function startDaemon(
         return { rows };
       }
       // === end Phase 116-05 IPC handlers ===
+
+      // =====================================================================
+      // Phase 116-06 — Tier 3 polish + cutover IPC handlers (F18/F20/F22/F23
+      // + telemetry). Same closure-intercept convention as the earlier 116-XX
+      // blocks. T01 (heatmaps) reads from per-agent TraceStore singletons via
+      // manager.getTraceStore(). T04 (audit) appends to a JSONL via the
+      // DashboardAuditTrail singleton wired into the dashboard server. T07
+      // (telemetry) reuses the same audit infrastructure with an "action"
+      // discriminator so we don't multiply on-disk JSONL files.
+      //
+      // F19 swim-lane DEFERRED OUT OF PHASE 116 (see 116-DEFERRED.md).
+      // =====================================================================
+
+      case "activity-by-day": {
+        // F18 (per-agent) + F22 (fleet) — calendar-grid activity heatmap.
+        // Params:
+        //   days? (number, 1..90, default 30) — window size; UTC-aligned
+        //                                       start-of-day(now - days+1).
+        //   agent? (string)                   — restrict to one agent.
+        // Returns: { days, since, until, rows: [{date, agent, turn_count}] }
+        //
+        // SCOPE NOTE: getTraceStore returns the per-agent TraceStore for
+        // every agent the daemon has spun up since boot (including stopped
+        // agents whose stores haven't closed). We iterate the agentList
+        // (resolved agents — every agent in clawcode.yaml, running or not)
+        // so the fleet aggregate reflects ALL configured agents that have
+        // recorded turns. An agent whose TraceStore hasn't initialized (no
+        // turns ever) yields zero rows; the heatmap renders a blank lane.
+        const rawDays = (params as { days?: unknown }).days;
+        const days =
+          typeof rawDays === "number" && Number.isFinite(rawDays)
+            ? Math.max(1, Math.min(Math.floor(rawDays), 90))
+            : 30;
+        const agentFilter =
+          typeof (params as { agent?: unknown }).agent === "string" &&
+          (params as { agent: string }).agent.length > 0
+            ? (params as { agent: string }).agent
+            : null;
+        const now = new Date();
+        const sinceUtc = new Date(
+          Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - (days - 1),
+            0,
+            0,
+            0,
+            0,
+          ),
+        );
+        const sinceIso = sinceUtc.toISOString();
+        const untilIso = now.toISOString();
+
+        const agentList = agentFilter
+          ? [agentFilter]
+          : resolvedAgents.map((a) => a.name);
+
+        const rows: Array<{
+          date: string;
+          agent: string;
+          turn_count: number;
+        }> = [];
+        for (const agentName of agentList) {
+          const store = manager.getTraceStore(agentName);
+          if (!store) continue;
+          // activityByDay returns ALL agent rows in that DB filtered by
+          // started_at. In ClawCode each agent owns its own traces.db so
+          // every row legitimately belongs to `agentName`. We still echo
+          // the row's `agent` column verbatim (defensive — survives any
+          // future cross-agent traces.db restructure).
+          for (const r of store.getActivityByDay(sinceIso)) {
+            rows.push({
+              date: r.date,
+              agent: r.agent,
+              turn_count: r.turn_count,
+            });
+          }
+        }
+        return {
+          days,
+          since: sinceIso,
+          until: untilIso,
+          rows,
+        };
+      }
+      case "list-dashboard-audit": {
+        // F23 — read the dashboard audit log tail. Filters: since (ISO
+        // 8601), action (exact match), agent (target match), limit
+        // (default 500, max 5000). Returns rows DESCENDING by timestamp
+        // so the F23 viewer renders the freshest at the top.
+        if (!dashboardAuditTrail) {
+          return { rows: [], filePath: null };
+        }
+        const opts: {
+          since?: string;
+          action?: string;
+          target?: string;
+          limit?: number;
+        } = {};
+        const sinceRaw = (params as { since?: unknown }).since;
+        if (typeof sinceRaw === "string" && sinceRaw.length > 0) {
+          opts.since = sinceRaw;
+        }
+        const actionRaw = (params as { action?: unknown }).action;
+        if (typeof actionRaw === "string" && actionRaw.length > 0) {
+          opts.action = actionRaw;
+        }
+        const agentRaw = (params as { agent?: unknown }).agent;
+        if (typeof agentRaw === "string" && agentRaw.length > 0) {
+          opts.target = agentRaw;
+        }
+        const limitRaw = (params as { limit?: unknown }).limit;
+        if (typeof limitRaw === "number" && Number.isFinite(limitRaw)) {
+          opts.limit = limitRaw;
+        }
+        const rows = await dashboardAuditTrail.listActions(opts);
+        return { rows, filePath: dashboardAuditTrail.getFilePath() };
+      }
+
+      case "dashboard-telemetry-summary": {
+        // T07 — count v2 page-view + error events in the last 24h. Drives
+        // the small "v2 page views: N · errors: M" badge.
+        if (!dashboardAuditTrail) {
+          return {
+            pageViews24h: 0,
+            errors24h: 0,
+            since: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+          };
+        }
+        return dashboardAuditTrail.telemetrySummary24h();
+      }
+      // === end Phase 116-06 IPC handlers ===
     }
 
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);
@@ -6851,6 +7001,7 @@ export async function startDaemon(
       socketPath: SOCKET_PATH,
       webhookHandler,
       cutoverRedirectEnabled,
+      auditTrail: dashboardAuditTrail,
     });
     // Phase 116-03 F27 — publish the SseManager into the late-binding ref so
     // the bridge's onConversationTurn closure picks it up. From now on, every
