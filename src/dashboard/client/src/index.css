@@ -100,18 +100,59 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* shadcn/ui CSS variable layer — dark-only (theme toggle lands in        */
-/* Plan 116-06 F21). HSL values picked to map cleanly onto the Phase 116  */
-/* token palette: --background uses bg.base hue, --primary uses the       */
-/* emerald, --destructive uses the red, etc. shadcn primitives consume    */
-/* these via `bg-background` / `text-foreground` / `border` Tailwind      */
-/* utilities (defined in shadcn's default theme.extend, NOT in this       */
-/* repo's tailwind.config.js — which means the utilities resolve from     */
-/* THESE variables only).                                                  */
+/* shadcn/ui CSS variable layer. Phase 116-06 F21 — theme toggle.         */
+/*                                                                        */
+/* `:root` carries the LIGHT theme values; `.dark` (class on <html>) flips */
+/* every variable to its dark counterpart. The Tailwind config has        */
+/* darkMode: 'class' so utilities like `dark:bg-foo` also respect the     */
+/* class. The pre-React FOUC guard in `index.html` sets `.dark` on        */
+/* <html> BEFORE the React bundle hydrates — that prevents the light-     */
+/* then-dark flash on initial paint when the operator's last selection    */
+/* was "dark" (or "system" + OS dark mode).                                */
+/*                                                                        */
+/* Dark theme is RETAINED as the historical default for operators who     */
+/* never visited the theme toggle (the FOUC guard treats absence-of-      */
+/* preference as `system`, which on most operator OS configs resolves    */
+/* to dark — same effective behavior as pre-F21).                         */
 /* ---------------------------------------------------------------------- */
 @layer base {
   :root {
-    /* Surfaces — dark-mode default. Hex aliases (see token table):       */
+    /* LIGHT theme — operator opts in by selecting "Light" in the toggle. */
+    /* Calibrated to match the editorial / refined aesthetic so the      */
+    /* dashboard reads as a typeset document rather than a glaring page. */
+    --background: 0 0% 99%;
+    --foreground: 240 14% 8%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 14% 8%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 14% 8%;
+
+    --primary: 158 64% 32%; /* slightly darker emerald for AA contrast on white */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 5% 95%;
+    --secondary-foreground: 240 14% 8%;
+
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 5% 40%;
+
+    --accent: 240 5% 95%;
+    --accent-foreground: 240 14% 8%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 6% 88%;
+    --input: 240 6% 88%;
+    --ring: 158 64% 32%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* DARK theme — historical default. Hex aliases (see token table):    */
     /*   #0e0e12 ≈ 240 14% 6.3%  → background                             */
     /*   #16161c ≈ 240 11% 9.8%  → card / popover                         */
     /*   #1c1c24 ≈ 240 13% 12.5% → muted / secondary                      */
@@ -160,7 +201,12 @@
   }
 
   body {
-    @apply bg-bg-base text-fg-1 font-sans antialiased;
+    /* 116-06 F21 — bg-background / text-foreground resolve from the
+       active theme's CSS variables (light by default, dark via .dark
+       on <html>). The 116-00..116-05 era used the literal `bg-bg-base
+       text-fg-1` tokens which were dark-only; flipped here so the body
+       follows the operator's selected theme. */
+    @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: 'cv11', 'ss01', 'ss03';
   }
 

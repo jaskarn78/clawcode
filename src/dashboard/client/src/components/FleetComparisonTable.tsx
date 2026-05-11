@@ -49,6 +49,14 @@ import {
   useIpcInboxes,
   type AgentStatusEntry,
 } from '@/hooks/useApi'
+import { ActivityHeatmap } from './ActivityHeatmap'
+
+// 116-06 F22 — small wrapper so the fleet-wide ActivityHeatmap reads as
+// "fleet" at the call site (no `agent` prop → server aggregates over
+// every running agent).
+function FleetActivityHeatmap(): JSX.Element {
+  return <ActivityHeatmap />
+}
 
 // ---------------------------------------------------------------------------
 // Column definitions + sort state
@@ -500,6 +508,15 @@ export function FleetComparisonTable(): JSX.Element {
           All agents, side-by-side. Click any column header to sort. Export CSV for
           off-line analysis.
         </p>
+      </div>
+
+      {/* 116-06 F22 — fleet-wide 30-day activity heatmap. Sums turn
+          counts across every agent so the operator question "when is
+          the fleet busy?" answers in one glance (informs deploy-window
+          scheduling — see plan must-have). Mounted above the table so
+          the rhythm sits in the operator's primary scan path. */}
+      <div className="mb-6">
+        <FleetActivityHeatmap />
       </div>
 
       <FilterBar

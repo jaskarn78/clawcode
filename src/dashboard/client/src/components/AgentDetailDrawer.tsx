@@ -44,6 +44,7 @@ import { IpcInbox } from './IpcInbox'
 // Phase 116-05 — opportunistic drawer enrichments (F02 SLO gauges +
 // F17 cost summary). F04 7d sparkline deferred — needs new backend.
 import { CostSummaryCard, SloSegmentGauges } from './DrawerExtras'
+import { ActivityHeatmap } from './ActivityHeatmap'
 
 // Lazy-load the F12 waterfall. Reason: it's the heaviest content in the
 // drawer (custom SVG renderer + percentile math) and only mounts on
@@ -284,6 +285,9 @@ function DrawerBody(props: {
               below to preserve scroll memory. */}
           <SloSegmentGauges agentName={props.agentName} />
           <CostSummaryCard agentName={props.agentName} />
+          {/* 116-06 F18 — per-agent 30-day activity heatmap. Compact mode
+              keeps the SVG inside the drawer's right-column width. */}
+          <ActivityHeatmap agent={props.agentName ?? undefined} compact />
           <MemoryPanel agentName={props.agentName} />
           <IpcInbox scope={props.agentName} />
           <DreamQueue agentName={props.agentName} />
