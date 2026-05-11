@@ -3578,12 +3578,27 @@ export async function startDaemon(
       // fleet-wide live size signal so the dashboard reads a fresh number
       // even on the very first turn (when per-agent telemetry is still
       // accumulating).
+      // Phase 116 hotfix 2026-05-11 — `base.since` is ALREADY an ISO timestamp
+      // (set at line 8560 by the underlying `case "cache"` handler via
+      // sinceToIso(params.since)). Re-running sinceToIso() on an ISO string
+      // throws RangeError("invalid since duration: <iso>"), poisoning every
+      // /api/agents/:name/cache response. Use base.since directly (or compute
+      // 24h fallback as ISO) — never re-parse.
+      const resolveSinceIso = (base: Record<string, unknown>): string => {
+        const raw = typeof base.since === "string" ? base.since : "";
+        // ISO timestamps from the underlying handler — pass through.
+        if (raw.includes("T") && raw.includes("Z")) return raw;
+        // Defensive: if some future caller passes a duration string, convert.
+        try {
+          return sinceToIso(raw || "24h");
+        } catch {
+          return new Date(Date.now() - 24 * 3_600_000).toISOString();
+        }
+      };
       if (Array.isArray(baseResult)) {
         return baseResult.map((r) => {
           const base = r as Record<string, unknown>;
-          const since =
-            typeof base.since === "string" ? (base.since as string) : "24h";
-          const sinceIso = sinceToIso(since);
+          const sinceIso = resolveSinceIso(base);
           const agentName =
             typeof base.agent === "string" ? (base.agent as string) : "";
           return Object.freeze({
@@ -3595,9 +3610,7 @@ export async function startDaemon(
         });
       }
       const base = baseResult as Record<string, unknown>;
-      const since =
-        typeof base.since === "string" ? (base.since as string) : "24h";
-      const sinceIso = sinceToIso(since);
+      const sinceIso = resolveSinceIso(base);
       const agentName =
         typeof base.agent === "string" ? (base.agent as string) : "";
       return Object.freeze({
