@@ -12,6 +12,7 @@
  */
 import { useSseBridge } from './hooks/useSse'
 import { FleetLayout } from './layouts/FleetLayout'
+import { CommandPalette } from './components/CommandPalette'
 
 function App() {
   // Singleton SSE bridge — `/api/events` → TanStack Query cache fan-out.
@@ -19,7 +20,22 @@ function App() {
   // the same push-driven invalidation surface.
   useSseBridge()
 
-  return <FleetLayout />
+  return (
+    <>
+      <FleetLayout />
+      {/* Phase 116-02 F06 — Cmd+K palette mounted at root so the global
+          keyboard listener works regardless of view mode (Basic/Advanced)
+          or sub-component focus state. */}
+      <CommandPalette
+        onSelectAgent={(name) => {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[clawcode-dashboard] command palette: jump-to-agent (${name}) — drawer wires in 116-04.`,
+          )
+        }}
+      />
+    </>
+  )
 }
 
 export default App
