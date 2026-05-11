@@ -534,6 +534,141 @@ async function handleRequest(
       return;
     }
 
+    // =====================================================================
+    // Phase 116-02 routes — keep grouped to minimize 116-03 merge surface.
+    //
+    // F09 — embedding migration tracker:
+    //   GET  /api/migrations            -> proxies daemon `embedding-migration-status` (no agent filter)
+    //   POST /api/migrations/:agent/pause     -> daemon `embedding-migration-pause`
+    //   POST /api/migrations/:agent/resume    -> daemon `embedding-migration-resume`
+    //   POST /api/migrations/:agent/rollback  -> daemon `embedding-migration-transition` with toPhase=rolled-back
+    //
+    // F10 — MCP server health panel:
+    //   GET  /api/mcp-servers                          -> proxies daemon `mcp-servers` (config-derived list w/ healthy=null)
+    //   GET  /api/mcp-servers/:agent                   -> proxies daemon `list-mcp-status` (live runtime status + capability probe)
+    //   POST /api/mcp-servers/:agent/:server/reconnect -> proxies daemon `mcp-probe` (re-runs readiness handshake + capability probe)
+    //
+    // The migration `list-migrations` IPC method name in the plan doesn't exist;
+    // daemon ships `embedding-migration-status` which returns the same shape.
+    // Aliased at the REST layer rather than adding a duplicate handler.
+    //
+    // Reconnect maps to `mcp-probe` because the daemon has no operator-fired
+    // reconnect IPC — the heartbeat does reconnects internally; `mcp-probe`
+    // re-runs the readiness handshake which is the equivalent of "kick this
+    // server now". Status flips through degraded → ready as a side effect.
+    // =====================================================================
+
+    // GET /api/migrations  (fleet-wide migration phase snapshot)
+    if (method === "GET" && pathname === "/api/migrations") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "embedding-migration-status",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // POST /api/migrations/:agent/{pause,resume,rollback}
+    if (
+      method === "POST" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "migrations"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const action = segments[3];
+      let ipcMethod: string | null = null;
+      let ipcParams: Record<string, unknown> = { agent: agentName };
+      if (action === "pause") {
+        ipcMethod = "embedding-migration-pause";
+      } else if (action === "resume") {
+        ipcMethod = "embedding-migration-resume";
+      } else if (action === "rollback") {
+        // Rollback is a legal transition from every phase except v1-dropped
+        // (see src/memory/migrations/embedding-v2.ts LEGAL_TRANSITIONS).
+        ipcMethod = "embedding-migration-transition";
+        ipcParams = { agent: agentName, toPhase: "rolled-back" };
+      } else {
+        sendJson(res, 400, {
+          error: `Unknown migration action: ${action} (expected pause|resume|rollback)`,
+        });
+        return;
+      }
+      try {
+        const result = await sendIpcRequest(socketPath, ipcMethod, ipcParams);
+        sendJson(res, 200, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err, agentName, action }, "Migration action failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/mcp-servers  (config-derived list across all agents; healthy=null)
+    if (method === "GET" && pathname === "/api/mcp-servers") {
+      try {
+        const data = await sendIpcRequest(socketPath, "mcp-servers", {});
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/mcp-servers/:agent  (live runtime status from McpServerState)
+    if (
+      method === "GET" &&
+      segments.length === 3 &&
+      segments[0] === "api" &&
+      segments[1] === "mcp-servers"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "list-mcp-status", {
+          agent: agentName,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // POST /api/mcp-servers/:agent/:server/reconnect
+    if (
+      method === "POST" &&
+      segments.length === 5 &&
+      segments[0] === "api" &&
+      segments[1] === "mcp-servers" &&
+      segments[4] === "reconnect"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      // Server name retained in URL for parity with future per-server retry
+      // IPC. Today daemon `mcp-probe` re-runs the readiness handshake for ALL
+      // servers of the agent; per-server kick lands when daemon ships it.
+      try {
+        const data = await sendIpcRequest(socketPath, "mcp-probe", {
+          agent: agentName,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err, agentName }, "MCP reconnect (mcp-probe) failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+    // === end Phase 116-02 routes ===
+
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
       const triggerId = decodeURIComponent(segments[1]!);
