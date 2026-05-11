@@ -1,52 +1,48 @@
 /**
- * Phase 116-05 F17 — cost dashboard.
+ * Phase 116-postdeploy — Usage page (subscription utilisation first).
  *
- * Lazy-loaded (App.tsx imports via React.lazy) because recharts'
- * AreaChart + PieChart land ~70KB minified. Eager loading would burn
- * the remaining bundle budget for a single route.
+ * Replaces the old Costs page framing. Operator runs on Claude Max
+ * ($200/mo flat OAuth subscription), so theoretical API-equivalent USD
+ * totals are not what they're billed. Leading with dollar figures was
+ * causing anxiety over numbers the operator does not actually pay.
  *
- * Sections (top→bottom):
+ * New hierarchy (top→bottom):
  *
- *  1. Anomaly alert banner
- *     If today's spend > 2× the 30-day daily average, render a warn
- *     banner with the multiplier. Threshold locked from CONTEXT.
+ *  1. MaxBanner
+ *     Dismissible explainer: "You're on Claude Max — token spend below
+ *     is theoretical API-equivalent." Persists dismissal to localStorage
+ *     under a versioned key so a future re-wording can re-show it.
  *
- *  2. Total spend cards (today / 7d / 30d)
- *     Three columns. Each card pulls a separate /api/costs?period={}
- *     query so we get the daemon's canonical aggregate (covers the
- *     today/week/month switch already implemented in the costs handler).
+ *  2. Subscription utilisation (primary surface)
+ *     Driven by /api/usage (Phase 116-postdeploy). Renders one wide bar
+ *     per rate-limit type — 5-hour session, 7-day weekly, plus narrower
+ *     bars for the Opus weekly and Sonnet weekly carve-outs. Each bar
+ *     shows utilisation % + a "resets in …" countdown + status emoji
+ *     (allowed / allowed_warning / rejected). Colour: green <70%, amber
+ *     70–90%, red >90%. Overage state shown as a small footer row.
+ *     Snapshot field `rateLimitType` is `string` not a union (Pitfall 10);
+ *     unknown types render with a humanised fallback label, not dropped.
  *
- *  3. Trend chart (stacked area)
- *     Per-day buckets from /api/costs/daily?days=30. Toggle: stack by
- *     agent vs by model. Linear projection from the 30d trend is overlaid
- *     as a dashed extension to month-end.
+ *  3. Token volume (secondary surface)
+ *     Today / 7d / 30d token totals (in + out, K/M suffixed). Trend
+ *     chart re-keyed off the same /api/costs/daily rows but expressing
+ *     totals in tokens instead of USD.
  *
- *  4. Per-model split donut
- *     Sum costs by model name (opus/sonnet/haiku) over the 30d window;
- *     drives a PieChart donut for fast eyeball of where spend goes.
+ *  4. Theoretical API-equivalent cost (DEMOTED, collapsible)
+ *     Default collapsed. Inside: today/7d/30d USD cards + trend chart +
+ *     per-model donut + month-end projection + the high-volume-day
+ *     callout (renamed from "spend anomaly" so the framing doesn't
+ *     suggest the operator is being billed for the spike).
  *
- *  5. Budget gauges (EscalationBudget)
- *     One row per (agent, model, period) where a token limit is
- *     configured. Bar shows tokens_used / tokens_limit + status color
- *     (ok / warning / exceeded). UNITS ARE TOKENS BY SCHEMA — see
- *     116-05-SUMMARY decisions.
+ *  5. Escalation budget gauges (unchanged)
+ *     Token-unit per-agent caps from clawcode.yaml. These ARE real
+ *     operator-configured constraints so they stay top-level.
  *
- * Linear projection logic:
- *   - Need ≥14 days of buckets in the 30d window (after collapsing
- *     per-agent/per-model rows by date). Below that we render
- *     "insufficient data — gather 14d for projection".
- *   - Compute total spend per day. Fit y = mx + b via least-squares
- *     regression over the 30d. Extrapolate to month-end (last day of
- *     the current calendar month). Render the projection as a tiny
- *     callout card next to the trend chart.
- *
- * Anomaly logic:
- *   - average30 = sum(daily totals over last 30d) / 30
- *   - If average30 > 0 and today_total > 2 × average30 → banner.
- *   - When data is sparse (< 5 days of buckets) we suppress the banner
- *     to avoid spurious alerts on freshly-installed daemons.
+ * Lazy-loaded by App.tsx via React.lazy because recharts is ~70KB
+ * minified. The new subscription-bar primitives are pure Tailwind divs
+ * + numbers and don't add to the heavy-import surface.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Area,
   AreaChart,
@@ -66,8 +62,11 @@ import {
   useBudgets,
   useCosts,
   useCostsDaily,
+  useFleetUsage,
   type CostByDay,
   type BudgetRow,
+  type RateLimitSnapshot,
+  type UsageFleetResponse,
 } from '@/hooks/useApi'
 import { parentAgentName } from '@/lib/agent-name'
 
@@ -95,6 +94,85 @@ function formatUsd(n: number): string {
   if (n < 1000) return `$${n.toFixed(2)}`
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 }
+
+// K/M suffix formatter for token counts. Tokens are integers so we don't
+// chase fractional precision below 1K; above 1K we want one decimal place
+// so 12.3K reads as different from 12.4K but 123K isn't noisy.
+function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0'
+  if (n < 1_000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 })
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  return `${(n / 1_000_000_000).toFixed(2)}B`
+}
+
+// Resets-in countdown formatter. Input is ms-epoch (Phase 999.4 normalisation
+// guarantees ms units; seconds-epoch already multiplied by 1000 on capture).
+// Returns "now" when in the past so we don't render negative durations.
+function formatResetsIn(resetsAtMs: number | undefined): string {
+  if (resetsAtMs === undefined) return ''
+  const deltaMs = resetsAtMs - Date.now()
+  if (deltaMs <= 0) return 'resets now'
+  const seconds = Math.floor(deltaMs / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  if (days >= 1) return `resets in ${days}d ${hours % 24}h`
+  if (hours >= 1) return `resets in ${hours}h ${minutes % 60}m`
+  if (minutes >= 1) return `resets in ${minutes}m`
+  return `resets in ${seconds}s`
+}
+
+// Snapshot.rateLimitType is `string` (Pitfall 10) — render a humanised
+// label that covers the known SDK union AND any future type via fallback.
+function humanizeRateLimitType(t: string): string {
+  switch (t) {
+    case 'five_hour':
+      return '5-hour session'
+    case 'seven_day':
+      return 'Weekly (7-day)'
+    case 'seven_day_opus':
+      return 'Opus weekly'
+    case 'seven_day_sonnet':
+      return 'Sonnet weekly'
+    case 'overage':
+      return 'Overage'
+    case 'unknown':
+      return 'Unknown limit'
+    default:
+      // Best-effort prettification: snake_case → Title Case.
+      return t
+        .split('_')
+        .map((s) => (s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1)))
+        .join(' ')
+  }
+}
+
+// Status emoji for the snapshot's allowed/warning/rejected state.
+function statusEmoji(status: RateLimitSnapshot['status']): string {
+  switch (status) {
+    case 'allowed':
+      return '🟢'
+    case 'allowed_warning':
+      return '🟡'
+    case 'rejected':
+      return '🔴'
+  }
+}
+
+// Threshold-aware bar colour. green <70%, amber 70-90%, red >90%. Operator
+// wanted a single visual cue at-a-glance; the status emoji handles the
+// nuance between warning vs rejected within those bands.
+function utilizationBarColor(util: number | undefined): string {
+  const u = util ?? 0
+  if (u >= 0.9) return 'bg-danger'
+  if (u >= 0.7) return 'bg-warn'
+  return 'bg-primary'
+}
+
+// Localstorage key for the Max-subscription banner dismissal. Versioned so
+// a future re-wording can re-show it without needing a migration.
+const MAX_BANNER_DISMISS_KEY = 'clawcode.usage.banner.dismissed.v1'
 
 function modelBucket(model: string): 'opus' | 'sonnet' | 'haiku' | 'other' {
   const m = model.toLowerCase()
@@ -220,18 +298,429 @@ function AnomalyBanner(props: {
   if (props.avg30 <= 0) return null
   const ratio = props.today / props.avg30
   if (ratio < ANOMALY_MULTIPLIER) return null
+  // 116-postdeploy: copy reframed from "spend anomaly" (anxiety-inducing
+  // for theoretical numbers) to "high-volume day" (factual + neutral). Now
+  // also lives INSIDE the collapsed theoretical-cost section, never at the
+  // page top — the operator complaint was over-emphasis on $ figures.
   return (
     <div
-      className="mb-4 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm"
+      className="mb-4 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
       data-testid="cost-anomaly-banner"
-      role="alert"
+      role="status"
     >
-      <span className="font-bold text-danger">Spend anomaly:</span>{' '}
+      <span className="font-bold text-warn">High token-volume day:</span>{' '}
       <span className="text-fg-1">
-        today is {ratio.toFixed(1)}× the 30-day daily average (
-        {formatUsd(props.today)} vs {formatUsd(props.avg30)}).
+        today's theoretical spend is {ratio.toFixed(1)}× the 30-day daily
+        average ({formatUsd(props.today)} vs {formatUsd(props.avg30)}).
       </span>
     </div>
+  )
+}
+
+// 116-postdeploy — reset-expectations banner. Operator runs on Claude Max
+// ($200/mo flat). Dollar totals shown below are theoretical API-equivalent,
+// not what they're billed. Dismissible to localStorage with a versioned
+// key so we can re-show on copy changes.
+function MaxBanner(): JSX.Element | null {
+  const [dismissed, setDismissed] = useState<boolean>(false)
+
+  // Resolve dismissal on mount only (avoid hydration flash from
+  // localStorage on SSR-style re-mounts — not strictly an SSR app but the
+  // pattern is cheap insurance).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(MAX_BANNER_DISMISS_KEY)
+      if (raw === '1') setDismissed(true)
+    } catch {
+      // localStorage may be blocked (private mode / sandboxed iframe). Show
+      // the banner in that case — better to be repetitive than to silently
+      // hide the framing reset.
+    }
+  }, [])
+
+  if (dismissed) return null
+
+  const onDismiss = (): void => {
+    try {
+      window.localStorage.setItem(MAX_BANNER_DISMISS_KEY, '1')
+    } catch {
+      /* see useEffect above */
+    }
+    setDismissed(true)
+  }
+
+  return (
+    <div
+      className="mb-4 flex items-start gap-3 rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm"
+      data-testid="usage-max-banner"
+      role="note"
+    >
+      <span aria-hidden className="font-display text-base">
+        💠
+      </span>
+      <div className="flex-1">
+        <span className="font-bold text-primary">You're on Claude Max</span>{' '}
+        <span className="text-fg-1">($200/mo).</span>{' '}
+        <span className="text-fg-2">
+          Token spend below is theoretical API-equivalent — you're not being
+          billed these amounts. Your real constraints are session + weekly
+          limits, shown above.
+        </span>
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onDismiss}
+        data-testid="usage-max-banner-dismiss"
+      >
+        Dismiss
+      </Button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Subscription utilisation (primary surface) — fed by /api/usage.
+//
+// Aggregates per-rate-limit-type across all running agents. We pick the
+// max utilisation per type (most-constrained agent wins) because the
+// operator's effective constraint is whoever is closest to the cap, not
+// the fleet average. resetsAt is also taken from that max-util snapshot
+// so the countdown is meaningful for the binding agent.
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT_PRIMARY_TYPES = ['five_hour', 'seven_day'] as const
+const RATE_LIMIT_CARVEOUT_TYPES = ['seven_day_opus', 'seven_day_sonnet'] as const
+
+type AggregatedSnapshot = Readonly<{
+  rateLimitType: string
+  status: RateLimitSnapshot['status']
+  utilization: number | undefined
+  resetsAt: number | undefined
+  bindingAgent: string | undefined
+}>
+
+function aggregateByType(
+  fleet: UsageFleetResponse | undefined,
+): Map<string, AggregatedSnapshot> {
+  const out = new Map<string, AggregatedSnapshot>()
+  if (!fleet) return out
+  for (const entry of fleet.agents) {
+    for (const snap of entry.snapshots) {
+      const existing = out.get(snap.rateLimitType)
+      const existingUtil = existing?.utilization ?? -1
+      const incomingUtil = snap.utilization ?? -1
+      // Rule: pick the most-constrained snapshot per type. rejected always
+      // wins over allowed regardless of utilisation since `rejected` means
+      // the cap is HIT.
+      const incomingPriority =
+        snap.status === 'rejected' ? Number.POSITIVE_INFINITY : incomingUtil
+      const existingPriority =
+        existing?.status === 'rejected' ? Number.POSITIVE_INFINITY : existingUtil
+      if (existing && existingPriority >= incomingPriority) continue
+      out.set(snap.rateLimitType, {
+        rateLimitType: snap.rateLimitType,
+        status: snap.status,
+        utilization: snap.utilization,
+        resetsAt: snap.resetsAt,
+        bindingAgent: entry.agent,
+      })
+    }
+  }
+  return out
+}
+
+function findOverageState(
+  fleet: UsageFleetResponse | undefined,
+): {
+  readonly status: RateLimitSnapshot['overageStatus']
+  readonly disabledReason: string | undefined
+  readonly isUsing: boolean | undefined
+} | null {
+  if (!fleet) return null
+  // Overage state is per-account, not per-agent — but the SDK emits it on
+  // any snapshot's overageStatus field. Take the first non-undefined value
+  // we see; if multiple agents disagree (shouldn't happen) the first wins,
+  // which is fine since the operator only needs the *existence* signal.
+  for (const entry of fleet.agents) {
+    for (const snap of entry.snapshots) {
+      if (snap.overageStatus !== undefined || snap.isUsingOverage !== undefined) {
+        return {
+          status: snap.overageStatus,
+          disabledReason: snap.overageDisabledReason,
+          isUsing: snap.isUsingOverage,
+        }
+      }
+    }
+  }
+  return null
+}
+
+function UsageBar(props: {
+  readonly snapshot: AggregatedSnapshot
+  readonly narrow?: boolean
+  readonly testid: string
+}): JSX.Element {
+  const s = props.snapshot
+  const pct = Math.min(100, Math.max(0, (s.utilization ?? 0) * 100))
+  const barColor = utilizationBarColor(s.utilization)
+  const labelSize = props.narrow ? 'text-xs' : 'text-sm'
+  return (
+    <div
+      data-testid={props.testid}
+      data-rate-limit-type={s.rateLimitType}
+      data-status={s.status}
+    >
+      <div className={`flex items-baseline justify-between ${labelSize}`}>
+        <span className="font-display font-bold text-fg-1">
+          {statusEmoji(s.status)}{' '}
+          <span className="font-sans font-normal">
+            {humanizeRateLimitType(s.rateLimitType)}
+          </span>
+        </span>
+        <span className="font-mono text-fg-2 data">
+          {s.utilization === undefined ? '—' : `${pct.toFixed(0)}%`}
+        </span>
+      </div>
+      <div
+        className={`mt-1 w-full ${props.narrow ? 'h-2' : 'h-3'} bg-bg-s3 rounded overflow-hidden`}
+      >
+        <div
+          className={`h-full ${barColor} transition-all`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[10px] font-mono text-fg-3">
+        <span>{formatResetsIn(s.resetsAt)}</span>
+        {s.bindingAgent !== undefined && (
+          <span className="opacity-70" title="binding agent">
+            {s.bindingAgent}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SubscriptionUtilization(props: {
+  readonly fleet: UsageFleetResponse | undefined
+  readonly isLoading: boolean
+}): JSX.Element {
+  const byType = useMemo(() => aggregateByType(props.fleet), [props.fleet])
+  const overage = useMemo(() => findOverageState(props.fleet), [props.fleet])
+
+  const hasAny =
+    byType.size > 0 ||
+    (props.fleet?.agents.some((a) => a.snapshots.length > 0) ?? false)
+
+  return (
+    <Card
+      className="bg-bg-elevated border-bg-s3 mb-4"
+      data-testid="usage-subscription-card"
+    >
+      <CardHeader className="pb-1">
+        <span className="font-display text-sm font-bold text-fg-1">
+          Subscription utilisation
+        </span>
+        <span className="text-[10px] text-fg-3 font-sans">
+          Live from SDK rate_limit_event. Most-constrained agent wins per
+          limit type.
+        </span>
+      </CardHeader>
+      <CardContent>
+        {props.isLoading && !hasAny ? (
+          <p className="text-fg-3 text-sm py-6 text-center">Loading…</p>
+        ) : !hasAny ? (
+          <p
+            className="text-fg-3 text-sm py-6 text-center"
+            data-testid="usage-empty-state"
+          >
+            Subscription utilisation data will appear after the first turn.
+            Captured per-agent from SDK rate_limit_event messages.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {/* Primary bars — full-width 5h + 7d. */}
+            <div className="space-y-3">
+              {RATE_LIMIT_PRIMARY_TYPES.map((t) => {
+                const snap = byType.get(t)
+                if (!snap) return null
+                return (
+                  <UsageBar
+                    key={t}
+                    snapshot={snap}
+                    testid={`usage-bar-${t}`}
+                  />
+                )
+              })}
+            </div>
+
+            {/* Carve-outs — narrower side-by-side. */}
+            {(byType.has('seven_day_opus') || byType.has('seven_day_sonnet')) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {RATE_LIMIT_CARVEOUT_TYPES.map((t) => {
+                  const snap = byType.get(t)
+                  if (!snap) return null
+                  return (
+                    <UsageBar
+                      key={t}
+                      snapshot={snap}
+                      narrow
+                      testid={`usage-bar-${t}`}
+                    />
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Any unknown / future types from a newer SDK release. */}
+            {[...byType.values()]
+              .filter(
+                (s) =>
+                  !RATE_LIMIT_PRIMARY_TYPES.includes(
+                    s.rateLimitType as (typeof RATE_LIMIT_PRIMARY_TYPES)[number],
+                  ) &&
+                  !RATE_LIMIT_CARVEOUT_TYPES.includes(
+                    s.rateLimitType as (typeof RATE_LIMIT_CARVEOUT_TYPES)[number],
+                  ) &&
+                  s.rateLimitType !== 'overage',
+              )
+              .map((s) => (
+                <UsageBar
+                  key={s.rateLimitType}
+                  snapshot={s}
+                  narrow
+                  testid={`usage-bar-${s.rateLimitType}`}
+                />
+              ))}
+
+            {/* Overage row — small indicator, not a full bar. */}
+            {overage && (
+              <div
+                className="text-xs text-fg-2 font-mono border-t border-bg-s3 pt-2"
+                data-testid="usage-overage-row"
+              >
+                Overage:{' '}
+                {overage.status === 'rejected'
+                  ? '🔴 exceeded'
+                  : overage.status === 'allowed_warning'
+                    ? '🟡 allowed (warning)'
+                    : overage.status === 'allowed'
+                      ? overage.isUsing
+                        ? '🟢 in use'
+                        : '🟢 allowed'
+                      : overage.disabledReason
+                        ? `disabled (${overage.disabledReason})`
+                        : 'disabled'}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Token volume (secondary surface) — re-keyed off the existing costs rows.
+//
+// We sum tokens_in + tokens_out across the same /api/costs?period={} rows
+// the USD cards use, so the SAME canonical period semantics apply (today
+// = local midnight, week = Sunday-start, month = calendar month). Trend
+// chart reuses the daily rows with cost_usd swapped for token totals.
+// ---------------------------------------------------------------------------
+
+function TokenCard(props: {
+  readonly label: string
+  readonly tokens: number | null
+  readonly testid: string
+}): JSX.Element {
+  return (
+    <Card className="bg-bg-elevated border-bg-s3" data-testid={props.testid}>
+      <CardHeader className="pb-1">
+        <span className="font-display text-[10px] uppercase tracking-wide text-fg-3">
+          {props.label}
+        </span>
+      </CardHeader>
+      <CardContent>
+        <div className="font-display text-2xl font-bold text-fg-1 data">
+          {props.tokens === null ? '—' : formatTokens(props.tokens)}
+        </div>
+        <div className="text-[10px] text-fg-3 font-sans">tokens (in + out)</div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function TokenTrendChart(props: {
+  readonly rows: readonly CostByDay[]
+}): JSX.Element {
+  // Per-day total tokens (in+out) across the 30d window. We don't split
+  // by agent here — the per-agent split lives in the demoted theoretical
+  // cost section so the operator sees both views without duplication.
+  const chartRows = useMemo(() => {
+    const byDate = new Map<string, number>()
+    for (const r of props.rows) {
+      byDate.set(r.date, (byDate.get(r.date) ?? 0) + r.tokens_in + r.tokens_out)
+    }
+    return [...byDate.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, tokens]) => ({ date, tokens }))
+  }, [props.rows])
+
+  return (
+    <Card
+      className="bg-bg-elevated border-bg-s3"
+      data-testid="usage-token-trend-card"
+    >
+      <CardHeader className="pb-1">
+        <span className="font-display text-sm font-bold text-fg-1">
+          Token volume ({chartRows.length}d)
+        </span>
+      </CardHeader>
+      <CardContent>
+        {chartRows.length === 0 ? (
+          <p className="text-fg-3 text-sm py-12 text-center">No data yet.</p>
+        ) : (
+          <div style={{ width: '100%', height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={chartRows}
+                margin={{ left: 4, right: 12, top: 8, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#252530" />
+                <XAxis
+                  dataKey="date"
+                  stroke="#71717a"
+                  tick={{ fontSize: 10, fontFamily: 'monospace' }}
+                />
+                <YAxis
+                  stroke="#71717a"
+                  tick={{ fontSize: 10, fontFamily: 'monospace' }}
+                  tickFormatter={(v: number) => formatTokens(v)}
+                  width={48}
+                />
+                <RechartsTooltip
+                  contentStyle={{
+                    background: '#1a1a23',
+                    border: '1px solid #252530',
+                    fontSize: 11,
+                  }}
+                  formatter={(v: number) => formatTokens(v)}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="tokens"
+                  stroke="#10b981"
+                  fill="#10b981"
+                  fillOpacity={0.35}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -597,18 +1086,144 @@ function BudgetBar(props: { readonly row: BudgetRow }): JSX.Element {
 // Public surface
 // ---------------------------------------------------------------------------
 
-export function CostDashboard(): JSX.Element {
+// ---------------------------------------------------------------------------
+// Demoted: theoretical API-equivalent cost section. Collapsible — default
+// closed because Operator runs on Claude Max and these numbers are NOT
+// what they're billed. Kept for budget-planning curiosity (e.g. "what
+// would this cost if I switched off Max?") and so the existing telemetry
+// surface isn't deleted; it's just reframed.
+// ---------------------------------------------------------------------------
+
+function TheoreticalCostSection(props: {
+  readonly todayTotal: number
+  readonly weekTotal: number
+  readonly monthTotal: number
+  readonly todayLoading: boolean
+  readonly weekLoading: boolean
+  readonly monthLoading: boolean
+  readonly dailyRows: readonly CostByDay[]
+  readonly dailyMap: ReadonlyMap<string, number>
+  readonly avg30: number
+}): JSX.Element {
+  const [open, setOpen] = useState<boolean>(false)
+  const [groupBy, setGroupBy] = useState<'agent' | 'model'>('agent')
+
+  return (
+    <Card
+      className="bg-bg-elevated border-bg-s3 mb-4"
+      data-testid="usage-theoretical-cost-section"
+    >
+      <CardHeader
+        className="pb-1 cursor-pointer select-none flex flex-row items-center justify-between"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div>
+          <span className="font-display text-sm font-bold text-fg-1">
+            Theoretical API-equivalent cost (if billed)
+          </span>
+          <span className="block text-[10px] text-fg-3 font-sans">
+            What this would cost via the public API. Not what you're billed
+            on Claude Max.
+          </span>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={(e) => {
+            e.stopPropagation()
+            setOpen((v) => !v)
+          }}
+          data-testid="usage-theoretical-cost-toggle"
+        >
+          {open ? 'Hide' : 'Show'}
+        </Button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          <AnomalyBanner
+            today={props.todayTotal}
+            avg30={props.avg30}
+            dayCount={props.dailyMap.size}
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <SpendCard
+              label="Today"
+              amount={props.todayLoading ? null : props.todayTotal}
+              testid="cost-card-today"
+            />
+            <SpendCard
+              label="This week"
+              amount={props.weekLoading ? null : props.weekTotal}
+              testid="cost-card-week"
+            />
+            <SpendCard
+              label="This month"
+              amount={props.monthLoading ? null : props.monthTotal}
+              testid="cost-card-month"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="lg:col-span-2">
+              <TrendChart
+                rows={props.dailyRows}
+                groupBy={groupBy}
+                setGroupBy={setGroupBy}
+              />
+            </div>
+            <div className="space-y-3">
+              <ProjectionCard dailyTotals={props.dailyMap} />
+              <ModelDonut rows={props.dailyRows} />
+            </div>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+export function UsageDashboard(): JSX.Element {
+  // Subscription utilisation — primary surface.
+  const usageQ = useFleetUsage()
+
+  // Token + cost data (re-keyed: tokens are primary, USD is demoted).
   const todayQ = useCosts('today')
   const weekQ = useCosts('week')
   const monthQ = useCosts('month')
   const dailyQ = useCostsDaily(30, null)
   const budgetQ = useBudgets()
 
-  const [groupBy, setGroupBy] = useState<'agent' | 'model'>('agent')
-
-  const todayTotal = useMemo(
+  // Token totals — sum tokens_in + tokens_out across the canonical period
+  // rows so the period semantics match the USD cards exactly.
+  const todayTokens = useMemo(
     () =>
-      (todayQ.data?.costs ?? []).reduce((acc, r) => acc + r.cost_usd, 0),
+      (todayQ.data?.costs ?? []).reduce(
+        (acc, r) => acc + r.input_tokens + r.output_tokens,
+        0,
+      ),
+    [todayQ.data],
+  )
+  const weekTokens = useMemo(
+    () =>
+      (weekQ.data?.costs ?? []).reduce(
+        (acc, r) => acc + r.input_tokens + r.output_tokens,
+        0,
+      ),
+    [weekQ.data],
+  )
+  const monthTokens = useMemo(
+    () =>
+      (monthQ.data?.costs ?? []).reduce(
+        (acc, r) => acc + r.input_tokens + r.output_tokens,
+        0,
+      ),
+    [monthQ.data],
+  )
+
+  // USD totals — retained for the demoted theoretical-cost section.
+  const todayTotal = useMemo(
+    () => (todayQ.data?.costs ?? []).reduce((acc, r) => acc + r.cost_usd, 0),
     [todayQ.data],
   )
   const weekTotal = useMemo(
@@ -620,10 +1235,7 @@ export function CostDashboard(): JSX.Element {
     [monthQ.data],
   )
 
-  const dailyRows = useMemo(
-    () => dailyQ.data?.rows ?? [],
-    [dailyQ.data],
-  )
+  const dailyRows = useMemo(() => dailyQ.data?.rows ?? [], [dailyQ.data])
   const dailyMap = useMemo(() => dailyTotals(dailyRows), [dailyRows])
   const avg30 = useMemo(() => {
     if (dailyMap.size === 0) return 0
@@ -634,50 +1246,70 @@ export function CostDashboard(): JSX.Element {
   return (
     <div className="mx-auto max-w-7xl p-4">
       <div className="mb-4">
-        <h1 className="font-display text-2xl font-bold text-fg-1">Costs</h1>
+        <h1 className="font-display text-2xl font-bold text-fg-1">Usage</h1>
         <p className="text-sm text-fg-3 font-sans">
-          Token + image spend. 30-day rolling window for the trend chart;
-          today/week/month cards use the daemon's canonical aggregate.
+          Subscription utilisation first. Token volume second. Theoretical
+          API-equivalent USD is collapsed by default — you're on Claude Max,
+          not billed per call.
         </p>
       </div>
 
-      <AnomalyBanner today={todayTotal} avg30={avg30} dayCount={dailyMap.size} />
+      <MaxBanner />
+
+      <SubscriptionUtilization
+        fleet={usageQ.data}
+        isLoading={usageQ.isLoading}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-        <SpendCard
+        <TokenCard
           label="Today"
-          amount={todayQ.isLoading ? null : todayTotal}
-          testid="cost-card-today"
+          tokens={todayQ.isLoading ? null : todayTokens}
+          testid="usage-tokens-today"
         />
-        <SpendCard
+        <TokenCard
           label="This week"
-          amount={weekQ.isLoading ? null : weekTotal}
-          testid="cost-card-week"
+          tokens={weekQ.isLoading ? null : weekTokens}
+          testid="usage-tokens-week"
         />
-        <SpendCard
+        <TokenCard
           label="This month"
-          amount={monthQ.isLoading ? null : monthTotal}
-          testid="cost-card-month"
+          tokens={monthQ.isLoading ? null : monthTokens}
+          testid="usage-tokens-month"
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
         <div className="lg:col-span-2">
-          <TrendChart
-            rows={dailyRows}
-            groupBy={groupBy}
-            setGroupBy={setGroupBy}
-          />
+          <TokenTrendChart rows={dailyRows} />
         </div>
-        <div className="space-y-3">
-          <ProjectionCard dailyTotals={dailyMap} />
+        <div>
           <ModelDonut rows={dailyRows} />
         </div>
       </div>
+
+      <TheoreticalCostSection
+        todayTotal={todayTotal}
+        weekTotal={weekTotal}
+        monthTotal={monthTotal}
+        todayLoading={todayQ.isLoading}
+        weekLoading={weekQ.isLoading}
+        monthLoading={monthQ.isLoading}
+        dailyRows={dailyRows}
+        dailyMap={dailyMap}
+        avg30={avg30}
+      />
 
       <BudgetGauges rows={budgetQ.data?.rows ?? []} />
     </div>
   )
 }
 
-export default CostDashboard
+// Backwards-compat alias: App.tsx historically imports `{ CostDashboard }`
+// from this module via React.lazy. Re-exporting the new component under
+// the old name keeps the lazy import resolver working without touching
+// the route plumbing in this commit (handled separately in the nav rename
+// commit so the diff stays atomic).
+export const CostDashboard = UsageDashboard
+
+export default UsageDashboard
