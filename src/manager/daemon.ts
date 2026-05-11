@@ -166,7 +166,6 @@ import {
   provisionWebhooks,
   verifyAgentWebhookIdentity,
 } from "../discord/webhook-provisioner.js";
-import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
 import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.js";
 import { chunkText, chunkPdf } from "../documents/chunker.js";
@@ -6523,53 +6522,43 @@ async function routeMethod(
       const to = validateStringParam(params, "to");
       const message = validateStringParam(params, "message");
 
-      // Validate target agent exists
-      const targetConfig = configs.find((c) => c.name === to);
-      if (!targetConfig) {
-        throw new ManagerError(`Target agent '${to}' not found`);
-      }
-
-      // 1. Always write to filesystem inbox (fallback/record)
-      // Phase 75 SHARED-01 — memoryPath (not workspace) so send-to-agent
-      // writes to the target's private inbox in shared-workspace cases.
-      const inboxDir = join(targetConfig.memoryPath, "inbox");
-      const inboxMsg = createMessage(from, to, message, "normal");
-      await writeMessage(inboxDir, inboxMsg);
-
-      // 2. Post webhook embed to target's Discord channel
-      let delivered = false;
-      const targetChannels = routingTableRef.current.agentToChannels.get(to);
-      if (
-        targetChannels &&
-        targetChannels.length > 0 &&
-        webhookManager.hasWebhook(to)
-      ) {
-        try {
-          const senderConfig = configs.find((c) => c.name === from);
-          const senderDisplayName =
-            senderConfig?.webhook?.displayName ?? from;
-          const senderAvatarUrl = senderConfig?.webhook?.avatarUrl;
-          const embed = buildAgentMessageEmbed(
-            from,
-            senderDisplayName,
-            message,
-          );
-          await webhookManager.sendAsAgent(
-            to,
-            senderDisplayName,
-            senderAvatarUrl,
-            embed,
-          );
-          delivered = true;
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `[send-to-agent] webhook delivery failed from=${from} to=${to} error=${errMsg} — inbox fallback used`,
-          );
-        }
-      }
-
-      return { delivered, messageId: inboxMsg.id };
+      // Quick 260511-pw2 — delegate to the pure-DI handler so all six
+      // silent-skip points emit structured `post-to-agent skipped` logs
+      // with reason tags (mirrors Phase 999.18 / quick 260501-i3r
+      // `subagent relay skipped` substrate). Sender's tool result now
+      // surfaces `{ok, delivered, reason?, messageId}` so the MCP wrapper
+      // can render explicit "queued in inbox" text — fixes the
+      // post-id-looks-task-shaped confusion Admin Clawdy observed.
+      const { handlePostToAgentIpc } = await import("./daemon-post-to-agent-ipc.js");
+      return await handlePostToAgentIpc(
+        { from, to, message },
+        {
+          runningAgents: manager.getRunningAgents(),
+          configs,
+          agentChannels: routingTableRef.current.agentToChannels,
+          webhookManager,
+          writeInbox: async (p) => {
+            const targetConfig = configs.find((c) => c.name === p.to);
+            if (!targetConfig) {
+              // Defensive — handler validated already, but writeInbox is a
+              // pure dep so it owns its own precondition.
+              throw new ManagerError(`Target agent '${p.to}' not found`);
+            }
+            // Phase 75 SHARED-01 — memoryPath (not workspace) so the inbox
+            // write lands in the target's private inbox even in
+            // shared-workspace deployments.
+            const inboxDir = join(targetConfig.memoryPath, "inbox");
+            const inboxMsg = createMessage(p.from, p.to, p.content, "normal");
+            await writeMessage(inboxDir, inboxMsg);
+            return { messageId: inboxMsg.id };
+          },
+          log: {
+            info: (...args: unknown[]) => console.info(...args),
+            warn: (...args: unknown[]) => console.warn(...args),
+            error: (...args: unknown[]) => console.error(...args),
+          },
+        },
+      );
     }
 
     case "set-effort": {

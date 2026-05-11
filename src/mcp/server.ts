@@ -999,14 +999,40 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
         from,
         to,
         message,
-      })) as { delivered: boolean; messageId: string };
+      })) as {
+        ok?: boolean;
+        delivered: boolean;
+        messageId: string;
+        // Quick 260511-pw2 — present iff `delivered=false`. One of:
+        // "no-target-channels" | "no-webhook" | "webhook-send-failed".
+        // Surfaced so the sender's LLM doesn't mistake the inbox id for a
+        // queryable task id (Admin Clawdy 2026-05-11 bug).
+        reason?: string;
+      };
+      if (result.delivered) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Message delivered to ${to} via their Discord channel.`,
+            },
+          ],
+        };
+      }
+      // Inbox-only fallback. Heartbeat reconciler
+      // (src/heartbeat/checks/inbox.ts) drains the inbox for every agent so
+      // the message still lands — but NOT immediately. Be explicit so the
+      // sender's LLM knows this is not a task id to poll.
+      const reasonNote = result.reason ? ` (reason: ${result.reason})` : "";
       return {
         content: [
           {
             type: "text" as const,
-            text: result.delivered
-              ? `Message delivered to ${to} (id: ${result.messageId})`
-              : `Message queued for ${to} (id: ${result.messageId})`,
+            text:
+              `Message written to ${to}'s inbox${reasonNote}. ` +
+              `Webhook delivery to their Discord channel failed, so they will receive it on their next inbox-heartbeat sweep (not immediately). ` +
+              `Note: this is NOT a delegate_task id — do not call task_status on it. ` +
+              `For synchronous Q&A use ask_agent instead.`,
           },
         ],
       };
