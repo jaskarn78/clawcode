@@ -50,18 +50,17 @@ async function fetchJson<T>(url: string): Promise<T> {
 // ---------------------------------------------------------------------------
 
 /**
- * Fleet agent-status snapshot. Initial fetch via REST (`/api/state`); SSE
+ * Fleet agent-status snapshot. Initial fetch via REST (`/api/status`); SSE
  * `agent-status` events push subsequent updates into the same cache key.
  *
- * NOTE: the daemon's existing dashboard REST surface for fleet state is
- * `/api/state` (broadcast also by `agent-status` SSE event). If the daemon
- * later moves to `/api/agents` we update one fetcher here without touching
- * any component.
+ * The daemon's existing dashboard REST surface for fleet state is
+ * `/api/status` (verified against src/dashboard/server.ts:429). The SSE
+ * `agent-status` event broadcasts the same shape on every poll tick.
  */
 export function useAgents(): UseQueryResult<AgentStatusPayload> {
   return useQuery({
     queryKey: ['agent-status'],
-    queryFn: () => fetchJson<AgentStatusPayload>('/api/state'),
+    queryFn: () => fetchJson<AgentStatusPayload>('/api/status'),
     staleTime: Infinity, // SSE pushes invalidations; REST is only the initial fetch.
   })
 }
@@ -115,16 +114,21 @@ export function useDeliveryQueue(): UseQueryResult<unknown> {
   })
 }
 
-/** Per-agent memory tier counts — SSE `memory-stats` event. */
+/**
+ * Per-agent memory tier counts — SSE `memory-stats` event ONLY (no REST
+ * fallback; daemon doesn't expose a /api/memory-stats endpoint). Component
+ * will see `data: undefined` until the first SSE tick lands (typically <3s).
+ */
 export function useMemoryStats(): UseQueryResult<unknown> {
   return useQuery({
     queryKey: ['memory-stats'],
-    queryFn: () => fetchJson('/api/memory-stats'),
+    queryFn: () => Promise.resolve(undefined),
     staleTime: Infinity,
+    enabled: false, // SSE-only — initial REST fetch disabled
   })
 }
 
-/** Task store snapshot — SSE `task-state-change` event. */
+/** Task store snapshot — SSE `task-state-change` event + /api/tasks REST. */
 export function useTasks(): UseQueryResult<unknown> {
   return useQuery({
     queryKey: ['task-state-change'],
@@ -135,13 +139,13 @@ export function useTasks(): UseQueryResult<unknown> {
 
 /**
  * Fleet-level statistics (cgroup memory, claude proc count, MCP rollup).
- * Hits the existing `/api/fleet/stats` endpoint. Not SSE-pushed; refetches
+ * Hits the existing `/api/fleet-stats` endpoint. Not SSE-pushed; refetches
  * every 5s as polling fallback for the few non-push metrics.
  */
 export function useFleetStats(): UseQueryResult<unknown> {
   return useQuery({
     queryKey: ['fleet-stats'],
-    queryFn: () => fetchJson('/api/fleet/stats'),
+    queryFn: () => fetchJson('/api/fleet-stats'),
     refetchInterval: 5_000,
   })
 }
