@@ -38,6 +38,7 @@ import { AgentTileGrid } from '@/components/AgentTileGrid'
 import { AgentTile } from '@/components/AgentTile'
 import { ToolLatencySplit } from '@/components/ToolLatencySplit'
 import { MigrationTracker } from '@/components/MigrationTracker'
+import { McpHealthPanel } from '@/components/McpHealthPanel'
 
 // ---------------------------------------------------------------------------
 // Header — connection dot, branding, view-mode toggle, settings cog.
@@ -314,6 +315,7 @@ function AdvancedMode(): JSX.Element {
             grid on wide viewports so operators can scan both surfaces. */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <MigrationTracker />
+          <McpHealthPanel />
         </div>
       </main>
       <McpOverviewStrip />
