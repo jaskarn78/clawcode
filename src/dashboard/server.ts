@@ -258,10 +258,23 @@ async function handleRequest(
     if (method === "GET" && pathname.startsWith("/dashboard/v2/")) {
       // Catch-all for SPA static under spa/ root (fonts/, favicon.svg, etc.).
       // Strict prefix-strip — anything matching /dashboard/v2/<x> serves
-      // STATIC_SPA_DIR/<x>; if the file is missing, serveSpaAsset 404s rather
-      // than falling back to index.html (the operator should see the 404 if
-      // the build is stale).
+      // STATIC_SPA_DIR/<x>.
+      //
+      // Phase 116-05 — SPA-fallback for client routes. The SPA owns
+      // /dashboard/v2/{fleet,costs,conversations,tasks,...} via the App.tsx
+      // path↔view sync layer. These look like file paths but no file exists
+      // under STATIC_SPA_DIR for them. Heuristic: if the path has no file
+      // extension (no `.` in the last segment), treat it as a client route
+      // and serve index.html. Paths with extensions (e.g. fonts/x.woff2,
+      // favicon.svg) keep the strict 404-on-miss behavior so operators
+      // catch stale-build issues.
       const relativePath = pathname.slice("/dashboard/v2/".length);
+      const lastSegment = relativePath.split("/").pop() ?? "";
+      const hasExtension = lastSegment.includes(".");
+      if (!hasExtension) {
+        await serveSpaAsset(res, "index.html", MIME_TYPES[".html"]!);
+        return;
+      }
       await serveSpaAsset(res, relativePath, inferMimeType(relativePath));
       return;
     }

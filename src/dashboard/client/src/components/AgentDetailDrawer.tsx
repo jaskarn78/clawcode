@@ -41,6 +41,9 @@ import {
 import { MemoryPanel } from './MemoryPanel'
 import { DreamQueue } from './DreamQueue'
 import { IpcInbox } from './IpcInbox'
+// Phase 116-05 — opportunistic drawer enrichments (F02 SLO gauges +
+// F17 cost summary). F04 7d sparkline deferred — needs new backend.
+import { CostSummaryCard, SloSegmentGauges } from './DrawerExtras'
 
 // Lazy-load the F12 waterfall. Reason: it's the heaviest content in the
 // drawer (custom SVG renderer + percentile math) and only mounts on
@@ -272,11 +275,15 @@ function DrawerBody(props: {
           )}
         </main>
 
-        {/* RIGHT — memory, IPC inbox, dream queue */}
+        {/* RIGHT — memory, IPC inbox, dream queue, SLO + cost (116-05). */}
         <aside
           className="space-y-3"
           data-testid="drawer-right-column"
         >
+          {/* 116-05 enrichments — small surfaces; existing panels stay
+              below to preserve scroll memory. */}
+          <SloSegmentGauges agentName={props.agentName} />
+          <CostSummaryCard agentName={props.agentName} />
           <MemoryPanel agentName={props.agentName} />
           <IpcInbox scope={props.agentName} />
           <DreamQueue agentName={props.agentName} />

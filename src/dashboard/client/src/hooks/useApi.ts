@@ -714,6 +714,99 @@ export function useDreamQueue(
   })
 }
 
+// ---------------------------------------------------------------------------
+// Phase 116-05 — Fleet-scale + cost (F16/F17).
+// ---------------------------------------------------------------------------
+
+/**
+ * F17 — one cost row aggregated across the configured `period`.
+ * Shape mirrors the daemon's existing `costs` IPC handler (period →
+ * Date(start-of-{today,week,month}) inclusive through now).
+ */
+export type CostRow = {
+  readonly agent: string
+  readonly model: string
+  readonly input_tokens: number
+  readonly output_tokens: number
+  readonly cost_usd: number
+}
+
+export type CostsResponse = {
+  readonly period: 'today' | 'week' | 'month' | string
+  readonly costs: readonly CostRow[]
+}
+
+/** F17 — costs for a window. Periods: today / week / month. */
+export function useCosts(
+  period: 'today' | 'week' | 'month' = 'today',
+): UseQueryResult<CostsResponse> {
+  return useQuery({
+    queryKey: ['costs', period],
+    queryFn: () =>
+      fetchJson<CostsResponse>(
+        `/api/costs?period=${encodeURIComponent(period)}`,
+      ),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  })
+}
+
+/** F17 — per-day cost trend rows (daemon costs-daily IPC). */
+export type CostByDay = {
+  readonly date: string
+  readonly agent: string
+  readonly model: string
+  readonly tokens_in: number
+  readonly tokens_out: number
+  readonly cost_usd: number
+}
+
+export type CostsDailyResponse = {
+  readonly days: number
+  readonly since: string
+  readonly until: string
+  readonly rows: readonly CostByDay[]
+}
+
+export function useCostsDaily(
+  days: number = 30,
+  agent: string | null = null,
+): UseQueryResult<CostsDailyResponse> {
+  const search = new URLSearchParams({ days: String(days) })
+  if (agent) search.set('agent', agent)
+  return useQuery({
+    queryKey: ['costs-daily', days, agent ?? ''],
+    queryFn: () =>
+      fetchJson<CostsDailyResponse>(`/api/costs/daily?${search.toString()}`),
+    refetchInterval: 60_000,
+    staleTime: 45_000,
+  })
+}
+
+/** F17 — EscalationBudget gauges. TOKEN units. */
+export type BudgetRow = {
+  readonly agent: string
+  readonly model: string
+  readonly period: 'daily' | 'weekly'
+  readonly tokens_used: number
+  readonly tokens_limit: number
+  readonly pct: number
+  readonly status: 'ok' | 'warning' | 'exceeded'
+}
+
+export type BudgetsResponse = {
+  readonly rows: readonly BudgetRow[]
+}
+
+export function useBudgets(): UseQueryResult<BudgetsResponse> {
+  return useQuery({
+    queryKey: ['budgets'],
+    queryFn: () => fetchJson<BudgetsResponse>('/api/budgets'),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  })
+}
+
 /** F15 — operator-fired veto on a pending D-10 window. */
 export async function vetoDreamRun(
   agentName: string,
