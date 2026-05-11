@@ -8,7 +8,9 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsup && npm run copy-assets",
+    "build": "tsup && npm run copy-assets && npm run build:spa",
+    "build:spa": "cd src/dashboard/client && vite build",
+    "dev:spa": "cd src/dashboard/client && vite dev",
     "copy-assets": "mkdir -p dist/dashboard/static && cp -r src/dashboard/static/. dist/dashboard/static/",
     "postinstall": "node scripts/install/postinstall-shim.cjs",
     "test": "vitest run --reporter=verbose",
