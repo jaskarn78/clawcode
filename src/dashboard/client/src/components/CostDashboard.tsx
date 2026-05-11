@@ -69,10 +69,21 @@ import {
   type CostByDay,
   type BudgetRow,
 } from '@/hooks/useApi'
+import { parentAgentName } from '@/lib/agent-name'
 
 const ANOMALY_MULTIPLIER = 2 // CONTEXT-locked
 const MIN_DAYS_FOR_PROJECTION = 14
 const MIN_DAYS_FOR_ANOMALY = 5
+
+// 116-postdeploy Bug 1 — cap "by agent" series count so the legend stays
+// readable. Top-N agents by total spend retain their own series; the
+// remainder collapse into a single "other" bucket. 7 is a balance between
+// "see real agents" and "legend doesn't wrap to three lines" on a 280px
+// chart. With ~14 root agents in the fleet today, this keeps the top
+// half of the fleet legible and packs the long-tail subagent spam into
+// one band.
+const TOP_AGENT_SERIES = 7
+const OTHER_BUCKET = 'other'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -134,15 +145,43 @@ function dailyTotals(rows: readonly CostByDay[]): Map<string, number> {
 
 // Group rows by date with per-agent OR per-model columns. Recharts wants
 // each row to be `{ date, [seriesName]: value, ... }`.
+//
+// 116-postdeploy Bug 1: when grouping by agent, names are first collapsed
+// to their root parent (subagent threads like `<parent>-sub-<nanoid6>` or
+// `<parent>-via-<delegate>-<nanoid6>` roll up into `<parent>`). Then the
+// top-N parents by total spend retain individual series; the long tail
+// merges into an `other` bucket. This avoids the operator-reported bug
+// where hundreds of subagent session names spilled across the legend.
 function buildChartRows(
   rows: readonly CostByDay[],
   groupBy: 'agent' | 'model',
 ): { rows: Array<Record<string, number | string>>; series: string[] } {
+  // Pass 1 (agent-only): compute parent totals → pick top-N.
+  let topAgents: Set<string> | null = null
+  if (groupBy === 'agent') {
+    const totals = new Map<string, number>()
+    for (const r of rows) {
+      const parent = parentAgentName(r.agent)
+      totals.set(parent, (totals.get(parent) ?? 0) + r.cost_usd)
+    }
+    const ranked = [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, TOP_AGENT_SERIES)
+      .map(([name]) => name)
+    topAgents = new Set(ranked)
+  }
+
+  // Pass 2: bucket each row into a date × series cell.
   const dateMap = new Map<string, Record<string, number | string>>()
   const seriesSet = new Set<string>()
   for (const r of rows) {
-    const series =
-      groupBy === 'agent' ? r.agent : modelBucket(r.model)
+    let series: string
+    if (groupBy === 'agent') {
+      const parent = parentAgentName(r.agent)
+      series = topAgents!.has(parent) ? parent : OTHER_BUCKET
+    } else {
+      series = modelBucket(r.model)
+    }
     seriesSet.add(series)
     let row = dateMap.get(r.date)
     if (!row) {
@@ -152,9 +191,19 @@ function buildChartRows(
     row[series] = ((row[series] as number | undefined) ?? 0) + r.cost_usd
   }
   const sortedDates = [...dateMap.keys()].sort()
+
+  // Sort series: `other` always last (visual: long tail sits at the top
+  // of the stack, recognisable as the muted band). Otherwise alphabetical
+  // for stable layout across renders.
+  const series = [...seriesSet].sort((a, b) => {
+    if (a === OTHER_BUCKET) return 1
+    if (b === OTHER_BUCKET) return -1
+    return a.localeCompare(b)
+  })
+
   return {
     rows: sortedDates.map((d) => dateMap.get(d)!),
-    series: [...seriesSet].sort(),
+    series,
   }
 }
 
@@ -312,6 +361,10 @@ function pickColor(
       MODEL_COLORS[series as keyof typeof MODEL_COLORS] ?? MODEL_COLORS.other
     )
   }
+  // 116-postdeploy Bug 1 — stable muted color for the "other" bucket so
+  // the long-tail collapse reads as such (and doesn't fight for attention
+  // against the top-N real-agent bands).
+  if (series === OTHER_BUCKET) return '#52525b' // zinc-600
   return AGENT_COLORS[idx % AGENT_COLORS.length]!
 }
 

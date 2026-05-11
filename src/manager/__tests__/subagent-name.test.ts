@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSubagentThreadName } from "../subagent-name.js";
+import { isSubagentThreadName, parentAgentName } from "../subagent-name.js";
 
 describe("isSubagentThreadName", () => {
   describe("positive matches (auto-spawned)", () => {
@@ -82,5 +82,57 @@ describe("isSubagentThreadName", () => {
       expect(isSubagentThreadName("foo-via-bar-ab.def")).toBe(false);
       expect(isSubagentThreadName("foo-sub-ab@def")).toBe(false);
     });
+  });
+});
+
+describe("parentAgentName", () => {
+  it("strips -sub-<nanoid6> to recover the parent", () => {
+    expect(parentAgentName("fin-acquisition-sub-AbC123")).toBe(
+      "fin-acquisition",
+    );
+    expect(parentAgentName("personal-sub-Wo2nHX")).toBe("personal");
+  });
+
+  it("strips -via-<delegate>-<nanoid6> to recover the parent", () => {
+    expect(parentAgentName("fin-acquisition-via-fin-research-57r__G")).toBe(
+      "fin-acquisition",
+    );
+  });
+
+  it("strips multi-segment delegate suffix back to the root parent", () => {
+    // The greedy `.+` in the delegate portion + non-greedy parent capture
+    // must still land at the first valid -via- boundary.
+    expect(
+      parentAgentName("fin-acquisition-via-finmentum-content-creator-4XZKL0"),
+    ).toBe("fin-acquisition");
+  });
+
+  it("preserves parent names containing spaces", () => {
+    expect(parentAgentName("Admin Clawdy-sub-Wo2nHX")).toBe("Admin Clawdy");
+    expect(parentAgentName("Admin Clawdy-via-research-2K7cf3")).toBe(
+      "Admin Clawdy",
+    );
+  });
+
+  it("returns operator-defined names unchanged", () => {
+    expect(parentAgentName("fin-acquisition")).toBe("fin-acquisition");
+    expect(parentAgentName("Admin Clawdy")).toBe("Admin Clawdy");
+    expect(parentAgentName("personal")).toBe("personal");
+  });
+
+  it("returns operator names containing -via- unchanged (suffix not nanoid)", () => {
+    // An operator could legally name an agent "general-via-billing"; the
+    // trailing nanoid6 is what makes it a subagent.
+    expect(parentAgentName("general-via-billing")).toBe("general-via-billing");
+  });
+
+  it("returns unchanged when suffix is wrong length", () => {
+    expect(parentAgentName("foo-sub-abcde")).toBe("foo-sub-abcde");
+    expect(parentAgentName("foo-sub-abcdefg")).toBe("foo-sub-abcdefg");
+  });
+
+  it("handles edge inputs gracefully", () => {
+    expect(parentAgentName("")).toBe("");
+    expect(parentAgentName("a")).toBe("a");
   });
 });
