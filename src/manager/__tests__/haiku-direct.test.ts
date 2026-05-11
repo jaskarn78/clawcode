@@ -10,9 +10,12 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const { mockCreate, MockAnthropic } = vi.hoisted(() => {
   const mockCreate = vi.fn();
-  function MockAnthropic(_opts: unknown) {
+  // vi.fn() wrapping a function expression (NOT arrow — arrows aren't
+  // constructable with `new`) so tests can assert MockAnthropic.mock.calls
+  // for verifying the token-identity cache (token unchanged → no reconstruction).
+  const MockAnthropic = vi.fn(function MockAnthropicImpl(this: unknown, _opts: unknown) {
     return { messages: { create: mockCreate } };
-  }
+  });
   return { mockCreate, MockAnthropic };
 });
 
@@ -41,11 +44,18 @@ function textResponse(text: string) {
   return { content: [{ type: "text", text }] };
 }
 
+function credsWithToken(token: string): string {
+  return JSON.stringify({
+    claudeAiOauth: { accessToken: token, expiresAt: 9999999999 },
+  });
+}
+
 describe("callHaikuDirect", () => {
   beforeEach(() => {
     _resetClientForTests();
     mockCreate.mockReset();
     mockReadFile.mockReset();
+    MockAnthropic.mockClear();
     mockReadFile.mockResolvedValue(VALID_CREDS as unknown as string);
   });
 
@@ -95,11 +105,68 @@ describe("callHaikuDirect", () => {
     await expect(callHaikuDirect("s", "u", {})).rejects.toThrow("ENOENT");
   });
 
-  it("caches the client: credentials file read only once across multiple calls", async () => {
+  it("reuses client when access token is unchanged across calls", async () => {
+    // Token-identity cache: file is read every call (page-cached, cheap), but
+    // the Anthropic SDK client is reconstructed only when the token differs.
     mockCreate.mockResolvedValue(textResponse("a"));
     await callHaikuDirect("s", "u", {});
     await callHaikuDirect("s", "u", {});
-    expect(mockReadFile).toHaveBeenCalledTimes(1);
+    expect(mockReadFile).toHaveBeenCalledTimes(2);
+    expect(MockAnthropic).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds client when access token rotates (auto-refresh, manual relogin)", async () => {
+    // Regression pin for the 2026-05-11 Discord 401 incident: cached client
+    // bakes the old token at construction time; refresh rotates the token in
+    // the credentials file; without re-checking identity the daemon replays
+    // the dead token forever and every call hits 401.
+    mockReadFile.mockReset();
+    mockReadFile.mockResolvedValueOnce(credsWithToken("TOKEN_A"));
+    mockReadFile.mockResolvedValueOnce(credsWithToken("TOKEN_B"));
+    mockCreate.mockResolvedValue(textResponse("ok"));
+
+    await callHaikuDirect("s", "u", {});
+    await callHaikuDirect("s", "u", {});
+
+    expect(MockAnthropic).toHaveBeenCalledTimes(2);
+    const firstCallOpts = MockAnthropic.mock.calls[0]![0] as {
+      authToken: string;
+    };
+    const secondCallOpts = MockAnthropic.mock.calls[1]![0] as {
+      authToken: string;
+    };
+    expect(firstCallOpts.authToken).toBe("TOKEN_A");
+    expect(secondCallOpts.authToken).toBe("TOKEN_B");
+  });
+
+  it("retries once on 401, invalidating cache and reloading credentials", async () => {
+    // Defense-in-depth: handles the race where the token rotates between
+    // loadOAuthToken() and the SDK's HTTP send. Without this, callers still
+    // see occasional 401s at rotation boundaries every ~8h.
+    mockReadFile.mockReset();
+    mockReadFile.mockResolvedValueOnce(credsWithToken("STALE"));
+    mockReadFile.mockResolvedValueOnce(credsWithToken("FRESH"));
+
+    const error401 = Object.assign(new Error("Unauthorized"), { status: 401 });
+    mockCreate.mockRejectedValueOnce(error401);
+    mockCreate.mockResolvedValueOnce(textResponse("recovered"));
+
+    const result = await callHaikuDirect("s", "u", {});
+    expect(result).toBe("recovered");
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(MockAnthropic).toHaveBeenCalledTimes(2);
+    const retryClientOpts = MockAnthropic.mock.calls[1]![0] as {
+      authToken: string;
+    };
+    expect(retryClientOpts.authToken).toBe("FRESH");
+  });
+
+  it("does not retry on non-401 errors", async () => {
+    const error500 = Object.assign(new Error("Server error"), { status: 500 });
+    mockCreate.mockRejectedValueOnce(error500);
+
+    await expect(callHaikuDirect("s", "u", {})).rejects.toThrow("Server error");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -108,6 +175,7 @@ describe("callHaikuVision", () => {
     _resetClientForTests();
     mockCreate.mockReset();
     mockReadFile.mockReset();
+    MockAnthropic.mockClear();
     mockReadFile.mockResolvedValue(VALID_CREDS as unknown as string);
   });
 
