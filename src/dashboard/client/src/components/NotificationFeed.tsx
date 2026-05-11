@@ -8,32 +8,40 @@
  * SOURCES (all derived client-side; NO new backend endpoint — every
  * signal already streams via SSE or polls via the existing query layer):
  *
- *   1. SLO breach          — useAgents() + useAgentCache(name) per agent.
- *                            slos.first_token_p50_ms observed > threshold.
- *                            Same logic as SloBreachBanner.tsx.
- *   2. Budget exceeded     — useBudgets(). Any row.pct >= 0.9.
- *   3. MCP degradation     — useFleetStats().mcpFleet — any pattern with
- *                            count > 0 + a sibling agent's useMcpServers
- *                            reporting `degraded`. For the v1 surface we
- *                            ONLY notify on the fleet snapshot's "degraded"
- *                            string when present in the payload (lazy
- *                            best-effort; falls back silently).
- *   4. Dream priority      — useAgents()'s SSE stream emits
- *                            `dream_priority_pass_fired`. We watch via
- *                            the SSE bridge (window event).
- *   5. IPC delivery failure — useIpcInboxes().deliveryStats.failed > 0.
+ *   1. SLO breach           — per-agent fan-out via useAgentCache(name) +
+ *                             useAgentLatency(name) probe components.
+ *                             slos.first_token_p50_ms observed > threshold.
+ *                             SAME PATTERN as SloBreachBanner.tsx (AgentBreachProbe).
+ *   2. Budget exceeded      — useBudgets(). Any row.pct >= 0.9.
+ *   3. Discord delivery     — useDeliveryQueue().stats.failed > 0.
+ *
+ * SOURCES INTENTIONALLY OMITTED (advisor-triaged 2026-05-11):
+ *
+ *   - MCP degradation       — useMcpServers() is per-agent; no fleet-wide
+ *                             rollup IPC exists today. The F10 MCP health
+ *                             panel inside the drawer is the existing
+ *                             affordance. Documented in 116-06-SUMMARY.
+ *   - Dream priority trigger — no SSE event fires today; F15 dream queue
+ *                             panel in the drawer is the existing
+ *                             affordance. Documented in 116-06-SUMMARY.
+ *   - Per-agent IPC inbox failures — DROPPED on advisor review. The
+ *                             IpcInboxesResponse shape is { inboxes: [{agent,
+ *                             pending, lastModified, ...}], deliveryStats,
+ *                             recentFailures } — there's no `failed` count
+ *                             per inbox row. Fleet-wide Discord delivery
+ *                             failures are already surfaced via
+ *                             useDeliveryQueue (the recentFailures field
+ *                             carries the per-message breakdown for the
+ *                             F13 panel). Adding it twice would double-fire.
  *
  * AUTO-DISMISS: notifications with `firstSeen` older than 24h are
- * filtered out at render time (no localStorage retention; the next
- * page load with the upstream signal still present re-creates the
- * notification with a fresh `firstSeen`). Operator-dismissed entries
- * persist in `clawcode:dismissed-notifications` until the underlying
- * signal clears (so a once-dismissed SLO breach doesn't re-pop on
- * every poll).
+ * filtered out at render time. Operator-dismissed entries persist in
+ * `clawcode:dismissed-notifications` until the underlying signal
+ * clears (so a once-dismissed SLO breach doesn't re-pop on every poll).
  *
  * The header badge shows the UNDISMISSED count. Zero = no badge.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Sheet,
   SheetContent,
@@ -45,9 +53,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   useAgents,
+  useAgentCache,
+  useAgentLatency,
   useBudgets,
   useDeliveryQueue,
-  useIpcInboxes,
 } from '@/hooks/useApi'
 
 type NotificationLevel = 'info' | 'warn' | 'danger'
@@ -58,7 +67,7 @@ export type Notification = {
   readonly title: string
   readonly detail: string
   readonly firstSeen: number // epoch ms
-  readonly source: 'slo' | 'budget' | 'ipc' | 'mcp' | 'delivery'
+  readonly source: 'slo' | 'budget' | 'delivery'
 }
 
 const DISMISSED_KEY = 'clawcode:dismissed-notifications'
@@ -103,25 +112,103 @@ function BellIcon(): JSX.Element {
   )
 }
 
+type SloBreach = {
+  readonly agent: string
+  readonly observedMs: number
+  readonly thresholdMs: number
+}
+
+// Per-agent SLO probe — one component per agent so each can drive its own
+// useAgentCache + useAgentLatency without violating hook rules. Reports the
+// breach (or null) up to the parent via a callback. Same shape as the
+// AgentBreachProbe in SloBreachBanner.tsx; we INTENTIONALLY re-implement it
+// inline rather than extract a shared module because the two surfaces want
+// different result shapes (banner: dismissKey for jitter-bucket dismissal;
+// feed: simple {observed, threshold}).
+function AgentSloProbe(props: {
+  readonly agent: string
+  readonly onResult: (agent: string, breach: SloBreach | null) => void
+}): null {
+  const cacheQ = useAgentCache(props.agent)
+  const latencyQ = useAgentLatency(props.agent)
+  const { onResult, agent } = props
+  useEffect(() => {
+    type CachePayload = { readonly slos?: { readonly first_token_p50_ms?: number | null } }
+    type LatencyPayload = {
+      readonly first_token_headline?: {
+        readonly p50?: number | null
+        readonly count?: number
+        readonly slo_status?: string | null
+      }
+    }
+    const cache = cacheQ.data as CachePayload | undefined
+    const latency = latencyQ.data as LatencyPayload | undefined
+    const threshold = cache?.slos?.first_token_p50_ms ?? null
+    const observed = latency?.first_token_headline?.p50 ?? null
+    const count = latency?.first_token_headline?.count ?? 0
+    const status = latency?.first_token_headline?.slo_status ?? null
+    // Cold-start guard: < 5 samples → no breach (matches daemon's
+    // evaluateFirstTokenHeadline + SloBreachBanner pattern).
+    if (
+      threshold === null ||
+      observed === null ||
+      count < 5 ||
+      status === 'no_data' ||
+      observed <= threshold
+    ) {
+      onResult(agent, null)
+      return
+    }
+    onResult(agent, { agent, observedMs: observed, thresholdMs: threshold })
+  }, [cacheQ.data, latencyQ.data, agent, onResult])
+  return null
+}
+
 export function NotificationFeed(): JSX.Element {
   const agentsQuery = useAgents()
   const budgetsQuery = useBudgets()
-  const ipcQuery = useIpcInboxes()
   const deliveryQuery = useDeliveryQueue()
+
+  // Per-agent SLO breach map driven by AgentSloProbe children.
+  const [sloMap, setSloMap] = useState<Record<string, SloBreach | null>>({})
+  const handleSloResult = useCallback(
+    (agent: string, breach: SloBreach | null) => {
+      setSloMap((curr) => {
+        const prev = curr[agent]
+        // Cheap equality — skip re-render when nothing changed.
+        if (
+          prev === breach ||
+          (prev !== null &&
+            prev !== undefined &&
+            breach !== null &&
+            prev.observedMs === breach.observedMs &&
+            prev.thresholdMs === breach.thresholdMs)
+        ) {
+          return curr
+        }
+        return { ...curr, [agent]: breach }
+      })
+    },
+    [],
+  )
+
+  const agentsPayload = agentsQuery.data as
+    | { agents?: ReadonlyArray<{ name: string }> }
+    | undefined
+  const agentNames = useMemo(
+    () => (agentsPayload?.agents ?? []).map((a) => a.name).filter((n) => n.length > 0),
+    [agentsPayload],
+  )
 
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() =>
     readDismissed(),
   )
-  // Stable `firstSeen` map keyed by notification id. Notifications that
-  // appear in successive polls keep the original firstSeen so the 24h
-  // auto-dismiss runs from the FIRST time we saw the signal, not the
-  // current render.
+  // Stable `firstSeen` map keyed by notification id.
   const [firstSeenMap, setFirstSeenMap] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
   )
 
-  // Aggregate raw signals into notification objects (without firstSeen
-  // yet — that's filled in from firstSeenMap below).
+  // Aggregate raw signals into notification objects.
   const rawNotifications = useMemo<readonly Omit<Notification, 'firstSeen'>[]>(() => {
     const out: Omit<Notification, 'firstSeen'>[] = []
 
@@ -145,7 +232,7 @@ export function NotificationFeed(): JSX.Element {
       }
     }
 
-    // 2) IPC delivery failures — useDeliveryQueue().stats.failed > 0.
+    // 2) Discord delivery failures — useDeliveryQueue().stats.failed > 0.
     const deliveryData = deliveryQuery.data as
       | { readonly stats?: { readonly failed?: number; readonly delivered?: number } }
       | undefined
@@ -159,60 +246,30 @@ export function NotificationFeed(): JSX.Element {
         level: 'warn',
         title: `Discord delivery: ${deliveryData.stats.failed} failed`,
         detail:
-          'Fleet-wide outbound queue has unresolved failures. Inspect via the delivery panel or operator CLI.',
+          'Fleet-wide outbound queue has unresolved failures. Inspect via the F13 IPC inbox panel or operator CLI.',
         source: 'delivery',
       })
     }
 
-    // 3) IPC inbox failures — useIpcInboxes() carries per-agent inbox
-    //    state with delivery counts; we surface any agent with a
-    //    `failed > 0` count in its inbox.
-    const ipcData = ipcQuery.data as
-      | { readonly agents?: readonly { readonly name: string; readonly delivery?: { readonly failed?: number } }[] }
-      | undefined
-    if (ipcData?.agents) {
-      for (const a of ipcData.agents) {
-        const failed = a.delivery?.failed
-        if (typeof failed === 'number' && failed > 0) {
-          out.push({
-            id: `ipc:${a.name}`,
-            level: 'warn',
-            title: `${a.name} IPC delivery failure`,
-            detail: `${failed} undelivered IPC message${failed === 1 ? '' : 's'} pending.`,
-            source: 'ipc',
-          })
-        }
-      }
-    }
-
-    // 4) SLO breaches — DERIVED from useAgents()'s status field. Each
-    //    agent payload carries a `slo_status` enrichment when the daemon
-    //    has data; "warn" / "danger" produce a notification. The
-    //    SloBreachBanner does its own per-agent useAgentCache fan-out
-    //    for the precise metric; the notification feed surfaces the
-    //    headline only ("agent X is breaching").
-    const agentsData = agentsQuery.data as
-      | { readonly agents?: readonly { readonly name: string; readonly slo_status?: string }[] }
-      | undefined
-    if (agentsData?.agents) {
-      for (const a of agentsData.agents) {
-        if (a.slo_status === 'warn' || a.slo_status === 'danger') {
-          out.push({
-            id: `slo:${a.name}`,
-            level: a.slo_status === 'danger' ? 'danger' : 'warn',
-            title: `${a.name} SLO breach`,
-            detail:
-              a.slo_status === 'danger'
-                ? 'first_token p50 is more than 2× the per-model threshold. Investigate via the drawer.'
-                : 'first_token p50 is over the per-model threshold. Watch for sustained degradation.',
-            source: 'slo',
-          })
-        }
-      }
+    // 3) SLO breaches — per-agent fan-out via AgentSloProbe children.
+    //    Cold-start agents (< 5 samples) and absent-threshold agents
+    //    don't fire. Severity bumps to danger when observed > 2× threshold
+    //    (matches SloBreachBanner's color magnitude split).
+    for (const [agent, breach] of Object.entries(sloMap)) {
+      if (!breach) continue
+      const overage = breach.observedMs / breach.thresholdMs
+      const level: NotificationLevel = overage >= 2 ? 'danger' : 'warn'
+      out.push({
+        id: `slo:${agent}`,
+        level,
+        title: `${agent} SLO breach: first_token p50 ${Math.round(breach.observedMs)}ms`,
+        detail: `Observed ${Math.round(breach.observedMs)}ms vs threshold ${Math.round(breach.thresholdMs)}ms (${(overage).toFixed(1)}× over). Drill into the F11 drawer for the per-segment breakdown.`,
+        source: 'slo',
+      })
     }
 
     return out
-  }, [agentsQuery.data, budgetsQuery.data, ipcQuery.data, deliveryQuery.data])
+  }, [budgetsQuery.data, deliveryQuery.data, sloMap])
 
   // Update firstSeenMap: new ids get `now`, existing keep their original
   // timestamp. Stale ids (signal cleared) DON'T get pruned — keeping
@@ -276,6 +333,15 @@ export function NotificationFeed(): JSX.Element {
       : 'info'
 
   return (
+    <>
+      {/* Hidden per-agent SLO probes — each renders null but drives
+          useAgentCache + useAgentLatency for its agent and reports the
+          breach (or null) up to the parent via handleSloResult. Mounted
+          OUTSIDE the Sheet so they keep polling while the slide-over is
+          closed (otherwise the badge would only update on open). */}
+      {agentNames.map((agent) => (
+        <AgentSloProbe key={agent} agent={agent} onResult={handleSloResult} />
+      ))}
     <Sheet>
       <SheetTrigger asChild>
         <Button
@@ -373,5 +439,6 @@ export function NotificationFeed(): JSX.Element {
         </div>
       </SheetContent>
     </Sheet>
+    </>
   )
 }
