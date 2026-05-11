@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Performance + Reliability
 status: executing
-stopped_at: Completed Plan 116-00 (10 commits) + quick tasks 260511-pw2 (post_to_agent silent drops) + 260511-pw3 (schema registry auto-discovery)
-last_updated: "2026-05-11T21:34:28.588Z"
+stopped_at: Phase 116 SHIPPED 2026-05-11 — Plan 116-06 closes Phase 116 (F18+F20-F24 + telemetry + cutover gate). 3 commits (f863757 T08 cutover flag, d6510ff T01+T04+T07 backend, 7e6b531 T01-T05+T07 frontend). Awaiting operator deploy clearance + cutover flip decision.
+last_updated: "2026-05-11T22:35:00.000Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 63
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 108
-  completed_plans: 99
-  percent: 92
+  completed_plans: 105
+  percent: 97
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 ## Current Position
 
-Phase: 116 (Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)) — EXECUTING
-Plan: 4 of 6
-Status: Ready to execute
-Latest commit: `38deaca` — feat(116-00): T10 smoke component renders agent cards from live SSE
+Phase: 116 (Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)) — SHIPPED 2026-05-11
+Plan: 6 of 6 (CLOSED)
+Status: Phase 116 COMPLETE at source level. Operator owns cutover flip + deploy decisions.
+Latest commit: `7e6b531` — feat(116-06): T01-T05+T07 frontend — heatmap, notifications, theme, audit, graph, telemetry
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 
@@ -680,16 +680,21 @@ Recent decisions affecting current work:
 | Phase 999.36 P00 | 22min | 5 tasks | 5 files |
 | Phase 999.36 P01 | 11 | 5 tasks | 7 files |
 | Phase 116 P01 | 65min | 6 tasks | 11 files |
+| Phase 116 P06 | 85min | 7 tasks | 22 files |
 
 ## Session Continuity
 
 Last activity: 2026-05-11
-Stopped at: Completed Plan 116-00 (10 commits) + quick tasks 260511-pw2 (post_to_agent silent drops) + 260511-pw3 (schema registry auto-discovery)
-Resume: Execute Plan 116-01 (Tier 1 read-only surfaces — F01 SLO breach banner, F03 agent tile grid, F04 budget meter, F05 cache gauge, F08 prompt-bloat/lazy-recall counters). All Tier 1 data sources already exist via `/api/agents/:name/cache` + `/api/status` + `/api/fleet-stats` — no backend additions. Pure React component work using the 116-00 SPA foundation (Vite + React 19 + shadcn/ui + Tailwind + self-hosted Cabinet Grotesk/Geist/JetBrains Mono fonts).
+Stopped at: Phase 116 SHIPPED — Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md.
+Resume: Phase 116 is code-complete at the source level. Awaiting operator decisions: (1) deploy clearance — Ramy-active deploy hold continues until operator explicit clearance; (2) cutover flag flip — `clawcode config set defaults.dashboardCutoverRedirect true` once operator has soaked /dashboard/v2/ for one or more sessions and reviewed `/dashboard/v2/audit` to confirm dashboard mutations are captured; (3) decommission follow-up — separate commit removing legacy `src/dashboard/static/*` files + the cutover-flag plumbing once the operator is confident the cutover is durable. See `116-VERIFICATION.md` for the operator handoff checklist + telemetry signals to watch + rollback procedure.
 
-**Open follow-up:** ~~Phase 115-08 producer port~~ — **DONE 2026-05-11 (commit `a0f30a6`, awaiting deploy clearance).** Surgical port from `session-adapter.ts:iterateWithTracing` (test-only path) into `persistent-session-handle.ts:iterateUntilResult` (production path) + static-grep sentinel + end-to-end integration test. See Open Bugs section for full diagnosis + resolution detail.
+**Open follow-ups (deferred from Phase 116):**
+- ~~Phase 115-08 producer port~~ — **DONE 2026-05-11 (commit `a0f30a6`, awaiting deploy clearance).** See Open Bugs section.
+- F19 swim-lane timeline → 116-DEFERRED.md (promotion criteria: 2× operator demand reports OR F12 reveals multi-agent timing gap).
+- F14 in-UI memory editor → 116-DEFERRED.md (promotion criteria: operator workflow friction OR `clawcode memory edit` invocations exceed 10/day).
+- Pre-existing slash-command test failures (~17-19) carried forward across the entire Phase 116 chain. Awaiting the dedupe task 116-04 surfaced.
 
-**Operator note:** Plan 116-00 introduced no daemon-side runtime deps; all new deps are client-side devDeps for the SPA build. No deploy performed; commits are code-only. Ramy-active deploy hold continues until operator explicit clearance.
+**Operator note:** Plan 116-06 introduced no new top-level dependencies (bare SVG for the heatmap, existing shadcn Sheet/Popover/Table primitives reused). All new components are client-side. No deploy performed; commits are code-only. Ramy-active deploy hold continues.
 
 ## Open Bugs (post-999.15 deploy)
 

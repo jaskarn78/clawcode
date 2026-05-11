@@ -999,9 +999,21 @@ Plans:
 - Cmd+K palette indexes agents + actions + recent SLO breaches + tool errors
 - Existing `/` route serves old static dashboard during rollout; cutover after operator confirmation; old `static/` removed after 2-week soak
 
-**Plans:** 5/7 plans executed
+**Plans:** 7/7 plans executed (116-00 through 116-06; F19 swim-lane DEFERRED per `116-DEFERRED.md`).
 
-**Status:** Pending — opened 2026-05-08 evening after operator review of v1 + v2 mockups. Research complete (`RESEARCH.md` + `116-CONTEXT.md` + 7-file v2 mockup). **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme and unblocks the "every opus tile shows red" frustration that 999.38 was scoped to address standalone.
+**Status:** **SHIPPED 2026-05-11** at the source level. Phase 116 = COMPLETE.
+
+- Plan 116-00 (scaffolding + per-model SLOs): shipped
+- Plan 116-01 (Tier 1 — agent tile grid + SLO breach banner + context meter + cache gauge): shipped
+- Plan 116-02 (F09 migration tracker + F10 MCP health panel): shipped
+- Plan 116-03 (F26 config editor + F27 conversations + F28 Kanban tasks): shipped
+- Plan 116-04 (F11-F15 — Tier 2 deep-dive drawer): shipped
+- Plan 116-05 (F16 fleet comparison + F17 cost dashboard): shipped
+- **Plan 116-06 (F18 + F20-F24 + telemetry + cutover gate): SHIPPED 2026-05-11.** F19 swim-lane DEFERRED out of phase. 998KB raw / 273KB gzip cold-load — within 1MB/320KB budget.
+
+Operator handoff: `116-VERIFICATION.md` documents the cutover-flag flip procedure (`clawcode config set defaults.dashboardCutoverRedirect true`), telemetry signals to watch during soak, and rollback procedure. The deprecation of legacy `src/dashboard/static/*` files is intentionally a SEPARATE follow-up commit after the operator observes the cutover for some period.
+
+Closes 999.38 (per-model SLO recalibration absorbed as F02).
 
 ---
 
