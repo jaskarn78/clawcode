@@ -176,3 +176,84 @@ export function useFleetStats(): UseQueryResult<unknown> {
     refetchInterval: 5_000,
   })
 }
+
+// ---------------------------------------------------------------------------
+// Phase 116-02 — new query/mutation surfaces for F09 migrations + F10 MCP
+// health. Polling-only (no SSE event today); 10s for migrations because
+// re-embed progress moves over minutes, 30s for MCP because server health
+// flips on the 60s heartbeat cycle.
+// ---------------------------------------------------------------------------
+
+export type MigrationRow = {
+  readonly agent: string
+  readonly phase: string // idle | dual-write | re-embedding | re-embed-complete | cutover | v1-dropped | rolled-back | no-store | error
+  readonly progressProcessed: number
+  readonly progressTotal: number
+  readonly lastCursor: string | null
+  readonly startedAt: string | null
+  readonly completedAt: string | null
+  readonly paused: boolean
+  readonly error?: string
+}
+
+export type MigrationsPayload = {
+  readonly results: readonly MigrationRow[]
+}
+
+/** F09 — fleet migration phase snapshot. Polls every 10s. */
+export function useMigrations(): UseQueryResult<MigrationsPayload> {
+  return useQuery({
+    queryKey: ['migrations'],
+    queryFn: () => fetchJson<MigrationsPayload>('/api/migrations'),
+    refetchInterval: 10_000,
+    staleTime: 10_000,
+  })
+}
+
+export type McpServerStatus =
+  | 'ready'
+  | 'degraded'
+  | 'failed'
+  | 'unknown'
+  | string
+
+export type McpServerEntry = {
+  readonly name: string
+  readonly status: McpServerStatus
+  readonly lastSuccessAt: string | null
+  readonly lastFailureAt: string | null
+  readonly failureCount: number
+  readonly optional: boolean
+  readonly lastError: string | null
+  readonly capabilityProbe?: {
+    readonly lastRunAt: string
+    readonly status: string
+    readonly toolCount?: number
+    readonly error?: string
+  }
+  readonly alternatives?: readonly string[]
+}
+
+export type McpAgentSnapshot = {
+  readonly agent: string
+  readonly servers: readonly McpServerEntry[]
+}
+
+/**
+ * F10 — per-agent live MCP runtime state (status, lastSuccessAt, capability
+ * probe). Polls every 30s; MCP health doesn't broadcast over SSE today.
+ */
+export function useMcpServers(
+  agentName: string | null,
+): UseQueryResult<McpAgentSnapshot> {
+  return useQuery({
+    queryKey: ['mcp-servers', agentName],
+    queryFn: () =>
+      fetchJson<McpAgentSnapshot>(
+        `/api/mcp-servers/${encodeURIComponent(agentName ?? '')}`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    refetchInterval: 30_000,
+    staleTime: 30_000,
+  })
+}

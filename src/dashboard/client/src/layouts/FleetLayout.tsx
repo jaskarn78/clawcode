@@ -37,6 +37,7 @@ import { SloBreachBanner } from '@/components/SloBreachBanner'
 import { AgentTileGrid } from '@/components/AgentTileGrid'
 import { AgentTile } from '@/components/AgentTile'
 import { ToolLatencySplit } from '@/components/ToolLatencySplit'
+import { MigrationTracker } from '@/components/MigrationTracker'
 
 // ---------------------------------------------------------------------------
 // Header — connection dot, branding, view-mode toggle, settings cog.
@@ -309,6 +310,11 @@ function AdvancedMode(): JSX.Element {
             exec vs roundtrip gap across the fleet. Per-tool depth lives in
             the 116-04 drawer. */}
         <ToolLatencySplit />
+        {/* Phase 116-02 — F09 migration tracker + F10 MCP health. Two-column
+            grid on wide viewports so operators can scan both surfaces. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <MigrationTracker />
+        </div>
       </main>
       <McpOverviewStrip />
     </>
