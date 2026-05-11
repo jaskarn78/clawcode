@@ -999,7 +999,7 @@ Plans:
 - Cmd+K palette indexes agents + actions + recent SLO breaches + tool errors
 - Existing `/` route serves old static dashboard during rollout; cutover after operator confirmation; old `static/` removed after 2-week soak
 
-**Plans:** TBD — plan-phase first to break into ~6 atomic plans across 5 waves. Estimated 60-90 executor hours total (comparable to Phase 115's wave 2 structural backbone).
+**Plans:** 1/7 plans executed
 
 **Status:** Pending — opened 2026-05-08 evening after operator review of v1 + v2 mockups. Research complete (`RESEARCH.md` + `116-CONTEXT.md` + 7-file v2 mockup). **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme and unblocks the "every opus tile shows red" frustration that 999.38 was scoped to address standalone.
 

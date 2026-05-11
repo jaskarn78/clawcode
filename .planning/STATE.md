@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
+milestone_name: Performance + Reliability
 status: executing
 stopped_at: Completed 999.36-01-PLAN.md
-last_updated: "2026-05-08T20:28:38.849Z"
-last_activity: 2026-05-08
+last_updated: "2026-05-11T18:51:07.205Z"
+last_activity: 2026-05-11
 progress:
   total_phases: 63
   completed_phases: 16
-  total_plans: 101
-  completed_plans: 94
-  percent: 93
+  total_plans: 108
+  completed_plans: 95
+  percent: 88
 ---
 
 # Project State
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 ## Current Position
 
 Phase: 116 (Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 116
-Latest commit: `1148d79` — docs(115-09) T05 phase-115 closeout receipt
+Plan: 2 of 6
+Status: Ready to execute (116-00 shipped scaffolding; 116-01 unblocked)
+Latest commit: `38deaca` — feat(116-00): T10 smoke component renders agent cards from live SSE
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 
@@ -475,6 +475,8 @@ Recent decisions affecting current work:
 - [Phase 999.36]: D-09/D-10: share-file routing rebound to agent identity (sessionName) -> thread binding, NOT workspace
 - [Phase 999.36]: D-11: shared-workspace regression test pins Schwab AIP failure class with actual incident channel IDs
 - [Phase 999.36]: D-02: 4 OTHER workspace-keyed lookups CATALOGUED in DEFERRED-WORKSPACE-LOOKUPS.md, NOT FIXED — operator promotes follow-up if reproduces
+- [Phase ?]: Phase 116 Plan 00: F02 backend uses sibling DEFAULT_MODEL_SLOS + resolveSloFor; existing segment-based sloOverrideSchema preserved, no schema migration
+- [Phase ?]: Phase 116 Plan 00: shadcn/ui scaffolded via manual components.json — shadcn CLI rejects Tailwind 3.4 + parent-directory node_modules; locked New York / neutral / CSS-vars config written by hand
 
 ### v2.1 closing decisions (for reference)
 
@@ -532,6 +534,7 @@ Recent decisions affecting current work:
 - **SDK pre-1.0 churn risk** — pinning to exact 0.2.97 (not ^0.2.97). If the SDK ships a breaking minor (0.3.x) during v2.2 execution, hold at 0.2.97 and defer bump to a separate milestone.
 - **12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)** — legacy carry-over, not blocking v2.2.
 - **Discord 100-command-per-guild cap** — v2.2 adds to the existing ~13 clawcode-* commands + ~20-25 native CC commands = worst case ~40/guild; safe but Phase 87 must keep per-guild dedupe (not per-agent registration).
+- Phase 115-08 producer call sites need porting from session-adapter.ts:iterateWithTracing (test-only path) into persistent-session-handle.ts:iterateUntilResult (production path) — tracked in 116-DEFERRED.md
 
 ### Quick Tasks Completed
 
@@ -674,7 +677,7 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-08
+Last activity: 2026-05-11
 Stopped at: Completed 999.36-01-PLAN.md
 Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
 

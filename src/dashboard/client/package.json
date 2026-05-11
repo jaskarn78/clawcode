@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "comment": "Phase 116 — ClawCode dashboard v2 SPA. All dependencies live in the repo-root package.json (single node_modules). This manifest carries only scripts + identity so Vite has a project root to anchor at.",
+  "_comment": "Phase 116 — ClawCode dashboard v2 SPA. All dependencies live in the repo-root package.json (single node_modules). This manifest carries only scripts + identity so Vite has a project root to anchor at. The radix dependencies below were auto-appended by shadcn add commands; the actual installs landed in the root node_modules and the SPA build resolves them from there.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
