@@ -78,7 +78,10 @@ These are listed here for cross-reference; they are NOT Phase 116 follow-up cand
 
 ---
 
-## Phase 115-08 producer regression — deeper than cache (added 2026-05-11 from Plan 116-00 T01)
+## Phase 115-08 producer regression — deeper than cache (added 2026-05-11 from Plan 116-00 T01) — **RESOLVED 2026-05-11 (commit `a0f30a6`)**
+
+> **Status: RESOLVED 2026-05-11 (commit `a0f30a6`, awaiting deploy clearance).** Surgical port shipped under quick task 260512. The 4 producer call sites from `session-adapter.ts:iterateWithTracing` (test-only path) were ported verbatim into `persistent-session-handle.ts:iterateUntilResult` (production path): per-tool `addToolExecutionMs` on tool_result arrival, per-batch `addToolRoundtripMs` open/close on parent assistant transitions, `recordParallelToolCallCount` on each parent assistant carrying tool_use blocks, and final-batch execution + roundtrip fallbacks inside `closeAllSpans`. All wrapped in try/catch (Phase 50 observational-only invariant). Added two regression guards: `src/manager/__tests__/producer-call-sites-sentinel.test.ts` (static-grep sentinel pinning the call sites in BOTH files to prevent future silent-path-bifurcation), and `src/manager/__tests__/persistent-session-handle-producer-port.test.ts` (end-to-end integration test driving the real production `iterateUntilResult` through `createPersistentSessionHandle` with a synthetic tool_use→tool_result→result sequence, asserting the persisted `TurnRecord` carries non-zero `toolExecutionMs`, `toolRoundtripMs`, and `parallelToolCallCount`). 11/11 new tests pass; 222 tests across the persistent-session-handle + performance suites pass with zero regressions. Once `a0f30a6` deploys, fleet `traces.db` will start populating the three columns and F07 in Plan 116-02 can switch from `trace_spans` fallback to direct column reads. Original diagnosis preserved below for history.
+
 
 **Origin:** Plan 116-00 T01. Audit Finding B (file: `.planning/quick/260511-mfn-close-out-phase-999-7-item-2-run-tool-la/260511-mfn-AUDIT-FINDINGS.md`) hypothesized the `tool_execution_ms` / `tool_roundtrip_ms` / `parallel_tool_call_count` columns are NULL in production because of a stale esbuild cache that dropped the producer call sites from the build. The plan dispatched T01 to wipe the cache, rebuild, and re-verify.
 
