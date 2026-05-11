@@ -1436,6 +1436,63 @@ async function handleRequest(
     }
     // === end Phase 116-06 routes ===
 
+    // =====================================================================
+    // Phase 116-postdeploy routes — Usage page (subscription utilisation).
+    //
+    // The Costs page over-emphasised theoretical API-equivalent USD on an
+    // operator who runs on Claude Max ($200/mo flat). The real constraint
+    // is subscription rate limits (5h session window + 7d weekly + per-
+    // model carve-outs), already captured by Phase 103's RateLimitTracker.
+    // These routes expose that data so the redesigned Usage view can lead
+    // with utilisation bars instead of dollar totals.
+    //
+    //   GET /api/usage          -> daemon `list-rate-limit-snapshots-fleet`
+    //                              returns `{agents: [{agent, snapshots}]}`
+    //   GET /api/usage/:agent   -> daemon `list-rate-limit-snapshots`
+    //                              returns `{agent, snapshots}`
+    //
+    // Backwards compat: /api/costs and /api/costs/daily are untouched.
+    // =====================================================================
+
+    // GET /api/usage — fleet aggregate.
+    if (method === "GET" && pathname === "/api/usage") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "list-rate-limit-snapshots-fleet",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/usage/:agent — single-agent snapshots.
+    if (
+      method === "GET" &&
+      segments.length === 3 &&
+      segments[0] === "api" &&
+      segments[1] === "usage"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "list-rate-limit-snapshots",
+          { agent: agentName },
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+    // === end Phase 116-postdeploy routes ===
+
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
       const triggerId = decodeURIComponent(segments[1]!);

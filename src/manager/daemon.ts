@@ -7799,6 +7799,37 @@ async function routeMethod(
       );
     }
 
+    case "list-rate-limit-snapshots-fleet": {
+      // Phase 116-postdeploy — fleet aggregate of subscription utilisation
+      // snapshots. Mirrors the `costs` aggregation pattern at daemon.ts:9547:
+      // iterates `manager.getRunningAgents()`, asks each for its
+      // RateLimitTracker, and rolls up `getAllSnapshots()` into a single
+      // wire payload so the Usage page can render fleet-level bars without
+      // doing N round-trips from the SPA.
+      //
+      // Empty `agents: []` when no agents are running OR none have emitted
+      // a `rate_limit_event` yet — the SPA renders the "data appears after
+      // first turn" graceful path on empty.
+      const { handleListRateLimitSnapshotsIpc } = await import(
+        "./daemon-rate-limit-ipc.js"
+      );
+      const agents: Array<{
+        agent: string;
+        snapshots: ReturnType<typeof handleListRateLimitSnapshotsIpc>["snapshots"];
+      }> = [];
+      for (const agentName of manager.getRunningAgents()) {
+        const result = handleListRateLimitSnapshotsIpc(
+          { agent: agentName },
+          {
+            getRateLimitTrackerForAgent: (name) =>
+              manager.getRateLimitTrackerForAgent(name),
+          },
+        );
+        agents.push({ agent: result.agent, snapshots: result.snapshots });
+      }
+      return { agents };
+    }
+
     case "heartbeat-status": {
       const results = heartbeatRunner.getLatestResults();
       const zoneStatuses = heartbeatRunner.getZoneStatuses();

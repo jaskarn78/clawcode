@@ -850,6 +850,72 @@ export function useBudgets(): UseQueryResult<BudgetsResponse> {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Phase 116-postdeploy — Usage page (subscription utilisation).
+//
+// Shape mirrors Phase 103 RateLimitSnapshot exactly. `rateLimitType` is
+// `string` (not the SDK union) per Pitfall 10 — future SDK releases may
+// emit new types and the dashboard must still render them under a
+// fallback label rather than dropping them.
+// ---------------------------------------------------------------------------
+
+export type RateLimitSnapshot = {
+  readonly rateLimitType: string
+  readonly status: 'allowed' | 'allowed_warning' | 'rejected'
+  readonly utilization: number | undefined
+  readonly resetsAt: number | undefined
+  readonly surpassedThreshold: number | undefined
+  readonly overageStatus:
+    | 'allowed'
+    | 'allowed_warning'
+    | 'rejected'
+    | undefined
+  readonly overageResetsAt: number | undefined
+  readonly overageDisabledReason: string | undefined
+  readonly isUsingOverage: boolean | undefined
+  readonly recordedAt: number
+}
+
+export type UsageAgentEntry = {
+  readonly agent: string
+  readonly snapshots: readonly RateLimitSnapshot[]
+}
+
+export type UsageFleetResponse = {
+  readonly agents: readonly UsageAgentEntry[]
+}
+
+/** Phase 116-postdeploy — fleet-wide subscription utilisation snapshots. */
+export function useFleetUsage(): UseQueryResult<UsageFleetResponse> {
+  return useQuery({
+    queryKey: ['usage', 'fleet'],
+    queryFn: () => fetchJson<UsageFleetResponse>('/api/usage'),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  })
+}
+
+export type UsageAgentResponse = {
+  readonly agent: string
+  readonly snapshots: readonly RateLimitSnapshot[]
+}
+
+/** Phase 116-postdeploy — single-agent subscription utilisation snapshots. */
+export function useAgentUsage(
+  agent: string | null,
+): UseQueryResult<UsageAgentResponse> {
+  return useQuery({
+    queryKey: ['usage', 'agent', agent ?? ''],
+    queryFn: () =>
+      fetchJson<UsageAgentResponse>(
+        `/api/usage/${encodeURIComponent(agent ?? '')}`,
+      ),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+    enabled: agent !== null && agent.length > 0,
+  })
+}
+
 /** F15 — operator-fired veto on a pending D-10 window. */
 export async function vetoDreamRun(
   agentName: string,
