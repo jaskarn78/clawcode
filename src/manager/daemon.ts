@@ -5672,6 +5672,657 @@ export async function startDaemon(
         );
         return { task_id, row: next };
       }
+
+      // =====================================================================
+      // Phase 116-04 — Tier 2 deep-dive IPC handlers (F11-F15).
+      // Closure-intercept block, same convention as 116-03 above. All handlers
+      // read existing per-agent stores (ConversationStore, TraceStore, Veto-
+      // Store, MemoryStore) through the SessionManager surface. No new
+      // singletons; the daemon already owns every primitive these routes need.
+      //
+      // F11 — three-panel agent detail drawer:
+      //   list-recent-turns  -> last N conversation turns for transcript
+      // F12 — per-turn trace waterfall:
+      //   get-turn-trace     -> trace_spans rows for one turn_id
+      // F13 — cross-agent IPC inbox viewer:
+      //   list-ipc-inboxes   -> per-agent inbox state + 24h delivery log
+      // F14 — memory subsystem panel (READ-ONLY per 116-DEFERRED):
+      //   get-memory-snapshot -> tier counts + tier-1 file previews +
+      //                          vec_memories migration delta + last
+      //                          consolidation timestamps + dream status
+      // F15 — dream-pass queue + D-10 veto windows:
+      //   get-dream-queue    -> pending depth + next fire + last 7 events +
+      //                         active veto windows
+      //   veto-dream-run     -> operator veto on a D-10 window with rationale
+      // =====================================================================
+
+      // F11 — last N conversation turns for the drawer's center column.
+      // Reads conversation_turns table directly via the store's getDatabase()
+      // accessor (Phase 90 read-only pattern; same as Plan 116-03 F27 search
+      // path). Returns rows in DESCENDING `created_at` order so the UI can
+      // prepend live `conversation-turn` SSE events to the head of the list
+      // without re-sorting.
+      //
+      // Trust filter: defaults to SEC-01 hygiene (untrusted Discord channels
+      // excluded), matches the F27 search default. Untrusted turns are
+      // visible only when the operator explicitly passes
+      // includeUntrustedChannels=true (future operator-toggle in the drawer).
+      case "list-recent-turns": {
+        const agent = validateStringParam(params, "agent");
+        const limit =
+          typeof (params as { limit?: unknown }).limit === "number"
+            ? Math.max(1, Math.min((params as { limit: number }).limit, 200))
+            : 50;
+        const includeUntrustedChannels =
+          (params as { includeUntrustedChannels?: unknown })
+            .includeUntrustedChannels === true;
+        const store = manager.getConversationStore(agent);
+        if (!store) {
+          return { agent, turns: [] };
+        }
+        // Direct read against conversation_turns. The store's public surface
+        // (searchTurns / listRecentSessions) doesn't expose this; rather
+        // than add a new public method on ConversationStore (which has its
+        // own test surface), we inline the prepared statement here. Trust
+        // filter mirrors the WHERE clause in searchTurns.
+        const db = store.getDatabase();
+        const sql = includeUntrustedChannels
+          ? `
+            SELECT id, session_id, turn_index, role, content, token_count,
+                   channel_id, discord_user_id, discord_message_id,
+                   is_trusted_channel, origin, created_at
+            FROM conversation_turns
+            ORDER BY created_at DESC
+            LIMIT ?
+          `
+          : `
+            SELECT id, session_id, turn_index, role, content, token_count,
+                   channel_id, discord_user_id, discord_message_id,
+                   is_trusted_channel, origin, created_at
+            FROM conversation_turns
+            WHERE is_trusted_channel = 1 OR channel_id IS NULL
+            ORDER BY created_at DESC
+            LIMIT ?
+          `;
+        const rows = db.prepare(sql).all(limit) as ReadonlyArray<{
+          id: string;
+          session_id: string;
+          turn_index: number;
+          role: string;
+          content: string;
+          token_count: number | null;
+          channel_id: string | null;
+          discord_user_id: string | null;
+          discord_message_id: string | null;
+          is_trusted_channel: number;
+          origin: string | null;
+          created_at: string;
+        }>;
+        return {
+          agent,
+          turns: rows.map((r) => ({
+            turnId: r.id,
+            sessionId: r.session_id,
+            turnIndex: r.turn_index,
+            role: r.role,
+            content: r.content,
+            tokenCount: r.token_count,
+            channelId: r.channel_id,
+            discordUserId: r.discord_user_id,
+            discordMessageId: r.discord_message_id,
+            isTrustedChannel: r.is_trusted_channel === 1,
+            origin: r.origin,
+            createdAt: r.created_at,
+          })),
+        };
+      }
+
+      // F12 — trace_spans for one turn_id. Reads via TraceStore's public
+      // getDatabase() accessor (same READ-ONLY contract as the warmup
+      // queries in AgentMemoryManager). Returns spans sorted by started_at
+      // so the SVG waterfall can render top-to-bottom without re-sorting.
+      // Also returns the parent `traces` row metadata (total_ms,
+      // cache_eviction_expected) for the waterfall header strip.
+      //
+      // Optional `withPercentiles` flag — if true, batches a per-span-name
+      // percentile lookup for the 24h window so the hover tooltip can render
+      // "p47 of 24h" without a second round-trip. Capped to the 6 canonical
+      // names + the actual tool_call.* names in this turn (small set).
+      case "get-turn-trace": {
+        const agent = validateStringParam(params, "agent");
+        const turnId = validateStringParam(params, "turnId");
+        const store = manager.getTraceStore(agent);
+        if (!store) {
+          throw new ManagerError(
+            `Trace store not found for agent '${agent}' (agent may not be running)`,
+          );
+        }
+        const db = store.getDatabase();
+        const turnRow = db
+          .prepare(
+            `SELECT id, agent, started_at, ended_at, total_ms,
+                    discord_channel_id, status, cache_eviction_expected
+             FROM traces WHERE id = ?`,
+          )
+          .get(turnId) as
+          | {
+              id: string;
+              agent: string;
+              started_at: string;
+              ended_at: string;
+              total_ms: number;
+              discord_channel_id: string | null;
+              status: string;
+              cache_eviction_expected: number | null;
+            }
+          | undefined;
+        if (!turnRow) {
+          throw new ManagerError(
+            `Turn not found: ${turnId} (agent=${agent})`,
+          );
+        }
+        const spanRows = db
+          .prepare(
+            `SELECT name, started_at, duration_ms, metadata_json
+             FROM trace_spans
+             WHERE turn_id = ?
+             ORDER BY started_at ASC`,
+          )
+          .all(turnId) as ReadonlyArray<{
+          name: string;
+          started_at: string;
+          duration_ms: number;
+          metadata_json: string | null;
+        }>;
+        return {
+          turn: {
+            id: turnRow.id,
+            agent: turnRow.agent,
+            startedAt: turnRow.started_at,
+            endedAt: turnRow.ended_at,
+            totalMs: turnRow.total_ms,
+            discordChannelId: turnRow.discord_channel_id,
+            status: turnRow.status,
+            cacheEvictionExpected: turnRow.cache_eviction_expected === 1,
+          },
+          spans: spanRows.map((s) => ({
+            name: s.name,
+            startedAt: s.started_at,
+            durationMs: s.duration_ms,
+            metadata: s.metadata_json,
+          })),
+        };
+      }
+
+      // F13 — per-agent IPC inbox snapshot + fleet 24h delivery log.
+      //
+      // Two-part response:
+      //   inboxes[]: per-agent pending message count + last-modified time of
+      //              the inbox directory (the "heartbeat" proxy — chokidar's
+      //              watch tick fires on any file write, but the dir mtime
+      //              is the cheapest cross-platform freshness signal).
+      //   deliveryLog[]: last 24h of cross-agent send/post/ask traffic from
+      //              the delivery queue (status: pending|delivered|failed).
+      //
+      // Inbox dir resolution: agent.memoryPath + "/inbox" (same path
+      // captured.ts uses to write inbox files via writeMessage in
+      // src/collaboration/inbox.ts). For agents with no memoryPath we
+      // return zero counts rather than scanning.
+      case "list-ipc-inboxes": {
+        const { readdir, stat: fsStat } = await import("node:fs/promises");
+        const { join: joinPath } = await import("node:path");
+        const inboxes: Array<{
+          agent: string;
+          pending: number;
+          lastModified: string | null;
+          inboxDir: string;
+          error?: string;
+        }> = [];
+        for (const cfg of resolvedAgents) {
+          if (!cfg.memoryPath) {
+            inboxes.push({
+              agent: cfg.name,
+              pending: 0,
+              lastModified: null,
+              inboxDir: "",
+            });
+            continue;
+          }
+          const inboxDir = joinPath(cfg.memoryPath, "inbox");
+          try {
+            const entries = await readdir(inboxDir);
+            const jsonFiles = entries.filter((f) => f.endsWith(".json"));
+            let lastModifiedMs = 0;
+            for (const f of jsonFiles) {
+              try {
+                const st = await fsStat(joinPath(inboxDir, f));
+                if (st.mtimeMs > lastModifiedMs)
+                  lastModifiedMs = st.mtimeMs;
+              } catch {
+                // unreadable file — skip without failing the whole agent
+              }
+            }
+            inboxes.push({
+              agent: cfg.name,
+              pending: jsonFiles.length,
+              lastModified:
+                lastModifiedMs > 0
+                  ? new Date(lastModifiedMs).toISOString()
+                  : null,
+              inboxDir,
+            });
+          } catch (err) {
+            // ENOENT — inbox dir not yet created. Treat as empty.
+            const errCode = (err as { code?: string }).code;
+            if (errCode === "ENOENT") {
+              inboxes.push({
+                agent: cfg.name,
+                pending: 0,
+                lastModified: null,
+                inboxDir,
+              });
+            } else {
+              inboxes.push({
+                agent: cfg.name,
+                pending: 0,
+                lastModified: null,
+                inboxDir,
+                error:
+                  err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        }
+
+        // Outbound Discord delivery health from delivery-queue.db. The queue
+        // tracks agent → channel SENDS (one row per outbound message).
+        // Cross-agent IPC (send_to_agent / ask_agent) does NOT flow through
+        // this queue — those are file-based via writeMessage to the
+        // recipient's inbox dir + InboxSource pickup (fire-and-forget;
+        // recipient discovery is the inboxes[] surface above).
+        //
+        // We expose:
+        //   - deliveryStats: { pending, inFlight, failed, delivered, totalEnqueued }
+        //   - recentFailures: last 50 permanently-failed sends (for inline
+        //     fleet-wide failure list in the F13 panel)
+        let deliveryStats: unknown = null;
+        let recentFailures: ReadonlyArray<unknown> = [];
+        try {
+          deliveryStats = deliveryQueue.getStats();
+          recentFailures = deliveryQueue.getFailedEntries(50);
+        } catch (err) {
+          log.warn(
+            { err },
+            "[F13] delivery-queue probe failed; returning empty stats",
+          );
+        }
+        return { inboxes, deliveryStats, recentFailures };
+      }
+
+      // F14 — memory subsystem snapshot (READ-ONLY in v1; in-UI editor
+      // explicitly DEFERRED per .planning/phases/116-.../116-DEFERRED.md).
+      //
+      // Aggregates:
+      //   - tier counts (hot/warm/cold) from MemoryStore
+      //   - tier-1 file previews (first 1000 chars each): SOUL.md /
+      //     IDENTITY.md / MEMORY.md / USER.md from agent.memoryPath
+      //   - vec_memories vs vec_memories_v2 migration delta from
+      //     EmbeddingV2Migrator state (Phase 90 / 115)
+      //   - last 5 consolidation events from the dream-pass log dir
+      //     (~/<memoryRoot>/dreams/*.md) — file list with mtime
+      //   - dream-pass schedule status (next fire + last fire timestamp)
+      //     surfaced as a forward-pointer; full surface lives in F15
+      //
+      // For each tier-1 file we also return last-modified + total bytes so
+      // the UI can render "5,234 chars total (showing 1,000)". File reads
+      // are best-effort: ENOENT returns null for that slot rather than
+      // throwing the whole snapshot.
+      case "get-memory-snapshot": {
+        const agent = validateStringParam(params, "agent");
+        const cfg = resolvedAgents.find((a) => a.name === agent);
+        if (!cfg) {
+          throw new ManagerError(`Agent not found: ${agent}`);
+        }
+        const { readFile: rf, stat: fsStat } = await import(
+          "node:fs/promises"
+        );
+        const { join: joinPath } = await import("node:path");
+
+        const PREVIEW_LEN = 1000;
+        const tier1FileNames = [
+          "SOUL.md",
+          "IDENTITY.md",
+          "MEMORY.md",
+          "USER.md",
+        ];
+
+        type FilePreview = {
+          name: string;
+          path: string;
+          preview: string | null;
+          totalChars: number;
+          lastModified: string | null;
+          error?: string;
+        };
+
+        const files: FilePreview[] = [];
+        if (cfg.memoryPath) {
+          for (const fname of tier1FileNames) {
+            const fpath = joinPath(cfg.memoryPath, fname);
+            try {
+              const content = await rf(fpath, "utf8");
+              const st = await fsStat(fpath);
+              files.push({
+                name: fname,
+                path: fpath,
+                preview:
+                  content.length > PREVIEW_LEN
+                    ? content.slice(0, PREVIEW_LEN)
+                    : content,
+                totalChars: content.length,
+                lastModified: new Date(st.mtimeMs).toISOString(),
+              });
+            } catch (err) {
+              const errCode = (err as { code?: string }).code;
+              if (errCode === "ENOENT") {
+                files.push({
+                  name: fname,
+                  path: fpath,
+                  preview: null,
+                  totalChars: 0,
+                  lastModified: null,
+                });
+              } else {
+                files.push({
+                  name: fname,
+                  path: fpath,
+                  preview: null,
+                  totalChars: 0,
+                  lastModified: null,
+                  error:
+                    err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+          }
+        }
+
+        // Tier counts via MemoryStore. The store carries hot/warm/cold
+        // discrimination per Phase 56+ tier model. Returns zeros if the
+        // store isn't running yet (race at agent boot).
+        let tierCounts: {
+          hot: number;
+          warm: number;
+          cold: number;
+          total: number;
+        } = { hot: 0, warm: 0, cold: 0, total: 0 };
+        let migrationDelta: {
+          vecMemoriesRows: number | null;
+          vecMemoriesV2Rows: number | null;
+          phase: string | null;
+        } = {
+          vecMemoriesRows: null,
+          vecMemoriesV2Rows: null,
+          phase: null,
+        };
+        try {
+          const memStore = manager.getMemoryStore(agent);
+          if (memStore) {
+            const db = memStore.getDatabase();
+            // Tier counts — `tier` column is added in Phase 56+ migrations.
+            try {
+              const rows = db
+                .prepare(
+                  `SELECT tier, COUNT(*) as n FROM memories GROUP BY tier`,
+                )
+                .all() as ReadonlyArray<{ tier: string | null; n: number }>;
+              for (const r of rows) {
+                tierCounts.total += r.n;
+                if (r.tier === "hot") tierCounts.hot += r.n;
+                else if (r.tier === "warm") tierCounts.warm += r.n;
+                else if (r.tier === "cold") tierCounts.cold += r.n;
+              }
+            } catch {
+              // Older agents may not yet have the tier column; total only.
+              const row = db
+                .prepare(`SELECT COUNT(*) as n FROM memories`)
+                .get() as { n: number };
+              tierCounts.total = row.n;
+            }
+            // Migration delta — vec_memories vs vec_memories_v2. Tables may
+            // not exist; guard each.
+            try {
+              const v1 = db
+                .prepare(`SELECT COUNT(*) as n FROM vec_memories`)
+                .get() as { n: number };
+              migrationDelta.vecMemoriesRows = v1.n;
+            } catch {
+              // table absent — leave null
+            }
+            try {
+              const v2 = db
+                .prepare(`SELECT COUNT(*) as n FROM vec_memories_v2`)
+                .get() as { n: number };
+              migrationDelta.vecMemoriesV2Rows = v2.n;
+            } catch {
+              // table absent — leave null
+            }
+          }
+        } catch (err) {
+          log.warn(
+            { err, agent },
+            "[F14] memory snapshot store probe failed; returning partial",
+          );
+        }
+
+        // Last 5 dream/consolidation log entries from the daily dream-log
+        // markdown files. Pattern from src/manager/dream-log-writer.ts.
+        type ConsolidationEntry = {
+          file: string;
+          lastModified: string;
+          sizeBytes: number;
+        };
+        const consolidations: ConsolidationEntry[] = [];
+        if (cfg.memoryPath) {
+          const dreamsDir = joinPath(cfg.memoryPath, "dreams");
+          try {
+            const { readdir: rd } = await import("node:fs/promises");
+            const entries = await rd(dreamsDir);
+            const mdFiles = entries.filter((e) => e.endsWith(".md"));
+            const stats = await Promise.all(
+              mdFiles.map(async (f) => {
+                try {
+                  const st = await fsStat(joinPath(dreamsDir, f));
+                  return {
+                    file: f,
+                    lastModified: new Date(st.mtimeMs).toISOString(),
+                    sizeBytes: st.size,
+                  };
+                } catch {
+                  return null;
+                }
+              }),
+            );
+            for (const s of stats) {
+              if (s) consolidations.push(s);
+            }
+            consolidations.sort((a, b) =>
+              b.lastModified.localeCompare(a.lastModified),
+            );
+            consolidations.splice(5);
+          } catch {
+            // dreams dir absent — empty list
+          }
+        }
+
+        return {
+          agent,
+          memoryPath: cfg.memoryPath ?? null,
+          files,
+          tierCounts,
+          migrationDelta,
+          consolidations,
+          editAffordance: {
+            available: false,
+            // Operator-facing hint surfacing the CLI flow (per 116-DEFERRED
+            // operator decision — in-UI editor is a separate follow-up
+            // phase). UI renders this as a tooltip on each disabled "Edit"
+            // button.
+            hint: "In-UI editing is deferred. Use `clawcode memory edit <agent> <file>` (filesystem CLI flow) — see 116-DEFERRED.md for rationale.",
+          },
+        };
+      }
+
+      // F15 — dream-pass queue snapshot.
+      //
+      // Three data sources, each best-effort:
+      //   1. Last 7 dream events from the per-agent dream-log markdown
+      //      files (~/<memoryRoot>/dreams/YYYY-MM-DD.md). Each file may
+      //      hold multiple "## [HH:MM UTC] Dream pass" sections; we
+      //      grep-count headers + read the most-recent's metadata.
+      //   2. Pending D-10 veto windows from dream-veto-pending.jsonl
+      //      (createDreamVetoStore().list() reducing by runId to latest).
+      //   3. Next scheduled fire — derived from the agent's cron config
+      //      (config.agents[*].dream.cron). The actual cron scheduler
+      //      isn't directly registered in daemon.ts today (see
+      //      `grep registerDreamCron` — wired via test paths); we surface
+      //      the configured CRON string + the cfg.dream.* fields so the
+      //      UI can render "next fire: ~Xh from now" using croner client-
+      //      side parsing without round-tripping through the daemon for
+      //      every refresh.
+      case "get-dream-queue": {
+        const agent = validateStringParam(params, "agent");
+        const cfg = resolvedAgents.find((a) => a.name === agent);
+        if (!cfg) {
+          throw new ManagerError(`Agent not found: ${agent}`);
+        }
+        const { readFile: rf, stat: fsStat, readdir: rd } = await import(
+          "node:fs/promises"
+        );
+        const { join: joinPath } = await import("node:path");
+
+        // 1. Last 7 dream events
+        type DreamEvent = {
+          file: string;
+          lastModified: string;
+          headerCount: number; // number of "## " headers in the file
+        };
+        const events: DreamEvent[] = [];
+        if (cfg.memoryPath) {
+          const dreamsDir = joinPath(cfg.memoryPath, "dreams");
+          try {
+            const entries = await rd(dreamsDir);
+            const mdFiles = entries.filter((e) => e.endsWith(".md"));
+            for (const f of mdFiles) {
+              try {
+                const fpath = joinPath(dreamsDir, f);
+                const st = await fsStat(fpath);
+                const content = await rf(fpath, "utf8");
+                const headerCount = (content.match(/^## /gm) ?? []).length;
+                events.push({
+                  file: f,
+                  lastModified: new Date(st.mtimeMs).toISOString(),
+                  headerCount,
+                });
+              } catch {
+                // skip unreadable
+              }
+            }
+            events.sort((a, b) =>
+              b.lastModified.localeCompare(a.lastModified),
+            );
+            events.splice(7);
+          } catch {
+            // ENOENT — no dreams yet
+          }
+        }
+
+        // 2. Pending D-10 veto windows. Lazy import to avoid cost when no
+        //    veto path has ever fired.
+        type VetoWindow = {
+          runId: string;
+          agentName: string;
+          candidateCount: number;
+          deadline: number;
+          isPriorityPass: boolean;
+          status: string;
+          scheduledAt: string;
+        };
+        const pending: VetoWindow[] = [];
+        try {
+          const { createDreamVetoStore } = await import(
+            "./dream-veto-store.js"
+          );
+          const store = createDreamVetoStore();
+          const rows = await store.list();
+          // Reduce by runId to latest row, then filter to pending matching
+          // this agent.
+          const byRunId = new Map<string, (typeof rows)[number]>();
+          for (const r of rows) {
+            byRunId.set(r.runId, r);
+          }
+          for (const r of byRunId.values()) {
+            if (r.agentName === agent && r.status === "pending") {
+              pending.push({
+                runId: r.runId,
+                agentName: r.agentName,
+                candidateCount: r.candidates.length,
+                deadline: r.deadline,
+                isPriorityPass: r.isPriorityPass,
+                status: r.status,
+                scheduledAt: r.scheduledAt,
+              });
+            }
+          }
+        } catch (err) {
+          log.warn(
+            { err, agent },
+            "[F15] dream-veto-store probe failed; returning empty pending list",
+          );
+        }
+
+        // 3. Next-fire schedule — config-derived. The dream-cron scheduler
+        //    fires when the agent has been idle for `idleMinutes` minutes.
+        //    The schema doesn't carry a literal cron string; the UI renders
+        //    "next fire: idle ≥ Xm" rather than a wall-clock countdown.
+        //    retentionDays surfaces so the operator sees the consolidation
+        //    horizon at a glance.
+        const dreamConfig = cfg.dream
+          ? {
+              enabled: cfg.dream.enabled,
+              idleMinutes: cfg.dream.idleMinutes,
+              model: cfg.dream.model,
+              retentionDays: cfg.dream.retentionDays ?? null,
+            }
+          : null;
+
+        return {
+          agent,
+          events,
+          pendingVetoWindows: pending,
+          dreamConfig,
+        };
+      }
+
+      // F15 — operator-fired veto on a D-10 pending window. The plan's
+      // `:windowId` and the VetoStore's `runId` are the same identifier;
+      // we use `runId` in the IPC contract for parity with the store.
+      // Rationale is required (operator-supplied free text) and capped at
+      // 200 chars defensively (same truncation the veto-store applies).
+      case "veto-dream-run": {
+        const runId = validateStringParam(params, "runId");
+        const reason = validateStringParam(params, "reason");
+        if (reason.length === 0) {
+          throw new ManagerError("veto reason must be non-empty");
+        }
+        const { createDreamVetoStore } = await import(
+          "./dream-veto-store.js"
+        );
+        const store = createDreamVetoStore();
+        await store.vetoRun(runId, reason);
+        log.info({ runId, reasonLen: reason.length }, "[F15] dream veto recorded");
+        return { runId, vetoed: true, recordedAt: new Date().toISOString() };
+      }
     }
 
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);

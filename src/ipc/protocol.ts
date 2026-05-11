@@ -317,6 +317,24 @@ export const IPC_METHODS = [
   "list-tasks-kanban",
   "create-task",
   "transition-task",
+  // Phase 116-04 — Tier 2 deep-dive IPC methods (F11-F15).
+  // Handlers live in src/manager/daemon.ts in the closure-intercept block
+  // labeled "Phase 116-04". REST proxies in src/dashboard/server.ts in the
+  // "=== Phase 116-04 routes ===" block.
+  //
+  //   list-recent-turns   -> F11 drawer transcript (last N conversation_turns)
+  //   get-turn-trace      -> F12 trace waterfall (trace_spans for one turn_id)
+  //   list-ipc-inboxes    -> F13 cross-agent IPC inbox + delivery snapshot
+  //   get-memory-snapshot -> F14 memory tier counts + tier-1 file previews
+  //                          (READ-ONLY per 116-DEFERRED — no in-UI editor)
+  //   get-dream-queue     -> F15 dream-pass events + D-10 pending vetos
+  //   veto-dream-run      -> F15 operator-fired veto on a pending window
+  "list-recent-turns",
+  "get-turn-trace",
+  "list-ipc-inboxes",
+  "get-memory-snapshot",
+  "get-dream-queue",
+  "veto-dream-run",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

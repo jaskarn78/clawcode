@@ -956,6 +956,190 @@ async function handleRequest(
     }
     // === end Phase 116-03 routes ===
 
+    // =====================================================================
+    // Phase 116-04 routes — Tier 2 deep-dive (F11/F12/F13/F14/F15).
+    // Same contiguous-block convention as 116-02 + 116-03 so 116-05 can
+    // append its own fence without touching this diff. Every route proxies
+    // a daemon IPC method registered in the "Phase 116-04" closure-
+    // intercept block in src/manager/daemon.ts.
+    //
+    // F11 — per-agent detail drawer transcript:
+    //   GET  /api/agents/:name/recent-turns       -> daemon `list-recent-turns`
+    //
+    // F12 — per-turn trace waterfall:
+    //   GET  /api/agents/:name/traces/:turnId     -> daemon `get-turn-trace`
+    //
+    // F13 — cross-agent IPC inbox + fleet delivery snapshot:
+    //   GET  /api/ipc/inboxes                     -> daemon `list-ipc-inboxes`
+    //
+    // F14 — memory subsystem (READ-ONLY in v1 per 116-DEFERRED):
+    //   GET  /api/agents/:name/memory-snapshot    -> daemon `get-memory-snapshot`
+    //
+    // F15 — dream-pass queue + D-10 veto windows:
+    //   GET  /api/agents/:name/dream-queue        -> daemon `get-dream-queue`
+    //   POST /api/agents/:name/dream-veto/:runId  -> daemon `veto-dream-run`
+    //                                                ({ reason: string } body)
+    //
+    // Naming note: F15 URL says `:runId` for parity with VetoStore.vetoRun()
+    // (the canonical identifier in the store). The plan referred to this
+    // as `:windowId` but it's the same value — see 116-04-SUMMARY.md.
+    // =====================================================================
+
+    // GET /api/agents/:name/recent-turns?limit=50&includeUntrusted=false
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "recent-turns"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const limitParam = queryParams.get("limit");
+      const limit = limitParam ? parseInt(limitParam, 10) : 50;
+      const includeUntrustedChannels =
+        queryParams.get("includeUntrusted") === "true";
+      try {
+        const data = await sendIpcRequest(socketPath, "list-recent-turns", {
+          agent: agentName,
+          limit: Number.isFinite(limit) ? limit : 50,
+          includeUntrustedChannels,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/agents/:name/traces/:turnId
+    if (
+      method === "GET" &&
+      segments.length === 5 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "traces"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const turnId = decodeURIComponent(segments[4]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "get-turn-trace", {
+          agent: agentName,
+          turnId,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        // 404 for "Turn not found"; everything else is 500. The daemon
+        // surfaces the exact reason in `message`, so the SPA can render it
+        // verbatim in the waterfall's error slot.
+        const code = message.startsWith("Turn not found") ? 404 : 500;
+        sendJson(res, code, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/ipc/inboxes
+    if (
+      method === "GET" &&
+      segments.length === 3 &&
+      segments[0] === "api" &&
+      segments[1] === "ipc" &&
+      segments[2] === "inboxes"
+    ) {
+      try {
+        const data = await sendIpcRequest(socketPath, "list-ipc-inboxes", {});
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/agents/:name/memory-snapshot
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "memory-snapshot"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "get-memory-snapshot", {
+          agent: agentName,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        const code = message.startsWith("Agent not found") ? 404 : 500;
+        sendJson(res, code, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/agents/:name/dream-queue
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "dream-queue"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "get-dream-queue", {
+          agent: agentName,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        const code = message.startsWith("Agent not found") ? 404 : 500;
+        sendJson(res, code, { error: message });
+      }
+      return;
+    }
+
+    // POST /api/agents/:name/dream-veto/:runId  body: { reason: string }
+    if (
+      method === "POST" &&
+      segments.length === 5 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "dream-veto"
+    ) {
+      // agentName is currently unused by the IPC handler (VetoStore is keyed
+      // by runId only), but we keep it in the URL for symmetry with the
+      // other agent-scoped routes + to future-proof a per-agent ACL.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const _agentName = decodeURIComponent(segments[2]!);
+      const runId = decodeURIComponent(segments[4]!);
+      try {
+        const body = await readJsonBody(req);
+        const reason =
+          body && typeof (body as { reason?: unknown }).reason === "string"
+            ? (body as { reason: string }).reason
+            : "";
+        if (reason.length === 0) {
+          sendJson(res, 400, { error: "reason is required (non-empty string)" });
+          return;
+        }
+        const data = await sendIpcRequest(socketPath, "veto-dream-run", {
+          runId,
+          reason,
+        });
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+    // === end Phase 116-04 routes ===
+
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
       const triggerId = decodeURIComponent(segments[1]!);
