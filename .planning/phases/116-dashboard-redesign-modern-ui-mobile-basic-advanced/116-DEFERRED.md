@@ -75,3 +75,30 @@ These are listed here for cross-reference; they are NOT Phase 116 follow-up cand
 - i18n — single-operator, English-only
 - Cloud-hosted dashboard mode — local-only by design
 - Auth (Clerk / Google Sign-In) — local-only
+
+---
+
+## Phase 115-08 producer regression — deeper than cache (added 2026-05-11 from Plan 116-00 T01)
+
+**Origin:** Plan 116-00 T01. Audit Finding B (file: `.planning/quick/260511-mfn-close-out-phase-999-7-item-2-run-tool-la/260511-mfn-AUDIT-FINDINGS.md`) hypothesized the `tool_execution_ms` / `tool_roundtrip_ms` / `parallel_tool_call_count` columns are NULL in production because of a stale esbuild cache that dropped the producer call sites from the build. The plan dispatched T01 to wipe the cache, rebuild, and re-verify.
+
+**T01 verdict (2026-05-11):** Cache wipe DID NOT recover the producer call sites. After `rm -rf dist node_modules/.cache && npm run build`, the freshly-built `dist/cli/index.js` still contains 0 producer call sites and still has `function iterateUntilResult` (old name), not `iterateWithTracing`.
+
+**Root cause (corrected):** The bundle is actually CORRECT — it faithfully reflects the source. There are two parallel session-handle implementations in source:
+
+| File | Function | Producer call sites? | Live in prod? |
+|------|----------|---------------------|---------------|
+| `src/manager/session-adapter.ts:1336` | `async function iterateWithTracing` | ✓ yes (4 sites) | ✗ no — only invoked via `wrapSdkQuery` which `session-adapter.ts:914,1252` documents as "test-only" (`createTracedSessionHandle`) |
+| `src/manager/persistent-session-handle.ts:333` | `async function iterateUntilResult` | ✗ no | ✓ yes — `daemon.ts:18,2287` constructs `SdkSessionAdapter`, which `template-driver.ts:55,121` and the production handle chain delegate to via `createPersistentSessionHandle` |
+
+The Phase 115-08 producer methods (`addToolExecutionMs` / `addToolRoundtripMs` / `recordParallelToolCallCount`) were added to `session-adapter.ts:iterateWithTracing`, but production never executes that function — it executes `persistent-session-handle.ts:iterateUntilResult`, which has no producer call sites.
+
+**Fix required (deferred out of Plan 116-00):** Port the Phase 115-08 producer call sites from `session-adapter.ts:iterateWithTracing` into `persistent-session-handle.ts:iterateUntilResult`. The call-site shapes (4 sites at session-adapter.ts:1403, 1419, 1465, 1476, 1607) need to be replicated against the analogous tool_use / tool_result / batch points in `iterateUntilResult`. Estimated ~1-2h surgical port + verification.
+
+**Impact on Phase 116 plans:**
+
+- Plan 116-00 proceeds without this fix. F02 backend (per-model SLO) is unaffected.
+- Plan 116-02 F07 (tool latency split panel) MUST fall back to `trace_spans` table for its data source rather than the new `traces` columns. The plan's deviation handling already calls this out: "F07 ships against `trace_spans` — works today, no dependency on Finding B fix, but only shows `tool_call.<name>` durations, not the per-batch round-trip / split decomposition that 115-08 intended."
+- Operator can promote this to a quick task (~260512-xxx style) any time after Plan 116-00 ships. Suggested priority: medium (F07 ships fine without it, but the full exec-vs-roundtrip split is the headline 115-08 surface).
+
+**Promotion criteria:** Promote to a Phase 999-series quick task as soon as Plan 116-00 closes, so F07 in Plan 116-02 has the option of using the new columns by the time it ships.
