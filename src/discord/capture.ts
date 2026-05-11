@@ -45,10 +45,10 @@ export type CaptureInput = {
    * caller (bridge.ts has it; capture is agent-agnostic by default).
    */
   readonly onTurnRecorded?: (info: {
-    readonly agentName: string;
+    readonly agent: string;
     readonly turnId: string;
     readonly role: "user" | "assistant";
-    readonly createdAt: string;
+    readonly ts: string;
   }) => void;
   readonly agentName?: string;
 };
@@ -109,19 +109,19 @@ export function captureDiscordExchange(input: CaptureInput): void {
     // ConversationTurn is the in-memory shape recordTurn just returned, no
     // re-read needed.
     if (input.onTurnRecorded && input.agentName) {
-      const agentName = input.agentName;
+      const agent = input.agentName;
       try {
         input.onTurnRecorded({
-          agentName,
+          agent,
           turnId: userTurn.id,
           role: "user",
-          createdAt: userTurn.createdAt,
+          ts: userTurn.createdAt,
         });
         input.onTurnRecorded({
-          agentName,
+          agent,
           turnId: assistantTurn.id,
           role: "assistant",
-          createdAt: assistantTurn.createdAt,
+          ts: assistantTurn.createdAt,
         });
       } catch (hookErr) {
         input.log.warn(

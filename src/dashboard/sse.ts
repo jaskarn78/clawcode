@@ -90,7 +90,7 @@ export class SseManager {
    * Phase 116-03 F27 — event-driven additions (NOT polled; fired inline
    * from captureDiscordExchange in src/discord/capture.ts via the
    * `onConversationTurn` hook the bridge constructor accepts):
-   *   - `conversation-turn`   (per turn write)      — { agentName, turnId, role, createdAt }
+   *   - `conversation-turn`   (per turn write)      — { agent, turnId, role, ts }
    *
    * Payload is metadata-only — UI fetches full content on demand via
    * /api/conversations/search or /api/conversations/:agent/recent. Keeps

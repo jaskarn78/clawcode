@@ -79,10 +79,10 @@ export type BridgeConfig = {
    * the bridge without a dashboard.
    */
   readonly onConversationTurn?: (info: {
-    readonly agentName: string;
+    readonly agent: string;
     readonly turnId: string;
     readonly role: "user" | "assistant";
-    readonly createdAt: string;
+    readonly ts: string;
   }) => void;
 };
 
@@ -159,10 +159,10 @@ export class DiscordBridge {
   /** Phase 116-03 F27 — SSE-broadcast hook for conversation turn writes. */
   private readonly onConversationTurn:
     | ((info: {
-        readonly agentName: string;
+        readonly agent: string;
         readonly turnId: string;
         readonly role: "user" | "assistant";
-        readonly createdAt: string;
+        readonly ts: string;
       }) => void)
     | undefined;
   private running = false;

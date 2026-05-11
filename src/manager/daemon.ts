@@ -2445,6 +2445,10 @@ export async function startDaemon(
   const sseManagerRef: {
     current: import("../dashboard/sse.js").SseManager | null;
   } = { current: null };
+  // Field-name contract: SSE payload is locked to {agent, turnId, ts, role}
+  // per the dashboard-redesign-2026-05-08 spec (must-have #4). Daemon-side
+  // emit uses the same key set; UI destructures by these names.
+
 
   // Phase 100 follow-up — late-binding refs for the TriggerEngine deliveryFn.
   // TriggerEngine is constructed at boot step 6-quinquies-b (~line 1935),
@@ -5779,7 +5783,7 @@ export async function startDaemon(
           sse.broadcast("conversation-turn", info);
         } catch (err) {
           log.warn(
-            { err, agentName: info.agentName, turnId: info.turnId },
+            { err, agent: info.agent, turnId: info.turnId },
             "[F27] SSE conversation-turn broadcast failed (non-fatal)",
           );
         }
