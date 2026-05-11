@@ -16,7 +16,18 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveModelId } from "./model-resolver.js";
 
-export type HaikuCallOpts = { readonly signal?: AbortSignal };
+/**
+ * `maxTokens` overrides the per-call default (text: 2048, vision: 1024).
+ * Dream-pass needs ~4096 to fit a full JSON object — without this override,
+ * Haiku truncates the output mid-string and the downstream JSON.parse
+ * throws "Unterminated string in JSON at position N" (see 2026-05-11
+ * dream-pass parse-failed incident, surfaced after the OAuth-cache fix
+ * unmasked it).
+ */
+export type HaikuCallOpts = {
+  readonly signal?: AbortSignal;
+  readonly maxTokens?: number;
+};
 
 export type VisionMediaType =
   | "image/png"
@@ -99,7 +110,7 @@ export async function callHaikuDirect(
     client.messages.create(
       {
         model: resolveModelId("haiku"),
-        max_tokens: 2048,
+        max_tokens: opts.maxTokens ?? 2048,
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
       },
@@ -125,7 +136,7 @@ export async function callHaikuVision(
     client.messages.create(
       {
         model: resolveModelId("haiku"),
-        max_tokens: 1024,
+        max_tokens: opts.maxTokens ?? 1024,
         system: systemPrompt,
         messages: [
           {

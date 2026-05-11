@@ -168,6 +168,25 @@ describe("callHaikuDirect", () => {
     await expect(callHaikuDirect("s", "u", {})).rejects.toThrow("Server error");
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
+
+  it("honors opts.maxTokens override (dream-pass requires ~4096 for full JSON)", async () => {
+    // Regression pin for the 2026-05-11 dream-pass parse-failed incident:
+    // callHaikuDirect previously hardcoded max_tokens: 2048, dropping the
+    // dispatcher's maxOutputTokens request. Output truncated mid-string ~6700
+    // chars in → JSON.parse threw "Unterminated string". Test asserts the
+    // override is forwarded so dream-pass can grant itself the budget it needs.
+    mockCreate.mockResolvedValue(textResponse("ok"));
+    await callHaikuDirect("s", "u", { maxTokens: 4096 });
+    const call = mockCreate.mock.calls[0]![0] as { max_tokens: number };
+    expect(call.max_tokens).toBe(4096);
+  });
+
+  it("falls back to default max_tokens 2048 when override not supplied", async () => {
+    mockCreate.mockResolvedValue(textResponse("ok"));
+    await callHaikuDirect("s", "u", {});
+    const call = mockCreate.mock.calls[0]![0] as { max_tokens: number };
+    expect(call.max_tokens).toBe(2048);
+  });
 });
 
 describe("callHaikuVision", () => {
@@ -215,5 +234,14 @@ describe("callHaikuVision", () => {
     mockCreate.mockResolvedValue({ content: [] });
     const result = await callHaikuVision("s", "u", Buffer.alloc(1), "image/png", {});
     expect(result).toBe("");
+  });
+
+  it("honors opts.maxTokens override (default 1024 if not supplied)", async () => {
+    mockCreate.mockResolvedValue(textResponse("ok"));
+    await callHaikuVision("s", "u", Buffer.alloc(1), "image/png", {
+      maxTokens: 3000,
+    });
+    const call = mockCreate.mock.calls[0]![0] as { max_tokens: number };
+    expect(call.max_tokens).toBe(3000);
   });
 });

@@ -4073,10 +4073,13 @@ export async function startDaemon(
             // dispatchReq.model is "haiku" by default (dream config default);
             // model override is a future follow-up.
             try {
+              // Honor the dispatcher's maxOutputTokens (dream-pass needs
+              // ~4096 for full JSON; haiku-direct's default of 2048 truncates
+              // mid-string → parse-failed). See 2026-05-11 latent budget bug.
               const text = await callHaikuDirect(
                 dispatchReq.systemPrompt,
                 dispatchReq.userPrompt,
-                {},
+                { maxTokens: dispatchReq.maxOutputTokens },
               );
               // Token counts unavailable from direct call; approximate via
               // chars/4 heuristic (consistent with dream-prompt-builder's budget).
