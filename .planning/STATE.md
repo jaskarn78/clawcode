@@ -679,9 +679,13 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-11
-Stopped at: Completed 999.36-01-PLAN.md
-Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
+Last activity: 2026-05-11 (late evening)
+Stopped at: Completed Plan 116-00 (10 commits) + quick tasks 260511-pw2 (post_to_agent silent drops) + 260511-pw3 (schema registry auto-discovery)
+Resume: Execute Plan 116-01 (Tier 1 read-only surfaces — F01 SLO breach banner, F03 agent tile grid, F04 budget meter, F05 cache gauge, F08 prompt-bloat/lazy-recall counters). All Tier 1 data sources already exist via `/api/agents/:name/cache` + `/api/status` + `/api/fleet-stats` — no backend additions. Pure React component work using the 116-00 SPA foundation (Vite + React 19 + shadcn/ui + Tailwind + self-hosted Cabinet Grotesk/Geist/JetBrains Mono fonts).
+
+**Open follow-up:** Phase 115-08 producer port (session-adapter.ts → persistent-session-handle.ts) — see Open Bugs section. ~1-2h surgical port. Can land any time before Plan 116-02 F07 ships if operator wants the full exec-vs-roundtrip split; otherwise F07 ships against `trace_spans` fallback.
+
+**Operator note:** Plan 116-00 introduced no daemon-side runtime deps; all new deps are client-side devDeps for the SPA build. No deploy performed; commits are code-only. Ramy-active deploy hold continues until operator explicit clearance.
 
 ## Open Bugs (post-999.15 deploy)
 
@@ -689,5 +693,5 @@ Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — st
 
 ## Open Bugs (post-115-08 deploy, surfaced by quick task 260511-mfn)
 
-- **Phase 115-08 split-latency producers SILENT in production** — `tool_execution_ms`, `tool_roundtrip_ms`, `parallel_tool_call_count` columns on `traces` table are NULL for 0/63 turns post-deploy (8h window) despite 132 `tool_call.*` spans recorded in the same window. Bundle inspection: `trace-collector.ts` method definitions ARE present at `/opt/clawcode/dist/cli/index.js:10700-10737` but `session-adapter.ts` producer call sites are MISSING — bundle uses `iterateUntilResult` (older function name) instead of `iterateWithTracing` (the post-115-08 name from commit `cebc06c`). Likely stale tsup/esbuild incremental cache during the 2026-05-11 14:28 UTC build. Repro path: `rm -rf dist node_modules/.cache && npm run build` then diff against deployed bundle. **Blocks Phase 116 F07** (tool latency split panel) if F07 is designed against the new columns. See `.planning/quick/260511-mfn-close-out-phase-999-7-item-2-run-tool-la/260511-mfn-AUDIT-FINDINGS.md` "Finding B".
-- **`clawcode tool-latency-audit` CLI: "Invalid Request"** — same flavor as the mcp-tracker bug, likely shares root cause with the 115-08 producer regression above (the closure-intercept IPC handler from 115-08 is probably also missing from the bundle). Direct SQLite read against agent `traces.db` files is the working fallback. See `.planning/quick/260511-mfn-*/260511-mfn-AUDIT-FINDINGS.md` "Finding C".
+- **Phase 115-08 split-latency producers SILENT in production — ROOT-CAUSED 2026-05-11 by Plan 116-00 T01** — Cache wipe did NOT recover the producer call sites. **Actual root cause:** two parallel session-handle implementations exist in source. `src/manager/session-adapter.ts:1336:iterateWithTracing` has the 4 producer call sites but is **test-only** (invoked via `wrapSdkQuery` / `createTracedSessionHandle` per `session-adapter.ts:914,1252`). Production uses `src/manager/persistent-session-handle.ts:333:iterateUntilResult` which has NO producer call sites (`daemon.ts:18,2287` → `SdkSessionAdapter` → `template-driver.ts:55,121` → `createPersistentSessionHandle`). The bundle faithfully reflects the source — the build was never broken. **Fix required (deferred out of Plan 116-00):** port the 4 producer call sites from `session-adapter.ts:1403,1419,1465,1476,1607` into `persistent-session-handle.ts:iterateUntilResult` at the analogous tool_use/tool_result/batch points. Estimated ~1-2h surgical port + verification. Logged in `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-DEFERRED.md`. **F07 in Plan 116-02 ships against `trace_spans` fallback** per the plan's deviation handling.
+- **`clawcode tool-latency-audit` CLI: "Invalid Request"** — same flavor as the mcp-tracker bug. May share root cause with the producer regression above OR may be a separate IPC-handler bug; investigation deferred until the producer port lands. Direct SQLite read against agent `traces.db` files is the working fallback. See `.planning/quick/260511-mfn-*/260511-mfn-AUDIT-FINDINGS.md` "Finding C".
