@@ -3,10 +3,10 @@
  * react-router). 116-06 extends the view enum with `audit` (F23) and
  * `graph` (F24); heavy routes lazy-load.
  *
- * View enum (116-06):
+ * View enum (116-postdeploy):
  *   - 'dashboard'      → FleetLayout (Tier 1 — agent tile grid; default)
  *   - 'fleet'          → FleetComparisonTable (F16 — 116-05)
- *   - 'costs'          → CostDashboard (F17 — 116-05, lazy)
+ *   - 'usage'          → UsageDashboard (116-postdeploy; was 'costs')
  *   - 'conversations'  → ConversationsView (F27 — 116-03)
  *   - 'tasks'          → TaskKanban (F28 — 116-03)
  *   - 'audit'          → AuditLogViewer (F23 — 116-06, lazy)
@@ -16,15 +16,23 @@
  *   - Nav strip (left)
  *   - Telemetry badge + notification bell + theme toggle (right)
  *
- * Path mapping (116-06):
+ * Path mapping (116-postdeploy):
  *   /dashboard/v2                → 'dashboard' (default)
  *   /dashboard/v2/fleet          → 'fleet'
- *   /dashboard/v2/costs          → 'costs'
+ *   /dashboard/v2/usage          → 'usage'  (canonical)
+ *   /dashboard/v2/costs          → 'usage'  (legacy alias — bookmarks)
  *   /dashboard/v2/conversations  → 'conversations'
  *   /dashboard/v2/tasks          → 'tasks'
  *   /dashboard/v2/audit          → 'audit'
  *   /dashboard/v2/graph          → 'graph'
  * Unknown paths fall back to 'dashboard'.
+ *
+ * 116-postdeploy: 'costs' → 'usage' rename. The route alias keeps any
+ * historical bookmarks pointing at /costs working without a 301 (this is
+ * a SPA route, not a server-side path — both paths resolve to the same
+ * 'usage' view). Forward nav writes /usage; popstate from old bookmarks
+ * back-navigates correctly because the SPA never re-writes the URL on
+ * load, only on navigate().
  */
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useSseBridge } from './hooks/useSse'
@@ -41,11 +49,13 @@ import { TelemetryBadge, useDashboardPageViewEmit } from './components/Telemetry
 import { DashboardErrorBoundary } from './components/DashboardErrorBoundary'
 import { Button } from '@/components/ui/button'
 
-// Recharts is heavy (~70KB minified). Lazy-load the cost dashboard so the
+// Recharts is heavy (~70KB minified). Lazy-load the usage dashboard so the
 // eager bundle for the default Tier 1 view stays inside the plan budget.
-const CostDashboard = lazy(() =>
+// (File path unchanged — 116-postdeploy reframed the export under a new
+// `UsageDashboard` name but the lazy import target is the same module.)
+const UsageDashboard = lazy(() =>
   import('./components/CostDashboard').then((m) => ({
-    default: m.CostDashboard,
+    default: m.UsageDashboard,
   })),
 )
 // 116-06 — heavy lazy routes. AuditLogViewer pulls the audit list +
@@ -63,7 +73,7 @@ const GraphRoute = lazy(() =>
 export type DashboardView =
   | 'dashboard'
   | 'fleet'
-  | 'costs'
+  | 'usage'
   | 'conversations'
   | 'tasks'
   | 'audit'
@@ -74,7 +84,10 @@ const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2/': 'dashboard',
   '/dashboard/v2/dashboard': 'dashboard',
   '/dashboard/v2/fleet': 'fleet',
-  '/dashboard/v2/costs': 'costs',
+  '/dashboard/v2/usage': 'usage',
+  // Legacy alias — /costs bookmarks resolve to the Usage view without a
+  // server-side 301 (this is SPA-only routing).
+  '/dashboard/v2/costs': 'usage',
   '/dashboard/v2/conversations': 'conversations',
   '/dashboard/v2/tasks': 'tasks',
   '/dashboard/v2/audit': 'audit',
@@ -84,7 +97,7 @@ const PATH_TO_VIEW: Record<string, DashboardView> = {
 const VIEW_TO_PATH: Record<DashboardView, string> = {
   dashboard: '/dashboard/v2',
   fleet: '/dashboard/v2/fleet',
-  costs: '/dashboard/v2/costs',
+  usage: '/dashboard/v2/usage',
   conversations: '/dashboard/v2/conversations',
   tasks: '/dashboard/v2/tasks',
   audit: '/dashboard/v2/audit',
@@ -145,10 +158,10 @@ function App() {
             Fleet
           </ViewButton>
           <ViewButton
-            active={view === 'costs'}
-            onClick={() => navigate('costs')}
+            active={view === 'usage'}
+            onClick={() => navigate('usage')}
           >
-            Costs
+            Usage
           </ViewButton>
           <ViewButton
             active={view === 'conversations'}
@@ -190,15 +203,15 @@ function App() {
         />
       )}
       {view === 'fleet' && <FleetComparisonTable />}
-      {view === 'costs' && (
+      {view === 'usage' && (
         <Suspense
           fallback={
             <div className="mx-auto max-w-7xl p-4 text-sm text-fg-3">
-              Loading cost dashboard…
+              Loading usage dashboard…
             </div>
           }
         >
-          <CostDashboard />
+          <UsageDashboard />
         </Suspense>
       )}
       {view === 'conversations' && <ConversationsView />}
