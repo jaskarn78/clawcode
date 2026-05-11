@@ -6323,6 +6323,153 @@ export async function startDaemon(
         log.info({ runId, reasonLen: reason.length }, "[F15] dream veto recorded");
         return { runId, vetoed: true, recordedAt: new Date().toISOString() };
       }
+
+      // =====================================================================
+      // Phase 116-05 — Fleet-scale + cost IPC handlers (F16/F17).
+      // Same closure-intercept convention as 116-03/116-04 above. Both
+      // handlers read from already-open singletons (per-agent UsageTracker
+      // via SessionManager + the daemon-scope EscalationBudget). No new
+      // schema, no new singletons.
+      //
+      // F17 — cost dashboard:
+      //   costs-daily    -> per-day cost rows for the trend chart.
+      //   budget-status  -> EscalationBudget gauges (tokens) per agent
+      //                     per model per period (daily + weekly).
+      //
+      // F16 reuses existing per-agent IPC routes — no new daemon surface.
+      //
+      // SCOPE CAVEAT: `getRunningAgents()` is used for both handlers, same
+      // as the existing `costs` handler at line ~9201. UsageTracker
+      // instances close on stopAgent; rebuilding them for historical reads
+      // on stopped agents would mean opening usage.db from disk + caching.
+      // Out of scope for 116-05; documented as a forward-pointer in the
+      // SUMMARY. Operators viewing a 30d trend for a stopped agent will
+      // see zero rows; restart the agent to surface its historical data.
+      // =====================================================================
+
+      case "costs-daily": {
+        // F17 per-day cost trend rows. Params:
+        //   days?  (number, 1..90, default 30) — window size in days,
+        //          UTC-aligned from start-of-day (now - days+1) through now.
+        //   agent? (string)                    — restrict to one agent
+        // Returns: { days, since, until, rows: CostByDay[] }
+        //
+        // Each CostByDay row is one (date, agent, model) bucket. The
+        // dashboard re-stacks client-side (per-agent OR per-model toggle).
+        const rawDays = (params as { days?: unknown }).days;
+        const days =
+          typeof rawDays === "number" && Number.isFinite(rawDays)
+            ? Math.max(1, Math.min(Math.floor(rawDays), 90))
+            : 30;
+        const agentFilter =
+          typeof (params as { agent?: unknown }).agent === "string" &&
+          (params as { agent: string }).agent.length > 0
+            ? (params as { agent: string }).agent
+            : null;
+        const now = new Date();
+        // UTC start-of-day(now - (days-1)) → inclusive lower bound covering
+        // exactly `days` daily buckets.
+        const sinceUtc = new Date(
+          Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - (days - 1),
+            0,
+            0,
+            0,
+            0,
+          ),
+        );
+        const sinceIso = sinceUtc.toISOString();
+        const untilIso = now.toISOString();
+
+        const agentList = agentFilter
+          ? [agentFilter]
+          : manager.getRunningAgents();
+
+        const rows: Array<{
+          date: string;
+          agent: string;
+          model: string;
+          tokens_in: number;
+          tokens_out: number;
+          cost_usd: number;
+        }> = [];
+        for (const agentName of agentList) {
+          const tracker = manager.getUsageTracker(agentName);
+          if (!tracker) continue;
+          const dayRows = tracker.getCostsByDay(sinceIso, untilIso);
+          for (const r of dayRows) {
+            rows.push({
+              date: r.date,
+              agent: r.agent,
+              model: r.model,
+              tokens_in: r.tokens_in,
+              tokens_out: r.tokens_out,
+              cost_usd: r.cost_usd,
+            });
+          }
+        }
+        return {
+          days,
+          since: sinceIso,
+          until: untilIso,
+          rows,
+        };
+      }
+
+      case "budget-status": {
+        // F17 budget gauges. Returns one row per (agent, model, period)
+        // pairing the configured token limit with the current period's
+        // tokens_used. Models with no limit configured are omitted (no
+        // gauge to render). Periods covered: daily + weekly (the two
+        // EscalationBudget natively tracks).
+        //
+        // UNITS: TOKENS (matches schema). The dashboard renders these on a
+        // separate row from the USD spend cards. Conversion to USD would
+        // need a model-pricing lookup per row — defensible alternative but
+        // we keep this contract token-native to match the underlying
+        // AgentBudgetConfig surface. See 116-05-SUMMARY decisions.
+        const rows: Array<{
+          agent: string;
+          model: string;
+          period: "daily" | "weekly";
+          tokens_used: number;
+          tokens_limit: number;
+          pct: number;
+          status: "ok" | "warning" | "exceeded";
+        }> = [];
+        for (const [agent, cfg] of budgetConfigs.entries()) {
+          for (const period of ["daily", "weekly"] as const) {
+            const periodCfg = cfg[period];
+            if (!periodCfg) continue;
+            for (const model of ["sonnet", "opus"] as const) {
+              const limit = periodCfg[model];
+              if (typeof limit !== "number" || limit <= 0) continue;
+              const used = escalationBudget.getUsageForPeriod(
+                agent,
+                model,
+                period,
+              );
+              const pct = limit > 0 ? used / limit : 0;
+              let status: "ok" | "warning" | "exceeded" = "ok";
+              if (pct >= 1.0) status = "exceeded";
+              else if (pct >= 0.8) status = "warning";
+              rows.push({
+                agent,
+                model,
+                period,
+                tokens_used: used,
+                tokens_limit: limit,
+                pct,
+                status,
+              });
+            }
+          }
+        }
+        return { rows };
+      }
+      // === end Phase 116-05 IPC handlers ===
     }
 
     return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);

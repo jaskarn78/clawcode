@@ -79,3 +79,22 @@ export type CostByCategory = {
   readonly category: string;
   readonly cost_usd: number;
 };
+
+/**
+ * Phase 116-05 F17 — per-day cost row grouped by (date, agent, model).
+ *
+ * Returned by `UsageTracker.getCostsByDay()`. The `date` field is the
+ * SQLite `date(timestamp)` value (UTC, YYYY-MM-DD format) — bucketing is
+ * intentionally UTC-aligned so a 30-day window is exactly 30 buckets
+ * regardless of operator timezone. The cost dashboard re-displays the
+ * date as-is (operators reading this surface are looking at trends, not
+ * accountancy ledger lines).
+ */
+export type CostByDay = {
+  readonly date: string;
+  readonly agent: string;
+  readonly model: string;
+  readonly tokens_in: number;
+  readonly tokens_out: number;
+  readonly cost_usd: number;
+};

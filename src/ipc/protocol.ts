@@ -335,6 +335,20 @@ export const IPC_METHODS = [
   "get-memory-snapshot",
   "get-dream-queue",
   "veto-dream-run",
+  // Phase 116-05 — Fleet-scale + cost (F16/F17).
+  // Handlers live in src/manager/daemon.ts in the closure-intercept block
+  // labeled "Phase 116-05". REST proxies in src/dashboard/server.ts in
+  // the "=== Phase 116-05 routes ===" block.
+  //
+  //   costs-daily   -> F17 per-day cost trend rows for the cost dashboard
+  //                    (extends the existing `costs` aggregate handler).
+  //   budget-status -> F17 EscalationBudget gauges — token usage per
+  //                    period (daily/weekly) per agent per model, alongside
+  //                    the configured limit. Tokens-not-USD by schema; the
+  //                    cost dashboard renders these on a separate row from
+  //                    the USD spend cards. See 116-05-SUMMARY decisions.
+  "costs-daily",
+  "budget-status",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

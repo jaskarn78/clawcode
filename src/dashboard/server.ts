@@ -1140,6 +1140,63 @@ async function handleRequest(
     }
     // === end Phase 116-04 routes ===
 
+    // =====================================================================
+    // Phase 116-05 routes — Fleet-scale + cost (F16/F17).
+    // Same contiguous-block convention as 116-02/116-03/116-04 so 116-06
+    // can append its own fence without touching this diff. Both routes
+    // proxy daemon IPC methods registered in the "Phase 116-05" closure-
+    // intercept block in src/manager/daemon.ts.
+    //
+    // F16 — fleet comparison table:
+    //   No new backend — the page aggregates over the existing per-agent
+    //   /api/agents/:name/cache + /api/agents/:name/latency + /api/costs
+    //   endpoints. CSV serialization is client-side (Blob + download).
+    //
+    // F17 — cost dashboard:
+    //   GET /api/costs/daily?days=30&agent=X  -> daemon `costs-daily`
+    //   GET /api/budgets                      -> daemon `budget-status`
+    //
+    // Note: `/api/costs` (Phase 1.5) already covers today/week/month
+    // totals; 116-05 builds on top of it without replacing.
+    // =====================================================================
+
+    // GET /api/costs/daily?days=30&agent=X
+    // F17 — per-day cost trend rows for the dashboard's trend chart +
+    // anomaly detection + linear projection.
+    if (method === "GET" && pathname === "/api/costs/daily") {
+      try {
+        const queryString = (req.url ?? "").split("?")[1] ?? "";
+        const params = new URLSearchParams(queryString);
+        const daysRaw = params.get("days");
+        const days = daysRaw ? Number.parseInt(daysRaw, 10) : 30;
+        const agent = params.get("agent");
+        const ipcParams: Record<string, unknown> = {};
+        if (Number.isFinite(days)) ipcParams.days = days;
+        if (agent) ipcParams.agent = agent;
+        const data = await sendIpcRequest(socketPath, "costs-daily", ipcParams);
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    // GET /api/budgets
+    // F17 — EscalationBudget gauges. Units are TOKENS by schema; the
+    // dashboard renders these alongside (not inside) the USD spend cards.
+    if (method === "GET" && pathname === "/api/budgets") {
+      try {
+        const data = await sendIpcRequest(socketPath, "budget-status", {});
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+    // === end Phase 116-05 routes ===
+
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
       const triggerId = decodeURIComponent(segments[1]!);

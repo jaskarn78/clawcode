@@ -199,6 +199,9 @@ describe("IPC_METHODS", () => {
       "get-memory-snapshot",
       "get-dream-queue",
       "veto-dream-run",
+      // Phase 116-05 — Fleet-scale + cost IPC methods (F16/F17).
+      "costs-daily",
+      "budget-status",
     ]);
   });
 });
