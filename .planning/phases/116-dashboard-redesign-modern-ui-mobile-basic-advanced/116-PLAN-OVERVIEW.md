@@ -29,16 +29,16 @@ The session-local plan file (with full plan-mode review trace, exploration outpu
 | **116-03** | Tier 1.5 operator workflow | F26, F27, F28 | 14-18 | 116-00 (parallelizable with 116-01/02) |
 | **116-04** | Tier 2 deep-dive | F11, F12, F13, F14, F15 | 10-14 | 116-01, 116-02 |
 | **116-05** | Fleet-scale + cost | F16, F17 | 4-6 | 116-04 |
-| **116-06** | Tier 3 polish + cutover gate | F18-F25 + cutover instrumentation | 6-10 | all prior |
+| **116-06** | Tier 3 polish + cutover gate | F18, F20-F25 (F19 DEFERRED) + cutover instrumentation | 4-7 | all prior |
 
-**Total: 57-78 executor hours across 7 atomic plans.**
+**Total: 55-75 executor hours across 7 atomic plans** (F19 deferred saves 2-3h).
 
 ## Locked decisions (operator review 2026-05-11)
 
 - **Wave order:** Tier 1 → Tier 1.5 (F26/F27/F28) → Tier 2 → Tier 3 polish (operator chose to ship workflow features before Tier 2 inspector panels)
 - **Finding B fix:** Plan 116-00 T01 wipes esbuild cache + rebuilds + verifies producer call sites land in `dist/cli/index.js`. ~10-20 min. Unblocks F07 against the new `tool_execution_ms` / `tool_roundtrip_ms` columns. Fallback path: F07 against `trace_spans` if cache wipe doesn't recover.
 - **Cutover:** Operator-driven feature flag (`defaults.dashboardCutoverRedirect: false → true`). No calendar gate. Both `/` and `/dashboard/v2/` coexist indefinitely until operator green-lights `/` redirect.
-- **Scope:** All 28 features (F01-F28) stay in Phase 116. F14 in-UI memory editor descopes to read-only previews in v1 only. F19 swim-lane stays in scope but eligible for defer if 116-06 runs over budget.
+- **Scope:** 27 of 28 features (F01-F18, F20-F28) stay in Phase 116. F14 in-UI memory editor descopes to read-only previews in v1 only. **F19 swim-lane DEFERRED out of Phase 116** (operator decision 2026-05-11; rationale + promotion criteria in `116-DEFERRED.md`).
 - **Tech stack:** Vite + React 19 + shadcn/ui + Tailwind 3.4 + Recharts 3 + TanStack Query + Lucide (locked from 116-CONTEXT.md)
 - **Aesthetic:** Cabinet Grotesk display + Geist body + JetBrains Mono data; dark `#0e0e12` base + emerald `#10b981` primary
 - **Build:** Single root `package.json`, Vite reads root `node_modules`; daemon-side runtime deps unchanged
@@ -91,8 +91,8 @@ Each plan has its own PLAN.md with frontmatter + task breakdown. Plans are desig
 Before dispatching `gsd-executor` against Plan 116-00:
 
 - [ ] Operator confirms deploy hold continues to be active (no deploy at end of 116-00)
-- [ ] Discord allowlist for `npm install` / `npx shadcn add` configured to reduce permission-prompt fatigue (optional but recommended)
-- [ ] Phase 115 wave-4 perf-comparison report available for F02 Opus threshold derivation in 116-00 T02
+- [x] **Claude Code permissions allowlist configured for `npm install *`, `npm create vite@latest *`, `npx shadcn@latest *`, `cd src/dashboard/client && *`** — landed in `.claude/settings.local.json` on 2026-05-11 (reduces prompt fatigue during 116-00 scaffolding)
+- [x] **F02 SLO thresholds locked** — Sonnet 6,000ms / Opus 8,000ms / Haiku 2,000ms first_token p50 (derivation table + rationale in `116-00-PLAN.md` T02 action block). SLOs are intentionally aspirational — several agents red at ship until Phase 115 propagates.
 - [ ] No active subagent dispatches against `src/dashboard/server.ts` to avoid merge conflicts (Phase 116 plans modify it heavily)
 
 ## Verification at phase completion
@@ -118,10 +118,13 @@ End-to-end test (after all 7 plans ship):
 
 ## Out of scope (deferred)
 
-- F14 in-UI MEMORY.md/SOUL.md editor (operator overwriting mid-turn is high-risk) — read-only previews only in v1
-- Approval-driven governance UI (Mission Control pattern) — single-operator tool, not needed
-- Multi-framework adapters (CrewAI / LangGraph)
-- Session replay / time-travel debugging
-- OpenTelemetry native instrumentation
-- i18n
-- Cloud-hosted dashboard mode / auth
+See `116-DEFERRED.md` for full rationale and promotion criteria.
+
+- **F19 swim-lane timeline** — DEFERRED OUT OF PHASE 116 (operator decision 2026-05-11). F12 trace waterfall covers per-turn timing; multi-agent correlation demand unproven. Promote if operator usage shows demand during soak.
+- **F14 in-UI memory editor** — read-only previews only in v1; in-UI editor deferred (file-locking + post-save SSE invalidation needed first). Operator can still use `clawcode memory edit` CLI.
+- **Approval-driven governance UI** (Mission Control pattern) — single-operator tool, not needed
+- **Multi-framework adapters** (CrewAI / LangGraph) — ClawCode is Claude-only by design
+- **Session replay / time-travel debugging** — high storage cost
+- **OpenTelemetry native instrumentation** — overkill for tightly-coupled daemon
+- **i18n** — single-operator, English-only
+- **Cloud-hosted dashboard mode** / auth — local-only by design
