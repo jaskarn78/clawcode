@@ -96,6 +96,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       // Phase 96 D-05 — fleet-wide fileAccess defaults.
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
     },
     mcpServers: {},
     agents: [

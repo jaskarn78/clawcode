@@ -182,7 +182,15 @@ export async function startDashboardServer(config: DashboardServerConfig): Promi
   });
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void handleRequest(req, res, sseManager, config.socketPath, log, config.webhookHandler);
+    void handleRequest(
+      req,
+      res,
+      sseManager,
+      config.socketPath,
+      log,
+      config.webhookHandler,
+      config.cutoverRedirectEnabled,
+    );
   });
 
   sseManager.start();
@@ -216,6 +224,7 @@ async function handleRequest(
   socketPath: string,
   log: Logger,
   webhookHandler?: DashboardServerConfig["webhookHandler"],
+  cutoverRedirectEnabled?: DashboardServerConfig["cutoverRedirectEnabled"],
 ): Promise<void> {
   const method = req.method ?? "GET";
   const { pathname, segments } = parseRoute(req.url);
@@ -281,6 +290,23 @@ async function handleRequest(
 
     // Static file routes
     if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+      // Phase 116-06 T08 — operator-driven cutover gate. When the flag is
+      // flipped to true (via `clawcode config set defaults.dashboardCutoverRedirect true`)
+      // the legacy dashboard root 301-redirects to the SPA. The flag is a
+      // CLOSURE OVER THE LIVE CONFIG REF in daemon.ts, so the flip takes
+      // effect on the very next request after ConfigWatcher debounces the
+      // YAML edit — no daemon restart.
+      //
+      // Hardening: only redirect `pathname === "/"`. The `/index.html`
+      // legacy path keeps serving the old asset literally — operators who
+      // bookmarked or scripted `/index.html` shouldn't get bounced. The
+      // redirect target ends with `/` so the SPA's path↔view layer reads
+      // the canonical home view.
+      if (pathname === "/" && cutoverRedirectEnabled?.() === true) {
+        res.writeHead(301, { Location: "/dashboard/v2/" });
+        res.end();
+        return;
+      }
       await serveStatic(res, "index.html", MIME_TYPES[".html"]!);
       return;
     }

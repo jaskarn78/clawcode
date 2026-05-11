@@ -6835,7 +6835,23 @@ export async function startDaemon(
           log,
         )
       : undefined;
-    dashboard = await startDashboardServer({ port: dashboardPort, host: dashboardHost, socketPath: SOCKET_PATH, webhookHandler });
+    // Phase 116-06 T08 — cutover redirect closure reads the LIVE config
+    // ref. `config` is the `let`-bound mutable reference reassigned on
+    // every ConfigWatcher reload tick (see line 1818 + reassignment at
+    // the ConfigReloader applyChanges callsite). The dashboard server
+    // invokes this getter on every incoming `GET /` request, so a
+    // `clawcode config set defaults.dashboardCutoverRedirect true` edit
+    // takes effect on the very next request after chokidar fires the
+    // debounce timer — no daemon restart needed.
+    const cutoverRedirectEnabled = (): boolean =>
+      config.defaults.dashboardCutoverRedirect === true;
+    dashboard = await startDashboardServer({
+      port: dashboardPort,
+      host: dashboardHost,
+      socketPath: SOCKET_PATH,
+      webhookHandler,
+      cutoverRedirectEnabled,
+    });
     // Phase 116-03 F27 — publish the SseManager into the late-binding ref so
     // the bridge's onConversationTurn closure picks it up. From now on, every
     // captureDiscordExchange call broadcasts a `conversation-turn` event.

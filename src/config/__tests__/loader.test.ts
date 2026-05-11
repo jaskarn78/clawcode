@@ -96,6 +96,8 @@ describe("resolveAgentConfig", () => {
     // Phase 96 D-05 — fleet-wide fileAccess defaults.
     fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -653,6 +655,8 @@ describe("resolveAgentConfig - mcpServers", () => {
     // Phase 96 D-05 — fleet-wide fileAccess defaults.
     fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
   };
 
   const sharedMcpServers = {
@@ -1630,6 +1634,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     // Phase 96 D-05 — fleet-wide fileAccess defaults.
     fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
   };
 
   afterEach(() => {
@@ -2040,6 +2046,8 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       // Phase 96 D-05 — fleet-wide fileAccess defaults.
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
     };
   }
 
@@ -2189,6 +2197,8 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       // Phase 96 D-05 — fleet-wide fileAccess defaults.
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
     };
   }
 
@@ -2442,6 +2452,8 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
       fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
       autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
     };
   }
 

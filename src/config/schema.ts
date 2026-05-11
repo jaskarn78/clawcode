@@ -1955,6 +1955,23 @@ export const defaultsSchema = z.object({
   // NOT idempotent (different images for same prompt) — explicitly
   // excluded from IDEMPOTENT_TOOL_DEFAULTS.
   image: imageConfigSchema,
+  // Phase 116-06 T08 — operator-driven cutover redirect flag. When `true`,
+  // the dashboard server responds with `301 Location: /dashboard/v2/`
+  // for every `GET /`; when `false` (the default) the legacy static
+  // index.html is served byte-identical to pre-Phase-116 behavior. The
+  // flip is INTENTIONALLY manual (`clawcode config set
+  // defaults.dashboardCutoverRedirect true`) so the operator owns the
+  // moment of cutover. Reload classification: the dashboard handler
+  // reads the live config ref on every request, so the flip takes
+  // effect on the very next HTTP request after ConfigWatcher fires —
+  // no daemon restart required.
+  //
+  // Operator rollback: `clawcode config set defaults.dashboardCutoverRedirect false`
+  // returns the dashboard to dual-mode immediately. Old static files
+  // remain on disk and untouched during the soak — see Phase 116-06
+  // SUMMARY "Decommission follow-up" section for the post-soak cleanup
+  // commit pattern.
+  dashboardCutoverRedirect: z.boolean().default(false),
 });
 
 // ---------------------------------------------------------------------------
@@ -2194,6 +2211,10 @@ export const configSchema = z.object({
       timeoutMs: 60000,
       workspaceSubdir: "generated-images",
     },
+    // Phase 116-06 T08 — cutover flag default mirror. FALSE preserves the
+    // current dual-mode behavior (both `/` and `/dashboard/v2/` reachable);
+    // operator flips to TRUE manually via `clawcode config set`.
+    dashboardCutoverRedirect: false,
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   triggers: triggersConfigSchema,

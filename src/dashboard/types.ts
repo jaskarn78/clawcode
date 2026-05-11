@@ -29,6 +29,21 @@ export type DashboardServerConfig = {
     req: IncomingMessage,
     res: ServerResponse,
   ) => Promise<void>;
+
+  /**
+   * Phase 116-06 T08 — operator-driven cutover redirect.
+   *
+   * When this getter returns `true`, `GET /` responds with
+   * `301 Location: /dashboard/v2/` instead of serving the legacy
+   * static index.html. The daemon injects a closure over the live
+   * `config` ref so the read picks up `defaults.dashboardCutoverRedirect`
+   * AFTER each ConfigWatcher hot-reload — no server restart needed.
+   *
+   * The getter is invoked on every incoming GET / request; keep it cheap
+   * (a single property read). Omit (undefined) for legacy callers (tests,
+   * embeddings); the handler treats `undefined` identically to `false`.
+   */
+  readonly cutoverRedirectEnabled?: () => boolean;
 };
 
 /**
