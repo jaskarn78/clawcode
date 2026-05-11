@@ -55,6 +55,11 @@ export const IPC_METHODS = [
   // the /clawcode-usage Discord slash command + /clawcode-status session/
   // weekly bar suffix (Plan 03).
   "list-rate-limit-snapshots",
+  // Phase 116-postdeploy 2026-05-11 — fleet aggregate over per-agent
+  // RateLimitTracker. Loops manager.getRunningAgents() and calls the
+  // single-agent handler internally. Backs GET /api/usage on the SPA's
+  // Usage page (subscription utilization surface).
+  "list-rate-limit-snapshots-fleet",
   // Messaging
   // Phase 999.2 Plan 02 D-RNI-IPC-01 / D-RNI-IPC-02 — canonical IPC names
   // (ask-agent, post-to-agent) registered FIRST; old names retained as
