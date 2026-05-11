@@ -1,111 +1,134 @@
-:root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+/*
+ * Phase 116 — ClawCode dashboard v2 base stylesheet.
+ *
+ * Loads Tailwind layers + self-hosted WOFF2 fonts. Font URLs point at
+ * /dashboard/v2/fonts/<name>.woff2 — the daemon's static route handler
+ * (Plan 116-00 T05) maps that prefix to dist/dashboard/spa/fonts/, which
+ * Vite copies from src/dashboard/client/public/fonts/ during build.
+ *
+ * font-display: swap → render fallback (system-ui) while WOFF2 streams
+ * in. Acceptable for a local-tool dashboard; eliminates FOIT.
+ */
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+/* ---------------------------------------------------------------------- */
+/* Cabinet Grotesk — display / heading face (Fontshare CDN, Indian Type   */
+/* Foundry). Fontshare ships 400/500/700 only; the 600 weight from the    */
+/* original design lock is not available — Tailwind `font-medium` (500)   */
+/* and `font-bold` (700) cover the typical headline cases.                */
+/* ---------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Cabinet Grotesk';
+  src: url('/dashboard/v2/fonts/CabinetGrotesk-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
+@font-face {
+  font-family: 'Cabinet Grotesk';
+  src: url('/dashboard/v2/fonts/CabinetGrotesk-500.woff2') format('woff2');
   font-weight: 500;
-  color: var(--text-h);
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cabinet Grotesk';
+  src: url('/dashboard/v2/fonts/CabinetGrotesk-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+/* ---------------------------------------------------------------------- */
+/* Geist — body / sans face (Vercel, OFL).                                */
+/* ---------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Geist';
+  src: url('/dashboard/v2/fonts/Geist-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/dashboard/v2/fonts/Geist-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/dashboard/v2/fonts/Geist-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/dashboard/v2/fonts/Geist-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------------------------------------------------------------------- */
+/* JetBrains Mono — numerals / data / code face (JetBrains, OFL).          */
+/* ---------------------------------------------------------------------- */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/dashboard/v2/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/dashboard/v2/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/dashboard/v2/fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------------------------------------------------------------------- */
+/* App-wide base layer overrides (dark theme is the default; theme toggle */
+/* lands in Plan 116-06 F21).                                              */
+/* ---------------------------------------------------------------------- */
+@layer base {
+  html,
+  body,
+  #root {
+    @apply min-h-screen;
   }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
+
+  body {
+    @apply bg-bg-base text-fg-1 font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
   }
-}
-p {
-  margin: 0;
-}
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
+  /* Headlines use the display face; body inherits the sans face. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display tracking-tight;
+  }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+  /* Numerals + data should land in the mono face by default in any
+     element flagged with class="data". Tier 1 metric values use this. */
+  .data,
+  code,
+  pre,
+  kbd {
+    @apply font-mono;
+  }
 }
