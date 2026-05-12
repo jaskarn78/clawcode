@@ -41,6 +41,15 @@ SPA_DIR="$REPO_ROOT/dist/dashboard/spa"
 SPA_STAGING="${CLAWCODE_DEPLOY_SPA_STAGING:-/home/jjagpal/clawcode-staging-spa}"
 SPA_DEPLOY="${CLAWCODE_DEPLOY_SPA_TARGET:-/opt/clawcode/dist/dashboard/spa}"
 SPA_OWNER="${CLAWCODE_DEPLOY_SPA_OWNER:-clawcode:clawcode}"
+# Phase 116-postdeploy 2026-05-12 — also rsync the .planning/ tree so the
+# new GSD-planning-tasks ingest (daemon scanner at request time) reads
+# the operator's live planning artifacts instead of a stale May-7 snapshot.
+# Local read-only on the daemon side; the scanner walks .planning/todos/,
+# .planning/quick/, and .planning/ROADMAP.md.
+PLANNING_DIR="$REPO_ROOT/.planning"
+PLANNING_STAGING="${CLAWCODE_DEPLOY_PLANNING_STAGING:-/home/jjagpal/clawcode-staging-planning}"
+PLANNING_DEPLOY="${CLAWCODE_DEPLOY_PLANNING_TARGET:-/opt/clawcode/.planning}"
+PLANNING_OWNER="${CLAWCODE_DEPLOY_PLANNING_OWNER:-clawcode:clawcode}"
 
 DO_BUILD=1
 DO_RESTART=1
@@ -138,6 +147,20 @@ if [ -d "$SPA_DIR" ] && [ -f "$SPA_DIR/index.html" ]; then
   echo "  ✓ SPA staged ($SPA_FILES files)"
 fi
 
+# Stage .planning/ tree if it exists (Phase 116-postdeploy GSD planning
+# ingest). The daemon's planning-tasks scanner walks this tree at request
+# time. Without this sync the dashboard Tasks page shows stale planning
+# state (last manual snapshot, often days/weeks old).
+DEPLOY_PLANNING=0
+if [ -d "$PLANNING_DIR" ] && [ -f "$PLANNING_DIR/ROADMAP.md" ]; then
+  DEPLOY_PLANNING=1
+  echo "→ Staging .planning/ to $HOST:$PLANNING_STAGING/"
+  ssh "$HOST" "mkdir -p '$PLANNING_STAGING'" >/dev/null
+  rsync -az --delete "$PLANNING_DIR/" "$REMOTE_USER@$HOST:$PLANNING_STAGING/"
+  PLANNING_FILES=$(find "$PLANNING_DIR" -type f | wc -l)
+  echo "  ✓ planning staged ($PLANNING_FILES files)"
+fi
+
 # ---------------------------------------------------------------------------
 # 3. sudo cp + restart
 # ---------------------------------------------------------------------------
@@ -151,12 +174,19 @@ if [ "$DEPLOY_SPA" = 1 ]; then
   # stale hashed bundle filenames). chown so the daemon user can serve it.
   REMOTE_CMD="$REMOTE_CMD && mkdir -p '$SPA_DEPLOY' && rsync -a --delete '$SPA_STAGING/' '$SPA_DEPLOY/' && chown -R '$SPA_OWNER' '$SPA_DEPLOY'"
 fi
+if [ "$DEPLOY_PLANNING" = 1 ]; then
+  # Same atomic rsync + chown pattern. The daemon reads .planning/ at IPC
+  # request time so no restart is needed for new planning artifacts to
+  # appear in the dashboard Tasks page.
+  REMOTE_CMD="$REMOTE_CMD && mkdir -p '$PLANNING_DEPLOY' && rsync -a --delete '$PLANNING_STAGING/' '$PLANNING_DEPLOY/' && chown -R '$PLANNING_OWNER' '$PLANNING_DEPLOY'"
+fi
 if [ "$DO_RESTART" = 1 ]; then
   REMOTE_CMD="$REMOTE_CMD && systemctl restart $SERVICE_NAME"
 fi
 
 echo "→ Deploying to $DEPLOY_PATH"
 [ "$DEPLOY_SPA" = 1 ] && echo "→ Deploying SPA to $SPA_DEPLOY"
+[ "$DEPLOY_PLANNING" = 1 ] && echo "→ Deploying .planning/ to $PLANNING_DEPLOY"
 # -p prefix the prompt so sudo writes ONLY '' on the password line — keeps stdout clean.
 # The password is piped via stdin so it never appears on the SSH command line or in ps.
 printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' sh -c \"$REMOTE_CMD\"" 2>&1 | grep -v '^$' || true
@@ -186,6 +216,15 @@ if [ "$DEPLOY_SPA" = 1 ]; then
     exit 1
   fi
   echo "  ✓ SPA verify ($REMOTE_SPA_ASSETS asset files)"
+fi
+
+if [ "$DEPLOY_PLANNING" = 1 ]; then
+  REMOTE_PLANNING_ROADMAP=$(ssh "$HOST" "test -f '$PLANNING_DEPLOY/ROADMAP.md' && echo OK || echo MISSING")
+  if [ "$REMOTE_PLANNING_ROADMAP" != "OK" ]; then
+    echo "✗ planning verify failed — ROADMAP.md=$REMOTE_PLANNING_ROADMAP" >&2
+    exit 1
+  fi
+  echo "  ✓ planning verify (ROADMAP.md present)"
 fi
 
 if [ "$DO_RESTART" = 1 ]; then
