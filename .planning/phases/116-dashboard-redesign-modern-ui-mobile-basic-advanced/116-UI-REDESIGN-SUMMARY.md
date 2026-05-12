@@ -245,13 +245,50 @@ Implemented throughout the three pages (not a separate commit):
 
 ## Theme parity check
 
-Verified the three redesigned pages contain **zero hardcoded hex
-literals** (only a comment reference to `#ff3366` in
-ConversationsView). All status colors come through Tailwind utilities
-(`bg-primary`, `bg-destructive`, `bg-info`, `bg-warn`, `bg-pink`)
-which keep AA contrast across both themes by design.
+### What was verified (static)
 
-Build & type-check clean after each commit. SPA size budget respected.
+- The three redesigned pages contain **zero hardcoded hex literals**
+  (only a comment reference to `#ff3366` in ConversationsView). All
+  status colors come through Tailwind utilities (`bg-primary`,
+  `bg-destructive`, `bg-info`, `bg-warn`, `bg-pink`) which keep AA
+  contrast across both themes by design.
+- `npx vite build` clean after every commit.
+- `npx tsc -p tsconfig.app.json --noEmit --ignoreDeprecations 6.0`
+  clean for the three redesigned files (the rest of the SPA has
+  pre-existing JSX-namespace warnings — out of scope).
+
+### What was NOT verified (runtime)
+
+This executor session ran headless — **no browser was available** to
+spot-check the four pages under `clawcode:theme=light` and
+`clawcode:theme=dark` in an actual rendered viewport. Specifically not
+verified at runtime:
+
+1. That the `rgb(var(--bg-base) / <alpha-value>)` form resolves
+   correctly under Tailwind v3 + the project's PostCSS pipeline (it's
+   the canonical pattern but the codebase has never used it before).
+2. That the warm-white light palette has no white-on-white traps or
+   contrast collisions with status colors on real screen.
+3. That the 380+ existing usages of `bg-bg-*` / `text-fg-*` across
+   the rest of the SPA (AgentTileGrid, MetricCounters, FleetLayout,
+   the drawer, etc. — not touched by this redesign) render correctly
+   in light mode now that they finally flip.
+
+**Recommended operator check before deploying:**
+
+```bash
+cd src/dashboard/client && npx vite preview
+# Then in browser DevTools console:
+localStorage.setItem('clawcode:theme', 'light'); location.reload()
+# Walk Conversations, Tasks, Audit, Usage, AgentTileGrid, and the drawer.
+# Then flip:
+localStorage.setItem('clawcode:theme', 'dark'); location.reload()
+# Confirm parity with the current production look.
+```
+
+If anything looks broken in light mode, the fix is almost always a
+specific component carrying a hardcoded hex literal (see the 38 Recharts
+literals listed in "Deferred" above as the prime suspect).
 
 ## Deferred / not done
 
@@ -274,7 +311,15 @@ Build & type-check clean after each commit. SPA size budget respected.
    (`useConversationSearch`) to return `sessionId` on each hit. Today
    it returns `turnId` + `agent` only. Wired forward but no-op until
    backend extends.
-4. **Audit metadata diff.** Today the daemon doesn't expose
+4. **Conversations search uses `Dialog`, not `Command`.** The brief
+   asked for the existing `Command` (`cmdk`-backed) primitive. Used
+   `Dialog` instead because it's already imported widely and the
+   search flow needed a custom layout (input + agent-filter dropdown +
+   results list with previews). `Command` would give free fuzzy-filter
+   + arrow-key navigation through results — worth swapping in a
+   follow-up if the operator wants tighter visual parity with the
+   existing Cmd+K palette.
+5. **Audit metadata diff.** Today the daemon doesn't expose
    before/after pairs on most action types — we render the faux diff
    only when keys happen to follow the `*_before`/`*_after`
    convention. Real wiring would require the audit producer side to
