@@ -255,12 +255,21 @@ async function scanRoadmap(planningRoot: string): Promise<PlanningTask[]> {
       : upper.startsWith("PLANNED")
       ? "Planned — scheduled in the roadmap, not yet started"
       : undefined;
+    // Phase 116-postdeploy 2026-05-12 (revision) — every non-SHIPPED phase
+    // surfaces under `status: "pending"` regardless of its roadmap-internal
+    // state (PARTIAL/ACTIVE/BACKLOG/PLANNED). The previous mapping bled
+    // PARTIAL+ACTIVE phases into the "In Progress" Kanban column, which
+    // operators conflated with live agent execution. Planning metadata is
+    // NOT live execution; the daemon's own `running` column is reserved for
+    // truly-executing daemon tasks now. The subtitle field still discloses
+    // the underlying status (Partial / Active / Backlog / Planned) so the
+    // operator can tell the difference within the Backlog column.
     tasks.push({
       id: `phase:${phaseNumber}`,
       source: "phase",
       title: `Phase ${phaseNumber}: ${title}`,
       description,
-      status: status === "running" ? "running" : "pending",
+      status: "pending",
       tags,
       filePath: file,
       subtitle,
@@ -338,6 +347,11 @@ async function scanQuickDirs(planningRoot: string): Promise<PlanningTask[]> {
     }
 
     // In-flight quick task (PLAN.md but no SUMMARY.md).
+    // Phase 116-postdeploy 2026-05-12 (revision) — drafted quicks surface as
+    // `status: "pending"` so they live in the Backlog column. They are NOT
+    // actively executing — a quick task with a PLAN but no SUMMARY just
+    // means "operator wrote the plan, executor hasn't run yet." The
+    // subtitle still discloses that state for operators who care.
     const filePath = join(dirPath, planFile);
     let raw: string;
     try {
@@ -358,7 +372,7 @@ async function scanQuickDirs(planningRoot: string): Promise<PlanningTask[]> {
       source: "quick",
       title,
       description,
-      status: "running",
+      status: "pending",
       tags: ["quick"],
       createdAt: planStat?.mtime.toISOString(),
       filePath,
@@ -400,13 +414,19 @@ export async function listPlanningTasks(opts?: {
     const bt = b.createdAt ? Date.parse(b.createdAt) : 0;
     return bt - at;
   };
+  // Phase 116-postdeploy 2026-05-12 (revision) — after the mapping change
+  // above, in-flight quicks emit `status: "pending"` (they're not actually
+  // running). Partition by !complete so drafted quicks stay in the
+  // response; previously the running-only filter would silently drop them.
   const phasesSorted = [...phases].sort(byTime);
-  const quicksRunning = quicks.filter((q) => q.status === "running").sort(byTime);
+  const quicksInflight = quicks
+    .filter((q) => q.status !== "complete")
+    .sort(byTime);
   const quicksDone = quicks.filter((q) => q.status === "complete").sort(byTime);
   const todosSorted = [...todos].sort(byTime);
 
   return {
-    tasks: [...phasesSorted, ...quicksRunning, ...todosSorted, ...quicksDone],
+    tasks: [...phasesSorted, ...quicksInflight, ...todosSorted, ...quicksDone],
     sourceCount: {
       todo: todos.length,
       phase: phases.length,

@@ -69,10 +69,15 @@ const DISPLAY_COLUMNS: ReadonlyArray<DisplayColumn> = [
 ]
 // 116-postdeploy 2026-05-12 — operators were confused by planning artefacts
 // (PARTIAL/ACTIVE phases, quick tasks without SUMMARY) appearing under
-// "Running" alongside actual live agent execution. Reframed: the column
-// label is "In Progress" (broader semantic, covers both planning chrome
-// AND live execution), the planning subtitle + a separate "Live execution"
-// scope filter let the operator drill into truly-running work.
+// "Running" alongside actual live agent execution.
+//
+// 2026-05-12 (revision) — operator pushed back further ("nothing is
+// actually in progress"). Planning metadata is now flattened to `pending`
+// at the source (src/manager/planning-tasks.ts) so planning items live in
+// Backlog only. The "In Progress" column is reserved for daemon-tracked
+// live execution — today that's typically 0, which is the truth.
+// The card subtitle still discloses the underlying phase state
+// (Partial / Active / Backlog / Planned / Quick-drafted) within Backlog.
 const DISPLAY_COLUMN_LABEL: Record<DisplayColumn, string> = {
   Backlog: 'Backlog',
   Running: 'In Progress',
@@ -232,13 +237,20 @@ export function TaskKanban() {
     return out
   }, [planningTasks, searchQ])
 
-  const totalActive = displayed
-    ? displayed.Running.length + displayed.Waiting.length
+  // 116-postdeploy 2026-05-12 (revision) — operator wanted honest count
+  // labels after the "In Progress" column was reframed for live execution
+  // only. Backlog = daemon-pending + ALL planning (PARTIAL/ACTIVE/BACKLOG/
+  // PLANNED/drafted-quick now flow to pending). Running = daemon-only (the
+  // column's whole point). Done = daemon-complete + recently-completed
+  // quicks. Planning items still surface under "Backlog" with a subtitle.
+  const totalBacklog = displayed
+    ? displayed.Backlog.length + planningByColumn.Backlog.length
     : 0
-  const totalDone = displayed ? displayed.Done.length : 0
-  const planningActive =
-    planningByColumn.Running.length + planningByColumn.Backlog.length
-  const planningDoneThisWeek = planningByColumn.Done.length
+  const totalRunning = displayed ? displayed.Running.length : 0
+  const totalWaiting = displayed ? displayed.Waiting.length : 0
+  const totalDone = displayed
+    ? displayed.Done.length + planningByColumn.Done.length
+    : 0
 
   return (
     <div className="mx-auto max-w-[1600px] px-4 py-6 lg:px-6">
@@ -250,8 +262,9 @@ export function TaskKanban() {
               Tasks
             </h1>
             <span className="font-mono text-xs text-fg-3">
-              {totalActive} active · {planningActive} planning ·{' '}
-              {totalDone + planningDoneThisWeek} done
+              {totalBacklog} backlog · {totalRunning} running ·{' '}
+              {totalWaiting > 0 ? `${totalWaiting} waiting · ` : ''}
+              {totalDone} done
             </span>
           </div>
           <Button
