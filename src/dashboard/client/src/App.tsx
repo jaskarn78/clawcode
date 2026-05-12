@@ -189,6 +189,13 @@ function App() {
             className="flex items-center gap-1 overflow-x-auto whitespace-nowrap min-w-0 -mx-1 px-1"
             aria-label="Dashboard sections"
           >
+            {/* 116-postdeploy 2026-05-12 — operator-usage-frequency order.
+                Dashboard stays first (home glance). Tasks + Conversations
+                are the active operator surfaces (planning + live obs).
+                Memory moves UP because it's now the migration / consol-
+                idation driver (advance-phase + dream toggle). Usage is
+                glanced often but not interacted with. Fleet, OpenAI,
+                Audit, Graph trail off into config + forensics. */}
             <ViewButton
               active={view === 'dashboard'}
               onClick={() => navigate('dashboard')}
@@ -196,16 +203,10 @@ function App() {
               Dashboard
             </ViewButton>
             <ViewButton
-              active={view === 'fleet'}
-              onClick={() => navigate('fleet')}
+              active={view === 'tasks'}
+              onClick={() => navigate('tasks')}
             >
-              Fleet
-            </ViewButton>
-            <ViewButton
-              active={view === 'usage'}
-              onClick={() => navigate('usage')}
-            >
-              Usage
+              Tasks
             </ViewButton>
             <ViewButton
               active={view === 'conversations'}
@@ -214,10 +215,28 @@ function App() {
               Conversations
             </ViewButton>
             <ViewButton
-              active={view === 'tasks'}
-              onClick={() => navigate('tasks')}
+              active={view === 'memory'}
+              onClick={() => navigate('memory')}
             >
-              Tasks
+              Memory
+            </ViewButton>
+            <ViewButton
+              active={view === 'usage'}
+              onClick={() => navigate('usage')}
+            >
+              Usage
+            </ViewButton>
+            <ViewButton
+              active={view === 'fleet'}
+              onClick={() => navigate('fleet')}
+            >
+              Fleet
+            </ViewButton>
+            <ViewButton
+              active={view === 'openai'}
+              onClick={() => navigate('openai')}
+            >
+              OpenAI
             </ViewButton>
             <ViewButton
               active={view === 'audit'}
@@ -230,18 +249,6 @@ function App() {
               onClick={() => navigate('graph')}
             >
               Graph
-            </ViewButton>
-            <ViewButton
-              active={view === 'openai'}
-              onClick={() => navigate('openai')}
-            >
-              OpenAI
-            </ViewButton>
-            <ViewButton
-              active={view === 'memory'}
-              onClick={() => navigate('memory')}
-            >
-              Memory
             </ViewButton>
           </nav>
           {/* Right side — telemetry badge + notification bell + theme
