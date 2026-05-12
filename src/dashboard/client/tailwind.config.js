@@ -25,18 +25,24 @@ export default {
     },
     extend: {
       colors: {
-        // Surfaces — dark mode primary. fg.1 highest contrast text;
-        // fg.3 secondary metadata. bg.s3 = drawer / detail panel.
+        // Surfaces — CSS-var-resolved so `bg-bg-base`, `text-fg-1`, etc.
+        // flip with the .dark class. Defined in index.css `:root` (light)
+        // and `.dark` (dark) blocks. The `rgb(<channels> / <alpha-value>)`
+        // form preserves Tailwind opacity modifiers like `bg-bg-base/50`.
+        //
+        // 116-UI redesign (2026-05): converted from literal hex to vars
+        // so the 380+ existing token usages (`bg-bg-elevated`, `text-fg-2`,
+        // etc.) flip with theme without touching every component.
         bg: {
-          base: '#0e0e12',
-          elevated: '#16161c',
-          muted: '#1c1c24',
-          s3: '#252530',
+          base: 'rgb(var(--bg-base) / <alpha-value>)',
+          elevated: 'rgb(var(--bg-elevated) / <alpha-value>)',
+          muted: 'rgb(var(--bg-muted) / <alpha-value>)',
+          s3: 'rgb(var(--bg-s3) / <alpha-value>)',
         },
         fg: {
-          1: '#f4f4f5',
-          2: '#a1a1aa',
-          3: '#71717a',
+          1: 'rgb(var(--fg-1) / <alpha-value>)',
+          2: 'rgb(var(--fg-2) / <alpha-value>)',
+          3: 'rgb(var(--fg-3) / <alpha-value>)',
         },
         // Status palette — locked from 116-CONTEXT aesthetic section.
         // SLO gauges in F03 + agent tile borders consume these directly.
