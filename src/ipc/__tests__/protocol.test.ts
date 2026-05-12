@@ -148,6 +148,8 @@ describe("IPC_METHODS", () => {
       "openai-key-create",
       "openai-key-list",
       "openai-key-revoke",
+      // Phase 116-postdeploy 2026-05-12 — endpoint info for dashboard SPA.
+      "openai-endpoint-info",
       // Browser automation MCP (Phase 70)
       "browser-tool-call",
       // Web search MCP (Phase 71)

@@ -221,6 +221,10 @@ export const IPC_METHODS = [
   "openai-key-create",
   "openai-key-list",
   "openai-key-revoke",
+  // Phase 116-postdeploy 2026-05-12 — read-only endpoint info for the new
+  // dashboard /openai page. Returns `{enabled, host, port}` so the SPA can
+  // render the base URL + curl example without hardcoding port 3101.
+  "openai-endpoint-info",
   // Browser automation MCP (Phase 70) — routes per-agent tool calls from
   // the out-of-process `clawcode browser-mcp` subprocess to the daemon's
   // shared BrowserManager + the pure handlers in src/browser/tools.ts.

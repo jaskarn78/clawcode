@@ -1552,6 +1552,135 @@ async function handleRequest(
       return;
     }
 
+    // =====================================================================
+    // Phase 116-postdeploy 2026-05-12 — OpenAI endpoint config page.
+    //
+    // Operator asked: "a page to configure the OpenAI-style endpoint we set
+    // up for this project." Backend IPC for key CRUD already shipped in
+    // Phase 69 (openai-key-{create,list,revoke}); this block wraps them as
+    // REST + adds an endpoint-info read for the base-URL/curl-example
+    // surface on /dashboard/v2/openai.
+    //
+    //   GET    /api/openai/info          -> daemon `openai-endpoint-info`
+    //                                       returns `{enabled, host?, port?}`
+    //   GET    /api/openai/keys          -> daemon `openai-key-list`
+    //                                       returns `{rows: [...]}`
+    //   POST   /api/openai/keys          body: { agent? | all? : true,
+    //                                            label? } → key create.
+    //                                       Returns plaintext key once.
+    //   DELETE /api/openai/keys/:ident   -> daemon `openai-key-revoke`
+    //                                       :ident is full key, hex prefix,
+    //                                       or label (same semantics as CLI).
+    //
+    // The IPC handlers throw a structured ManagerError when the endpoint is
+    // disabled — this surface returns 503 with the message so the SPA can
+    // render an "endpoint disabled, edit config to enable" empty state.
+    // =====================================================================
+    if (method === "GET" && pathname === "/api/openai/info") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "openai-endpoint-info",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/openai/keys") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "openai-key-list",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/openai/keys") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "bad request body";
+        sendJson(res, 400, { error: message });
+        return;
+      }
+      if (typeof body !== "object" || body === null) {
+        sendJson(res, 400, {
+          error:
+            "Body must be { agent: string } or { all: true } with optional label",
+        });
+        return;
+      }
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "openai-key-create",
+          body as Record<string, unknown>,
+        );
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "openai-key-create",
+            target:
+              typeof (body as { agent?: unknown }).agent === "string"
+                ? ((body as { agent: string }).agent)
+                : (body as { all?: unknown }).all === true
+                ? "*"
+                : null,
+            metadata: {
+              label: (body as { label?: unknown }).label ?? null,
+              scope:
+                (body as { all?: unknown }).all === true ? "all" : "agent",
+            },
+          });
+        }
+        sendJson(res, 201, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "POST /api/openai/keys failed");
+        sendJson(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (
+      method === "DELETE" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "openai" &&
+      segments[2] === "keys"
+    ) {
+      const identifier = decodeURIComponent(segments[3]!);
+      try {
+        const data = await sendIpcRequest(socketPath, "openai-key-revoke", {
+          identifier,
+        });
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "openai-key-revoke",
+            target: identifier,
+            metadata: { identifier },
+          });
+        }
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "DELETE /api/openai/keys failed");
+        sendJson(res, 400, { error: message });
+      }
+      return;
+    }
+
     // POST /api/daemon/restart
     // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart daemon" quick
     // action. Proxies to the daemon's `restart-daemon` IPC, which sends

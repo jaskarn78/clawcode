@@ -3292,6 +3292,21 @@ export async function startDaemon(
   });
 
   const handler: IpcHandler = async (method, params) => {
+    // Phase 116-postdeploy 2026-05-12 — endpoint info for the SPA's
+    // /dashboard/v2/openai page. Read-only; safe even when the endpoint
+    // is disabled (returns `{enabled: false}`). Renders the base URL +
+    // curl example without the SPA needing to hardcode port 3101.
+    if (method === "openai-endpoint-info") {
+      const ep = openAiEndpointRef;
+      if (!ep || !ep.enabled) {
+        return { enabled: false };
+      }
+      return {
+        enabled: true,
+        host: ep.host ?? null,
+        port: ep.port ?? null,
+      };
+    }
     if (
       method === "openai-key-create" ||
       method === "openai-key-list" ||

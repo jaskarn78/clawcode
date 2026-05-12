@@ -1004,6 +1004,95 @@ export function useAgentUsage(
   })
 }
 
+// ---------------------------------------------------------------------------
+// Phase 116-postdeploy 2026-05-12 — OpenAI endpoint config page.
+// Wraps the daemon's `openai-endpoint-info` + `openai-key-{list,create,revoke}`
+// IPC methods exposed as REST under /api/openai/*.
+// ---------------------------------------------------------------------------
+
+export type OpenAiEndpointInfo =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true
+      readonly host: string | null
+      readonly port: number | null
+    }
+
+export type OpenAiKeyRow = {
+  readonly key_hash: string
+  readonly agent_name: string
+  readonly label: string | null
+  readonly created_at: number
+  readonly last_used_at: number | null
+  readonly expires_at: number | null
+  readonly disabled_at: number | null
+  readonly scope: string
+}
+
+export type OpenAiKeyListResponse = { readonly rows: ReadonlyArray<OpenAiKeyRow> }
+
+export type OpenAiKeyCreateResponse = {
+  readonly key: string
+  readonly keyHash: string
+  readonly agent: string
+  readonly label: string | null
+  readonly expiresAt: number | null
+  readonly createdAt: number
+}
+
+export function useOpenAiInfo(): UseQueryResult<OpenAiEndpointInfo> {
+  return useQuery({
+    queryKey: ['openai-info'],
+    queryFn: () => fetchJson<OpenAiEndpointInfo>('/api/openai/info'),
+    // Endpoint config rarely changes — staleTime keeps the SPA from
+    // hammering it; the page also doesn't need real-time updates.
+    staleTime: 60_000,
+  })
+}
+
+export function useOpenAiKeys(
+  enabled = true,
+): UseQueryResult<OpenAiKeyListResponse> {
+  return useQuery({
+    queryKey: ['openai-keys'],
+    queryFn: () => fetchJson<OpenAiKeyListResponse>('/api/openai/keys'),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
+export async function createOpenAiKey(
+  body:
+    | { readonly agent: string; readonly label?: string }
+    | { readonly all: true; readonly label?: string },
+): Promise<OpenAiKeyCreateResponse> {
+  const res = await fetch('/api/openai/keys', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `openai-key-create ${res.status}`)
+  }
+  return (await res.json()) as OpenAiKeyCreateResponse
+}
+
+export async function revokeOpenAiKey(
+  identifier: string,
+): Promise<{ readonly revoked: boolean }> {
+  const res = await fetch(
+    `/api/openai/keys/${encodeURIComponent(identifier)}`,
+    { method: 'DELETE', credentials: 'same-origin' },
+  )
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `openai-key-revoke ${res.status}`)
+  }
+  return (await res.json()) as { revoked: boolean }
+}
+
 /** F15 — operator-fired veto on a pending D-10 window. */
 export async function vetoDreamRun(
   agentName: string,

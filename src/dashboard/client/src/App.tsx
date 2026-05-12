@@ -71,6 +71,12 @@ const AuditLogViewer = lazy(() =>
 const GraphRoute = lazy(() =>
   import('./routes/graph').then((m) => ({ default: m.GraphRoute })),
 )
+// 116-postdeploy 2026-05-12 — operator-occasional surfaces. Both pages are
+// configuration/observability surfaces hit rarely (per-session, not per-
+// view-flip), so they live outside the eager bundle.
+const OpenAiView = lazy(() =>
+  import('./components/OpenAiView').then((m) => ({ default: m.OpenAiView })),
+)
 
 export type DashboardView =
   | 'dashboard'
@@ -81,6 +87,7 @@ export type DashboardView =
   | 'audit'
   | 'graph'
   | 'settings'
+  | 'openai'
 
 const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2': 'dashboard',
@@ -96,6 +103,7 @@ const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2/audit': 'audit',
   '/dashboard/v2/graph': 'graph',
   '/dashboard/v2/settings': 'settings',
+  '/dashboard/v2/openai': 'openai',
 }
 
 const VIEW_TO_PATH: Record<DashboardView, string> = {
@@ -107,6 +115,7 @@ const VIEW_TO_PATH: Record<DashboardView, string> = {
   audit: '/dashboard/v2/audit',
   graph: '/dashboard/v2/graph',
   settings: '/dashboard/v2/settings',
+  openai: '/dashboard/v2/openai',
 }
 
 function pathToView(path: string): DashboardView {
@@ -216,6 +225,12 @@ function App() {
             >
               Graph
             </ViewButton>
+            <ViewButton
+              active={view === 'openai'}
+              onClick={() => navigate('openai')}
+            >
+              OpenAI
+            </ViewButton>
           </nav>
           {/* Right side — telemetry badge + notification bell + theme
               toggle. `ml-auto` floats this cluster to the right edge so
@@ -274,6 +289,17 @@ function App() {
         </Suspense>
       )}
       {view === 'settings' && <SettingsView />}
+      {view === 'openai' && (
+        <Suspense
+          fallback={
+            <div className="mx-auto max-w-4xl p-4 text-sm text-fg-3">
+              Loading OpenAI endpoint config…
+            </div>
+          }
+        >
+          <OpenAiView />
+        </Suspense>
+      )}
 
       {/* F26 ConfigEditor overlay — null agent = closed. */}
       <ConfigEditor
