@@ -225,6 +225,11 @@ export const IPC_METHODS = [
   // dashboard /openai page. Returns `{enabled, host, port}` so the SPA can
   // render the base URL + curl example without hardcoding port 3101.
   "openai-endpoint-info",
+  // Phase 116-postdeploy 2026-05-12 — list recent dream-pass artefacts
+  // for the new dashboard /memory page. Reads memory/dreams/*.md under
+  // an agent's memoryPath and returns recent files with parsed dates +
+  // body previews. Pure file-scan; no DB hit.
+  "list-dream-artifacts",
   // Browser automation MCP (Phase 70) — routes per-agent tool calls from
   // the out-of-process `clawcode browser-mcp` subprocess to the daemon's
   // shared BrowserManager + the pure handlers in src/browser/tools.ts.

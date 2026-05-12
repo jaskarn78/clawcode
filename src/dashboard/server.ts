@@ -1706,6 +1706,139 @@ async function handleRequest(
       }
       return;
     }
+
+    // =====================================================================
+    // Phase 116-postdeploy 2026-05-12 — Memory + dreams page (/memory).
+    //
+    // Operator asked: "a view to see and trigger agent dreaming and memory
+    // consolidation, etc." Most of the IPC surface already exists from
+    // Phase 95 (dream-pass) + Phase 999.8 (tier-maintenance) + 116-04
+    // (dream-queue/memory-snapshot). This block wraps the trigger surfaces
+    // as REST so the SPA can fire them.
+    //
+    //   POST /api/agents/:name/dream-run     body: { modelOverride?, force?,
+    //                                              idleBypass? }
+    //                                       → daemon `run-dream-pass`
+    //   GET  /api/agents/:name/dreams        ?limit=20  → daemon
+    //                                       `list-dream-artifacts`
+    //   POST /api/agents/:name/memory/consolidate (or POST /api/memory/consolidate
+    //                                       for fleet-wide) → daemon
+    //                                       `tier-maintenance-tick`
+    //
+    // The existing dream-queue + memory-snapshot routes (116-04) are NOT
+    // re-declared here — they're already wired and the SPA reuses them.
+    // =====================================================================
+    if (
+      method === "POST" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "dream-run"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      let body: unknown = {};
+      try {
+        body = await readJsonBody(req).catch(() => ({}));
+      } catch {
+        body = {};
+      }
+      const params: Record<string, unknown> = { agent: agentName };
+      if (body && typeof body === "object") {
+        const b = body as Record<string, unknown>;
+        if (typeof b.modelOverride === "string") {
+          params.modelOverride = b.modelOverride;
+        }
+        if (typeof b.force === "boolean") params.force = b.force;
+        if (typeof b.idleBypass === "boolean") params.idleBypass = b.idleBypass;
+      }
+      try {
+        const data = await sendIpcRequest(socketPath, "run-dream-pass", params);
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "run-dream-pass",
+            target: agentName,
+            metadata: params,
+          });
+        }
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "POST /api/agents/:name/dream-run failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "dreams"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const limitRaw = queryParams.get("limit");
+      const limitParsed = limitRaw ? Number.parseInt(limitRaw, 10) : NaN;
+      const params: { agent: string; limit?: number } = { agent: agentName };
+      if (Number.isFinite(limitParsed) && limitParsed > 0) {
+        params.limit = limitParsed;
+      }
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "list-dream-artifacts",
+          params,
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        const code = message.startsWith("Agent not found") ? 404 : 500;
+        sendJson(res, code, { error: message });
+      }
+      return;
+    }
+
+    // POST /api/agents/:name/memory/consolidate  (single-agent)
+    // POST /api/memory/consolidate               (fleet-wide)
+    if (
+      method === "POST" &&
+      ((segments.length === 5 &&
+        segments[0] === "api" &&
+        segments[1] === "agents" &&
+        segments[3] === "memory" &&
+        segments[4] === "consolidate") ||
+        (segments.length === 3 &&
+          segments[0] === "api" &&
+          segments[1] === "memory" &&
+          segments[2] === "consolidate"))
+    ) {
+      const isFleet = segments[1] === "memory";
+      const agentName = isFleet ? null : decodeURIComponent(segments[2]!);
+      const params: Record<string, unknown> = {};
+      if (agentName) params.agent = agentName;
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "tier-maintenance-tick",
+          params,
+        );
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "tier-maintenance-tick",
+            target: agentName ?? "*",
+            metadata: params,
+          });
+        }
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "POST memory/consolidate failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
     // === end Phase 116-postdeploy routes ===
 
     // Phase 61 TRIG-03: Webhook trigger endpoint

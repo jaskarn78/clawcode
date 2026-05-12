@@ -6389,6 +6389,95 @@ export async function startDaemon(
         return { runId, vetoed: true, recordedAt: new Date().toISOString() };
       }
 
+      // Phase 116-postdeploy 2026-05-12 — list recent dream-pass artefacts
+      // for the dashboard /memory page. Reads memory/dreams/*.md from the
+      // target agent's memoryPath. Best-effort + ENOENT-tolerant: a fresh
+      // agent with no dreams yet returns `{artifacts: []}` rather than
+      // erroring. Body content is truncated to `previewChars` (default 800)
+      // to keep IPC payloads small; the SPA renders the preview in a card
+      // and an operator can open the file in their editor for the full text.
+      case "list-dream-artifacts": {
+        const agentName = validateStringParam(params, "agent");
+        const limit =
+          typeof params.limit === "number" && params.limit > 0
+            ? Math.min(Math.floor(params.limit), 100)
+            : 20;
+        const previewChars =
+          typeof params.previewChars === "number" && params.previewChars > 0
+            ? Math.min(Math.floor(params.previewChars), 4000)
+            : 800;
+        const cfg = resolvedAgents.find((a) => a.name === agentName);
+        if (!cfg) {
+          throw new ManagerError(`Agent not found: ${agentName}`);
+        }
+        if (!cfg.memoryPath) {
+          return { artifacts: [], memoryPath: null };
+        }
+        const { readdir, readFile, stat: fsStat } = await import(
+          "node:fs/promises"
+        );
+        const { join: joinPath } = await import("node:path");
+        // memoryPath is already the root that contains dreams/ + inbox/ as
+        // direct children (cf. writeDreamLog in src/manager/dream-log-writer.ts
+        // which joins `${memoryRoot}/dreams`, and the list-ipc-inboxes
+        // handler above which joins `${memoryPath}/inbox`). Do NOT nest
+        // another "memory" segment in between — that would silently return
+        // empty results in production.
+        const dreamsDir = joinPath(cfg.memoryPath, "dreams");
+        let names: string[];
+        try {
+          names = await readdir(dreamsDir);
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code === "ENOENT") {
+            return { artifacts: [], memoryPath: dreamsDir };
+          }
+          throw err;
+        }
+        const mdFiles = names.filter((n) => n.endsWith(".md"));
+        // Sort by name descending — dream filenames are YYYY-MM-DD.md so a
+        // lexicographic sort gives newest-first without a stat() each.
+        mdFiles.sort((a, b) => b.localeCompare(a));
+        const slice = mdFiles.slice(0, limit);
+        const artifacts: Array<{
+          file: string;
+          path: string;
+          date: string | null;
+          sizeBytes: number;
+          mtime: string | null;
+          preview: string;
+        }> = [];
+        for (const name of slice) {
+          const filePath = joinPath(dreamsDir, name);
+          let st;
+          try {
+            st = await fsStat(filePath);
+          } catch {
+            continue;
+          }
+          let raw = "";
+          try {
+            raw = await readFile(filePath, "utf-8");
+          } catch {
+            // unreadable — push placeholder + size from stat
+          }
+          const dateMatch = name.match(/^(\d{4}-\d{2}-\d{2})/);
+          const preview = raw
+            ? raw.slice(0, previewChars) +
+              (raw.length > previewChars ? "…" : "")
+            : "";
+          artifacts.push({
+            file: name,
+            path: filePath,
+            date: dateMatch ? dateMatch[1]! : null,
+            sizeBytes: st.size,
+            mtime: new Date(st.mtimeMs).toISOString(),
+            preview,
+          });
+        }
+        return { artifacts, memoryPath: dreamsDir };
+      }
+
       // =====================================================================
       // Phase 116-05 — Fleet-scale + cost IPC handlers (F16/F17).
       // Same closure-intercept convention as 116-03/116-04 above. Both

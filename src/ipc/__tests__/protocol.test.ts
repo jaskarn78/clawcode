@@ -150,6 +150,8 @@ describe("IPC_METHODS", () => {
       "openai-key-revoke",
       // Phase 116-postdeploy 2026-05-12 — endpoint info for dashboard SPA.
       "openai-endpoint-info",
+      // Phase 116-postdeploy 2026-05-12 — dream artefacts feed.
+      "list-dream-artifacts",
       // Browser automation MCP (Phase 70)
       "browser-tool-call",
       // Web search MCP (Phase 71)

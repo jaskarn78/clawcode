@@ -1118,3 +1118,97 @@ export async function vetoDreamRun(
     recordedAt: string
   }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 116-postdeploy 2026-05-12 — Memory + dreams page (/dashboard/v2/memory).
+// Wraps `run-dream-pass`, `list-dream-artifacts`, and
+// `tier-maintenance-tick` IPC methods exposed under /api/agents/*/dream-*
+// and /api/(agents/*)?/memory/consolidate.
+// ---------------------------------------------------------------------------
+
+export type DreamArtifact = {
+  readonly file: string
+  readonly path: string
+  readonly date: string | null
+  readonly sizeBytes: number
+  readonly mtime: string | null
+  readonly preview: string
+}
+
+export type DreamArtifactsResponse = {
+  readonly artifacts: ReadonlyArray<DreamArtifact>
+  readonly memoryPath: string | null
+}
+
+export function useDreamArtifacts(
+  agentName: string | null,
+  limit = 20,
+): UseQueryResult<DreamArtifactsResponse> {
+  return useQuery({
+    queryKey: ['dream-artifacts', agentName, limit],
+    queryFn: () =>
+      fetchJson<DreamArtifactsResponse>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/dreams?limit=${limit}`,
+      ),
+    enabled: agentName !== null && agentName.length > 0,
+    staleTime: 30_000,
+  })
+}
+
+export type RunDreamPassRequest = {
+  readonly modelOverride?: 'haiku' | 'sonnet' | 'opus'
+  readonly force?: boolean
+  readonly idleBypass?: boolean
+}
+
+export type RunDreamPassResponse = {
+  readonly agent: string
+  readonly startedAt: string
+  readonly outcome: { readonly kind: string; readonly reason?: string }
+  readonly applied: { readonly kind: string; readonly reason?: string }
+}
+
+export async function runDreamPass(
+  agentName: string,
+  req: RunDreamPassRequest = {},
+): Promise<RunDreamPassResponse> {
+  const res = await fetch(
+    `/api/agents/${encodeURIComponent(agentName)}/dream-run`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    },
+  )
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `run-dream-pass ${res.status}`)
+  }
+  return (await res.json()) as RunDreamPassResponse
+}
+
+export type TierMaintenanceResponse = {
+  readonly results: Record<
+    string,
+    { promoted: number; demoted: number; archived: number }
+  >
+  readonly skipped: ReadonlyArray<string>
+}
+
+export async function runTierMaintenance(
+  agentName: string | null,
+): Promise<TierMaintenanceResponse> {
+  const url = agentName
+    ? `/api/agents/${encodeURIComponent(agentName)}/memory/consolidate`
+    : '/api/memory/consolidate'
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `tier-maintenance ${res.status}`)
+  }
+  return (await res.json()) as TierMaintenanceResponse
+}

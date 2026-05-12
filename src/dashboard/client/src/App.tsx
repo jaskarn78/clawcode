@@ -77,6 +77,9 @@ const GraphRoute = lazy(() =>
 const OpenAiView = lazy(() =>
   import('./components/OpenAiView').then((m) => ({ default: m.OpenAiView })),
 )
+const MemoryView = lazy(() =>
+  import('./components/MemoryView').then((m) => ({ default: m.MemoryView })),
+)
 
 export type DashboardView =
   | 'dashboard'
@@ -88,6 +91,7 @@ export type DashboardView =
   | 'graph'
   | 'settings'
   | 'openai'
+  | 'memory'
 
 const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2': 'dashboard',
@@ -104,6 +108,7 @@ const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2/graph': 'graph',
   '/dashboard/v2/settings': 'settings',
   '/dashboard/v2/openai': 'openai',
+  '/dashboard/v2/memory': 'memory',
 }
 
 const VIEW_TO_PATH: Record<DashboardView, string> = {
@@ -116,6 +121,7 @@ const VIEW_TO_PATH: Record<DashboardView, string> = {
   graph: '/dashboard/v2/graph',
   settings: '/dashboard/v2/settings',
   openai: '/dashboard/v2/openai',
+  memory: '/dashboard/v2/memory',
 }
 
 function pathToView(path: string): DashboardView {
@@ -231,6 +237,12 @@ function App() {
             >
               OpenAI
             </ViewButton>
+            <ViewButton
+              active={view === 'memory'}
+              onClick={() => navigate('memory')}
+            >
+              Memory
+            </ViewButton>
           </nav>
           {/* Right side — telemetry badge + notification bell + theme
               toggle. `ml-auto` floats this cluster to the right edge so
@@ -298,6 +310,17 @@ function App() {
           }
         >
           <OpenAiView />
+        </Suspense>
+      )}
+      {view === 'memory' && (
+        <Suspense
+          fallback={
+            <div className="mx-auto max-w-[1400px] p-4 text-sm text-fg-3">
+              Loading memory + dreams…
+            </div>
+          }
+        >
+          <MemoryView />
         </Suspense>
       )}
 
