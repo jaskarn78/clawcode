@@ -1,40 +1,44 @@
 /**
- * Phase 116-03 F27 — Conversations view.
+ * Phase 116-UI redesign (2026-05) — Conversations view.
  *
- * Three-column layout on desktop (single column on mobile via flex-wrap):
+ * "Transcript-first reading experience". Hierarchy from top to bottom:
  *
- *  Left pane (sidebar)
- *    - Live activity tape: in-flight conversation-turn events from the SSE
- *      bus. Ring buffer of last 30, newest first. Each row shows agent +
- *      role + relative time.
- *    - Per-agent past sessions: fetched on-demand via
- *      /api/conversations/:agent/recent when an agent is selected.
- *      Clicking a session row pins its transcript in the right pane.
+ *   ┌─────────────────────────────────────────────────────────────┐
+ *   │ HEADER                                                       │
+ *   │  • Page title (Cabinet Grotesk display) + live-status pip   │
+ *   │  • Live tape (horizontal mono ticker, last 8 fleet turns)   │
+ *   │  • "Press / to search" hint + Cmd+K affordance              │
+ *   └─────────────────────────────────────────────────────────────┘
+ *   ┌──────────┬─────────────────────┬──────────────────────────┐
+ *   │ LEFT     │ MIDDLE              │ RIGHT (transcript)        │
+ *   │ Agent    │ Session cards for   │ Reading-experience pane   │
+ *   │ picker   │ selected agent      │ (only when a session is   │
+ *   │ (chips)  │ (status / count /   │  pinned). Max ~70ch       │
+ *   │          │  first-msg preview) │ measure, role-distinguished│
+ *   └──────────┴─────────────────────┴──────────────────────────┘
  *
- *  Center pane (workspace)
- *    - FTS5 search bar: q + optional agent filter
- *    - Results table: BM25-sorted hits with role + agent + timestamp +
- *      content snippet (first ~200 chars).
+ * Key design moves vs the 116-03 / 116-postdeploy version:
  *
- *  Right pane (transcript — 116-postdeploy Bug 2)
- *    - Full ordered turn list for the pinned session, fetched via
- *      /api/agents/:agent/recent-turns?sessionId=… (extended in the same
- *      fix; reuses the F11 list-recent-turns IPC handler with an optional
- *      session pin). Each turn shows role badge + content + timestamp +
- *      token count when present.
- *    - Live append: when a `conversation-turn` SSE event lands for the
- *      pinned session's agent, the query is invalidated and the latest
- *      turns are refetched. The SSE payload carries no sessionId today,
- *      so we refetch the whole session rather than try to match — fine
- *      because the open-transcript case is rare and a single-session
- *      query is cheap.
+ *  - Live tape moved OUT of the sidebar into the page header — became a
+ *    horizontal ticker, mono-font, scroll-on-overflow. No more vertical
+ *    stacking competing with agents + sessions for the same eyebrow
+ *    column.
+ *  - Search dialog (`/` to open) instead of a permanent input chrome.
+ *    Cleaner default view, search is summoned not always present.
+ *  - Session rows became cards with status pill, turn-count, timestamps,
+ *    and a first-message preview. Click pins to the transcript.
+ *  - Transcript pane gained typographic care: max-measure ~70ch, line-
+ *    height generous, role differentiation via left-rail accent
+ *    (emerald for assistant, info-blue for user, pink for active
+ *    streaming turn), hover-revealed token footer.
+ *  - Active-streaming animation: when an SSE conversation-turn lands
+ *    on the pinned session, the newest turn gets the pink #ff3366 left
+ *    rail for 4 seconds then settles back.
+ *  - Empty states: designed not "no results" plain text.
  *
- * The live tape uses subscribeConversationTurns from useSse.ts — NOT a
- * TanStack Query cache. The event volume can hit 50/s at peak; overwriting
- * a cache key would re-render every consumer per event. Component-owned
- * ring buffer is the right granularity.
+ * Tape ring buffer trimmed from 30 to a header-friendly 8 entries.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   subscribeConversationTurns,
@@ -46,12 +50,20 @@ import {
   useRecentConversations,
   useSessionTurns,
   SESSION_TURNS_QUERY_KEY,
+  type ConversationSessionRow,
   type RecentTurnRow,
 } from '@/hooks/useApi'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
-const TAPE_MAX = 30
+const TAPE_MAX = 8
+const STREAMING_FLASH_MS = 4000
 
 function relativeTime(iso: string): string {
   const t = Date.parse(iso)
@@ -74,36 +86,62 @@ export function ConversationsView() {
   }, [agentsQ.data])
 
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [searchAgent, setSearchAgent] = useState<string>('') // '' = all
-  const [searchEnabled, setSearchEnabled] = useState(false)
-
-  // 116-postdeploy Bug 2 — pinned transcript pane state. Both ids must
-  // be present together (set when the operator clicks a session row);
-  // closing the pane resets both.
   const [pinnedAgent, setPinnedAgent] = useState<string | null>(null)
   const [pinnedSessionId, setPinnedSessionId] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
-  // Live tape — ring buffer of recent conversation-turn events.
+  // Search dialog state
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [searchAgent, setSearchAgent] = useState<string>('')
+  const [searchEnabled, setSearchEnabled] = useState(false)
+
+  // Live tape — ring buffer
   const [tape, setTape] = useState<ConversationTurnEvent[]>([])
+  // Track most recent streaming turn for transient pink highlight
+  const [streamingTurnId, setStreamingTurnId] = useState<string | null>(null)
+  const streamingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     const unsub = subscribeConversationTurns((evt) => {
       setTape((curr) => [evt, ...curr].slice(0, TAPE_MAX))
-      // 116-postdeploy Bug 2 — if the event's agent matches the pinned
-      // transcript, invalidate the session-turns query so React Query
-      // refetches and the new turn appears. The SSE payload doesn't
-      // carry sessionId; we just match by agent. For a non-active pinned
-      // session this triggers a wasted refetch but the result is
-      // identical (no new turns) so the cache stays stable.
       if (pinnedAgent && evt.agent === pinnedAgent) {
         queryClient.invalidateQueries({
           queryKey: [SESSION_TURNS_QUERY_KEY, pinnedAgent, pinnedSessionId],
         })
+        setStreamingTurnId(evt.turnId)
+        if (streamingTimerRef.current) clearTimeout(streamingTimerRef.current)
+        streamingTimerRef.current = setTimeout(
+          () => setStreamingTurnId(null),
+          STREAMING_FLASH_MS,
+        )
       }
     })
-    return unsub
+    return () => {
+      unsub()
+      if (streamingTimerRef.current) clearTimeout(streamingTimerRef.current)
+    }
   }, [pinnedAgent, pinnedSessionId, queryClient])
+
+  // Keyboard shortcut: "/" opens search (when no input focused)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/') return
+      const tgt = e.target as HTMLElement | null
+      if (
+        tgt &&
+        (tgt.tagName === 'INPUT' ||
+          tgt.tagName === 'TEXTAREA' ||
+          tgt.isContentEditable)
+      ) {
+        return
+      }
+      e.preventDefault()
+      setSearchOpen(true)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const recentQ = useRecentConversations(selectedAgent)
   const searchQ = useConversationSearch(
@@ -113,96 +151,189 @@ export function ConversationsView() {
   )
   const transcriptQ = useSessionTurns(pinnedAgent, pinnedSessionId)
 
+  // Streaming = a turn landed within last 10s for any agent
+  const isLiveActivity = tape.length > 0 &&
+    Date.now() - Date.parse(tape[0].ts) < 10_000
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6">
-      <h2 className="mb-4 text-2xl font-bold">Conversations</h2>
-
-      <div className="flex flex-wrap gap-6">
-        {/* Sidebar */}
-        <aside className="w-full shrink-0 space-y-4 lg:w-72">
-          {/* Live tape */}
-          <div className="rounded-md border bg-card p-3">
-            <div className="mb-2 flex items-center justify-between text-xs uppercase text-muted-foreground">
-              <span>Live ({tape.length})</span>
-              {tape.length > 0 && (
-                <button
-                  className="text-[10px] underline"
-                  onClick={() => setTape([])}
-                >
-                  clear
-                </button>
-              )}
-            </div>
-            {tape.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                Waiting for a conversation-turn SSE event…
-              </p>
-            )}
-            <ul className="max-h-64 space-y-1 overflow-y-auto text-xs">
-              {tape.map((evt) => (
-                <li
-                  key={evt.turnId}
-                  className="flex cursor-pointer items-center gap-2 rounded p-1 hover:bg-muted/50"
-                  onClick={() => setSelectedAgent(evt.agent)}
-                >
-                  <Badge
-                    variant={evt.role === 'user' ? 'outline' : 'secondary'}
-                    className="text-[10px]"
-                  >
-                    {evt.role}
-                  </Badge>
-                  <span className="font-mono">{evt.agent}</span>
-                  <span className="ml-auto text-muted-foreground">
-                    {relativeTime(evt.ts)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+    <div className="mx-auto max-w-[1600px] px-4 py-6 lg:px-6">
+      {/* HEADER ============================================================ */}
+      <header className="mb-6 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-3xl font-bold tracking-tight text-fg-1">
+              Conversations
+            </h1>
+            <StatusPip live={isLiveActivity} />
           </div>
-
-          {/* Agent list */}
-          <div className="rounded-md border bg-card p-3">
-            <div className="mb-2 text-xs uppercase text-muted-foreground">
-              Agents
-            </div>
-            <ul className="space-y-1 text-sm">
-              {allAgents.map((name) => (
-                <li key={name}>
-                  <button
-                    className={
-                      'w-full rounded px-2 py-1 text-left transition-colors ' +
-                      (selectedAgent === name
-                        ? 'bg-primary/20 text-foreground'
-                        : 'hover:bg-muted')
-                    }
-                    onClick={() => setSelectedAgent(name)}
-                  >
-                    <span className="font-mono">{name}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              className="group flex items-center gap-2 rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-xs text-fg-3 transition-colors hover:border-primary/40 hover:text-fg-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
+              aria-label="Search conversations"
+            >
+              <span aria-hidden>⌕</span>
+              <span className="hidden sm:inline">Search transcripts</span>
+              <kbd className="rounded border border-border bg-bg-muted px-1.5 py-0.5 font-mono text-[10px] text-fg-2">
+                /
+              </kbd>
+            </button>
           </div>
+        </div>
+
+        {/* Live tape — horizontal ticker */}
+        <LiveTape tape={tape} onAgentClick={(name) => setSelectedAgent(name)} />
+      </header>
+
+      {/* THREE-COLUMN BODY ================================================ */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[200px_1fr_minmax(0,560px)]">
+        {/* LEFT — Agent picker (chips) */}
+        <aside className="lg:sticky lg:top-6 lg:self-start">
+          <div className="mb-2 px-1 text-[10px] font-medium uppercase tracking-wider text-fg-3">
+            Agents · {allAgents.length}
+          </div>
+          {allAgents.length === 0 ? (
+            <p className="px-1 text-xs text-fg-3">No agents.</p>
+          ) : (
+            <ul
+              role="listbox"
+              aria-label="Agent picker"
+              className="space-y-0.5"
+            >
+              {allAgents.map((name) => {
+                const selected = selectedAgent === name
+                const tapeHit = tape.find((t) => t.agent === name)
+                return (
+                  <li key={name}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onClick={() => setSelectedAgent(name)}
+                      className={
+                        'group flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ' +
+                        (selected
+                          ? 'bg-bg-elevated text-fg-1 shadow-sm ring-1 ring-primary/40'
+                          : 'text-fg-2 hover:bg-bg-elevated/60 hover:text-fg-1')
+                      }
+                    >
+                      <span
+                        aria-hidden
+                        className={
+                          'h-1.5 w-1.5 rounded-full ' +
+                          (tapeHit ? 'bg-primary animate-pulse' : 'bg-fg-3/40')
+                        }
+                      />
+                      <span className="truncate font-mono text-xs">{name}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </aside>
 
-        {/* Workspace */}
-        <section className="min-w-0 flex-1 space-y-4">
-          {/* Search bar */}
-          <div className="rounded-md border bg-card p-3">
-            <div className="flex flex-wrap gap-2">
+        {/* MIDDLE — Session cards */}
+        <section className="min-w-0">
+          {!selectedAgent ? (
+            <EmptyState
+              title="Pick an agent to read"
+              body="Select an agent from the left rail to see their recent sessions. Or press / to search across the fleet."
+            />
+          ) : recentQ.isLoading ? (
+            <SessionsSkeleton />
+          ) : recentQ.data && recentQ.data.sessions.length === 0 ? (
+            <EmptyState
+              title="No conversations yet"
+              body={`${selectedAgent} hasn't had a session recorded. Once a turn lands it'll appear here.`}
+            />
+          ) : (
+            <div className="space-y-3">
+              <div className="mb-1 flex items-baseline justify-between">
+                <h2 className="font-display text-sm font-medium uppercase tracking-wider text-fg-3">
+                  {selectedAgent} · sessions
+                </h2>
+                <span className="font-mono text-[10px] text-fg-3">
+                  {recentQ.data?.sessions.length ?? 0} total
+                </span>
+              </div>
+              <ul className="space-y-2">
+                {recentQ.data?.sessions.map((s) => (
+                  <SessionCard
+                    key={s.id}
+                    session={s}
+                    pinned={
+                      pinnedAgent === selectedAgent && pinnedSessionId === s.id
+                    }
+                    onClick={() => {
+                      setPinnedAgent(selectedAgent)
+                      setPinnedSessionId(s.id)
+                    }}
+                  />
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+
+        {/* RIGHT — Transcript */}
+        <aside className="min-w-0">
+          {pinnedAgent && pinnedSessionId ? (
+            <TranscriptPane
+              agent={pinnedAgent}
+              sessionId={pinnedSessionId}
+              isLoading={transcriptQ.isLoading}
+              error={transcriptQ.error as Error | null | undefined}
+              turns={transcriptQ.data?.turns ?? null}
+              streamingTurnId={streamingTurnId}
+              onClose={() => {
+                setPinnedAgent(null)
+                setPinnedSessionId(null)
+              }}
+            />
+          ) : (
+            <div className="rounded-lg border border-dashed border-border bg-bg-elevated/40 p-8 text-center">
+              <p className="font-display text-sm font-medium text-fg-2">
+                No session selected
+              </p>
+              <p className="mt-1 text-xs text-fg-3">
+                Click a session card to read the full transcript.
+              </p>
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {/* SEARCH DIALOG ==================================================== */}
+      <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              Search transcripts
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-2">
               <input
-                className="min-w-0 flex-1 rounded border bg-background px-3 py-1.5 text-sm"
-                placeholder="FTS5 search across conversation turns…"
+                autoFocus
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') setSearchEnabled(true)
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setSearchEnabled(false)
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && query.length > 0) {
+                    setSearchEnabled(true)
+                  }
+                }}
+                placeholder="FTS5 query across all turns…"
+                className="min-w-0 flex-1 rounded-md border border-border bg-bg-base px-3 py-2 font-mono text-sm text-fg-1 placeholder:text-fg-3 focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               <select
-                className="rounded border bg-background px-2 py-1 text-sm"
                 value={searchAgent}
                 onChange={(e) => setSearchAgent(e.target.value)}
+                className="rounded-md border border-border bg-bg-base px-2 py-2 text-sm text-fg-1"
               >
                 <option value="">all agents</option>
                 {allAgents.map((a) => (
@@ -213,223 +344,384 @@ export function ConversationsView() {
               </select>
               <Button
                 size="sm"
-                onClick={() => setSearchEnabled(true)}
                 disabled={query.length === 0}
+                onClick={() => setSearchEnabled(true)}
               >
                 Search
               </Button>
             </div>
             {searchQ.isLoading && (
-              <p className="mt-2 text-xs text-muted-foreground">searching…</p>
+              <p className="text-xs text-fg-3">searching…</p>
             )}
             {searchQ.error && (
-              <p className="mt-2 text-xs text-destructive">
+              <p className="text-xs text-destructive">
                 {(searchQ.error as Error).message}
               </p>
             )}
             {searchQ.data && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                {searchQ.data.hits.length} hits / {searchQ.data.totalMatches}{' '}
-                total across {searchQ.data.agentsQueried.length} agent
-                {searchQ.data.agentsQueried.length === 1 ? '' : 's'}
-              </p>
+              <>
+                <p className="text-xs text-fg-3">
+                  {searchQ.data.hits.length} hits ·{' '}
+                  {searchQ.data.totalMatches} total across{' '}
+                  {searchQ.data.agentsQueried.length} agent
+                  {searchQ.data.agentsQueried.length === 1 ? '' : 's'}
+                </p>
+                {searchQ.data.hits.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border p-4 text-center text-xs text-fg-3">
+                    No matches. Try a broader query.
+                  </p>
+                ) : (
+                  <ul className="max-h-[50vh] space-y-2 overflow-y-auto pr-2">
+                    {searchQ.data.hits.map((hit) => (
+                      <li
+                        key={hit.turnId}
+                        className="cursor-pointer rounded-md border border-border bg-bg-elevated p-3 text-sm transition-colors hover:border-primary/40"
+                        onClick={() => {
+                          // For now, just close — wiring jump-to-session
+                          // would require the backend to return sessionId
+                          // in search hits.
+                          setSelectedAgent(hit.agent)
+                          setSearchOpen(false)
+                        }}
+                      >
+                        <div className="mb-1 flex items-center gap-2 text-[10px] text-fg-3">
+                          <RoleBadge role={hit.role} />
+                          <span className="font-mono">{hit.agent}</span>
+                          <span>{relativeTime(hit.createdAt)}</span>
+                          <span className="ml-auto font-mono">
+                            bm25 {hit.bm25Score.toFixed(2)}
+                          </span>
+                        </div>
+                        <p className="line-clamp-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-fg-2">
+                          {hit.content}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
 
-          {/* Search results */}
-          {searchQ.data && searchQ.data.hits.length > 0 && (
-            <div className="rounded-md border bg-card">
-              <ul className="divide-y">
-                {searchQ.data.hits.map((hit) => (
-                  <li key={hit.turnId} className="p-3 text-sm">
-                    <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                      <Badge
-                        variant={hit.role === 'user' ? 'outline' : 'secondary'}
-                        className="text-[10px]"
-                      >
-                        {hit.role}
-                      </Badge>
-                      <span className="font-mono">{hit.agent}</span>
-                      <span>{relativeTime(hit.createdAt)}</span>
-                      <span className="ml-auto font-mono">
-                        bm25 {hit.bm25Score.toFixed(2)}
-                      </span>
-                    </div>
-                    <p className="whitespace-pre-wrap break-words text-sm">
-                      {hit.content.length > 400
-                        ? hit.content.slice(0, 400) + '…'
-                        : hit.content}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+/* ====================================================================== */
+/* SUB-COMPONENTS                                                          */
+/* ====================================================================== */
 
-          {/* Selected agent's recent sessions */}
-          {selectedAgent && (
-            <div className="rounded-md border bg-card p-3">
-              <div className="mb-2 text-sm font-semibold">
-                Recent sessions — <span className="font-mono">{selectedAgent}</span>
-              </div>
-              {recentQ.isLoading && (
-                <p className="text-xs text-muted-foreground">loading…</p>
-              )}
-              {recentQ.data && recentQ.data.sessions.length === 0 && (
-                <p className="text-xs text-muted-foreground">No sessions recorded.</p>
-              )}
-              {recentQ.data && (
-                <ul className="space-y-1 text-xs">
-                  {recentQ.data.sessions.map((s) => {
-                    const isPinned =
-                      pinnedAgent === selectedAgent && pinnedSessionId === s.id
-                    return (
-                      <li
-                        key={s.id}
-                        className={
-                          'flex cursor-pointer items-center gap-2 rounded p-1 transition-colors ' +
-                          (isPinned
-                            ? 'bg-primary/20 text-foreground'
-                            : 'hover:bg-muted/50')
-                        }
-                        onClick={() => {
-                          // 116-postdeploy Bug 2 — pin the transcript pane
-                          // to this session. Re-clicking the pinned session
-                          // is a no-op; clicking a different one swaps the
-                          // pane. The "close" button on the pane resets.
-                          setPinnedAgent(selectedAgent)
-                          setPinnedSessionId(s.id)
-                        }}
-                        title="Click to open transcript"
-                      >
-                        <Badge variant="outline" className="text-[10px]">
-                          {s.status}
-                        </Badge>
-                        <span className="font-mono">{s.id.slice(0, 8)}</span>
-                        <span className="text-muted-foreground">
-                          {s.turnCount} turn{s.turnCount === 1 ? '' : 's'}
-                        </span>
-                        <span className="ml-auto text-muted-foreground">
-                          {relativeTime(s.startedAt)}
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </div>
-          )}
-        </section>
+function StatusPip(props: { readonly live: boolean }) {
+  return (
+    <span
+      className={
+        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ' +
+        (props.live
+          ? 'bg-primary/10 text-primary'
+          : 'bg-bg-muted text-fg-3')
+      }
+      aria-live="polite"
+    >
+      <span
+        className={
+          'h-1.5 w-1.5 rounded-full ' +
+          (props.live ? 'bg-primary animate-pulse' : 'bg-fg-3')
+        }
+        aria-hidden
+      />
+      {props.live ? 'Live' : 'Idle'}
+    </span>
+  )
+}
 
-        {/* Right pane — transcript (116-postdeploy Bug 2). Only mounts
-            when a session is pinned, so the layout stays 2-column for
-            search-only flows. */}
-        {pinnedAgent && pinnedSessionId && (
-          <TranscriptPane
-            agent={pinnedAgent}
-            sessionId={pinnedSessionId}
-            isLoading={transcriptQ.isLoading}
-            error={transcriptQ.error as Error | null | undefined}
-            turns={transcriptQ.data?.turns ?? null}
-            onClose={() => {
-              setPinnedAgent(null)
-              setPinnedSessionId(null)
-            }}
-          />
-        )}
+function LiveTape(props: {
+  readonly tape: readonly ConversationTurnEvent[]
+  readonly onAgentClick: (agent: string) => void
+}) {
+  const { tape, onAgentClick } = props
+  if (tape.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-bg-elevated/40 px-3 py-2">
+        <p className="font-mono text-[11px] text-fg-3">
+          Waiting for live conversation-turn events…
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-bg-elevated">
+      <div className="flex items-stretch divide-x divide-border overflow-x-auto">
+        <div className="flex shrink-0 items-center gap-2 bg-bg-muted px-3 py-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+          <span className="font-display text-[10px] font-medium uppercase tracking-wider text-fg-3">
+            Live
+          </span>
+        </div>
+        {tape.map((evt) => (
+          <button
+            key={evt.turnId}
+            onClick={() => onAgentClick(evt.agent)}
+            className="flex shrink-0 items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-bg-muted focus-visible:bg-bg-muted focus-visible:outline-none"
+            title={`${evt.agent} · ${evt.role} · ${evt.ts}`}
+          >
+            <RoleBadge role={evt.role} compact />
+            <span className="font-mono text-[11px] text-fg-1">
+              {evt.agent}
+            </span>
+            <span className="font-mono text-[10px] text-fg-3">
+              {relativeTime(evt.ts)}
+            </span>
+          </button>
+        ))}
       </div>
     </div>
   )
 }
 
-/**
- * 116-postdeploy Bug 2 — transcript pane.
- *
- * Renders the full ordered turn list for one session in chronological
- * order (top→bottom). Designed to sit as a third flex child alongside
- * the existing sidebar + workspace; on mobile it wraps to a full-width
- * stacked card.
- */
+function RoleBadge(props: {
+  readonly role: 'user' | 'assistant' | 'system' | string
+  readonly compact?: boolean
+}) {
+  const role = props.role
+  const compact = props.compact
+  const cls =
+    role === 'user'
+      ? 'bg-info/15 text-info'
+      : role === 'assistant'
+      ? 'bg-primary/15 text-primary'
+      : 'bg-bg-muted text-fg-3'
+  return (
+    <span
+      className={
+        'rounded font-mono font-medium uppercase tracking-wider ' +
+        cls +
+        ' ' +
+        (compact ? 'px-1 py-0 text-[9px]' : 'px-1.5 py-0.5 text-[10px]')
+      }
+    >
+      {role}
+    </span>
+  )
+}
+
+function SessionCard(props: {
+  readonly session: ConversationSessionRow
+  readonly pinned: boolean
+  readonly onClick: () => void
+}) {
+  const { session, pinned, onClick } = props
+  const statusCls =
+    session.status === 'active'
+      ? 'bg-primary/15 text-primary'
+      : session.status === 'failed' || session.status === 'errored'
+      ? 'bg-destructive/15 text-destructive'
+      : 'bg-bg-muted text-fg-2'
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={pinned}
+        className={
+          'block w-full rounded-lg border bg-bg-elevated p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ' +
+          (pinned
+            ? 'border-primary/60 shadow-md ring-1 ring-primary/20'
+            : 'border-border hover:-translate-y-px hover:border-primary/30 hover:shadow-sm')
+        }
+      >
+        <div className="mb-2 flex items-center gap-2 text-[10px] text-fg-3">
+          <span
+            className={
+              'rounded-full px-2 py-0.5 font-medium uppercase tracking-wider ' +
+              statusCls
+            }
+          >
+            {session.status}
+          </span>
+          <span className="font-mono">{session.id.slice(0, 8)}</span>
+          <span className="ml-auto font-mono">
+            {relativeTime(session.startedAt)}
+          </span>
+        </div>
+        <div className="flex items-baseline gap-3 text-sm">
+          <span className="font-display font-medium text-fg-1">
+            {session.turnCount} turn{session.turnCount === 1 ? '' : 's'}
+          </span>
+          {session.totalTokens !== null && (
+            <span className="font-mono text-xs text-fg-3">
+              {session.totalTokens.toLocaleString()} tokens
+            </span>
+          )}
+        </div>
+      </button>
+    </li>
+  )
+}
+
+function SessionsSkeleton() {
+  return (
+    <div className="space-y-2">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="h-[88px] animate-pulse rounded-lg border border-border bg-bg-elevated/40"
+        />
+      ))}
+    </div>
+  )
+}
+
+function EmptyState(props: {
+  readonly title: string
+  readonly body: string
+}) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-bg-elevated/30 p-10 text-center">
+      <p className="font-display text-base font-medium text-fg-2">
+        {props.title}
+      </p>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-fg-3">{props.body}</p>
+    </div>
+  )
+}
+
+/* ====================================================================== */
+/* TRANSCRIPT PANE — the reading experience                                */
+/* ====================================================================== */
+
 function TranscriptPane(props: {
   readonly agent: string
   readonly sessionId: string
   readonly isLoading: boolean
   readonly error: Error | null | undefined
   readonly turns: readonly RecentTurnRow[] | null
+  readonly streamingTurnId: string | null
   readonly onClose: () => void
-}): JSX.Element {
-  const { agent, sessionId, isLoading, error, turns, onClose } = props
+}) {
+  const { agent, sessionId, isLoading, error, turns, streamingTurnId, onClose } =
+    props
   return (
-    <aside className="w-full shrink-0 lg:w-96">
-      <div className="rounded-md border bg-card">
-        <header className="flex items-center justify-between border-b p-3">
-          <div>
-            <div className="text-sm font-semibold">Transcript</div>
-            <div className="text-[10px] text-muted-foreground">
-              <span className="font-mono">{agent}</span> ·{' '}
-              <span className="font-mono">{sessionId.slice(0, 8)}</span>
-              {turns && (
-                <>
-                  {' '}
-                  · {turns.length} turn{turns.length === 1 ? '' : 's'}
-                </>
-              )}
-            </div>
+    <div className="overflow-hidden rounded-lg border border-border bg-bg-elevated lg:sticky lg:top-6">
+      <header className="flex items-center justify-between gap-3 border-b border-border bg-bg-muted/50 px-4 py-3">
+        <div className="min-w-0">
+          <div className="font-display text-sm font-medium text-fg-1">
+            Transcript
           </div>
-          <button
-            className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50"
-            onClick={onClose}
-            aria-label="Close transcript"
-          >
-            ✕
-          </button>
-        </header>
-        <div className="max-h-[70vh] overflow-y-auto p-3">
-          {isLoading && (
-            <p className="text-xs text-muted-foreground">loading transcript…</p>
-          )}
-          {error && (
-            <p className="text-xs text-destructive">{error.message}</p>
-          )}
-          {turns && turns.length === 0 && !isLoading && (
-            <p className="text-xs text-muted-foreground">
-              No turns recorded for this session.
-            </p>
-          )}
-          {turns && turns.length > 0 && (
-            <ol className="space-y-3">
-              {turns.map((t) => (
-                <li
-                  key={t.turnId}
-                  className="rounded border bg-background/40 p-2"
-                  data-role={t.role}
-                >
-                  <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground">
-                    <Badge
-                      variant={t.role === 'user' ? 'outline' : 'secondary'}
-                      className="text-[10px]"
-                    >
-                      {t.role}
-                    </Badge>
-                    <span className="font-mono">#{t.turnIndex}</span>
-                    {t.tokenCount !== null && (
-                      <span className="font-mono" title="token count">
-                        {t.tokenCount.toLocaleString()}t
-                      </span>
-                    )}
-                    <span className="ml-auto" title={t.createdAt}>
-                      {relativeTime(t.createdAt)}
-                    </span>
-                  </div>
-                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">
-                    {t.content}
-                  </p>
-                </li>
-              ))}
-            </ol>
-          )}
+          <div className="mt-0.5 truncate font-mono text-[10px] text-fg-3">
+            {agent} · {sessionId.slice(0, 12)}
+            {turns && (
+              <> · {turns.length} turn{turns.length === 1 ? '' : 's'}</>
+            )}
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md px-2 py-1 text-fg-3 transition-colors hover:bg-bg-base hover:text-fg-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Close transcript"
+        >
+          ✕
+        </button>
+      </header>
+
+      <div className="max-h-[calc(100vh-220px)] overflow-y-auto px-4 py-4">
+        {isLoading && <TranscriptSkeleton />}
+        {error && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+            {error.message}
+          </div>
+        )}
+        {turns && turns.length === 0 && !isLoading && (
+          <p className="text-center text-xs text-fg-3">
+            No turns recorded for this session.
+          </p>
+        )}
+        {turns && turns.length > 0 && (
+          <ol className="space-y-4">
+            {turns.map((t) => (
+              <TranscriptTurn
+                key={t.turnId}
+                turn={t}
+                streaming={streamingTurnId === t.turnId}
+              />
+            ))}
+          </ol>
+        )}
       </div>
-    </aside>
+    </div>
+  )
+}
+
+function TranscriptTurn(props: {
+  readonly turn: RecentTurnRow
+  readonly streaming: boolean
+}) {
+  const t = props.turn
+  const streaming = props.streaming
+  const railCls = streaming
+    ? 'bg-pink'
+    : t.role === 'user'
+    ? 'bg-info'
+    : t.role === 'assistant'
+    ? 'bg-primary'
+    : 'bg-fg-3'
+  return (
+    <li
+      className={
+        'group relative rounded-md border bg-bg-base px-4 py-3 transition-colors ' +
+        (streaming
+          ? 'border-pink/50 shadow-[0_0_0_1px_rgba(255,51,102,0.15)]'
+          : 'border-border')
+      }
+      data-role={t.role}
+    >
+      <span
+        aria-hidden
+        className={
+          'absolute inset-y-2 left-0 w-0.5 rounded-r-full transition-colors ' +
+          railCls
+        }
+      />
+      <div className="mb-1.5 flex items-center gap-2 text-[10px]">
+        <RoleBadge role={t.role} />
+        <span className="font-mono text-fg-3">#{t.turnIndex}</span>
+        <span className="ml-auto font-mono text-fg-3" title={t.createdAt}>
+          {relativeTime(t.createdAt)}
+        </span>
+      </div>
+      <p
+        className="whitespace-pre-wrap break-words font-sans text-sm leading-7 text-fg-1"
+        style={{ maxWidth: '70ch' }}
+      >
+        {t.content}
+      </p>
+      {t.tokenCount !== null && (
+        <div className="mt-2 hidden font-mono text-[10px] text-fg-3 group-hover:block">
+          {t.tokenCount.toLocaleString()} tokens
+          {t.origin ? ` · ${t.origin}` : ''}
+        </div>
+      )}
+    </li>
+  )
+}
+
+function TranscriptSkeleton() {
+  return (
+    <div className="space-y-4">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="animate-pulse rounded-md border border-border bg-bg-base px-4 py-3"
+        >
+          <div className="mb-2 h-3 w-1/3 rounded bg-bg-muted" />
+          <div className="space-y-1.5">
+            <div className="h-3 w-full rounded bg-bg-muted" />
+            <div className="h-3 w-11/12 rounded bg-bg-muted" />
+            <div className="h-3 w-4/5 rounded bg-bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
