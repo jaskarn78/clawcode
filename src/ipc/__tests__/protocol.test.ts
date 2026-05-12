@@ -41,6 +41,18 @@ describe("IPC_METHODS", () => {
       "list-sync-status",
       // Phase 103 OBS-06 — per-agent OAuth Max rate-limit snapshots
       "list-rate-limit-snapshots",
+      // Phase 116-postdeploy 2026-05-11 — fleet aggregate
+      "list-rate-limit-snapshots-fleet",
+      // Phase 115 Plan 05 — lazy-load memory tools (clawcode_memory_* MCP)
+      "clawcode-memory-search",
+      "clawcode-memory-recall",
+      "clawcode-memory-edit",
+      "clawcode-memory-archive",
+      // Phase 999.14 MCP-10 — operator escape hatches for stale-binding sweep
+      "threads-prune-stale",
+      "threads-prune-agent",
+      // Quick 260511-pw3 — schema-registry introspection
+      "list-agent-schemas",
       // Messaging
       // Phase 999.2 Plan 02 — canonical names registered FIRST; old names
       // retained as back-compat aliases (D-RNI-IPC-01 / D-RNI-IPC-02).

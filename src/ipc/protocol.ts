@@ -60,6 +60,30 @@ export const IPC_METHODS = [
   // single-agent handler internally. Backs GET /api/usage on the SPA's
   // Usage page (subscription utilization surface).
   "list-rate-limit-snapshots-fleet",
+  // Phase 115 Plan 05 — lazy-load memory tools backing the agent-facing
+  // clawcode_memory_* MCP tools (search / recall / edit / archive). Each
+  // resolves into the per-agent MemoryStore with cross-agent isolation
+  // enforced at this resolution layer. The MCP tool surface called these
+  // IPC methods via `sendIpcRequest` but the allowlist had not picked
+  // them up — caught 2026-05-12 by the protocol-daemon-parity sentinel.
+  "clawcode-memory-search",
+  "clawcode-memory-recall",
+  "clawcode-memory-edit",
+  "clawcode-memory-archive",
+  // Phase 999.14 MCP-10 — operator escape hatches for the stale-binding
+  // sweep. `threads-prune-stale` runs the sweep on demand with an
+  // operator-supplied threshold; `threads-prune-agent` force-prunes ALL
+  // bindings for one agent without calling Discord. Same parity-drift
+  // class as the clawcode-memory-* methods above.
+  "threads-prune-stale",
+  "threads-prune-agent",
+  // Quick 260511-pw3 — schema-registry introspection for cross-agent
+  // typed delegations. Returns the target's accepted schemas with
+  // `callerAllowed` + `registered` flags so the sender's LLM can choose
+  // a valid schema before calling `delegate_task`. Same parity-drift
+  // class — backed the new `list_agent_schemas` MCP tool but the wire
+  // allowlist had not picked it up.
+  "list-agent-schemas",
   // Messaging
   // Phase 999.2 Plan 02 D-RNI-IPC-01 / D-RNI-IPC-02 — canonical IPC names
   // (ask-agent, post-to-agent) registered FIRST; old names retained as
