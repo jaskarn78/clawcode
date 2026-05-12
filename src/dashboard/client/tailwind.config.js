@@ -52,8 +52,15 @@ export default {
         // matched so `bg-primary` (literal #10b981) and `bg-primary`
         // (CSS-var resolved) agree visually.
         info: '#3b82f6', // blue — informational
-        warn: '#f59e0b', // amber — degraded / warning
-        danger: '#ef4444', // red — breach / errored
+        // 116-postdeploy fix-pass: warn + danger upgraded to theme-aware
+        // CSS vars (HSL channels declared in index.css :root / .dark).
+        // Tailwind utilities (`bg-warn`, `text-warn/40`, `border-danger/30`,
+        // etc.) continue to compile but now flip with the active theme.
+        // The remaining literals (info/gold/pink) stay hex because they
+        // are not currently used in light-vs-dark-sensitive surfaces; lift
+        // them to CSS vars on demand when a real contrast bug surfaces.
+        warn: 'hsl(var(--warn) / <alpha-value>)', // amber — degraded / warning
+        danger: 'hsl(var(--danger) / <alpha-value>)', // red — breach / errored
         gold: '#eab308', // yellow — escalation / priority
         pink: '#ff3366', // magenta — accent / SLO-breach banner highlight
 

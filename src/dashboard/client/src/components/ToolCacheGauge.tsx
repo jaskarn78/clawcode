@@ -34,21 +34,26 @@ export type ToolCacheGaugeProps = {
 
 const TARGET_HIT_RATE = 0.4 // ≥40% per 116-CONTEXT
 
+// 116-postdeploy fix-pass — fills returned as `hsl(var(--…))` /
+// `rgb(var(--…))` so the donut flips between light + dark at theme-
+// toggle time without a React re-render (same pattern as
+// AgentTile.tsx ActivitySparkline). HSL for shadcn semantic tokens,
+// RGB for the custom surface channels (--fg-3, --bg-s3).
 function gaugeBand(rate: number | null): {
   readonly fill: string
   readonly tw: string
   readonly label: string
 } {
   if (rate === null) {
-    return { fill: '#71717a', tw: 'text-fg-3', label: 'no_data' }
+    return { fill: 'rgb(var(--fg-3))', tw: 'text-fg-3', label: 'no_data' }
   }
   if (rate >= TARGET_HIT_RATE) {
-    return { fill: '#10b981', tw: 'text-primary', label: 'ok' }
+    return { fill: 'hsl(var(--primary))', tw: 'text-primary', label: 'ok' }
   }
   if (rate >= 0.2) {
-    return { fill: '#f59e0b', tw: 'text-warn', label: 'warn' }
+    return { fill: 'hsl(var(--warn))', tw: 'text-warn', label: 'warn' }
   }
-  return { fill: '#ef4444', tw: 'text-danger', label: 'danger' }
+  return { fill: 'hsl(var(--danger))', tw: 'text-danger', label: 'danger' }
 }
 
 export function ToolCacheGauge(props: ToolCacheGaugeProps): JSX.Element {
@@ -59,10 +64,12 @@ export function ToolCacheGauge(props: ToolCacheGaugeProps): JSX.Element {
 
   // Recharts wants two slices for a donut: the filled portion and the
   // remainder. Track color is the muted surface to match other meters.
+  // 116-postdeploy fix-pass — miss-bucket fill resolved through `--bg-s3`
+  // (RGB channels in index.css) so the donut ring flips light/dark.
   const data = useMemo(
     () => [
       { name: 'hit', value: pct, color: band.fill },
-      { name: 'miss', value: 100 - pct, color: '#252530' },
+      { name: 'miss', value: 100 - pct, color: 'rgb(var(--bg-s3))' },
     ],
     [pct, band.fill],
   )

@@ -164,6 +164,16 @@
     --fg-1: 14 14 18; /* #0e0e12 near-black — primary text */
     --fg-2: 75 75 85; /* #4b4b55 secondary text */
     --fg-3: 130 130 140; /* #82828c muted metadata */
+
+    /* 116-postdeploy fix-pass — `warn` + `danger` upgraded from hex
+       literals in tailwind.config.js to HSL CSS vars so they flip
+       with theme. Same channel-format convention as shadcn's primary /
+       destructive (HSL space-separated, no commas) so opacity modifiers
+       like `bg-warn/10` keep working.
+
+       LIGHT theme — darker shades for AA contrast on warm-white bg. */
+    --warn: 32 95% 44%;    /* darker amber — AA on white */
+    --danger: 0 72% 45%;   /* darker red — matches --destructive */
   }
 
   .dark {
@@ -210,6 +220,12 @@
     --fg-1: 244 244 245; /* #f4f4f5 */
     --fg-2: 161 161 170; /* #a1a1aa */
     --fg-3: 113 113 122; /* #71717a */
+
+    /* 116-postdeploy fix-pass — DARK theme warn/danger. Matches the
+       historical hex values (#f59e0b amber, #ef4444 red) re-expressed
+       as HSL channels so theme-toggle flips the tokens. */
+    --warn: 38 92% 50%;    /* #f59e0b amber */
+    --danger: 0 84% 60%;   /* #ef4444 red — matches --destructive */
   }
 }
 

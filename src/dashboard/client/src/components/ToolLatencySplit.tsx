@@ -297,28 +297,37 @@ export function ToolLatencySplit(
                   layout="vertical"
                   barCategoryGap={8}
                 >
+                  {/* 116-postdeploy fix-pass — all chart fills/strokes
+                      resolved through CSS vars so the chart flips
+                      light/dark with the theme toggle. RGB channels for
+                      `--fg-*` (custom surface tokens), HSL for `--primary`
+                      (shadcn semantic). */}
                   <XAxis
                     type="number"
-                    stroke="#71717a"
-                    tick={{ fill: '#a1a1aa', fontSize: 11 }}
+                    stroke="rgb(var(--fg-3))"
+                    tick={{ fill: 'rgb(var(--fg-2))', fontSize: 11 }}
                     label={{
                       value: 'ms (p50)',
                       position: 'insideBottom',
                       offset: -2,
-                      fill: '#71717a',
+                      fill: 'rgb(var(--fg-3))',
                       fontSize: 11,
                     }}
                   />
                   <YAxis
                     dataKey="agent"
                     type="category"
-                    stroke="#71717a"
-                    tick={{ fill: '#f4f4f5', fontSize: 11, fontFamily: 'monospace' }}
+                    stroke="rgb(var(--fg-3))"
+                    tick={{
+                      fill: 'rgb(var(--fg-1))',
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                    }}
                     width={120}
                   />
                   <RechartsTooltip
                     content={<SplitTooltip />}
-                    cursor={{ fill: '#27272a', opacity: 0.4 }}
+                    cursor={{ fill: 'rgb(var(--bg-muted))', opacity: 0.4 }}
                   />
                   {/* Outline (roundtrip) drawn first so the filled exec bar
                       stacks visually in front. Recharts renders bars at the
@@ -326,7 +335,7 @@ export function ToolLatencySplit(
                   <Bar
                     dataKey="roundtrip"
                     fill="transparent"
-                    stroke="#10b981"
+                    stroke="hsl(var(--primary))"
                     strokeWidth={1.5}
                     barSize={14}
                   >
@@ -336,7 +345,7 @@ export function ToolLatencySplit(
                   </Bar>
                   <Bar
                     dataKey="exec"
-                    fill="#10b981"
+                    fill="hsl(var(--primary))"
                     fillOpacity={0.85}
                     barSize={14}
                   >

@@ -182,11 +182,18 @@ function modelBucket(model: string): 'opus' | 'sonnet' | 'haiku' | 'other' {
   return 'other'
 }
 
+// 116-postdeploy fix-pass — model palette uses theme-aware CSS vars for
+// the two colors that have semantic tokens (sonnet=primary, haiku=warn).
+// Opus + other stay literal — `--primary` is owned by ok/healthy and
+// `--warn` is owned by degraded/warning; co-opting them for model
+// identity would cross semantic lanes. Violet + muted-grey are visually
+// stable enough in both themes that a contrast fix isn't urgent. Lift
+// to CSS vars if a real contrast bug surfaces.
 const MODEL_COLORS = {
   opus: '#a855f7', // violet
-  sonnet: '#10b981', // emerald
-  haiku: '#f59e0b', // amber
-  other: '#71717a', // muted
+  sonnet: 'hsl(var(--primary))', // emerald → theme-aware
+  haiku: 'hsl(var(--warn))', // amber → theme-aware
+  other: 'rgb(var(--fg-3))', // muted → theme-aware
 } as const
 
 // Linear regression (least squares) over an array of (x, y) pairs.
@@ -688,22 +695,25 @@ function TokenTrendChart(props: {
                 data={chartRows}
                 margin={{ left: 4, right: 12, top: 8, bottom: 4 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#252530" />
+                {/* 116-postdeploy fix-pass — all chart chrome flips via
+                    CSS vars. RGB channels for `--bg-*` / `--fg-*`, HSL
+                    for shadcn `--primary`. */}
+                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--bg-s3))" />
                 <XAxis
                   dataKey="date"
-                  stroke="#71717a"
+                  stroke="rgb(var(--fg-3))"
                   tick={{ fontSize: 10, fontFamily: 'monospace' }}
                 />
                 <YAxis
-                  stroke="#71717a"
+                  stroke="rgb(var(--fg-3))"
                   tick={{ fontSize: 10, fontFamily: 'monospace' }}
                   tickFormatter={(v: number) => formatTokens(v)}
                   width={48}
                 />
                 <RechartsTooltip
                   contentStyle={{
-                    background: '#1a1a23',
-                    border: '1px solid #252530',
+                    background: 'rgb(var(--bg-elevated))',
+                    border: '1px solid rgb(var(--bg-s3))',
                     fontSize: 11,
                   }}
                   formatter={(v: number) => formatTokens(v)}
@@ -711,8 +721,8 @@ function TokenTrendChart(props: {
                 <Area
                   type="monotone"
                   dataKey="tokens"
-                  stroke="#10b981"
-                  fill="#10b981"
+                  stroke="hsl(var(--primary))"
+                  fill="hsl(var(--primary))"
                   fillOpacity={0.35}
                 />
               </AreaChart>
@@ -787,22 +797,23 @@ function TrendChart(props: {
           <div style={{ width: '100%', height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartRows} margin={{ left: 4, right: 12, top: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#252530" />
+                {/* 116-postdeploy fix-pass — theme-aware chart chrome. */}
+                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--bg-s3))" />
                 <XAxis
                   dataKey="date"
-                  stroke="#71717a"
+                  stroke="rgb(var(--fg-3))"
                   tick={{ fontSize: 10, fontFamily: 'monospace' }}
                 />
                 <YAxis
-                  stroke="#71717a"
+                  stroke="rgb(var(--fg-3))"
                   tick={{ fontSize: 10, fontFamily: 'monospace' }}
                   tickFormatter={(v) => formatUsd(v)}
                   width={60}
                 />
                 <RechartsTooltip
                   contentStyle={{
-                    background: '#1a1a23',
-                    border: '1px solid #252530',
+                    background: 'rgb(var(--bg-elevated))',
+                    border: '1px solid rgb(var(--bg-s3))',
                     fontSize: 11,
                   }}
                   formatter={(v: number) => formatUsd(v)}
@@ -832,13 +843,19 @@ function TrendChart(props: {
 
 // Series-color picker — when grouping by model, use the canonical model
 // palette; when grouping by agent, fall back to a 6-color cycle.
+//
+// 116-postdeploy fix-pass — the two semantic-tokenable colors in the
+// agent cycle (emerald=primary, amber=warn) flip with theme. The rest
+// (violet/blue/pink/cyan) stay literal — they're visually identifiable
+// in both themes and we don't have semantic CSS vars for them. Lift on
+// demand.
 const AGENT_COLORS = [
-  '#10b981',
-  '#a855f7',
-  '#f59e0b',
-  '#3b82f6',
-  '#ec4899',
-  '#06b6d4',
+  'hsl(var(--primary))', // emerald — theme-aware
+  '#a855f7',             // violet
+  'hsl(var(--warn))',    // amber — theme-aware
+  '#3b82f6',             // blue
+  '#ec4899',             // pink
+  '#06b6d4',             // cyan
 ]
 function pickColor(
   groupBy: 'agent' | 'model',
@@ -852,8 +869,10 @@ function pickColor(
   }
   // 116-postdeploy Bug 1 — stable muted color for the "other" bucket so
   // the long-tail collapse reads as such (and doesn't fight for attention
-  // against the top-N real-agent bands).
-  if (series === OTHER_BUCKET) return '#52525b' // zinc-600
+  // against the top-N real-agent bands). Routed through `--fg-2` so the
+  // bucket reads as "muted-but-visible" in BOTH themes (zinc-600 hex was
+  // dark-tuned and rendered too-faint on the white light-mode bg).
+  if (series === OTHER_BUCKET) return 'rgb(var(--fg-2))'
   return AGENT_COLORS[idx % AGENT_COLORS.length]!
 }
 
@@ -907,8 +926,8 @@ function ModelDonut(props: { readonly rows: readonly CostByDay[] }): JSX.Element
                 </Pie>
                 <RechartsTooltip
                   contentStyle={{
-                    background: '#1a1a23',
-                    border: '1px solid #252530',
+                    background: 'rgb(var(--bg-elevated))',
+                    border: '1px solid rgb(var(--bg-s3))',
                     fontSize: 11,
                   }}
                   formatter={(v: number) => formatUsd(v)}
