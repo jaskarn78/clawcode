@@ -60,6 +60,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet'
 
 const TAPE_MAX = 8
 const STREAMING_FLASH_MS = 4000
@@ -276,8 +283,14 @@ export function ConversationsView() {
           )}
         </section>
 
-        {/* RIGHT — Transcript */}
-        <aside className="min-w-0">
+        {/* RIGHT — Transcript.
+            116-postdeploy 2026-05-12 fix: `hidden lg:block` hides the
+            right-column aside on phones/tablets. On <lg the transcript
+            previously rendered BELOW the session list (single-column
+            grid stack) and went off-screen — operator clicked a session,
+            saw nothing happen. Sheet variant below takes over on <lg
+            using the same pinned-session truth (`pinnedSessionId`). */}
+        <aside className="hidden min-w-0 lg:block">
           {pinnedAgent && pinnedSessionId ? (
             <TranscriptPane
               agent={pinnedAgent}
@@ -303,6 +316,59 @@ export function ConversationsView() {
           )}
         </aside>
       </div>
+
+      {/* MOBILE / TABLET — transcript Sheet ================================ */}
+      {/* 116-postdeploy 2026-05-12 fix: on <lg the right-column aside is
+          hidden; instead, opening a session triggers a full-screen Sheet
+          containing the same TranscriptPane. Width chain mirrors
+          AgentDetailDrawer's post-fix-pass override (full-screen phones,
+          max-w-2xl tablet, hidden on lg+ since the aside takes over).
+          The Sheet's lg:hidden keeps it off desktop entirely — there the
+          side-by-side aside is visible. */}
+      <Sheet
+        open={pinnedSessionId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPinnedAgent(null)
+            setPinnedSessionId(null)
+          }
+        }}
+      >
+        <SheetContent
+          side="right"
+          className="flex flex-col p-0 lg:hidden w-full max-w-full md:w-3/4 md:max-w-2xl"
+          data-testid="conversations-transcript-sheet"
+        >
+          <SheetHeader className="border-b border-border bg-bg-muted/50 px-4 py-3 text-left">
+            <SheetTitle className="font-display text-sm font-medium text-fg-1">
+              Transcript
+            </SheetTitle>
+            <SheetDescription className="truncate font-mono text-[10px] text-fg-3">
+              {pinnedAgent ?? ''}
+              {pinnedSessionId ? ` · ${pinnedSessionId.slice(0, 12)}` : ''}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto">
+            {pinnedAgent && pinnedSessionId && (
+              <TranscriptPane
+                agent={pinnedAgent}
+                sessionId={pinnedSessionId}
+                isLoading={transcriptQ.isLoading}
+                error={transcriptQ.error as Error | null | undefined}
+                turns={transcriptQ.data?.turns ?? null}
+                streamingTurnId={streamingTurnId}
+                onClose={() => {
+                  setPinnedAgent(null)
+                  setPinnedSessionId(null)
+                }}
+                /* The Sheet provides its own header; ask the pane to drop
+                   its own internal header on mobile so we don't double up. */
+                hideInternalHeader
+              />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* SEARCH DIALOG ==================================================== */}
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
@@ -597,34 +663,63 @@ function TranscriptPane(props: {
   readonly turns: readonly RecentTurnRow[] | null
   readonly streamingTurnId: string | null
   readonly onClose: () => void
+  /**
+   * 116-postdeploy 2026-05-12: when the pane is rendered inside the mobile
+   * Sheet, the Sheet supplies its own SheetHeader (with its own close
+   * affordance from the SheetContent overlay). Set this to suppress the
+   * pane's own internal header to avoid double-chrome.
+   */
+  readonly hideInternalHeader?: boolean
 }) {
-  const { agent, sessionId, isLoading, error, turns, streamingTurnId, onClose } =
-    props
+  const {
+    agent,
+    sessionId,
+    isLoading,
+    error,
+    turns,
+    streamingTurnId,
+    onClose,
+    hideInternalHeader,
+  } = props
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-bg-elevated lg:sticky lg:top-6">
-      <header className="flex items-center justify-between gap-3 border-b border-border bg-bg-muted/50 px-4 py-3">
-        <div className="min-w-0">
-          <div className="font-display text-sm font-medium text-fg-1">
-            Transcript
+    <div
+      className={
+        hideInternalHeader
+          ? ''
+          : 'overflow-hidden rounded-lg border border-border bg-bg-elevated lg:sticky lg:top-6'
+      }
+    >
+      {!hideInternalHeader && (
+        <header className="flex items-center justify-between gap-3 border-b border-border bg-bg-muted/50 px-4 py-3">
+          <div className="min-w-0">
+            <div className="font-display text-sm font-medium text-fg-1">
+              Transcript
+            </div>
+            <div className="mt-0.5 truncate font-mono text-[10px] text-fg-3">
+              {agent} · {sessionId.slice(0, 12)}
+              {turns && (
+                <> · {turns.length} turn{turns.length === 1 ? '' : 's'}</>
+              )}
+            </div>
           </div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-fg-3">
-            {agent} · {sessionId.slice(0, 12)}
-            {turns && (
-              <> · {turns.length} turn{turns.length === 1 ? '' : 's'}</>
-            )}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md px-2 py-1 text-fg-3 transition-colors hover:bg-bg-base hover:text-fg-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Close transcript"
-        >
-          ✕
-        </button>
-      </header>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-2 py-1 text-fg-3 transition-colors hover:bg-bg-base hover:text-fg-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close transcript"
+          >
+            ✕
+          </button>
+        </header>
+      )}
 
-      <div className="max-h-[calc(100vh-220px)] overflow-y-auto px-4 py-4">
+      <div
+        className={
+          hideInternalHeader
+            ? 'overflow-y-auto px-4 py-4'
+            : 'max-h-[calc(100vh-220px)] overflow-y-auto px-4 py-4'
+        }
+      >
         {isLoading && <TranscriptSkeleton />}
         {error && (
           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
