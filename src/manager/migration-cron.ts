@@ -172,7 +172,7 @@ function getRunnerConfig(config: Config): {
  * skips; we log INFO for actual work, DEBUG for skips, WARN on caught
  * errors.
  */
-async function runBatchForAgent(args: {
+export async function runBatchForAgent(args: {
   readonly agent: string;
   readonly manager: MigrationCronManager;
   readonly config: Config;
@@ -220,6 +220,27 @@ async function runBatchForAgent(args: {
       return false;
     }
   };
+  // 116-postdeploy 2026-05-12 — capture phase BEFORE runBatch so we can
+  // detect an in-batch auto-transition to `re-embed-complete` and fire a
+  // one-shot orphan cleanup for this agent. The runner flips
+  // `re-embedding → re-embed-complete` from TWO sites (runner.ts
+  // lines 113-121 + 155-165) when the v2 backfill cursor finishes;
+  // observing phase before/after catches both naturally without
+  // entangling the runner with cleanup concerns.
+  //
+  // Why cleanup at this exact edge: orphan `vec_memories` rows
+  // (memory_id present in v1/v2 vec table but absent from `memories`)
+  // are counted in the v2 dashboard total alongside real memories. An
+  // agent that's actually 100% migrated will display "59%" or similar
+  // because the orphan denominator never moves. The cleanupOrphansSplit
+  // call removes the orphan v1+v2 rows so the percent display snaps to
+  // 100% — and the dashboard's v1 / v2 numbers reflect real memories
+  // only. Idempotent; safe to fire even if no orphans exist.
+  //
+  // We choose `cleanupOrphansSplit` over `cleanupOrphans` so the log
+  // line exposes per-version counts (v1 vs v2 removed). The dashboard
+  // refresh path will pick the same shape when sub-scope 16c lands.
+  const phaseBefore = state.phase;
   try {
     const result = await runReEmbedBatch(
       migrator,
@@ -251,6 +272,45 @@ async function runBatchForAgent(args: {
         },
         "[diag] embedding-v2 cron batch skipped by runner",
       );
+    }
+    // Auto-fire orphan cleanup on re-embed-complete transition. We read
+    // the migrator state fresh here (not result.phase) because phase
+    // mutations land in the migrator via store.getDatabase() writes —
+    // result.phase is sourced from the same migrator and matches, but
+    // a fresh getState() is defensive against future runner refactors
+    // that might return a stale phase snapshot.
+    const phaseAfter = migrator.getState().phase;
+    if (
+      phaseBefore !== "re-embed-complete" &&
+      phaseAfter === "re-embed-complete"
+    ) {
+      try {
+        const cleanup = store.cleanupOrphansSplit();
+        log.info(
+          {
+            agent,
+            action: "embedding-v2-cron-orphan-cleanup-on-complete",
+            v1Removed: cleanup.v1Removed,
+            v2Removed: cleanup.v2Removed,
+            v1Total: cleanup.v1Total,
+            v2Total: cleanup.v2Total,
+          },
+          "[diag] embedding-v2 fired orphan cleanup on re-embed-complete transition",
+        );
+      } catch (cleanupErr) {
+        const msg =
+          cleanupErr instanceof Error
+            ? cleanupErr.message
+            : String(cleanupErr);
+        log.warn(
+          {
+            agent,
+            action: "embedding-v2-cron-orphan-cleanup-failed",
+            err: msg,
+          },
+          "[diag] embedding-v2 orphan cleanup on re-embed-complete failed (non-fatal)",
+        );
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
