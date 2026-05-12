@@ -53,7 +53,6 @@ import {
   type ConversationSessionRow,
   type RecentTurnRow,
 } from '@/hooks/useApi'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

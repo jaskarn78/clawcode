@@ -281,7 +281,7 @@ export function AuditLogViewer(): JSX.Element {
 
               <ol className="relative ml-2 space-y-2 border-l border-border pl-6">
                 {group.entries.map((entry) => {
-                  const key = `${entry.timestamp}-${entry.idx}`
+                  const key = `${entry.entry.timestamp}-${entry.idx}`
                   const expanded = isEntryExpanded(key)
                   const isError = isErrorEntry(entry)
                   return (
