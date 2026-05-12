@@ -470,7 +470,15 @@ function KanbanColumn(props: {
         </div>
       </header>
 
-      <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2">
+      {/* 116-postdeploy 2026-05-12 — bump column gap from 2 (8px) to 3
+          (12px). Operator screenshot of the Backlog column showed cards
+          stacking too tight: the bottom of each card's wrapped title
+          appeared to clip against the next card's top border. gap-2
+          provided 8px of breathing room which was insufficient against
+          the warn-bar accent + rounded corners. overflow-hidden stays on
+          the cards themselves so the absolute-positioned accent bar
+          (inset-y-0 left-0 w-1) doesn't bleed past the rounded edge. */}
+      <div className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto p-2">
         {totalCount === 0 ? (
           <EmptyColumn name={name} />
         ) : (
