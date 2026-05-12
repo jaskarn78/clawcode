@@ -659,7 +659,17 @@ async function handleRequest(
       return;
     }
 
-    // POST /api/migrations/:agent/{pause,resume,rollback}
+    // POST /api/migrations/:agent/{pause,resume,rollback,transition}
+    //
+    // 116-postdeploy 2026-05-12 — `transition` action added so operators can
+    // advance the state machine phase-by-phase from the dashboard Memory page
+    // (eight agents stranded at dual-write since 2026-05-08). Body shape:
+    //   { toPhase: "dual-write" | "re-embedding" | "re-embed-complete" |
+    //              "cutover" | "v1-dropped" | "rolled-back" }
+    // Daemon's `embedding-migration-transition` IPC is the same handler
+    // already used for the rollback action — it validates legality via
+    // LEGAL_TRANSITIONS in src/memory/migrations/embedding-v2.ts. Illegal
+    // transitions surface as 500 with the daemon's error message.
     if (
       method === "POST" &&
       segments.length === 4 &&
@@ -679,9 +689,29 @@ async function handleRequest(
         // (see src/memory/migrations/embedding-v2.ts LEGAL_TRANSITIONS).
         ipcMethod = "embedding-migration-transition";
         ipcParams = { agent: agentName, toPhase: "rolled-back" };
+      } else if (action === "transition") {
+        // Operator-fired phase advance. Body MUST include `toPhase`.
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          sendJson(res, 400, {
+            error: err instanceof Error ? err.message : "invalid body",
+          });
+          return;
+        }
+        const toPhase = (body as { toPhase?: unknown })?.toPhase;
+        if (typeof toPhase !== "string" || toPhase.length === 0) {
+          sendJson(res, 400, {
+            error: "Missing required body field: toPhase (string)",
+          });
+          return;
+        }
+        ipcMethod = "embedding-migration-transition";
+        ipcParams = { agent: agentName, toPhase };
       } else {
         sendJson(res, 400, {
-          error: `Unknown migration action: ${action} (expected pause|resume|rollback)`,
+          error: `Unknown migration action: ${action} (expected pause|resume|rollback|transition)`,
         });
         return;
       }
@@ -691,6 +721,13 @@ async function handleRequest(
           await dashboardAuditTrail.recordAction({
             action: `migration-${action}`,
             target: agentName,
+            ...(action === "transition"
+              ? {
+                  metadata: {
+                    toPhase: (ipcParams as { toPhase?: string }).toPhase,
+                  },
+                }
+              : {}),
           });
         }
         sendJson(res, 200, result);

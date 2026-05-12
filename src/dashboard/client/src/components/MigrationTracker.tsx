@@ -34,7 +34,11 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { useMigrations, type MigrationRow } from '@/hooks/useApi'
+import {
+  transitionMigration,
+  useMigrations,
+  type MigrationRow,
+} from '@/hooks/useApi'
 
 // ---------------------------------------------------------------------------
 // Phase pill styling
@@ -221,7 +225,20 @@ function formatProgress(r: MigrationRow): string {
 // Operator-confirm modal
 // ---------------------------------------------------------------------------
 
-type Action = 'pause' | 'resume' | 'rollback'
+type Action =
+  | { readonly kind: 'pause' }
+  | { readonly kind: 'resume' }
+  | { readonly kind: 'rollback' }
+  // 116-postdeploy — generic phase advance. Lives alongside rollback because
+  // they share the same daemon IPC (`embedding-migration-transition`); the
+  // distinction lives in REST routing + operator copy.
+  | { readonly kind: 'transition'; readonly toPhase: TransitionTarget }
+
+type TransitionTarget =
+  | 'dual-write'
+  | 're-embedding'
+  | 'cutover'
+  | 'v1-dropped'
 
 function actionCopy(action: Action): {
   readonly title: string
@@ -229,7 +246,7 @@ function actionCopy(action: Action): {
   readonly cta: string
   readonly variant: 'default' | 'destructive'
 } {
-  switch (action) {
+  switch (action.kind) {
     case 'pause':
       return {
         title: 'Pause migration?',
@@ -254,12 +271,60 @@ function actionCopy(action: Action): {
         cta: 'Roll back',
         variant: 'destructive',
       }
+    case 'transition':
+      return transitionCopy(action.toPhase)
+  }
+}
+
+function transitionCopy(toPhase: TransitionTarget): {
+  readonly title: string
+  readonly body: string
+  readonly cta: string
+  readonly variant: 'default' | 'destructive'
+} {
+  switch (toPhase) {
+    case 'dual-write':
+      return {
+        title: 'Start dual-write?',
+        body:
+          'Both v1 and v2 embeddings will be written for every NEW memory. Existing memories keep their v1-only vectors until re-embedding starts. Reads continue to use v1.',
+        cta: 'Start dual-write',
+        variant: 'default',
+      }
+    case 're-embedding':
+      return {
+        title: 'Start re-embedding?',
+        body:
+          'The heartbeat runner will backfill v2 embeddings on existing v1-only memories at the configured CPU budget + batch size. Depending on memory store size this takes minutes to hours; you can pause / rollback at any time. Reads still use v1 throughout this phase.',
+        cta: 'Start re-embedding',
+        variant: 'default',
+      }
+    case 'cutover':
+      return {
+        title: 'Cut over to v2 reads?',
+        body:
+          'Search + relevance scoring switch to the v2 vector column. Re-embed is complete (every memory has a v2 vector) but v1 columns remain on disk as a safety net — rollback is still legal.',
+        cta: 'Advance to cutover',
+        variant: 'default',
+      }
+    case 'v1-dropped':
+      return {
+        title: 'Drop v1 vectors?',
+        body:
+          'Final step — v1 embedding columns are dropped from disk. This is IRREVERSIBLE; rollback is no longer legal once v1 is gone. Only proceed if the agent has been stable on v2 reads for a meaningful window.',
+        cta: 'Drop v1 (irreversible)',
+        variant: 'destructive',
+      }
   }
 }
 
 async function postAction(agent: string, action: Action): Promise<void> {
+  if (action.kind === 'transition') {
+    await transitionMigration(agent, action.toPhase)
+    return
+  }
   const r = await fetch(
-    `/api/migrations/${encodeURIComponent(agent)}/${action}`,
+    `/api/migrations/${encodeURIComponent(agent)}/${action.kind}`,
     {
       method: 'POST',
       credentials: 'same-origin',
@@ -274,7 +339,7 @@ async function postAction(agent: string, action: Action): Promise<void> {
       /* swallow — non-JSON body */
     }
     throw new Error(
-      `POST /api/migrations/${agent}/${action} failed: ${r.status}${detail ? ` — ${detail}` : ''}`,
+      `POST /api/migrations/${agent}/${action.kind} failed: ${r.status}${detail ? ` — ${detail}` : ''}`,
     )
   }
 }
@@ -289,6 +354,10 @@ function ConfirmModal(props: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const copy = actionCopy(props.action)
+  const testIdSuffix =
+    props.action.kind === 'transition'
+      ? `transition-${props.action.toPhase}`
+      : props.action.kind
 
   const handleConfirm = useCallback(async () => {
     setBusy(true)
@@ -313,7 +382,7 @@ function ConfirmModal(props: {
     >
       <DialogContent
         className="bg-bg-elevated border border-bg-s3 text-fg-1"
-        data-testid={`migration-confirm-${props.action}`}
+        data-testid={`migration-confirm-${testIdSuffix}`}
       >
         <DialogHeader>
           <DialogTitle className="font-display text-fg-1">
@@ -435,6 +504,34 @@ function FleetAggregate(props: {
 // Per-agent row
 // ---------------------------------------------------------------------------
 
+// 116-postdeploy 2026-05-12 — derives the operator's "next-phase" advance
+// button from the current phase, matching LEGAL_TRANSITIONS in
+// src/memory/migrations/embedding-v2.ts. Returns null when no forward
+// advance applies (re-embedding mid-flight, v1-dropped). The state
+// `re-embed-complete` exposes "Advance to cutover" — the heartbeat runner
+// flips re-embedding → re-embed-complete when the backfill cursor finishes.
+function nextAdvance(r: MigrationRow): {
+  readonly label: string
+  readonly toPhase: TransitionTarget
+} | null {
+  switch (r.phase) {
+    case 'idle':
+      return { label: 'Start dual-write', toPhase: 'dual-write' }
+    case 'dual-write':
+      return { label: 'Start re-embedding', toPhase: 're-embedding' }
+    case 're-embed-complete':
+      return { label: 'Advance to cutover', toPhase: 'cutover' }
+    case 'cutover':
+      return { label: 'Drop v1 (final)', toPhase: 'v1-dropped' }
+    case 'rolled-back':
+      return { label: 'Restart dual-write', toPhase: 'dual-write' }
+    case 're-embedding':
+    case 'v1-dropped':
+    default:
+      return null
+  }
+}
+
 function AgentRow(props: {
   readonly row: MigrationRow
   readonly etaMs: number | null
@@ -449,6 +546,7 @@ function AgentRow(props: {
   // Rollback is legal from every phase except v1-dropped (LEGAL_TRANSITIONS).
   // Hide it in idle (nothing to roll back) too.
   const canRollback = r.phase !== 'v1-dropped' && r.phase !== 'idle' && r.phase !== 'rolled-back'
+  const advance = nextAdvance(r)
 
   return (
     <li
@@ -491,12 +589,48 @@ function AgentRow(props: {
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2 justify-end">
+      <div className="flex items-center gap-2 justify-end flex-wrap">
+        {r.phase === 're-embedding' && !r.paused && (
+          <span
+            className="font-mono text-[10px] text-fg-3 data"
+            title="Re-embed in flight — pause or roll back to interrupt."
+          >
+            Re-embedding: {r.progressProcessed.toLocaleString()} /{' '}
+            {r.progressTotal.toLocaleString()}
+          </span>
+        )}
+        {r.phase === 'v1-dropped' && (
+          <span
+            className="font-mono text-[10px] text-primary"
+            title="Terminal state — migration complete."
+          >
+            Migration complete ✓
+          </span>
+        )}
+        {advance && (
+          <Button
+            size="sm"
+            onClick={() =>
+              props.onActionStart(r.agent, {
+                kind: 'transition',
+                toPhase: advance.toPhase,
+              })
+            }
+            className={
+              advance.toPhase === 'v1-dropped'
+                ? 'bg-danger text-white hover:bg-danger/90 font-mono text-xs'
+                : 'bg-primary text-bg-base hover:bg-primary/90 font-mono text-xs'
+            }
+            data-testid={`migration-advance-${r.agent}`}
+          >
+            {advance.label}
+          </Button>
+        )}
         {canPause && (
           <Button
             size="sm"
             variant="outline"
-            onClick={() => props.onActionStart(r.agent, 'pause')}
+            onClick={() => props.onActionStart(r.agent, { kind: 'pause' })}
             className="border-bg-s3 text-fg-2 hover:text-fg-1 font-mono text-xs"
           >
             Pause
@@ -506,7 +640,7 @@ function AgentRow(props: {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => props.onActionStart(r.agent, 'resume')}
+            onClick={() => props.onActionStart(r.agent, { kind: 'resume' })}
             className="border-bg-s3 text-fg-2 hover:text-fg-1 font-mono text-xs"
           >
             Resume
@@ -516,7 +650,7 @@ function AgentRow(props: {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => props.onActionStart(r.agent, 'rollback')}
+            onClick={() => props.onActionStart(r.agent, { kind: 'rollback' })}
             className="border-danger/40 text-danger hover:bg-danger/10 font-mono text-xs"
           >
             Rollback
@@ -539,10 +673,46 @@ export function MigrationTracker(): JSX.Element {
   const [pending, setPending] = useState<
     { readonly agent: string; readonly action: Action } | null
   >(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkOutcome, setBulkOutcome] = useState<
+    | { readonly succeeded: readonly string[]; readonly failed: readonly { agent: string; error: string }[] }
+    | null
+  >(null)
 
   const onActionStart = useCallback((agent: string, action: Action) => {
     setPending({ agent, action })
   }, [])
+
+  // 116-postdeploy 2026-05-12 — fleet-wide "Start re-embedding on every
+  // agent stuck at dual-write". The 8-of-10 cohort from 2026-05-08 is the
+  // primary use case; once they all flip to re-embedding the button no
+  // longer surfaces any candidates and becomes disabled.
+  const eligible = useMemo(
+    () => rows.filter((r) => r.phase === 'dual-write').map((r) => r.agent),
+    [rows],
+  )
+
+  const handleBulkStartReembedding = useCallback(async () => {
+    setBulkBusy(true)
+    setBulkOutcome(null)
+    const succeeded: string[] = []
+    const failed: { agent: string; error: string }[] = []
+    for (const agent of eligible) {
+      try {
+        await transitionMigration(agent, 're-embedding')
+        succeeded.push(agent)
+      } catch (err) {
+        failed.push({
+          agent,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    setBulkOutcome({ succeeded, failed })
+    setBulkBusy(false)
+    void migQ.refetch()
+  }, [eligible, migQ])
 
   const sorted = useMemo(() => {
     // Active migrations (anything except idle) first; then idle agents.
@@ -571,16 +741,31 @@ export function MigrationTracker(): JSX.Element {
       data-testid="migration-tracker"
     >
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <div>
             <h2 className="font-display text-base font-bold">
               Embedding migration
             </h2>
             <p className="text-xs text-fg-3 font-sans mt-0.5">
-              Per-agent phase + operator pause/resume/rollback. ETA projects
-              linearly from velocity over the trailing 6h+ of samples.
+              Per-agent phase + operator advance / pause / resume / rollback.
+              ETA projects linearly from velocity over the trailing 6h+ of
+              samples.
             </p>
           </div>
+          {eligible.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setBulkOutcome(null)
+                setBulkOpen(true)
+              }}
+              data-testid="migration-bulk-start-reembedding"
+              className="border-primary/40 text-primary hover:bg-primary/10 font-mono text-xs"
+            >
+              Start re-embedding ({eligible.length})
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-4 pb-4">
@@ -626,6 +811,87 @@ export function MigrationTracker(): JSX.Element {
           }}
         />
       )}
+      <Dialog
+        open={bulkOpen}
+        onOpenChange={(o) => {
+          if (!o && !bulkBusy) {
+            setBulkOpen(false)
+            setBulkOutcome(null)
+          }
+        }}
+      >
+        <DialogContent
+          className="bg-bg-elevated border border-bg-s3 text-fg-1"
+          data-testid="migration-bulk-confirm"
+        >
+          <DialogHeader>
+            <DialogTitle className="font-display text-fg-1">
+              Start re-embedding on {eligible.length} agent
+              {eligible.length === 1 ? '' : 's'}?
+            </DialogTitle>
+            <DialogDescription className="text-fg-2 font-sans">
+              The heartbeat runner will begin backfilling v2 embeddings for
+              every agent currently in <code className="font-mono">dual-write</code>.
+              Depending on memory store size each agent takes minutes to
+              hours; per-agent pause / rollback remains available throughout.
+            </DialogDescription>
+          </DialogHeader>
+          {!bulkOutcome && (
+            <ul className="rounded-md border border-bg-s3 bg-bg-base p-3 max-h-48 overflow-y-auto text-xs font-mono space-y-1">
+              {eligible.map((a) => (
+                <li key={a} className="text-fg-2">
+                  {a}
+                </li>
+              ))}
+            </ul>
+          )}
+          {bulkOutcome && (
+            <div className="space-y-2 text-xs font-mono">
+              <p className="text-fg-2">
+                Started: <span className="text-primary">{bulkOutcome.succeeded.length}</span>
+                {bulkOutcome.failed.length > 0 && (
+                  <>
+                    {' · '}
+                    Failed: <span className="text-danger">{bulkOutcome.failed.length}</span>
+                  </>
+                )}
+              </p>
+              {bulkOutcome.failed.length > 0 && (
+                <ul className="rounded-md border border-danger/40 bg-danger/5 p-2 max-h-32 overflow-y-auto space-y-0.5">
+                  {bulkOutcome.failed.map((f) => (
+                    <li key={f.agent} className="text-danger text-[11px]">
+                      <span className="font-bold">{f.agent}</span>: {f.error}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setBulkOpen(false)
+                setBulkOutcome(null)
+              }}
+              disabled={bulkBusy}
+            >
+              {bulkOutcome ? 'Close' : 'Cancel'}
+            </Button>
+            {!bulkOutcome && (
+              <Button
+                type="button"
+                onClick={handleBulkStartReembedding}
+                disabled={bulkBusy || eligible.length === 0}
+                className="bg-primary text-bg-base hover:bg-primary/90"
+              >
+                {bulkBusy ? 'Working…' : `Start ${eligible.length}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }

@@ -38,6 +38,7 @@ import {
 } from '@/hooks/useApi'
 import { MemoryPanel } from './MemoryPanel'
 import { DreamQueue } from './DreamQueue'
+import { MigrationTracker } from './MigrationTracker'
 
 type ModelChoice = 'haiku' | 'sonnet' | 'opus'
 
@@ -175,6 +176,15 @@ export function MemoryView(): JSX.Element {
           </Button>
         </div>
       </header>
+
+      {/* 116-postdeploy 2026-05-12 — fleet-wide embedding-v2 migration
+          tracker. Mounted here on the Memory page so operators can drive
+          the migration state machine alongside per-agent memory triage.
+          The same component is also rendered on the dashboard home (Fleet
+          layout) for at-a-glance visibility. */}
+      <div className="mb-6">
+        <MigrationTracker />
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_1fr]">
         {/* Agent picker */}

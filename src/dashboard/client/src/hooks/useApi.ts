@@ -287,6 +287,45 @@ export function useMigrations(): UseQueryResult<MigrationsPayload> {
   })
 }
 
+/**
+ * 116-postdeploy 2026-05-12 — operator-fired phase advance.
+ *
+ * Routes to `POST /api/migrations/:agent/transition` with `{ toPhase }` body
+ * — the dashboard server proxies to the daemon's `embedding-migration-
+ * transition` IPC, which validates legality against LEGAL_TRANSITIONS in
+ * src/memory/migrations/embedding-v2.ts. Illegal transitions surface as a
+ * thrown Error with the daemon's reason verbatim.
+ */
+export async function transitionMigration(
+  agent: string,
+  toPhase: string,
+): Promise<{ ok: boolean; phase?: string; error?: string }> {
+  const res = await fetch(
+    `/api/migrations/${encodeURIComponent(agent)}/transition`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toPhase }),
+    },
+  )
+  if (!res.ok) {
+    let detail = ''
+    try {
+      const body = (await res.json()) as { error?: string }
+      detail = body?.error ?? ''
+    } catch {
+      /* swallow — non-JSON */
+    }
+    throw new Error(
+      `POST /api/migrations/${agent}/transition → ${res.status}${
+        detail ? ` — ${detail}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as { ok: boolean; phase?: string; error?: string }
+}
+
 export type McpServerStatus =
   | 'ready'
   | 'degraded'
