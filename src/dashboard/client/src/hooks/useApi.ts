@@ -506,6 +506,9 @@ export type PlanningTask = {
   readonly tags: readonly string[]
   readonly createdAt?: string
   readonly filePath?: string
+  // 116-postdeploy 2026-05-12 — short clarifier rendered as a subtitle so
+  // operators don't conflate planning "in-progress" with live agent execution.
+  readonly subtitle?: string
 }
 
 export type PlanningTasksResponse = {

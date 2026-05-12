@@ -67,9 +67,15 @@ const DISPLAY_COLUMNS: ReadonlyArray<DisplayColumn> = [
   'Waiting',
   'Done',
 ]
+// 116-postdeploy 2026-05-12 — operators were confused by planning artefacts
+// (PARTIAL/ACTIVE phases, quick tasks without SUMMARY) appearing under
+// "Running" alongside actual live agent execution. Reframed: the column
+// label is "In Progress" (broader semantic, covers both planning chrome
+// AND live execution), the planning subtitle + a separate "Live execution"
+// scope filter let the operator drill into truly-running work.
 const DISPLAY_COLUMN_LABEL: Record<DisplayColumn, string> = {
   Backlog: 'Backlog',
-  Running: 'Running',
+  Running: 'In Progress',
   Waiting: 'Waiting',
   Done: 'Done',
 }
@@ -111,10 +117,15 @@ function statusDotClass(col: DisplayColumn): string {
   }
 }
 
-// Phase 116-postdeploy 2026-05-12 — scope filter chip values. "All"
-// (default) interleaves planning tasks with daemon tasks. "Agent tasks"
-// hides planning rows. "Planning" hides daemon rows.
-type ScopeFilter = 'all' | 'agent' | 'planning'
+// Phase 116-postdeploy 2026-05-12 — scope filter chip values.
+//   - "all"      (default) interleaves planning tasks with daemon tasks.
+//   - "agent"    hides planning rows; shows all daemon-task columns.
+//   - "planning" hides daemon rows.
+//   - "live"     ONLY daemon rows with status="running" (real agent
+//     execution right now). Operator-asked drill-down: "what's actually
+//     executing this second?" — strips planning chrome and queued/done
+//     daemon tasks alike.
+type ScopeFilter = 'all' | 'agent' | 'planning' | 'live'
 
 export function TaskKanban() {
   const queryClient = useQueryClient()
@@ -305,6 +316,7 @@ export function TaskKanban() {
             { id: 'all', label: 'All' },
             { id: 'agent', label: 'Agent tasks' },
             { id: 'planning', label: 'Planning' },
+            { id: 'live', label: 'Live execution' },
           ] as ReadonlyArray<{ id: ScopeFilter; label: string }>).map((c) => (
             <button
               key={c.id}
@@ -348,17 +360,33 @@ export function TaskKanban() {
       {displayed && (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {DISPLAY_COLUMNS.map((name) => (
-              <KanbanColumn
-                key={name}
-                name={name}
-                rows={scope === 'planning' ? [] : displayed[name]}
-                planningRows={
-                  scope === 'agent' ? [] : planningByColumn[name]
-                }
-                onPlanningClick={(t) => setPlanningDetail(t)}
-              />
-            ))}
+            {DISPLAY_COLUMNS.map((name) => {
+              // 116-postdeploy 2026-05-12 — "Live execution" filter: show
+              // ONLY daemon rows in the Running column (truly-running agent
+              // execution). Every other column renders empty so the
+              // operator sees exactly what is executing this second.
+              const daemonRows =
+                scope === 'planning'
+                  ? []
+                  : scope === 'live'
+                  ? name === 'Running'
+                    ? displayed[name]
+                    : []
+                  : displayed[name]
+              const planningRows =
+                scope === 'agent' || scope === 'live'
+                  ? []
+                  : planningByColumn[name]
+              return (
+                <KanbanColumn
+                  key={name}
+                  name={name}
+                  rows={daemonRows}
+                  planningRows={planningRows}
+                  onPlanningClick={(t) => setPlanningDetail(t)}
+                />
+              )
+            })}
           </div>
         </DndContext>
       )}
@@ -508,6 +536,14 @@ function PlanningCard(props: {
         <div className="mb-0.5 font-display text-sm font-medium text-fg-1">
           {task.title}
         </div>
+        {/* 116-postdeploy 2026-05-12 — disclosure subtitle. Disambiguates
+            planning "in-progress" (PARTIAL/ACTIVE phase, undrafted quick
+            task) from real live agent execution. */}
+        {task.subtitle && (
+          <p className="mb-1 font-mono text-[10px] text-fg-3">
+            {task.subtitle}
+          </p>
+        )}
         {task.description && (
           <p className="line-clamp-2 text-[11px] text-fg-2">
             {task.description}
@@ -605,7 +641,7 @@ function PlanningDetailDialog(props: {
 function EmptyColumn(props: { readonly name: DisplayColumn }) {
   const messages: Record<DisplayColumn, string> = {
     Backlog: 'Backlog is empty — create a task',
-    Running: 'Nothing running',
+    Running: 'Nothing in progress',
     Waiting: 'Nothing awaiting input',
     Done: 'No completed tasks yet',
   }

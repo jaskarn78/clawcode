@@ -43,6 +43,13 @@ export type PlanningTask = {
   readonly tags: readonly string[];
   readonly createdAt?: string;
   readonly filePath?: string;
+  /**
+   * Phase 116-postdeploy 2026-05-12 — short clarifier rendered as a
+   * subtitle on each Kanban card. Disambiguates planning "in progress"
+   * (e.g., PARTIAL phase = dominant fix shipped, edge cases pending)
+   * from actual live agent execution.
+   */
+  readonly subtitle?: string;
 };
 
 export type PlanningTasksResponse = {
@@ -236,6 +243,18 @@ async function scanRoadmap(planningRoot: string): Promise<PlanningTask[]> {
       : undefined;
     const tags = [`phase-${phaseNumber}`];
     if (statusLabel) tags.push(statusLabel.split(/\s+/)[0]!.toLowerCase());
+    // Per-source disclosure: clarify what the planning-task status really
+    // means so operators don't conflate it with daemon-side `running`.
+    const upper = statusLabel.toUpperCase();
+    const subtitle = upper.startsWith("PARTIAL")
+      ? "Partial — dominant fix shipped, edge cases pending"
+      : upper.startsWith("ACTIVE")
+      ? "Active — promoted to current milestone, not yet executing"
+      : upper.startsWith("BACKLOG")
+      ? "Backlog — queued in the roadmap, not yet started"
+      : upper.startsWith("PLANNED")
+      ? "Planned — scheduled in the roadmap, not yet started"
+      : undefined;
     tasks.push({
       id: `phase:${phaseNumber}`,
       source: "phase",
@@ -244,6 +263,7 @@ async function scanRoadmap(planningRoot: string): Promise<PlanningTask[]> {
       status: status === "running" ? "running" : "pending",
       tags,
       filePath: file,
+      subtitle,
     });
   }
   return tasks;
@@ -342,6 +362,7 @@ async function scanQuickDirs(planningRoot: string): Promise<PlanningTask[]> {
       tags: ["quick"],
       createdAt: planStat?.mtime.toISOString(),
       filePath,
+      subtitle: "Quick task drafted, no executor invoked yet",
     });
   }
   return tasks;
