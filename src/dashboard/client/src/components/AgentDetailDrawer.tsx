@@ -119,7 +119,16 @@ export function AgentDetailDrawer(
         // Project Tailwind breakpoints (tailwind.config.js): sm=375 (iPhone
         // SE), md=768 (tablet), lg=1024 (laptop). Transition at md, not
         // sm — sm fires at 375px which is the very bug we're fixing.
-        className="p-0 overflow-hidden flex flex-col w-full max-w-full md:w-3/4 md:max-w-2xl lg:max-w-3xl"
+        // 116-postdeploy 2026-05-12 (round 2) — operator screenshot showed
+        // SLO segments + Today's usage right-column elements overlapping the
+        // transcript center column. Root cause: the drawer was capped at
+        // lg:max-w-3xl (768px) but the internal three-panel grid triggers
+        // `lg:grid-cols-3` based on VIEWPORT width, not container width. With
+        // 768px ÷ 3 ≈ 256px per column, the panels couldn't fit their content
+        // and stacked-overlapped instead. Fix: scale the drawer up to leave
+        // each column ~340px+ on desktop. md gets 2 cols (~400px each), xl+
+        // gets 3 cols (~480px each).
+        className="p-0 overflow-hidden flex flex-col w-full max-w-full md:w-[85vw] md:max-w-3xl lg:max-w-5xl xl:max-w-7xl"
         data-testid="agent-detail-drawer"
       >
         {props.agentName && (
@@ -178,7 +187,12 @@ function DrawerBody(props: {
         </div>
       </SheetHeader>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* 116-postdeploy 2026-05-12 — grid scales 1 col → 2 cols at md (768px,
+          tablet) → 3 cols at xl (1280px, wide desktop). lg (1024px) is the
+          awkward middle: drawer is wide enough at lg:max-w-5xl (1024px) to
+          host 2 panels comfortably (~480px each) but 3 squeezes them. xl
+          drawer (max-w-7xl = 1280px) hosts 3 cleanly (~410px each). */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {/* LEFT — config snapshot */}
         <aside
           className="space-y-3 border border-bg-s3 rounded-md bg-bg-elevated p-3"
