@@ -189,6 +189,86 @@ the transcript pane.
 | `5975a1b` | fix(116): cache IPC re-parsing ISO timestamp (pre-existing, ref only) |
 | `d7ad15a` | fix(116-postdeploy): bucket subagent series in costs chart (Bug 1) |
 | `6809fbc` | fix(116-postdeploy): session-pin transcript pane in F27 (Bug 2) |
+| `e96f4ba` | fix(116-postdeploy): auto-fire orphan cleanup on re-embed-complete transition (Bug 3, Fix 1) |
+| `91c01f4` | feat(116-postdeploy): "Clean orphans" buttons on Memory page (per-agent + fleet-wide) (Bug 3, Fix 2) |
+
+---
+
+## Bug 3 — orphan vec_memories drift inflating migration percentage
+
+### Symptom (2026-05-11)
+
+Operator observed "v2: 982 / 1664 (59%)" on what should have been a
+fully-migrated agent. Manual cleanup via `clawcode memory cleanup-orphans`
+freed **940 orphans fleet-wide, 757 on fin-acquisition alone**, and the
+percentages snapped to 100%. The dashboard treats orphan `vec_memories` /
+`vec_memories_v2` rows (vec row exists, memory_id no longer in `memories`)
+as part of the denominator, so a fully-migrated agent reads "59% migrated"
+when the gap is pure orphan residue.
+
+### Fix 1 — auto-fire orphan cleanup on re-embed-complete (e96f4ba)
+
+Cron observer in `src/manager/migration-cron.ts` `runBatchForAgent`: capture
+phase before + after `runReEmbedBatch`, call `store.cleanupOrphansSplit()`
+when the edge `* → re-embed-complete` is observed. Per-agent regression test
+at `src/manager/__tests__/migration-cron-orphan-cleanup.test.ts`.
+
+### Fix 2 — Clean orphans buttons (91c01f4)
+
+Per-agent button in `MigrationTracker`, fleet-wide button in `MemoryView`
+header. New REST routes `POST /api/agents/:name/memory/cleanup-orphans` +
+`POST /api/memory/cleanup-orphans`, backed by the Phase 107
+`memory-cleanup-orphans` IPC (no new IPC allowlist entries).
+
+### Fix 3 — root-cause investigation (deferred with findings)
+
+**Goal:** find the active leak path that creates new orphans, then either
+add a SQL FOREIGN KEY ... ON DELETE CASCADE, or wrap the offending deletion
+in a transaction touching both tables.
+
+**Investigation results — NO ACTIVE LEAK FOUND:**
+
+| Callsite | Verdict |
+|---|---|
+| `src/memory/store.ts:391` (`store.delete()`) | **Cascades v1 + v2** via `deleteVec` + `deleteVecV2` inside the same `db.transaction()`. Verified by Phase 107 + Phase 115 atomicity tests at `src/memory/__tests__/embedding-v2-cascade-delete.test.ts`. |
+| `src/memory/episode-archival.ts:56` | **Not an orphan source.** Deletes from `vec_memories` only and intentionally leaves the `memories` row present (cold-archive shape — opposite shape from orphan, where the vec row survives a missing memory row). |
+| `src/memory/dedup.ts:117` | **Not an orphan source.** UPDATE-then-replace vec on the same `existingId` inside one transaction. `memories` row is updated, not deleted. |
+| `src/memory/tier-manager.ts:128` | Goes through `store.delete()` → cascades. |
+| `src/manager/cross-agent-coordinator.ts:310` | Goes through `store.delete()` → cascades. |
+| `src/memory/memory-scanner.ts:117,204` | Uses `deleteMemoryChunksByPath()` which operates on `memory_chunks` + `vec_memory_chunks{,_v2}`, NOT `memories` + `vec_memories`. Cascades v1+v2 chunks inside one transaction. Cannot produce vec_memories orphans. |
+| Schema-rebuild migrations at `src/memory/store.ts:1043, 1105` | `INSERT memories_new SELECT * FROM memories` preserves IDs. The `vec_memories` virtual table is untouched by these migrations — IDs match across the rename. Not an orphan source. |
+
+The single non-test `DELETE FROM memories` prepared statement is
+`store.ts:1838` (`stmts.deleteMemory`), used exclusively inside
+`store.delete()` which cascades. There is no live code path that deletes
+from `memories` without cascading.
+
+**Conclusion:** the 940 orphans are pre-cascade residue from the window
+BEFORE Phase 107 added the v1 cascade and Phase 115 D-08 added the v2
+cascade. The cascade fix has already been in production for those phases;
+new orphans should not be accumulating from any of the deletion sites
+audited above.
+
+**Schema-level CASCADE on `vec_memories` is NOT applicable** — `vec_memories`
+is a sqlite-vec `vec0` virtual table, which does not support SQLite FOREIGN
+KEY constraints (per sqlite-vec docs). Application-level cascade in
+`store.delete()` is the correct (and current) enforcement layer.
+
+**Fix 3 outcome:** deferred — no commit needed. Fixes 1 + 2 plus the
+existing application-level cascade prevent NEW orphans + give operators
+ergonomic clearing for legacy residue.
+
+### Sentinel for future drift
+
+If a future regression introduces a new `DELETE FROM memories` site that
+bypasses `store.delete()`, the existing cascade test at
+`src/memory/__tests__/embedding-v2-cascade-delete.test.ts` is the safety
+net — but only for that one shape. Consider adding a static-grep sentinel
+(same shape as `migration-cron-wiring.test.ts`) that asserts the only
+non-test occurrence of `DELETE FROM memories` is inside `store.ts`'s
+`deleteMemory` prepared statement. This would catch future drift at PR
+time. Not blocking; recommend filing as a follow-up if a third orphan
+incident appears.
 
 ---
 
