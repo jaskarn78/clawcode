@@ -17,7 +17,7 @@
  * triage session.
  */
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -30,6 +30,9 @@ import {
 import {
   runDreamPass,
   runTierMaintenance,
+  triggerHotReload,
+  updateAgentConfig,
+  useAgentConfig,
   useAgents,
   useDreamArtifacts,
   type DreamArtifact,
@@ -41,6 +44,20 @@ import { DreamQueue } from './DreamQueue'
 import { MigrationTracker } from './MigrationTracker'
 
 type ModelChoice = 'haiku' | 'sonnet' | 'opus'
+
+/**
+ * 116-postdeploy 2026-05-12 — defaults used when seeding a fresh
+ * `dream:` block onto an agent that doesn't have one. Mirrors the schema
+ * defaults in src/config/schema.ts dreamConfigSchema (idleMinutes 30,
+ * model haiku) and adds retentionDays so dream artefacts roll over.
+ *
+ * The schema accepts idleMinutes in [5, 360]; the operator UI clamps to
+ * [5, 180] because beyond 3h the consolidation cadence stops being
+ * meaningful — by then the agent has likely been restarted.
+ */
+const DEFAULT_DREAM_IDLE_MINUTES = 30
+const DREAM_IDLE_MIN = 5
+const DREAM_IDLE_MAX = 180
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -92,6 +109,14 @@ export function MemoryView(): JSX.Element {
     useState<TierMaintenanceResponse | null>(null)
   const [consolidateError, setConsolidateError] = useState<string | null>(null)
 
+  // Bulk "Enable consolidation on all" state
+  const [bulkEnableOpen, setBulkEnableOpen] = useState(false)
+  const [bulkEnableBusy, setBulkEnableBusy] = useState(false)
+  const [bulkEnableOutcome, setBulkEnableOutcome] = useState<
+    | { readonly succeeded: readonly string[]; readonly failed: readonly { agent: string; error: string }[] }
+    | null
+  >(null)
+
   async function handleRunDream(): Promise<void> {
     if (!selected) return
     setRunning(true)
@@ -118,6 +143,47 @@ export function MemoryView(): JSX.Element {
     } finally {
       setRunning(false)
     }
+  }
+
+  async function handleBulkEnableConsolidation(): Promise<void> {
+    setBulkEnableBusy(true)
+    setBulkEnableOutcome(null)
+    const succeeded: string[] = []
+    const failed: { agent: string; error: string }[] = []
+    // Sequential to avoid hammering the daemon yaml-patch path — patcher
+    // does an atomic temp+rename per call; parallel writes would queue at
+    // the same fs.rename() barrier anyway.
+    for (const agent of topLevelAgents) {
+      try {
+        await updateAgentConfig(agent, {
+          dream: {
+            enabled: true,
+            idleMinutes: DEFAULT_DREAM_IDLE_MINUTES,
+            model: 'haiku',
+            retentionDays: 90,
+          },
+        })
+        succeeded.push(agent)
+      } catch (err) {
+        failed.push({
+          agent,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    // Force chokidar to re-read once at the end (debounce bypass) so the
+    // daemon picks up every config change without a 500ms wait per file.
+    try {
+      await triggerHotReload()
+    } catch {
+      /* best-effort */
+    }
+    // Refresh agent-config caches so the toggles reflect the new state.
+    for (const a of topLevelAgents) {
+      void queryClient.invalidateQueries({ queryKey: ['agent-config', a] })
+    }
+    setBulkEnableOutcome({ succeeded, failed })
+    setBulkEnableBusy(false)
   }
 
   async function handleConsolidate(scope: 'agent' | 'fleet'): Promise<void> {
@@ -166,14 +232,28 @@ export function MemoryView(): JSX.Element {
               demote / archive).
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleConsolidate('fleet')}
-            disabled={consolidating}
-          >
-            {consolidating ? 'Consolidating…' : 'Consolidate fleet'}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setBulkEnableOutcome(null)
+                setBulkEnableOpen(true)
+              }}
+              disabled={topLevelAgents.length === 0}
+              data-testid="bulk-enable-consolidation"
+            >
+              Enable consolidation on all
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleConsolidate('fleet')}
+              disabled={consolidating}
+            >
+              {consolidating ? 'Consolidating…' : 'Consolidate fleet'}
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -261,6 +341,13 @@ export function MemoryView(): JSX.Element {
                   <ConsolidateResultBlock result={consolidateResult} />
                 )}
               </section>
+
+              {/* 116-postdeploy 2026-05-12 — consolidation toggle. The
+                  per-agent `dream:` block in clawcode.yaml gates auto
+                  consolidation; today only 2 of 10 agents have it set.
+                  Surfaces a toggle + idleMinutes knob so operator-edits
+                  no longer require YAML hand-editing. */}
+              <ConsolidationConfigCard agentName={selected} />
 
               {/* MemoryPanel — reused from F14 (116-04) */}
               <MemoryPanel agentName={selected} />
@@ -417,7 +504,342 @@ export function MemoryView(): JSX.Element {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* BULK ENABLE CONSOLIDATION MODAL — 116-postdeploy 2026-05-12 */}
+      <Dialog
+        open={bulkEnableOpen}
+        onOpenChange={(open) => {
+          if (!open && !bulkEnableBusy) {
+            setBulkEnableOpen(false)
+            setBulkEnableOutcome(null)
+          }
+        }}
+      >
+        <DialogContent data-testid="bulk-enable-consolidation-modal">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">
+              Enable consolidation on {topLevelAgents.length} agent
+              {topLevelAgents.length === 1 ? '' : 's'}?
+            </DialogTitle>
+            <DialogDescription>
+              Writes a default <code className="font-mono">dream:</code> block
+              (<code className="font-mono">enabled: true</code>, idleMinutes
+              {' '}{DEFAULT_DREAM_IDLE_MINUTES}, model haiku, retentionDays 90)
+              to every top-level agent. Existing dream blocks have their{' '}
+              <code className="font-mono">enabled</code> flag flipped on (other
+              keys preserved by the YAML patcher). Hot-reloadable — no
+              restarts required.
+            </DialogDescription>
+          </DialogHeader>
+
+          {!bulkEnableOutcome && (
+            <ul className="rounded-md border border-border bg-bg-base p-3 max-h-48 overflow-y-auto text-xs font-mono space-y-1">
+              {topLevelAgents.map((a) => (
+                <li key={a} className="text-fg-2">
+                  {a}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {bulkEnableOutcome && (
+            <div className="space-y-2 text-xs font-mono">
+              <p className="text-fg-2">
+                Updated:{' '}
+                <span className="text-primary">
+                  {bulkEnableOutcome.succeeded.length}
+                </span>
+                {bulkEnableOutcome.failed.length > 0 && (
+                  <>
+                    {' · '}
+                    Failed:{' '}
+                    <span className="text-destructive">
+                      {bulkEnableOutcome.failed.length}
+                    </span>
+                  </>
+                )}
+              </p>
+              {bulkEnableOutcome.failed.length > 0 && (
+                <ul className="rounded-md border border-destructive/40 bg-destructive/5 p-2 max-h-32 overflow-y-auto space-y-0.5">
+                  {bulkEnableOutcome.failed.map((f) => (
+                    <li
+                      key={f.agent}
+                      className="text-destructive text-[11px]"
+                    >
+                      <span className="font-bold">{f.agent}</span>: {f.error}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setBulkEnableOpen(false)
+                setBulkEnableOutcome(null)
+              }}
+              disabled={bulkEnableBusy}
+            >
+              {bulkEnableOutcome ? 'Close' : 'Cancel'}
+            </Button>
+            {!bulkEnableOutcome && (
+              <Button
+                onClick={handleBulkEnableConsolidation}
+                disabled={bulkEnableBusy || topLevelAgents.length === 0}
+              >
+                {bulkEnableBusy
+                  ? 'Working…'
+                  : `Enable ${topLevelAgents.length}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 116-postdeploy 2026-05-12 — ConsolidationConfigCard.
+//
+// Reads the agent's resolved config from `/api/config/agents/:name`, surfaces
+// the `dream.enabled` flag as a toggle and `dream.idleMinutes` as a slider
+// + number input. Writes flow through PUT /api/config/agents/:name (F26 path),
+// then triggerHotReload() to bypass chokidar's 500ms debounce so the daemon
+// applies the change immediately.
+//
+// For agents with NO `dream:` block in clawcode.yaml today, the writer adds
+// the block atomically — YAMLMap.set in src/config/yaml-patcher.ts adds keys
+// that aren't already present.
+// ---------------------------------------------------------------------------
+
+function ConsolidationConfigCard(props: {
+  readonly agentName: string
+}): JSX.Element {
+  const { agentName } = props
+  const queryClient = useQueryClient()
+  const cfgQ = useAgentConfig(agentName)
+
+  // Read current dream config from resolved (always present after merge
+  // with defaults — even unset agents resolve to `enabled: false`).
+  const resolvedDream = useMemo(() => {
+    const r = cfgQ.data?.resolved as { dream?: { enabled?: boolean; idleMinutes?: number; model?: string; retentionDays?: number } } | undefined
+    return r?.dream ?? { enabled: false, idleMinutes: DEFAULT_DREAM_IDLE_MINUTES, model: 'haiku' }
+  }, [cfgQ.data])
+
+  // Locally-controlled pending state so the slider feels responsive — only
+  // PUT when the operator releases the slider (onChange handler fires once).
+  const [pendingIdleMinutes, setPendingIdleMinutes] = useState<number | null>(
+    null,
+  )
+  const effectiveIdleMinutes =
+    pendingIdleMinutes ?? resolvedDream.idleMinutes ?? DEFAULT_DREAM_IDLE_MINUTES
+
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+
+  const writeDream = useCallback(
+    async (next: {
+      readonly enabled?: boolean
+      readonly idleMinutes?: number
+    }): Promise<void> => {
+      setSaving(true)
+      setSaveError(null)
+      try {
+        // Always write the COMPLETE dream block — for agents without an
+        // existing `dream:` key the patcher needs every required field
+        // (enabled, idleMinutes, model) to satisfy dreamConfigSchema.
+        const enabled = next.enabled ?? resolvedDream.enabled ?? false
+        const idleMinutes = Math.max(
+          DREAM_IDLE_MIN,
+          Math.min(
+            DREAM_IDLE_MAX,
+            next.idleMinutes ?? resolvedDream.idleMinutes ?? DEFAULT_DREAM_IDLE_MINUTES,
+          ),
+        )
+        await updateAgentConfig(agentName, {
+          dream: {
+            enabled,
+            idleMinutes,
+            model: (resolvedDream.model as 'haiku' | 'sonnet' | 'opus') ?? 'haiku',
+            retentionDays: resolvedDream.retentionDays ?? 90,
+          },
+        })
+        await triggerHotReload().catch(() => {
+          /* best-effort — patch already on disk, watcher catches up in 500ms */
+        })
+        void queryClient.invalidateQueries({
+          queryKey: ['agent-config', agentName],
+        })
+        setSavedAt(Date.now())
+        setPendingIdleMinutes(null)
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : 'Unknown error')
+      } finally {
+        setSaving(false)
+      }
+    },
+    [agentName, queryClient, resolvedDream],
+  )
+
+  // Auto-clear the "saved" indicator after 2s.
+  useEffect(() => {
+    if (savedAt === null) return
+    const handle = setTimeout(() => setSavedAt(null), 2000)
+    return () => clearTimeout(handle)
+  }, [savedAt])
+
+  const enabled = resolvedDream.enabled ?? false
+
+  return (
+    <section
+      className="rounded-lg border border-border bg-bg-elevated p-4"
+      data-testid="consolidation-config"
+    >
+      <div className="mb-3 flex items-baseline justify-between">
+        <h3 className="font-display text-lg font-medium text-fg-1">
+          Auto-consolidation
+        </h3>
+        <span className="font-mono text-[10px] text-fg-3">
+          dream.enabled · dream.idleMinutes
+        </span>
+      </div>
+
+      {cfgQ.isLoading && (
+        <p className="text-sm text-fg-3">Loading config…</p>
+      )}
+      {cfgQ.error && (
+        <p className="text-sm text-destructive">
+          {(cfgQ.error as Error).message}
+        </p>
+      )}
+
+      {cfgQ.data && (
+        <div className="space-y-4">
+          {/* Toggle */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-mono text-sm text-fg-1">
+                {enabled ? 'Enabled' : 'Disabled'}
+              </p>
+              <p className="text-[11px] text-fg-3">
+                When enabled, the heartbeat runner fires a dream pass after
+                the configured idle window. Hot-reloadable — no agent
+                restart needed.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              data-testid="consolidation-toggle"
+              onClick={() => void writeDream({ enabled: !enabled })}
+              disabled={saving}
+              className={
+                'relative h-6 w-11 shrink-0 rounded-full transition-colors ' +
+                (enabled ? 'bg-primary' : 'bg-bg-s3') +
+                (saving ? ' opacity-60 cursor-wait' : ' cursor-pointer')
+              }
+            >
+              <span
+                aria-hidden
+                className={
+                  'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ' +
+                  (enabled ? 'translate-x-5' : 'translate-x-0.5')
+                }
+              />
+            </button>
+          </div>
+
+          {/* idleMinutes knob — slider + number input pairing */}
+          <div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <label
+                htmlFor={`idle-${agentName}`}
+                className="text-xs font-medium text-fg-2"
+              >
+                Idle window (minutes)
+              </label>
+              <span className="font-mono text-xs text-fg-1 data">
+                {effectiveIdleMinutes}m
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                id={`idle-${agentName}`}
+                type="range"
+                min={DREAM_IDLE_MIN}
+                max={DREAM_IDLE_MAX}
+                step={5}
+                value={effectiveIdleMinutes}
+                onChange={(e) => setPendingIdleMinutes(Number(e.target.value))}
+                onMouseUp={() => {
+                  if (
+                    pendingIdleMinutes !== null &&
+                    pendingIdleMinutes !== resolvedDream.idleMinutes
+                  ) {
+                    void writeDream({ idleMinutes: pendingIdleMinutes })
+                  }
+                }}
+                onTouchEnd={() => {
+                  if (
+                    pendingIdleMinutes !== null &&
+                    pendingIdleMinutes !== resolvedDream.idleMinutes
+                  ) {
+                    void writeDream({ idleMinutes: pendingIdleMinutes })
+                  }
+                }}
+                disabled={saving}
+                className="flex-1 accent-primary"
+                data-testid="consolidation-idle-slider"
+              />
+              <input
+                type="number"
+                min={DREAM_IDLE_MIN}
+                max={DREAM_IDLE_MAX}
+                step={5}
+                value={effectiveIdleMinutes}
+                onChange={(e) => setPendingIdleMinutes(Number(e.target.value))}
+                onBlur={() => {
+                  if (
+                    pendingIdleMinutes !== null &&
+                    pendingIdleMinutes !== resolvedDream.idleMinutes
+                  ) {
+                    void writeDream({ idleMinutes: pendingIdleMinutes })
+                  }
+                }}
+                disabled={saving}
+                className="w-20 rounded border border-border bg-bg-base px-2 py-1 font-mono text-xs text-fg-1 data"
+                data-testid="consolidation-idle-input"
+              />
+            </div>
+            <p className="mt-1 text-[10px] text-fg-3">
+              Default {DEFAULT_DREAM_IDLE_MINUTES}m · range {DREAM_IDLE_MIN}–
+              {DREAM_IDLE_MAX}m. Slider commits on release; number-input on
+              blur.
+            </p>
+          </div>
+
+          {saving && (
+            <p className="text-[11px] text-fg-3 font-mono">Saving…</p>
+          )}
+          {savedAt !== null && !saving && (
+            <p className="text-[11px] text-primary font-mono">
+              Saved · hot-reloaded
+            </p>
+          )}
+          {saveError && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+              {saveError}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 
