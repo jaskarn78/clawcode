@@ -194,9 +194,14 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
     (agent: string, breach: Breach | null) => {
       setBreaches((curr) => {
         const prev = curr[agent]
+        // Phase 116-postdeploy 2026-05-12: same null-AND-undefined guard
+        // fix as SloBreachBanner. TS Record<K,V> returns V|undefined on
+        // missing keys; `prev !== null` let undefined through, crashing
+        // the SPA shell on first read of an unseen agent. `prev != null`
+        // excludes both null and undefined.
         if (
           prev === breach ||
-          (prev !== null &&
+          (prev != null &&
             breach !== null &&
             prev.observedP50Ms === breach.observedP50Ms)
         )

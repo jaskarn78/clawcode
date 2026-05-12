@@ -166,9 +166,16 @@ export function SloBreachBanner(props: SloBreachBannerProps): JSX.Element | null
       setBreaches((curr) => {
         const prev = curr[agent]
         // Cheap equality — skip re-render when nothing changed.
+        // Phase 116-postdeploy 2026-05-12: `prev` is typed `Breach | null` but
+        // a TS `Record<K, V>` actually returns `V | undefined` on missing
+        // keys. The previous `prev !== null` guard let `undefined` through,
+        // and `undefined.dismissKey` threw — that crashed the SPA shell with
+        // the "Cannot read properties of null (reading useEffect)"-style
+        // trace operators kept reporting. `prev != null` excludes BOTH
+        // null and undefined.
         if (
           prev === breach ||
-          (prev !== null &&
+          (prev != null &&
             breach !== null &&
             prev.dismissKey === breach.dismissKey &&
             prev.observedP50Ms === breach.observedP50Ms)
