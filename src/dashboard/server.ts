@@ -583,19 +583,23 @@ async function handleRequest(
     }
 
     // Agent control: POST /api/agents/:name/:action
+    // Phase 116-postdeploy 2026-05-12: this used to 400 on ANY action not in
+    // {start, stop, restart}, which made it a catch-all gate that intercepted
+    // every downstream agent-scoped POST route (dream-run, dream-veto,
+    // memory/consolidate, etc.) before they got a chance to match. Fix:
+    // only ENGAGE this handler for the three known agent-control actions;
+    // for anything else, fall through to the more specific handlers below.
     if (
       method === "POST" &&
       segments.length === 4 &&
       segments[0] === "api" &&
-      segments[1] === "agents"
+      segments[1] === "agents" &&
+      (segments[3] === "start" ||
+        segments[3] === "stop" ||
+        segments[3] === "restart")
     ) {
       const agentName = decodeURIComponent(segments[2]!);
       const action = segments[3];
-
-      if (action !== "start" && action !== "stop" && action !== "restart") {
-        sendJson(res, 400, { error: `Unknown action: ${action}` });
-        return;
-      }
 
       try {
         await sendIpcRequest(socketPath, action, { name: agentName });
