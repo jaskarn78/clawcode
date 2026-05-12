@@ -526,19 +526,23 @@ function PlanningCard(props: {
       : task.id.startsWith('quick:')
       ? `QUICK ${task.id.slice('quick:'.length, 'quick:'.length + 10).toUpperCase()}`
       : 'QUICK'
+  // 116-postdeploy 2026-05-12 — Title clipping fix.
+  // Previously: `overflow-hidden` on the button + an absolute-positioned
+  // accent <span> on the left edge. The overflow-hidden was needed to
+  // clip the absolute accent to the rounded corner, but it ALSO clipped
+  // multi-line titles (operator reported "Phase 999.5: ..." truncated
+  // mid-character at the bottom). Replaced the absolute accent with a
+  // native `border-l-4 border-warn/60` on the button itself — same
+  // visual, no overflow concern, title wraps freely.
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group relative overflow-hidden rounded-md border border-warn/40 bg-bg-base px-3 py-2.5 text-left text-xs transition-all hover:-translate-y-px hover:border-warn/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group relative rounded-md border border-warn/40 border-l-4 !border-l-warn/60 bg-bg-base px-3 py-2.5 text-left text-xs transition-all hover:-translate-y-px hover:border-warn/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       data-testid="planning-card"
       title="Planning artefact — read-only (manage via GSD commands)"
     >
-      <span
-        aria-hidden
-        className="absolute inset-y-0 left-0 w-1 bg-warn/60"
-      />
-      <div className="ml-1.5">
+      <div>
         <div className="mb-1 flex items-center gap-1.5">
           <span className="rounded-full bg-warn/15 px-1.5 py-0.5 font-mono text-[9px] font-medium uppercase tracking-wider text-warn">
             {badgeLabel}
@@ -693,16 +697,29 @@ function KanbanCard(props: { readonly row: KanbanRow }) {
   // priority today, we encode urgency via the task's status: failed/errored
   // = danger; waiting (blocked) = warn; running = primary; otherwise muted.
   // When KanbanRow gains a `priority` field, swap to that.
-  const railCls =
+  //
+  // 116-postdeploy 2026-05-12 — paired border-l class for the rail.
+  // Previously the rail was an absolute-positioned <span> inside an
+  // `overflow-hidden` parent — see PlanningCard fix above for why we
+  // moved the rail onto the card itself as border-l-4. Tailwind needs
+  // literal classnames in source for tree-shaking, so we derive a
+  // parallel `railBorderCls` alongside the bg variant.
+  // `!` prefix forces `!important` on the left-border-color so it wins
+  // deterministically over the cascade-later `border-{color}`
+  // shorthand utilities (border-border / border-primary/60 / etc) that
+  // otherwise paint left-border-color as part of all-sides. Without
+  // the bang, the rail color would be clobbered on cards in the
+  // non-dragging path.
+  const railBorderCls =
     row.status === 'failed' ||
     row.status === 'timed_out' ||
     row.status === 'orphaned'
-      ? 'bg-destructive'
+      ? '!border-l-destructive'
       : row.status === 'awaiting_input'
-      ? 'bg-warn'
+      ? '!border-l-warn'
       : row.status === 'running'
-      ? 'bg-primary'
-      : 'bg-fg-3/30'
+      ? '!border-l-primary'
+      : '!border-l-fg-3/30'
 
   const statusPillCls =
     row.status === 'failed' ||
@@ -727,6 +744,12 @@ function KanbanCard(props: { readonly row: KanbanRow }) {
     }
   }
 
+  // 116-postdeploy 2026-05-12 — Title clipping fix (see PlanningCard
+  // above for full root-cause analysis). Removed `overflow-hidden`
+  // from the card; removed the absolute-positioned <span> rail;
+  // attached `border-l-4 ${railBorderCls}` to the card itself. Visual
+  // identity preserved (4px colored rail on the left), title wraps
+  // freely without being clipped.
   return (
     <div
       ref={setNodeRef}
@@ -734,19 +757,19 @@ function KanbanCard(props: { readonly row: KanbanRow }) {
       {...attributes}
       {...listeners}
       className={
-        'group relative cursor-grab overflow-hidden rounded-md border bg-bg-base px-3 py-2.5 text-xs transition-all active:cursor-grabbing ' +
+        // We use `!`-important on the rail's left-border-color so it
+        // wins over the cascade-later `border-{color}` shorthand
+        // (which paints all four sides incl. left). This is the same
+        // approach Tailwind itself uses for ring-* utilities that
+        // need to beat border shorthands deterministically.
+        'group relative cursor-grab rounded-md border border-l-4 bg-bg-base px-3 py-2.5 text-xs transition-all active:cursor-grabbing ' +
         (isDragging
-          ? 'border-primary/60 opacity-70 shadow-lg'
-          : 'border-border hover:-translate-y-px hover:border-primary/30 hover:shadow-md')
+          ? 'border-primary/60 opacity-70 shadow-lg '
+          : 'border-border hover:-translate-y-px hover:border-primary/30 hover:shadow-md ') +
+        railBorderCls
       }
     >
-      {/* Left rail (priority/urgency) */}
-      <span
-        aria-hidden
-        className={'absolute inset-y-0 left-0 w-1 ' + railCls}
-      />
-
-      <div className="ml-1.5">
+      <div>
         <div className="mb-1 flex items-center gap-1.5">
           <span
             className={
