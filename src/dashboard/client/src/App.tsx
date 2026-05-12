@@ -144,51 +144,80 @@ function App() {
   return (
     <DashboardErrorBoundary>
       <div className="border-b bg-background/60 px-4 py-2">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 text-sm">
-          <ViewButton
-            active={view === 'dashboard'}
-            onClick={() => navigate('dashboard')}
+        {/* 116-postdeploy fix-pass — header chrome fills the viewport on
+            mobile. Operator screenshot showed Dashboard/Fleet/Usage/…
+            clustered on the left with a large empty band on the right;
+            root cause was `max-w-7xl mx-auto` capping the header at
+            ~1280px even on a 375px iPhone, which left the right cluster
+            (bell + Telemetry + theme) floating mid-row instead of
+            edge-snapped.
+
+            Fix: drop the max-width cap below `xl` (1280px) so the bar
+            stretches edge-to-edge on phones, tablets, and laptops; keep
+            the cap on desktop+ where the content density justifies it.
+            Add horizontal-scroll to the nav cluster itself so a future
+            8th-or-9th tab doesn't truncate — operator can swipe through
+            tabs on a narrow viewport. The right cluster sticks to
+            `ml-auto` so it edge-snaps to the right margin regardless of
+            how many tabs fit. */}
+        <div className="mx-auto flex w-full xl:max-w-7xl items-center gap-2 text-sm">
+          {/* Page-link nav — horizontal scroll on narrow viewports keeps
+              every tab reachable without truncation. `whitespace-nowrap`
+              prevents the buttons from wrapping; `min-w-0` lets the flex
+              child actually shrink so `overflow-x-auto` engages. */}
+          <nav
+            className="flex items-center gap-1 overflow-x-auto whitespace-nowrap min-w-0 -mx-1 px-1"
+            aria-label="Dashboard sections"
           >
-            Dashboard
-          </ViewButton>
-          <ViewButton
-            active={view === 'fleet'}
-            onClick={() => navigate('fleet')}
-          >
-            Fleet
-          </ViewButton>
-          <ViewButton
-            active={view === 'usage'}
-            onClick={() => navigate('usage')}
-          >
-            Usage
-          </ViewButton>
-          <ViewButton
-            active={view === 'conversations'}
-            onClick={() => navigate('conversations')}
-          >
-            Conversations
-          </ViewButton>
-          <ViewButton
-            active={view === 'tasks'}
-            onClick={() => navigate('tasks')}
-          >
-            Tasks
-          </ViewButton>
-          <ViewButton
-            active={view === 'audit'}
-            onClick={() => navigate('audit')}
-          >
-            Audit
-          </ViewButton>
-          <ViewButton
-            active={view === 'graph'}
-            onClick={() => navigate('graph')}
-          >
-            Graph
-          </ViewButton>
-          {/* Right side — telemetry badge + notification bell + theme toggle. */}
-          <div className="ml-auto flex items-center gap-1">
+            <ViewButton
+              active={view === 'dashboard'}
+              onClick={() => navigate('dashboard')}
+            >
+              Dashboard
+            </ViewButton>
+            <ViewButton
+              active={view === 'fleet'}
+              onClick={() => navigate('fleet')}
+            >
+              Fleet
+            </ViewButton>
+            <ViewButton
+              active={view === 'usage'}
+              onClick={() => navigate('usage')}
+            >
+              Usage
+            </ViewButton>
+            <ViewButton
+              active={view === 'conversations'}
+              onClick={() => navigate('conversations')}
+            >
+              Conversations
+            </ViewButton>
+            <ViewButton
+              active={view === 'tasks'}
+              onClick={() => navigate('tasks')}
+            >
+              Tasks
+            </ViewButton>
+            <ViewButton
+              active={view === 'audit'}
+              onClick={() => navigate('audit')}
+            >
+              Audit
+            </ViewButton>
+            <ViewButton
+              active={view === 'graph'}
+              onClick={() => navigate('graph')}
+            >
+              Graph
+            </ViewButton>
+          </nav>
+          {/* Right side — telemetry badge + notification bell + theme
+              toggle. `ml-auto` floats this cluster to the right edge so
+              it edge-snaps to the viewport regardless of how many nav
+              tabs are visible. `shrink-0` prevents the cluster from
+              compressing when the nav scrolls. */}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
             <TelemetryBadge />
             <NotificationFeed />
             <ThemeToggle />
