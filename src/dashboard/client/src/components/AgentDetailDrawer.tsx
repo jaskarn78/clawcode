@@ -109,7 +109,17 @@ export function AgentDetailDrawer(
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent
         side="right"
-        className="p-0 overflow-hidden flex flex-col"
+        // 116-postdeploy fix-pass — explicit mobile full-screen override.
+        // The sheet.tsx primitive's right-variant already declares
+        // `w-full md:w-[90%] lg:w-[60%]`, but operator-screenshot evidence
+        // showed bleed-through on a real iPhone (likely a stale-build /
+        // cache artifact). This duplicates the intent at the component
+        // surface so the contract is explicit: phones get the full 100vw
+        // (375 → 767), tablets cap at max-w-2xl, desktops at max-w-3xl.
+        // Project Tailwind breakpoints (tailwind.config.js): sm=375 (iPhone
+        // SE), md=768 (tablet), lg=1024 (laptop). Transition at md, not
+        // sm — sm fires at 375px which is the very bug we're fixing.
+        className="p-0 overflow-hidden flex flex-col w-full max-w-full md:w-3/4 md:max-w-2xl lg:max-w-3xl"
         data-testid="agent-detail-drawer"
       >
         {props.agentName && (
