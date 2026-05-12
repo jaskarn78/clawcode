@@ -163,7 +163,14 @@ function SegmentBar(props: { readonly segment: Segment }): JSX.Element {
 }
 
 // ---------------------------------------------------------------------------
-// CostSummaryCard — F17 24h spend, scoped to the active agent.
+// CostSummaryCard — 116-postdeploy fix-pass: reframed "Today's usage".
+//
+// Operator runs on Claude Max ($200/mo flat OAuth subscription). The
+// reframed Usage page (/dashboard/v2/usage) already leads with token
+// volume + subscription utilisation; this card was inconsistent — it
+// led with USD even though the operator doesn't pay USD-per-call. Now
+// matches the Usage-page hierarchy: token count headline, per-model
+// breakdown in tokens, theoretical USD as a small subtitle.
 // ---------------------------------------------------------------------------
 
 function formatUsd(n: number): string {
@@ -171,6 +178,18 @@ function formatUsd(n: number): string {
   if (n < 10) return `$${n.toFixed(3)}`
   if (n < 1000) return `$${n.toFixed(2)}`
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+}
+
+// Token-count formatter — matches CostDashboard.tsx formatTokens conventions.
+// Below 1K: raw integer with locale separators (so "847" reads cleanly).
+// 1K–1M: one decimal place (12.3K vs 12.4K distinguishable).
+// Above 1M: two decimal places at M, then B.
+function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0'
+  if (n < 1_000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 })
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  return `${(n / 1_000_000_000).toFixed(2)}B`
 }
 
 export function CostSummaryCard(props: {
@@ -182,47 +201,73 @@ export function CostSummaryCard(props: {
       (costsQ.data?.costs ?? []).filter((r) => r.agent === props.agentName),
     [costsQ.data, props.agentName],
   )
-  const total = useMemo(
+  // Sum tokens in + out per row. NOTE: CostRow uses `input_tokens` /
+  // `output_tokens` (see useApi.ts:815-816), NOT the `tokens_in` /
+  // `tokens_out` fields on the separate CostByDay endpoint.
+  const totalTokens = useMemo(
+    () =>
+      agentRows.reduce((acc, r) => acc + r.input_tokens + r.output_tokens, 0),
+    [agentRows],
+  )
+  const totalUsd = useMemo(
     () => agentRows.reduce((acc, r) => acc + r.cost_usd, 0),
     [agentRows],
   )
   const byModel = useMemo(() => {
-    const m = new Map<string, number>()
+    const m = new Map<string, { tokens: number; usd: number }>()
     for (const r of agentRows) {
-      m.set(r.model, (m.get(r.model) ?? 0) + r.cost_usd)
+      const existing = m.get(r.model) ?? { tokens: 0, usd: 0 }
+      m.set(r.model, {
+        tokens: existing.tokens + r.input_tokens + r.output_tokens,
+        usd: existing.usd + r.cost_usd,
+      })
     }
-    return [...m.entries()].sort((a, b) => b[1] - a[1])
+    return [...m.entries()].sort((a, b) => b[1].tokens - a[1].tokens)
   }, [agentRows])
 
   return (
     <Card className="bg-bg-elevated border-bg-s3" data-testid="drawer-cost-card">
       <CardHeader className="pb-1 flex flex-row items-baseline justify-between">
         <span className="font-display text-sm font-bold text-fg-1">
-          Cost (today)
+          Today's usage
         </span>
         <a
-          href="/dashboard/v2/costs"
+          href="/dashboard/v2/usage"
           className="text-[10px] font-sans text-fg-3 hover:text-fg-1 underline"
         >
           Full dashboard →
         </a>
       </CardHeader>
       <CardContent>
+        {/* Headline: token count (what Max actually constrains).        */}
         <div className="font-display text-xl font-bold text-fg-1 data">
-          {costsQ.isLoading ? '—' : formatUsd(total)}
+          {costsQ.isLoading ? '—' : formatTokens(totalTokens)}
         </div>
+        <div className="text-[10px] text-fg-3 font-sans">
+          tokens (in + out)
+        </div>
+        {/* Subtitle: theoretical USD (small, secondary). Kept for the
+            "what would this cost if I switched off Max?" curiosity but
+            visually demoted so it doesn't read as a bill. */}
+        {!costsQ.isLoading && totalUsd > 0 && (
+          <div className="mt-1 text-[10px] font-mono text-fg-3">
+            ≈ {formatUsd(totalUsd)} API equivalent (you're on Max)
+          </div>
+        )}
         {byModel.length > 0 && (
           <ul className="mt-2 space-y-1 text-[11px] font-mono">
-            {byModel.map(([model, amount]) => (
+            {byModel.map(([model, amounts]) => (
               <li key={model} className="flex justify-between gap-2">
                 <span className="text-fg-3">{model}</span>
-                <span className="text-fg-2 data">{formatUsd(amount)}</span>
+                <span className="text-fg-2 data">
+                  {formatTokens(amounts.tokens)}
+                </span>
               </li>
             ))}
           </ul>
         )}
         {!costsQ.isLoading && byModel.length === 0 && (
-          <p className="mt-1 text-[11px] text-fg-3">No spend yet today.</p>
+          <p className="mt-1 text-[11px] text-fg-3">No turns yet today.</p>
         )}
       </CardContent>
     </Card>
