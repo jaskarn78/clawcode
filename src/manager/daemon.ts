@@ -8687,6 +8687,62 @@ async function routeMethod(
       };
     }
 
+    case "fleet-activity-summary": {
+      // Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort.
+      // Operator: "the main dashboard page should show agents ordered by
+      // whats used the most". Returns one row per non-ephemeral agent
+      // with turn counts over rolling 24h / 7d windows plus the last-turn
+      // timestamp. The SPA sorts the tile grid by `turns_24h DESC` with
+      // alphabetical tiebreak.
+      //
+      // Subagents (-sub-) and ephemeral threads (-thread-) are filtered
+      // out — matches the canonical `agentNames` filter at line ~3326 so
+      // the main-dashboard tile grid doesn't sort against transient
+      // execution units that an operator never sees as tiles anyway.
+      //
+      // Stopped agents (no TraceStore singleton) surface with zero
+      // counts; they still appear in the response so the client can
+      // render their tiles in the dormant footer without missing data.
+      const nowMs = Date.now();
+      const since24hIso = new Date(nowMs - 24 * 3_600_000).toISOString();
+      const since7dIso = new Date(nowMs - 7 * 24 * 3_600_000).toISOString();
+      // `configs` is the in-scope ResolvedAgentConfig[] for the IPC
+      // handler (see daemon.ts:1122). Filter matches the canonical
+      // `agentNames` projection used elsewhere in this module so the
+      // main-dashboard tile grid doesn't sort against ephemeral
+      // subagents/threads.
+      const tileAgents = configs.filter(
+        (a) => !a.name.includes("-sub-") && !a.name.includes("-thread-"),
+      );
+      const summary = tileAgents.map((cfg) => {
+        const store = manager.getTraceStore(cfg.name);
+        if (!store) {
+          return {
+            agent: cfg.name,
+            turns_24h: 0,
+            turns_7d: 0,
+            last_turn_at: null as string | null,
+          };
+        }
+        const r24 = store.getTurnSummarySince(cfg.name, since24hIso);
+        const r7d = store.getTurnSummarySince(cfg.name, since7dIso);
+        return {
+          agent: cfg.name,
+          turns_24h: r24.n,
+          turns_7d: r7d.n,
+          // 7d MAX is always >= 24h MAX, so use it as the most-recent
+          // signal. Falls back to null when the agent has zero turns in
+          // the last week (operator-stopped fleet, fresh install, etc.).
+          last_turn_at: r7d.last_at,
+        };
+      });
+      return {
+        since_24h: since24hIso,
+        since_7d: since7dIso,
+        agents: summary,
+      };
+    }
+
     case "list-planning-tasks": {
       // Phase 116-postdeploy 2026-05-12 — Tasks Kanban planning-artefact
       // ingest. Scans the repo's `.planning/` tree at request time;

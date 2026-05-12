@@ -136,6 +136,40 @@ export function useAgentActivity(
 }
 
 /**
+ * Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort.
+ *
+ * Returns per-agent turn counts (24h + 7d) and last-turn timestamp,
+ * filtered server-side to non-ephemeral agents (no -sub- / -thread-).
+ *
+ * Separate query from `useAgentActivity` (which the per-tile sparkline
+ * already runs) so the AgentTileGrid sort doesn't thrash the per-tile
+ * Recharts mounts on every refetch — different cache keys, different
+ * cadence. Polled every 60s, stale-time 30s, matches the sparkline.
+ */
+export type FleetActivityAgent = {
+  readonly agent: string
+  readonly turns_24h: number
+  readonly turns_7d: number
+  readonly last_turn_at: string | null
+}
+
+export type FleetActivitySummary = {
+  readonly since_24h: string
+  readonly since_7d: string
+  readonly agents: ReadonlyArray<FleetActivityAgent>
+}
+
+export function useFleetActivitySummary(): UseQueryResult<FleetActivitySummary> {
+  return useQuery({
+    queryKey: ['fleet-activity-summary'],
+    queryFn: () =>
+      fetchJson<FleetActivitySummary>('/api/fleet-activity-summary'),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+}
+
+/**
  * Per-agent prompt cache + per-model SLO bundle (Plan 116-00 T02 surface).
  *
  * Hits `/api/agents/:name/cache?since=24h`. The response carries the augmented

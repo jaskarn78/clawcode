@@ -70,6 +70,12 @@ type PreparedStatements = {
   // replaced — the drawer landed without an hourly endpoint, so this
   // ships standalone.
   readonly activityByHour: Statement;
+  // Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort. Single-row
+  // summary of turn count + last-turn timestamp for a single agent within
+  // a sliding window. The handler iterates every running agent and asks
+  // the per-agent traces.db for one summary row, so the query needs to be
+  // a single COUNT() + MAX() round-trip (no row materialisation).
+  readonly turnSummarySince: Statement;
 };
 
 /**
@@ -1135,6 +1141,20 @@ export class TraceStore {
         GROUP BY bucket
         ORDER BY bucket ASC
       `),
+      // Phase 116-postdeploy 2026-05-12 — fleet-activity-summary tile sort.
+      // ONE round-trip per agent for both count and recency. MAX over a
+      // TEXT-typed ISO 8601 column is correct (lexicographic ordering
+      // matches chronological). idx_traces_agent_started (line ~906)
+      // covers the WHERE clause and the MAX scan tail, so this is
+      // O(log n) for the WHERE seek and bounded by the matched-row count
+      // for MAX. An agent with zero turns in window returns `{n:0, last_at:null}`.
+      turnSummarySince: this.db.prepare(`
+        SELECT
+          COUNT(*) AS n,
+          MAX(started_at) AS last_at
+        FROM traces
+        WHERE agent = @agent AND started_at >= @since
+      `),
     };
   }
 
@@ -1212,6 +1232,45 @@ export class TraceStore {
       const msg = err instanceof Error ? err.message : "unknown";
       throw new TraceStoreError(
         `getActivityByHour failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 116-postdeploy 2026-05-12 — fleet-activity-summary tile sort.
+   *
+   * Returns a single-row summary for an agent within [sinceIso, now]:
+   *   - `n`        : turn count
+   *   - `last_at`  : MAX(started_at) ISO 8601 string, or `null` if no rows
+   *
+   * Used by the `fleet-activity-summary` IPC handler to sort the main
+   * dashboard tile grid by recent usage. ONE round-trip per agent — the
+   * handler runs N of these in a tight loop (one per running agent), so
+   * the single-statement form matters at fleet scale (14 agents today,
+   * room for ~hundreds without strain).
+   *
+   * Empty windows return `{ n: 0, last_at: null }` — never throws on
+   * empty rows. ISO 8601 lexicographic comparison with `started_at`
+   * matches the convention every other trace-store window query uses.
+   */
+  getTurnSummarySince(
+    agent: string,
+    sinceIso: string,
+  ): { readonly n: number; readonly last_at: string | null } {
+    try {
+      const row = this.stmts.turnSummarySince.get({
+        agent,
+        since: sinceIso,
+      }) as { readonly n: number; readonly last_at: string | null } | undefined;
+      return Object.freeze({
+        n: row?.n ?? 0,
+        last_at: row?.last_at ?? null,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getTurnSummarySince failed: ${msg}`,
         this.dbPath,
       );
     }

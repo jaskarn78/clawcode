@@ -230,6 +230,10 @@ describe("IPC_METHODS", () => {
       // Phase 116-postdeploy 2026-05-12 — GSD planning artefacts on the
       // Tasks Kanban (Backlog/Running interleave with daemon tasks).
       "list-planning-tasks",
+      // Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort.
+      // Per-agent turn counts (24h + 7d) + last-turn timestamp so the
+      // AgentTileGrid renders most-used agents first.
+      "fleet-activity-summary",
     ]);
   });
 });

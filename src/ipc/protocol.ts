@@ -432,6 +432,15 @@ export const IPC_METHODS = [
   // from /opt/clawcode (no .planning/) get an empty response — graceful
   // no-op, not an error. REST proxy at GET /api/planning/tasks.
   "list-planning-tasks",
+  // Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort. Returns
+  // per-agent turn counts (24h + 7d) plus the most-recent turn timestamp
+  // so the SPA can order the AgentTileGrid by "most used 24h" instead of
+  // the alphabetical/registration-order default. Handler in daemon.ts
+  // (`case "fleet-activity-summary":`); REST proxy at
+  // GET /api/fleet-activity-summary in src/dashboard/server.ts.
+  // Subagents (-sub-) and ephemeral threads (-thread-) are filtered out
+  // server-side — they're not tile-rendered on the main dashboard.
+  "fleet-activity-summary",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

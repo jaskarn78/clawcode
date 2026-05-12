@@ -16,7 +16,7 @@
  */
 import { useMemo } from 'react'
 import { AgentTile } from './AgentTile'
-import { useAgents } from '@/hooks/useApi'
+import { useAgents, useFleetActivitySummary } from '@/hooks/useApi'
 
 // 7d dormant threshold — agents quieter than this collapse to the footer.
 const DORMANT_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -60,8 +60,27 @@ export type AgentTileGridProps = {
 
 export function AgentTileGrid(props: AgentTileGridProps): JSX.Element {
   const agentsQuery = useAgents()
+  // Phase 116-postdeploy 2026-05-12 — operator: "the main dashboard page
+  // should show agents ordered by whats used the most." Independent query
+  // keyed for sort only; the per-tile sparkline keeps its own cache key
+  // so the sort refetch doesn't thrash the Recharts mounts.
+  const activityQuery = useFleetActivitySummary()
   const payload = agentsQuery.data as FleetPayload | undefined
   const all = useMemo(() => payload?.agents ?? [], [payload])
+
+  // Build a stable {agent → turns_24h} lookup. Missing entries treated as
+  // 0 (agent reported by /api/status but no traces.db turns in window —
+  // e.g., a brand-new agent or one that's been stopped > 24h). When the
+  // activity query is still in flight, the lookup is empty and every
+  // agent ties at 0 → fall through to alphabetical, which matches the
+  // pre-sort default visually until data arrives.
+  const turns24h = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const row of activityQuery.data?.agents ?? []) {
+      m.set(row.agent, row.turns_24h)
+    }
+    return m
+  }, [activityQuery.data])
 
   const now = Date.now()
   const { active, dormant } = useMemo(() => {
@@ -71,8 +90,17 @@ export function AgentTileGrid(props: AgentTileGridProps): JSX.Element {
       if (isDormant(agent, now)) d.push(agent)
       else a.push(agent)
     }
+    // Sort active by turns_24h DESC; tie-break alphabetical ASC.
+    // Stopped agents already live in `d` (dormant footer) per
+    // `isDormant`, so this only sorts the visible tile grid.
+    a.sort((x, y) => {
+      const tx = turns24h.get(x.name) ?? 0
+      const ty = turns24h.get(y.name) ?? 0
+      if (tx !== ty) return ty - tx
+      return x.name.localeCompare(y.name)
+    })
     return { active: a, dormant: d }
-  }, [all, now])
+  }, [all, now, turns24h])
 
   if (agentsQuery.isLoading) {
     return (
@@ -99,8 +127,30 @@ export function AgentTileGrid(props: AgentTileGridProps): JSX.Element {
     )
   }
 
+  // Phase 116-postdeploy 2026-05-12 — small indicator so the operator
+  // knows the order isn't alphabetical. Kept as a static label rather
+  // than a dropdown to minimise surface — operator's literal ask was
+  // "ordered by what's used the most" (24h), so we ship that as the
+  // single default. A dropdown can land later if other sort modes get
+  // asked for.
+  const sortReady = activityQuery.data !== undefined
   return (
     <div className="space-y-6" data-testid="agent-tile-grid">
+      <div className="flex items-center justify-end">
+        <span
+          className="font-mono text-[10px] uppercase tracking-wider text-fg-3"
+          data-testid="agent-tile-grid-sort-indicator"
+          title={
+            sortReady
+              ? 'Tiles ordered by turn count over the last 24 hours (most active first).'
+              : 'Tiles will reorder by 24h usage once the fleet-activity summary loads.'
+          }
+        >
+          Sort: most used 24h
+          {!sortReady && activityQuery.isLoading ? ' · loading…' : ''}
+          {activityQuery.isError ? ' · offline (alphabetical)' : ''}
+        </span>
+      </div>
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {active.map((agent) => (
           <AgentTile

@@ -1534,6 +1534,28 @@ async function handleRequest(
       }
       return;
     }
+    // GET /api/fleet-activity-summary
+    // Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort.
+    // Proxies the daemon's `fleet-activity-summary` IPC. Response shape:
+    //   { since_24h, since_7d, agents: [{ agent, turns_24h, turns_7d, last_turn_at }, ...] }
+    // The SPA's AgentTileGrid uses this to order tiles by most-used 24h.
+    // Light query — single-row aggregate per agent — but cache 30s on
+    // the client to avoid polling the daemon on every dashboard re-render.
+    if (method === "GET" && pathname === "/api/fleet-activity-summary") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "fleet-activity-summary",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
     // GET /api/planning/tasks
     // Phase 116-postdeploy 2026-05-12 — GSD planning artefacts surfaced
     // on the Tasks Kanban. Proxies the daemon's `list-planning-tasks`
