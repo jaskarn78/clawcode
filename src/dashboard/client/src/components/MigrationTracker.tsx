@@ -214,12 +214,36 @@ function formatEta(etaMs: number | null): string {
 }
 
 function formatProgress(r: MigrationRow): string {
-  if (r.progressTotal <= 0) return '0 / 0'
-  const pct = Math.min(
-    100,
-    Math.round((r.progressProcessed / r.progressTotal) * 100),
-  )
-  return `${r.progressProcessed.toLocaleString()} / ${r.progressTotal.toLocaleString()} (${pct}%)`
+  if (r.progressTotal <= 0) {
+    // No work to do, or total not yet known. Surface raw processed count
+    // if any — happens transiently during dual-write before the first
+    // re-embedding cursor walk has snapshotted the total.
+    return r.progressProcessed > 0
+      ? `${r.progressProcessed.toLocaleString()} / 0`
+      : '0 / 0'
+  }
+  const processed = r.progressProcessed
+  const total = r.progressTotal
+  const remaining = Math.max(0, total - processed)
+  // Phase 116-postdeploy 2026-05-12 — round-up-to-100 bug fix. Math.round
+  // turned 1407/1408 (99.93%) into "100%" which read as "complete" — but
+  // 1 entry was still pending and the agent was paused, so it sat there
+  // forever looking done. Use floor to avoid the round-up, and explicitly
+  // append "N remaining" when the gap is small (≤25) so the operator
+  // sees exactly what's left. Only render "(complete)" when processed
+  // truly reaches total — defensively tolerate processed > total too.
+  if (processed >= total) {
+    return `${processed.toLocaleString()} / ${total.toLocaleString()} (complete)`
+  }
+  const pctFloor = Math.floor((processed / total) * 100)
+  // For >=99% with <=25 remaining, show fractional precision so 99.93%
+  // doesn't display as just "99%". For everyone else, integer floor.
+  const pctStr =
+    pctFloor >= 99 && remaining > 0
+      ? `${((processed / total) * 100).toFixed(1)}%`
+      : `${pctFloor}%`
+  const remainingStr = remaining <= 25 ? ` · ${remaining} remaining` : ''
+  return `${processed.toLocaleString()} / ${total.toLocaleString()} (${pctStr}${remainingStr})`
 }
 
 // ---------------------------------------------------------------------------
