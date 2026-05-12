@@ -63,6 +63,13 @@ type PreparedStatements = {
   // Phase 116-06 T01 — F18/F22 activity heatmap. One row per
   // (date, agent) bucket within [since, now], turn count per bucket.
   readonly activityByDay: Statement;
+  // Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline. One row
+  // per (hour-of-day) bucket within [since, now] for a single agent.
+  // The Skeleton placeholder on the tile (shipped with Phase 116-01,
+  // commented "lands with the drawer in 116-04") is finally being
+  // replaced — the drawer landed without an hourly endpoint, so this
+  // ships standalone.
+  readonly activityByHour: Statement;
 };
 
 /**
@@ -1111,6 +1118,23 @@ export class TraceStore {
         GROUP BY date, agent
         ORDER BY date, agent
       `),
+      // Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline.
+      // strftime('%Y-%m-%dT%H', ...) yields "2026-05-12T13" (hour mark)
+      // — naturally ordered lexicographically. Plain turn count per
+      // hour, no input_tokens / cache / status filter (same convention
+      // as activityByDay — every recorded turn surfaces). The @agent
+      // bind is defensive: in ClawCode every agent owns its own
+      // traces.db so all rows already belong to one agent, but the
+      // bind survives any future cross-agent traces.db restructure.
+      activityByHour: this.db.prepare(`
+        SELECT
+          strftime('%Y-%m-%dT%H', started_at) AS bucket,
+          COUNT(*) AS turn_count
+        FROM traces
+        WHERE agent = @agent AND started_at >= @since
+        GROUP BY bucket
+        ORDER BY bucket ASC
+      `),
     };
   }
 
@@ -1149,6 +1173,45 @@ export class TraceStore {
       const msg = err instanceof Error ? err.message : "unknown";
       throw new TraceStoreError(
         `getActivityByDay failed: ${msg}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline.
+   *
+   * Returns one row per hour bucket within [sinceIso, now] for a single
+   * agent, ordered ascending so the sparkline draws left-to-right
+   * chronological. Sparse: an hour with zero turns is OMITTED (no
+   * zero-fill — the client interpolates / treats absent hours as 0
+   * since Recharts handles gaps in time-series gracefully and an
+   * idle agent should render a flat area, not bogus rows).
+   *
+   * Empty windows return `[]` — never throws (matches getActivityByDay).
+   * ISO 8601 lexicographic comparison with `started_at` is the same
+   * convention every trace-store window query uses.
+   */
+  getActivityByHour(
+    agent: string,
+    sinceIso: string,
+  ): ReadonlyArray<{
+    readonly bucket: string;
+    readonly turn_count: number;
+  }> {
+    try {
+      const rows = this.stmts.activityByHour.all({
+        agent,
+        since: sinceIso,
+      }) as Array<{
+        bucket: string;
+        turn_count: number;
+      }>;
+      return Object.freeze(rows.map((r) => Object.freeze(r)));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      throw new TraceStoreError(
+        `getActivityByHour failed: ${msg}`,
         this.dbPath,
       );
     }

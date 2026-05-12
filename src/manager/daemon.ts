@@ -8542,6 +8542,47 @@ async function routeMethod(
       return { agent: agentName, period, ...aggregate };
     }
 
+    case "agent-activity": {
+      // Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline IPC.
+      // Mirrors the shape of `case "latency":` below. Returns per-hour
+      // turn counts for a single agent over a sliding window.
+      //
+      // Params:
+      //   agent       (string, required)
+      //   windowHours (number, optional, default 24, clamped to 1..168)
+      const agentName = validateStringParam(params, "agent");
+      const rawWindow = (params as { windowHours?: unknown }).windowHours;
+      const windowHours =
+        typeof rawWindow === "number" && Number.isFinite(rawWindow)
+          ? Math.max(1, Math.min(Math.floor(rawWindow), 168))
+          : 24;
+      // sinceToIso accepts "24h", "1h" etc — feed it the clamped value
+      // as a duration string so we stay on the same window-parser the
+      // rest of the trace-store IPC surface uses.
+      let sinceIso: string;
+      try {
+        sinceIso = sinceToIso(`${windowHours}h`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "invalid since duration";
+        throw new ManagerError(`Invalid windowHours: ${msg}`);
+      }
+      const store = manager.getTraceStore(agentName);
+      // Stopped agents (no TraceStore singleton) return an empty
+      // buckets array, NOT an error — the tile renders the "no turns
+      // 24h" empty state in that case.
+      const buckets = store
+        ? store
+            .getActivityByHour(agentName, sinceIso)
+            .map((r) => ({ bucket: r.bucket, turn_count: r.turn_count }))
+        : [];
+      return {
+        agent: agentName,
+        windowHours,
+        since: sinceIso,
+        buckets,
+      };
+    }
+
     case "latency": {
       const since = typeof params.since === "string" && params.since.length > 0 ? params.since : "24h";
       let sinceIso: string;

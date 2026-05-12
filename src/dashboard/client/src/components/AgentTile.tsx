@@ -7,8 +7,8 @@
  *   - ContextMeter (F04 — Tier 1 inject budget)
  *   - First-token p50, SLO-colored (observed from latency endpoint, threshold
  *     from cache.slos.first_token_p50_ms; > 2× threshold → red)
- *   - 24h activity sparkline — Skeleton placeholder (no per-agent timeline
- *     endpoint yet; lands with the drawer in 116-04)
+ *   - 24h activity sparkline — emerald area chart of hourly turn counts
+ *     (Phase 116-postdeploy 2026-05-12; replaced the Skeleton placeholder)
  *   - Last-turn relative time ("2m ago") — from `useAgents().lastTurnAt`
  *   - ToolCacheGauge (F05)
  *   - MetricCounters (F08 — prompt-bloat + lazy-recall)
@@ -18,19 +18,79 @@
  * Documented as plan deviations in 116-01-SUMMARY.
  */
 import { useMemo } from 'react'
+import { AreaChart, Area, ResponsiveContainer } from 'recharts'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { useAgentCache, useAgentLatency } from '@/hooks/useApi'
+import {
+  useAgentCache,
+  useAgentLatency,
+  useAgentActivity,
+  type ActivityResponse,
+} from '@/hooks/useApi'
 import { ContextMeter } from './ContextMeter'
 import { ToolCacheGauge } from './ToolCacheGauge'
 import { MetricCounters } from './MetricCounters'
+
+// ---------------------------------------------------------------------------
+// ActivitySparkline — Phase 116-postdeploy 2026-05-12.
+//
+// Renders a tiny 24h hourly-turn-count area chart for the tile. Reads
+// /api/agents/:name/activity via useAgentActivity. Empty / errored
+// queries fall through to a slim "no turns 24h" mono empty state
+// (operator hard requirement — stopped agents must NEVER render junk
+// or a perpetual Skeleton).
+//
+// Theming: stroke + fill are CSS variables resolved at SVG paint time,
+// so the chart flips between light + dark when the operator toggles
+// theme without forcing a React re-render. `--primary` in index.css
+// is declared as HSL components ("158 64% 39%"), so we wrap it in
+// hsl(...) when passing to Recharts (which forwards to SVG attrs).
+// ---------------------------------------------------------------------------
+function ActivitySparkline(props: { readonly agentName: string }): JSX.Element {
+  const q = useAgentActivity(props.agentName, 24)
+  const data = q.data as ActivityResponse | undefined
+  const buckets = data?.buckets ?? []
+  const hasData = !q.isError && buckets.length > 0
+
+  if (!hasData) {
+    return (
+      <div className="h-8 flex items-center text-[11px] font-mono text-fg-3">
+        no turns 24h
+      </div>
+    )
+  }
+  // Recharts wants a plain mutable shape; map the readonly buckets to
+  // {hour, count}. The chart has no axes, grid, tooltip, or legend —
+  // just the area for visual density (per design constraint).
+  const chartData = buckets.map((b) => ({
+    hour: b.bucket,
+    count: b.turn_count,
+  }))
+  return (
+    <div className="h-8 w-full" data-testid="agent-tile-sparkline">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={chartData} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
+          <Area
+            type="monotone"
+            dataKey="count"
+            stroke="hsl(var(--primary))"
+            fill="hsl(var(--primary))"
+            fillOpacity={0.3}
+            strokeWidth={1.5}
+            isAnimationActive={false}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Loose payload types — useAgentCache / useAgentLatency return unknown.
@@ -240,17 +300,15 @@ export function AgentTile(props: AgentTileProps): JSX.Element {
           showSparkline={false}
         />
 
-        {/* 24h activity sparkline placeholder — no per-agent timeline endpoint
-            today. Lands with the drawer in 116-04. */}
+        {/* 24h activity sparkline — Phase 116-postdeploy 2026-05-12.
+            Reads /api/agents/:name/activity (per-hour turn counts).
+            Stopped / dormant agents render "no turns 24h" instead of
+            a Skeleton; theme color flows via --primary CSS var. */}
         <div>
           <div className="text-[11px] uppercase tracking-wide text-fg-3 mb-1 font-sans">
             24h activity
           </div>
-          <Skeleton
-            className="h-8 w-full rounded"
-            data-testid="agent-tile-sparkline-placeholder"
-            aria-label="24h activity sparkline placeholder — ships with 116-04 drawer"
-          />
+          <ActivitySparkline agentName={agent.name} />
         </div>
 
         <div className="flex items-center justify-between gap-3">

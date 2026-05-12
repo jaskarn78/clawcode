@@ -394,6 +394,12 @@ export const IPC_METHODS = [
   "activity-by-day",
   "list-dashboard-audit",
   "dashboard-telemetry-summary",
+  // Phase 116-postdeploy 2026-05-12 — F03 tile 24h activity sparkline.
+  // Handler in src/manager/daemon.ts (`case "agent-activity":` adjacent
+  // to `case "latency":`). REST proxy at /api/agents/:name/activity
+  // in src/dashboard/server.ts. Replaces the Skeleton placeholder the
+  // tile has rendered since Phase 116-01.
+  "agent-activity",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

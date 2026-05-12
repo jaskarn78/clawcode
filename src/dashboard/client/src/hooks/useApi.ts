@@ -93,6 +93,49 @@ export function useAgentLatency(
 }
 
 /**
+ * Per-agent 24h activity buckets — drives the F03 tile sparkline.
+ *
+ * Phase 116-postdeploy 2026-05-12. Replaces the Skeleton placeholder that
+ * has rendered on each AgentTile since Phase 116-01 (the original comment
+ * said "lands with 116-04 drawer" — the drawer shipped without it).
+ *
+ * REST: `/api/agents/:name/activity?windowHours=N`. Daemon clamps
+ * windowHours to [1, 168]. Empty buckets array → tile renders the
+ * "no turns 24h" empty state instead of the chart.
+ *
+ * Refetch every 60s — a sparkline doesn't need faster cadence than the
+ * underlying turn rate, and the SSE bridge doesn't broadcast activity
+ * events today.
+ */
+export type ActivityBucket = {
+  readonly bucket: string // "2026-05-12T13" hour mark, ISO-prefix sortable
+  readonly turn_count: number
+}
+
+export type ActivityResponse = {
+  readonly agent: string
+  readonly windowHours: number
+  readonly since: string
+  readonly buckets: ReadonlyArray<ActivityBucket>
+}
+
+export function useAgentActivity(
+  agentName: string | null,
+  windowHours: number = 24,
+): UseQueryResult<ActivityResponse> {
+  return useQuery({
+    queryKey: ['agent-activity', agentName, windowHours],
+    queryFn: () =>
+      fetchJson<ActivityResponse>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/activity?windowHours=${windowHours}`,
+      ),
+    enabled: agentName !== null && agentName !== '',
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+}
+
+/**
  * Per-agent prompt cache + per-model SLO bundle (Plan 116-00 T02 surface).
  *
  * Hits `/api/agents/:name/cache?since=24h`. The response carries the augmented

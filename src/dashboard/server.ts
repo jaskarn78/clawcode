@@ -1491,6 +1491,45 @@ async function handleRequest(
       }
       return;
     }
+
+    // GET /api/agents/:name/activity?windowHours=24
+    // Phase 116-postdeploy 2026-05-12 — F03 tile 24h activity sparkline.
+    // Proxies to the daemon's `agent-activity` IPC handler. The route
+    // mirrors the per-agent latency shape (`/api/agents/:name/latency`).
+    // windowHours is forwarded as a number; the daemon clamps to 1..168.
+    if (
+      method === "GET" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "activity"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const queryParams = new URLSearchParams(queryString);
+      const windowHoursRaw = queryParams.get("windowHours");
+      const windowHoursParsed = windowHoursRaw
+        ? Number.parseInt(windowHoursRaw, 10)
+        : NaN;
+      const ipcParams: { agent: string; windowHours?: number } = {
+        agent: agentName,
+      };
+      if (Number.isFinite(windowHoursParsed)) {
+        ipcParams.windowHours = windowHoursParsed;
+      }
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "agent-activity",
+          ipcParams,
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
     // === end Phase 116-postdeploy routes ===
 
     // Phase 61 TRIG-03: Webhook trigger endpoint

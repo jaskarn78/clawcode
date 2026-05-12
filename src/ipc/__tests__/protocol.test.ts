@@ -218,6 +218,8 @@ describe("IPC_METHODS", () => {
       "activity-by-day",
       "list-dashboard-audit",
       "dashboard-telemetry-summary",
+      // Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline.
+      "agent-activity",
     ]);
   });
 });
