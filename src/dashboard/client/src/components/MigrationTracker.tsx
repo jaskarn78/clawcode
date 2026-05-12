@@ -35,6 +35,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import {
+  runCleanupOrphans,
   transitionMigration,
   useMigrations,
   type MigrationRow,
@@ -233,6 +234,11 @@ type Action =
   // they share the same daemon IPC (`embedding-migration-transition`); the
   // distinction lives in REST routing + operator copy.
   | { readonly kind: 'transition'; readonly toPhase: TransitionTarget }
+  // 116-postdeploy 2026-05-12 — manual orphan cleanup. Fires the Phase 107
+  // `memory-cleanup-orphans` IPC for one agent. Useful for clearing the
+  // pre-cascade orphan residue that's inflating the v1/v2 dashboard
+  // denominator on agents that finished re-embedding before Fix 1 landed.
+  | { readonly kind: 'cleanup-orphans' }
 
 type TransitionTarget =
   | 'dual-write'
@@ -270,6 +276,14 @@ function actionCopy(action: Action): {
           'Transitions the agent to "rolled-back" phase. Re-embed progress is preserved but reads return to v1. This action is reversible (rolled-back → dual-write is legal).',
         cta: 'Roll back',
         variant: 'destructive',
+      }
+    case 'cleanup-orphans':
+      return {
+        title: 'Clean orphan vec rows?',
+        body:
+          'Scans vec_memories + vec_memories_v2 for rows whose memory_id no longer exists in the `memories` table and removes them. These orphans inflate the v1/v2 dashboard denominator and can make a fully-migrated agent display as e.g. 59%. Idempotent and safe to re-run.',
+        cta: 'Clean orphans',
+        variant: 'default',
       }
     case 'transition':
       return transitionCopy(action.toPhase)
@@ -321,6 +335,14 @@ function transitionCopy(toPhase: TransitionTarget): {
 async function postAction(agent: string, action: Action): Promise<void> {
   if (action.kind === 'transition') {
     await transitionMigration(agent, action.toPhase)
+    return
+  }
+  if (action.kind === 'cleanup-orphans') {
+    // Different REST surface — cleanup is /api/agents/:name/memory/...
+    // rather than /api/migrations/:agent/... because cleanup is a memory-
+    // store operation, not a migration state machine transition. The
+    // hook does its own response shape parsing.
+    await runCleanupOrphans(agent)
     return
   }
   const r = await fetch(
@@ -654,6 +676,24 @@ function AgentRow(props: {
             className="border-danger/40 text-danger hover:bg-danger/10 font-mono text-xs"
           >
             Rollback
+          </Button>
+        )}
+        {/* 116-postdeploy 2026-05-12 — Clean orphans surfaces on every
+            non-idle, non-error row. Cleaning is idempotent + safe in any
+            phase; we leave it hidden in `idle` only because there's no
+            v2 vec table activity to clean before dual-write starts. */}
+        {r.phase !== 'idle' && r.phase !== 'error' && r.phase !== 'no-store' && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              props.onActionStart(r.agent, { kind: 'cleanup-orphans' })
+            }
+            className="border-bg-s3 text-fg-2 hover:text-fg-1 font-mono text-xs"
+            data-testid={`migration-cleanup-orphans-${r.agent}`}
+            title="Remove vec_memories rows whose memory_id no longer exists in memories"
+          >
+            Clean orphans
           </Button>
         )}
       </div>

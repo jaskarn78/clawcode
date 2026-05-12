@@ -1285,3 +1285,38 @@ export async function runTierMaintenance(
   }
   return (await res.json()) as TierMaintenanceResponse
 }
+
+// 116-postdeploy 2026-05-12 — orphan cleanup. Backed by the Phase 107
+// `memory-cleanup-orphans` IPC + the new dashboard REST route. Returns
+// per-agent counts so the UI can surface "removed N orphans across M
+// agents". `agentName: null` triggers fleet-wide cleanup.
+//
+// Why this exists: orphan vec_memories rows (vec row exists, memory row
+// gone) inflate the migration percentage denominator on the dashboard,
+// so a fully-migrated agent appears stuck at 59% etc. Fix 1 wires the
+// cron to clean automatically on re-embed-complete; Fix 2 (this) gives
+// operators a manual trigger for the pre-existing residue.
+export type CleanupOrphansResponse = {
+  readonly results: ReadonlyArray<{
+    readonly agent: string
+    readonly removed: number
+    readonly totalAfter: number
+  }>
+}
+
+export async function runCleanupOrphans(
+  agentName: string | null,
+): Promise<CleanupOrphansResponse> {
+  const url = agentName
+    ? `/api/agents/${encodeURIComponent(agentName)}/memory/cleanup-orphans`
+    : '/api/memory/cleanup-orphans'
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `cleanup-orphans ${res.status}`)
+  }
+  return (await res.json()) as CleanupOrphansResponse
+}

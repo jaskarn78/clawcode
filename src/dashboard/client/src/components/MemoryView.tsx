@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  runCleanupOrphans,
   runDreamPass,
   runTierMaintenance,
   triggerHotReload,
@@ -35,6 +36,7 @@ import {
   useAgentConfig,
   useAgents,
   useDreamArtifacts,
+  type CleanupOrphansResponse,
   type DreamArtifact,
   type RunDreamPassResponse,
   type TierMaintenanceResponse,
@@ -108,6 +110,16 @@ export function MemoryView(): JSX.Element {
   const [consolidateResult, setConsolidateResult] =
     useState<TierMaintenanceResponse | null>(null)
   const [consolidateError, setConsolidateError] = useState<string | null>(null)
+
+  // 116-postdeploy 2026-05-12 — orphan cleanup state. Fleet-wide button at
+  // the top of the page invalidates every agent's migration card afterwards
+  // so the v1/v2 numbers refresh. Per-agent cleanup happens inside
+  // MigrationTracker (its own modal); this state covers the fleet path.
+  const [cleaningOrphans, setCleaningOrphans] = useState(false)
+  const [cleanupResult, setCleanupResult] =
+    useState<CleanupOrphansResponse | null>(null)
+  const [cleanupError, setCleanupError] = useState<string | null>(null)
+  const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false)
 
   // Bulk "Enable consolidation on all" state
   const [bulkEnableOpen, setBulkEnableOpen] = useState(false)
@@ -186,6 +198,29 @@ export function MemoryView(): JSX.Element {
     setBulkEnableBusy(false)
   }
 
+  async function handleCleanupOrphansFleet(): Promise<void> {
+    setCleaningOrphans(true)
+    setCleanupError(null)
+    setCleanupResult(null)
+    try {
+      const out = await runCleanupOrphans(null)
+      setCleanupResult(out)
+      // Invalidate the migrations query so the v1/v2 numbers + percentage
+      // refresh on every agent card. Also touch each per-agent memory
+      // snapshot since vec_memories counts surface there too.
+      void queryClient.invalidateQueries({ queryKey: ['migrations'] })
+      for (const a of topLevelAgents) {
+        void queryClient.invalidateQueries({
+          queryKey: ['memory-snapshot', a],
+        })
+      }
+    } catch (err) {
+      setCleanupError((err as Error).message)
+    } finally {
+      setCleaningOrphans(false)
+    }
+  }
+
   async function handleConsolidate(scope: 'agent' | 'fleet'): Promise<void> {
     setConsolidating(true)
     setConsolidateError(null)
@@ -252,6 +287,24 @@ export function MemoryView(): JSX.Element {
               disabled={consolidating}
             >
               {consolidating ? 'Consolidating…' : 'Consolidate fleet'}
+            </Button>
+            {/* 116-postdeploy 2026-05-12 — fleet-wide orphan cleanup. The
+                cron now auto-cleans on re-embed-complete (Fix 1) but a
+                manual fleet trigger still has value for clearing the
+                pre-cascade residue across every running agent in one
+                shot. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setCleanupResult(null)
+                setCleanupError(null)
+                setCleanupConfirmOpen(true)
+              }}
+              disabled={cleaningOrphans || topLevelAgents.length === 0}
+              data-testid="cleanup-orphans-fleet"
+            >
+              {cleaningOrphans ? 'Cleaning…' : 'Clean orphans (all agents)'}
             </Button>
           </div>
         </div>
@@ -593,6 +646,116 @@ export function MemoryView(): JSX.Element {
                 {bulkEnableBusy
                   ? 'Working…'
                   : `Enable ${topLevelAgents.length}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CLEANUP ORPHANS FLEET MODAL — 116-postdeploy 2026-05-12.
+          Pre-cascade residue: 940 orphans fleet-wide, 757 on one agent at
+          time of writing. Fix 1 prevents new orphans on future
+          re-embed-complete transitions; this trigger clears existing
+          residue across every running agent in one IPC call. */}
+      <Dialog
+        open={cleanupConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open && !cleaningOrphans) {
+            setCleanupConfirmOpen(false)
+            setCleanupResult(null)
+            setCleanupError(null)
+          }
+        }}
+      >
+        <DialogContent data-testid="cleanup-orphans-fleet-modal">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">
+              Clean orphan vec rows across {topLevelAgents.length} agent
+              {topLevelAgents.length === 1 ? '' : 's'}?
+            </DialogTitle>
+            <DialogDescription>
+              For every running agent, scans{' '}
+              <code className="font-mono">vec_memories</code> +{' '}
+              <code className="font-mono">vec_memories_v2</code> for rows
+              whose <code className="font-mono">memory_id</code> no longer
+              exists in <code className="font-mono">memories</code>, and
+              removes them. Orphans accumulate as pre-cascade residue and
+              inflate the v1/v2 dashboard denominator (a fully-migrated
+              agent may display 59% etc.). Idempotent + safe.
+            </DialogDescription>
+          </DialogHeader>
+
+          {cleanupError && (
+            <p
+              className="mt-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+              role="alert"
+            >
+              {cleanupError}
+            </p>
+          )}
+
+          {cleanupResult && (
+            <div className="space-y-2 text-xs font-mono">
+              <p className="text-fg-2">
+                Cleaned{' '}
+                <span className="text-primary">
+                  {cleanupResult.results.filter((r) => r.removed > 0).length}
+                </span>{' '}
+                of <span className="text-fg-2">{cleanupResult.results.length}</span>{' '}
+                agents (orphans found).{' '}
+                <span className="text-fg-3">
+                  Total removed:{' '}
+                  {cleanupResult.results.reduce((s, r) => s + r.removed, 0)}
+                </span>
+              </p>
+              <ul className="rounded-md border border-border bg-bg-base p-2 max-h-48 overflow-y-auto space-y-0.5">
+                {cleanupResult.results
+                  .slice()
+                  .sort((a, b) => b.removed - a.removed)
+                  .map((r) => (
+                    <li
+                      key={r.agent}
+                      className={
+                        r.totalAfter < 0
+                          ? 'text-destructive text-[11px]'
+                          : r.removed > 0
+                            ? 'text-primary text-[11px]'
+                            : 'text-fg-3 text-[11px]'
+                      }
+                    >
+                      <span className="font-bold">{r.agent}</span>:{' '}
+                      {r.totalAfter < 0
+                        ? 'failed'
+                        : r.removed === 0
+                          ? `no orphans (${r.totalAfter} v1 vecs remain)`
+                          : `removed ${r.removed}, ${r.totalAfter} v1 vecs remain`}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setCleanupConfirmOpen(false)
+                setCleanupResult(null)
+                setCleanupError(null)
+              }}
+              disabled={cleaningOrphans}
+            >
+              {cleanupResult ? 'Close' : 'Cancel'}
+            </Button>
+            {!cleanupResult && (
+              <Button
+                onClick={handleCleanupOrphansFleet}
+                disabled={cleaningOrphans || topLevelAgents.length === 0}
+                data-testid="cleanup-orphans-fleet-confirm"
+              >
+                {cleaningOrphans
+                  ? 'Cleaning…'
+                  : `Clean ${topLevelAgents.length}`}
               </Button>
             )}
           </DialogFooter>

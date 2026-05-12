@@ -1863,6 +1863,54 @@ async function handleRequest(
       return;
     }
 
+    // 116-postdeploy 2026-05-12 — orphan cleanup REST surface. Mirrors the
+    // memory/consolidate route shape exactly so the dashboard reuses the
+    // single-vs-fleet branching idiom from useApi.ts.
+    //
+    //   POST /api/agents/:name/memory/cleanup-orphans  (single-agent)
+    //   POST /api/memory/cleanup-orphans               (fleet-wide)
+    //
+    // Backed by the Phase 107 `memory-cleanup-orphans` IPC (no new IPC).
+    // Daemon-side iterates resolvedAgents or scopes to one agent based on
+    // the optional `agent` param — same shape consolidate uses.
+    if (
+      method === "POST" &&
+      ((segments.length === 5 &&
+        segments[0] === "api" &&
+        segments[1] === "agents" &&
+        segments[3] === "memory" &&
+        segments[4] === "cleanup-orphans") ||
+        (segments.length === 3 &&
+          segments[0] === "api" &&
+          segments[1] === "memory" &&
+          segments[2] === "cleanup-orphans"))
+    ) {
+      const isFleet = segments[1] === "memory";
+      const agentName = isFleet ? null : decodeURIComponent(segments[2]!);
+      const params: Record<string, unknown> = {};
+      if (agentName) params.agent = agentName;
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "memory-cleanup-orphans",
+          params,
+        );
+        if (dashboardAuditTrail) {
+          await dashboardAuditTrail.recordAction({
+            action: "memory-cleanup-orphans",
+            target: agentName ?? "*",
+            metadata: params,
+          });
+        }
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        log.error({ err }, "POST memory/cleanup-orphans failed");
+        sendJson(res, 500, { error: message });
+      }
+      return;
+    }
+
     // POST /api/agents/:name/memory/consolidate  (single-agent)
     // POST /api/memory/consolidate               (fleet-wide)
     if (
