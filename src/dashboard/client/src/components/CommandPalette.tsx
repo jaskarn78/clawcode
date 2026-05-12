@@ -39,6 +39,10 @@ import {
 } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useAgents, useAgentCache, useAgentLatency } from '@/hooks/useApi'
+import {
+  runHealthCheckAction,
+  restartDiscordBotAction,
+} from './quickActions'
 
 // Tailwind md breakpoint = 768 (116-00 T06 locks `md: '768px'`).
 const MOBILE_BREAKPOINT_PX = 768
@@ -171,6 +175,12 @@ export type CommandPaletteProps = {
    * older callers (tests) compile unchanged.
    */
   readonly onOpenConfig?: (agent: string) => void
+  /**
+   * Phase 116-postdeploy 2026-05-12 — navigate to a top-level dashboard
+   * view (used by the new "Settings" + cascaded "Open fleet" actions).
+   * Threaded down from App's pushState-aware navigate().
+   */
+  readonly onNavigate?: (view: string) => void
   /** Optional uncontrolled open state hint — defaults to internal state. */
   readonly defaultOpen?: boolean
 }
@@ -359,22 +369,46 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                 </CommandItem>
                 <CommandItem
                   value="restart discord bot"
-                  onSelect={placeholderAction('Restart Discord bot')}
+                  onSelect={() => {
+                    close()
+                    void restartDiscordBotAction()
+                  }}
                 >
                   <span>Restart Discord bot</span>
                   <span className="ml-auto text-[10px] text-fg-3 font-mono">
-                    IPC restart-discord-bot — 116-02 follow-up
+                    stop → start bridge
                   </span>
                 </CommandItem>
                 <CommandItem
                   value="run health check"
-                  onSelect={placeholderAction('Run health check')}
+                  onSelect={() => {
+                    close()
+                    void runHealthCheckAction({
+                      onNavigateToFleet: props.onNavigate
+                        ? () => props.onNavigate?.('fleet')
+                        : undefined,
+                    })
+                  }}
                 >
                   <span>Run health check</span>
                   <span className="ml-auto text-[10px] text-fg-3 font-mono">
-                    IPC heartbeat-status — 116-02 follow-up
+                    GET /api/health → toast
                   </span>
                 </CommandItem>
+                {props.onNavigate && (
+                  <CommandItem
+                    value="settings"
+                    onSelect={() => {
+                      close()
+                      props.onNavigate?.('settings')
+                    }}
+                  >
+                    <span>Open settings</span>
+                    <span className="ml-auto text-[10px] text-fg-3 font-mono">
+                      /dashboard/v2/settings
+                    </span>
+                  </CommandItem>
+                )}
                 <CommandItem
                   value="view perf comparison"
                   onSelect={placeholderAction('View perf comparison')}

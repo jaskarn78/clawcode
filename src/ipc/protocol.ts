@@ -400,6 +400,13 @@ export const IPC_METHODS = [
   // in src/dashboard/server.ts. Replaces the Skeleton placeholder the
   // tile has rendered since Phase 116-01.
   "agent-activity",
+  // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart Discord bot"
+  // quick action wired to a real IPC. Handler calls discordBridge.stop()
+  // then start() on the existing DiscordBridge singleton (accessed via
+  // discordBridgeRef.current). REST proxy at POST /api/discord/restart.
+  // Returns { ok: true } on success; throws if no bridge is configured
+  // (botToken missing or routing table has no channel bindings).
+  "restart-discord-bot",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

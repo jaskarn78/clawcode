@@ -42,6 +42,8 @@ import { ConfigEditor } from './components/ConfigEditor'
 import { ConversationsView } from './components/ConversationsView'
 import { TaskKanban } from './components/TaskKanban'
 import { AgentDetailDrawer } from './components/AgentDetailDrawer'
+import { SettingsView } from './components/SettingsView'
+import { ActionToastHost } from './components/ActionToast'
 import { FleetComparisonTable } from './components/FleetComparisonTable'
 import { NotificationFeed } from './components/NotificationFeed'
 import { ThemeToggle } from './components/ThemeToggle'
@@ -78,6 +80,7 @@ export type DashboardView =
   | 'tasks'
   | 'audit'
   | 'graph'
+  | 'settings'
 
 const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2': 'dashboard',
@@ -92,6 +95,7 @@ const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2/tasks': 'tasks',
   '/dashboard/v2/audit': 'audit',
   '/dashboard/v2/graph': 'graph',
+  '/dashboard/v2/settings': 'settings',
 }
 
 const VIEW_TO_PATH: Record<DashboardView, string> = {
@@ -102,6 +106,7 @@ const VIEW_TO_PATH: Record<DashboardView, string> = {
   tasks: '/dashboard/v2/tasks',
   audit: '/dashboard/v2/audit',
   graph: '/dashboard/v2/graph',
+  settings: '/dashboard/v2/settings',
 }
 
 function pathToView(path: string): DashboardView {
@@ -229,6 +234,7 @@ function App() {
         <FleetLayout
           onEditAgent={(name) => setEditingAgent(name)}
           onSelectAgent={(name) => setDrawerAgent(name)}
+          onNavigate={navigate}
         />
       )}
       {view === 'fleet' && <FleetComparisonTable />}
@@ -267,6 +273,7 @@ function App() {
           <GraphRoute />
         </Suspense>
       )}
+      {view === 'settings' && <SettingsView />}
 
       {/* F26 ConfigEditor overlay — null agent = closed. */}
       <ConfigEditor
@@ -291,7 +298,13 @@ function App() {
       <CommandPalette
         onSelectAgent={(name) => setDrawerAgent(name)}
         onOpenConfig={(name) => setEditingAgent(name)}
+        onNavigate={navigate}
       />
+
+      {/* 116-postdeploy 2026-05-12 — action toast host (Run health check,
+          Restart Discord bot status banners). Singleton; any caller fires
+          via showActionToast(). */}
+      <ActionToastHost />
     </DashboardErrorBoundary>
   )
 }

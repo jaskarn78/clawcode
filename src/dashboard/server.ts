@@ -1530,6 +1530,26 @@ async function handleRequest(
       }
       return;
     }
+    // POST /api/discord/restart
+    // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart Discord bot"
+    // quick action. Proxies to the daemon's `restart-discord-bot` IPC,
+    // which calls stop()→start() on the singleton DiscordBridge. Operator-
+    // initiated, surfaces a daemon-side error (e.g. "bridge not configured")
+    // as a 503 with the underlying message in the JSON body.
+    if (method === "POST" && pathname === "/api/discord/restart") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "restart-discord-bot",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
     // === end Phase 116-postdeploy routes ===
 
     // Phase 61 TRIG-03: Webhook trigger endpoint

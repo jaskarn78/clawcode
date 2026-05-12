@@ -8583,6 +8583,31 @@ async function routeMethod(
       };
     }
 
+    case "restart-discord-bot": {
+      // Phase 116-postdeploy 2026-05-12 — Basic-mode quick-action handler.
+      // Calls stop()→start() on the existing DiscordBridge singleton via
+      // discordBridgeRef.current. The bridge instance is constructed once
+      // at daemon boot (line ~6747) and accumulates all the wiring around
+      // it (webhook manager, deliveryFn, restart greeting bot-direct
+      // sender, subagent thread spawner). We deliberately do NOT
+      // re-instantiate — calling .stop() tears down the discord.js client
+      // connection, and .start() reconnects on the SAME bridge object so
+      // every consumer keeps its closure-captured reference.
+      const bridge = discordBridgeRef.current;
+      if (!bridge) {
+        throw new ManagerError(
+          "Discord bridge is not configured — set DISCORD_BOT_TOKEN and at least one agent.discord.channelId to enable the bridge.",
+        );
+      }
+      const startedAt = Date.now();
+      await bridge.stop();
+      await bridge.start();
+      return {
+        ok: true,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
     case "latency": {
       const since = typeof params.since === "string" && params.since.length > 0 ? params.since : "24h";
       let sinceIso: string;

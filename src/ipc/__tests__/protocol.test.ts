@@ -220,6 +220,9 @@ describe("IPC_METHODS", () => {
       "dashboard-telemetry-summary",
       // Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline.
       "agent-activity",
+      // Phase 116-postdeploy 2026-05-12 — Basic-mode Restart Discord bot
+      // quick action (stop()→start() on the singleton DiscordBridge).
+      "restart-discord-bot",
     ]);
   });
 });

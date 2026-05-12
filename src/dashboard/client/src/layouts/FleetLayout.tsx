@@ -21,9 +21,17 @@
  * (restart-discord-bot, run-health-check, open-settings) are 116-02/116-03
  * scope. Tooltips spell out the deferral so operators aren't surprised.
  */
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Tooltip,
   TooltipContent,
@@ -39,6 +47,17 @@ import { AgentTile } from '@/components/AgentTile'
 import { ToolLatencySplit } from '@/components/ToolLatencySplit'
 import { MigrationTracker } from '@/components/MigrationTracker'
 import { McpHealthPanel } from '@/components/McpHealthPanel'
+import {
+  runHealthCheckAction,
+  restartDiscordBotAction,
+} from '@/components/quickActions'
+
+// Avoid importing DashboardView type from @/App — that creates a circular
+// dependency (App imports FleetLayout). The string set is small; keep a
+// local string-literal alias here. App's stricter DashboardView is a
+// strict subset of these strings, so the narrowing at the call site
+// (navigate(view as DashboardView)) is safe.
+type NavigateView = string
 
 // ---------------------------------------------------------------------------
 // Header — connection dot, branding, view-mode toggle, settings cog.
@@ -61,6 +80,7 @@ function statusDotClass(status: string): string {
 function Header(props: {
   readonly agentCount: number
   readonly sseStatus: string
+  readonly onNavigate?: (view: NavigateView) => void
 }): JSX.Element {
   const { mode, toggle } = useViewMode()
   return (
@@ -96,10 +116,12 @@ function Header(props: {
                 variant="ghost"
                 size="icon"
                 aria-label="Settings"
+                onClick={() => props.onNavigate?.('settings')}
                 className="text-fg-2 hover:text-fg-1"
               >
                 {/* Inline gear glyph — keeps the bundle from pulling lucide
-                    in just for one icon. Replace when 116-06 settings ships. */}
+                    in just for one icon. Phase 116-postdeploy 2026-05-12
+                    wired this to the Settings route (was: no onClick). */}
                 <svg
                   width="16"
                   height="16"
@@ -120,7 +142,7 @@ function Header(props: {
               side="bottom"
               className="bg-bg-elevated text-fg-1 border border-bg-s3 font-sans text-xs"
             >
-              Settings panel ships in 116-06
+              Open dashboard settings (theme + about)
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -143,12 +165,38 @@ function BasicAgentRow(props: {
   return <AgentTile agent={props.agent} onSelect={props.onSelect} />
 }
 
-function QuickActions(): JSX.Element {
-  // Each button is a no-op placeholder; the IPC handlers it would invoke
-  // belong to later plans. Tooltips spell out what each one will do.
-  const noop = useCallback(() => {
-    // Intentionally empty; 116-02/03 wire the IPC calls.
+function QuickActions(props: {
+  readonly onNavigate?: (view: NavigateView) => void
+}): JSX.Element {
+  // Phase 116-postdeploy 2026-05-12 — buttons are now wired to real IPC
+  // calls (was: noop placeholders with "wires up in 116-02" tooltips).
+  // Tooltips updated to describe what they actually do, not what they
+  // would do.
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const onHealthCheck = useCallback(() => {
+    void runHealthCheckAction({
+      onNavigateToFleet: props.onNavigate
+        ? () => props.onNavigate?.('fleet')
+        : undefined,
+    })
+  }, [props])
+
+  const onSettings = useCallback(() => {
+    props.onNavigate?.('settings')
+  }, [props])
+
+  const onConfirmRestart = useCallback(async () => {
+    setBusy(true)
+    try {
+      await restartDiscordBotAction()
+    } finally {
+      setBusy(false)
+      setConfirmRestart(false)
+    }
   }, [])
+
   return (
     <TooltipProvider delayDuration={200}>
       <section
@@ -159,7 +207,7 @@ function QuickActions(): JSX.Element {
           <TooltipTrigger asChild>
             <Button
               variant="outline"
-              onClick={noop}
+              onClick={() => setConfirmRestart(true)}
               className="border-bg-s3 text-fg-1 hover:border-primary/40 font-sans"
             >
               Restart Discord bot
@@ -169,14 +217,14 @@ function QuickActions(): JSX.Element {
             side="top"
             className="bg-bg-elevated text-fg-1 border border-bg-s3 font-sans text-xs"
           >
-            Daemon IPC (`restart-discord-bot`) wires up in 116-02
+            Stops + starts the discord.js bridge; agents momentarily disconnect.
           </TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="outline"
-              onClick={noop}
+              onClick={onHealthCheck}
               className="border-bg-s3 text-fg-1 hover:border-primary/40 font-sans"
             >
               Run health check
@@ -186,14 +234,15 @@ function QuickActions(): JSX.Element {
             side="top"
             className="bg-bg-elevated text-fg-1 border border-bg-s3 font-sans text-xs"
           >
-            Triggers `heartbeat-status` IPC and surfaces a toast (116-02)
+            Polls daemon heartbeat-status; toast summarises healthy / failing
+            agents.
           </TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="outline"
-              onClick={noop}
+              onClick={onSettings}
               className="border-bg-s3 text-fg-1 hover:border-primary/40 font-sans"
             >
               Settings
@@ -203,9 +252,45 @@ function QuickActions(): JSX.Element {
             side="top"
             className="bg-bg-elevated text-fg-1 border border-bg-s3 font-sans text-xs"
           >
-            Settings panel ships in 116-06
+            Theme + about (dashboard-side). Daemon config still via{' '}
+            <code>clawcode config</code>.
           </TooltipContent>
         </Tooltip>
+
+        {/* Restart confirmation modal — operator opt-in. */}
+        <Dialog
+          open={confirmRestart}
+          onOpenChange={(open) => {
+            if (!busy) setConfirmRestart(open)
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="font-display">
+                Restart Discord bot?
+              </DialogTitle>
+              <DialogDescription className="text-fg-3">
+                This stops the discord.js connection on the daemon, then
+                immediately reopens it. Bound channels will be unresponsive
+                for a few seconds while the bridge reconnects. Active agent
+                sessions are unaffected (only the Discord transport
+                bounces).
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmRestart(false)}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+              <Button onClick={onConfirmRestart} disabled={busy}>
+                {busy ? 'Restarting…' : 'Restart bot'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </section>
     </TooltipProvider>
   )
@@ -213,6 +298,7 @@ function QuickActions(): JSX.Element {
 
 function BasicMode(props: {
   readonly onSelectAgent?: (agent: string) => void
+  readonly onNavigate?: (view: NavigateView) => void
 }): JSX.Element {
   const agentsQuery = useAgents()
   const payload = agentsQuery.data as
@@ -243,7 +329,7 @@ function BasicMode(props: {
           />
         ))}
       </main>
-      <QuickActions />
+      <QuickActions onNavigate={props.onNavigate} />
     </>
   )
 }
@@ -350,6 +436,13 @@ export type FleetLayoutProps = {
    * three entry points unify on the single App-level drawer state setter.
    */
   readonly onSelectAgent?: (agent: string) => void
+  /**
+   * Phase 116-postdeploy 2026-05-12 — operator-driven view navigation
+   * (Basic-mode "Settings" quick action; Cmd+K "Run health check" can
+   * cascade into a fleet-view jump). Threaded down to QuickActions so
+   * the buttons can call back into App's pushState-aware navigate().
+   */
+  readonly onNavigate?: (view: NavigateView) => void
 }
 
 export function FleetLayout(props: FleetLayoutProps = {}): JSX.Element {
@@ -363,7 +456,11 @@ export function FleetLayout(props: FleetLayoutProps = {}): JSX.Element {
 
   return (
     <div className="min-h-screen bg-bg-base text-fg-1 font-sans">
-      <Header agentCount={agentCount} sseStatus={sseStatus} />
+      <Header
+        agentCount={agentCount}
+        sseStatus={sseStatus}
+        onNavigate={props.onNavigate}
+      />
       <SloBreachBanner
         openAgentDrawer={(name) => {
           // Phase 116-04 — routes to the App-level drawer state setter.
@@ -380,7 +477,10 @@ export function FleetLayout(props: FleetLayoutProps = {}): JSX.Element {
         }}
       />
       {mode === 'basic' ? (
-        <BasicMode onSelectAgent={props.onSelectAgent} />
+        <BasicMode
+          onSelectAgent={props.onSelectAgent}
+          onNavigate={props.onNavigate}
+        />
       ) : (
         <AdvancedMode onSelectAgent={props.onSelectAgent} />
       )}
