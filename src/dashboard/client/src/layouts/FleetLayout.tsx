@@ -49,7 +49,7 @@ import { MigrationTracker } from '@/components/MigrationTracker'
 import { McpHealthPanel } from '@/components/McpHealthPanel'
 import {
   runHealthCheckAction,
-  restartDiscordBotAction,
+  restartDaemonAction,
 } from '@/components/quickActions'
 
 // Avoid importing DashboardView type from @/App — that creates a circular
@@ -190,7 +190,7 @@ function QuickActions(props: {
   const onConfirmRestart = useCallback(async () => {
     setBusy(true)
     try {
-      await restartDiscordBotAction()
+      await restartDaemonAction()
     } finally {
       setBusy(false)
       setConfirmRestart(false)
@@ -210,14 +210,15 @@ function QuickActions(props: {
               onClick={() => setConfirmRestart(true)}
               className="border-bg-s3 text-fg-1 hover:border-primary/40 font-sans"
             >
-              Restart Discord bot
+              Restart daemon
             </Button>
           </TooltipTrigger>
           <TooltipContent
             side="top"
             className="bg-bg-elevated text-fg-1 border border-bg-s3 font-sans text-xs"
           >
-            Stops + starts the discord.js bridge; agents momentarily disconnect.
+            Sends SIGHUP; systemd rebuilds the process. Running agents are
+            preserved via Phase 999.6 snapshot.
           </TooltipContent>
         </Tooltip>
         <Tooltip>
@@ -267,14 +268,14 @@ function QuickActions(props: {
           <DialogContent>
             <DialogHeader>
               <DialogTitle className="font-display">
-                Restart Discord bot?
+                Restart daemon?
               </DialogTitle>
               <DialogDescription className="text-fg-3">
-                This stops the discord.js connection on the daemon, then
-                immediately reopens it. Bound channels will be unresponsive
-                for a few seconds while the bridge reconnects. Active agent
-                sessions are unaffected (only the Discord transport
-                bounces).
+                This sends SIGHUP to the ClawCode daemon; systemd will
+                rebuild the process (RestartForceExitStatus=129). The
+                running agent fleet is preserved across the restart via
+                the Phase 999.6 pre-deploy snapshot. The dashboard will
+                briefly disconnect — refresh in ~3-5 seconds.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="gap-2">
@@ -286,7 +287,7 @@ function QuickActions(props: {
                 Cancel
               </Button>
               <Button onClick={onConfirmRestart} disabled={busy}>
-                {busy ? 'Restarting…' : 'Restart bot'}
+                {busy ? 'Restarting…' : 'Restart daemon'}
               </Button>
             </DialogFooter>
           </DialogContent>

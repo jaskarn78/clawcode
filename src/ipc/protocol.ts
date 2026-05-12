@@ -400,13 +400,21 @@ export const IPC_METHODS = [
   // in src/dashboard/server.ts. Replaces the Skeleton placeholder the
   // tile has rendered since Phase 116-01.
   "agent-activity",
-  // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart Discord bot"
-  // quick action wired to a real IPC. Handler calls discordBridge.stop()
-  // then start() on the existing DiscordBridge singleton (accessed via
-  // discordBridgeRef.current). REST proxy at POST /api/discord/restart.
-  // Returns { ok: true } on success; throws if no bridge is configured
-  // (botToken missing or routing table has no channel bindings).
-  "restart-discord-bot",
+  // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart daemon" quick
+  // action. Sends SIGHUP to itself (process.kill(process.pid, 'SIGHUP'))
+  // which triggers the existing graceful-shutdown path (daemon.ts line
+  // ~7563) and exits with code 129 — systemd's RestartForceExitStatus=129
+  // declaration restarts the process. Phase 999.6's pre-deploy snapshot
+  // preserves the running-agent fleet across the restart so operators
+  // don't lose live work. REST proxy at POST /api/daemon/restart.
+  //
+  // History: an earlier draft of this fix-pass shipped a `restart-discord-
+  // bot` IPC that called bridge.stop()→start() on the singleton bridge.
+  // That was unsafe — DiscordBridge.stop() calls client.destroy() which
+  // permanently invalidates every captured `discordClient` reference in
+  // WebhookManager / SubagentThreadSpawner / restart-greeting bot-direct
+  // sender. SIGHUP self-restart sidesteps the entire closure-trap.
+  "restart-daemon",
   // Phase 116-postdeploy 2026-05-12 — GSD planning artefacts surfaced on
   // the Tasks Kanban (Backlog + Running columns). Scans the repo's
   // .planning/ tree at request time and returns a stable virtual-task

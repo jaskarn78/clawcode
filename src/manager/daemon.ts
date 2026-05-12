@@ -8594,28 +8594,44 @@ async function routeMethod(
       return await listPlanningTasks();
     }
 
-    case "restart-discord-bot": {
-      // Phase 116-postdeploy 2026-05-12 — Basic-mode quick-action handler.
-      // Calls stop()→start() on the existing DiscordBridge singleton via
-      // discordBridgeRef.current. The bridge instance is constructed once
-      // at daemon boot (line ~6747) and accumulates all the wiring around
-      // it (webhook manager, deliveryFn, restart greeting bot-direct
-      // sender, subagent thread spawner). We deliberately do NOT
-      // re-instantiate — calling .stop() tears down the discord.js client
-      // connection, and .start() reconnects on the SAME bridge object so
-      // every consumer keeps its closure-captured reference.
-      const bridge = discordBridgeRef.current;
-      if (!bridge) {
-        throw new ManagerError(
-          "Discord bridge is not configured — set DISCORD_BOT_TOKEN and at least one agent.discord.channelId to enable the bridge.",
-        );
-      }
-      const startedAt = Date.now();
-      await bridge.stop();
-      await bridge.start();
+    case "restart-daemon": {
+      // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart daemon"
+      // quick action. Sends SIGHUP to ourselves; the SIGHUP handler at
+      // daemon.ts:~7563 runs graceful shutdown and exits with code 129,
+      // which systemd's RestartForceExitStatus=129 turns into a clean
+      // restart. Phase 999.6 pre-deploy snapshot preserves running agents.
+      //
+      // setImmediate ordering: schedule the signal on the NEXT tick so
+      // the IPC response + socket flush land BEFORE shutdown begins.
+      // Without this, the dashboard sees a network error instead of the
+      // "daemon restarting…" toast we want to surface.
+      //
+      // Original design was `restart-discord-bot` (stop→start on the
+      // bridge singleton). Withdrawn before deploy because
+      // DiscordBridge.stop() calls client.destroy() and every consumer
+      // that captured `bridge.discordClient` at boot (WebhookManager,
+      // SubagentThreadSpawner, restart-greeting BotDirectSender) holds
+      // a reference to the destroyed Client — bridge-restart alone
+      // can't repair those closures. Daemon restart sidesteps the
+      // entire problem by rebuilding everything from scratch.
+      setImmediate(() => {
+        try {
+          process.kill(process.pid, "SIGHUP");
+        } catch (err) {
+          // Logging only — by the time we get here the IPC response is
+          // already on the wire. If signal delivery fails (unusual on a
+          // unix host), systemd's idle-watchdog will eventually notice.
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error(
+            { component: "daemon", error: msg },
+            "restart-daemon: SIGHUP self-signal failed",
+          );
+        }
+      });
       return {
         ok: true,
-        durationMs: Date.now() - startedAt,
+        message:
+          "SIGHUP scheduled — daemon will restart via systemd (RestartForceExitStatus=129). Reconnect in ~3-5s.",
       };
     }
 

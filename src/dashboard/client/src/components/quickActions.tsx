@@ -104,20 +104,26 @@ export async function runHealthCheckAction(opts: {
 }
 
 /**
- * Restart Discord bot — POST /api/discord/restart. Calls stop()→start()
- * on the daemon's DiscordBridge singleton. Operator confirmation modal
- * is the caller's responsibility (FleetLayout shows it; Cmd+K assumes
- * the operator knows what they typed).
+ * Restart daemon — POST /api/daemon/restart. The IPC handler sends
+ * SIGHUP to the daemon process; systemd rebuilds it with Phase 999.6
+ * snapshot/restore preserving running agents.
+ *
+ * Original design was a Discord-bridge-only restart, but DiscordBridge's
+ * stop() destroys the discord.js Client and every captured reference in
+ * dependent managers (webhooks, subagent threads, restart-greeting bot-
+ * direct sender) becomes invalid. Full daemon restart is the only safe
+ * one-button path today. Operator confirmation modal is the caller's
+ * responsibility.
  */
-export async function restartDiscordBotAction(): Promise<void> {
+export async function restartDaemonAction(): Promise<void> {
   showActionToast({
-    title: 'Restarting Discord bot…',
-    body: 'Stopping and re-starting the bridge connection',
+    title: 'Restarting daemon…',
+    body: 'systemd will restart the process; reconnect in ~3-5s',
     tone: 'info',
     durationMs: 0,
   })
   try {
-    const r = await fetch('/api/discord/restart', {
+    const r = await fetch('/api/daemon/restart', {
       method: 'POST',
       credentials: 'same-origin',
     })
@@ -130,27 +136,27 @@ export async function restartDiscordBotAction(): Promise<void> {
         /* body wasn't JSON — keep HTTP status */
       }
       showActionToast({
-        title: 'Discord restart failed',
+        title: 'Daemon restart failed',
         body: detail,
         tone: 'error',
         durationMs: 8000,
       })
       return
     }
-    const data = (await r.json()) as { durationMs?: number; ok?: boolean }
-    const ms =
-      typeof data.durationMs === 'number' ? `${data.durationMs}ms` : 'OK'
     showActionToast({
-      title: 'Discord bot restarted',
-      body: `Bridge stop→start completed in ${ms}`,
+      title: 'Daemon restarting',
+      body: 'systemd is rebuilding the process; this page may briefly disconnect',
       tone: 'success',
+      durationMs: 6000,
     })
   } catch (err) {
+    // Mid-restart, the fetch may abort with a network error AFTER the
+    // daemon accepted SIGHUP. That's expected — surface as info, not error.
     showActionToast({
-      title: 'Discord restart failed',
-      body: (err as Error).message,
-      tone: 'error',
-      durationMs: 8000,
+      title: 'Daemon restart in progress',
+      body: `${(err as Error).message} — refresh in a few seconds`,
+      tone: 'info',
+      durationMs: 6000,
     })
   }
 }

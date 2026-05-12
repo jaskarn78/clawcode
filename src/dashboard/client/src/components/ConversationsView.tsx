@@ -71,6 +71,34 @@ import {
 const TAPE_MAX = 8
 const STREAMING_FLASH_MS = 4000
 
+// Tailwind `lg` breakpoint (1024px). Matches the lg: utility on the grid
+// + the right-column aside's `hidden lg:block`.
+const LG_BREAKPOINT_PX = 1024
+
+/**
+ * Viewport hook — returns true when the window is below the lg breakpoint.
+ * Pattern lifted from CommandPalette's `useIsMobile` (md=768). SSR-safe.
+ *
+ * 116-postdeploy 2026-05-12 — needed so the mobile transcript Sheet's
+ * `open` prop is FALSE on desktop. Without this gate Radix renders the
+ * SheetOverlay (sibling of SheetContent) even when SheetContent has
+ * `lg:hidden`, dimming the entire desktop view behind a transparent
+ * panel when a session is pinned.
+ */
+function useIsBelowLg(): boolean {
+  const [below, setBelow] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.innerWidth < LG_BREAKPOINT_PX
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setBelow(window.innerWidth < LG_BREAKPOINT_PX)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return below
+}
+
 function relativeTime(iso: string): string {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return iso
@@ -95,6 +123,7 @@ export function ConversationsView() {
   const [pinnedAgent, setPinnedAgent] = useState<string | null>(null)
   const [pinnedSessionId, setPinnedSessionId] = useState<string | null>(null)
   const queryClient = useQueryClient()
+  const isBelowLg = useIsBelowLg()
 
   // Search dialog state
   const [searchOpen, setSearchOpen] = useState(false)
@@ -320,13 +349,17 @@ export function ConversationsView() {
       {/* MOBILE / TABLET — transcript Sheet ================================ */}
       {/* 116-postdeploy 2026-05-12 fix: on <lg the right-column aside is
           hidden; instead, opening a session triggers a full-screen Sheet
-          containing the same TranscriptPane. Width chain mirrors
-          AgentDetailDrawer's post-fix-pass override (full-screen phones,
-          max-w-2xl tablet, hidden on lg+ since the aside takes over).
-          The Sheet's lg:hidden keeps it off desktop entirely — there the
-          side-by-side aside is visible. */}
+          containing the same TranscriptPane.
+
+          Verification-pass fix (same day): the `open` prop is gated by
+          `isBelowLg && pinnedSessionId !== null`. Without the viewport
+          gate Radix renders SheetOverlay (a sibling of SheetContent
+          inside the portal), which dims the entire screen on desktop
+          even when SheetContent has `lg:hidden`. `lg:hidden` on the
+          content is kept as defense-in-depth; the open-gate is the real
+          fix. */}
       <Sheet
-        open={pinnedSessionId !== null}
+        open={isBelowLg && pinnedSessionId !== null}
         onOpenChange={(open) => {
           if (!open) {
             setPinnedAgent(null)

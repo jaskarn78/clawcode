@@ -41,7 +41,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useAgents, useAgentCache, useAgentLatency } from '@/hooks/useApi'
 import {
   runHealthCheckAction,
-  restartDiscordBotAction,
+  restartDaemonAction,
 } from './quickActions'
 
 // Tailwind md breakpoint = 768 (116-00 T06 locks `md: '768px'`).
@@ -368,15 +368,15 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                   </span>
                 </CommandItem>
                 <CommandItem
-                  value="restart discord bot"
+                  value="restart daemon"
                   onSelect={() => {
                     close()
-                    void restartDiscordBotAction()
+                    void restartDaemonAction()
                   }}
                 >
-                  <span>Restart Discord bot</span>
+                  <span>Restart daemon</span>
                   <span className="ml-auto text-[10px] text-fg-3 font-mono">
-                    stop → start bridge
+                    SIGHUP → systemd restart
                   </span>
                 </CommandItem>
                 <CommandItem

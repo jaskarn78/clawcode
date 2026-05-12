@@ -1552,17 +1552,22 @@ async function handleRequest(
       return;
     }
 
-    // POST /api/discord/restart
-    // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart Discord bot"
-    // quick action. Proxies to the daemon's `restart-discord-bot` IPC,
-    // which calls stop()→start() on the singleton DiscordBridge. Operator-
-    // initiated, surfaces a daemon-side error (e.g. "bridge not configured")
-    // as a 503 with the underlying message in the JSON body.
-    if (method === "POST" && pathname === "/api/discord/restart") {
+    // POST /api/daemon/restart
+    // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart daemon" quick
+    // action. Proxies to the daemon's `restart-daemon` IPC, which sends
+    // SIGHUP to itself; systemd RestartForceExitStatus=129 rebuilds the
+    // process from scratch. Phase 999.6 snapshot preserves the running
+    // fleet across the restart.
+    //
+    // History: an earlier draft routed to `restart-discord-bot` (bridge
+    // stop→start). Withdrawn because client.destroy() invalidated every
+    // captured discordClient reference in dependent managers; full
+    // daemon restart is the safe path. See protocol.ts for the rationale.
+    if (method === "POST" && pathname === "/api/daemon/restart") {
       try {
         const data = await sendIpcRequest(
           socketPath,
-          "restart-discord-bot",
+          "restart-daemon",
           {},
         );
         sendJson(res, 200, data);
