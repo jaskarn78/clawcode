@@ -267,6 +267,11 @@ import {
 import type { TraceStore } from "../performance/trace-store.js";
 import type { TraceCollector } from "../performance/trace-collector.js";
 import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-summary-cron.js";
+import {
+  scheduleMigrationCron,
+  kickEmbeddingMigrationBatch,
+  type MigrationCronHandle,
+} from "./migration-cron.js";
 import { isDiscordRateLimitError } from "../discord/streaming.js";
 import { nanoid } from "nanoid";
 import { createPool, type Pool } from "mysql2/promise";
@@ -5171,6 +5176,20 @@ export async function startDaemon(
             },
             "[diag] embedding-v2 migration transitioned",
           );
+          // Phase 115-postdeploy 2026-05-12 — one-shot batch kick on
+          // transition into a working phase. Fire-and-forget so the
+          // IPC response returns immediately; the operator sees
+          // progressProcessed jump from 0 within seconds instead of
+          // waiting up to 30s for the cron tick. Errors are caught and
+          // logged inside `kickEmbeddingMigrationBatch`.
+          if (s.phase === "re-embedding" || s.phase === "dual-write") {
+            void kickEmbeddingMigrationBatch({
+              agent,
+              manager,
+              config,
+              log,
+            });
+          }
           return { ok: true, phase: s.phase };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -7187,6 +7206,36 @@ export async function startDaemon(
   });
   log.info({ pattern: "0 9 * * *" }, "daily summary cron scheduled (09:00 UTC)");
 
+  // 11f'. Phase 115-postdeploy 2026-05-12 — embedding-v2 migration cron.
+  // Phase 115 Plan 06 shipped the state machine + IPC handlers + runner
+  // but NEVER shipped a scheduler that called `runReEmbedBatch`. The
+  // operator's "Start re-embedding" click flipped the phase to
+  // `re-embedding` and then progress sat at 0% forever because nothing
+  // on the daemon side invoked the runner. Silent-path-bifurcation
+  // anti-pattern (see `feedback_silent_path_bifurcation.md`).
+  //
+  // Cron iterates `manager.getRunningAgents()` every 30s, calls
+  // `runReEmbedBatch` for each agent in a working phase (`dual-write`
+  // or `re-embedding`). Skips paused agents per
+  // `defaults.embeddingMigration.pausedAgents`. The one-shot kick from
+  // the transition IPC handler (see `embedding-migration-transition`
+  // case below) gives the operator immediate progress without waiting
+  // up to 30s for the first tick.
+  //
+  // Sentinel test: `src/memory/migrations/__tests__/migration-cron-wiring.test.ts`
+  // statically asserts `runReEmbedBatch` has at least one production
+  // caller in `src/manager/migration-cron.ts` so this bug class can't
+  // recur silently.
+  const migrationCron: MigrationCronHandle = scheduleMigrationCron({
+    manager,
+    config,
+    log,
+  });
+  log.info(
+    { pattern: "*/30 * * * * *" },
+    "embedding-v2 migration cron scheduled (every 30s)",
+  );
+
   // 11g. Phase 999.14 — start the periodic MCP orphan reaper. Runs every 60s
   // AFTER manager.startAll has had time to spawn fresh MCP children (the
   // first tick fires at t=60s, by which time the npm-wrapper exec handoff
@@ -7557,6 +7606,8 @@ export async function startDaemon(
     taskScheduler.stop();    // Stop handler-based cron jobs
     heartbeatRunner.stop();
     dailySummaryCron.stop();
+    // Phase 115-postdeploy 2026-05-12 — embedding-v2 migration cron stop.
+    migrationCron.stop();
     // Clean up all subagent thread bindings before stopping agents
     if (subagentThreadSpawner) {
       const subBindings = await subagentThreadSpawner.getSubagentBindings();
