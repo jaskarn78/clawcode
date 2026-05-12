@@ -8583,6 +8583,17 @@ async function routeMethod(
       };
     }
 
+    case "list-planning-tasks": {
+      // Phase 116-postdeploy 2026-05-12 — Tasks Kanban planning-artefact
+      // ingest. Scans the repo's `.planning/` tree at request time;
+      // missing dir (production install at /opt/clawcode) returns the
+      // empty response — never errors so the SPA's Tasks page degrades
+      // gracefully. Heavy I/O is bounded (one readdir + per-file stat;
+      // bodies parsed for frontmatter + first-paragraph excerpt only).
+      const { listPlanningTasks } = await import("./planning-tasks.js");
+      return await listPlanningTasks();
+    }
+
     case "restart-discord-bot": {
       // Phase 116-postdeploy 2026-05-12 — Basic-mode quick-action handler.
       // Calls stop()→start() on the existing DiscordBridge singleton via

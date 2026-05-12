@@ -486,6 +486,48 @@ export function useKanbanTasks(): UseQueryResult<KanbanResponse> {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Phase 116-postdeploy 2026-05-12 — GSD planning artefacts on the Tasks
+// Kanban. Sourced from `.planning/{todos,quick,ROADMAP.md}` server-side
+// (see src/manager/planning-tasks.ts) so the frontend only needs to read
+// the stable virtual-task shape. Production installs running outside
+// the repo get an empty response — render placeholders, don't error.
+// ---------------------------------------------------------------------------
+
+export type PlanningTaskSource = 'todo' | 'phase' | 'quick'
+export type PlanningTaskStatus = 'pending' | 'running' | 'complete' | 'failed'
+
+export type PlanningTask = {
+  readonly id: string
+  readonly source: PlanningTaskSource
+  readonly title: string
+  readonly description?: string
+  readonly status: PlanningTaskStatus
+  readonly tags: readonly string[]
+  readonly createdAt?: string
+  readonly filePath?: string
+}
+
+export type PlanningTasksResponse = {
+  readonly tasks: readonly PlanningTask[]
+  readonly sourceCount: {
+    readonly todo: number
+    readonly phase: number
+    readonly quick: number
+  }
+}
+
+export function usePlanningTasks(): UseQueryResult<PlanningTasksResponse> {
+  return useQuery({
+    queryKey: ['planning-tasks'],
+    queryFn: () => fetchJson<PlanningTasksResponse>('/api/planning/tasks'),
+    // Filesystem scan — refresh on visibility change + every 60s to keep
+    // edits in .planning/ reflected without thrashing readdir.
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+}
+
 /** F28 — operator-fired task transition. Optimistic UI flips before this returns. */
 export async function transitionTask(
   taskId: string,

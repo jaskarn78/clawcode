@@ -407,6 +407,14 @@ export const IPC_METHODS = [
   // Returns { ok: true } on success; throws if no bridge is configured
   // (botToken missing or routing table has no channel bindings).
   "restart-discord-bot",
+  // Phase 116-postdeploy 2026-05-12 — GSD planning artefacts surfaced on
+  // the Tasks Kanban (Backlog + Running columns). Scans the repo's
+  // .planning/ tree at request time and returns a stable virtual-task
+  // shape (PlanningTasksResponse from src/manager/planning-tasks.ts).
+  // Working directory is process.cwd(); production installs running
+  // from /opt/clawcode (no .planning/) get an empty response — graceful
+  // no-op, not an error. REST proxy at GET /api/planning/tasks.
+  "list-planning-tasks",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

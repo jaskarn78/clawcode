@@ -42,10 +42,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   useKanbanTasks,
   useAgents,
+  usePlanningTasks,
   transitionTask,
   createTask,
   type KanbanRow,
   type KanbanColumns,
+  type PlanningTask,
 } from '@/hooks/useApi'
 import {
   Dialog,
@@ -109,13 +111,23 @@ function statusDotClass(col: DisplayColumn): string {
   }
 }
 
+// Phase 116-postdeploy 2026-05-12 — scope filter chip values. "All"
+// (default) interleaves planning tasks with daemon tasks. "Agent tasks"
+// hides planning rows. "Planning" hides daemon rows.
+type ScopeFilter = 'all' | 'agent' | 'planning'
+
 export function TaskKanban() {
   const queryClient = useQueryClient()
   const kanbanQ = useKanbanTasks()
+  const planningQ = usePlanningTasks()
   const [createOpen, setCreateOpen] = useState(false)
   const [transitionError, setTransitionError] = useState<string | null>(null)
   const [agentFilter, setAgentFilter] = useState<string>('')
   const [searchQ, setSearchQ] = useState<string>('')
+  const [scope, setScope] = useState<ScopeFilter>('all')
+  const [planningDetail, setPlanningDetail] = useState<PlanningTask | null>(
+    null,
+  )
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -181,10 +193,41 @@ export function TaskKanban() {
     return [...set].sort()
   }, [kanbanQ.data])
 
+  // Phase 116-postdeploy 2026-05-12 — partition planning tasks into the
+  // same display columns as daemon tasks. Filtered by `searchQ` so the
+  // top-bar search bar continues to feel coherent across both sources.
+  const planningTasks = planningQ.data?.tasks ?? []
+  const planningByColumn = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    const match = (t: PlanningTask) => {
+      if (!q) return true
+      const blob =
+        `${t.title} ${t.description ?? ''} ${t.tags.join(' ')}`.toLowerCase()
+      return blob.includes(q)
+    }
+    const out: Record<DisplayColumn, PlanningTask[]> = {
+      Backlog: [],
+      Running: [],
+      Waiting: [],
+      Done: [],
+    }
+    for (const t of planningTasks) {
+      if (!match(t)) continue
+      if (t.status === 'pending') out.Backlog.push(t)
+      else if (t.status === 'running') out.Running.push(t)
+      else if (t.status === 'complete') out.Done.push(t)
+      // failed planning tasks don't surface today
+    }
+    return out
+  }, [planningTasks, searchQ])
+
   const totalActive = displayed
     ? displayed.Running.length + displayed.Waiting.length
     : 0
   const totalDone = displayed ? displayed.Done.length : 0
+  const planningActive =
+    planningByColumn.Running.length + planningByColumn.Backlog.length
+  const planningDoneThisWeek = planningByColumn.Done.length
 
   return (
     <div className="mx-auto max-w-[1600px] px-4 py-6 lg:px-6">
@@ -196,7 +239,8 @@ export function TaskKanban() {
               Tasks
             </h1>
             <span className="font-mono text-xs text-fg-3">
-              {totalActive} active · {totalDone} done
+              {totalActive} active · {planningActive} planning ·{' '}
+              {totalDone + planningDoneThisWeek} done
             </span>
           </div>
           <Button
@@ -234,18 +278,57 @@ export function TaskKanban() {
               </option>
             ))}
           </select>
-          {(searchQ || agentFilter) && (
+          {(searchQ || agentFilter || scope !== 'all') && (
             <button
               type="button"
               onClick={() => {
                 setSearchQ('')
                 setAgentFilter('')
+                setScope('all')
               }}
               className="rounded-md px-2 py-1 text-xs text-fg-3 hover:text-fg-1"
             >
               Clear
             </button>
           )}
+        </div>
+
+        {/* 116-postdeploy 2026-05-12 — scope filter chips. "All" interleaves
+            planning tasks with daemon tasks (default); "Agent tasks" hides
+            planning rows; "Planning" hides daemon rows. */}
+        <div
+          className="mt-3 flex items-center gap-1"
+          role="tablist"
+          aria-label="Task source filter"
+        >
+          {([
+            { id: 'all', label: 'All' },
+            { id: 'agent', label: 'Agent tasks' },
+            { id: 'planning', label: 'Planning' },
+          ] as ReadonlyArray<{ id: ScopeFilter; label: string }>).map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="tab"
+              aria-selected={scope === c.id}
+              onClick={() => setScope(c.id)}
+              className={
+                'rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider transition-all ' +
+                (scope === c.id
+                  ? 'bg-primary/15 text-primary ring-1 ring-primary/30'
+                  : 'text-fg-3 hover:bg-bg-elevated hover:text-fg-1')
+              }
+            >
+              {c.label}
+            </button>
+          ))}
+          <span className="ml-auto font-mono text-[10px] text-fg-3">
+            {planningQ.data
+              ? `${planningQ.data.sourceCount.phase} phases · ${planningQ.data.sourceCount.quick} quick · ${planningQ.data.sourceCount.todo} todos`
+              : planningQ.isLoading
+              ? 'loading planning…'
+              : 'planning: offline'}
+          </span>
         </div>
       </header>
 
@@ -269,7 +352,11 @@ export function TaskKanban() {
               <KanbanColumn
                 key={name}
                 name={name}
-                rows={displayed[name]}
+                rows={scope === 'planning' ? [] : displayed[name]}
+                planningRows={
+                  scope === 'agent' ? [] : planningByColumn[name]
+                }
+                onPlanningClick={(t) => setPlanningDetail(t)}
               />
             ))}
           </div>
@@ -283,6 +370,14 @@ export function TaskKanban() {
           void queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] })
         }}
       />
+
+      {/* 116-postdeploy 2026-05-12 — planning task detail modal. Read-only
+          surface — operators manage these via the GSD CLI commands, not
+          via dashboard drag-drop. */}
+      <PlanningDetailDialog
+        task={planningDetail}
+        onClose={() => setPlanningDetail(null)}
+      />
     </div>
   )
 }
@@ -294,9 +389,13 @@ export function TaskKanban() {
 function KanbanColumn(props: {
   readonly name: DisplayColumn
   readonly rows: readonly KanbanRow[]
+  // 116-postdeploy 2026-05-12 — planning tasks interleaved by column.
+  readonly planningRows: readonly PlanningTask[]
+  readonly onPlanningClick: (task: PlanningTask) => void
 }) {
-  const { name, rows } = props
+  const { name, rows, planningRows, onPlanningClick } = props
   const { setNodeRef, isOver } = useDroppable({ id: name })
+  const totalCount = rows.length + planningRows.length
   return (
     <div
       ref={setNodeRef}
@@ -316,18 +415,190 @@ function KanbanColumn(props: {
           <h2 className="font-display text-sm font-medium uppercase tracking-wider text-fg-1">
             {DISPLAY_COLUMN_LABEL[name]}
           </h2>
-          <span className="font-mono text-[10px] text-fg-3">{rows.length}</span>
+          <span className="font-mono text-[10px] text-fg-3">{totalCount}</span>
+          {planningRows.length > 0 && (
+            <span
+              className="font-mono text-[9px] text-fg-3"
+              title={`${planningRows.length} planning ${
+                planningRows.length === 1 ? 'task' : 'tasks'
+              }`}
+            >
+              ({planningRows.length}p)
+            </span>
+          )}
         </div>
       </header>
 
       <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2">
-        {rows.length === 0 ? (
+        {totalCount === 0 ? (
           <EmptyColumn name={name} />
         ) : (
-          rows.map((row) => <KanbanCard key={row.task_id} row={row} />)
+          <>
+            {/* Planning cards first — they're the higher-signal "real
+                workstream" surface. Daemon-task chains follow. */}
+            {planningRows.map((t) => (
+              <PlanningCard
+                key={t.id}
+                task={t}
+                onClick={() => onPlanningClick(t)}
+              />
+            ))}
+            {rows.map((row) => (
+              <KanbanCard key={row.task_id} row={row} />
+            ))}
+          </>
         )}
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 116-postdeploy 2026-05-12 — PlanningCard.
+//
+// Read-only surface (no draggable wrapper, no transition select). Border
+// uses the `warn` token (vs daemon cards on the `primary` ladder) so the
+// operator can scan the two streams apart at a glance. A small lock glyph
+// emphasises that drag/drop is intentionally disabled.
+// ---------------------------------------------------------------------------
+
+function PlanningCard(props: {
+  readonly task: PlanningTask
+  readonly onClick: () => void
+}) {
+  const { task, onClick } = props
+  const badgeLabel =
+    task.source === 'phase'
+      ? task.id.startsWith('phase:')
+        ? `PHASE ${task.id.slice('phase:'.length)}`
+        : 'PHASE'
+      : task.source === 'todo'
+      ? 'TODO'
+      : task.id.startsWith('quick:')
+      ? `QUICK ${task.id.slice('quick:'.length, 'quick:'.length + 10).toUpperCase()}`
+      : 'QUICK'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative overflow-hidden rounded-md border border-warn/40 bg-bg-base px-3 py-2.5 text-left text-xs transition-all hover:-translate-y-px hover:border-warn/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      data-testid="planning-card"
+      title="Planning artefact — read-only (manage via GSD commands)"
+    >
+      <span
+        aria-hidden
+        className="absolute inset-y-0 left-0 w-1 bg-warn/60"
+      />
+      <div className="ml-1.5">
+        <div className="mb-1 flex items-center gap-1.5">
+          <span className="rounded-full bg-warn/15 px-1.5 py-0.5 font-mono text-[9px] font-medium uppercase tracking-wider text-warn">
+            {badgeLabel}
+          </span>
+          <span
+            aria-hidden
+            className="font-mono text-[10px] text-fg-3"
+            title="Read-only"
+          >
+            🔒
+          </span>
+          <span className="ml-auto font-mono text-[10px] text-fg-3">
+            {task.tags.slice(0, 2).join(' · ')}
+          </span>
+        </div>
+        <div className="mb-0.5 font-display text-sm font-medium text-fg-1">
+          {task.title}
+        </div>
+        {task.description && (
+          <p className="line-clamp-2 text-[11px] text-fg-2">
+            {task.description}
+          </p>
+        )}
+      </div>
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 116-postdeploy 2026-05-12 — Planning task detail dialog. Opens when a
+// PlanningCard is clicked. Surfaces the file path so the operator can
+// open the artefact in their editor; renders full description + tags.
+// ---------------------------------------------------------------------------
+
+function PlanningDetailDialog(props: {
+  readonly task: PlanningTask | null
+  readonly onClose: () => void
+}) {
+  const { task, onClose } = props
+  return (
+    <Dialog open={task !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        {task && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="font-display text-xl">
+                {task.title}
+              </DialogTitle>
+              <DialogDescription className="text-fg-3">
+                <span className="inline-flex items-center gap-1 rounded-full bg-warn/15 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-warn">
+                  <span aria-hidden>🔒</span>
+                  {task.source} · read-only
+                </span>{' '}
+                Manage via GSD commands;{' '}
+                <code className="font-mono">.planning/</code> is the source of
+                truth.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              {task.description && (
+                <p className="text-sm leading-relaxed text-fg-1">
+                  {task.description}
+                </p>
+              )}
+              <dl className="space-y-1 text-xs">
+                <div className="flex gap-2">
+                  <dt className="text-fg-3">Status:</dt>
+                  <dd className="font-mono text-fg-1">{task.status}</dd>
+                </div>
+                {task.filePath && (
+                  <div className="flex gap-2">
+                    <dt className="text-fg-3">File:</dt>
+                    <dd className="break-all font-mono text-fg-1">
+                      {task.filePath}
+                    </dd>
+                  </div>
+                )}
+                {task.createdAt && (
+                  <div className="flex gap-2">
+                    <dt className="text-fg-3">Created:</dt>
+                    <dd className="font-mono text-fg-1">{task.createdAt}</dd>
+                  </div>
+                )}
+                {task.tags.length > 0 && (
+                  <div className="flex gap-2">
+                    <dt className="text-fg-3">Tags:</dt>
+                    <dd className="flex flex-wrap gap-1">
+                      {task.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded bg-bg-muted px-1.5 py-0.5 font-mono text-[10px] text-fg-2"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>
+                Close
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

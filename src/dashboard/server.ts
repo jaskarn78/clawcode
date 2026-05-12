@@ -1530,6 +1530,28 @@ async function handleRequest(
       }
       return;
     }
+    // GET /api/planning/tasks
+    // Phase 116-postdeploy 2026-05-12 — GSD planning artefacts surfaced
+    // on the Tasks Kanban. Proxies the daemon's `list-planning-tasks`
+    // IPC which scans `.planning/{todos,quick,ROADMAP.md}` from
+    // process.cwd() and returns a stable virtual-task shape. Production
+    // installs running from /opt/clawcode return the empty response —
+    // not an error — so the frontend can render its placeholders.
+    if (method === "GET" && pathname === "/api/planning/tasks") {
+      try {
+        const data = await sendIpcRequest(
+          socketPath,
+          "list-planning-tasks",
+          {},
+        );
+        sendJson(res, 200, data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        sendJson(res, 503, { error: message });
+      }
+      return;
+    }
+
     // POST /api/discord/restart
     // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart Discord bot"
     // quick action. Proxies to the daemon's `restart-discord-bot` IPC,

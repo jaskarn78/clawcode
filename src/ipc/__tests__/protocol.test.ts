@@ -223,6 +223,9 @@ describe("IPC_METHODS", () => {
       // Phase 116-postdeploy 2026-05-12 — Basic-mode Restart Discord bot
       // quick action (stop()→start() on the singleton DiscordBridge).
       "restart-discord-bot",
+      // Phase 116-postdeploy 2026-05-12 — GSD planning artefacts on the
+      // Tasks Kanban (Backlog/Running interleave with daemon tasks).
+      "list-planning-tasks",
     ]);
   });
 });
