@@ -1,4 +1,14 @@
 import type { ResolvedAgentConfig } from "../shared/types.js";
+import { buildAgentAwarenessBlock } from "../advisor/prompts.js";
+import { resolveAdvisorBackend } from "../config/loader.js";
+
+// Phase 117 Plan 08 — advisor awareness defaults.
+// Capability-manifest hint for the per-agent daily budget. The live
+// throttle is enforced by `AdvisorBudget` at IPC dispatch time; this is
+// the prompt-time hint so the agent has a rough sense of remaining
+// headroom. Future work: thread the operator-tunable value through here.
+// (Plan 117-04 wires the runtime budget; surface here is informational.)
+const ADVISOR_DAILY_BUDGET_HINT = 10;
 
 /**
  * Phase 100 follow-up — capability manifest builder.
@@ -181,6 +191,33 @@ export function buildCapabilityManifest(
     "- **Lazy memory recall**: `clawcode_memory_search` (FTS5+vec hybrid), `clawcode_memory_recall` (full body by id), `clawcode_memory_edit` (str_replace / append on MEMORY.md / USER.md), `clawcode_memory_archive` (promote a chunk into Tier 1).",
   );
 
+  // ---- 10b. Advisor awareness (Phase 117 Plan 08) ----
+  // Inject the advisor bullet when the resolved backend is "native" or
+  // "fork" (always true given the resolver's default of "native"; the
+  // explicit gate guards future operators who disable advisor entirely).
+  // The prose protocol is appended at the very end of the manifest (after
+  // memoryProtocol) so it lands in the cached stable prefix alongside
+  // the other protocol blocks. (RESEARCH §4.3.)
+  //
+  // EXPLICIT DO-NOT: `src/manager/capability-probes.ts` is MCP server
+  // liveness probes (browser/1password) — it is NOT the capability
+  // declaration registry and must not be touched here. (RESEARCH §6
+  // Pitfall 5.)
+  const advisorBackend = resolveAdvisorBackend(
+    config as { advisor?: { backend?: string } } | undefined,
+    undefined,
+  );
+  const advisorAwareness =
+    advisorBackend === "native" || advisorBackend === "fork"
+      ? buildAgentAwarenessBlock({
+          backend: advisorBackend,
+          dailyBudget: ADVISOR_DAILY_BUDGET_HINT,
+        })
+      : null;
+  if (advisorAwareness !== null) {
+    bullets.push(advisorAwareness.bullet);
+  }
+
   // ---- 11. Recursion guard ----
   // Only rendered when the agent has the subagent-thread skill — the
   // guard is informational about how the SDK enforces "subagents cannot
@@ -228,5 +265,16 @@ export function buildCapabilityManifest(
     "Record significant new facts via `clawcode_memory_edit` (str_replace / append on MEMORY.md or USER.md). " +
     "Promote a found chunk to permanent memory via `clawcode_memory_archive(chunkId)`.\n";
 
-  return header + bullets.join("\n") + memoryProtocol;
+  // Phase 117 Plan 08 — append the Advisor protocol prose alongside the
+  // memory protocol so both land in the cached stable prefix. When the
+  // advisor is gated off (future "none" backend), advisorProtocol is "".
+  // Awareness is also conditionally tied to having ANY notable opt-in
+  // (matches the file-level rule "don't bloat minimal agents" — those
+  // agents already get an empty manifest above; if a minimal agent has
+  // somehow reached this point, the advisor bullet was already pushed
+  // alongside the other bullets and the protocol naturally rides along).
+  const advisorProtocol =
+    advisorAwareness !== null ? advisorAwareness.protocol : "";
+
+  return header + bullets.join("\n") + memoryProtocol + advisorProtocol;
 }
