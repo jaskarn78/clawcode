@@ -1980,6 +1980,25 @@ Make every agent aware of the advisor via system-prompt block + capability manif
 
 ---
 
+### Phase 117.1: Hotfix — Advisor telemetry + slash command guild cap
+
+**Goal:** Close two production gaps surfaced immediately after Phase 117 deploy. (1) Add INFO log lines in `bridge.ts:onInvoked`/`onResulted` so native advisor invocations leave evidence in production logs (the silent-path-bifurcation pattern bit us again — admin-clawdy claimed advisor fired with no telemetry to confirm). (2) Audit + prune per-agent custom `slashCommands` from production `clawcode.yaml` to drop the per-guild command count from **193 → ≤90** so Discord stops refusing the whole registration batch with CMD-07; this is what's keeping `/clawcode-verbose` (and every other recently-added CONTROL_COMMAND) invisible. (3) Execute the `117-10-SMOKE.md` procedure for real with a question that genuinely qualifies for advisor consultation per the timing prompt; capture telemetry evidence in `SMOKE-REPORT.md`.
+
+**Trigger:** 2026-05-13 — Phase 117 source-level complete + deployed. Operator smoke surfaced `/clawcode-verbose` missing in Discord (`CMD-07` ERROR in daemon log: `commandCount=193 limit=90 refusing to register`) plus a likely-hallucinated "advisor fired" report from admin-clawdy (meta-question about capability, not substantive work; no production telemetry to confirm).
+
+**Plans (3):**
+- [ ] 117.1-01 — Bridge advisor event telemetry (2 INFO log lines + test assertions)
+- [ ] 117.1-02 — Slash command guild-cap remediation (audit 193 → prune to ≤90; conditional cap raise 90 → 95 with 5-slot buffer)
+- [ ] 117.1-03 — Real production smoke procedure (test-agent fresh session + canonical advisor trigger + telemetry verification + fork-backend rollback verification → `SMOKE-REPORT.md`)
+
+**Depends on:** Phase 117 (already shipped)
+
+**Reference:** `.planning/phases/117.1-hotfix-advisor-telemetry-and-slash-cap/117.1-CONTEXT.md`
+
+**Status:** PLANNED 2026-05-13 — awaiting execution.
+
+---
+
 ### Phase 999.40 (original): Daemon-side response cache for repeated MCP tool calls
 
 **Goal:** Cache MCP tool-call responses (e.g. `web_search`) at the daemon layer with content-keyed lookups. When an agent re-asks the same query within a TTL window, the daemon returns the cached result instead of re-hitting brave/exa/openai. Speeds up second-and-later identical queries from ~2-5s to <50ms. Helps both Node and Go shim runtimes equally — not Phase 110-specific.
