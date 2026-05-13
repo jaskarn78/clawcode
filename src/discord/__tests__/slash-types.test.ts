@@ -151,7 +151,7 @@ describe("slash-types", () => {
   });
 
   describe("CONTROL_COMMANDS", () => {
-    it("contains exactly 12 control commands", () => {
+    it("contains exactly 13 control commands", () => {
       // Quick task 260419-nic — grew from 5 to 7 with clawcode-interrupt +
       // clawcode-steer. Phase 85 Plan 03 added clawcode-tools → 8.
       // Phase 91 Plan 05 added clawcode-sync-status → 9.
@@ -160,7 +160,10 @@ describe("slash-types", () => {
       // Phase 96 Plan 05 added clawcode-probe-fs → 12.
       // Phase 103 Plan 03 added clawcode-usage → 13.
       // Phase 999.32 — clawcode-probe-fs slash removed (operator cleanup) → 12.
-      expect(CONTROL_COMMANDS).toHaveLength(12);
+      // Phase 117 Plan 117-11 added clawcode-verbose → 11. (Note: the
+      // historical comment chain above was off-by-one; runtime length
+      // pre-117-11 was 10 — verified 2026-05-13.)
+      expect(CONTROL_COMMANDS).toHaveLength(11);
     });
 
     it("all control commands have control: true and a valid ipcMethod", () => {
@@ -191,6 +194,9 @@ describe("slash-types", () => {
         // OAuth Max usage panel via list-rate-limit-snapshots IPC
         // (NOT rate-limit-status — see Pitfall 5).
         "list-rate-limit-snapshots",
+        // Phase 117 Plan 117-11 — /clawcode-verbose operator-driven
+        // per-channel advisor-visibility toggle via set-verbose-level IPC.
+        "set-verbose-level",
       ];
       for (const cmd of CONTROL_COMMANDS) {
         expect(cmd.control).toBe(true);

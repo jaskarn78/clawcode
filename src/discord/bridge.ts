@@ -46,6 +46,7 @@ import { MessageCoalescer } from "./message-coalescer.js";
 import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js";
 import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
 import { runVisionPrePass } from "./vision-pre-pass.js";
+import type { VerboseState } from "../usage/verbose-state.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -88,6 +89,21 @@ export type BridgeConfig = {
     readonly role: "user" | "assistant";
     readonly ts: string;
   }) => void;
+  /**
+   * Phase 117 Plan 117-11 — per-channel verbose-level state for the
+   * advisor visibility mutation point at `streamAndPostResponse:~810`.
+   *
+   * Optional: daemon boot ALWAYS injects (construction at daemon.ts:~2706
+   * alongside AdvisorBudget). Standalone runner (`src/cli/commands/run.ts`)
+   * and direct-bridge tests omit it — the mutation falls through to the
+   * `"normal"` branch (reaction + plain footer), identical to today.
+   *
+   * Existing tests in `bridge-advisor-footer.test.ts` Case F/F' inject a
+   * stub via `(bridge as any).verboseState = { getLevel: () => "verbose" }`
+   * — `as any` bypasses TS, so the structural-match stub continues to
+   * work even after the field type is tightened to `VerboseState`.
+   */
+  readonly verboseState?: VerboseState;
 };
 
 /**
@@ -185,19 +201,26 @@ export class DiscordBridge {
   private messageCoalescer: MessageCoalescer = new MessageCoalescer();
 
   /**
-   * Plan 117-09 — level-aware visibility seam (RESEARCH §13.2).
+   * Plan 117-09 seam, Plan 117-11 wiring — per-channel verbose-level state.
    *
-   * Today defaults to `undefined`, so the footer mutation at the single
-   * injection point (`streamAndPostResponse:739-area`) falls through to
-   * the `"normal"` branch (reaction + footer only, no plaintext advice).
+   * In production, the daemon constructs a `VerboseState` instance backed
+   * by `~/.clawcode/manager/verbose-state.db` (separate file from the
+   * advisor budget — RESEARCH §6 Pitfall 4) and passes it via
+   * `BridgeConfig.verboseState`. The single mutation point in
+   * `streamAndPostResponse` (~:809) reads `getLevel(message.channelId)`
+   * once per turn — at the same call site for both `"normal"` (plain
+   * footer) and `"verbose"` (fenced advice block) branches.
    *
-   * Plan 117-11 attaches a real `VerboseState` instance and the
-   * `/verbose` slash command toggles per-channel level; the `"verbose"`
-   * branch in the mutation then renders an inline fenced advice block.
-   * Tests in Plan 117-09 inject a stub via `(bridge as any).verboseState`
-   * to exercise the verbose seam without depending on 117-11.
+   * Standalone runner / tests may omit it; the seam falls through to
+   * `"normal"` (no behavior change). `bridge-advisor-footer.test.ts`
+   * Case F/F' still inject a structural stub via
+   * `(bridge as any).verboseState = { getLevel: () => "verbose" }` —
+   * `as any` bypasses the type so the stub keeps working.
    */
-  private verboseState: { getLevel(channelId: string): "normal" | "verbose" } | undefined;
+  private verboseState:
+    | VerboseState
+    | { getLevel(channelId: string): "normal" | "verbose" }
+    | undefined;
 
   /**
    * Expose the Discord client for use by SubagentThreadSpawner.
@@ -225,6 +248,10 @@ export class DiscordBridge {
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
     this.onConversationTurn = config.onConversationTurn;
+    // Phase 117 Plan 117-11 — daemon injects the real VerboseState here;
+    // standalone runner / direct tests leave it undefined (mutation falls
+    // through to "normal" branch — identical to Plan 117-09 pre-wiring).
+    this.verboseState = config.verboseState;
 
     this.client = new Client({
       intents: [

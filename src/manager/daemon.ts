@@ -7173,6 +7173,10 @@ export async function startDaemon(
       securityPolicies,
       botToken,
       log,
+      // Phase 117 Plan 117-11 T06 — share the boot-time VerboseState with the
+      // bridge so the mutation point at bridge.ts:~810 reads the same
+      // per-channel level state that the /clawcode-verbose IPC handler writes.
+      verboseState,
       // Phase 116-03 F27 — fire `conversation-turn` SSE events after each
       // recordTurn write. Metadata only (NO content). Ref reads .current at
       // fire time so the post-startDashboardServer assignment is visible.
