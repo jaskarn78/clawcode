@@ -1449,3 +1449,122 @@ export function useBenchmarkCompare(
     staleTime: 30_000,
   })
 }
+
+// ---------------------------------------------------------------------------
+// dash-redesign (Mission Control) — right-rail hooks.
+//
+// useActivityFeed: live operator-visible event stream for the
+// dashboard home's right rail. The kit assumes four event types
+// (advisor, escalation, discord, memory); production SSE
+// (src/dashboard/client/src/hooks/useSse.ts) only fans these names:
+//   agent-status, schedules, health, delivery-queue, memory-stats,
+//   task-state-change, error, conversation-turn
+//
+// None of those carry the operator-narrative shape the kit's feed
+// renders ("agent X consulted advisor", "agent Y escalated context").
+// Shipping a placeholder that returns an empty array — the right-
+// rail component renders the empty-state and the operator gets a
+// degraded-but-honest experience instead of fake data.
+//
+// TODO (follow-up phase): wire a new daemon-side SSE event
+// `operator-activity` that emits the four narrative event types
+// from the existing daemon hooks (advisor service, escalation,
+// Discord bot, memory consolidator). Spec sketch:
+//   { type: 'advisor'|'escalation'|'discord'|'memory',
+//     agent: string, text: string, ts: number }
+// and a REST seed at GET /api/activity?limit=N for first paint.
+// ---------------------------------------------------------------------------
+
+export type ActivityFeedItem = {
+  readonly type: 'advisor' | 'escalation' | 'discord' | 'memory'
+  readonly agent: string
+  readonly text: string
+  readonly when: string // relative time string ("2m", "6m", etc.)
+}
+
+/**
+ * Placeholder while the operator-activity SSE channel does not exist.
+ * Returns an empty list. The rail renders an empty state until the
+ * daemon-side feed lands.
+ */
+export function useActivityFeed(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _limit: number = 8,
+): { readonly data: ReadonlyArray<ActivityFeedItem>; readonly isLoading: boolean; readonly isError: boolean } {
+  return { data: [], isLoading: false, isError: false }
+}
+
+// ---------------------------------------------------------------------------
+// useRecentTasks: top-N active tasks across the fleet, flattened from
+// the existing /api/tasks/kanban endpoint that TaskKanban consumes.
+//
+// State mapping for the kit's three-state pill:
+//   Running               → 'run'
+//   Backlog/Scheduled/    → 'queue'
+//     Waiting
+//   Done/Failed           → 'done'
+//
+// Ordering: by started_at DESC, recent first. The kit's TaskRow shows
+// 5 items.
+// ---------------------------------------------------------------------------
+
+export type RecentTask = {
+  readonly id: string
+  readonly agent: string
+  readonly title: string
+  readonly meta: string
+  readonly state: 'run' | 'queue' | 'done'
+}
+
+function mapKanbanState(status: string): 'run' | 'queue' | 'done' {
+  if (status === 'Running' || status === 'running') return 'run'
+  if (status === 'Done' || status === 'done' || status === 'Failed' || status === 'failed') return 'done'
+  return 'queue'
+}
+
+function formatRelShort(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return ''
+  const delta = Date.now() - epochMs
+  if (delta < 0) return 'just now'
+  const sec = Math.floor(delta / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  return `${Math.floor(hr / 24)}d ago`
+}
+
+export function useRecentTasks(limit: number = 5): {
+  readonly data: ReadonlyArray<RecentTask>
+  readonly isLoading: boolean
+  readonly isError: boolean
+} {
+  const q = useKanbanTasks()
+  const cols = q.data?.columns
+  if (!cols) {
+    return { data: [], isLoading: q.isLoading, isError: q.isError }
+  }
+  // Flatten and sort. Done/Failed land at the bottom even when freshly
+  // ended — operators primarily care about live + queued.
+  const all: KanbanRow[] = [
+    ...cols.Running,
+    ...cols.Scheduled,
+    ...cols.Waiting,
+    ...cols.Backlog,
+    ...cols.Failed,
+    ...cols.Done,
+  ]
+  const sorted = all
+    .slice()
+    .sort((a, b) => b.started_at - a.started_at)
+    .slice(0, limit)
+  const data: RecentTask[] = sorted.map((r) => ({
+    id: r.task_id,
+    agent: r.target_agent || r.caller_agent || '?',
+    title: r.task_type || '(untitled)',
+    meta: `${r.caller_agent} → ${r.target_agent} · ${formatRelShort(r.started_at)}`,
+    state: mapKanbanState(r.status),
+  }))
+  return { data, isLoading: q.isLoading, isError: q.isError }
+}
