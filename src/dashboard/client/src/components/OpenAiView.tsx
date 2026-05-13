@@ -162,34 +162,32 @@ export function OpenAiView(): JSX.Element {
 
   return (
     <div
-      className="mx-auto max-w-4xl px-4 py-8 lg:px-6"
+      className="mx-auto max-w-4xl px-7 py-6"
       data-testid="openai-view"
     >
-      <header className="mb-8">
-        <h1 className="font-display text-3xl font-bold tracking-tight text-fg-1">
-          OpenAI endpoint
-        </h1>
-        <p className="mt-1 text-sm text-fg-3">
-          OpenAI-compatible chat-completions endpoint backed by Claude. Use any
-          client that speaks <code className="font-mono">/v1/chat/completions</code>{' '}
-          — OpenAI SDK, LangChain, curl. Keys are scoped per-agent or fleet-wide.
-        </p>
-      </header>
+      {/* dash-redesign sweep — section-head pattern. Endpoint-purpose
+          copy folds into .sub so the page opens with the same scan
+          rhythm as every other tab. */}
+      <div className="section-head mb-5">
+        <div className="flex items-baseline">
+          <h2>OpenAI endpoint</h2>
+          <span className="sub">
+            OpenAI-compatible chat-completions backed by Claude · keys
+            scoped per-agent or fleet-wide
+          </span>
+        </div>
+      </div>
 
       {/* ENDPOINT CARD */}
-      <section className="mb-6 rounded-lg border border-border bg-bg-elevated p-5">
+      <section className="tile mb-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-display text-lg font-medium text-fg-1">
             Endpoint
           </h2>
-          <span
-            className={
-              'rounded-full px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider ' +
-              (enabled
-                ? 'bg-primary/15 text-primary'
-                : 'bg-warn/15 text-warn')
-            }
-          >
+          <span className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-fg-2">
+            {/* dash-redesign sweep — .mc-dot semantics. Active endpoint
+                pulses emerald (live ok); disabled is calm warn amber. */}
+            <span className={enabled ? 'mc-dot live ok' : 'mc-dot warn'} />
             {enabled ? 'active' : 'disabled'}
           </span>
         </div>
@@ -257,7 +255,7 @@ export function OpenAiView(): JSX.Element {
 
       {/* KEYS TABLE */}
       {enabled && (
-        <section className="mb-6 rounded-lg border border-border bg-bg-elevated p-5">
+        <section className="tile mb-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-display text-lg font-medium text-fg-1">
               API keys
@@ -374,7 +372,7 @@ export function OpenAiView(): JSX.Element {
 
       {/* CREATE FORM */}
       {enabled && (
-        <section className="mb-6 rounded-lg border border-border bg-bg-elevated p-5">
+        <section className="tile mb-4">
           <h2 className="mb-3 font-display text-lg font-medium text-fg-1">
             Create key
           </h2>
