@@ -99,10 +99,36 @@ All 73 tests pass; `npm run typecheck` clean across the full repo.
 - `b574330` — feat(117-08): T01 — add buildAgentAwarenessBlock() to src/advisor/prompts.ts
 - `1d04959` — feat(117-08): T02 — inject advisor bullet + protocol into capability-manifest.ts
 - `f2e364c` — test(117-08): T03 — extend capability-manifest.test.ts with advisor cases
+- `e12e433` — docs(117-08): summary (initial draft, superseded by this revision)
+- `0c74fba` — fix(117-08): protocol points to subagent-thread by skill name, not MCP tool name (Rule 1 auto-fix)
 
 ## Deviations from Plan
 
-None — the plan was executed exactly as written. One scope clarification (above) reconciled a mismatch between the orchestrator's prompt description (which named `context-assembler.ts` for T03) and the PLAN.md authoritative `must_haves` (which explicitly says context-assembler is NOT modified). Plan-first per advisor consultation. Documented for orchestrator visibility.
+### Auto-fixed Issues
+
+**1. [Rule 1 - Bug] Advisor protocol referenced `spawn_subagent_thread` MCP tool name verbatim, breaking session-config test assertion**
+
+- **Found during:** post-completion full-suite run (`npm test`) — advisor consultation flagged that PLAN.md verify-step `npm run build` and a full-suite run had not been executed yet.
+- **Issue:** my T01 prose draft included the literal token `spawn_subagent_thread` (matching the MCP tool name) as a pointer to the alternative tool. The capability manifest runs for any agent with at least one opt-in (`skills.length > 0`), so the protocol prose leaked the tool name across `session-config.test.ts:153` — `does NOT include guidance when agent has other skills but not subagent-thread` — which asserts the prompt does NOT contain `spawn_subagent_thread` for agents that have OTHER skills but not the subagent-thread skill.
+- **Fix:** rewrite the pointer in `buildAgentAwarenessBlock` to reference `"the subagent-thread skill"` (skill name) instead of `"spawn_subagent_thread"` (MCP tool name). Identical intent; preserves the negative assertion. Also updated CM-ADV-A to assert the substring `"subagent-thread skill"` rather than the MCP tool name.
+- **Files modified:** `src/advisor/prompts.ts`, `src/manager/__tests__/capability-manifest.test.ts`
+- **Commit:** `0c74fba fix(117-08): protocol points to subagent-thread by skill name, not MCP tool name`
+
+### Scope clarification (orchestrator-visible — see top of summary)
+
+The orchestrator's prompt description named `context-assembler.ts` for T03; PLAN.md `must_haves` explicitly say context-assembler is NOT modified. Plan-first per advisor consultation. No assembler files were touched.
+
+## Pre-existing flakes (out of scope)
+
+Full-suite run also surfaces these pre-existing failures, verified by checking out the pre-117-08 commit (`a23e0cd`) and re-running the suite — same set fails there. Logged but NOT fixed per the executor scope-boundary rule:
+
+- `src/openai/__tests__/session-continuity.test.ts` — `v1 legacy rows are copied to v2 exactly once on first post-migration boot` (5s timeout)
+- `src/cli/commands/__tests__/migrate-openclaw-complete.test.ts` — SC-3 / SC-4 (5s timeouts on Phase 82 migration tests)
+- `src/manager/__tests__/session-config.test.ts` — 5 pre-existing failures (`fingerprint + top-3 hot memories` size budget at 2800, `resume summary budget` strategy assertion, two `Phase 73 brief cache wiring` cases, and `MEM-01-C2` 50KB-truncation marker assertion). All fail on `a23e0cd` (pre-117-08) too.
+- `src/manager/__tests__/daemon-openai.test.ts` — 4 startOpenAiEndpoint pre-existing failures
+- Various dream-prompt-builder / conversation-brief / config-mapper / memory-translator / verifier / keys.test.ts pre-existing failures
+
+Deferred — none of these touch advisor / capability-manifest paths, none were introduced by 117-08.
 
 ## Out of scope (per plan, deferred)
 
