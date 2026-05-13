@@ -265,18 +265,26 @@ describe("SlashCommandHandler.register — native-CC discovery + merge (Phase 87
   });
 
   it("CMD-07 — throws and does NOT call rest.put when body > 90 commands per guild", async () => {
-    // Generate 120 unique SDK commands.
-    const cmds: SlashCommand[] = [];
-    for (let i = 0; i < 120; i++) {
-      cmds.push({
-        name: `stress-cmd-${i}`,
-        description: `Stress ${i}`,
-        argumentHint: "",
-      });
-    }
-    const handle = makeHandleStub(cmds);
-    const sessionManager = makeSessionManagerStub({ "agent-a": handle });
-    const agent = makeAgentConfig("agent-a");
+    // Phase 117.1-02 — under the post-117.1-02 allowlist policy SDK-reported
+    // commands that aren't in {model, permissions, effort, compact, cost,
+    // help} are skipped at classification time, so flooding the SDK channel
+    // can no longer breach the cap (that's the whole point of T02). The
+    // cap path is still reachable via per-agent yaml configuration, so we
+    // pin the same negative-path here by stuffing 120 entries into the
+    // agent's static `slashCommands` config directly. If the cap pre-flight
+    // ever regresses, this test catches it just like the SDK-flood version
+    // used to.
+    const stressDefs = Array.from({ length: 120 }, (_, i) => ({
+      name: `stress-cmd-${i}`,
+      description: `Stress ${i}`,
+      claudeCommand: "",
+      options: [] as const,
+    }));
+    const sdkHandle = makeHandleStub([]);
+    const sessionManager = makeSessionManagerStub({ "agent-a": sdkHandle });
+    const agent = makeAgentConfig("agent-a", {
+      slashCommands: stressDefs as unknown as ResolvedAgentConfig["slashCommands"],
+    });
 
     const client = {
       user: { id: "bot-123" },

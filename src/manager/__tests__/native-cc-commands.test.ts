@@ -1,14 +1,24 @@
 /**
- * Phase 87 Plan 01 Task 1 — native-CC classifier + builder unit tests (RED).
+ * Phase 87 Plan 01 Task 1 — native-CC classifier + builder unit tests.
  *
- * Pinned by the plan frontmatter must_haves:
+ * Phase 117.1-02 T02 UPDATE: classifier flipped from open-by-default to
+ * explicit ALLOWLIST. The pre-117.1 expectation that unknown / future
+ * command names default to "prompt-channel" no longer holds — under the
+ * allowlist policy, anything not in
+ * {model, permissions, effort, compact, cost, help} returns "skip".
+ *
+ * Pinned must_haves (post-117.1-02):
  *   - classifyCommand routes `model`/`permissions`/`effort` → "control-plane"
- *   - classifyCommand routes `compact`/`context`/`cost`/`help`/`hooks` →
- *     "prompt-channel"
- *   - classifyCommand routes `clear`/`export`/`mcp` → "skip"
- *   - Safe default for unknown commands is "prompt-channel"
+ *   - classifyCommand routes `compact`/`cost`/`help` → "prompt-channel"
+ *   - classifyCommand routes ANY non-allowlisted name → "skip"
+ *     (including previously-routable `context`, `hooks`, and unknown future
+ *     commands, plus project/user `.claude/commands/*.md` names like
+ *     `gsd-debug` / `find-skills` that flooded the registration in prod
+ *     CMD-07 2026-05-12)
+ *   - classifyCommand routes `clear`/`export`/`mcp` → "skip" (legacy SKIP
+ *     set retained for documentation; they're absent from the allowlist too)
  *   - buildNativeCommandDefs: every entry's `.name` matches /^clawcode-/
- *   - buildNativeCommandDefs: skip-set entries produce zero output
+ *   - buildNativeCommandDefs: non-allowlisted entries produce zero output
  *   - buildNativeCommandDefs: ACL-denied names NEVER appear
  *   - buildNativeCommandDefs: nativeBehavior discriminator is populated
  *   - mergeAndDedupe: native wins on name collision
@@ -52,72 +62,106 @@ describe("classifyCommand — dispatch discriminator", () => {
     expect(classifyCommand("effort")).toBe("control-plane");
   });
 
-  it("routes `compact` to prompt-channel", () => {
+  it("routes `compact` to prompt-channel (allowlisted)", () => {
     expect(classifyCommand("compact")).toBe("prompt-channel");
   });
 
-  it("routes `context` to prompt-channel", () => {
-    expect(classifyCommand("context")).toBe("prompt-channel");
-  });
-
-  it("routes `cost` to prompt-channel", () => {
+  it("routes `cost` to prompt-channel (allowlisted)", () => {
     expect(classifyCommand("cost")).toBe("prompt-channel");
   });
 
-  it("routes `help` to prompt-channel", () => {
+  it("routes `help` to prompt-channel (allowlisted)", () => {
     expect(classifyCommand("help")).toBe("prompt-channel");
   });
 
-  it("routes `hooks` to prompt-channel", () => {
-    expect(classifyCommand("hooks")).toBe("prompt-channel");
+  // Phase 117.1-02 — `context` and `hooks` were previously prompt-channel by
+  // virtue of falling through the open default. Under the allowlist they're
+  // no longer routable through Discord (operators reach them via CLI).
+  it("routes `context` to skip (Phase 117.1-02 — not allowlisted)", () => {
+    expect(classifyCommand("context")).toBe("skip");
   });
 
-  it("routes `clear` to skip (CMD-00 spike: not SDK-dispatchable)", () => {
+  it("routes `hooks` to skip (Phase 117.1-02 — not allowlisted)", () => {
+    expect(classifyCommand("hooks")).toBe("skip");
+  });
+
+  it("routes `clear` to skip (CMD-00 spike: not SDK-dispatchable; also not allowlisted)", () => {
     expect(classifyCommand("clear")).toBe("skip");
   });
 
-  it("routes `export` to skip (CMD-00 spike: not SDK-dispatchable)", () => {
+  it("routes `export` to skip (CMD-00 spike: not SDK-dispatchable; also not allowlisted)", () => {
     expect(classifyCommand("export")).toBe("skip");
   });
 
-  it("routes `mcp` to skip (Pitfall 12 — covered by /clawcode-tools)", () => {
+  it("routes `mcp` to skip (Pitfall 12 — covered by /clawcode-tools; also not allowlisted)", () => {
     expect(classifyCommand("mcp")).toBe("skip");
   });
 
-  it("routes unknown future commands to prompt-channel (safe default)", () => {
-    expect(classifyCommand("unknown-future-cmd")).toBe("prompt-channel");
+  // Phase 117.1-02 — open-by-default removed. Unknown names now skip.
+  // This is the prod CMD-07 regression pin: ~120 project/user .claude/
+  // commands/*.md names used to flood registration through this default.
+  it("routes unknown future commands to skip (Phase 117.1-02 — not in allowlist)", () => {
+    expect(classifyCommand("unknown-future-cmd")).toBe("skip");
   });
 
-  it("routes empty string to prompt-channel (safe default)", () => {
-    expect(classifyCommand("")).toBe("prompt-channel");
+  it("routes empty string to skip (Phase 117.1-02 — not in allowlist)", () => {
+    expect(classifyCommand("")).toBe("skip");
+  });
+
+  // Phase 117.1-02 — explicit regression pins for the names that triggered
+  // the production CMD-07 cap breach. Every project/user `.claude/commands/
+  // *.md` name surfaced by the SDK when settingSources: [project, user] is
+  // set must classify as "skip" — otherwise the open-default regression
+  // returns and we ship 193 commands again.
+  it("routes `bug` to skip (Phase 117.1-02 — not allowlisted)", () => {
+    expect(classifyCommand("bug")).toBe("skip");
+  });
+
+  it("routes `init` to skip (Phase 117.1-02 — not allowlisted)", () => {
+    expect(classifyCommand("init")).toBe("skip");
+  });
+
+  it("routes `gsd-debug` to skip (project/user command — not allowlisted)", () => {
+    expect(classifyCommand("gsd-debug")).toBe("skip");
+  });
+
+  it("routes `find-skills` to skip (project/user command — not allowlisted)", () => {
+    expect(classifyCommand("find-skills")).toBe("skip");
   });
 });
 
 describe("buildNativeCommandDefs — classifier-driven SlashCommandDef[] construction", () => {
-  it("skips SKIP-set entries and emits only non-skip commands", () => {
+  it("skips non-allowlisted entries and emits only allowlisted commands", () => {
     const input: readonly SlashCommand[] = [
-      cmd("compact", "X"),
-      cmd("export", "Y"),
+      cmd("compact", "X"), // allowlisted
+      cmd("export", "Y"),  // not allowlisted (legacy SKIP)
     ];
     const out = buildNativeCommandDefs(input, emptyAcl);
     expect(out).toHaveLength(1);
     expect(out[0].name).toBe("clawcode-compact");
   });
 
-  it("prefixes EVERY returned name with `clawcode-`", () => {
+  it("prefixes EVERY returned name with `clawcode-` (allowlisted entries only)", () => {
+    // Phase 117.1-02 — `hooks` and `context` are no longer allowlisted,
+    // so only the three allowlisted names below survive.
     const input: readonly SlashCommand[] = [
-      cmd("compact"),
-      cmd("model"),
-      cmd("hooks"),
-      cmd("help"),
-      cmd("context"),
+      cmd("compact"), // allowlisted (prompt-channel)
+      cmd("model"),   // allowlisted (control-plane)
+      cmd("hooks"),   // skipped — not allowlisted
+      cmd("help"),    // allowlisted (prompt-channel)
+      cmd("context"), // skipped — not allowlisted
     ];
     const out = buildNativeCommandDefs(input, emptyAcl);
     // Every returned entry respects the namespace pin (Pitfall 10).
     for (const entry of out) {
       expect(entry.name).toMatch(/^clawcode-/);
     }
-    expect(out.length).toBe(input.length);
+    expect(out.length).toBe(3);
+    expect(out.map((c) => c.name).sort()).toEqual([
+      "clawcode-compact",
+      "clawcode-help",
+      "clawcode-model",
+    ]);
   });
 
   it("tags control-plane entries with nativeBehavior:'control-plane'", () => {
@@ -133,6 +177,11 @@ describe("buildNativeCommandDefs — classifier-driven SlashCommandDef[] constru
   });
 
   it("filters out ACL-denied names BEFORE classification (init/security-review/batch)", () => {
+    // Phase 117.1-02 — under the allowlist these names would be skipped
+    // anyway, but the ACL gate must run FIRST so admins can override the
+    // allowlist (e.g., deny an allowlisted name) without surfacing a
+    // classification mismatch. Keep `compact` (allowlisted) as the
+    // positive-path pin.
     const input: readonly SlashCommand[] = [
       cmd("init"),
       cmd("security-review"),
@@ -150,17 +199,16 @@ describe("buildNativeCommandDefs — classifier-driven SlashCommandDef[] constru
     expect(names).toContain("clawcode-compact");
   });
 
-  it("with empty ACL, all non-skip commands pass through", () => {
+  it("with empty ACL, only allowlisted commands pass through (Phase 117.1-02 — `init` is no longer allowlisted)", () => {
     const input: readonly SlashCommand[] = [
-      cmd("init"),
-      cmd("compact"),
-      cmd("model"),
+      cmd("init"),    // skipped — not allowlisted
+      cmd("compact"), // allowlisted
+      cmd("model"),   // allowlisted
     ];
     const out = buildNativeCommandDefs(input, emptyAcl);
-    expect(out).toHaveLength(3);
+    expect(out).toHaveLength(2);
     expect(out.map((c) => c.name).sort()).toEqual([
       "clawcode-compact",
-      "clawcode-init",
       "clawcode-model",
     ]);
   });
