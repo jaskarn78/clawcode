@@ -198,6 +198,10 @@ import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
 import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
+// Phase 117-03 — ported advisor system-prompt builder (parity baseline from
+// the inline construction at the old :9836 site). The IPC handler at
+// `ask-advisor` now calls this rather than inlining the string.
+import { buildAdvisorSystemPrompt } from "../advisor/prompts.js";
 import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema, agentSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
@@ -1711,6 +1715,78 @@ export async function handleMarketplaceProbeOpItemsIpc(
  * in-depth pattern as `CLAWCODE_MANAGER_SOCK` (Go shim side) and
  * `CLAWCODE_STATIC_SHIM_PATH` (loader side). Default is canonical.
  */
+/**
+ * Arguments to `forkAdvisorConsult` — Phase 117-03 extraction shape.
+ *
+ * - `agent`         : parent agent name to fork from.
+ * - `question`      : single-turn message dispatched to the fork.
+ * - `systemPrompt`  : fully-assembled system-prompt override (the caller
+ *                     is responsible for memory-context retrieval +
+ *                     `buildAdvisorSystemPrompt` assembly so this function
+ *                     remains a signature-pure fork-and-dispatch primitive).
+ * - `advisorModel`  : SDK model alias (today: literal `"opus"` matching
+ *                     the legacy `modelOverride` at the old :9844 site;
+ *                     Plan 117-06 wires per-agent resolution).
+ */
+export interface ForkAdvisorArgs {
+  readonly agent: string;
+  readonly question: string;
+  readonly systemPrompt: string;
+  readonly advisorModel: string;
+}
+
+/**
+ * Fork-based advisor consultation primitive — extracted verbatim from the
+ * inline body that used to live at `daemon.ts:9843–9854` (Phase 117-03).
+ *
+ * Behavior contract (DO NOT CHANGE — parity test in
+ * `src/advisor/backends/__tests__/legacy-fork.test.ts` enforces it):
+ *   1. Fork the parent agent under `advisorModel` (literal `"opus"` today)
+ *      with the caller-supplied `systemPromptOverride`.
+ *   2. Dispatch ONE turn carrying `question` to the fork.
+ *   3. In `finally`, ALWAYS call `stopAgent(forkName)` — even when
+ *      `dispatchTurn` throws. This invariant is the most important
+ *      behavioral guarantee preserved by the extraction.
+ *   4. Return `{ answer }` (untruncated; the caller — today the IPC
+ *      handler, Plan 117-07 the `AdvisorService` — owns the
+ *      `ADVISOR_RESPONSE_MAX_LENGTH` truncation).
+ *
+ * This function does NOT:
+ *   - retrieve memory context (caller builds the system prompt),
+ *   - enforce the daily budget (`AdvisorBudget.canCall` / `recordCall`),
+ *   - truncate the answer.
+ * Those concerns belong to the IPC handler (today) and `AdvisorService`
+ * (Plan 117-07).
+ *
+ * Wrapped as `LegacyForkAdvisor` in `src/advisor/backends/legacy-fork.ts`
+ * to plug into the provider-neutral `AdvisorService` registry while
+ * preserving today's behavior as the operator rollback path
+ * (CONTEXT.md `<scope>`).
+ */
+export async function forkAdvisorConsult(
+  manager: SessionManager,
+  args: ForkAdvisorArgs,
+): Promise<{ answer: string }> {
+  // `modelOverride` is typed `"sonnet" | "opus" | "haiku"` on `ForkOptions`
+  // (see `src/manager/fork.ts:9`). Plan 117-03 keeps the legacy call shape
+  // (`"opus"`); Plan 117-06 introduces a real alias resolver in front of
+  // this primitive so the cast can be replaced with the resolved literal.
+  const fork = await manager.forkSession(args.agent, {
+    modelOverride: args.advisorModel as "sonnet" | "opus" | "haiku",
+    systemPromptOverride: args.systemPrompt,
+  });
+
+  let answer: string;
+  try {
+    answer = await manager.dispatchTurn(fork.forkName, args.question);
+  } finally {
+    // Always clean up the fork — this try/finally is the parity invariant.
+    await manager.stopAgent(fork.forkName).catch(() => {});
+  }
+
+  return { answer };
+}
+
 export const MANAGER_DIR =
   process.env.CLAWCODE_MANAGER_DIR ?? join(homedir(), ".clawcode", "manager");
 
@@ -9832,33 +9908,28 @@ async function routeMethod(
         }
       }
 
-      // Fork a session with opus model for one-shot advice
-      const systemPrompt = [
-        `You are an advisor to agent "${agentName}". Provide concise, actionable guidance.`,
-        ...(memoryContext
-          ? ["\nRelevant context from agent's memory:", memoryContext]
-          : []),
-      ].join("\n");
-
-      const fork = await manager.forkSession(agentName, {
-        modelOverride: "opus" as const,
-        systemPromptOverride: systemPrompt,
+      // Phase 117-03: the fork-and-dispatch body is now `forkAdvisorConsult`
+      // above. System prompt assembly moved to `buildAdvisorSystemPrompt`
+      // (`src/advisor/prompts.ts`, ported in Plan 117-02). Memory-context
+      // retrieval, budget enforcement, truncation, and the IPC response
+      // shape REMAIN INLINE HERE for behavior parity — Plan 117-07
+      // re-points this handler at `AdvisorService` which owns those.
+      const systemPrompt = buildAdvisorSystemPrompt(agentName, memoryContext);
+      const { answer: rawAnswer } = await forkAdvisorConsult(manager, {
+        agent: agentName,
+        question,
+        systemPrompt,
+        advisorModel: "opus",
       });
 
-      let answer: string;
-      try {
-        answer = await manager.dispatchTurn(fork.forkName, question);
-      } finally {
-        // Always clean up the fork
-        await manager.stopAgent(fork.forkName).catch(() => {});
-      }
+      // Truncate response to 2000 chars (parity with the pre-117-03 body).
+      const answer =
+        rawAnswer.length > ADVISOR_RESPONSE_MAX_LENGTH
+          ? rawAnswer.slice(0, ADVISOR_RESPONSE_MAX_LENGTH)
+          : rawAnswer;
 
-      // Truncate response to 2000 chars
-      if (answer.length > ADVISOR_RESPONSE_MAX_LENGTH) {
-        answer = answer.slice(0, ADVISOR_RESPONSE_MAX_LENGTH);
-      }
-
-      // Record the call after success
+      // Record the call after success — same ordering as before
+      // extraction (only successful turns charge the budget).
       advisorBudget.recordCall(agentName);
       const budgetRemaining = advisorBudget.getRemaining(agentName);
 
