@@ -127,7 +127,7 @@ export function buildAgentAwarenessBlock(opts: AwarenessBlockOptions): {
     "Advisor consultations are visible in your Discord channel: a 💭 reaction on the triggering message and a " +
     "`— consulted advisor (Opus) before responding` footer on your reply. " +
     "For tasks that need operator-watchable execution (multi-step exploration, code review, long research), " +
-    "use the `spawn_subagent_thread` skill instead — that creates a visible sidebar thread.\n";
+    "use the subagent-thread skill instead (when assigned) — that creates a visible sidebar thread.\n";
 
   return { bullet, protocol };
 }

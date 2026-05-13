@@ -489,7 +489,13 @@ describe("buildCapabilityManifest", () => {
     expect(manifest).toContain("💭 reaction");
     expect(manifest).toContain("## Advisor protocol");
     expect(manifest).toContain("BEFORE substantive work");
-    expect(manifest).toContain("spawn_subagent_thread");
+    // Protocol points operators toward subagent-thread by skill name (not
+    // the MCP tool name) so the prose doesn't accidentally surface
+    // `spawn_subagent_thread` to agents that don't carry the skill —
+    // see session-config "does NOT include guidance when agent has other
+    // skills but not subagent-thread" test (Rule 1 deviation from initial
+    // T01 draft, caught by full-suite run pre-completion).
+    expect(manifest).toContain("subagent-thread skill");
     // Native path: no legacy-fork qualifier.
     expect(manifest).not.toContain("legacy fork backend");
   });
