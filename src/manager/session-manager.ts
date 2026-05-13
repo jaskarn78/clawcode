@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { logger } from "../shared/logger.js";
 import { SessionError } from "../shared/errors.js";
 // Phase 999.14 MCP-01 — /proc-walk PID discovery for the daemon-wide tracker.
@@ -227,6 +228,39 @@ export class SessionManager {
   private readonly skillUsageTracker: SkillUsageTracker = new SkillUsageTracker({
     capacity: 20,
   });
+
+  /**
+   * Phase 117 Plan 04 T02 — advisor consultation event bus.
+   *
+   * Per RESEARCH §13.10: `session-adapter.ts` emits two observational
+   * events on this emitter when the Claude Agent SDK's native advisor
+   * tool fires inside an agent's own turn (Plan 117-04 T03/T04 wires
+   * the emitters at the per-assistant-message scan site and at the
+   * terminal `result` event for budget accounting).
+   *
+   * Event shapes (see `src/advisor/types.ts`):
+   *   - `"advisor:invoked"` payload: `AdvisorInvokedEvent`
+   *     `{ agent, turnId, toolUseId }` — fires when the executor emits
+   *     `server_tool_use{name:"advisor"}`. Discord bridge (Plan 117-09)
+   *     listens to drop the 💭 reaction on the triggering message.
+   *   - `"advisor:resulted"` payload: `AdvisorResultedEvent`
+   *     `{ agent, turnId, toolUseId, kind, text?, errorCode? }` — fires
+   *     when the matching `advisor_tool_result` block arrives in the
+   *     same assistant message. `kind` distinguishes the three SDK
+   *     terminal states (advisor_result / advisor_redacted_result /
+   *     advisor_tool_result_error). Plan 117-09 uses this for the
+   *     footer and `/verbose` inline display (Plan 117-11).
+   *
+   * Observational ONLY — listeners that throw must not break the
+   * message path. `session-adapter.ts` wraps `emit()` in try/catch
+   * (RESEARCH §6 Pitfall 1 + Pitfall 7 invariant).
+   *
+   * Lifetime: same as SessionManager instance. The emitter is
+   * `public readonly` so DiscordBridge can subscribe directly through
+   * its injected SessionManager reference (RESEARCH §13.10 — public
+   * property is the simplest reachable surface).
+   */
+  public readonly advisorEvents: EventEmitter = new EventEmitter();
 
   /** Phase 73 Plan 02 — per-agent conversation-brief cache (LAT-02). */
   private readonly briefCache = new ConversationBriefCache();
