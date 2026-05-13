@@ -251,21 +251,20 @@ export function MemoryView(): JSX.Element {
 
   return (
     <div
-      className="mx-auto max-w-[1400px] px-4 py-6 lg:px-6"
+      className="mx-auto max-w-[1400px] px-7 py-6"
       data-testid="memory-view"
     >
-      <header className="mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="font-display text-3xl font-bold tracking-tight text-fg-1">
-              Memory & dreams
-            </h1>
-            <p className="mt-1 text-sm text-fg-3">
-              Per-agent memory tiers + dream-pass orchestration. Triggered
-              passes write to <code className="font-mono">memory/dreams/</code>
-              ; consolidation runs the tier-maintenance pipeline (promote /
-              demote / archive).
-            </p>
+      {/* dash-redesign sweep — section-head pattern. The dense
+          consolidation/dream copy moves into .sub so the buttons
+          edge-snap right at the same baseline. */}
+      <header className="mb-5">
+        <div className="section-head">
+          <div className="flex items-baseline">
+            <h2>Memory &amp; dreams</h2>
+            <span className="sub">
+              per-agent memory tiers + dream-pass orchestration ·
+              consolidation runs promote / demote / archive
+            </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
