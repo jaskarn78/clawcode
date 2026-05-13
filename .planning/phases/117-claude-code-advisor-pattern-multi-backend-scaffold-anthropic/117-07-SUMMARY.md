@@ -112,7 +112,9 @@ src/mcp/server.test.ts
   "has exactly 22 tools defined" — unchanged by this plan)
 ```
 
-Baseline pre-execution: 73 failed | 6792 passed | 7 skipped. Post-execution: same baseline failures + 7 new passes from the dispatch suite (no new regressions).
+Baseline pre-execution: 73 failed | 6792 passed | 7 skipped (6872 total).
+Post-execution: 57 failed | 6827 passed | 7 skipped (6891 total).
+Delta: +19 total tests (this plan added 7; parallel-wave plans 117-08/117-09 added the remainder); passed +35; failed −16 (parallel agents fixed pre-existing failures during this session window). **No new failures from this plan** — the regression baseline shrank rather than grew.
 
 ## Deviations from Plan
 
