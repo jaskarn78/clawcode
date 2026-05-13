@@ -109,16 +109,19 @@ function relTime(ms: number): string {
 }
 
 function statusDotClass(col: DisplayColumn): string {
+  // dash-redesign sweep — use the kit's `.mc-dot` tri-state semantics.
+  // Running = ok+live (pulsing emerald); Waiting = warn (amber);
+  // Done = idle (gray); Backlog = ok (calm emerald, no pulse).
   switch (col) {
     case 'Running':
-      return 'bg-primary animate-pulse'
+      return 'mc-dot live ok'
     case 'Waiting':
-      return 'bg-warn'
+      return 'mc-dot warn'
     case 'Done':
-      return 'bg-fg-3'
+      return 'mc-dot idle'
     case 'Backlog':
     default:
-      return 'bg-info'
+      return 'mc-dot ok'
   }
 }
 
@@ -253,15 +256,16 @@ export function TaskKanban() {
     : 0
 
   return (
-    <div className="mx-auto max-w-[1600px] px-4 py-6 lg:px-6">
-      {/* HEADER */}
-      <header className="mb-6">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h1 className="font-display text-3xl font-bold tracking-tight text-fg-1">
-              Tasks
-            </h1>
-            <span className="font-mono text-xs text-fg-3">
+    <div className="mx-auto max-w-[1600px] px-7 py-6">
+      {/* dash-redesign sweep — section-head pattern. Counts roll up
+          into the .sub subtitle so the operator scans 'Tasks · N
+          backlog · N running · N waiting · N done' on one row.
+          New-task button stays right-anchored. */}
+      <header className="mb-5">
+        <div className="section-head mb-4">
+          <div className="flex items-baseline gap-3">
+            <h2>Tasks</h2>
+            <span className="sub">
               {totalBacklog} backlog · {totalRunning} running ·{' '}
               {totalWaiting > 0 ? `${totalWaiting} waiting · ` : ''}
               {totalDone} done
@@ -449,10 +453,7 @@ function KanbanColumn(props: {
     >
       <header className="flex items-center justify-between border-b border-border px-3 py-2.5">
         <div className="flex items-center gap-2">
-          <span
-            className={'h-2 w-2 rounded-full ' + statusDotClass(name)}
-            aria-hidden
-          />
+          <span className={statusDotClass(name)} aria-hidden />
           <h2 className="font-display text-sm font-medium uppercase tracking-wider text-fg-1">
             {DISPLAY_COLUMN_LABEL[name]}
           </h2>
