@@ -29,10 +29,14 @@ afterEach(() => {
 })
 import {
   matchesFilter,
+  sortByActivity,
   MissionFleetGrid,
   type FleetFilter,
 } from './MissionFleetGrid'
-import type { AgentStatusEntry } from '../../hooks/useApi'
+import type {
+  AgentStatusEntry,
+  FleetActivityAgent,
+} from '../../hooks/useApi'
 
 // ---------------------------------------------------------------------------
 // Pure helper: matchesFilter
@@ -74,6 +78,95 @@ describe('matchesFilter', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Pure helper: sortByActivity
+// ---------------------------------------------------------------------------
+
+const act = (
+  overrides: Partial<FleetActivityAgent>,
+): FleetActivityAgent =>
+  ({
+    agent: 'unspecified',
+    turns_24h: 0,
+    turns_7d: 0,
+    last_turn_at: null,
+    ...overrides,
+  }) as FleetActivityAgent
+
+describe('sortByActivity', () => {
+  it('orders agents by turns_24h descending', () => {
+    const agents = [
+      agent({ name: 'low' }),
+      agent({ name: 'high' }),
+      agent({ name: 'mid' }),
+    ]
+    const activity = [
+      act({ agent: 'low', turns_24h: 1 }),
+      act({ agent: 'mid', turns_24h: 5 }),
+      act({ agent: 'high', turns_24h: 42 }),
+    ]
+    const sorted = sortByActivity(agents, activity)
+    expect(sorted.map((a) => a.name)).toEqual(['high', 'mid', 'low'])
+  })
+
+  it('breaks ties by last_turn_at (more recent wins)', () => {
+    const agents = [agent({ name: 'older' }), agent({ name: 'newer' })]
+    const activity = [
+      act({
+        agent: 'older',
+        turns_24h: 3,
+        last_turn_at: '2026-05-13T00:00:00Z',
+      }),
+      act({
+        agent: 'newer',
+        turns_24h: 3,
+        last_turn_at: '2026-05-13T18:00:00Z',
+      }),
+    ]
+    const sorted = sortByActivity(agents, activity)
+    expect(sorted.map((a) => a.name)).toEqual(['newer', 'older'])
+  })
+
+  it('breaks turns+recency ties by name asc as final tiebreaker', () => {
+    const agents = [agent({ name: 'zeta' }), agent({ name: 'alpha' })]
+    const activity = [
+      act({ agent: 'zeta', turns_24h: 0, last_turn_at: null }),
+      act({ agent: 'alpha', turns_24h: 0, last_turn_at: null }),
+    ]
+    const sorted = sortByActivity(agents, activity)
+    expect(sorted.map((a) => a.name)).toEqual(['alpha', 'zeta'])
+  })
+
+  it('treats missing activity rows as zero (sorts to the tail, name-ordered)', () => {
+    const agents = [
+      agent({ name: 'unseen' }),
+      agent({ name: 'busy' }),
+      agent({ name: 'alsounseen' }),
+    ]
+    const activity = [act({ agent: 'busy', turns_24h: 10 })]
+    const sorted = sortByActivity(agents, activity)
+    expect(sorted.map((a) => a.name)).toEqual([
+      'busy',
+      'alsounseen',
+      'unseen',
+    ])
+  })
+
+  it('does not mutate the input arrays (immutable per coding-style rule)', () => {
+    const agents = [
+      agent({ name: 'b' }),
+      agent({ name: 'a' }),
+    ] as ReadonlyArray<AgentStatusEntry>
+    const before = agents.map((a) => a.name)
+    sortByActivity(agents, [])
+    expect(agents.map((a) => a.name)).toEqual(before)
+  })
+
+  it('returns an empty array when given an empty agent list', () => {
+    expect(sortByActivity([], [])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Render smokes
 // ---------------------------------------------------------------------------
 
@@ -83,11 +176,26 @@ const FIXTURE = vi.hoisted(() => ({
     { name: 'bravo', status: 'errored', lastTurnAt: null, model: 'opus' },
     { name: 'charlie', status: 'stopped', lastTurnAt: null, model: 'haiku' },
   ],
+  activity: [] as Array<{
+    readonly agent: string
+    readonly turns_24h: number
+    readonly turns_7d: number
+    readonly last_turn_at: string | null
+  }>,
 }))
 
 vi.mock('../../hooks/useApi', () => ({
   useAgents: () => ({
     data: { agents: FIXTURE.agents },
+    isLoading: false,
+    isError: false,
+  }),
+  useFleetActivitySummary: () => ({
+    data: {
+      since_24h: '2026-05-12T00:00:00Z',
+      since_7d: '2026-05-06T00:00:00Z',
+      agents: FIXTURE.activity,
+    },
     isLoading: false,
     isError: false,
   }),
@@ -100,6 +208,31 @@ vi.mock('./MissionAgentTile', () => ({
 }))
 
 describe('<MissionFleetGrid />', () => {
+  it('shows the "most active first · 24h" subtitle in the section header', () => {
+    render(<MissionFleetGrid />)
+    expect(screen.getByText(/most active first/i)).toBeInTheDocument()
+  })
+
+  it('renders tiles in activity-descending order', () => {
+    // Override the hoisted fixture so render order is observable.
+    FIXTURE.activity = [
+      { agent: 'alpha', turns_24h: 1, turns_7d: 1, last_turn_at: null },
+      { agent: 'bravo', turns_24h: 50, turns_7d: 200, last_turn_at: null },
+      { agent: 'charlie', turns_24h: 10, turns_7d: 70, last_turn_at: null },
+    ]
+
+    const { container } = render(<MissionFleetGrid />)
+    const tiles = Array.from(container.querySelectorAll('[data-testid^="tile-"]'))
+    expect(tiles.map((el) => el.getAttribute('data-testid'))).toEqual([
+      'tile-bravo',
+      'tile-charlie',
+      'tile-alpha',
+    ])
+
+    // Reset for the remaining tests in this describe block.
+    FIXTURE.activity = []
+  })
+
   it('defaults to the "all" filter — chip is active and every tile renders', () => {
     render(<MissionFleetGrid />)
 
