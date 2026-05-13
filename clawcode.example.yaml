@@ -20,6 +20,17 @@ defaults:
     fal:
       apiKeyEnv: FAL_API_KEY
       model: fal-ai/flux-pro
+  # Phase 117 — Advisor pattern. See CLAUDE.md "Advisor pattern (Phase 117)"
+  # for backend resolution, rollback procedure, and Discord visibility.
+  # The values below are the hardcoded baseline; leave the block omitted
+  # to inherit it. Uncomment to make the defaults explicit or to dial.
+  # advisor:
+  #   backend: native         # "native" (default) | "fork" (legacy rollback)
+  #   model: opus             # alias resolves to claude-opus-4-7
+  #   maxUsesPerRequest: 3    # native-only — per-request advisor tool cap
+  #   caching:
+  #     enabled: true         # native-only — advisor-side prompt cache
+  #     ttl: 5m
 
 mcpServers:
   finnhub:
@@ -271,6 +282,13 @@ agents:
     identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
     model: sonnet
     subagentModel: opus
+    # Phase 117 — operator rollback lever. If the native (Anthropic SDK
+    # advisorModel) backend shows regressions on this one agent, flip
+    # only this agent back to the legacy fork advisor via `clawcode
+    # reload` (no daemon restart needed). Cascades per field over
+    # defaults.advisor. See CLAUDE.md "Advisor pattern (Phase 117)".
+    # advisor:
+    #   backend: fork
     channels:
       - "1481670479017414767"
     mcpServers:
