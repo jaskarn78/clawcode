@@ -781,12 +781,38 @@ export class DiscordBridge {
       const onInvoked = (ev: AdvisorInvokedEvent): void => {
         if (ev.agent !== sessionName) return;
         didConsultAdvisor = true;
+        // Plan 117.1-01 — production telemetry. INFO so it surfaces in
+        // daemon logs without DEBUG noise; matches existing pino convention
+        // ({ ...fields }, "message"). Closes the silent-path gap that
+        // masked Issue 2 in the 117 operator smoke (see 117.1-CONTEXT.md).
+        this.log.info(
+          {
+            agent: sessionName,
+            channel: channelId,
+            userMessageId: message.id,
+          },
+          "advisor invoked (native server tool fired)",
+        );
         // Fire-and-forget — addReaction swallows errors itself.
         void addReaction(message, "💭");
       };
       const onResulted = (ev: AdvisorResultedEvent): void => {
         if (ev.agent !== sessionName) return;
         lastAdvisorResult = { kind: ev.kind, text: ev.text, errorCode: ev.errorCode };
+        // Plan 117.1-01 — production telemetry. `variant` discriminates
+        // advisor_result / advisor_redacted_result / advisor_tool_result_error
+        // (RESEARCH §13.4). errorCode only logged on the error variant.
+        this.log.info(
+          {
+            agent: sessionName,
+            channel: channelId,
+            variant: ev.kind,
+            ...(ev.kind === "advisor_tool_result_error"
+              ? { errorCode: ev.errorCode }
+              : {}),
+          },
+          "advisor resulted",
+        );
       };
       this.sessionManager.advisorEvents.on("advisor:invoked", onInvoked);
       this.sessionManager.advisorEvents.on("advisor:resulted", onResulted);
