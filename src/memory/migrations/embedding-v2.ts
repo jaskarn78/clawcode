@@ -329,6 +329,49 @@ export class EmbeddingV2Migrator {
   }
 
   /**
+   * 116-postdeploy 2026-05-13 — reset `last_cursor` to NULL so the next
+   * batch starts scanning from the beginning of the memories table again.
+   *
+   * Why this exists: memory IDs are nanoid-generated (random ordering, NOT
+   * monotonic). The runner's batch query filters `id > last_cursor`, so if
+   * the cursor advances past the lexicographic position of subsequent
+   * inserts, those entries become invisible to the runner — it returns
+   * `batch.length === 0` forever while `countMemoriesMissingV2Embedding()`
+   * still reports the orphan rows. Production bug 2026-05-13:
+   * fin-acquisition stuck at 1407/1408 (then 1407/1415 as new memories
+   * landed behind the cursor) for ~5 days.
+   *
+   * Distinct from `saveCursor(id, n)` which only writes a non-null id.
+   * Optionally updates `progress_total` so the dashboard's percent display
+   * snaps to a meaningful denominator after the reset (the original total
+   * was set once at re-embedding entry and never tracks new inserts).
+   *
+   * Same phase guard as `saveCursor` — no-ops outside working phases so a
+   * concurrent pause/cutover/rollback can't be steamrolled by a stale
+   * runner tick that started before the operator's transition landed.
+   */
+  resetCursor(opts?: { readonly newProgressTotal?: number }): void {
+    const current = this.getState();
+    if (
+      current.phase !== "dual-write" &&
+      current.phase !== "re-embedding"
+    ) {
+      return;
+    }
+    if (typeof opts?.newProgressTotal === "number") {
+      this.db
+        .prepare(
+          `UPDATE migrations SET last_cursor = NULL, progress_total = ? WHERE key = ?`,
+        )
+        .run(opts.newProgressTotal, this.key);
+    } else {
+      this.db
+        .prepare(`UPDATE migrations SET last_cursor = NULL WHERE key = ?`)
+        .run(this.key);
+    }
+  }
+
+  /**
    * Phase 115 D-08 — current READ version selection logic. Used by the
    * retrieval path (memory-retrieval.ts in a future plan-115-09) to
    * route KNN queries to vec_memories or vec_memories_v2.

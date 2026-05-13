@@ -475,6 +475,106 @@ describe("runReEmbedBatch (Phase 115 D-08 + D-09)", () => {
     expect(store.countVecMemoriesV2()).toBe(1);
   });
 
+  it("resets last_cursor when cursor advances past nanoid-shuffled missing rows (116-postdeploy 2026-05-13 fin-acq fix)", async () => {
+    // Production bug: fin-acquisition stuck at 1407/1408 (later 1407/1415).
+    // Root cause: nanoid IDs sort randomly, so a memory inserted AFTER the
+    // cursor advanced past a high-sorting id can have a LOWER id. The
+    // runner's `id > last_cursor` filter then makes that memory invisible
+    // — countMemoriesMissingV2Embedding() reports it (no cursor filter),
+    // but listMemoriesMissingV2Embedding(cursor) returns []. The runner
+    // returned `processed: 0, remaining: N` forever.
+    //
+    // Fix: when batch is empty AND totalMissing > 0, reset last_cursor to
+    // NULL and reconcile progress_total. Next tick scans from the start
+    // and finds the row.
+    store = createTestStore();
+
+    // Plant 3 rows, dual-write 2 of them so only ONE is missing v2. Then
+    // force last_cursor to a SUPER high value so the missing row sorts
+    // before it. Mirrors what production looked like (cursor past valid
+    // work).
+    const v1A = randomEmbedding();
+    const v1B = randomEmbedding();
+    const v1C = randomEmbedding();
+    const idA = store.insertWithDualWrite(
+      { content: "alpha (already v2)", source: "manual", skipDedup: true },
+      v1A,
+      quantizeInt8(randomEmbedding()),
+    ).id;
+    const idB = store.insertWithDualWrite(
+      { content: "beta (already v2)", source: "manual", skipDedup: true },
+      v1B,
+      quantizeInt8(randomEmbedding()),
+    ).id;
+    // gamma is v1-only — the "stuck" row.
+    const idGamma = store.insert(
+      { content: "gamma (missing v2)", source: "manual", skipDedup: true },
+      v1C,
+    ).id;
+
+    // Sanity — gamma should be the ONLY missing-v2 entry.
+    expect(store.countMemoriesMissingV2Embedding()).toBe(1);
+
+    const m = new EmbeddingV2Migrator(store.getDatabase(), "agent");
+    m.transition("dual-write");
+    m.transition("re-embedding", 1);
+
+    // Force the cursor PAST gamma's id by saving a synthetic high id.
+    // Use ASCII 0x7E (~) repeated — sorts after every nanoid character.
+    const stuckCursor = "~~~~~~~~~~~~~~~~~~~~~";
+    expect(idA < stuckCursor).toBe(true);
+    expect(idB < stuckCursor).toBe(true);
+    expect(idGamma < stuckCursor).toBe(true);
+    m.saveCursor(stuckCursor, 5); // pretend 5 already processed
+
+    const e = new MockEmbedder();
+
+    // FIRST tick — cursor is past gamma's id. Runner sees batch.length=0
+    // AND totalMissing=1. Pre-fix: returned without resetting → stuck
+    // forever. Post-fix: resets last_cursor to NULL + reconciles total.
+    const r1 = await runReEmbedBatch(
+      m,
+      store,
+      e,
+      { cpuBudgetPct: 5, batchSize: 10 },
+      () => false,
+      SILENT_LOG,
+    );
+    expect(r1.processed).toBe(0);
+    // The runner reports `remaining: totalMissing` on this branch (1
+    // before the reset succeeded — the count is computed pre-reset).
+    expect(r1.remaining).toBe(1);
+
+    const stateAfterReset = m.getState();
+    expect(stateAfterReset.lastCursor).toBeNull();
+    // progress_total reconciled to processed + missing.
+    expect(stateAfterReset.progressTotal).toBe(6);
+
+    // SECOND tick — cursor is null, scan from start finds gamma.
+    const r2 = await runReEmbedBatch(
+      m,
+      store,
+      e,
+      { cpuBudgetPct: 5, batchSize: 10 },
+      () => false,
+      SILENT_LOG,
+    );
+    expect(r2.processed).toBe(1);
+    expect(store.countMemoriesMissingV2Embedding()).toBe(0);
+
+    // THIRD tick — count is now 0, runner auto-transitions to complete.
+    const r3 = await runReEmbedBatch(
+      m,
+      store,
+      e,
+      { cpuBudgetPct: 5, batchSize: 10 },
+      () => false,
+      SILENT_LOG,
+    );
+    expect(r3.processed).toBe(0);
+    expect(m.getState().phase).toBe("re-embed-complete");
+  });
+
   it("continues batch on per-entry embed failure", async () => {
     store = createTestStore();
     const inputs = ["good-1", "BAD-MEMORY", "good-2"];

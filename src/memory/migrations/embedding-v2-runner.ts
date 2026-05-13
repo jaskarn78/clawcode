@@ -143,27 +143,50 @@ export async function runReEmbedBatch(
   );
 
   if (batch.length === 0) {
-    // Cursor advanced past the end of currently-missing entries. This
-    // can happen if last_cursor was set to a high id and new memories
-    // with lower ids were created since (the SQL filter requires id >
-    // last_cursor). Reset cursor and signal completion of this pass.
-    if (state.phase === "re-embedding") {
-      // Auto-transition since totalMissing is also 0 from this cursor.
-      // No-op if totalMissing was non-zero (which means there are entries
-      // BEHIND the cursor we're skipping due to id ordering — the runner
-      // will get them next pass after cursor reset).
-      const remainingFromStart = store.countMemoriesMissingV2Embedding();
-      if (remainingFromStart === 0) {
-        try {
-          migrator.transition("re-embed-complete");
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          log.warn(
-            { agent: migrator.agent, action: "v2-auto-transition-failed", message },
-            "[diag] embedding-v2 auto-transition to re-embed-complete failed",
-          );
-        }
+    // Cursor advanced past the lexicographic position of currently-missing
+    // entries. Memory IDs are nanoid (random ordering, NOT monotonic) so
+    // memories inserted AFTER the cursor advanced can sort BEFORE it; the
+    // `id > last_cursor` SQL filter then hides them forever.
+    //
+    // Two branches:
+    //   (a) totalMissing === 0 → re-embedding actually done. Auto-transition
+    //       to re-embed-complete.
+    //   (b) totalMissing > 0 → cursor is stuck behind real work. Reset
+    //       last_cursor to NULL so the next tick scans from the beginning,
+    //       AND fix progress_total which was set once at re-embedding entry
+    //       and doesn't reflect memories that have landed since (e.g. the
+    //       2026-05-13 fin-acquisition incident: 1407/1408 with 7+ rows
+    //       actually missing).
+    if (totalMissing === 0 && state.phase === "re-embedding") {
+      try {
+        migrator.transition("re-embed-complete");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(
+          { agent: migrator.agent, action: "v2-auto-transition-failed", message },
+          "[diag] embedding-v2 auto-transition to re-embed-complete failed",
+        );
       }
+    } else if (totalMissing > 0) {
+      // Reset cursor + reconcile progress_total. The new total is
+      // progressProcessed + currently-missing so the dashboard percent
+      // remains meaningful (it doesn't pretend the original total was
+      // ever right). saveCursor is silently dropped in non-working
+      // phases via the same guard; safe to call here under the cursor
+      // bug.
+      const newTotal = state.progressProcessed + totalMissing;
+      migrator.resetCursor({ newProgressTotal: newTotal });
+      log.warn(
+        {
+          agent: migrator.agent,
+          action: "v2-cursor-reset",
+          previousCursor: state.lastCursor,
+          totalMissing,
+          progressProcessed: state.progressProcessed,
+          newProgressTotal: newTotal,
+        },
+        "[diag] embedding-v2 cursor reset — last_cursor advanced past currently-missing entries (nanoid ordering); next tick scans from start",
+      );
     }
     return Object.freeze({
       agent: migrator.agent,
