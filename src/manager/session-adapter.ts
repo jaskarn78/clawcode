@@ -1055,9 +1055,30 @@ export class SdkSessionAdapter implements SessionAdapter {
       // Symmetric edit pin (Rule 3): resumeSession (below) MUST mirror
       // this so a daemon restart cannot drift the resumed session into
       // a different advisor state than the original create call.
+      //
+      // Phase 117.1 — production smoke proved SDK 0.2.140's sdk.mjs accepts
+      // Options.advisorModel as a typed field but does NOT translate it to
+      // the `--advisor <model>` CLI flag the bundled binary actually reads
+      // (CLI arg-builder in sdk.mjs lists model/effort/agent/betas/etc but
+      // no advisor). The binary also requires CLAUDE_CODE_ENABLE_EXPERIMENTAL_
+      // ADVISOR_TOOL=1 in env to honor advisor at all (set in /etc/clawcode/env
+      // post-117.1). To bridge the SDK gap until upstream wires advisorModel,
+      // pass `extraArgs: { advisor: <model> }` — the SDK's public escape hatch
+      // (sdk.d.ts:1268 — `extraArgs?: Record<string, string | null>`) appends
+      // the bare `--advisor <model>` flag to the spawn args. Direct binary
+      // invocation with this exact flag pair was verified to emit real
+      // advisor_tool_result blocks (test on 2026-05-13 against the worker-pool
+      // prompt — Opus advice with counting-semaphore design landed in stream).
+      //
+      // Keep advisorModel field too so when the SDK eventually wires it
+      // through, no second migration is needed; remove extraArgs at that
+      // point in a follow-up phase.
       ...(typeof config.advisorModel === "string" &&
       config.advisorModel.length > 0
-        ? ({ advisorModel: config.advisorModel } as { advisorModel: string })
+        ? ({
+            advisorModel: config.advisorModel,
+            extraArgs: { advisor: config.advisorModel },
+          })
         : {}),
     };
 
@@ -1150,9 +1171,18 @@ export class SdkSessionAdapter implements SessionAdapter {
       // create call so a daemon restart cannot toggle the
       // `advisor_20260301` server tool on or off mid-conversation
       // without an explicit operator action (`clawcode reload`).
+      //
+      // Phase 117.1 — also pass `extraArgs: { advisor: <model> }` to
+      // bridge the SDK 0.2.140 gap (Options.advisorModel is a typed field
+      // but the SDK doesn't translate it to `--advisor <model>` on the
+      // binary spawn). See createSession comment above for the full
+      // diagnostic trail.
       ...(typeof config.advisorModel === "string" &&
       config.advisorModel.length > 0
-        ? ({ advisorModel: config.advisorModel } as { advisorModel: string })
+        ? ({
+            advisorModel: config.advisorModel,
+            extraArgs: { advisor: config.advisorModel },
+          })
         : {}),
     };
 

@@ -128,6 +128,23 @@ export type SdkQueryOptions = {
    * (backend === "native" AND budget.canCall).
    */
   readonly advisorModel?: string;
+  /**
+   * Phase 117.1 — SDK escape hatch for CLI args not yet wired through typed
+   * Options. `extraArgs: { advisor: "claude-opus-4-7" }` appends
+   * `--advisor claude-opus-4-7` to the bundled binary spawn. Mirrors the
+   * SDK's public `extraArgs?: Record<string, string | null>` field
+   * (sdk.d.ts:1268). Used to bridge the SDK 0.2.140 gap where
+   * `advisorModel?: string` is declared in the typed Options but not
+   * translated to a CLI flag during spawn (verified via grep on sdk.mjs
+   * arg-builder: lists --model/--effort/--agent/--betas but no --advisor).
+   *
+   * The binary ALSO requires `CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL=1`
+   * in env to honor the flag — set in `/etc/clawcode/env` (systemd
+   * EnvironmentFile) at the daemon level so all spawned binaries inherit it.
+   *
+   * Remove this field once upstream SDK wires `advisorModel` end-to-end.
+   */
+  readonly extraArgs?: Record<string, string | null>;
 };
 
 /**
