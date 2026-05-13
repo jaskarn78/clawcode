@@ -24,7 +24,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.132",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.140",
     "@anthropic-ai/sdk": "^0.95.1",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@huggingface/transformers": "^4.0.1",
