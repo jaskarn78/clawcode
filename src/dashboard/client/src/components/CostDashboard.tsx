@@ -1263,14 +1263,18 @@ export function UsageDashboard(): JSX.Element {
   }, [dailyMap])
 
   return (
-    <div className="mx-auto max-w-7xl p-4">
-      <div className="mb-4">
-        <h1 className="font-display text-2xl font-bold text-fg-1">Usage</h1>
-        <p className="text-sm text-fg-3 font-sans">
-          Subscription utilisation first. Token volume second. Theoretical
-          API-equivalent USD is collapsed by default — you're on Claude Max,
-          not billed per call.
-        </p>
+    <div className="mx-auto max-w-7xl px-7 py-6">
+      {/* dash-redesign sweep — section-head pattern. Subscription/
+          token framing folds into .sub so the operator scans
+          'Usage · subscription first · tokens second · USD collapsed'
+          on one row. */}
+      <div className="section-head mb-5">
+        <div className="flex items-baseline">
+          <h2>Usage</h2>
+          <span className="sub">
+            subscription utilisation first · token volume second · API-equivalent USD collapsed
+          </span>
+        </div>
       </div>
 
       <MaxBanner />
