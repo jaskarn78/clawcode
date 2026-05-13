@@ -1,335 +1,394 @@
-# Features Research — v2.2 OpenClaw Parity & Polish
+# Feature Research — v2.9 Reliability & Routing
 
-## Research Mode
-Ecosystem (feature landscape, 4 subsystems).
-
-## Confidence
-HIGH on SDK limits and native commands (verified via official docs); HIGH on OpenClaw behavior (read source); HIGH on skill inventory (direct filesystem scan + SKILL.md spot-check).
+**Domain:** Multi-agent Discord orchestration — reliability hardening + UX cleanup of existing subsystems
+**Researched:** 2026-05-13
+**Confidence:** HIGH (per-item BACKLOG specs are concrete; pre-written 999.36-02/-03 plans exist; ROADMAP specs for 999.19/.20 are detailed)
 
 ---
 
-## Feature 1 — Skills Library Migration
+## Summary
 
-### Skill Inventory (`~/.openclaw/skills/`, 13 directories)
+v2.9 is not greenfield. Every item below targets an **existing**, **already-deployed** subsystem with a confirmed defect or operator-visible papercut. Work splits cleanly into five active categories — three merge groups (MG-A, MG-B, MG-D) plus three standalone items (999.46, 999.19, 999.20). MG-C (MCP lifecycle soak) is operator-restart-window-gated and lives outside daily feature work, so it is mentioned but not expanded here.
 
-| # | Skill | Format | Domain | Verdict | Complexity | Notes |
-|---|-------|--------|--------|---------|------------|-------|
-| 1 | `cognitive-memory` | YAML frontmatter + prose | Memory system | **DEPRECATE** | n/a | Superseded by ClawCode's KG / consolidation / decay / tiering (v1.1/v1.5/v1.9). |
-| 2 | `finmentum-content-creator.retired` | YAML frontmatter | Finmentum Reels (legacy) | **SKIP** | n/a | Replaced by `new-reel`. Dir explicitly `.retired`. |
-| 3 | `finmentum-crm` | YAML frontmatter | Finmentum DB ops | **MUST-MIGRATE** | LOW | `fin-*` agents only. MCP target `finmentum-db` already wired. ⚠ contains literal MySQL credentials (host/port/user/password) in SKILL.md description — must secret-scan. |
-| 4 | `frontend-design` | YAML frontmatter | Aesthetic guide | **MUST-MIGRATE** | LOW | Content-only, zero-conversion. |
-| 5 | `new-reel` | YAML frontmatter + scripts/ + reference/ | Finmentum Reels workflow | **MUST-MIGRATE** | MEDIUM | 56KB SKILL.md + `heygen-*.sh` + `pexels-download.sh`. Uses `${CLAUDE_SKILL_DIR}` substitution (natively supported). |
-| 6 | `openclaw-config` | YAML frontmatter | Gateway config manipulation | **DEPRECATE** | n/a | References dead `gateway()` tool post-v2.1. |
-| 7 | `power-apps-builder` | YAML frontmatter + references/ | Power Apps YAML generator | **NICE-TO-HAVE** | LOW | General-purpose. `references/` ports intact. |
-| 8 | `remotion` | YAML frontmatter | Motion graphics | **NICE-TO-HAVE** | MEDIUM | Spawns nested Claude Code sessions — potential collision with v1.1 subagent spawning; test isolation. |
-| 9 | `self-improving-agent` | YAML + hooks/ + scripts/ + `.learnings/` | Error/learning capture | **MIGRATE WITH CONVERSION** | MEDIUM | Ships `hooks:` frontmatter (doc-confirmed supported). `.learnings/*.md` — dedupe against v2.1-migrated memory (already tagged `learning`). |
-| 10 | `test` | YAML frontmatter, `user-invocable: true` | Sanity check | **NICE-TO-HAVE** | LOW | 8-line smoke test for linker. |
-| 11 | `tuya-ac` | **Plain markdown** (no frontmatter) | Smart-home (personal) | **MIGRATE WITH CONVERSION** | LOW | Format mismatch — scanner falls back but degraded. Add `---` frontmatter during port. Personal agent only. |
-| 12 | `workspace-janitor` | **Plain markdown** (no frontmatter) | File organizer | **NICE-TO-HAVE** | LOW | Same format issue. Ships Node CLI (`scripts/run.js`). |
+Two cross-cutting facts shape the table-stakes set:
 
-### Format Compatibility
-ClawCode's scanner (`src/skills/scanner.ts`) is forgiving — tolerates missing frontmatter, falls back to first paragraph as description. Main conversions needed: (a) hooks-bearing skills (`self-improving-agent`), (b) frontmatter-less skills (tuya-ac, workspace-janitor). Native Claude Code supports `${CLAUDE_SKILL_DIR}` and `$ARGUMENTS` substitutions.
-
-### Classification
-
-**Must-migrate (P1):** `finmentum-crm`, `new-reel`, `frontend-design`, `self-improving-agent`, `tuya-ac`
-**Nice-to-have (P2):** `power-apps-builder`, `remotion`, `workspace-janitor`, `test`
-**Deprecate:** `cognitive-memory`, `openclaw-config`, `finmentum-content-creator.retired`
-
-### Table Stakes / Differentiators / Anti-Features
-
-| Classification | Item | Why |
-|---|---|---|
-| **Table Stakes** | Idempotent port preserving directory structure (SKILL.md + scripts/ + references/) | Bundled-file references break silently otherwise |
-| **Table Stakes** | Per-agent linker verification | `skills:` list must resolve via v1.4 global skill install |
-| **Table Stakes** | Frontmatter normalization for legacy skills | Autonomous invocation relies on `description` |
-| **Table Stakes** | Skip `.retired` dirs + deprecate-list | No dead skills in catalog |
-| **Table Stakes** | Secret scan (finmentum-crm contains literal MySQL creds) | Prevent credential leak via system prompt |
-| **Differentiators** | Migration report per skill (v2.1-style) | Operator visibility |
-| **Differentiators** | Dry-run diff of skills catalog before/after | Matches v2.1 UX |
-| **Differentiators** | Scope tags — skip Finmentum skills on non-Finmentum agents | `finmentum-crm` doesn't belong on `personal` |
-| **Anti-Feature** | Recreating `cognitive-memory` | Fights v1.x memory stack — confabulation risk |
-| **Anti-Feature** | Porting `openclaw-config` | Gateway no longer exists |
-| **Anti-Feature** | Auto-spawning Claude Code subprocesses (Remotion pattern) | Collides with v1.1 subagent spawning + v1.6 auto-linker |
+1. **Discord webhook tokens never expire on a timer** — they invalidate only on **delete+recreate**, **token regeneration**, **bot permission loss** (`MANAGE_WEBHOOKS`), or **channel deletion**. MG-A's "webhook expired" hypothesis is really "webhook was rotated/deleted and our registry is stale." The auto-heal pattern is **re-register-on-404 retry**, not a TTL refresh. (Interaction tokens expire at 15 min — but `post_to_agent` does not use interaction tokens.)
+2. **Discord renders zero markdown table syntax.** Code-block-with-padded-columns is the only universally-rendering approach (desktop + mobile). Operator explicitly asked for this pattern in 999.46. ASCII-art / image-render / embed alternatives have real tradeoffs called out in anti-features.
 
 ---
 
-## Feature 2 — Extended-Thinking Effort Mapping
+## Feature Landscape
 
-### OpenClaw Bridge Behavior (verified `openclaw-claude-bridge/src/claude.js:48-58, 107-118`)
+### Category 1 — MG-A · A2A + Subagent-Relay Delivery Reliability
+
+Headline operator pain. Three items, one root subsystem (Discord webhook delivery + correct destination channel).
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| `post_to_agent` returns live-delivery confirmation in steady state | Operator sees agents talk in real time, not via 30-60s heartbeat poll | M | Today broker silently falls through to `no-webhook` inbox-heartbeat. Acceptance: live delivery is default; `no-webhook` is logged, rare anomaly. |
+| Webhook auto-heal on 404 / `Unknown Webhook` / 401 | Discord deletes & rotations happen; daemon should re-register and retry without operator | M | Canonical pattern: try send → 404/401 → re-create webhook via bot (needs `MANAGE_WEBHOOKS`) → update registry → retry once → record. |
+| `no-webhook` fallback telemetry counter per channel per hour | Operator can spot sustained leak before users notice | S | Pino structured log with `agent`, `channel`, `reason` tags. Dashboard SSE already exists — add fallback-count tile. |
+| Queue-state icon disambiguation: 🕓 → 👍 → ✅ / ❌ | Operator must distinguish "queue stuck" (broken webhook) from "model thinking" (normal latency) | S | Icon transition needs runtime hook fired on SDK call start OR first stream-json event. Cheap once hook lands. Webhook PATCH path same as streaming edits. |
+| Cron-poll `HEARTBEAT_OK` ack stops leaking into user channel | Operator's `?` getting a `HEARTBEAT_OK` reply destroys trust in the agent | S | Per 999.48 the fix lives in the *agent's own* cron-poll skill (agent owns its monitor loop), not in the daemon. Either silent-no-op when nothing-to-report, or route to admin observability channel. |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Daemon-level webhook health-check tick (every N min, HEAD on registered webhooks) | Proactively detect rotation before next outbound send fails | M | Discord rate-limit-friendly but adds writes to registry. Worth it only if reactive auto-heal proves insufficient. |
+| Adaptive heartbeat-poll cadence (tighten when webhook unhealthy, relax when healthy) | Faster recovery when fallback is the only working path | M | Current cadence is fixed regardless of health. Tunable knob avoids both "always slow" and "always hammering." |
+| Crash-mid-processing landing on ❌ (not stuck at 👍) | Operator sees actual failure state, not zombie thumbs-up | S | Edge case explicit in 999.45 BACKLOG. |
+
+#### Anti-Features
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| TTL-based webhook rotation in the daemon | "Refresh tokens before they expire" | Discord webhook tokens **do not expire on a timer** — rotating eagerly creates the 404s we're trying to avoid | Re-register lazily on 404/401, not eagerly on a clock |
+| Typing-indicator firing on thumbs-up | Visual "agent is working" feedback | Conflates queue-state (👍 = picked up) with model-think state (typing) — re-creates the exact ambiguity 999.45 is fixing | Keep typing indicator for active model-call streaming only; thumbs-up is the pre-stream state marker |
+| Synchronous A2A RPC retry-with-backoff in the broker | "Just retry until it works" | Blocks calling agent's turn; cascades latency through fleet | Async inbox is already the failure-mode contract — fix is to make the live path actually live, not to retry the slow path |
+| Posting `HEARTBEAT_OK` to a status thread "for visibility" | "I want to see the cron is alive" | Operator wanted **silent** monitoring (Option A established in-session per 999.48); status thread re-creates noise elsewhere | Truly silent → log to local file/state. If proof-of-life is needed, post to admin-clawdy observability channel at 30min+ cadence, never user channel |
+| Tool-call-retry oscillating the emoji | "Show every state transition" | Visual flicker; user can't tell what state means | Debounce / latch — 👍 once set stays until terminal state |
+
+---
+
+### Category 2 — MG-B · Subagent UX Completion + Chunk-Boundary
+
+Two pre-written plans (999.36-02 and 999.36-03) targeting `src/discord/subagent-thread-spawner.ts`. Sequenced — 03 `depends_on` 02 because they touch overlapping code.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| `subagent_complete` fires only after stream-end AND delivery-confirmed | Operator's "Phase 2 complete" summary must reflect work that actually delivered | M | 999.36-02: `streamFullyDrained && deliveryConfirmed` AND-clause. New `lastDeliveryAt` JSON field on `ThreadBinding` (D-16 SQL-forbidden; JSON registry allowed, matching `completedAt` precedent). |
+| Quiescence-sweep emits `subagent_idle_warning`, not premature `subagent_complete` | Operator sees stuck thread without false-completion side-effects | S | Same plan. In-memory dedupe Map keyed by threadId; one warning per quiescence cycle per binding. |
+| `autoArchive=true` waits for delivery confirmation before archiving | Don't bury a thread whose final chunks never arrived | S | Defense-in-depth — reads registry once more before `archiveThread`. |
+| Chunk-boundary delivers every byte (no off-by-3 seam at chars 1997-1999) | Subagent output must not silently lose 3 bytes per overflow boundary | S | 999.36-03: `EDITOR_TRUNCATE_INDEX = 1997` module constant; overflow cursor starts at 1997 not 2000. Two call sites (`postInitialMessage` + `relayCompletionToParent`). |
+| One-time startup migration for pre-Phase-999.36 thread bindings | Existing bindings without `lastDeliveryAt` must not hang the new gate forever | S | `migrateBindingsForPhase999_36(...)`: backfill `lastDeliveryAt = lastActivity` for bindings with no `completedAt`. Idempotent. Marked `// REMOVE AFTER 999.36+1 milestone closes`. |
+| Session-end backstop stamps `lastDeliveryAt` | Crash mid-stream still notifies operator | S | `daemon.ts:7329-7350` session-end callback stamps before calling `relayCompletionToParent` — preserves "session ended → relay fires" behavior. |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Diff-against-expected reconstruction test (4500-char fixture) | Catches *any* future seam regression — byte-for-byte completeness check | S | Pre-specified in 999.36-03 Task 1. Load-bearing `expect(reconstructed).toBe(expected)` assertion. |
+| 2003-char off-by-3 detection fixture | Pins the specific bug class — exact boundary where the seam manifests | S | Pre-fix fails. Post-fix passes. Cheap regression insurance. |
+| Post-deploy `seamGapBytes: 0` log verification | Production confirmation channel — operator reads prod logs to confirm fix took | S | Plan 00 diagnostic logs already present; just need the post-fix values to flip to 0. |
+
+#### Anti-Features
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| Removing the `"..."` truncate marker in editor's visible message | "Just send the bytes — no marker needed" | Operator-friendly UX cue that more text follows; mobile users especially benefit from explicit "continued in next message" signal | Keep marker visible; fix overflow start cursor instead |
+| Fence-aware chunking (code-fence open/close detection) | "Tables/code blocks should stay contained per message" | Adds complexity, defers byte-correctness fix, was already broken pre-fix anyway | Defer to a future phase if operator requests; current scope is byte-correctness only |
+| Persistent (across daemon restart) idle-warning dedupe Map | "Don't re-emit warnings after restart" | A daemon restart is naturally a "fresh look" — emitting after restart is correct operator-visibility behavior | In-memory Map; resets on restart by design (called out as open question in 999.36-02 output) |
+| New SQL column for `lastDeliveryAt` | "Schema columns are more first-class" | CONTEXT D-16 explicitly forbids new SQL columns | JSON registry field on `ThreadBinding` (matches `completedAt` precedent from 999.25) |
+| autoArchive timeout / retry mechanism | "What if archive hangs?" | Out of scope for the gate plan; mixes concerns | If guard fails, log warn + leave thread open; operator manually archives |
+
+---
+
+### Category 3 — MG-D · Dashboard Backend Observability Cleanup (post-Phase-116)
+
+Three items on the `trace_spans` / `tool_latency` data layer. Highly visible — operator just opened Benchmarks tab post-redesign and "none of the benchmarks seem to work." Diagnostic SQL pre-prescribed.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Tool rollup table renders actual tool names (not blank rows) | Per-agent tool latency is useless if `Tool` column is empty | M | Hypotheses ranked in 999.49: (1) `Admin Clawdy` space-in-name SQL/IPC parameter handling, (2) trace_spans missing `name` field for some span types, (3) genuine no-data → should show empty-state, not 19 null rows. |
+| `slo_status === 'breach'` only when there's a real percentile to compare | Red `—` on null percentiles is misleading | S | Independent UI bug in `BenchmarksView.tsx:295-301`. Null percentiles → `text-fg-3` neutral, not `text-danger`. |
+| Cross-agent comparison chart renders bars when ≥1 agent has data | Empty chart with axis labels = broken UI | S | Falls out of fixing the rollup data shape. |
+| Split-latency producer regression repaired (columns no longer NULL) | 999.7 follow-up B — Phase 115-08 producer broke columns | M | Shared root with 999.49 — same `trace_spans` table. May be same fix. |
+| `clawcode tool-latency-audit` CLI returns valid output (not `Invalid Request`) | 999.7 follow-up C — CLI must work | S | Possibly same root as dashboard issue; verify together. |
+| Empty-state UI when no spans recorded in window | "No tool spans recorded for this agent in window" beats 19 null rows | S | Frontend addition in `ToolRollupSection`. |
+| Repro path documented (which agent + window) | Future regression detection | S | Pre-specified in 999.49 acceptance criteria. |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Diagnostic SQL captured in `999.49-BACKLOG.md:40` reused as runtime health-check | Self-healing dashboard | M | Optional — start with static fix; promote to live health-check only if regression class recurs. |
+| Test coverage for empty-tool-name groupings | Pin the regression class | S | `src/performance/__tests__/trace-store-*` notes lack this coverage today. |
+
+#### Anti-Features
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| Recomputing percentiles client-side from raw spans | "Trust the data, not the rollup" | Browser becomes query engine; moves load to wrong tier; same null bug deferred | Fix SQL/IPC layer producing the empties |
+| Defaulting null `slo_status` to `'pass'` for visual cleanliness | "Stop the red noise" | False signal — operator might miss real breach | Default to `'unknown'` / `text-fg-3` neutral — explicit "no data" not implicit "fine" |
+| Filtering out blank-tool-name rows in the API | "Just hide broken rows" | Hides symptom; root cause persists; future legitimate-blank-name spans silently disappear | Fix at source — populate `name` correctly or `GROUP BY` differently |
+| Adding new dashboard panels in v2.9 | "While we're in there" | Scope creep — v2.9 is reliability, not feature expansion | Keep panel surface unchanged; fix only the broken renders |
+
+---
+
+### Category 4 — Standalone: 999.46 · Discord Markdown Table Auto-Transform
+
+Single-place hook in the daemon's Discord output formatter. Obsoletes per-agent `feedback_no_wide_tables_discord.md` workarounds. Operator flagged 5×+; high perceived value for small implementation.
+
+#### Industry Pattern Research
+
+Five patterns exist for rendering tabular content on mobile Discord. Recommendation is unambiguous given operator preference + Discord's rendering reality (Discord supports ~60% of CommonMark; tables are NOT in that subset).
+
+| Pattern | How It Works | Pros | Cons | Verdict |
+|---------|--------------|------|------|---------|
+| **Code-block with padded columns** (RECOMMENDED) | Wrap table in triple-backtick fence; pad cells to max column width per column | Monospace alignment preserved desktop + mobile; matches existing tree-structure pattern in codebase; round-trip-safe | Bold/links inside cells degrade to raw md text; horizontal-scroll on mobile for wide tables | **Default transform.** Operator explicitly asked for this. |
+| **ASCII-art table** (box-drawing chars `┌─┬─┐`) | Render with unicode box characters | Looks prettier than backtick code block on desktop | Wider per cell; mobile rendering inconsistent; harder to round-trip; same anti-mobile result as raw md | Anti-feature — added complexity for marginal aesthetic gain |
+| **Image render (PNG via headless browser)** | Render markdown table → image, attach as file | Looks perfect everywhere | Slow (headless browser per response); breaks streaming/edit cycles; non-searchable; accessibility regression; attachment quota | Anti-feature — heavy infra for solved problem |
+| **Discord embed `addField()`** | Use embed's structured field-pair UI | Native Discord component | Adds visual chrome; mixes poorly with surrounding prose; breaks streaming edits | Explicitly called out as not-recommended in 999.46 BACKLOG |
+| **Upload as `.md` attachment** | For very wide tables (>2000 chars), upload | Handles message-length cap; preserves true markdown | Operator has to click; loses scannability | Fallback for exceptionally wide tables only |
+
+**Recommended detection rule:** contiguous block of `| ... |` lines with a separator row (`| --- | --- |`). Wrap only when the table block is **complete** (separator row seen + at least one data row). Don't half-wrap during streaming.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Detect markdown table block in agent output | Auto-transform requires reliable detection | S | Separator-row anchored regex. Helper `markdown-table-wrap.ts` appears to exist (referenced in 999.36-03 plan). |
+| Wrap in fenced code block when destination is Discord | Code-block monospace is universally-rendering option | S | Single-place hook in daemon output formatter between LLM stream-json and webhook POST. |
+| Pad columns to equal width based on max cell content | Monospace alignment requires uniform column widths | S | Naive `printf`-style padding; measure max width per column from raw cell content. |
+| Preserve raw markdown table when destination is NOT Discord | File writes / GFM-rendering clients should get original | S | Output-formatter is destination-aware; existing pattern. |
+| No half-wrap during streaming | Don't wrap a table whose separator row hasn't arrived yet | M | Streaming/edit cycle handling; complete-table-only gate. |
+| Per-agent `feedback_no_wide_tables_discord.md` workarounds become obsolete | Stated acceptance criterion in 999.46 BACKLOG | S | Removal of workaround files is part of acceptance, not a separate task. |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| 2-column key/value fallback to bullets (`• **Key** — value`) | Prettier than code-block for short K/V tables | S | Optional polish; operator said "code-block also works." |
+| `.md` attachment fallback for very wide tables (>message limit) | Preserves content that would otherwise truncate | M | Trigger when wrapped table would exceed 2000 chars. |
+
+#### Anti-Features
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| Rendering bold/italics/links inside cells | "Preserve formatting" | Backtick code block disables markdown inside; trying to keep it would mean abandoning the alignment fix | Accept degradation to plain text inside cells — operator confirmed acceptable tradeoff |
+| Per-agent table-disable flag | "Some agents shouldn't use tables" | Re-creates the per-agent feedback-file problem 999.46 is fixing | Single global daemon-level hook; agents emit markdown freely |
+| Discord embed `addField()` for all tables | "Native Discord component" | Adds chrome, breaks streaming, mixes poorly with prose | Code-block-with-padding |
+| Auto-image-render every table | "Make it look perfect" | Slow, breaks streaming, accessibility regression | Code-block-with-padding |
+
+---
+
+### Category 5 — Standalone: 999.19 · Subagent Delegate-Channel Routing + Memory Consolidation
+
+Three coordinated changes to make `delegateTo` (Phase 999.3) a real research-fanout primitive. Plus a `-via-` naming-pattern leak fix across 6 filter sites.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Delegated threads spawn on **delegate's** channel, not parent's | Today every `delegateTo: research` thread lands on `#admin-clawdy`; should land on `#research` | S | One-line fix in `subagent-thread-spawner.ts:350` — `sourceConfig.channels[0]` instead of `parentConfig.channels[0]` when delegating. |
+| `autoArchive: true` default for delegate path | Stops `Admin Clawdy-via-research-*` sessions leaking into `/clawcode-fleet` indefinitely | S | Flip default when `delegateTo` is set. Non-delegate `-sub-` spawns keep current behavior. |
+| Memory consolidation into delegate's SQLite memory store | Institutional memory survives — research agent surfaces past delegated work via hybrid-RRF retrieval | M | Direct DB write (not message dispatch) — delegate's session may not be running. Use delegate's embedder for the vector. Summary record: task + key findings + thread URL. |
+| `-via-` naming pattern recognized in 6 filter sites | Phase 999.3's `${parent}-via-${delegate}-${shortId}` session names must be treated like `-sub-` everywhere | M | Sites: `THREAD_SUFFIX_RE` (restart-greeting.ts:199), prune Rule 2 (registry.ts:413), 5 hardcoded `-sub-/-thread-` filters in openai/server.ts:376, openai/endpoint-bootstrap.ts:285, daemon.ts:2736/4142/5932, cli/commands/threads.ts:103, capability-manifest.ts:184. |
+| Cross-channel completion relay still posts to parent's main channel | Operator visibility — they delegated, they need to know it finished | S | `relayCompletionToParent` already reads parent's channel correctly. Keeps working unchanged. |
+| Discord's native thread panel as discovery surface | No custom log-thread needed — `#research` channel naturally lists delegated work | S | Falls out of routing change. Zero implementation. |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Memory entry includes original thread URL | Operator (or agent) can jump from memory hit back to deep-dive thread | S | Already in consolidation summary spec. |
+| Embedder reuse across delegate sessions | Consolidation avoids re-warming embedder if delegate is running | S | Existing resident-singleton pattern from v1.7 warm-path. |
+
+#### Anti-Features
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| Keep delegate sessions running for "memory continuity" | "Don't lose context between delegations" | Re-creates the `Admin Clawdy-via-research-*` leak; sessions accumulate forever | Memory consolidation IS the continuity mechanism — direct DB write before autoArchive |
+| Custom log thread for "all delegated work" | "Centralized view of research fanout" | Discord's native thread panel already does this; custom thread adds maintenance | Use `#research` channel's thread panel |
+| Sync message dispatch to delegate agent for consolidation | "Reuse the message bus" | Delegate session may not be running; introduces availability dependency | Direct DB write; call delegate's embedder for the vector |
+| Shared global memory across delegate + parent | "Research is collective knowledge" | Violates per-agent workspace isolation (PROJECT.md Out of Scope) | Per-agent memory with explicit consolidation into delegate's store |
+| Generalized "delegate to any agent" UI | "Why limit to research agents?" | Operator scope is research; expanding to all agents = unbounded fleet leakage | Constrain delegate picker to research-capable agents in v2.9 |
+
+---
+
+### Category 6 — Standalone: 999.20 · `/research` and `/research-search` Slash Commands
+
+Builds on 999.19's spawn + consolidation foundation. **Hard dependency** — ROADMAP line 1534: "must be in place first; otherwise these commands would re-create the leak/scatter problems."
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| `/research <topic> [agent:research\|fin-research]` slash command | One-shot deep-dive spawn without manual delegate setup | S | Calls delegated-spawn path with `delegateTo` set. Ephemeral thread URL response to operator. |
+| Parallel research threads | Multiple `/research` invocations spawn parallel threads on chosen channel | S | Falls out of using existing spawn path — each invocation is independent. |
+| `/research-search <query> [agent:research\|fin-research]` slash command | Surface past research semantically without scrolling Discord history | M | IPC into chosen agent's memory store. Reuse hybrid-RRF retrieval (Phase 90 MEM-03 substrate exists). Top 5 hits with original deep-dive thread links. |
+| Agent picker constrained to research-capable agents | Prevent accidental delegation to non-research agents | S | Schema-level allowlist (`research`, `fin-research`). |
+| Ephemeral response (only operator sees thread URL) | Don't spam the operator's channel with system-generated links | S | Standard Discord slash-command ephemeral flag. |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Semantic + full-text hybrid retrieval | Better recall than either alone | S | RRF substrate already exists — just plumbing the slash command through. |
+| Thread-URL links in search results | One-click jump from memory hit to deep-dive thread | S | Memory entries already include URL (per 999.19). |
+
+#### Anti-Features
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| `/research-list` to enumerate all past research | "Catalog of all deep-dives" | Discord's native thread panel on `#research` IS the list; redundant surface | Operator opens `#research` channel for chronological view; uses `/research-search` for semantic |
+| Auto-spawn research on inferred topic detection | "AI-driven research suggestions" | Spawns work operator didn't ask for; cost + noise | Explicit `/research` invocation only |
+| Cross-agent memory federation in search results | "Search ALL research, not just one agent's" | Violates workspace isolation; mixes domain contexts (research vs fin-research) | Agent picker is mandatory; one agent's memory per query |
+| `/research-archive` to bulk-archive old threads | "Discord clutter" | Discord auto-archives by inactivity; 999.19's autoArchive handles per-thread | Trust the platform + 999.19's per-thread autoArchive |
+
+---
+
+## Dependency Graph
 
 ```
-OC reasoning_effort → Claude CLI --effort
-  minimal → low
-  low     → medium
-  medium  → high
-  high    → max
-  xhigh   → max
-  (unset) → --effort omitted + env MAX_THINKING_TOKENS=0  (thinking OFF)
+┌─────────────────────────────────────────────────────────────────┐
+│  MG-A · A2A + Relay Reliability                                 │
+│  999.44 (webhook auto-heal) ────► unblocks ───► 999.45 (icon)   │
+│  999.48 (cron-poll routing) ──── parallel ──────────────────    │
+│  (different subsystem from MG-D, MG-B, 999.46, 999.19/.20)      │
+└─────────────────────────────────────────────────────────────────┘
+                       │ parallel
+                       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MG-D · Dashboard Cleanup                                       │
+│  (999.49 + 999.7-followups B/C)                                 │
+│  Three items share trace_spans / tool_latency root —            │
+│  likely a single fix; verify together                           │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  MG-B · Subagent UX (SEQUENTIAL)                                │
+│  999.36-02 (completion gate) ────► 999.36-03 (chunk boundary)   │
+│  Same file (subagent-thread-spawner.ts);                        │
+│  -03 has explicit depends_on: ["999.36-00", "999.36-02"]        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  999.46 · Table auto-transform (independent)                    │
+│  Single-place hook; no shared files with anything else          │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  999.19 (delegate-channel routing + consolidation)              │
+│         │  HARD GATE                                            │
+│         ▼                                                       │
+│  999.20 (/research + /research-search slash commands)           │
+│  Per ROADMAP: "must be in place first; otherwise these commands │
+│   would re-create the leak/scatter problems 999.19 fixes"       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Critical:** When `reasoning_effort` is falsy, OpenClaw sets `MAX_THINKING_TOKENS=0` in spawn env, forcibly disabling extended thinking. This is per-request env var, not session config.
+### Dependency Notes
 
-### Native Claude Code Support (verified via official commands docs)
-- CLI flag `--effort <level>` accepts `low | medium | high | xhigh | max` (max is session-only)
-- `/effort [level|auto]` slash command — effect is immediate, doesn't wait for current response
-- SKILL.md frontmatter supports `effort:` override per-skill
-- `auto` resets to model default
-
-### ClawCode Current State
-`/clawcode-effort` slash command exists (`src/discord/slash-types.ts:116-127`, validation at `slash-commands.ts:264-284`). Accepts `low/medium/high/max`, calls `sessionManager.setEffortForAgent(name, level)`. **Plumbing exists but `persistent-session-handle.ts:599-602` has a `// Future: q.setMaxThinkingTokens() wiring` TODO — P0 latent bug: setEffort stores level in local var but never calls the SDK.** Existing UX reports success while thinking tokens stay at default.
-
-### Token Budgets
-Neither OpenClaw nor ClawCode hardcode specific token budgets. Effort level is the knob; Anthropic decides token budget internally per tier. The only explicit token control is the `MAX_THINKING_TOKENS=0` kill-switch.
-
-### Table Stakes / Differentiators / Anti-Features
-
-| Classification | Item | Why |
-|---|---|---|
-| **Table Stakes** | Persist effort on session (not just in-memory) | ClawCode long-lived sessions; restart must restore |
-| **Table Stakes** | Per-agent default in clawcode.yaml (`defaults.effort` + `agents[*].effort`) | Mirrors `model` field |
-| **Table Stakes** | Runtime override via `/clawcode-effort` actually wired to SDK (fix the TODO) | Current command silently no-ops |
-| **Table Stakes** | Honor `MAX_THINKING_TOKENS=0` for explicit OFF | OpenClaw semantics; "none" must truly disable thinking |
-| **Table Stakes** | Support `auto` to reset to model default | Parity with native `/effort auto` |
-| **Differentiators** | Per-skill effort override (native `effort:` frontmatter) | Deep-analysis skill requests `max` just for its turn |
-| **Differentiators** | Effort visible in `/clawcode-status` | Operators see current level without extra command |
-| **Differentiators** | Per-channel / per-agent effort (research=high, personal=low) | Natural extension of agent config |
-| **Differentiators** | Fork-to-Opus auto-escalates effort (v1.5 fork) | Opus + max for complex subtasks, revert on main thread |
-| **Anti-Feature** | Real-time effort swap mid-turn | Out-of-scope per PROJECT.md line 116 |
-| **Anti-Feature** | Exposing raw token budget (`MAX_THINKING_TOKENS=<N>`) | Level abstraction is the contract |
-| **Anti-Feature** | Rebuilding OpenClaw's 5-level mapping | Use Claude CLI's native names (`low/medium/high/xhigh/max`) |
+- **MG-A and MG-D can ship in parallel** — different subsystems (Discord broker vs trace_spans data layer), no shared files, no shared root cause. Both are highest-perceived-pain so should be in the same milestone wave.
+- **999.44 unblocks 999.45's visibility** — the 👍 icon update is delivered via the same webhook PATCH path 999.44 is fixing. The icon improvement is real either way, but is only operator-visible once webhooks deliver reliably. Ship 999.44 first, 999.45 immediately after (or together in the same plan wave).
+- **999.48 is parallel to 999.44/45** — same "what channel does this message belong on" family, but the fix lives in the projects agent's own cron-poll skill, not in the daemon. Operator-driven fix request to the agent itself; doesn't block daemon work.
+- **999.36-03 depends_on 999.36-02** — explicit in plan frontmatter. -02 changes the relay gate (adds `lastDeliveryAt`); -03 changes the overflow cursor calc. Both touch `subagent-thread-spawner.ts` overlapping regions. Sequential, not parallel.
+- **999.20 truly gates on 999.19** — slash commands invoke the delegated-spawn path; without 999.19's routing + consolidation, every `/research` invocation re-creates exactly the leak 999.19 is fixing. Confirmed in ROADMAP line 1534.
+- **999.46 is fully independent** — single-place hook in output formatter; no shared files with anything else in v2.9. Can ship alongside or between any wave.
+- **MG-B is independent of MG-A and MG-D** — different files, different subsystems. Could ship any wave; recommended after MG-A because operator's compound-failure scenario (D's premature relay + B's truncation) is most visible alongside A's broken delivery.
 
 ---
 
-## Feature 3 — Dual Discord Model Picker
+## Anti-Features (Cross-Cutting Recap)
 
-### Current OpenClaw Picker State (`~/.openclaw/discord/model-picker-preferences.json`)
+For the requirements-definer — these should explicitly NOT become requirements:
 
-```json
-{
-  "version": 1,
-  "entries": {
-    "discord:default:guild:<GUILD>:user:<USER>": {
-      "recent": [
-        "clawcode/openclaw:coder:sonnet",
-        "clawcode/fin-acquisition",
-        "clawcode/openclaw:generic:sonnet",
-        "anthropic-api/claude-sonnet-4-6",
-        "clawcode/openclaw:research:sonnet"
-      ],
-      "updatedAt": "2026-04-21T14:18:14.035Z"
-    }
-  }
-}
-```
-
-**Shape:** per-guild/per-user keys → `recent[]` of `<provider>/<model-id>` strings (likely max 5) + `updatedAt`. **No allowlist stored** — picker tracks recently-used only. Allowed-model list lives in OpenClaw's gateway config.
-
-### ClawCode Current State
-`/clawcode-model` exists but per PROJECT.md tech debt (line 150): *"/model slash command uses indirect claudeCommand routing through agent LLM"* — command sends `"Set my model to {model}"` as a prompt, no direct dispatch. **This is what v2.2 fixes.**
-
-### Agent Config Shape
-`clawcode.yaml` agents have `model: <alias>` (`sonnet`, `opus`). **No `fallbackModels` or `allowedModels` field exists yet.** v2.2 must add it.
-
-### Native Picker UX (verified via docs)
-- Native `/model [model]`: no arg = opens picker; with arg = sets directly
-- Confirmation required when prior output exists (cache invalidation warning)
-- Effort adjustment via arrow keys in the picker
-
-### Discord UI Tradeoffs
-- **String autocomplete:** best for >5 options, live filtering
-- **String select menu:** up to 25 options × 25-char labels, proper dropdown, survives ephemeral replies — **recommended for 3-8 curated models per agent**
-- **Buttons (action row):** max 5 per row, fastest click, doesn't scale
-
-### Table Stakes / Differentiators / Anti-Features
-
-| Classification | Item | Why |
-|---|---|---|
-| **Table Stakes** | Add `allowedModels: []` to `agents[*]` schema (default inherit from `defaults.allowedModels`) | Picker needs a source of truth |
-| **Table Stakes** | `/clawcode-model` dispatches direct to SessionManager (not LLM prompt) | Fixes documented tech debt |
-| **Table Stakes** | Model change persists atomically (v2.1 writer pattern) | Restart must not lose setting |
-| **Table Stakes** | OpenClaw picker reads `clawcode/*` entries from clawcode.yaml's allowedModels | Satisfies dual-picker parity |
-| **Table Stakes** | Confirmation UX when prior conversation exists | Preserves v1.7 prompt-cache savings |
-| **Table Stakes** | Per-agent recent-models memory | Each agent gets its own picker state |
-| **Differentiators** | Effort adjustment from same picker | One-stop model+effort control |
-| **Differentiators** | Model-change webhook embed (old→new, cost delta) | v1.6 webhook identities surface the switch |
-| **Differentiators** | `fallbackModel` for auto-degrade on overload | Matches native `--fallback-model` |
-| **Differentiators** | Current model shown in `/clawcode-status` | Confirms switch took effect |
-| **Anti-Feature** | Picker available in ALL channels universally | Must scope to the channel's bound agent |
-| **Anti-Feature** | Global recent-models list (OpenClaw's per-user/per-guild shape) | Agent-bound channels = natural scope is the agent |
-| **Anti-Feature** | Showing every Claude alias | Curation via `allowedModels` is the value |
-| **Anti-Feature** | Separate picker per-agent AND per-user | Double-cardinality preference storage |
+1. **Typing-indicator firing on queue-thumbs-up state** — conflates queue-state with model-think state, re-creating 999.45's exact ambiguity. (MG-A)
+2. **TTL-based webhook rotation** — Discord webhook tokens don't expire on a timer; rotating eagerly causes the 404s we're trying to avoid. (MG-A)
+3. **Synchronous A2A RPC retry-with-backoff in the broker** — blocks calling agent's turn, cascades latency. (MG-A)
+4. **Posting `HEARTBEAT_OK` to a status thread "for visibility"** — operator wanted silent monitoring; status thread just relocates the noise. (MG-A)
+5. **Tool-call retries oscillating the queue-state emoji** — debounce/latch instead. (MG-A)
+6. **Removing the `"..."` truncate marker in editor's visible message** — operator-friendly UX cue; fix is overflow-cursor alignment, not marker removal. (MG-B)
+7. **Fence-aware chunking** — out of scope for v2.9; defer if operator requests. (MG-B)
+8. **Persistent (across daemon restart) idle-warning dedupe Map** — daemon restart is a fresh look. (MG-B)
+9. **New SQL column for `lastDeliveryAt`** — CONTEXT D-16 forbids; JSON registry field is the precedent. (MG-B)
+10. **autoArchive timeout / retry mechanism** — mixes concerns; leave thread open on guard failure. (MG-B)
+11. **Recomputing percentiles client-side from raw spans** — moves load to browser; same null bug deferred. (MG-D)
+12. **Defaulting null `slo_status` to `'pass'`** — false signal; default to `'unknown'` / neutral. (MG-D)
+13. **Filtering out blank-tool-name rows in the API** — hides symptom, root cause persists. (MG-D)
+14. **Adding new dashboard panels in v2.9** — scope creep; v2.9 is reliability not feature expansion. (MG-D)
+15. **ASCII-art box-drawing tables** — wider, inconsistent mobile rendering, harder round-trip. (999.46)
+16. **Image-render markdown tables via headless browser** — heavy infra, breaks streaming, accessibility regression. (999.46)
+17. **Discord embed `addField()` for all tables** — visual chrome, breaks streaming edits. (999.46)
+18. **Per-agent table-disable flag** — re-creates the per-agent feedback-file problem. (999.46)
+19. **Bold/italics/links rendered inside table cells** — incompatible with backtick code-block alignment. (999.46)
+20. **Keeping delegate sessions running for "memory continuity"** — re-creates session-leak; consolidation IS continuity. (999.19)
+21. **Custom log thread for "all delegated work"** — Discord's native thread panel already does this. (999.19)
+22. **Sync message dispatch to delegate agent for consolidation** — delegate may not be running. (999.19)
+23. **Shared global memory across delegate + parent** — violates workspace isolation. (999.19)
+24. **Generalized "delegate to any agent" UI** — unbounded fleet leakage; constrain to research-capable agents. (999.19)
+25. **`/research-list` to enumerate all past research** — redundant with Discord's native thread panel. (999.20)
+26. **Auto-spawn research on inferred topic detection** — spawns work operator didn't ask for. (999.20)
+27. **Cross-agent memory federation in search results** — violates workspace isolation. (999.20)
+28. **`/research-archive` to bulk-archive old threads** — Discord auto-archives by inactivity + 999.19's per-thread autoArchive. (999.20)
 
 ---
 
-## Feature 4 — Native Claude Code Slash Commands in Discord
+## Implementation-Cost / Operator-Value Matrix
 
-### Command Inventory (64 commands + bundled skills, verified via https://code.claude.com/docs/en/commands)
+| Feature category | Operator value | Implementation cost | Priority |
+|------------------|----------------|---------------------|----------|
+| MG-A · A2A reliability (999.44) | **VERY HIGH** (recurring pain, 5×+ flagged) | MEDIUM (webhook re-register + telemetry + retry loop) | P1 |
+| MG-A · Icon disambiguation (999.45) | MEDIUM (UX clarity) | LOW (icon swap + runtime hook) | P1 (rides with 999.44) |
+| MG-A · Heartbeat-leak fix (999.48) | MEDIUM (trust + signal-to-noise) | LOW (agent-owned skill change) | P1 |
+| MG-D · Benchmarks dashboard (999.49) | **HIGH** (just-deployed, "none of the benchmarks work") | LOW-MEDIUM (diagnostic SQL pre-prescribed) | P1 |
+| MG-D · 999.7 follow-ups B/C | MEDIUM (shared root with 999.49) | LOW (likely same fix) | P1 (rides with 999.49) |
+| MG-B · Completion gate (999.36-02) | HIGH (compound-failure prevention) | MEDIUM (pre-written plan, 4 est. hours, 7 tasks) | P1 |
+| MG-B · Chunk-boundary (999.36-03) | HIGH (silent data loss prevention) | LOW (pre-written plan, 3 est. hours, 4 tasks) | P1 (after -02) |
+| 999.46 · Table auto-transform | MEDIUM-HIGH (operator-facing daily) | LOW (single-place hook) | P1 (highest value-to-cost ratio) |
+| 999.19 · Delegate routing | MEDIUM (research workflow foundation) | MEDIUM (3-prong change + 6 filter sites) | P2 |
+| 999.20 · `/research` slash commands | MEDIUM (research workflow UX) | LOW-MEDIUM (rides 999.19 substrate) | P2 (gated on 999.19) |
 
-**Legend:** `YES` = meaningful + SDK-dispatchable · `SKILL` = bundled skill, dispatchable via skill tool · `NO-SDK` = interactive-only · `NO-FIT` = nonsensical in Discord · `CONFLICT` = collides with existing clawcode-*
-
-| Command | Purpose | Verdict |
-|---|---|---|
-| `/add-dir <path>` | Add working dir | YES |
-| `/agents` | Manage subagents | YES (read-only via SDK) |
-| `/autofix-pr` | Web session for PR | NO-FIT |
-| `/batch` | Parallel changes (skill) | SKILL — gate it |
-| `/branch [name]` | Fork conversation | YES (alias `/fork`) |
-| `/btw <question>` | Side question | YES |
-| `/chrome` | Chrome integration | NO-FIT |
-| `/claude-api` | API reference (skill) | SKILL |
-| `/clear` | New conversation | **NO-SDK** — official docs state "not available in the SDK". Must simulate by session restart. |
-| `/color` | Prompt bar color | NO-FIT |
-| `/compact [instructions]` | Summarize old messages | YES — CONFLICT `clawcode-compact`; unify |
-| `/config` (`/settings`) | Settings UI | NO-SDK |
-| `/context` | Context viz | YES |
-| `/copy [N]` | Copy response | NO-FIT |
-| `/cost` | Token stats | YES — CONFLICT `clawcode-usage` |
-| `/debug` | Debug logs (skill) | SKILL |
-| `/desktop` | Continue in desktop | NO-FIT |
-| `/diff` | Diff viewer | NO-SDK |
-| `/doctor` | Install health | NO-FIT |
-| `/effort [level\|auto]` | Set effort | **CONFLICT** `clawcode-effort` — unify |
-| `/exit` | Exit CLI | NO-FIT (would kill agent) |
-| `/export [file]` | Export conversation | NO-SDK (filename arg may bypass — test) |
-| `/extra-usage` | Rate limit extras | NO-FIT |
-| `/fast [on/off]` | Toggle fast mode | YES |
-| `/feedback` (`/bug`) | Submit feedback | NO-FIT |
-| `/fewer-permission-prompts` | Skill | SKILL — gated |
-| `/focus` | Focus toggle | NO-FIT |
-| `/heapdump` | Heap snapshot | NO-FIT |
-| `/help` | Show help | YES |
-| `/hooks` | View hooks | YES |
-| `/ide` | IDE integration | NO-FIT |
-| `/init` | Init CLAUDE.md | YES — admin-only |
-| `/insights` | Session analysis | YES |
-| `/install-github-app` | GitHub OAuth | NO-FIT |
-| `/install-slack-app` | Slack OAuth | NO-FIT |
-| `/keybindings` | Edit keybindings | NO-FIT |
-| `/login` / `/logout` | Auth | NO-FIT (daemon-scope) |
-| `/loop` | Interval runner (skill) | SKILL — overlaps v1.1 cron |
-| `/mcp` | MCP mgmt | YES (read-only) |
-| `/memory` | Edit CLAUDE.md | YES (careful — different from clawcode KG) |
-| `/mobile` (`/ios`/`/android`) | QR | NO-FIT |
-| `/model [model]` | Change model | **CONFLICT** — Feature 3 unify |
-| `/passes` | Referral | NO-FIT |
-| `/permissions` (`/allowed-tools`) | Tool perms | YES |
-| `/plan [desc]` | Plan mode | YES |
-| `/plugin` | Plugin mgmt | YES |
-| `/powerup` | Lessons | NO-FIT |
-| `/pr-comments [PR]` | PR comments | REMOVED v2.1.91 |
-| `/privacy-settings` | Privacy | NO-FIT |
-| `/recap` | Session summary | YES |
-| `/release-notes` | Changelog | NO-SDK |
-| `/reload-plugins` | Hot-reload plugins | YES |
-| `/remote-control` (`/rc`) | claude.ai remote | NO-FIT |
-| `/remote-env` | Web session env | NO-FIT |
-| `/rename [name]` | Rename session | YES |
-| `/resume` (`/continue`) | Resume prior | YES |
-| `/review [PR]` | Local PR review | YES |
-| `/rewind` (`/checkpoint`/`/undo`) | Rewind | YES |
-| `/sandbox` | Sandbox toggle | YES |
-| `/schedule` | Routines | YES — CONFLICT v1.1 cron |
-| `/security-review` | Security audit | YES |
-| `/setup-bedrock`/`/setup-vertex` | 3rd-party providers | NO-FIT (Anthropic-only per PROJECT.md) |
-| `/simplify` | 3-agent review (skill) | SKILL |
-| `/skills` | List skills | YES |
-| `/stats` | Usage viz | NO-SDK |
-| `/status` | Settings status | YES — CONFLICT `clawcode-status` |
-| `/statusline` | Status line config | NO-FIT |
-| `/stickers` | Order stickers | NO-FIT |
-| `/tasks` (`/bashes`) | Background tasks | YES |
-| `/team-onboarding` | Team guide | NO-FIT |
-| `/teleport` (`/tp`) | Pull web session | NO-FIT |
-| `/terminal-setup` | Keybindings | NO-FIT |
-| `/theme` | Color theme | NO-FIT |
-| `/tui` | Renderer mode | NO-FIT |
-| `/ultraplan` / `/ultrareview` | Cloud sessions | NO-FIT |
-| `/upgrade` | Plan upgrade | NO-FIT |
-| `/usage` | Plan limits | YES |
-| `/vim` | Removed v2.1.92 | skip |
-| `/voice` | Voice dictation | NO-FIT |
-| `/web-setup` | GitHub OAuth | NO-FIT |
-
-### SDK Dispatch Constraint (CRITICAL)
-
-Per https://code.claude.com/docs/en/agent-sdk/slash-commands:
-> "Only commands that work without an interactive terminal are dispatchable through the SDK; the `system/init` message lists the ones available in your session."
-
-Example dispatchable set given in docs: `["/compact", "/context", "/cost"]` + custom commands. The SDK `system/init.slash_commands` field is the **definitive per-session manifest** — v2.2 must read this at session start and register only those as Discord commands, not a hardcoded list.
-
-**/clear is explicitly not SDK-dispatchable.** Workaround: end `query()` and start fresh (v1.0 session-restart primitive).
-
-### Existing clawcode-* Conflicts
-
-| Existing | Native | Resolution |
-|---|---|---|
-| `clawcode-status` | `/status` | Keep clawcode-status (richer) |
-| `clawcode-memory` | `/memory` | Different semantics — keep both, rename native as `clawcode-memory-file` |
-| `clawcode-compact` | `/compact` | Unify — route to native SDK dispatch |
-| `clawcode-usage` | `/cost` | Merge |
-| `clawcode-model` | `/model` | Unify via Feature 3 |
-| `clawcode-effort` | `/effort` | Unify via Feature 2 |
-| `clawcode-schedule` | `/schedule` | Different — keep both (cron vs routines) |
-| `clawcode-health` | `/doctor` | Different scope — keep both |
-
-### Namespace Guidance
-Register native commands with `clawcode-` prefix (e.g., `/clawcode-context`, `/clawcode-compact`). All clawcode-managed commands under one Discord namespace.
-
-### Table Stakes / Differentiators / Anti-Features
-
-| Classification | Item | Why |
-|---|---|---|
-| **Table Stakes** | Read `system/init.slash_commands` at session start; register only SDK-reported commands | Docs-confirmed definitive list |
-| **Table Stakes** | Dispatch via SDK prompt input per docs | Documented API contract |
-| **Table Stakes** | Unify duplicates (`-model`, `-effort`, `-compact`, `-usage`) to native SDK | Fixes tech debt, avoids confusion |
-| **Table Stakes** | Per-agent filtering — no admin-only to non-admin | Respects v1.2 SECURITY.md ACLs |
-| **Table Stakes** | Parse native command output → Discord via v1.7 `ProgressiveMessageEditor` | Reuse existing streaming |
-| **Differentiators** | `/rewind` wired to v1.2 auto-snapshots | Rewind to last stable state |
-| **Differentiators** | `/review` + `/security-review` from PR webhooks | Closes security-reviewer pattern |
-| **Differentiators** | `/insights` as weekly Discord embed per agent | v1.1 scheduler + v1.6 webhooks |
-| **Differentiators** | `/clawcode-plan` captures plan to v1.9 ConversationStore | Plans become FTS5-searchable |
-| **Anti-Feature** | Hardcoded "supported commands" list | Will lie when SDK changes |
-| **Anti-Feature** | Exposing `/logout`/`/login`/`/exit` | Daemon-wide — admin-only if at all |
-| **Anti-Feature** | Emulating `/clear` via history slice | Docs: end query+start new. Use v1.0 restart. |
-| **Anti-Feature** | Native `/schedule` alongside v1.1 cron | Two schedulers = foot-gun |
-| **Anti-Feature** | Exposing every cosmetic (`/theme`/`/color`/`/tui`/`/focus`/`/keybindings`/`/statusline`) | No Discord semantics |
-| **Anti-Feature** | Rebuilding `/cost` when `clawcode-usage` is richer | Keep ClawCode version, route native `/cost` to it |
+**Priority key:**
+- P1: Ship in v2.9 wave 1 (highest operator pain or highest value-to-cost)
+- P2: Ship in v2.9 wave 2 — ROADMAP note: "Defer: 999.19+999.20 — need product decision on research-agent fleet shape"
 
 ---
 
-## Cross-Feature Dependencies
+## Discord Webhook Lifecycle Reference (MG-A Background)
+
+Verified via Discord API docs issue trackers and community guides:
+
+| Event | What Happens | API Signal |
+|-------|--------------|------------|
+| Webhook created | Token issued; **no TTL** | 200 + webhook object |
+| Webhook deleted (manually or via Discord UI) | Token invalidated immediately | 404 `Unknown Webhook` on next use |
+| Webhook token regenerated | Old token invalidated immediately | 401 `Unauthorized` on next use |
+| Bot loses `MANAGE_WEBHOOKS` permission | Cannot create or update webhooks; existing webhooks still POSTable | 403 on management calls |
+| Channel deleted | Webhook auto-deleted | 404 on next use |
+| Cloudflare UA blocking | Some User-Agents (notably Python's `requests` default) get 1010 blocked | 403 / 1010 |
+
+**Canonical auto-heal pattern for MG-A:**
 
 ```
-Feature 4 (Native CC slash)
-    ├── depends-on ── Feature 2 (/effort backing + clawcode-effort unification)
-    ├── depends-on ── Feature 3 (/model backing + clawcode-model unification)
-    └── blocks ────── unified namespace decisions for /clawcode-* vs native
-
-Feature 3 (Dual picker)
-    ├── depends-on ── agents[*].allowedModels schema (new clawcode.yaml field)
-    └── depends-on ── Feature 2 (for combined model+effort picker UX)
-
-Feature 2 (Effort mapping)
-    ├── depends-on ── Agent SDK session-option pass-through
-    └── independent-of ── Feature 1
-
-Feature 1 (Skills migration)
-    ├── depends-on ── v1.4 global skill install (shipped)
-    ├── depends-on ── v2.1 atomic writer + ledger (reusable)
-    └── independent-of ── Features 2/3/4
+try POST → success → done
+try POST → 404 / 401 →
+   re-create webhook via bot (needs MANAGE_WEBHOOKS)
+   update registry with new ID + token
+   retry POST once
+   on success → log telemetry counter
+   on second failure → fall through to inbox-heartbeat (existing path) + alert
 ```
 
-**Phase-ordering implication:**
-- Feature 1 runs in parallel with 2/3/4
-- Feature 2 must land before Feature 3's combined picker UX
-- Feature 4 must come last — it rationalizes the clawcode-* namespace, depending on final shape of `clawcode-model` + `clawcode-effort`
+Discord interaction tokens (15-min TTL) are a **different** lifecycle — they apply to slash-command response paths, not to `post_to_agent`'s outbound webhook sends. Don't conflate.
 
 ---
 
-## Open Questions (for phase-specific research)
+## Sources
 
-- Does SDK's `system/init.slash_commands` include bundled skills (`/simplify`, `/debug`, `/batch`, `/loop`, `/claude-api`)? Docs example shows only 3 built-ins. Empirical test during Phase 2.
-- Does `/export <filename>` work non-interactively via SDK? Docs classify as dialog; filename arg may bypass.
-- Does `remotion` skill's nested `claude` spawn survive in long-lived ClawCode agent process? Subagent-vs-subshell collision risk.
-- No `fallbackModels` field exists; Feature 3 introduces it or relies only on `model` + `allowedModels`?
+- `.planning/PROJECT.md` — v2.9 milestone scope, Validated history, Out of Scope constraints
+- `.planning/BACKLOG-CONSOLIDATED.md` — full triage (5 merge groups + 5 standalone + 5 pending-verify, from 33 candidate 999.x dirs)
+- `.planning/phases/999.44-agent-to-agent-message-delivery-reliability/BACKLOG.md` — symptoms, hypotheses, acceptance criteria
+- `.planning/phases/999.45-hourglass-to-thumbs-up-when-prompt-leaves-queue/BACKLOG.md` — icon states + runtime hook
+- `.planning/phases/999.46-discord-table-rendering-auto-transform/BACKLOG.md` — code-block transform spec + alternatives discussion
+- `.planning/phases/999.48-heartbeat-reply-leaks-to-user-channel/BACKLOG.md` — agent-owned cron-poll fix
+- `.planning/phases/999.49-benchmarks-tab-tool-rollup-empty-rows/BACKLOG.md` — ranked hypotheses + diagnostic SQL
+- `.planning/phases/999.36-.../999.36-02-PLAN.md` — completion gate, idle warning, autoArchive guard, one-time migration (7 tasks)
+- `.planning/phases/999.36-.../999.36-03-PLAN.md` — chunk-boundary off-by-3 fix (4 tasks)
+- `.planning/ROADMAP.md:1490-1534` — 999.19 + 999.20 detailed spec including the hard dependency
+- [Discord API docs — Invalid Webhook Tokens (Issue #6851)](https://github.com/discord/discord-api-docs/issues/6851) — webhook lifecycle: delete+recreate, token regeneration, no TTL
+- [Hooklistener — Discord Webhook Debugging Guide](https://www.hooklistener.com/guides/discord-webhook-debugging) — 404 vs 401 semantics + recovery patterns
+- [Discord Markdown Guide (matthewzring gist)](https://gist.github.com/matthewzring/9f7bbfd102003963f9be7dbcf7d40e51) — code-block monospace pattern; Discord supports ~60% CommonMark, tables not in subset
+- [Discord Feature Request: Advanced markdown (tables, lists)](https://support.discord.com/hc/en-us/community/posts/360040079832) — confirms native table rendering remains unsupported; code-block-with-padded-columns is standard workaround
+
+---
+*Feature research for: v2.9 Reliability & Routing — multi-agent Discord orchestration hardening*
+*Researched: 2026-05-13*
