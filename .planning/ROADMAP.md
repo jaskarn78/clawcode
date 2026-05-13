@@ -1927,6 +1927,57 @@ Plans:
 
 **Status:** SUPERSEDED 2026-05-07 — fully absorbed as Phase 115 sub-scope 15 (MCP tool-response cache). All sub-scope candidates listed below are carried forward into 115 planning. See `.planning/ROADMAP.md` Phase 115 entry for the active scope. Original entry preserved below for git-history searchability.
 
+### Phase 117: Claude Code advisor pattern — multi-backend scaffold, Anthropic complete
+
+**Goal:** Bring the Claude Code experimental advisor pattern to ClawCode. Replace the current fork-based `ask_advisor` (`daemon.ts:9805`) with a provider-neutral `AdvisorService` interface and two backend slots. Complete the Anthropic-native backend via the Claude Agent SDK's `advisorModel` option — in-request server sub-inference, advisor-side prompt caching, docs-recommended executor timing prompt. Scaffold (interface-conformant stub only) a `PortableForkAdvisor` for future non-Anthropic providers; full implementation deferred to Phase 118 once a consumer arrives. Preserve the existing fork-based code as `LegacyForkAdvisor` behind `advisor.backend: fork` — operator rollback lever, same pattern as Phase 110 `defaults.shimRuntime`.
+
+Seed `src/llm/CompletionProvider` interface for future provider implementations; no impls in this phase.
+
+Make every agent aware of the advisor via system-prompt block + capability manifest entry so they reach for it naturally. Make consultations visible in Discord: 💠/💭 reaction on the triggering user message + `— consulted advisor (Opus) before responding` footer on the assistant response. NO new threads — in-band visibility, never sidebar. `subagent-thread` skill untouched.
+
+**Trigger:** 2026-05-13 — Anthropic API beta `advisor_20260301` shipped; Claude Agent SDK 0.2.132 exposes `advisorModel?: string` as a first-class Option (`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:4930`). ClawCode's current advisor pays fresh-session boot cost + full-context input on every call with zero advisor-side caching — the native path eliminates both. Operator also flagged multi-provider as a forward concern; this is the right inflection point to seed the abstraction before more code is built on the SDK-only advisor surface.
+
+**Acceptance criteria:**
+- `AdvisorService` interface in `src/advisor/` with backend dispatch.
+- `AnthropicSdkAdvisor` working end-to-end on `test-agent`; advisor invocations show 💭 reaction + footer in Discord.
+- `LegacyForkAdvisor` preserves today's `daemon.ts:9810–9866` behavior; flag-flip via `clawcode reload` swaps backend cleanly.
+- `PortableForkAdvisor` exists and throws documented `Phase 118` stub error.
+- `src/llm/provider.ts` interface declared; no impls.
+- Config schema: `defaults.advisor.{backend,model,maxUsesPerRequest,caching}` + per-agent override. Rejects `"portable-fork"` value.
+- All existing operator contracts preserved: `ask_advisor` MCP tool schema, `AdvisorBudget` 10/day cap, 2000-char truncation, non-idempotent caching rules, `subagent-thread` independence.
+- Vitest suite green; manual smoke on `test-agent` (both backends) per plan §Verification.
+
+**Out of scope:**
+- `PortableForkAdvisor` implementation (Phase 118).
+- Any `CompletionProvider` implementations (first lands with 118 consumer).
+- Removal of fork-based code (deferred ≥1 week post-`native` rollout; follow-up phase).
+- `subagent-thread` skill changes.
+- Escalation rewire (`src/manager/escalation.ts` keeps its existing fork-to-Opus logic).
+
+**Depends on:** Phase 116 (current shipped state)
+
+**Plans (11 atomic, per plan doc):**
+- [ ] 117-01 — `src/llm/provider.ts` interface + README (no impls)
+- [ ] 117-02 — `AdvisorService` core + interface + registry + prompts
+- [ ] 117-03 — Extract fork logic from `daemon.ts:9810–9866` → `LegacyForkAdvisor` backend
+- [ ] 117-04 — `AnthropicSdkAdvisor` + `session-config.ts` `advisorModel` wiring + `session-adapter.ts` budget observer
+- [ ] 117-05 — `PortableForkAdvisor` scaffold (interface-conformant stub)
+- [ ] 117-06 — Config schema (`advisor` block) + loader + defaults
+- [ ] 117-07 — Re-point IPC handler at `AdvisorService`; conditional MCP tool registration
+- [ ] 117-08 — Agent awareness: timing-prompt block + capability manifest entry
+- [ ] 117-09 — Discord visibility: 💭 reaction + footer via `advisor:invoked` event (now level-aware — see 117-11)
+- [ ] 117-10 — Migration cleanup: `CLAUDE.md`, `clawcode.example.yaml`, `CHANGELOG.md`, phase `SUMMARY.md`
+- [ ] 117-11 — **`/verbose` operator Discord toggle** — per-channel slash command (`/verbose on|off|status`) controlling visibility level. SQLite-backed channel state (table `verbose_channels`, similar pattern to `AdvisorBudget`). Default OFF (today's behavior — 💭 reaction + footer only when advisor fires). When ON, the assistant delivery to that channel inlines advisor Q+A and a compact tool-call summary block. Generalizes 117-09 from "always-on footer" to "visibility level." Files: `src/usage/verbose-state.ts` (new), `src/manager/daemon.ts` (IPC + slash dispatch), `src/discord/slash-commands.ts` (register `/verbose`), `src/discord/bridge.ts` (consume level when assembling delivery). Acceptance: `/verbose on` in `#test-agent`'s channel `1491623782807244880` flips state; next advisor consultation shows inline Q+A; `/verbose off` reverts to footer-only; `/verbose status` reports current level + last-changed timestamp.
+
+**Pre-execution gates (resolve before 117-04 commits):**
+1. SDK `SdkStreamMessage` surface for `advisor_message` / `iterations` / `server_tool_use` — confirms budget observer parse site.
+2. MCP `ask_advisor` registration policy for native-backend agents — drop tool (recommended, matches Claude Code UX) vs keep as uniform surface.
+3. Event-emit site in `session-adapter.ts` for `advisor:invoked` — must precede Discord delivery so footer + reaction land atomically.
+
+**Reference plan:** `/home/jjagpal/.claude/plans/eventual-questing-tiger.md`
+
+**Status:** PLANNED 2026-05-13 — awaiting `/gsd-plan-phase 117` to expand the 10 plans into per-plan `PLAN.md` files with task breakdowns.
+
 ---
 
 ### Phase 999.40 (original): Daemon-side response cache for repeated MCP tool calls
