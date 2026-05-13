@@ -4084,6 +4084,19 @@ export class SlashCommandHandler {
           log: this.log,
         });
         await interaction.editReply(reply);
+      } else if (ipcMethod === "set-verbose-level") {
+        // Phase 117 Plan 117-11 T04 — per-channel verbose toggle. Routes the
+        // operator's level choice (on/off/status) through the daemon IPC
+        // handler (T05) which upserts via VerboseState and returns the
+        // resulting {level, updatedAt}. Reply is ephemeral (inherited from
+        // the deferReply at the top of this method).
+        const reply = await handleVerboseSlash({
+          channelId: interaction.channelId,
+          level: interaction.options.getString("level", true),
+          sendIpc: (method, params) =>
+            sendIpcRequest(SOCKET_PATH, method, params) as Promise<unknown>,
+        });
+        await interaction.editReply(reply);
       } else if (ipcMethod === "agent-create") {
         const name = interaction.options.getString("name");
         const soul = interaction.options.getString("soul");
@@ -4581,4 +4594,68 @@ export function buildFleetEmbed(
           : 0xffff00;
 
   return { title: "Fleet Status", color, fields, timestamp: new Date().toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 117 Plan 117-11 T04 — pure handler for /clawcode-verbose.
+//
+// Exported so tests can drive the command logic without spinning up a real
+// Discord interaction pipeline (mirror of handleInterruptSlash / handleSteerSlash
+// at slash-commands.ts:~4324). `handleControlCommand` wires it in-process
+// against `sendIpcRequest` and the slash interaction's deferred ephemeral
+// reply.
+//
+// The IPC daemon-side handler (T05) returns { level, updatedAt } on success
+// or surfaces a JSON-RPC error (caught upstream → editReply "Command failed").
+// This handler renders the user-visible reply text only; the caller wraps
+// it in editReply so the ephemeral-ness inherited from deferReply is
+// preserved (we DO NOT call reply() here — second reply would throw
+// InteractionAlreadyReplied).
+// ---------------------------------------------------------------------------
+
+/** Successful response payload from the `set-verbose-level` IPC method. */
+export type VerboseSlashIpcResult = {
+  readonly level: "normal" | "verbose";
+  readonly updatedAt: string;
+};
+
+/** Inputs for the pure verbose-slash handler. */
+export type VerboseSlashDeps = {
+  readonly channelId: string;
+  /** "on" | "off" | "status" — the operator's level choice from the slash option. */
+  readonly level: string;
+  /** Test-injectable IPC sender. Production binds this to `sendIpcRequest(SOCKET_PATH, ...)`. */
+  readonly sendIpc: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<unknown>;
+};
+
+/**
+ * Render the ephemeral reply text for `/clawcode-verbose`.
+ *
+ * Returns:
+ *   - "verbose: verbose for this channel"    — level=on  → IPC sets verbose
+ *   - "verbose: normal for this channel"     — level=off → IPC sets normal
+ *   - "verbose: <level> (last changed <ts>)" — level=status → IPC reads current
+ *   - "verbose: <error string>"              — IPC handler returned { error: ... }
+ *
+ * Never throws — IPC transport errors bubble to handleControlCommand's outer
+ * catch (which renders "Command failed: <msg>").
+ */
+export async function handleVerboseSlash(
+  deps: VerboseSlashDeps,
+): Promise<string> {
+  const { channelId, level, sendIpc } = deps;
+  const response = (await sendIpc("set-verbose-level", {
+    channelId,
+    level,
+  })) as VerboseSlashIpcResult | { readonly error: string };
+  if ("error" in response) {
+    return `verbose: ${response.error}`;
+  }
+  if (level === "status") {
+    return `verbose: ${response.level} (last changed ${response.updatedAt})`;
+  }
+  return `verbose: ${response.level} for this channel`;
 }
