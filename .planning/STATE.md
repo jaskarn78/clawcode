@@ -1,35 +1,35 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: Performance + Reliability
-status: verifying
-stopped_at: "Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md."
-last_updated: "2026-05-13T06:36:03.037Z"
+milestone: v2.9
+milestone_name: Reliability & Routing
+status: planning
+stopped_at: "Milestone v2.9 opened 2026-05-13 — closes v2.8 Performance + Reliability (most scope shipped via Phases 110, 113, 114, 115, 116; remainder consolidated). v2.9 scope: 5 merge groups + standalone items per .planning/BACKLOG-CONSOLIDATED.md. Cleanup commit 2a9fca8 removed 8 shipped 999.x stubs (999.7, .9, .16, .17, .21, .22, .23, .24). Next: parallel research → requirements → roadmap. Predecessor: Phase 116 SHIPPED + Usage-page reframe (116-postdeploy), commits 01d633f, c7786b5, ed729b0. Ramy-active deploy hold continues."
+last_updated: "2026-05-13T22:50:00.000Z"
 last_activity: 2026-05-13
 progress:
-  total_phases: 64
-  completed_phases: 17
-  total_plans: 119
-  completed_plans: 112
-  percent: 94
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
+See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing milestone opened)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** Phase 116 — Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)
+**Current focus:** v2.9 Reliability & Routing — close operator-pain gaps in A2A delivery, post-Phase-116 dashboard observability, subagent UX, and MCP lifecycle verification. See `.planning/BACKLOG-CONSOLIDATED.md` for the 5 merge groups + standalone items.
 
 ## Current Position
 
-Phase: 116 (Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)) — SHIPPED 2026-05-11
-Plan: 6 of 6 (CLOSED)
-Status: Phase complete — ready for verification
-Latest commit: `7e6b531` — feat(116-06): T01-T05+T07 frontend — heatmap, notifications, theme, audit, graph, telemetry
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-05-13 — Milestone v2.9 started, closing v2.8 via consolidation. Cleanup commit `2a9fca8` removed 8 shipped 999.x stubs (999.7, .9, .16, .17, .21, .22, .23, .24).
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 

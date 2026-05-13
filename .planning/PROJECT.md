@@ -100,7 +100,7 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-(No active requirements — v2.2 shipped 2026-04-23. Run `/gsd:new-milestone` to define next milestone's scope.)
+v2.9 Reliability & Routing — requirements pending definition (see `## Current Milestone` below). Closes the operator-pain gaps in A2A delivery, dashboard observability, subagent UX, and MCP lifecycle verification surfaced in `.planning/BACKLOG-CONSOLIDATED.md`.
 
 ### Out of Scope
 
@@ -117,9 +117,25 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 - Automatic personality evolution — identity drift is a feature-killing bug
 - LLM-powered entity/relation extraction — doubles token cost on writes
 
+## Current Milestone: v2.9 Reliability & Routing
+
+**Goal:** Close the operator-pain gaps in cross-agent message delivery, post-Phase-116 dashboard observability, subagent UX, and MCP lifecycle verification — formally retiring the v2.8 backlog and surfacing post-Phase-116 dashboard regressions as a first-class theme.
+
+**Target features:**
+- **MG-A · A2A + Subagent-Relay Delivery Reliability** — fix `post_to_agent` no-webhook fallback (999.44), queue-state icon coherence (999.45), and heartbeat-routing leak into operator channel (999.48); re-validates the Phase 999.12 deploy.
+- **MG-D · Dashboard Backend Observability Cleanup (post-116)** — benchmarks empty-rows + null-percentile rendering (999.49), split-latency producer regression + tool-latency-audit CLI Invalid Request (999.7 follow-ups B/C); shared root in `trace_spans` / `tool_latency` surface.
+- **MG-B · Subagent UX Completion + Chunk-Boundary** — premature-completion gate (999.36-02) + chunk-boundary off-by-3 (999.36-03); same file, sequenced waves.
+- **MG-C · MCP Lifecycle Verification Soak** — execute the four pre-written Wave-2/4 plans for 999.6 / 999.14 / 999.15 to formally close in-production code.
+- **Discord Table Auto-Transform** — wrap markdown tables in code blocks at the daemon's output formatter; single-place hook obsoleting per-agent `feedback_no_wide_tables_discord.md` workarounds (999.46).
+- **Subagent Delegate Routing + `/research` commands** — route delegated threads to delegate's channel + memory consolidation, then `/research` and `/research-search` slash commands on top (999.19 + 999.20).
+
+**Key context:** Closes v2.8 "Performance + Reliability" — most of its planned scope already shipped (Phases 110, 113, 114, 115, 116) or was triaged out via the cleanup commit `2a9fca8`. Detailed triage in `.planning/BACKLOG-CONSOLIDATED.md` (5 merge groups + 5 standalone + 5 pending-verify, from 33 candidate 999.x dirs).
+
 ## Current State
 
-**Latest shipped milestone:** v2.2 OpenClaw Parity & Polish (shipped 2026-04-23)
+**Latest shipped milestone:** v2.7 Operator Self-Serve + Production Hardening (Phases 100-108, shipped 2026-05-01)
+**In-flight (closing as v2.9 opens):** v2.8 Performance + Reliability — most scope shipped or absorbed; remainder consolidated into v2.9.
+**Previous active milestone reference:** v2.2 OpenClaw Parity & Polish (shipped 2026-04-23)
 
 v1.0-v2.2 delivered 90 phases across 13 milestones: core multi-agent system, advanced intelligence, production hardening, agent integrations, agent runtime, smart memory with model tiering, platform operations + RAG, end-to-end performance + latency optimizations, proactive agents with cross-agent handoffs, persistent conversation memory with auto-injection, OpenAI-compatible endpoint + browser/search/image MCPs, one-shot OpenClaw-to-ClawCode migration toolchain, and v2.2 parity polish (effort mapping, skills migration, MCP reliability, dual model picker, native CC slash commands, skills marketplace, restart greeting). Zero new npm dependencies added in v2.2 — entire milestone built on the existing stack.
 
@@ -200,4 +216,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-23 — v2.2 OpenClaw Parity & Polish shipped*
+*Last updated: 2026-05-13 — v2.9 Reliability & Routing milestone opened; v2.8 closed via consolidation (see `.planning/BACKLOG-CONSOLIDATED.md`)*
