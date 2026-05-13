@@ -899,16 +899,17 @@ export function BenchmarksView(): JSX.Element {
   }
 
   return (
-    <div className="mx-auto max-w-7xl p-4 space-y-4">
-      <header>
-        <h1 className="font-display text-2xl font-bold text-fg-1">
-          Benchmarks
-        </h1>
-        <p className="text-xs text-fg-3 font-sans mt-1">
-          Per-agent performance: tool latency, end-to-end turn timings,
-          memory ops. Trigger ad-hoc benchmark runs from Section 2.
-        </p>
-      </header>
+    <div className="mx-auto max-w-7xl px-7 py-6 space-y-4">
+      {/* dash-redesign sweep — section-head pattern. */}
+      <div className="section-head">
+        <div className="flex items-baseline">
+          <h2>Benchmarks</h2>
+          <span className="sub">
+            per-agent tool latency, turn timings, memory ops · ad-hoc
+            runs in Section 2
+          </span>
+        </div>
+      </div>
 
       <ToolRollupSection
         agent={effectiveAgent}

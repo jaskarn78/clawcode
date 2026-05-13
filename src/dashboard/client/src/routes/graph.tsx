@@ -54,17 +54,16 @@ export function GraphRoute(): JSX.Element {
   const src = agent ? `/graph?agent=${encodeURIComponent(agent)}` : '/graph'
 
   return (
-    <div className="mx-auto max-w-7xl p-4">
-      <div className="mb-4 flex items-baseline justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-fg-1">
-            Knowledge graph
-          </h1>
-          <p className="text-sm text-fg-3 font-sans">
-            Memory tier + edges. Drag nodes; zoom / pan; tier toggles in the
-            inner sidebar. Source: existing D3 graph from{' '}
-            <code className="text-[11px]">/graph</code>.
-          </p>
+    <div className="mx-auto max-w-7xl px-7 py-6">
+      {/* dash-redesign sweep — section-head pattern. Agent selector
+          and Open-in-new-tab action stay right-anchored. */}
+      <div className="section-head mb-5">
+        <div className="flex items-baseline">
+          <h2>Knowledge graph</h2>
+          <span className="sub">
+            memory tier + edges · drag nodes, zoom / pan · D3 source at{' '}
+            <code className="font-mono text-fg-2">/graph</code>
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
