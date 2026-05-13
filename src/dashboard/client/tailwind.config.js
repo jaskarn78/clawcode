@@ -64,6 +64,26 @@ export default {
         gold: '#eab308', // yellow — escalation / priority
         pink: '#ff3366', // magenta — accent / SLO-breach banner highlight
 
+        // dash-redesign (Mission Control) — new utility surface.
+        // `mc-accent` is the kit's warm amber/copper "live"/heartbeat
+        // accent (NOT shadcn's neutral --accent slot — that stays
+        // untouched below to keep Popover/Dialog/Button hover states).
+        // `mc-primary-*` are composed wash + ring colors used by tiles
+        // and stat cards. `mc-bg-line` is the hairline-border token.
+        //
+        // These resolve via simple `var(--mc-*)` (no <alpha-value>
+        // wrapping) because the underlying tokens are full colors with
+        // their own alpha baked in — Tailwind's opacity modifiers won't
+        // apply, but the dashboard's design lock only needs these as
+        // solid colors at canonical opacity.
+        'mc-accent': 'var(--mc-accent)',
+        'mc-accent-fg': 'var(--mc-accent-fg)',
+        'mc-accent-soft': 'var(--mc-accent-soft)',
+        'mc-primary-soft': 'var(--mc-primary-soft)',
+        'mc-primary-ring': 'var(--mc-primary-ring)',
+        'mc-bg-line': 'var(--mc-bg-line)',
+        'mc-bg-inset': 'var(--mc-bg-inset)',
+
         // shadcn/ui token utilities — every primitive in components/ui/
         // expects these. They resolve through the CSS variables declared in
         // index.css (`@layer base { :root { ... } }`). Using HSL channels
@@ -107,6 +127,14 @@ export default {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+        // dash-redesign (Mission Control) — kit-scoped radii so
+        // `rounded-mc-lg` etc. resolve. Independent from shadcn's
+        // `rounded-lg` so primitives keep their existing radius.
+        'mc-xs': 'var(--mc-radius-xs)',
+        'mc-sm': 'var(--mc-radius-sm)',
+        'mc': 'var(--mc-radius)',
+        'mc-lg': 'var(--mc-radius-lg)',
+        'mc-xl': 'var(--mc-radius-xl)',
       },
       fontFamily: {
         // Headings + display copy — Cabinet Grotesk (free, Indian Type
