@@ -197,7 +197,7 @@ import { startOpenAiEndpoint, type OpenAiEndpointHandle } from "../openai/endpoi
 import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
-import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
+import { AdvisorBudget } from "../usage/advisor-budget.js";
 // Phase 117-03 — ported advisor system-prompt builder (parity baseline from
 // the inline construction at the old :9836 site). The IPC handler at
 // `ask-advisor` now calls this rather than inlining the string.
@@ -213,6 +213,7 @@ import {
   BackendRegistry,
   resolveAdvisorModel as resolveAdvisorModelAlias,
   type AdvisorService,
+  type BackendId,
 } from "../advisor/index.js";
 import { LegacyForkAdvisor } from "../advisor/backends/legacy-fork.js";
 import { AnthropicSdkAdvisor } from "../advisor/backends/anthropic-sdk.js";
@@ -1803,6 +1804,91 @@ export async function forkAdvisorConsult(
   }
 
   return { answer };
+}
+
+/**
+ * Phase 117-07 T02 — `ask-advisor` IPC handler dispatch body.
+ *
+ * Replaces the previous inline ~60-line block at the `case "ask-advisor"`
+ * switch arm. Owns ZERO business logic beyond:
+ *   1. Resolving the backend at the IPC boundary via the loader resolver
+ *      (per-agent → defaults → "native").
+ *   2. Short-circuiting native-backend agents with the RESEARCH §13.11
+ *      explanatory response (MCP tool is also gated off for them in
+ *      `src/mcp/server.ts:925`, Plan 117-07 T03; this IPC path remains
+ *      callable as stale-state defense).
+ *   3. Dispatching fork-backend agents through `AdvisorService.ask`,
+ *      which owns budget gating + backend dispatch + truncation +
+ *      `recordCall` ordering (Plan 117-02 T06 — single source of truth
+ *      for `ADVISOR_RESPONSE_MAX_LENGTH`).
+ *
+ * Exported so `__tests__/daemon-ask-advisor-dispatch.test.ts` can mock
+ * `AdvisorService.ask` and exercise both branches without instantiating
+ * the full daemon. The IPC envelope (response field names `answer`,
+ * `budget_remaining`, plus the new `backend` discriminator) is operator-
+ * visible contract — see the test suite for the parity assertions.
+ */
+export interface AskAdvisorDeps {
+  readonly manager: SessionManager;
+  readonly advisorService: AdvisorService;
+  readonly advisorBudget: AdvisorBudget;
+  readonly advisorDefaults:
+    | { readonly advisor?: { readonly backend?: string } }
+    | undefined;
+}
+
+export async function handleAskAdvisor(
+  deps: AskAdvisorDeps,
+  params: { agent: string; question: string },
+): Promise<{
+  readonly answer: string;
+  readonly budget_remaining: number;
+  readonly backend: BackendId;
+}> {
+  const { manager, advisorService, advisorBudget, advisorDefaults } = deps;
+  const { agent, question } = params;
+
+  // RESEARCH §13.11 — native short-circuit. The MCP tool is unregistered
+  // for native-backend agents (Plan 117-07 T03 gates `server.tool` in
+  // `src/mcp/server.ts:925`); this IPC path remains callable for the
+  // fork backend, plus stale-state defense for any native call that
+  // slips through (e.g. a `clawcode mcp` client warm from before the
+  // backend flipped). The response makes the misuse readable to the
+  // caller so any agent that invokes the tool by mistake gets a clear
+  // pointer rather than an opaque failure.
+  //
+  // Cast `cfg` mirrors session-config.ts:1187 — see daemon-boot
+  // composition comment above. `ResolvedAgentConfig` doesn't expose
+  // `advisor?` on its type yet (Plan 117-06 schema-only).
+  const cfg = manager.getAgentConfig(agent) as unknown as
+    | { advisor?: { backend?: string } }
+    | undefined;
+  const backendId = resolveAdvisorBackend(cfg, advisorDefaults);
+  if (backendId === "native") {
+    return {
+      answer:
+        "Advisor runs in-session for native-backend agents — your agent " +
+        "will consult automatically on its next hard decision. To force " +
+        "a synchronous fork-based call, set agent.advisor.backend: fork.",
+      budget_remaining: advisorBudget.getRemaining(agent),
+      backend: "native" as const,
+    };
+  }
+
+  // Fork-backend dispatch. `AdvisorService.ask` owns:
+  //   - budget gate (canCall) — short-circuits with a budget-exhausted
+  //     answer if 0 remaining today;
+  //   - backend dispatch (LegacyForkAdvisor.consult → forkAdvisorConsult);
+  //   - response truncation to `ADVISOR_RESPONSE_MAX_LENGTH`;
+  //   - recordCall on success ONLY (failed turns don't charge budget).
+  // The IPC envelope re-maps `budgetRemaining` (camelCase service shape)
+  // to `budget_remaining` (operator-visible IPC contract).
+  const result = await advisorService.ask({ agent, question });
+  return {
+    answer: result.answer,
+    budget_remaining: result.budgetRemaining,
+    backend: result.backend,
+  };
 }
 
 export const MANAGER_DIR =
@@ -9986,61 +10072,21 @@ async function routeMethod(
     }
 
     case "ask-advisor": {
+      // Phase 117-07 T02 — dispatch delegated to `handleAskAdvisor` for
+      // testability + to make the dispatch shape (native short-circuit
+      // vs fork-via-AdvisorService) reviewable without scrolling the
+      // 60-line inline body that used to live here. Truncation + budget
+      // gate + recordCall now live in `DefaultAdvisorService.ask`
+      // (Plan 117-02 T06) — single source of truth for
+      // `ADVISOR_RESPONSE_MAX_LENGTH`. Memory-context retrieval dropped
+      // by design — see the AdvisorService composition comment at the
+      // daemon-boot site for the parity-loss rationale.
       const agentName = validateStringParam(params, "agent");
       const question = validateStringParam(params, "question");
-
-      // Check budget before doing any expensive work
-      if (!advisorBudget.canCall(agentName)) {
-        throw new ManagerError(
-          `Advisor budget exhausted for agent '${agentName}' (0 calls remaining today)`,
-        );
-      }
-
-      // Retrieve top 5 relevant memories for context
-      let memoryContext = "";
-      const store = manager.getMemoryStore(agentName);
-      if (store) {
-        try {
-          const embedder = manager.getEmbedder();
-          const queryEmbedding = await embedder.embed(question);
-          const search = new SemanticSearch(store.getDatabase());
-          const results = search.search(queryEmbedding, 5);
-          if (results.length > 0) {
-            memoryContext = results
-              .map((r, i) => `[${i + 1}] ${r.content}`)
-              .join("\n");
-          }
-        } catch {
-          // Memory search failure is non-fatal for advisor
-        }
-      }
-
-      // Phase 117-03: the fork-and-dispatch body is now `forkAdvisorConsult`
-      // above. System prompt assembly moved to `buildAdvisorSystemPrompt`
-      // (`src/advisor/prompts.ts`, ported in Plan 117-02). Memory-context
-      // retrieval, budget enforcement, truncation, and the IPC response
-      // shape REMAIN INLINE HERE for behavior parity — Plan 117-07
-      // re-points this handler at `AdvisorService` which owns those.
-      const systemPrompt = buildAdvisorSystemPrompt(agentName, memoryContext);
-      const { answer: rawAnswer } = await forkAdvisorConsult(manager, {
-        agent: agentName,
-        question,
-        systemPrompt,
-        advisorModel: "opus",
-      });
-
-      // Truncate response to 2000 chars (parity with the pre-117-03 body).
-      const answer =
-        rawAnswer.length > ADVISOR_RESPONSE_MAX_LENGTH
-          ? rawAnswer.slice(0, ADVISOR_RESPONSE_MAX_LENGTH)
-          : rawAnswer;
-
-      // Record the call after success — same ordering as before
-      // extraction (only successful turns charge the budget).
-      advisorBudget.recordCall(agentName);
-      const budgetRemaining = advisorBudget.getRemaining(agentName);
-
-      return { answer, budget_remaining: budgetRemaining };
+      return await handleAskAdvisor(
+        { manager, advisorService, advisorBudget, advisorDefaults },
+        { agent: agentName, question },
+      );
     }
 
     case "set-model": {
