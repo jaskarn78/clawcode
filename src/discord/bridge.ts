@@ -792,6 +792,59 @@ export class DiscordBridge {
       typingInterval = undefined;
       await editor.flush();
 
+      // Plan 117-09 — advisor visibility mutation (RESEARCH §4.5, §6 Pitfall 1,
+      // §13.2, §13.4). SINGLE injection point — all three delivery exits below
+      // (sendResponse-large, edit-small, sendResponse-no-typing-indicator) read
+      // the same `response` local. Do NOT add a fallback mutation inside
+      // sendResponse() or messageRef.current.edit(): that's the silent-path-
+      // bifurcation anti-pattern flagged by `feedback_silent_path_bifurcation`
+      // memory and §6 Pitfall 1. Mutate ONCE here.
+      //
+      // Standalone-runner branch (bridge.ts:turnDispatcher=undefined ->
+      // streamFromAgent path) does NOT fire advisor events today (RESEARCH
+      // §13.9 / §13.13 Pitfall 8); didConsultAdvisor stays false and no
+      // footer is appended. Documented acceptable absence.
+      if (didConsultAdvisor && response && response.trim().length > 0) {
+        // Plan 117-11 attaches verboseState; for now default to "normal".
+        const level: "normal" | "verbose" =
+          this.verboseState?.getLevel(message.channelId) ?? "normal";
+        // Snapshot `lastAdvisorResult` into a local — closure mutation from
+        // `onResulted` isn't visible to TS control-flow narrowing (TS would
+        // otherwise narrow to `null` here), so we read once through an
+        // explicit cast to the declared union type.
+        const result = lastAdvisorResult as
+          | { kind: AdvisorResultedEvent["kind"]; text?: string; errorCode?: string }
+          | null;
+        const variant = result?.kind;
+        if (variant === "advisor_tool_result_error") {
+          const code = result?.errorCode ?? "unknown";
+          response = response + "\n\n*— advisor unavailable (" + code + ")*";
+        } else if (
+          level === "verbose" &&
+          variant === "advisor_result" &&
+          result?.text
+        ) {
+          // Plan 117-11 seam — verbose mode shows the (truncated) advisor
+          // reply inline. advisor_redacted_result intentionally falls through
+          // to the plain footer (no plaintext leak — RESEARCH §13.4).
+          const adviceRaw = result.text;
+          const advice =
+            adviceRaw.length > 500 ? adviceRaw.slice(0, 500) + "…" : adviceRaw;
+          response =
+            response +
+            "\n\n```\n💭 advisor consulted (Opus)\n" +
+            advice +
+            "\n```";
+        } else {
+          // includes: level === "normal" (any kind), level === "verbose" with
+          // advisor_redacted_result (no plaintext), or kind === undefined
+          // (invoked but never resulted — partial-failure: still show footer
+          // because the 💭 reaction already landed).
+          response =
+            response + "\n\n*— consulted advisor (Opus) before responding*";
+        }
+      }
+
       if (response && response.trim().length > 0) {
         if (response.length > 2000) {
           if (messageRef.current) {

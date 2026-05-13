@@ -202,6 +202,24 @@ import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-bud
 // the inline construction at the old :9836 site). The IPC handler at
 // `ask-advisor` now calls this rather than inlining the string.
 import { buildAdvisorSystemPrompt } from "../advisor/prompts.js";
+// Phase 117-07 — provider-neutral AdvisorService composition at daemon boot.
+// The IPC handler at `ask-advisor` dispatches through this service (which
+// owns budget enforcement + truncation + backend dispatch) rather than
+// inlining `forkAdvisorConsult`. The two backends registered today are
+// `LegacyForkAdvisor` (rollback path, fork+dispatch) and `AnthropicSdkAdvisor`
+// (native marker; see backend file header for why `consult()` throws).
+import {
+  DefaultAdvisorService,
+  BackendRegistry,
+  resolveAdvisorModel as resolveAdvisorModelAlias,
+  type AdvisorService,
+} from "../advisor/index.js";
+import { LegacyForkAdvisor } from "../advisor/backends/legacy-fork.js";
+import { AnthropicSdkAdvisor } from "../advisor/backends/anthropic-sdk.js";
+import {
+  resolveAdvisorBackend,
+  resolveAdvisorModel as resolveAdvisorModelConfig,
+} from "../config/loader.js";
 import { EscalationBudget } from "../usage/budget.js";
 import { modelSchema, agentSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
@@ -2610,6 +2628,62 @@ export async function startDaemon(
   // semantics right.
   manager.setAdvisorDefaults({ advisor: config.defaults.advisor });
 
+  // Phase 117 Plan 07 T01 — compose `AdvisorService` at daemon boot.
+  //
+  // Registry holds both backends: `LegacyForkAdvisor` (operator rollback
+  // path; agents with `advisor.backend: fork` route here) and
+  // `AnthropicSdkAdvisor` (native marker — its `consult()` throws by
+  // design, see backend file header §spike). `PortableForkAdvisor`
+  // intentionally NOT registered — scaffold only per Plan 117-05.
+  //
+  // The service closes over `config.defaults.advisor` via the
+  // `resolveBackend` / `resolveAdvisorModel` deps so the IPC handler
+  // (Plan 117-07 T02) can call `advisorService.ask({agent, question})`
+  // with no extra config plumbing. Budget + truncation + recordCall
+  // ownership lives in `DefaultAdvisorService.ask` (Plan 117-02 T06),
+  // removing the duplication that used to live inline in the
+  // `ask-advisor` IPC handler.
+  //
+  // NOTE on memoryContext: the pre-117-07 inline handler retrieved top-5
+  // semantic memories and threaded them into `buildAdvisorSystemPrompt`.
+  // The provider-neutral `AdvisorServiceDeps.resolveSystemPrompt` is
+  // synchronous (`(agent) => string`) so memory context injection drops
+  // here as a deliberate parity loss for the rollback path. Native
+  // agents have memory MCP tools in-session; fork-backend agents retain
+  // `clawcode_memory_search` / `memory_lookup` MCP tools as an
+  // equivalent surface. Widening the service surface to re-thread
+  // memory belongs to a follow-up phase, not 117-07.
+  const advisorRegistry = new BackendRegistry();
+  advisorRegistry.register(new LegacyForkAdvisor(manager));
+  advisorRegistry.register(new AnthropicSdkAdvisor());
+  // Loader resolvers accept structural types — `cfg as unknown as ...`
+  // mirrors the pattern in `session-config.ts:1187` since
+  // `ResolvedAgentConfig` does not currently expose the `advisor?` field
+  // on its type (Plan 117-06 only adds it to the raw schema, not the
+  // resolved-type alias). The runtime value is read off `cfg.advisor`
+  // if operator set it; otherwise the resolver falls back through
+  // `config.defaults.advisor`.
+  const advisorService: AdvisorService = new DefaultAdvisorService({
+    budget: advisorBudget,
+    resolveBackend: (agent: string) => {
+      const cfg = manager.getAgentConfig(agent) as unknown as
+        | { advisor?: { backend?: string } }
+        | undefined;
+      const id = resolveAdvisorBackend(cfg, config.defaults);
+      return { backend: advisorRegistry.get(id), id };
+    },
+    resolveSystemPrompt: (agent: string) =>
+      buildAdvisorSystemPrompt(agent, null),
+    resolveAdvisorModel: (agent: string) => {
+      const cfg = manager.getAgentConfig(agent) as unknown as
+        | { advisor?: { model?: string } }
+        | undefined;
+      const raw = resolveAdvisorModelConfig(cfg, config.defaults);
+      return resolveAdvisorModelAlias(raw);
+    },
+  });
+  log.info("advisor service composed (backends: fork, native)");
+
   // 6-quater. Create TaskManager singleton (Phase 59 Plan 03).
   // Depends on: taskStore (6-ter), turnDispatcher (6-bis), escalationBudget (6a),
   // resolvedAgents (5a), and a SchemaRegistry loaded from ~/.clawcode/task-schemas/.
@@ -3556,6 +3630,8 @@ export async function startDaemon(
             taskStore,
             schedulerSource,
             botDirectSenderRef,
+            advisorService,
+            config.defaults,
           ),
         log,
         traceCollector: manager.getTraceCollector(agentName) ?? undefined,
@@ -3606,6 +3682,8 @@ export async function startDaemon(
         taskStore,
         schedulerSource,
         botDirectSenderRef,
+        advisorService,
+        config.defaults,
       );
       const liveSizeMb = toolCacheEnabled ? toolCacheStore.sizeMb() : 0;
       // Phase 115 Plan 08 T03 — augment `case "cache"` with per-agent
@@ -6871,7 +6949,7 @@ export async function startDaemon(
       // === end Phase 116-06 IPC handlers ===
     }
 
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef, advisorService, config.defaults);
   };
 
   // 11. Create IPC server
@@ -7954,6 +8032,17 @@ async function routeMethod(
   // fallback path. Mutable ref so the closure reads `.current` at call time
   // (Pitfall 7: pre-bridge boot leaves .current null).
   botDirectSenderRef: { current: import("./restart-greeting.js").BotDirectSender | null },
+  // Phase 117 Plan 07 T01 — provider-neutral advisor service. The
+  // `ask-advisor` IPC handler dispatches through this. `advisorBudget`
+  // is also passed (unchanged) because the native short-circuit path
+  // reports `budget_remaining` straight from the budget without going
+  // through the service.
+  advisorService: AdvisorService,
+  // Phase 117 Plan 07 T02 — daemon-wide defaults block for advisor
+  // backend resolution at the IPC handler gate (`resolveAdvisorBackend`).
+  // Closes over `config.defaults` so the handler can short-circuit for
+  // native-backend agents before invoking the service.
+  advisorDefaults: { readonly advisor?: { readonly backend?: string } } | undefined,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
