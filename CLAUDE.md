@@ -44,6 +44,114 @@ The Node shim CLI commands (`clawcode {search,image,browser}-mcp` in
 spawn the Node shim instead. Cleanup decision (path A — keep fallback) and
 rationale: `.planning/phases/110-mcp-memory-reduction-shim-runtime-swap/110-CLEANUP-DECISION.md`.
 
+## Advisor pattern (Phase 117)
+
+ClawCode runs an **advisor** alongside every agent — a stronger reviewer
+(Opus by default) that the executor model can consult mid-turn for
+hard decisions. The implementation is provider-neutral via the
+`AdvisorService` seam at `src/advisor/`. Two backends are wired today;
+a third is scaffold-only.
+
+**Backends:**
+
+- **`native`** (default) — uses the Claude Agent SDK's `advisorModel`
+  option (`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:4930`).
+  The SDK wires the Anthropic `advisor_20260301` beta tool in-request
+  with prompt caching; the executor decides timing itself. Implementation:
+  `AnthropicSdkAdvisor` at `src/advisor/backends/anthropic-sdk.ts`.
+- **`fork`** — operator rollback path. Wraps the legacy fork-to-Opus
+  flow (extracted from `daemon.ts` `forkAdvisorConsult()`) as a
+  provider-neutral backend. Implementation: `LegacyForkAdvisor` at
+  `src/advisor/backends/legacy-fork.ts`.
+- **`portable-fork`** — Phase 118 scaffold only. `consult()` throws a
+  documented deferred error. Not selectable in config (schema rejects
+  the value).
+
+**Config knobs** — same `clawcode reload` rollout pattern as the Phase
+110 `shimRuntime` flag above:
+
+```yaml
+defaults:
+  advisor:
+    backend: native         # "native" (default) | "fork" (rollback)
+    model: opus             # alias → claude-opus-4-7
+    maxUsesPerRequest: 3    # native-only — per-request advisor tool cap
+    caching:
+      enabled: true         # native-only — advisor-side prompt cache
+      ttl: 5m
+```
+
+**Rollback procedure** — if `native` shows regressions on one agent,
+flip just that agent without redeploying:
+
+```yaml
+agents:
+  - name: <agent>
+    advisor:
+      backend: fork
+```
+
+Then `clawcode reload`. Per-agent overrides cascade per field over
+`defaults.advisor`; setting only `backend: fork` keeps the rest of the
+fleet's defaults in effect.
+
+**Discord visibility** — every advisor consultation is visible in the
+agent's Discord channel:
+
+- 💭 reaction lands on the user message that triggered the turn.
+- `*— consulted advisor (Opus) before responding*` footer is appended
+  to the assistant's response (single-mutation-point in `bridge.ts`,
+  shared across all three delivery exits).
+- Error path: `*— advisor unavailable (<errorCode>)*` instead of the
+  default footer.
+- `advisor_redacted_result` deliberately falls through to the plain
+  footer — no plaintext leak even in verbose mode.
+
+`/clawcode-verbose on` flips the channel from footer-only to an inline
+fenced advice block (≤500 chars of the advisor's reply). The slash
+command is admin-only, ephemeral, and per-channel; state lives in
+`~/.clawcode/manager/verbose-state.db` (separate from
+`advisor-budget.db`). `/clawcode-verbose status` reports the current
+level + last-changed timestamp; `/clawcode-verbose off` returns to the
+footer-only display.
+
+**Discord visibility is in-band** — no new threads. The
+`spawn_subagent_thread` IPC and the `subagent-thread` skill remain the
+operator-visible spawning path for tasks that need a sidebar thread.
+Advisor consultations and subagent threads are independent systems.
+
+**What's NOT changed:**
+
+- `ask_advisor` MCP tool schema (`src/mcp/server.ts:91`) — same
+  `{question, agent}` input shape.
+- `ask-advisor` IPC method name (`src/ipc/protocol.ts:168`) — same wire
+  contract; the handler body now dispatches through `AdvisorService`.
+- `AdvisorBudget` per-agent daily cap (10/day default) at
+  `src/usage/advisor-budget.ts` — unchanged. Native `max_uses` is
+  per-request; the daily cap stays client-side.
+- 2000-char truncation (`ADVISOR_RESPONSE_MAX_LENGTH`) — single-sourced
+  in `DefaultAdvisorService.ask`.
+- `subagent-thread` skill and `spawn_subagent_thread` IPC — untouched.
+- `src/manager/escalation.ts` — keeps its fork-to-Opus logic
+  (separate cost/effort concern; orthogonal to advisor).
+
+**Architectural deferral — MCP `ask_advisor` tool gating.** The native
+backend short-circuits at the IPC boundary (`handleAskAdvisor` in
+`daemon.ts`) with an explanatory response that points operators at
+`agent.advisor.backend: fork` for synchronous semantics. The tool
+still appears in `tools/list` for native-backend agents because the
+MCP server has no per-agent identity at startup
+(`src/mcp/server.ts:170` — "no agent context"); gating registration
+would require a new env-injection + IPC-probe path that falls outside
+Phase 117. User-visible correctness is preserved by the IPC
+short-circuit. Resolution: future plan that owns both pieces
+(loader env injection + MCP-side resolver). See
+`.planning/phases/117-.../117-07-SUMMARY.md` for the full rationale.
+
+**Reference:**
+`.planning/phases/117-claude-code-advisor-pattern-multi-backend-scaffold-anthropic/117-SUMMARY.md`
++ `/home/jjagpal/.claude/plans/eventual-questing-tiger.md`.
+
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
