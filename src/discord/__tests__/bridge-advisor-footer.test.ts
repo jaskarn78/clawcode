@@ -468,6 +468,105 @@ describe("Plan 117-09 — Discord bridge advisor footer + reaction", () => {
     expect(advisorEvents.listenerCount("advisor:resulted")).toBe(0);
   });
 
+  // ── Plan 117.1-01 — INFO log telemetry on advisor events ──────────────────
+  //
+  // Production gap discovered in the Phase 117 operator smoke: the bridge's
+  // `onInvoked` / `onResulted` callbacks emitted no telemetry, so the daemon
+  // log contained no evidence of native advisor invocations (Issue 2 in
+  // .planning/phases/117.1-.../117.1-CONTEXT.md). 117.1-01 added two
+  // `this.log.info(...)` calls. These tests pin the structured-field shape so
+  // future refactors can't silently drop production observability. Pattern
+  // match: `feedback_silent_path_bifurcation` memory (bit us 3× in 2026).
+
+  it("telemetry: advisor:invoked fires INFO log with { agent, channel, userMessageId }", async () => {
+    const msg = makeMessage({ messageId: "1234567890123450014" });
+    const turnDispatcher = buildTurnDispatcher("Reply.", {
+      invoked: { agent: "test-agent" },
+      resulted: { agent: "test-agent", kind: "advisor_result", text: "advice" },
+    });
+    (bridge as unknown as { turnDispatcher: unknown }).turnDispatcher = turnDispatcher;
+
+    await (bridge as any).streamAndPostResponse(msg, "test-agent", "hello");
+
+    const invokedCall = fakeLog.info.mock.calls.find(
+      ([, message]) => message === "advisor invoked (native server tool fired)",
+    );
+    expect(invokedCall).toBeDefined();
+    expect(invokedCall![0]).toEqual({
+      agent: "test-agent",
+      channel: "chan-1",
+      userMessageId: "1234567890123450014",
+    });
+  });
+
+  it("telemetry: advisor:resulted (advisor_result variant) fires INFO log with variant, no errorCode", async () => {
+    const msg = makeMessage({ messageId: "1234567890123450015" });
+    const turnDispatcher = buildTurnDispatcher("Reply.", {
+      invoked: { agent: "test-agent" },
+      resulted: { agent: "test-agent", kind: "advisor_result", text: "advice" },
+    });
+    (bridge as unknown as { turnDispatcher: unknown }).turnDispatcher = turnDispatcher;
+
+    await (bridge as any).streamAndPostResponse(msg, "test-agent", "hello");
+
+    const resultedCall = fakeLog.info.mock.calls.find(
+      ([, message]) => message === "advisor resulted",
+    );
+    expect(resultedCall).toBeDefined();
+    const fields = resultedCall![0] as Record<string, unknown>;
+    expect(fields.agent).toBe("test-agent");
+    expect(fields.channel).toBe("chan-1");
+    expect(fields.variant).toBe("advisor_result");
+    // Non-error variant: errorCode field MUST be absent (not present-undefined).
+    expect("errorCode" in fields).toBe(false);
+  });
+
+  it("telemetry: advisor:resulted (advisor_redacted_result variant) fires INFO log with variant, no errorCode", async () => {
+    const msg = makeMessage({ messageId: "1234567890123450016" });
+    const turnDispatcher = buildTurnDispatcher("Reply.", {
+      invoked: { agent: "test-agent" },
+      resulted: { agent: "test-agent", kind: "advisor_redacted_result" },
+    });
+    (bridge as unknown as { turnDispatcher: unknown }).turnDispatcher = turnDispatcher;
+
+    await (bridge as any).streamAndPostResponse(msg, "test-agent", "hello");
+
+    const resultedCall = fakeLog.info.mock.calls.find(
+      ([, message]) => message === "advisor resulted",
+    );
+    expect(resultedCall).toBeDefined();
+    const fields = resultedCall![0] as Record<string, unknown>;
+    expect(fields.agent).toBe("test-agent");
+    expect(fields.channel).toBe("chan-1");
+    expect(fields.variant).toBe("advisor_redacted_result");
+    expect("errorCode" in fields).toBe(false);
+  });
+
+  it("telemetry: advisor:resulted (advisor_tool_result_error variant) fires INFO log with variant + errorCode", async () => {
+    const msg = makeMessage({ messageId: "1234567890123450017" });
+    const turnDispatcher = buildTurnDispatcher("Reply.", {
+      invoked: { agent: "test-agent" },
+      resulted: {
+        agent: "test-agent",
+        kind: "advisor_tool_result_error",
+        errorCode: "max_uses_exceeded",
+      },
+    });
+    (bridge as unknown as { turnDispatcher: unknown }).turnDispatcher = turnDispatcher;
+
+    await (bridge as any).streamAndPostResponse(msg, "test-agent", "hello");
+
+    const resultedCall = fakeLog.info.mock.calls.find(
+      ([, message]) => message === "advisor resulted",
+    );
+    expect(resultedCall).toBeDefined();
+    const fields = resultedCall![0] as Record<string, unknown>;
+    expect(fields.agent).toBe("test-agent");
+    expect(fields.channel).toBe("chan-1");
+    expect(fields.variant).toBe("advisor_tool_result_error");
+    expect(fields.errorCode).toBe("max_uses_exceeded");
+  });
+
   // ── Agent-name guard: cross-agent events are ignored ──────────────────────
 
   it("ignores advisor events for a different agent (agent-name guard)", async () => {
