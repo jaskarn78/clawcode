@@ -678,4 +678,38 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
       },
     ],
   },
+  // Phase 117 Plan 117-11 — operator-facing per-channel verbose toggle for
+  // advisor visibility (the 💭 footer vs the fenced advice block driven by
+  // the bridge mutation point seeded in 117-09 at bridge.ts:~810).
+  //
+  //   /clawcode-verbose level:on     → fenced advice block (≤500 chars)
+  //   /clawcode-verbose level:off    → plain footer + 💭 reaction only
+  //   /clawcode-verbose level:status → reports current level + ISO timestamp
+  //
+  // Admin-only (defaultMemberPermissions:"0" — Phase 100 admin precedent +
+  // RESEARCH §7 Q3). All replies ephemeral; channel-state only (no per-agent
+  // override — RESEARCH §13.2 + 117-CONTEXT.md deferred). Choice label says
+  // "advice" (not "Q+A") per RESEARCH §13.2 correction — the executor never
+  // passes a question; `server_tool_use.input` is always `{}`.
+  {
+    name: "clawcode-verbose",
+    description: "Toggle inline advisor visibility for this channel (on | off | status)",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "set-verbose-level",
+    options: [
+      {
+        name: "level",
+        type: 3, // STRING
+        description: "verbose level for this channel",
+        required: true,
+        choices: [
+          { name: "on (inline advisor advice)", value: "on" },
+          { name: "off (footer + reaction only)", value: "off" },
+          { name: "status (report current setting)", value: "status" },
+        ],
+      },
+    ],
+    defaultMemberPermissions: "0",
+  },
 ] as const;
