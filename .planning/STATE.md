@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Performance + Reliability
-status: executing
-stopped_at: Phase 116 SHIPPED 2026-05-11 — Plan 116-06 closes Phase 116 (F18+F20-F24 + telemetry + cutover gate). 3 commits (f863757 T08 cutover flag, d6510ff T01+T04+T07 backend, 7e6b531 T01-T05+T07 frontend). Awaiting operator deploy clearance + cutover flip decision.
-last_updated: "2026-05-11T22:35:00.000Z"
-last_activity: 2026-05-11
+status: verifying
+stopped_at: "Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md."
+last_updated: "2026-05-13T05:37:03.775Z"
+last_activity: 2026-05-13
 progress:
-  total_phases: 63
+  total_phases: 64
   completed_phases: 17
-  total_plans: 108
-  completed_plans: 105
-  percent: 97
+  total_plans: 119
+  completed_plans: 110
+  percent: 92
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
 
 Phase: 116 (Dashboard redesign — modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks (folds 999.38)) — SHIPPED 2026-05-11
 Plan: 6 of 6 (CLOSED)
-Status: Phase 116 COMPLETE at source level. Operator owns cutover flip + deploy decisions.
+Status: Phase complete — ready for verification
 Latest commit: `7e6b531` — feat(116-06): T01-T05+T07 frontend — heatmap, notifications, theme, audit, graph, telemetry
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
@@ -685,11 +685,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-05-11
+Last activity: 2026-05-13
 Stopped at: Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md.
 Resume: Phase 116 is code-complete at the source level. Awaiting operator decisions: (1) deploy clearance — Ramy-active deploy hold continues until operator explicit clearance; (2) cutover flag flip — `clawcode config set defaults.dashboardCutoverRedirect true` once operator has soaked /dashboard/v2/ for one or more sessions and reviewed `/dashboard/v2/audit` to confirm dashboard mutations are captured; (3) decommission follow-up — separate commit removing legacy `src/dashboard/static/*` files + the cutover-flag plumbing once the operator is confident the cutover is durable. See `116-VERIFICATION.md` for the operator handoff checklist + telemetry signals to watch + rollback procedure.
 
 **Open follow-ups (deferred from Phase 116):**
+
 - ~~Phase 115-08 producer port~~ — code DONE 2026-05-11 (commit `a0f30a6`); deployed 2026-05-11 22:55 UTC. **Post-deploy verification surfaced a NEW sub-bug:** producer call sites present in bundle (grep returns 5 vs 0 pre-port) but split-latency columns STILL NULL across 84 tool-use turns in 3-min post-restart window. Port landed in `iterateUntilResult` but producer calls aren't firing on real traffic. Three hypotheses to investigate as follow-up quick task: (1) call sites positioned at wrong message-type branch; (2) `turn` parameter from production callers lacks producer methods — `?.()` silently no-ops (silent-path-bifurcation AGAIN); (3) conditional spread gate `parallelToolCallCount > 0` gating writes. Integration test (`persistent-session-handle-producer-port.test.ts`) passed with non-zero values — production state differs from test state. **NOT a Phase 116 blocker** — F07 has graceful fallback for null columns per plan's deviation handling.
 - F19 swim-lane timeline → 116-DEFERRED.md (promotion criteria: 2× operator demand reports OR F12 reveals multi-agent timing gap).
 - F14 in-UI memory editor → 116-DEFERRED.md (promotion criteria: operator workflow friction OR `clawcode memory edit` invocations exceed 10/day).

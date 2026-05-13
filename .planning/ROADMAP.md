@@ -1957,14 +1957,14 @@ Make every agent aware of the advisor via system-prompt block + capability manif
 **Depends on:** Phase 116 (current shipped state)
 
 **Plans (11 atomic, per plan doc):**
-- [ ] 117-01 — `src/llm/provider.ts` interface + README (no impls)
-- [ ] 117-02 — `AdvisorService` core + interface + registry + prompts
-- [ ] 117-03 — Extract fork logic from `daemon.ts:9810–9866` → `LegacyForkAdvisor` backend
-- [ ] 117-04 — `AnthropicSdkAdvisor` + `session-config.ts` `advisorModel` wiring + `session-adapter.ts` budget observer
-- [ ] 117-05 — `PortableForkAdvisor` scaffold (interface-conformant stub)
-- [ ] 117-06 — Config schema (`advisor` block) + loader + defaults
-- [ ] 117-07 — Re-point IPC handler at `AdvisorService`; conditional MCP tool registration
-- [ ] 117-08 — Agent awareness: timing-prompt block + capability manifest entry
+- [x] 117-01 — `src/llm/provider.ts` interface + README (no impls)
+- [x] 117-02 — `AdvisorService` core + interface + registry + prompts
+- [x] 117-03 — Extract fork logic from `daemon.ts:9810–9866` → `LegacyForkAdvisor` backend
+- [x] 117-04 — `AnthropicSdkAdvisor` + `session-config.ts` `advisorModel` wiring + `session-adapter.ts` budget observer
+- [x] 117-05 — `PortableForkAdvisor` scaffold (interface-conformant stub)
+- [x] 117-06 — Config schema (`advisor` block) + loader + defaults
+- [x] 117-07 — Re-point IPC handler at `AdvisorService`; conditional MCP tool registration
+- [x] 117-08 — Agent awareness: timing-prompt block + capability manifest entry
 - [ ] 117-09 — Discord visibility: 💭 reaction + footer via `advisor:invoked` event (now level-aware — see 117-11)
 - [ ] 117-10 — Migration cleanup: `CLAUDE.md`, `clawcode.example.yaml`, `CHANGELOG.md`, phase `SUMMARY.md`
 - [ ] 117-11 — **`/verbose` operator Discord toggle** — per-channel slash command (`/verbose on|off|status`) controlling visibility level. SQLite-backed channel state (table `verbose_channels`, similar pattern to `AdvisorBudget`). Default OFF (today's behavior — 💭 reaction + footer only when advisor fires). When ON, the assistant delivery to that channel inlines advisor Q+A and a compact tool-call summary block. Generalizes 117-09 from "always-on footer" to "visibility level." Files: `src/usage/verbose-state.ts` (new), `src/manager/daemon.ts` (IPC + slash dispatch), `src/discord/slash-commands.ts` (register `/verbose`), `src/discord/bridge.ts` (consume level when assembling delivery). Acceptance: `/verbose on` in `#test-agent`'s channel `1491623782807244880` flips state; next advisor consultation shows inline Q+A; `/verbose off` reverts to footer-only; `/verbose status` reports current level + last-changed timestamp.
