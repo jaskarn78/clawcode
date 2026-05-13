@@ -1154,13 +1154,28 @@ export const advisorConfigSchema = z.object({
 /** Per-agent advisor override — every field optional so operators can flip
  * just `backend` (or just `model`, etc.) without re-specifying the rest.
  * Loader resolvers (`resolveAdvisorBackend` etc. in `./loader.ts`) handle
- * the per-agent → defaults → hardcoded-baseline fall-through. */
+ * the per-agent → defaults → hardcoded-baseline fall-through.
+ *
+ * Caching uses a raw inner schema (no .default()s) so an unset sub-field
+ * stays `undefined` after parse. `advisorCachingSchema.partial()` would
+ * still apply the `enabled: true` / `ttl: "5m"` defaults at parse time,
+ * which would short-circuit `resolveAdvisorCaching`'s per-field fall-
+ * through to `defaults.advisor.caching`. The schema for the per-agent
+ * override therefore intentionally diverges from the defaults-side
+ * caching schema — `advisorCachingSchema` keeps defaults for the
+ * defaults block; the inline shape below preserves operator-explicit
+ * vs. operator-omitted at the per-agent boundary. */
 export const agentAdvisorOverrideSchema = z
   .object({
     backend: advisorBackendSchema.optional(),
     model: z.string().optional(),
     maxUsesPerRequest: z.number().int().min(1).max(10).optional(),
-    caching: advisorCachingSchema.partial().optional(),
+    caching: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttl: z.enum(["5m", "1h"]).optional(),
+      })
+      .optional(),
   })
   .partial();
 
