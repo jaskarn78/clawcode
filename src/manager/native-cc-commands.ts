@@ -35,6 +35,42 @@ import type { SlashCommandDef } from "../discord/slash-types.js";
 const DESCRIPTION_MAX = 100;
 
 /**
+ * Phase 117.1-02 — Switch from open-by-default + skip-set to an explicit
+ * ALLOWLIST. The previous policy (`SKIP` as the only gate, everything else
+ * falling through to "prompt-channel") auto-registered every SDK-reported
+ * command — including project/user `.claude/commands/*.md` files surfaced
+ * when an agent opts into `settingSources: [project, user]`. In production
+ * (2026-05-12) two agents had `settingSources` set, the SDK reported ~122
+ * unique native commands across the fleet, total registration ballooned to
+ * 193, and Discord's `CMD-07` pre-flight cap (90/guild) refused the batch.
+ * Net effect: nothing registered, `/clawcode-verbose` and every other
+ * recent slash addition silently disappeared from the picker.
+ *
+ * The allowlist scales as project/user command libraries grow: Discord only
+ * sees the control-plane setters + a small operator toolkit; everything
+ * else is accessed via the CLI directly. See
+ * `.planning/phases/117.1-hotfix-advisor-telemetry-and-slash-cap/SLASH-AUDIT.md`
+ * for the full rationale and 193 → ~77 command count math.
+ *
+ *   - `model` / `permissions` / `effort` — control-plane setters; dispatched
+ *     via Query.setX() (Plan 02), no LLM turn cost.
+ *   - `compact` / `cost` / `help` — operator-useful prompt-channel commands
+ *     (Phase 87 CMD-04 explicitly re-provides `compact` and `cost` via
+ *     native dispatch after they were removed from DEFAULT_SLASH_COMMANDS).
+ *
+ * Any future SDK-reported command that operators want to surface in Discord
+ * must be added here explicitly.
+ */
+const ALLOWED_NATIVES: ReadonlySet<string> = new Set([
+  "model",
+  "permissions",
+  "effort",
+  "compact",
+  "cost",
+  "help",
+]);
+
+/**
  * Control-plane commands are dispatched via Query.setX() on the SDK
  * (Phases 83/86 blueprint: setModel, setPermissionMode, setMaxThinkingTokens).
  * They do NOT cost an LLM turn. Plan 02 owns the dispatch wiring.
@@ -46,7 +82,9 @@ const CONTROL_PLANE: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Skip-set commands are NOT registered as Discord slash commands at all.
+ * SKIP retained for documentation but no longer the gate under Phase 117.1-02.
+ * Under the allowlist policy, names like "clear"/"export"/"mcp" are simply
+ * absent from `ALLOWED_NATIVES` and therefore skipped automatically.
  *
  *   - `clear`   — not SDK-dispatchable (CMD-00 spike); deferred to CMD-F2
  *                 via session-restart workaround
@@ -61,15 +99,20 @@ const SKIP: ReadonlySet<string> = new Set(["clear", "export", "mcp"]);
 /**
  * Classify a SDK-reported command name for native dispatch.
  *
- * The default for unknown commands is "prompt-channel" — this matches the
- * CMD-00 spike's finding that most non-setter commands are prompt-routable
- * via SDKLocalCommandOutputMessage.
+ * Phase 117.1-02 — Allowlist policy: commands NOT in `ALLOWED_NATIVES`
+ * return "skip" (no Discord registration). Of the allowlisted commands,
+ * the three control-plane setters return "control-plane"; the rest
+ * (`compact`, `cost`, `help`) return "prompt-channel".
+ *
+ * NOTE: This is a behavior change from the pre-117.1 open-by-default
+ * policy where unknown names returned "prompt-channel". Operators access
+ * non-allowlisted commands via the CLI directly.
  */
 export function classifyCommand(
   name: string,
 ): "control-plane" | "prompt-channel" | "skip" {
+  if (!ALLOWED_NATIVES.has(name)) return "skip";
   if (CONTROL_PLANE.has(name)) return "control-plane";
-  if (SKIP.has(name)) return "skip";
   return "prompt-channel";
 }
 
@@ -87,9 +130,10 @@ export type CommandAcl = {
 /**
  * Build Discord SlashCommandDef[] from an SDK-reported SlashCommand[].
  *
- *   - ACL-denied names are filtered out BEFORE classification (so skip-set
- *     names are still pre-empted by the ACL if an admin wants them gone)
- *   - Classifier skip-set names produce zero output (even with empty ACL)
+ *   - ACL-denied names are filtered out BEFORE classification (so even
+ *     allowlisted names can be removed by an admin ACL)
+ *   - Names that are not in the Phase 117.1-02 allowlist (or are in the
+ *     legacy SKIP set) produce zero output (even with empty ACL)
  *   - Every surviving entry gets `clawcode-` prepended to its name
  *     (Pitfall 10 — NO bare-name registrations allowed)
  *   - Every entry carries a `nativeBehavior` discriminator so Plans 02/03
