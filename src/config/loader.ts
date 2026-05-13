@@ -1022,6 +1022,122 @@ export function resolveOutputDirTemplate(
   return agentCfg?.outputDir ?? defaultsCfg?.outputDir ?? "outputs/{date}/";
 }
 
+// ---------------------------------------------------------------------------
+// Phase 117 Plan 06 — advisor resolvers (per-agent → defaults → baseline).
+//
+// Mirror the inner `resolveRuntime` fall-through pattern at :392 and the
+// module-level `resolveOutputDirTemplate` style above (`agent ??
+// defaults ?? baseline`). Each function is exported because the call sites
+// live in OTHER files shipped by later plans in this phase:
+//   - Plan 117-04: `src/manager/session-adapter.ts` reads
+//     resolveAdvisorModel(agent, defaults) to wire `Options.advisorModel`.
+//   - Plan 117-07: `src/manager/daemon.ts` ask-advisor IPC handler reads
+//     resolveAdvisorBackend(agent, defaults) to gate dispatch (native vs
+//     fork) at the IPC boundary.
+//   - Plan 117-08: capability manifest reads the same backend to surface
+//     it on the per-agent capability surface.
+//   - Plan 117-04/07: resolveAdvisorMaxUsesPerRequest sets the per-agent
+//     budget cap; resolveAdvisorCaching feeds the Anthropic prompt-cache
+//     toggle (enabled+ttl) wired into Options at session create/resume.
+//
+// Type guard on backend: the resolver narrows to `"native" | "fork"` (the
+// SCHEMA's enum) even though `BackendId` in `src/advisor/types.ts` admits
+// `"portable-fork"`. That third value is rejected at schema parse time
+// (Plan 117-06 T05), so it can never reach this resolver from a loaded
+// config. The defensive narrowing (`v === "fork" ? "fork" : "native"`)
+// guards against future type drift between BackendId and the schema enum.
+//
+// Hardcoded baselines:
+//   - backend:           "native" (Phase 117 spec — the swap is the upgrade)
+//   - model:             "opus"   (SDK alias; resolveAdvisorModel in
+//                                  `src/manager/model-resolver.ts` from
+//                                  Plan 117-02 canonicalises at call time)
+//   - maxUsesPerRequest: 3        (Anthropic example budget)
+//   - caching:           {enabled:true, ttl:"5m"} (Anthropic-recommended
+//                                  for ≥3 advisor calls per conversation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the advisor backend for an agent. Falls through:
+ *   per-agent.advisor.backend → defaults.advisor.backend → "native".
+ *
+ * Returns the schema-narrowed enum `"native" | "fork"`. The third
+ * `BackendId` value `"portable-fork"` is rejected at config parse time
+ * (Plan 117-05/118 scaffold), so this resolver never returns it.
+ */
+export function resolveAdvisorBackend(
+  agent: { advisor?: { backend?: string } } | undefined,
+  defaults: { advisor?: { backend?: string } } | undefined,
+): "native" | "fork" {
+  const v = agent?.advisor?.backend ?? defaults?.advisor?.backend ?? "native";
+  return v === "fork" ? "fork" : "native";
+}
+
+/**
+ * Resolve the advisor model alias for an agent. Falls through:
+ *   per-agent.advisor.model → defaults.advisor.model → "opus".
+ *
+ * The string is the operator-supplied alias (e.g. `"opus"`, `"sonnet"`)
+ * NOT the canonical SDK id. Plan 117-02's resolver in
+ * `src/manager/model-resolver.ts` canonicalises `"opus"` →
+ * `"claude-opus-4-7"` at the SDK call site.
+ */
+export function resolveAdvisorModel(
+  agent: { advisor?: { model?: string } } | undefined,
+  defaults: { advisor?: { model?: string } } | undefined,
+): string {
+  return agent?.advisor?.model ?? defaults?.advisor?.model ?? "opus";
+}
+
+/**
+ * Resolve the per-request advisor call budget for an agent. Falls through:
+ *   per-agent.advisor.maxUsesPerRequest →
+ *     defaults.advisor.maxUsesPerRequest → 3.
+ *
+ * Schema enforces range 1–10 at parse time, so any value reaching this
+ * resolver is in-range. Plan 117-04/07 consumers gate dispatch on this
+ * count before each invocation; once exhausted within a single user
+ * request, the IPC handler returns a budget-error to the model.
+ */
+export function resolveAdvisorMaxUsesPerRequest(
+  agent: { advisor?: { maxUsesPerRequest?: number } } | undefined,
+  defaults: { advisor?: { maxUsesPerRequest?: number } } | undefined,
+): number {
+  return (
+    agent?.advisor?.maxUsesPerRequest ??
+    defaults?.advisor?.maxUsesPerRequest ??
+    3
+  );
+}
+
+/**
+ * Resolve the advisor prompt-cache toggle for an agent. Falls through
+ * per-field — `enabled` and `ttl` are resolved independently so an
+ * operator can override one without re-specifying the other:
+ *   enabled: per-agent → defaults → true
+ *   ttl:     per-agent → defaults → "5m"
+ *
+ * Anthropic's recommended default for ≥3 advisor invocations per
+ * conversation; see Phase 117 CONTEXT.md.
+ */
+export function resolveAdvisorCaching(
+  agent:
+    | { advisor?: { caching?: { enabled?: boolean; ttl?: "5m" | "1h" } } }
+    | undefined,
+  defaults:
+    | { advisor?: { caching?: { enabled?: boolean; ttl?: "5m" | "1h" } } }
+    | undefined,
+): { enabled: boolean; ttl: "5m" | "1h" } {
+  return {
+    enabled:
+      agent?.advisor?.caching?.enabled ??
+      defaults?.advisor?.caching?.enabled ??
+      true,
+    ttl:
+      agent?.advisor?.caching?.ttl ?? defaults?.advisor?.caching?.ttl ?? "5m",
+  };
+}
+
 /**
  * Check if a file exists at the given path.
  */
