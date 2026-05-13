@@ -1950,7 +1950,361 @@ async function handleRequest(
       }
       return;
     }
-    // === end Phase 116-postdeploy routes ===
+    // =====================================================================
+    // Phase 116-postdeploy 2026-05-12 — Benchmarks page routes.
+    //
+    //   POST /api/agents/:name/benchmark    -> loops `bench-run-prompt` N times
+    //   GET  /api/benchmarks/compare        -> per-agent `latency` snapshots
+    //                                          combined into one payload
+    //
+    // The trigger endpoint replicates the Ramy gate from scripts/bench/115-perf.ts:
+    // `fin-acquisition` is hard-refused (the script's allow-flag is intentionally
+    // CLI-only; the UI must NOT expose a bypass). The endpoint also refuses
+    // `cold-start` scenarios entirely — those require stop/start cycles that
+    // are unsafe to trigger from the dashboard while operator threads are
+    // active. CLI is the only path for cold-start.
+    //
+    // The four supported scenarios use the same canonical fixture prompts the
+    // CLI runner uses, ported inline to avoid pulling scripts/ into the SPA
+    // server bundle. End-to-end timing comes from `bench-run-prompt` which
+    // calls dispatchTurn directly (NOT the Discord ask-agent path). This is
+    // SAFER (no real Discord side effects) but produces NUMBERS that differ
+    // from the CLI baseline which goes through send-message. The UI surfaces
+    // this divergence explicitly so operators don't false-compare.
+    // =====================================================================
+
+    // Canonical fixture prompts — kept in sync with
+    // scripts/bench/115-perf-runner.ts DEFAULT_FIXTURE_PROMPTS. Cold-start
+    // omitted: it's intentionally not exposed via the UI (see the Ramy-gate
+    // commentary above the route block).
+    const BENCH_PROMPTS: Record<string, string> = {
+      "discord-ack": "ok thx",
+      "tool-heavy":
+        "Query mysql for the latest 5 rows in finmentum_clients then summarize and search the web for related news",
+      "memory-recall":
+        "What did we discuss about Ana Bencker on May 6 2026?",
+      "extended-thinking":
+        "Think step by step about the architecture of this multi-agent system and propose three improvements.",
+    };
+
+    // Per-scenario span name the runner harvests after each turn. Mirrors
+    // SCENARIO_SPAN_NAMES in 115-perf-runner.ts but ONLY the "first" span for
+    // each scenario — the UI surface uses a single headline number per run.
+    const BENCH_HEADLINE_SPAN: Record<string, string> = {
+      "discord-ack": "first_token",
+      "tool-heavy": "end_to_end",
+      "memory-recall": "end_to_end",
+      "extended-thinking": "first_visible_token",
+    };
+
+    // Ramy gate — fin-acquisition is REFUSED from the dashboard regardless of
+    // scenario. The CLI `--allow-fin-acq-cold-start` flag is intentionally
+    // CLI-only; the UI must NOT expose a bypass that operators could click
+    // through while Ramy is in the thread.
+    const RAMY_GATED_AGENTS = new Set<string>(["fin-acquisition"]);
+
+    function nearestRankPercentile(
+      values: readonly number[],
+      percentile: number,
+    ): number | null {
+      if (values.length === 0) return null;
+      const sorted = [...values].sort((a, b) => a - b);
+      const n = sorted.length;
+      const idx = Math.max(0, Math.min(Math.ceil(percentile * n) - 1, n - 1));
+      return sorted[idx] ?? null;
+    }
+
+    // POST /api/agents/:name/benchmark   { scenario, iterations }
+    if (
+      method === "POST" &&
+      segments.length === 4 &&
+      segments[0] === "api" &&
+      segments[1] === "agents" &&
+      segments[3] === "benchmark"
+    ) {
+      const agentName = decodeURIComponent(segments[2]!);
+
+      // Ramy gate — refuse before reading the body so the operator gets a
+      // fast, unambiguous error.
+      if (RAMY_GATED_AGENTS.has(agentName)) {
+        sendJson(res, 409, {
+          error: `Benchmarks are disabled from the dashboard for '${agentName}' (Ramy gate — CLI-only). Use scripts/bench/115-perf.ts with the appropriate allow-flag during a confirmed quiet window.`,
+        });
+        return;
+      }
+
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "invalid body";
+        sendJson(res, 400, { error: msg });
+        return;
+      }
+      const b = body as {
+        scenario?: unknown;
+        iterations?: unknown;
+      };
+      const scenario =
+        typeof b.scenario === "string" ? b.scenario : "";
+      if (!(scenario in BENCH_PROMPTS)) {
+        sendJson(res, 400, {
+          error: `Unknown scenario '${scenario}'. Supported: ${Object.keys(BENCH_PROMPTS).join(", ")}. (cold-start is CLI-only — see scripts/bench/115-perf.ts.)`,
+        });
+        return;
+      }
+      const iterationsRaw =
+        typeof b.iterations === "number" ? b.iterations : 3;
+      const iterations = Math.max(1, Math.min(10, Math.floor(iterationsRaw)));
+
+      const prompt = BENCH_PROMPTS[scenario]!;
+      const headlineSpan = BENCH_HEADLINE_SPAN[scenario]!;
+      const turnIdPrefix = `bench:dashboard:${scenario}:`;
+
+      // Run iterations sequentially. dispatchTurn is single-flight per agent
+      // (it serializes on the session lock anyway), so parallel calls would
+      // queue rather than overlap. Sequential keeps the timings clean.
+      type BenchIterationRow = {
+        readonly index: number;
+        readonly turnId: string | null;
+        readonly headline_ms: number | null;
+        readonly segments: Record<string, number>;
+        readonly error: string | null;
+      };
+      const rows: BenchIterationRow[] = [];
+      const startedAt = new Date().toISOString();
+
+      for (let i = 0; i < iterations; i++) {
+        try {
+          const result = (await sendIpcRequest(
+            socketPath,
+            "bench-run-prompt",
+            {
+              agent: agentName,
+              prompt,
+              turnIdPrefix,
+            },
+          )) as {
+            readonly turnId?: string;
+            readonly response?: {
+              readonly segments?: Record<string, number>;
+            };
+          };
+          const segments = (result.response?.segments ?? {}) as Record<
+            string,
+            number
+          >;
+          const headlineMs = segments[headlineSpan];
+          rows.push({
+            index: i,
+            turnId: result.turnId ?? null,
+            headline_ms:
+              typeof headlineMs === "number" ? headlineMs : null,
+            segments,
+            error: null,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "unknown error";
+          rows.push({
+            index: i,
+            turnId: null,
+            headline_ms: null,
+            segments: {},
+            error: msg,
+          });
+        }
+      }
+
+      const headlineValues = rows
+        .map((r) => r.headline_ms)
+        .filter((v): v is number => typeof v === "number");
+      const aggregate = {
+        runs: headlineValues.length,
+        errored: rows.filter((r) => r.error !== null).length,
+        p50_ms: nearestRankPercentile(headlineValues, 0.5),
+        p95_ms: nearestRankPercentile(headlineValues, 0.95),
+        mean_ms:
+          headlineValues.length === 0
+            ? null
+            : headlineValues.reduce((a, b) => a + b, 0) / headlineValues.length,
+        min_ms:
+          headlineValues.length === 0 ? null : Math.min(...headlineValues),
+        max_ms:
+          headlineValues.length === 0 ? null : Math.max(...headlineValues),
+      };
+
+      if (dashboardAuditTrail) {
+        await dashboardAuditTrail.recordAction({
+          action: "benchmark-run",
+          target: agentName,
+          metadata: { scenario, iterations, errored: aggregate.errored },
+        });
+      }
+
+      sendJson(res, 200, {
+        agent: agentName,
+        scenario,
+        iterations,
+        headlineSpan,
+        path: "bench-run-prompt (in-process; NOT Discord ask-agent path)",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        rows,
+        aggregate,
+      });
+      return;
+    }
+
+    // GET /api/benchmarks/compare?agents=A,B,C&metric=first_token_p50
+    //
+    // Loops over the per-agent `latency` IPC and pulls the requested metric.
+    // Supported metric formats:
+    //   - <segment>_p50 / _p95 / _p99   e.g. first_token_p50, end_to_end_p95
+    //   - tool:<name>_p50 / _p95 / _p99 (per-tool, sourced from `tools` IPC)
+    if (method === "GET" && pathname === "/api/benchmarks/compare") {
+      const queryString = (req.url ?? "").split("?")[1] ?? "";
+      const params = new URLSearchParams(queryString);
+      const agentsRaw = params.get("agents") ?? "";
+      const agents = agentsRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const metric = params.get("metric") ?? "first_token_p50";
+      const since = params.get("since") ?? "24h";
+
+      if (agents.length === 0) {
+        sendJson(res, 400, { error: "Missing required query param: agents" });
+        return;
+      }
+      if (agents.length > 6) {
+        sendJson(res, 400, {
+          error: "Too many agents (max 6) — comparison plot becomes unreadable",
+        });
+        return;
+      }
+
+      const toolMatch = /^tool:(.+)_(p50|p95|p99)$/.exec(metric);
+      const segMatch = /^([a-z_]+)_(p50|p95|p99)$/.exec(metric);
+
+      type ComparePoint = {
+        readonly agent: string;
+        readonly value_ms: number | null;
+        readonly count: number | null;
+        readonly model: string | null;
+        readonly error: string | null;
+      };
+
+      const results = await Promise.all(
+        agents.map(async (agent): Promise<ComparePoint> => {
+          try {
+            if (toolMatch) {
+              const toolName = toolMatch[1]!;
+              const percentile = toolMatch[2]!;
+              const data = (await sendIpcRequest(socketPath, "tools", {
+                agent,
+                since,
+              })) as {
+                readonly tools?: ReadonlyArray<{
+                  readonly tool: string;
+                  readonly count: number;
+                  readonly p50_ms: number | null;
+                  readonly p95_ms: number | null;
+                  readonly p99_ms: number | null;
+                }>;
+              };
+              const row = (data.tools ?? []).find((t) => t.tool === toolName);
+              if (!row) {
+                return {
+                  agent,
+                  value_ms: null,
+                  count: null,
+                  model: null,
+                  error: `tool '${toolName}' not seen in window`,
+                };
+              }
+              const value =
+                percentile === "p50"
+                  ? row.p50_ms
+                  : percentile === "p95"
+                    ? row.p95_ms
+                    : row.p99_ms;
+              return {
+                agent,
+                value_ms: value ?? null,
+                count: row.count,
+                model: null,
+                error: null,
+              };
+            }
+            if (segMatch) {
+              const segName = segMatch[1]!;
+              const percentile = segMatch[2]!;
+              const data = (await sendIpcRequest(socketPath, "latency", {
+                agent,
+                since,
+              })) as {
+                readonly segments?: ReadonlyArray<{
+                  readonly segment: string;
+                  readonly count: number;
+                  readonly p50_ms: number | null;
+                  readonly p95_ms: number | null;
+                  readonly p99_ms: number | null;
+                }>;
+              };
+              const row = (data.segments ?? []).find(
+                (s) => s.segment === segName,
+              );
+              if (!row) {
+                return {
+                  agent,
+                  value_ms: null,
+                  count: null,
+                  model: null,
+                  error: `segment '${segName}' not seen in window`,
+                };
+              }
+              const value =
+                percentile === "p50"
+                  ? row.p50_ms
+                  : percentile === "p95"
+                    ? row.p95_ms
+                    : row.p99_ms;
+              return {
+                agent,
+                value_ms: value ?? null,
+                count: row.count,
+                model: null,
+                error: null,
+              };
+            }
+            return {
+              agent,
+              value_ms: null,
+              count: null,
+              model: null,
+              error: `unsupported metric '${metric}' (expected <segment>_p{50,95,99} or tool:<name>_p{50,95,99})`,
+            };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "unknown error";
+            return {
+              agent,
+              value_ms: null,
+              count: null,
+              model: null,
+              error: msg,
+            };
+          }
+        }),
+      );
+
+      sendJson(res, 200, {
+        metric,
+        since,
+        points: results,
+      });
+      return;
+    }
+    // === end Phase 116-postdeploy benchmarks routes ===
 
     // Phase 61 TRIG-03: Webhook trigger endpoint
     if (method === "POST" && segments[0] === "webhook" && segments.length === 2) {
