@@ -1472,6 +1472,62 @@ export const agentSchema = z.object({
   }).optional(),
 });
 
+// ---------------------------------------------------------------------------
+// Phase 117 Plan 06 — advisor helper schemas (defaults + per-agent override).
+//
+// The advisor block configures which `AdvisorBackend` answers `ask_advisor`
+// tool calls and `/advise` IPC requests for each agent. The Phase 117 spec
+// (CONTEXT.md `<decisions>.Architecture`, LOCKED) treats the swap from the
+// legacy fork backend to the native SDK `advisorModel` option as a feature-
+// flag rollout — the default is `"native"` and operators can flip any one
+// agent back to `"fork"` via `clawcode reload` without a redeploy. Same
+// pattern as Phase 110 Stage 0b's `defaults.shimRuntime` canary dial.
+//
+// Backend enum is `"native" | "fork"` only. The `"portable-fork"` value
+// surfaced in `BackendId` (`src/advisor/types.ts:30`) is intentionally
+// EXCLUDED from this schema — Plan 117-05 ships the scaffold but Phase 118
+// owns the rollout. Operators who put `portable-fork` in YAML must see a
+// hard schema rejection (regression-pinned in
+// `__tests__/schema-advisor.test.ts` assertion C).
+//
+// Model string is stored verbatim (e.g. `"opus"`, `"sonnet"`, or a fully-
+// qualified SDK id `"claude-opus-4-7"`). The SDK call site resolves the
+// alias via `resolveAdvisorModel` shipped in Plan 117-02
+// (`src/manager/model-resolver.ts`) — that resolver canonicalises `"opus"`
+// → `"claude-opus-4-7"`. Do NOT canonicalise here; the schema's only job
+// is shape validation.
+//
+// Caching defaults (`enabled: true`, `ttl: "5m"`) are Anthropic's
+// recommended setting for ≥3 advisor invocations per conversation (see
+// CONTEXT.md). The `maxUsesPerRequest` default of 3 matches the Anthropic
+// example budget cited in the plan; range 1–10 keeps the operator from
+// burning budget on a misconfigured agent.
+// ---------------------------------------------------------------------------
+export const advisorBackendSchema = z.enum(["native", "fork"]); // "portable-fork" intentionally excluded — Phase 118 follow-up
+export const advisorCachingSchema = z.object({
+  enabled: z.boolean().default(true),
+  ttl: z.enum(["5m", "1h"]).default("5m"),
+});
+export const advisorConfigSchema = z.object({
+  backend: advisorBackendSchema.default("native"),
+  model: z.string().default("opus"),
+  maxUsesPerRequest: z.number().int().min(1).max(10).default(3),
+  caching: advisorCachingSchema.optional(),
+});
+
+/** Per-agent advisor override — every field optional so operators can flip
+ * just `backend` (or just `model`, etc.) without re-specifying the rest.
+ * Loader resolvers (`resolveAdvisorBackend` etc. in `./loader.ts`) handle
+ * the per-agent → defaults → hardcoded-baseline fall-through. */
+export const agentAdvisorOverrideSchema = z
+  .object({
+    backend: advisorBackendSchema.optional(),
+    model: z.string().optional(),
+    maxUsesPerRequest: z.number().int().min(1).max(10).optional(),
+    caching: advisorCachingSchema.partial().optional(),
+  })
+  .partial();
+
 /**
  * Schema for top-level defaults that agents inherit.
  */
@@ -1825,6 +1881,17 @@ export const defaultsSchema = z.object({
       browser: z.enum(["node", "static", "python"]).default("node"),
     })
     .optional(),
+  // Phase 117 Plan 06 — fleet-wide advisor block. Mirrors the shimRuntime
+  // canary dial: `.optional()` so omission yields `undefined` (operators on
+  // pre-117 configs see no behavior change at parse time; loader resolvers
+  // fall through to the hardcoded baseline {backend:"native", model:"opus",
+  // maxUsesPerRequest:3, caching:{enabled:true,ttl:"5m"}}). When an
+  // operator DOES supply a block, advisorConfigSchema's inner defaults
+  // populate any omitted sub-fields. Wave-4 Plan 117-04 reads the resolved
+  // model to wire `Options.advisorModel`; Plan 117-07 reads the resolved
+  // backend to gate IPC dispatch; Plan 117-08 reads the same backend for
+  // the capability manifest. See `advisorConfigSchema` block above.
+  advisor: advisorConfigSchema.optional(),
   // Phase 115 D-08 + D-09 — embedding-v2 migration knobs. Default values
   // match the Phase 115 D-09 cost discipline: 5% CPU budget, 50-row
   // batch. These are knobs not constants; operator can dial both via
