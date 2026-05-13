@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Reliability & Routing
 status: defining-phase
-stopped_at: "Roadmap drafted 2026-05-13 — v2.9 scoped to 5 phases (119-123) covering 15 requirements across A2A/DASH/SUB/DISC/MCP. Phase 119 (A2A Delivery Reliability) is the next phase; run /gsd-plan-phase 119 to break it down. Build order per research/SUMMARY.md: 119 → 120 → 121 → 122 → 123. Ramy-active deploy hold continues."
-last_updated: "2026-05-13T23:30:00.000Z"
+stopped_at: "Roadmap expanded 2026-05-13 — v2.9 scoped to 7 phases (119-125): 119-123 cover original 15 reqs across A2A/DASH/SUB/DISC/MCP; 124-125 fold in operator-requested compaction work (999.51 → 124, 999.52 → 125). Build order: 119 → 120 (parallel) → 121 → 122 → 124 → 125 → 123 (MCP soak — soak window largely satisfied as of 2026-05-13, deferral no longer required). Phase 119 (A2A Delivery Reliability) is next; run /gsd-plan-phase 119. Roadmap heading restructure also fixed analyzer-blind-spot (v2.9 Phase Details → Phase Details — v2.9). Ramy-active deploy hold continues."
+last_updated: "2026-05-13T23:55:00.000Z"
 last_activity: 2026-05-13
 progress:
-  total_phases: 5
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -22,21 +22,23 @@ See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing mil
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** v2.9 Reliability & Routing — close operator-pain gaps in A2A delivery, post-Phase-116 dashboard observability, subagent UX, and MCP lifecycle verification. See `.planning/BACKLOG-CONSOLIDATED.md` for the 5 merge groups + standalone items.
+**Current focus:** v2.9 Reliability & Routing — close operator-pain gaps in A2A delivery, post-Phase-116 dashboard observability, subagent UX, MCP lifecycle verification, plus session-compaction primitives + algorithm folded in from 999.51/999.52 on 2026-05-13. See `.planning/BACKLOG-CONSOLIDATED.md` for the merge groups + standalone items.
 
 ## Current Position
 
 Phase: 119 (A2A Delivery Reliability) — Not started
 Plan: —
 Status: Defining phase
-Last activity: 2026-05-13 — Roadmap drafted, REQUIREMENTS.md traceability filled. 5 phases (119-123) covering 15 reqs. Next: `/gsd-plan-phase 119`.
+Last activity: 2026-05-13 — Roadmap expanded from 5 to 7 phases. Added Phase 124 (Operator-Triggered Session Compaction, ex-999.51) and Phase 125 (Intelligent Auto-Compaction Strategy, ex-999.52) per operator request. Roadmap heading restructure also closed the analyzer-blind-spot (`gsd-tools roadmap analyze` now sees 119-125). Next: `/gsd-plan-phase 119`.
 
-**v2.9 phase map (build order — Waves 1/3/4/5/6):**
+**v2.9 phase map (build order — Waves 1/3/4/5/6/7):**
 - Phase 119: A2A Delivery Reliability (A2A-01..04) — Wave 1
 - Phase 120: Dashboard Observability Cleanup (DASH-01..05) — Wave 3, parallel to 119
 - Phase 121: Subagent UX Completion + Chunk-Boundary (SUB-01..02) — Wave 4
 - Phase 122: Discord Table Auto-Wrap Universalization (DISC-01) — Wave 5, sequenced after 119
-- Phase 123: MCP Lifecycle Verification Soak (MCP-01..03) — Wave 6, operator-window-gated
+- Phase 124: Operator-Triggered Session Compaction (CLI + Discord + policy decoupling) — Wave 5/6, parallel-OK with 122
+- Phase 125: Intelligent Auto-Compaction Strategy (tiered retention) — Wave 6/7, depends on 124
+- Phase 123: MCP Lifecycle Verification Soak (MCP-01..03) — Wave 7 (last; soak window satisfied 2026-05-13, the wait gate is no longer load-bearing)
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 

@@ -21,17 +21,19 @@
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
 - :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101 (engine), 114, **115** (folds 999.40, 999.41, partial 999.42), **116** (folds 999.38), **999.43** (auto-ingest hook, depends on 101), 999.7, 999.18-20, 999.34-36, 999.39, 999.42-residual (proposed 2026-05-07; updated 2026-05-08 to add 116 + absorb 999.38; 2026-05-08 promote 999.43 from BACKLOG with enriched two-axis priority spec, depends on 101)
-- :hourglass: **v2.9 Reliability & Routing** - Phases 119-123 (opened 2026-05-13 — 5 phases, 15 reqs across A2A/DASH/SUB/DISC/MCP; closes v2.8 backlog per `.planning/BACKLOG-CONSOLIDATED.md`)
+- :hourglass: **v2.9 Reliability & Routing** - Phases 119-125 (opened 2026-05-13 — 7 phases, 15+ reqs across A2A/DASH/SUB/DISC/MCP + Session Compaction; closes v2.8 backlog per `.planning/BACKLOG-CONSOLIDATED.md`; 2026-05-13 expanded to fold 999.51 → Phase 124 + 999.52 → Phase 125 per operator request)
 
 ## Phases
 
-### v2.9 Reliability & Routing (Phases 119-123) - OPENED 2026-05-13
+### v2.9 Reliability & Routing (Phases 119-125) - OPENED 2026-05-13
 
 - [ ] **Phase 119: A2A Delivery Reliability** — port bot-direct fallback into `post_to_agent` + webhook identity-cache invalidation + queue-state icon transitions + suppress `projects` agent HEARTBEAT_OK leak (covers A2A-01..04)
 - [ ] **Phase 120: Dashboard Observability Cleanup** — tool-rollup SQL guard + null-percentile neutral styling + empty-state message + split-latency producer regression + `tool-latency-audit` CLI verify (covers DASH-01..05)
 - [ ] **Phase 121: Subagent UX Completion + Chunk-Boundary** — premature-completion gate (stream-drained AND delivery-confirmed) + off-by-3 seam fix at editor/overflow boundary + `splitMessage` sibling audit (covers SUB-01..02)
 - [ ] **Phase 122: Discord Table Auto-Wrap Universalization** — wire `wrapMarkdownTablesInCodeFence` at the transport boundary so every outbound Discord send path inherits the wrap (covers DISC-01)
-- [ ] **Phase 123: MCP Lifecycle Verification Soak** — operator-window-gated execution of pre-written plans 999.6-02 + 999.14-02 + 999.15-04 across cold restart / per-agent restart / forced respawn (covers MCP-01..03)
+- [ ] **Phase 123: MCP Lifecycle Verification Soak** — execution of pre-written plans 999.6-02 + 999.14-02 + 999.15-04 across cold restart / per-agent restart / forced respawn (covers MCP-01..03; soak window largely satisfied as of 2026-05-13)
+- [ ] **Phase 124: Operator-Triggered Session Compaction** — first-class `clawcode session compact <agent>` CLI + `/compact` Discord admin command + heartbeat-policy decoupling of reset vs compaction; promoted from 999.51 (operator-pain item 2026-05-13)
+- [ ] **Phase 125: Intelligent Auto-Compaction Strategy** — tiered retention algorithm (verbatim / structured / prose / drop) + active-state header + auto-compact-at threshold; depends on 124; promoted from 999.52 (operator-pain item 2026-05-13)
 
 <details>
 <summary>v1.0 Core Multi-Agent System (Phases 1-5) - SHIPPED 2026-04-09</summary>
@@ -2217,7 +2219,7 @@ Result: ~6× signal-to-noise spread between high-signal client-doc-from-priority
 
 ---
 
-## v2.9 Phase Details (Reliability & Routing)
+## Phase Details — v2.9 (Reliability & Routing)
 
 ### Phase 119: A2A Delivery Reliability
 
@@ -2312,6 +2314,48 @@ Result: ~6× signal-to-noise spread between high-signal client-doc-from-priority
 
 **Plans:** TBD (promote `999.6-02-PLAN.md`, `999.14-02-PLAN.md`, `999.15-04-PLAN.md`; pure-execution wave — no new code)
 
-**Sequencing note:** Wave 6 of the milestone build order — last wave to land before milestone close. Per PITFALLS.md Pattern C, budget for a second latent MCP issue to surface during the restart window; do not pre-commit to a single-issue resolution.
+**Sequencing note:** Wave 6 of the milestone build order — last wave to land before milestone close. Per PITFALLS.md Pattern C, budget for a second latent MCP issue to surface during the restart window; do not pre-commit to a single-issue resolution. **2026-05-13 update:** MCP subsystems have been continuously soaking in production for ≥1 week without operator-visible drift; the soak window's spirit is met. The phase still ships the formal verification artifacts and CLI exit-code coverage, but the wait gate is satisfied.
+
+### Phase 124: Operator-Triggered Session Compaction
+
+**Goal:** Operators (CLI and admin-Discord) can compact a live agent's Claude Code session on demand — collapsing the conversation window to a summary turn — without touching the agent's `memory.db` or triggering a destructive `restart`. The heartbeat policy decouples "reset" (still operator-controlled) from "compaction" (now allowed), and per-agent settings can opt into auto-compact thresholds independently of auto-reset.
+
+**Depends on:** Phase 105 (trigger-policy default-allow + dispatch hot path — compaction queues behind in-flight turns the same way), Phase 117 (advisor IPC pattern — provides the IPC contract for daemon→worker control messages that don't go through normal message delivery), Phase 103 (`/clawcode-status` per-agent telemetry surface — extend with tokens-before/tokens-after).
+
+**Requirements:** Promoted from `.planning/phases/999.51-operator-triggered-session-compaction/BACKLOG.md` — operator-pain item surfaced 2026-05-13 16:30 PT (fin-acquisition: 8.5 MB session JSONL, zero summary entries, ~4 min response latency on stacked messages).
+
+**Success Criteria** (what must be TRUE):
+  1. **First-class CLI:** `clawcode session compact <agent>` exists, triggers Claude Code SDK `/compact` on the live worker, reports `tokens_before` / `tokens_after` / `summary_written: true` on stdout; exits non-zero with a recognizable error code when the worker is unreachable or mid-tool-chain past the safety budget. [Pattern A: absence-bug sentinel — CLI did not exist pre-phase]
+  2. **Discord operator command:** admin can post `/compact <agent>` in `#admin-clawdy` and receive an ephemeral embed with the same `tokens_before`/`tokens_after`/`summary_written` payload; non-admin users get a refusal embed.
+  3. **Memory preserved:** post-compaction, the agent's `memory.db` byte count is unchanged and `clawcode memory list <agent>` returns the same chunk IDs as before compaction; a probe turn after compaction successfully recalls a memory chunk created before compaction.
+  4. **Mid-turn safety:** invoking compact while the agent is mid-tool-chain queues the operation until the turn completes; the agent's tool-call sequence is not interrupted and no `tool_result` is corrupted. Integration test fires `compact` mid-turn against a synthetic agent and asserts the tool sequence completes intact.
+  5. **Policy decoupling:** the heartbeat-prompt template distinguishes `auto-reset` (still disabled for Finmentum agents) from `auto-compaction` (new opt-in `auto-compact-at: 0.7` per-agent setting). Static-grep regression test rejects any heartbeat prompt that conflates the two terms under a single "AUTO-RESET: DISABLED" block.
+  6. **Telemetry:** `clawcode status <agent>` surfaces `session_tokens` and `last_compaction_at` per agent; the dashboard adds a "tokens used" sparkline alongside the existing context-fill gauge.
+
+**Plans:** TBD
+
+**Sequencing note:** Phase 117's IPC pattern (advisor IPC short-circuit at `handleAskAdvisor`) is the closest precedent for daemon→worker control messages that bypass normal message delivery. Mirror the shape — register `handleCompactSession` in the IPC dispatcher; the worker side runs `/compact` via the Claude Agent SDK's session-control API (not by sending a literal "/compact" message into the agent's turn loop).
+
+### Phase 125: Intelligent Auto-Compaction Strategy
+
+**Goal:** Sessions compact themselves at operator-configured thresholds via a tiered retention algorithm that preserves load-bearing context (active clients, in-flight tasks, recent operator messages, standing rules) verbatim while collapsing repeated tool calls and heartbeat noise. A persistent "active state header" rebuilt every compaction sits at the top of every session for cheap retrieval of "where are we." No operator approval required per compaction; per-agent opt-out remains.
+
+**Depends on:** **Phase 124** (CLI + IPC + policy-decoupling primitives — 125 builds the algorithm on top of 124's plumbing). Phase 95 (memory dreaming — Tier 2 structured extraction reuses the haiku-worker pattern dreams established). Phase 115 (memory + context + prompt-cache redesign — bounded prompt model that 125 extends).
+
+**Requirements:** Promoted from `.planning/phases/999.52-intelligent-auto-compaction-strategy/BACKLOG.md` — operator-pain item surfaced 2026-05-13 16:40 PT, paired with Phase 124's manual primitive.
+
+**Success Criteria** (what must be TRUE):
+  1. **Active-state header (Tier 1 bedrock):** every session that has received ≥1 turn post-deploy renders an `ACTIVE STATE` block at the top of the session, refreshed at every compaction. Block contains the operator-configured fields (primary client, in-flight tasks, standing rules added today, drive folders touched, last 3 operator messages verbatim). Probe turn confirms the agent reads the block before tool calls.
+  2. **Tier 1 verbatim preservation:** the last N=10 turns, SOUL.md / IDENTITY.md, today's daily-notes file content, and the last 3 user-supplied operator messages are NEVER compacted. Regression test: send a marker token in turn N, fire compaction at turn N+5, assert marker survives in the post-compaction session.
+  3. **Tier 4 drop rules measurable:** repeated identical tool calls (same `tool_name + tool_args` within a single edit session) collapse to a "read file X across N calls" stub; heartbeat probe turns drop; failed-and-retried tool calls keep only the successful retry. Pre/post compaction byte count shows ≥40% reduction on a synthetic 6-hour fin-acquisition replay.
+  4. **Tier 2 structured extraction:** a haiku-worker reads each compacted block and emits a YAML/JSON structured summary covering active client names, decisions made, standing-rule changes, in-flight tasks, drive paths, and recover-or-lose-it numbers (AUM figures, dates, prices). Output persists to `~/.clawcode/agents/<agent>/state/active-state.yaml` AND to `memory.db` as a chunk (durable across full reset).
+  5. **No state loss assertion:** scripted A/B test sends the agent identical operator prompts pre- and post-compaction; the response contains the same client name, task state, and most recent feedback rule (fuzzy match passes on a 20-prompt fixture, >90% agreement).
+  6. **Latency win (operator-visible):** post-compaction, first-token latency drops below 8 s on a synthetic 6-hour-session replay; measured via `clawcode usage` over 5 consecutive turns. Pre-compaction baseline (the 2026-05-13 observation: ~30-60 s first-token after 6 h of work) is captured in the verification artifact as the regression sentinel.
+  7. **Auto-compact threshold:** fires at operator-configured `auto-compact-at: <pct>` (default 0.7, per-agent override) without operator intervention. Compaction runs out-of-band via haiku worker — main worker pauses for seconds, not minutes.
+  8. **Per-agent overrides honored:** Finmentum agents declare additional "preserve verbatim" patterns (e.g., any line mentioning AUM, any line with a `$` amount); regression fixture confirms those patterns survive compaction.
+
+**Plans:** TBD (incremental rollout per BACKLOG.md §Suggested incremental rollout — Phase 1 active-state header → Phase 2 Tier 1+4 → Phase 3 Tier 2 → Phase 4 Tier 3; each tier delivered as its own PLAN file under 125)
+
+**Sequencing note:** Sequenced AFTER Phase 124 (which ships the CLI / IPC / policy primitives), parallel-OK with Phase 122 (Discord wrap) and Phase 123 (MCP soak) which touch different subsystems. Per Pattern C, expect a latent finding during Tier 2 rollout — the haiku-worker pattern (Phase 95 precedent) has surfaced JSON-parsing edge cases historically; do not pre-commit to a single-pass design.
 
 ---
