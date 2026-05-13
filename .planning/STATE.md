@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Reliability & Routing
-status: planning
-stopped_at: "Milestone v2.9 opened 2026-05-13 — closes v2.8 Performance + Reliability (most scope shipped via Phases 110, 113, 114, 115, 116; remainder consolidated). v2.9 scope: 5 merge groups + standalone items per .planning/BACKLOG-CONSOLIDATED.md. Cleanup commit 2a9fca8 removed 8 shipped 999.x stubs (999.7, .9, .16, .17, .21, .22, .23, .24). Next: parallel research → requirements → roadmap. Predecessor: Phase 116 SHIPPED + Usage-page reframe (116-postdeploy), commits 01d633f, c7786b5, ed729b0. Ramy-active deploy hold continues."
-last_updated: "2026-05-13T22:50:00.000Z"
+status: defining-phase
+stopped_at: "Roadmap drafted 2026-05-13 — v2.9 scoped to 5 phases (119-123) covering 15 requirements across A2A/DASH/SUB/DISC/MCP. Phase 119 (A2A Delivery Reliability) is the next phase; run /gsd-plan-phase 119 to break it down. Build order per research/SUMMARY.md: 119 → 120 → 121 → 122 → 123. Ramy-active deploy hold continues."
+last_updated: "2026-05-13T23:30:00.000Z"
 last_activity: 2026-05-13
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -26,10 +26,17 @@ See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing mil
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 119 (A2A Delivery Reliability) — Not started
 Plan: —
-Status: Defining requirements
-Last activity: 2026-05-13 — Milestone v2.9 started, closing v2.8 via consolidation. Cleanup commit `2a9fca8` removed 8 shipped 999.x stubs (999.7, .9, .16, .17, .21, .22, .23, .24).
+Status: Defining phase
+Last activity: 2026-05-13 — Roadmap drafted, REQUIREMENTS.md traceability filled. 5 phases (119-123) covering 15 reqs. Next: `/gsd-plan-phase 119`.
+
+**v2.9 phase map (build order — Waves 1/3/4/5/6):**
+- Phase 119: A2A Delivery Reliability (A2A-01..04) — Wave 1
+- Phase 120: Dashboard Observability Cleanup (DASH-01..05) — Wave 3, parallel to 119
+- Phase 121: Subagent UX Completion + Chunk-Boundary (SUB-01..02) — Wave 4
+- Phase 122: Discord Table Auto-Wrap Universalization (DISC-01) — Wave 5, sequenced after 119
+- Phase 123: MCP Lifecycle Verification Soak (MCP-01..03) — Wave 6, operator-window-gated
 
 ## Current Session — Post-v2.7 fix wave (2026-05-02)
 

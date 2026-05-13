@@ -69,22 +69,22 @@ Deferred to v3.0 per operator scope confirmation (2026-05-13). v2.9 keeps focus 
 
 ## Traceability
 
-*To be filled by the roadmapper — each REQ-ID maps to exactly one phase.*
+*Each REQ-ID maps to exactly one phase. Filled 2026-05-13 by gsd-roadmapper.*
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| A2A-01 | — | Active |
-| A2A-02 | — | Active |
-| A2A-03 | — | Active |
-| A2A-04 | — | Active |
-| DASH-01 | — | Active |
-| DASH-02 | — | Active |
-| DASH-03 | — | Active |
-| DASH-04 | — | Active |
-| DASH-05 | — | Active |
-| SUB-01 | — | Active |
-| SUB-02 | — | Active |
-| DISC-01 | — | Active |
-| MCP-01 | — | Active |
-| MCP-02 | — | Active |
-| MCP-03 | — | Active |
+| A2A-01 | Phase 119 | Active |
+| A2A-02 | Phase 119 | Active |
+| A2A-03 | Phase 119 | Active |
+| A2A-04 | Phase 119 | Active |
+| DASH-01 | Phase 120 | Active |
+| DASH-02 | Phase 120 | Active |
+| DASH-03 | Phase 120 | Active |
+| DASH-04 | Phase 120 | Active |
+| DASH-05 | Phase 120 | Active |
+| SUB-01 | Phase 121 | Active |
+| SUB-02 | Phase 121 | Active |
+| DISC-01 | Phase 122 | Active |
+| MCP-01 | Phase 123 | Active |
+| MCP-02 | Phase 123 | Active |
+| MCP-03 | Phase 123 | Active |

@@ -21,8 +21,17 @@
 - :white_check_mark: **v2.6 Tool Reliability & Memory Dreaming** - Phases 94-95 (shipped 2026-04-25)
 - :white_check_mark: **v2.7 Operator Self-Serve + Production Hardening** - Phases 100-108 (shipped 2026-05-01)
 - :hourglass: **v2.8 Performance + Reliability** - Phases 110, 101 (engine), 114, **115** (folds 999.40, 999.41, partial 999.42), **116** (folds 999.38), **999.43** (auto-ingest hook, depends on 101), 999.7, 999.18-20, 999.34-36, 999.39, 999.42-residual (proposed 2026-05-07; updated 2026-05-08 to add 116 + absorb 999.38; 2026-05-08 promote 999.43 from BACKLOG with enriched two-axis priority spec, depends on 101)
+- :hourglass: **v2.9 Reliability & Routing** - Phases 119-123 (opened 2026-05-13 — 5 phases, 15 reqs across A2A/DASH/SUB/DISC/MCP; closes v2.8 backlog per `.planning/BACKLOG-CONSOLIDATED.md`)
 
 ## Phases
+
+### v2.9 Reliability & Routing (Phases 119-123) - OPENED 2026-05-13
+
+- [ ] **Phase 119: A2A Delivery Reliability** — port bot-direct fallback into `post_to_agent` + webhook identity-cache invalidation + queue-state icon transitions + suppress `projects` agent HEARTBEAT_OK leak (covers A2A-01..04)
+- [ ] **Phase 120: Dashboard Observability Cleanup** — tool-rollup SQL guard + null-percentile neutral styling + empty-state message + split-latency producer regression + `tool-latency-audit` CLI verify (covers DASH-01..05)
+- [ ] **Phase 121: Subagent UX Completion + Chunk-Boundary** — premature-completion gate (stream-drained AND delivery-confirmed) + off-by-3 seam fix at editor/overflow boundary + `splitMessage` sibling audit (covers SUB-01..02)
+- [ ] **Phase 122: Discord Table Auto-Wrap Universalization** — wire `wrapMarkdownTablesInCodeFence` at the transport boundary so every outbound Discord send path inherits the wrap (covers DISC-01)
+- [ ] **Phase 123: MCP Lifecycle Verification Soak** — operator-window-gated execution of pre-written plans 999.6-02 + 999.14-02 + 999.15-04 across cold restart / per-agent restart / forced respawn (covers MCP-01..03)
 
 <details>
 <summary>v1.0 Core Multi-Agent System (Phases 1-5) - SHIPPED 2026-04-09</summary>
@@ -2204,3 +2213,105 @@ Result: ~6× signal-to-noise spread between high-signal client-doc-from-priority
 **Plans:** TBD (run /gsd-plan-phase 999.43 after Phase 101 ships)
 
 **Status:** ACTIVE — promoted 2026-05-08 from BACKLOG with enriched two-axis priority spec. Estimated 15-25 executor hours across ~3-4 plans. **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme + unblocks fin-acquisition's daily client-doc workflow.
+
+
+---
+
+## v2.9 Phase Details (Reliability & Routing)
+
+### Phase 119: A2A Delivery Reliability
+
+**Goal:** Live cross-agent message delivery via Discord webhook is reliable; webhook health degrades gracefully through bot-direct fallback before falling back to the inbox-heartbeat sweep, and the operator-visible queue-state icon coherently reflects the actual delivery pipeline state.
+
+**Depends on:** Phase 116 (dashboard SLO surface for the new `no_webhook_fallbacks_total` counter), Phase 999.12 IPC-02 (reference bot-direct fallback shape in `daemon-ask-agent-ipc.ts:262-299`).
+
+**Requirements:** A2A-01, A2A-02, A2A-03, A2A-04.
+
+**Success Criteria** (what must be TRUE):
+  1. A synthetic admin→admin `post_to_agent` fired at daemon boot returns `{delivered: true}` (not `{ok: true, reason: "no-webhook"}`) — wiring sentinel proving the new bot-direct fallback executes on the production path. [Pattern A: absence-bug sentinel]
+  2. `WebhookManager` re-provisions a webhook within one delivery attempt after Discord returns HTTP 401/404 for the cached entry; subsequent delivery via the same `WebhookManager` instance succeeds without daemon restart.
+  3. On a fresh A2A turn the queue-state icon visibly transitions `⏳` → `👍` → `✅` (or `❌` on terminal failure) in the operator's Discord channel; mutually exclusive states with no double-emoji races.
+  4. Over a 24-hour observation window the `projects` agent's cron-poll emits zero `HEARTBEAT_OK` messages to user-facing channels — the no-op is suppressed in the agent's own cron skill (agent-side fix; no daemon code change for A2A-04).
+  5. `no_webhook_fallbacks_total{agent, channel}` counter exposed on the dashboard stays at 0 across a 15-minute window post-deploy; non-zero values are alerted, not silently absorbed.
+
+**Plans:** TBD
+**UI hint**: yes
+
+**Sequencing note:** Plan 999.45 (icon transitions) ships within this phase ONLY after Plan 999.44 (bot-direct fallback) has been observably green in production for ≥24h. Plan 999.48 (`projects` agent cron skill) is fully parallel and lives in the agent's workspace, not the daemon repo.
+
+### Phase 120: Dashboard Observability Cleanup
+
+**Goal:** The post-Phase-116 Benchmarks tab is correct end-to-end: tool-rollup rows show real tool names for every agent (including those with spaces in display names), null percentiles render as neutral "no data" rather than red breach, empty windows show an explicit empty-state message, the split-latency columns are populated for live turns, and the `tool-latency-audit` CLI exits clean.
+
+**Depends on:** Phase 116 (dashboard surface), Phase 999.7 follow-ups (split-latency producer regression context), Phase 106 TRACK-CLI-01 hotfix `fa72303` (CLI Invalid Request fix to verify end-to-end).
+
+**Requirements:** DASH-01, DASH-02, DASH-03, DASH-04, DASH-05.
+
+**Success Criteria** (what must be TRUE):
+  1. Tool rollup table renders the actual tool name for every agent (including "Admin Clawdy" with the embedded space); zero blank-tool-name rows when underlying span data exists in the window. [Pattern A: absence-bug sentinel]
+  2. Null percentile cells render with `text-fg-3` neutral styling and a "—" label across BenchmarksView and any sibling percentile renderer; static-grep regression test rejects `text-danger` applied to a null-input branch.
+  3. Tool rollup table shows an explicit "No tool spans recorded in window" message when the agent has zero spans, instead of rendering a row of nulls.
+  4. Static-grep test pins the canonical split-latency producer call site to the production path (`persistent-session-handle.ts:iterateUntilResult`, not `session-adapter.ts:iterateWithTracing`); `prep_latency_ms` / `tool_latency_ms` / `model_latency_ms` columns are non-NULL for any agent with live turns in the last hour. [Pattern A: 115-08-class regression sentinel]
+  5. `clawcode tool-latency-audit` CLI exits 0 with valid JSON on clawdy against a non-empty trace window; the Phase 106 hotfix `fa72303` is verified end-to-end.
+
+**Plans:** TBD
+**UI hint**: yes
+
+**Sequencing note:** Run diagnostic SQL on production FIRST — `SELECT name, COUNT(*) FROM trace_spans WHERE name LIKE 'tool_call.%' AND LENGTH(name) <= 11 GROUP BY name;` — and commit the captured result to the phase verification artifact BEFORE any code lands. This localizes the root cause (empty-`name` emitter bug vs IPC space-in-name binding drift vs frontend null-styling). Frontend null-percentile fix and backend SQL guard can then ship in parallel; producer-regression fix (DASH-04) sequences after the diagnostic has confirmed which writer is canonical.
+
+### Phase 121: Subagent UX Completion + Chunk-Boundary
+
+**Goal:** Subagent relay through Discord is byte-complete and operator-trustworthy: the `subagent_complete` event fires only after the stream has fully drained AND delivery is confirmed, and the byte-seam at the 2000-char Discord message boundary loses no content across editor truncate / overflow chunk handoff.
+
+**Depends on:** Phase 999.36-00 (typing indicator) and Phase 999.36-01 (share-file routing) — already shipped. Pre-written plans `999.36-02-PLAN.md` and `999.36-03-PLAN.md` exist and are ready to execute under this phase.
+
+**Requirements:** SUB-01, SUB-02.
+
+**Success Criteria** (what must be TRUE):
+  1. A subagent run that produces a 2003-character output delivers the full byte string reconstructed across the editor-edit + overflow-chunk sequence — `expect(reconstructed).toBe(expected)` passes against the regression fixture from `999.36-03-PLAN.md` Task 1. [Pattern A: chunk-seam absence sentinel]
+  2. `subagent_complete` fires exactly once per subagent run, AFTER the stream is fully drained AND the final delivery message has been acknowledged; no premature-completion path exists for either `dispatch_in_new_thread` or `dispatch_to_existing_thread`.
+  3. The post-Plan-00 `seamGapBytes` diagnostic field logs as `0` on every production subagent relay (verified via journalctl grep over a 24h soak window).
+  4. `splitMessage` sibling audit in `webhook-manager.ts` is recorded in the verification artifact — either confirmed to NOT share the off-by-3 seam (with the 2003-char fixture re-used as proof), or the same fix is applied alongside the subagent-thread-spawner patch.
+
+**Plans:** TBD (promote `999.36-02-PLAN.md` + `999.36-03-PLAN.md`; sequence 02 before 03 per `depends_on` chain)
+
+**Sequencing note:** Plans 02 and 03 both edit `src/discord/subagent-thread-spawner.ts`. Ship 02 first (completion gate), then 03 (byte-seam), to avoid merge churn within the same file.
+
+### Phase 122: Discord Table Auto-Wrap Universalization
+
+**Goal:** Every outbound Discord send path automatically wraps markdown tables in fenced code blocks so mobile renderers and the Discord web/desktop client display them legibly — without per-agent `feedback_no_wide_tables_discord.md` workarounds.
+
+**Depends on:** Phase 119 (the new bot-direct fallback path introduced by A2A-01 must inherit the wrap from day one — sequence this phase AFTER 119).
+
+**Requirements:** DISC-01.
+
+**Success Criteria** (what must be TRUE):
+  1. Static-grep regression test enumerates every known outbound Discord send site (`WebhookManager.send`, `WebhookManager.sendAsAgent`, `BotDirectSender.sendText`, `bridge.ts` edit/send sites, `daemon-ask-agent-ipc.ts` mirror + bot-direct fallback, `daemon-post-to-agent-ipc.ts` bot-direct fallback from Phase 119, cron `triggerDeliveryFn`, embed `description` body) and asserts each one routes through `wrapMarkdownTablesInCodeFence`; the test fails if a future commit introduces a bypass. [Pattern A: universal-wiring sentinel]
+  2. An operator-issued message containing a 4-column markdown table renders as a fenced code block in Discord across webhook, bot-direct, cron, and subagent-relay channels — operator screenshot verification against the same fixture across all four paths.
+  3. Nested code-block escaping is correct: a table cell containing a triple-backtick fence is wrapped using a longer outer fence (4+ backticks) and renders without breaking out of the wrapper.
+  4. The `wrapMarkdownTablesInCodeFence` helper itself is unchanged — universalization happens at the transport boundary, not by rewriting the helper.
+
+**Plans:** TBD
+
+**Sequencing note:** Approach A (single chokepoint at `WebhookManager.send` + `sendAsAgent` + `BotDirectSender.sendText`) per ARCHITECTURE.md §999.46. Approach B (per-site wrap) is explicitly rejected — it violates the silent-path-bifurcation prevention rule.
+
+### Phase 123: MCP Lifecycle Verification Soak
+
+**Goal:** Formally close the three pre-written Wave-2/4 MCP lifecycle plans (999.6 Plan 02, 999.14 Plan 02, 999.15 Plan 04) by executing them in production on clawdy across the three restart variants and capturing operator-witnessable evidence that the system is drift-free.
+
+**Depends on:** Phase 999.6-01 (snapshot/restore code shipped), Phase 999.14-01 (MCP child-process lifecycle shipped), Phase 999.15-03 (mcp-tracker IPC+CLI shipped), Phase 106 TRACK-CLI-01 (`fa72303` hotfix to verify the CLI path).
+
+**Requirements:** MCP-01, MCP-02, MCP-03.
+
+**Success Criteria** (what must be TRUE):
+  1. **Operator-approved restart window required** — soak only begins after Ramy-quiet state is verified via the Discord MCP plugin (`mcp__plugin_discord_discord__fetch_messages` on `#fin-acquisition`, NOT journalctl); the verification artifact records the timestamp + channel-state snapshot used to authorize the window.
+  2. Plan 999.6-02 production smoke gate passes on clawdy: pre-deploy snapshot writes, post-restart restore brings ≥3 agents back cleanly, snapshot-manager round-trip witness recorded.
+  3. Plan 999.14-02 Wave 2 verification (MCP-06 through MCP-10) closes with full vitest suite green AND `tsc --noEmit` clean against the deployed binary on clawdy.
+  4. Plan 999.15-04 soak passes ALL THREE variants — cold restart (5× `systemctl restart clawcode` in succession), per-agent restart (one agent stop/start with others untouched), forced respawn (SIGKILL one MCP child, watch reaper + tracker reconcile) — with zero orphan leak (`pgrep -cf mcp-server-mysql` matches live agent count + `ps -ef | awk '$3==1 && /mcp-server-mysql/'` count is 0) AND zero tracker drift vs `/proc` reality.
+  5. `clawcode mcp-tracker` CLI exits 0/1/2/3 against live state across all three soak variants; the Phase 106 hotfix `fa72303` is verified by the same run.
+
+**Plans:** TBD (promote `999.6-02-PLAN.md`, `999.14-02-PLAN.md`, `999.15-04-PLAN.md`; pure-execution wave — no new code)
+
+**Sequencing note:** Wave 6 of the milestone build order — last wave to land before milestone close. Per PITFALLS.md Pattern C, budget for a second latent MCP issue to surface during the restart window; do not pre-commit to a single-issue resolution.
+
+---
