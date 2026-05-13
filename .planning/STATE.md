@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: Performance + Reliability
 status: verifying
 stopped_at: "Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md."
-last_updated: "2026-05-13T05:37:03.775Z"
+last_updated: "2026-05-13T06:36:03.037Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 64
   completed_phases: 17
   total_plans: 119
-  completed_plans: 110
-  percent: 92
+  completed_plans: 112
+  percent: 94
 ---
 
 # Project State
@@ -480,6 +480,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Plan 116-01: useAgentLatency hook added (30s polling) — observed first_token p50 lives on /api/agents/:name/latency, not /cache (which carries only the SLO threshold)
 - [Phase ?]: Plan 116-01: F05 per-tool cache breakdown deferred to 116-02 — /api/agents/:name/cache returns fleet-wide tool_cache_hit_rate only
 - [Phase ?]: Plan 116-01: SLO breach dismissal bucketed by observed p50 rounded to 500ms (jitter ignored; genuine new spike re-shows)
+- [Phase 117]: Plan 117-11: separate manager/verbose-state.db SQLite file for per-channel verbose toggle (RESEARCH §4.1 + §6 Pitfall 4) — Matches AdvisorBudget own-file precedent; keeps backup/restore semantics independent across stores.
+- [Phase 117]: Plan 117-11: BridgeConfig.verboseState is OPTIONAL (back-compat); pure exported handleVerboseSlash mirrors handleInterruptSlash/handleSteerSlash pattern — Keeps existing structural-stub injection in bridge-advisor-footer.test.ts Case F/F' working via 'as any', avoiding a 4-file test rewrite. handleVerboseSlash extraction allows T07 to test the dispatch logic without instantiating SlashCommandHandler.
 
 ### v2.1 closing decisions (for reference)
 
@@ -682,6 +684,7 @@ Recent decisions affecting current work:
 | Phase 999.36 P01 | 11 | 5 tasks | 7 files |
 | Phase 116 P01 | 65min | 6 tasks | 11 files |
 | Phase 116 P06 | 85min | 7 tasks | 22 files |
+| Phase 117 P11 | 28min | 7 tasks | 10 files |
 
 ## Session Continuity
 
