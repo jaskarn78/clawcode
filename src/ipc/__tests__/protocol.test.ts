@@ -102,6 +102,8 @@ describe("IPC_METHODS", () => {
       // Model tiering (Phase 39)
       "ask-advisor",
       "set-model",
+      // Phase 117 Plan 117-11 — operator-driven per-channel verbose toggle
+      "set-verbose-level",
       // Phase 87 CMD-02 — live SDK permission-mode swap via Query.setPermissionMode.
       "set-permission-mode",
       // Phase 88 Plan 02 MKT-01..07 — marketplace list/install/remove

@@ -198,6 +198,7 @@ import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
 import { AdvisorBudget } from "../usage/advisor-budget.js";
+import { VerboseState } from "../usage/verbose-state.js";
 // Phase 117-03 — ported advisor system-prompt builder (parity baseline from
 // the inline construction at the old :9836 site). The IPC handler at
 // `ask-advisor` now calls this rather than inlining the string.
@@ -2696,6 +2697,17 @@ export async function startDaemon(
   const advisorBudget = new AdvisorBudget(advisorBudgetDb);
   log.info("advisor budget initialized");
 
+  // 6a2b. Phase 117 Plan 117-11 — per-channel verbose-level state for
+  // /clawcode-verbose (Discord operator slash command). Separate file
+  // from advisor-budget.db per RESEARCH §4.1 + §6 Pitfall 4 / §7 Q2
+  // RESOLVED — matches the AdvisorBudget's own-file precedent and keeps
+  // backup/restore semantics independent across the two stores. Shared
+  // by the IPC `set-verbose-level` handler (writes) and the DiscordBridge
+  // mutation point at bridge.ts:~810 (reads via getLevel).
+  const verboseStateDb = new Database(join(MANAGER_DIR, "verbose-state.db"));
+  const verboseState = new VerboseState(verboseStateDb);
+  log.info({ path: join(MANAGER_DIR, "verbose-state.db") }, "verbose state initialized");
+
   // Phase 117 Plan 04 T05 — inject the AdvisorBudget into SessionManager so
   // `makeAdvisorObserver(agent)` returns a real observer (and the SDK
   // adapter records `advisor_message` iterations + emits advisor events
@@ -5105,6 +5117,33 @@ export async function startDaemon(
       }
       case "secrets-invalidate": {
         return handleSecretsInvalidate(secretsResolver, params);
+      }
+      // Phase 117 Plan 117-11 T05 — operator-driven per-channel verbose
+      // toggle. Routes the /clawcode-verbose slash command's level choice
+      // through VerboseState. Closure-intercept BEFORE routeMethod so the
+      // already-massive routeMethod signature stays stable; `verboseState`
+      // is constructed at boot (alongside advisorBudget at :~2697) and
+      // shared by reference with the Discord bridge (T06) so reads at the
+      // single mutation point in bridge.ts (~:810) see the same state.
+      // Returns { level, updatedAt } so the slash handler can render the
+      // ephemeral reply (handleVerboseSlash in slash-commands.ts).
+      case "set-verbose-level": {
+        const channelId = validateStringParam(params, "channelId");
+        const level = validateStringParam(params, "level");
+        if (level === "status") {
+          const status = verboseState.getStatus(channelId);
+          return { level: status.level, updatedAt: status.updatedAt };
+        }
+        if (level !== "on" && level !== "off") {
+          throw new ManagerError(
+            `invalid verbose level '${level}' — expected on | off | status`,
+          );
+        }
+        const newLevel: "verbose" | "normal" =
+          level === "on" ? "verbose" : "normal";
+        verboseState.setLevel(channelId, newLevel);
+        const status = verboseState.getStatus(channelId);
+        return { level: status.level, updatedAt: status.updatedAt };
       }
       // Phase 109-A — broker-status IPC. Returns the live PoolStatus[] from
       // the daemon-singleton broker (rps + throttle + lastRetryAfterSec

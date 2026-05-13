@@ -167,6 +167,15 @@ export const IPC_METHODS = [
   // Model tiering (Phase 39)
   "ask-advisor",
   "set-model",
+  // Phase 117 Plan 117-11 — operator-driven per-channel verbose-level toggle
+  // for advisor visibility. Backs the /clawcode-verbose slash command in
+  // src/discord/slash-commands.ts (handleVerboseSlash). Daemon-side handler
+  // upserts via VerboseState.setLevel and returns {level, updatedAt}; the
+  // Discord bridge consumes the resulting state at the single mutation
+  // point seeded by 117-09 (bridge.ts:~810). Operator-scope (admin-only
+  // slash command, ephemeral replies) — see slash-types.ts entry with
+  // defaultMemberPermissions:"0".
+  "set-verbose-level",
   // Phase 87 CMD-02 — live SDK permission-mode swap via Query.setPermissionMode.
   "set-permission-mode",
   // Phase 88 MKT-01..07 — marketplace list / install / remove routed through
