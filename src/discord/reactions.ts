@@ -1,3 +1,27 @@
+import type { Message } from "discord.js";
+
+/**
+ * Add a reaction to a Discord message.
+ *
+ * Plan 117-09 (RESEARCH §4.6) — observational hook used by the Discord
+ * bridge to land the 💭 reaction on the triggering user message when
+ * the advisor is consulted during a turn. Failures are swallowed: the
+ * reaction is decorative; the assistant's response delivery is what
+ * matters (matches the codebase's "observational hooks must not break
+ * the message path" invariant — see session-adapter.ts:1422 precedent
+ * and the Plan 117-04 fail-silent emitter wrappers).
+ *
+ * discord.js v14 `Message.react(emoji)` accepts a unicode emoji string
+ * like `"💭"` directly.
+ */
+export async function addReaction(message: Message, emoji: string): Promise<void> {
+  try {
+    await message.react(emoji);
+  } catch {
+    // Non-fatal: the reaction is decorative; delivery is what matters.
+  }
+}
+
 /**
  * Represents a reaction event from Discord.
  */
