@@ -174,6 +174,44 @@
        LIGHT theme — darker shades for AA contrast on warm-white bg. */
     --warn: 32 95% 44%;    /* darker amber — AA on white */
     --danger: 0 72% 45%;   /* darker red — matches --destructive */
+
+    /* dash-redesign (Mission Control) — new tokens, LIGHT theme.
+       Prefixed `--mc-*` to avoid colliding with shadcn's `--accent` slot
+       (used by Popover/Dialog/Button hovers). The kit's amber accent is
+       semantically different from shadcn's neutral hover-accent. */
+    --mc-accent:        #b6770a;          /* warm copper for "live" warmth (light) */
+    --mc-accent-fg:     #ffffff;
+    --mc-accent-soft:   #b6770a18;
+    --mc-primary-soft:  #0d8a611a;        /* 10% tint emerald wash (light) */
+    --mc-primary-ring:  #0d8a6147;        /* 28% tint emerald ring (light) */
+    --mc-bg-line:       #dedcd2;          /* hairline borders on tiles */
+    --mc-bg-inset:      #f0eee6;          /* inset wells / code blocks */
+    --mc-shadow-1: 0 1px 2px rgba(15, 15, 20, 0.06);
+    --mc-shadow-2: 0 6px 18px rgba(15, 15, 20, 0.08);
+    --mc-shadow-3: 0 16px 48px rgba(15, 15, 20, 0.12);
+    --mc-shadow-glow-primary: 0 0 0 1px var(--mc-primary-ring), 0 0 24px -6px rgb(var(--primary-soft, 13 138 97));
+    --mc-shadow-glow-accent:  0 0 0 1px var(--mc-accent-soft), 0 0 18px -6px var(--mc-accent);
+    --mc-ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+    --mc-ease-in:   cubic-bezier(0.7, 0, 0.84, 0);
+    --mc-t-fast:    120ms;
+    --mc-t-base:    180ms;
+    --mc-t-slow:    320ms;
+    --mc-space-1: 4px;
+    --mc-space-2: 8px;
+    --mc-space-3: 12px;
+    --mc-space-4: 16px;
+    --mc-space-5: 20px;
+    --mc-space-6: 24px;
+    --mc-space-8: 32px;
+    --mc-space-10: 40px;
+    --mc-space-12: 48px;
+    --mc-space-16: 64px;
+    --mc-radius-xs: 4px;
+    --mc-radius-sm: 6px;
+    --mc-radius:    10px;
+    --mc-radius-lg: 14px;
+    --mc-radius-xl: 20px;
+    --mc-radius-pill: 999px;
   }
 
   .dark {
@@ -226,6 +264,22 @@
        as HSL channels so theme-toggle flips the tokens. */
     --warn: 38 92% 50%;    /* #f59e0b amber */
     --danger: 0 84% 60%;   /* #ef4444 red — matches --destructive */
+
+    /* dash-redesign (Mission Control) — DARK theme overrides. The kit's
+       canonical direction: dark-first emerald + warm amber. `--mc-*` so
+       shadcn `--accent` keeps its neutral-hover semantics. */
+    --mc-accent:        #f4b942;          /* warm amber for "live" warmth */
+    --mc-accent-fg:     #2a1f06;
+    --mc-accent-soft:   #f4b94220;
+    --mc-primary-soft:  #10b9811f;        /* 12% tint emerald wash */
+    --mc-primary-ring:  #10b9814d;        /* 30% tint emerald ring */
+    --mc-bg-line:       #2a2c38;          /* hairline borders on tiles */
+    --mc-bg-inset:      #060608;          /* inset wells */
+    --mc-shadow-1: 0 1px 0 0 rgba(255,255,255,0.03) inset, 0 1px 2px rgba(0,0,0,0.5);
+    --mc-shadow-2: 0 4px 16px rgba(0,0,0,0.45), 0 1px 0 0 rgba(255,255,255,0.04) inset;
+    --mc-shadow-3: 0 12px 40px rgba(0,0,0,0.55), 0 1px 0 0 rgba(255,255,255,0.05) inset;
+    --mc-shadow-glow-primary: 0 0 0 1px var(--mc-primary-ring), 0 0 24px -6px #10b981;
+    --mc-shadow-glow-accent:  0 0 0 1px var(--mc-accent-soft), 0 0 18px -6px var(--mc-accent);
   }
 }
 
