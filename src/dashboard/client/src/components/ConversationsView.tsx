@@ -191,15 +191,17 @@ export function ConversationsView() {
     Date.now() - Date.parse(tape[0].ts) < 10_000
 
   return (
-    <div className="mx-auto max-w-[1600px] px-4 py-6 lg:px-6">
-      {/* HEADER ============================================================ */}
-      <header className="mb-6 space-y-4">
-        <div className="flex items-center justify-between gap-4">
+    <div className="mx-auto max-w-[1600px] px-7 py-6">
+      {/* dash-redesign sweep — section-head pattern. The
+          StatusPip live indicator anchors inline next to the title;
+          subtitle gives operator context. Search button stays right-
+          aligned in the same header row. */}
+      <header className="mb-5 space-y-4">
+        <div className="section-head">
           <div className="flex items-center gap-3">
-            <h1 className="font-display text-3xl font-bold tracking-tight text-fg-1">
-              Conversations
-            </h1>
+            <h2>Conversations</h2>
             <StatusPip live={isLiveActivity} />
+            <span className="sub">cross-agent live transcript tape</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -674,12 +676,11 @@ function EmptyState(props: {
   readonly title: string
   readonly body: string
 }) {
+  // dash-redesign sweep — align with MissionRail's calm-mono empty
+  // voice via .feed-empty. Title and body fold into a single line.
   return (
-    <div className="rounded-lg border border-dashed border-border bg-bg-elevated/30 p-10 text-center">
-      <p className="font-display text-base font-medium text-fg-2">
-        {props.title}
-      </p>
-      <p className="mx-auto mt-2 max-w-sm text-sm text-fg-3">{props.body}</p>
+    <div className="feed-empty">
+      <strong className="text-fg-2">{props.title}.</strong> {props.body}
     </div>
   )
 }
