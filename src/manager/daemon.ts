@@ -2601,6 +2601,15 @@ export async function startDaemon(
   // stays stable (15+ agent test fixtures rely on that shape).
   manager.setAdvisorBudget(advisorBudget);
 
+  // Phase 117 Plan 04 T05 — also thread the daemon-wide advisor defaults
+  // block so `buildSessionConfig.shouldEnableAdvisor` resolves the
+  // backend + model via the same fall-through path the rest of the
+  // daemon uses (per-agent → defaults → baseline). config.defaults is
+  // populated by zod with the schema defaults (backend: "native", model:
+  // "opus") so even fleets that omit the block entirely get the gate
+  // semantics right.
+  manager.setAdvisorDefaults({ advisor: config.defaults.advisor });
+
   // 6-quater. Create TaskManager singleton (Phase 59 Plan 03).
   // Depends on: taskStore (6-ter), turnDispatcher (6-bis), escalationBudget (6a),
   // resolvedAgents (5a), and a SchemaRegistry loaded from ~/.clawcode/task-schemas/.

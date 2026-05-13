@@ -581,6 +581,32 @@ export class SessionManager {
   }
 
   /**
+   * Phase 117 Plan 04 T05 — daemon-wide advisor defaults block
+   * (`config.defaults.advisor` from clawcode.yaml).
+   *
+   * Wired by daemon.ts AFTER SessionManager construction (the full
+   * `config.defaults` is only known once `loadConfig` resolves; setter
+   * pattern mirrors setWebhookManager / setBotDirectSender to keep the
+   * SessionManager constructor signature stable).
+   *
+   * Threaded into `SessionConfigDeps.advisorDefaults` (via
+   * `configDeps`) so `buildSessionConfig`'s `shouldEnableAdvisor`
+   * gate can run `resolveAdvisorBackend(agent, defaults)` against
+   * the same defaults block the rest of the daemon uses. When unset
+   * (tests), the resolver falls through to its hard-coded baseline
+   * (`"native"` / `"opus"`).
+   */
+  private advisorDefaults:
+    | { advisor?: { backend?: string; model?: string } }
+    | undefined = undefined;
+
+  setAdvisorDefaults(defaults: {
+    advisor?: { backend?: string; model?: string };
+  }): void {
+    this.advisorDefaults = defaults;
+  }
+
+  /**
    * Phase 117 Plan 04 T03/T04 — build the native-advisor observer wiring
    * for a single agent. Returns undefined when the AdvisorBudget has
    * not been injected (test paths) so the adapter's advisorObserver
@@ -2353,6 +2379,14 @@ export class SessionManager {
         agentName !== undefined
           ? this.memory.traceCollectors.get(agentName)
           : undefined,
+      // Phase 117 Plan 04 T05 — advisor defaults + budget for the
+      // `shouldEnableAdvisor` gate inside buildSessionConfig. Both
+      // optional — when SessionManager hasn't been wired (test paths),
+      // the gate falls through to its hard-coded baselines and the
+      // advisor is enabled-by-default (matches the production fleet
+      // default `defaults.advisor.backend: native`).
+      advisorDefaults: this.advisorDefaults,
+      advisorBudget: this.advisorBudget,
     };
   }
 

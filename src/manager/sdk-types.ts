@@ -111,6 +111,23 @@ export type SdkQueryOptions = {
    * absent for the existing fleet so no behavior change ships.
    */
   readonly disallowedTools?: readonly string[];
+  /**
+   * Phase 117 Plan 04 T05 — native advisor model id.
+   *
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.132 `sdk.d.ts:4930`
+   * (`Options.advisorModel?: string`). When set, the bundled `claude`
+   * CLI binary enables the `advisor_20260301` server tool inside the
+   * agent's own turn (the executor decides timing) and auto-injects
+   * the `advisor-tool-2026-03-01` beta header server-side — ClawCode
+   * does NOT manually negotiate the beta. RESEARCH §6 Pitfall 2
+   * confirmed this via `strings` on the bundled CLI binary.
+   *
+   * Spread-conditionally forwarded by session-adapter from
+   * AgentSessionConfig.advisorModel. The gate that produces / omits
+   * that field lives in `session-config.ts:shouldEnableAdvisor`
+   * (backend === "native" AND budget.canCall).
+   */
+  readonly advisorModel?: string;
 };
 
 /**

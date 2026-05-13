@@ -165,6 +165,32 @@ export type AgentSessionConfig = {
    * bootstrap path in session-config.ts which has a different return shape).
    */
   readonly excludeDynamicSections?: boolean;
+  /**
+   * Phase 117 Plan 04 T05 — native advisor model passthrough.
+   *
+   * When SET, the SDK adapter spread-conditionally adds
+   * `advisorModel: <value>` to the `Options` object handed to
+   * `sdk.query`, enabling the `advisor_20260301` server tool inside
+   * the agent's own turn (the bundled `claude` CLI binary handles the
+   * `advisor-tool-2026-03-01` beta header injection automatically per
+   * RESEARCH §6 Pitfall 2).
+   *
+   * When UNDEFINED, the adapter OMITS the field entirely (NEVER
+   * passes `{advisorModel: undefined}` — the spread-conditional idiom
+   * preserves byte-stable equality and avoids implicit-undefined
+   * surprises per RESEARCH §6 Pitfall 3).
+   *
+   * Value is the SDK-canonical model id (e.g. `"claude-opus-4-7"`),
+   * already resolved through the alias map in
+   * `src/manager/model-resolver.ts` before reaching this field. Raw
+   * operator aliases (`"opus"`) are NEVER written here.
+   *
+   * The gate that decides set-vs-omit lives in
+   * `src/manager/session-config.ts:shouldEnableAdvisor` and evaluates
+   * `(a) backend === "native"` AND `(b) AdvisorBudget.canCall(agent)`.
+   * Both conditions must pass per RESEARCH §6 Pitfall 4 + §13.5.
+   */
+  readonly advisorModel?: string;
 };
 
 /**

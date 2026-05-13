@@ -1041,6 +1041,24 @@ export class SdkSessionAdapter implements SessionAdapter {
       ...(config.disallowedTools && config.disallowedTools.length > 0
         ? { disallowedTools: [...config.disallowedTools] }
         : {}),
+      // Phase 117 Plan 04 T05 — native advisor model passthrough.
+      //
+      // Spread-conditional pattern matching the surrounding idioms
+      // (settingSources / mutableSuffix / disallowedTools): the field
+      // is OMITTED when AgentSessionConfig.advisorModel is undefined
+      // so the SDK CLI receives nothing rather than an explicit
+      // `advisorModel: undefined` (RESEARCH §6 Pitfall 3 — byte-
+      // stability + implicit-undefined avoidance). When present, the
+      // value is already canonical (`"claude-opus-4-7"` etc — alias
+      // resolution happens upstream in buildSessionConfig).
+      //
+      // Symmetric edit pin (Rule 3): resumeSession (below) MUST mirror
+      // this so a daemon restart cannot drift the resumed session into
+      // a different advisor state than the original create call.
+      ...(typeof config.advisorModel === "string" &&
+      config.advisorModel.length > 0
+        ? ({ advisorModel: config.advisorModel } as { advisorModel: string })
+        : {}),
     };
 
     // Phase 115 sub-scope 2 (115-sub2-flag) — diagnostic trace so the first
@@ -1125,6 +1143,16 @@ export class SdkSessionAdapter implements SessionAdapter {
       // symmetric-edits enforced.
       ...(config.disallowedTools && config.disallowedTools.length > 0
         ? { disallowedTools: [...config.disallowedTools] }
+        : {}),
+      // Phase 117 Plan 04 T05 — symmetric mirror of createSession's
+      // advisorModel wiring above (Rule 3 symmetric-edits). A resumed
+      // session MUST carry the same advisor state as the original
+      // create call so a daemon restart cannot toggle the
+      // `advisor_20260301` server tool on or off mid-conversation
+      // without an explicit operator action (`clawcode reload`).
+      ...(typeof config.advisorModel === "string" &&
+      config.advisorModel.length > 0
+        ? ({ advisorModel: config.advisorModel } as { advisorModel: string })
         : {}),
     };
 

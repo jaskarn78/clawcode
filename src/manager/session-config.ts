@@ -71,6 +71,17 @@ import {
 
 // Phase 999.13 DELEG-02 — per-agent specialist delegate map renderer.
 import { renderDelegatesBlock } from "../config/loader.js";
+// Phase 117 Plan 04 T05 — advisor backend + model resolvers (config + SDK alias).
+// `resolveAdvisorBackend` and `resolveAdvisorModel` in `config/loader.ts`
+// implement the per-agent → defaults → baseline fall-through; the SDK
+// alias map in `manager/model-resolver.ts` canonicalises `"opus"` →
+// `"claude-opus-4-7"` before the value reaches the SDK Options surface.
+// Both are pure functions — safe to call inside buildSessionConfig.
+import {
+  resolveAdvisorBackend as resolveAdvisorBackendConfig,
+  resolveAdvisorModel as resolveAdvisorModelConfig,
+} from "../config/loader.js";
+import { resolveAdvisorModel as resolveAdvisorModelAlias } from "./model-resolver.js";
 // Phase 94 Plan 05 — TOOL-08 / TOOL-09 auto-injected built-in tools.
 // Tool DEFs (no mcpServer attribution) are appended to the LLM-visible
 // tool block in every agent's stable prefix. Plan 94-02's filter sees no
@@ -253,6 +264,42 @@ export type SessionConfigDeps = {
    * and `assembleContext` is called with no tracing.
    */
   readonly traceCollector?: TraceCollector;
+  /**
+   * Phase 117 Plan 04 T05 — advisor defaults block (`config.defaults.advisor`
+   * from clawcode.yaml) and the daemon-wide AdvisorBudget.
+   *
+   * Together they let `buildSessionConfig` decide whether to spread-
+   * conditionally inject `advisorModel` into `AgentSessionConfig` (which
+   * the SDK adapter then forwards into `Options.advisorModel`). The
+   * gate evaluates two conditions per RESEARCH §6 Pitfall 3 / §13.5:
+   *
+   *   1. `resolveAdvisorBackend(agent, defaults) === "native"` — the
+   *      operator hasn't flipped the agent to the fork rollback path.
+   *   2. `advisorBudget.canCall(agent.name) === true` — the per-agent
+   *      per-day cap (`AdvisorBudget`, 10/day) is not exhausted.
+   *
+   * When EITHER condition is false, `advisorModel` is OMITTED from the
+   * returned `AgentSessionConfig` (spread-conditional pattern; never
+   * `{advisorModel: undefined}`). The adapter then omits the field from
+   * the SDK Options object so the bundled `claude` CLI binary treats
+   * the feature as off for that session.
+   *
+   * Optional — when absent (tests, bootstrap paths, fleet defaults not
+   * loaded yet), buildSessionConfig falls through to the hard-coded
+   * resolver defaults (`"native"` / `"opus"`) and the advisor is
+   * enabled-by-default for the agent. Production daemon wires this in
+   * via `SessionManager.setAdvisorDefaults(config.defaults.advisor)`
+   * + `SessionManager.setAdvisorBudget(...)`.
+   */
+  readonly advisorDefaults?: {
+    advisor?: {
+      backend?: string;
+      model?: string;
+    };
+  };
+  readonly advisorBudget?: {
+    canCall(agent: string): boolean;
+  };
 };
 
 /**
@@ -1062,5 +1109,87 @@ export async function buildSessionConfig(
     // flag when systemPrompt is a string (custom prompt), but our preset
     // shape ({type:"preset",preset:"claude_code",append:...}) honors it.
     excludeDynamicSections: config.excludeDynamicSections,
+    // Phase 117 Plan 04 T05 — advisor model passthrough.
+    //
+    // Spread-conditional pattern (RESEARCH §6 Pitfall 3): the field is
+    // OMITTED — never `{advisorModel: undefined}` — when the gate says
+    // the advisor should be off. The session-adapter then propagates
+    // the same omission into the SDK Options so the bundled CLI binary
+    // does not enable the `advisor_20260301` server tool for this
+    // session.
+    //
+    // Gate (`shouldEnableAdvisor`):
+    //   1. `resolveAdvisorBackend(agent, defaults) === "native"`
+    //      — the operator hasn't flipped to the fork rollback path.
+    //   2. `advisorBudget.canCall(agent) !== false`
+    //      — the per-day cap is not exhausted (RESEARCH §13.5
+    //      mitigation B: omit advisorModel on exhaustion). When the
+    //      budget is undefined (tests, bootstrap), this leg is
+    //      treated as PASS so default-configured agents in test
+    //      paths still get the field — production wires the budget
+    //      via `SessionManager.setAdvisorBudget` so this is safe.
+    //
+    // The resolved value is run through the SDK alias resolver
+    // (`resolveAdvisorModelAlias`) so the config-level `"opus"`
+    // becomes the canonical `"claude-opus-4-7"` before reaching the
+    // SDK (RESEARCH §13.7 — Anthropic's docs name this exact alias).
+    ...(shouldEnableAdvisor(config, deps)
+      ? {
+          advisorModel: resolveAdvisorModelAlias(
+            resolveAdvisorModelConfig(
+              config as unknown as { advisor?: { model?: string } },
+              deps.advisorDefaults,
+            ),
+          ),
+        }
+      : {}),
   };
+}
+
+/**
+ * Phase 117 Plan 04 T05 — should we hand `advisorModel` to the SDK?
+ *
+ * Two gates evaluated, both must pass:
+ *
+ *   (a) **Backend = native.** When `resolveAdvisorBackend(agent, defaults)`
+ *       returns `"fork"`, the agent's `ask_advisor` invocations route
+ *       through `LegacyForkAdvisor` (Plan 117-03) instead — the native
+ *       SDK server tool MUST NOT also be enabled or the model would
+ *       have two parallel advisor surfaces. Defaults to `"native"`
+ *       when neither side specifies (loader baseline).
+ *
+ *   (b) **Budget not exhausted.** If `AdvisorBudget.canCall(agent)`
+ *       returns `false`, the daily cap is hit; omit `advisorModel` on
+ *       the next session reload so the SDK does not re-fire the
+ *       server tool. Per RESEARCH §13.5: this is mitigation B (omit
+ *       advisorModel) — the cheap mitigation. The risk that prior
+ *       `advisor_tool_result` blocks remaining in history could
+ *       produce a `400 invalid_request_error` is the documented
+ *       soft-cap acceptance (RESEARCH §13.5 paragraph ending
+ *       "accept the daily-cap-soft-limit risk").
+ *
+ * When `advisorBudget` is undefined (tests, bootstrap paths before
+ * daemon DI fires), this leg defaults to PASS — agents with budget
+ * not yet wired get the advisor by default, matching the production
+ * fleet default of `defaults.advisor.backend: native`.
+ */
+function shouldEnableAdvisor(
+  config: ResolvedAgentConfig,
+  deps: SessionConfigDeps,
+): boolean {
+  // Loader resolvers accept structural types — `config as unknown as ...`
+  // is the minimum-coupling cast since `ResolvedAgentConfig` does not
+  // currently expose the `advisor?` field on its type (Plan 117-06 only
+  // adds it to the raw schema, not the resolved-type alias). The runtime
+  // value is read off `config.advisor` if operator set it; otherwise the
+  // resolver falls back through `deps.advisorDefaults?.advisor`.
+  const backend = resolveAdvisorBackendConfig(
+    config as unknown as { advisor?: { backend?: string } },
+    deps.advisorDefaults,
+  );
+  if (backend !== "native") return false;
+  if (deps.advisorBudget && !deps.advisorBudget.canCall(config.name)) {
+    return false;
+  }
+  return true;
 }
