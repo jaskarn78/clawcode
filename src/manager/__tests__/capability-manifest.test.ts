@@ -458,6 +458,117 @@ describe("buildCapabilityManifest", () => {
     expect(manifest).toMatch(/vault-scoped/);
   });
 
+  // ---------------------------------------------------------------------------
+  // Phase 117 Plan 08 — Advisor awareness block (2026-05-13)
+  //
+  // Capability-manifest injects (a) an "Advisor (Opus)" bullet listing
+  // `advisor()` as a server-tool and (b) an "## Advisor protocol" prose
+  // section with the canonical timing-prompt. Source-of-truth for the prose
+  // is `src/advisor/prompts.ts::buildAgentAwarenessBlock`. The injection is
+  // gated on `resolveAdvisorBackend(config) ∈ {native, fork}` — always true
+  // post-117-06 given the default `native`, but the gate exists for future
+  // operators who explicitly disable advisor.
+  //
+  // The manifest's "minimal agent → empty string" rule still wins: a
+  // baseline agent (no dream/schedules/skills/gsd/etc.) gets ""; the
+  // advisor block does NOT itself count as an opt-in (matching the file
+  // philosophy of "don't bloat minimal agents").
+  // ---------------------------------------------------------------------------
+
+  it("CM-ADV-A (native): non-minimal agent with default backend → 'Advisor (Opus)' bullet + '## Advisor protocol' present; no '(legacy fork backend' qualifier", () => {
+    // gsd present ⇒ manifest is non-empty; resolveAdvisorBackend defaults
+    // to "native" because makeConfig has no `advisor` field.
+    const cfg = makeConfig({
+      gsd: { projectDir: "/tmp/p" },
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Advisor (Opus)");
+    expect(manifest).toContain("advisor()");
+    expect(manifest).toContain("Budget: 10 calls/day");
+    expect(manifest).toContain("💭 reaction");
+    expect(manifest).toContain("## Advisor protocol");
+    expect(manifest).toContain("BEFORE substantive work");
+    expect(manifest).toContain("spawn_subagent_thread");
+    // Native path: no legacy-fork qualifier.
+    expect(manifest).not.toContain("legacy fork backend");
+  });
+
+  it("CM-ADV-B (fork): agent with advisor.backend='fork' → bullet carries '(legacy fork backend — operator rollback path)' qualifier", () => {
+    // advisor.backend is not part of ResolvedAgentConfig today (resolver
+    // duck-types via `agent?.advisor?.backend`). The cast simulates a
+    // future config carrying the field; resolveAdvisorBackend returns
+    // "fork" for it.
+    const cfg = makeConfig({
+      gsd: { projectDir: "/tmp/p" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (cfg as any).advisor = { backend: "fork" };
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Advisor (Opus)");
+    expect(manifest).toContain(
+      "(legacy fork backend — operator rollback path)",
+    );
+    expect(manifest).toContain("## Advisor protocol");
+  });
+
+  it("CM-ADV-C (defensive, skipped): future 'none' backend would suppress the advisor bullet — guarded by the resolver narrowing today", () => {
+    // The resolver narrows to "native" | "fork", so a "none"-like state is
+    // unreachable in 117 scope. This test documents the manifest's gate
+    // intent: `(backend === "native" || backend === "fork")` is the
+    // suppression hook for a future operator-disabled advisor mode. If a
+    // future plan widens BackendId, the gate suppresses the bullet without
+    // needing a test refactor. Today the gate is always true.
+    //
+    // Sanity check: with the resolver's current contract, every non-empty
+    // manifest carries the advisor bullet. (Inverse direction of A/B.)
+    const cfg = makeConfig({ gsd: { projectDir: "/tmp/p" } });
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toContain("Advisor (Opus)");
+  });
+
+  it("CM-ADV-D (single injection): bullet appears exactly once in the assembled manifest", () => {
+    const cfg = makeConfig({
+      dream: { enabled: true, idleMinutes: 30, model: "haiku" },
+      schedules: [
+        { name: "tick", cron: "*/5 * * * *", prompt: "tick", enabled: true },
+      ],
+      skills: ["subagent-thread"],
+      gsd: { projectDir: "/tmp/p" },
+      mcpServers: [
+        {
+          name: "clawcode",
+          command: "clawcode",
+          args: ["mcp"],
+          env: {},
+          optional: false,
+        },
+      ],
+      fileAccess: ["/srv/shared/"],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect((manifest.match(/Advisor \(Opus\)/g) ?? []).length).toBe(1);
+    expect((manifest.match(/## Advisor protocol/g) ?? []).length).toBe(1);
+  });
+
+  it("CM-ADV-MINIMAL: baseline agent (no opt-ins) still returns '' — advisor block does NOT itself force a non-empty manifest", () => {
+    // Matches CM-4 / CM-4b philosophy: the advisor bullet only rides
+    // alongside other opt-ins. Truly minimal agents pay no prompt cost.
+    const cfg = makeConfig({
+      dream: undefined,
+      schedules: [],
+      skills: [],
+      gsd: undefined,
+      fileAccess: undefined,
+      mcpServers: [],
+    });
+
+    const manifest = buildCapabilityManifest(cfg);
+    expect(manifest).toBe("");
+  });
+
   it("CM-MCP-VAULT-2: 1password server without mcpEnvOverrides → no vault-scoped annotation (inherits daemon scope)", () => {
     const cfg = makeConfig({
       mcpServers: [
