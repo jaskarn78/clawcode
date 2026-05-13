@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
 import type { Message, Collection, Attachment, Embed } from "discord.js";
 import { DiscordBridge } from "../bridge.js";
+
+// Plan 117-09 — `sessionManager.advisorEvents` (added in 117-04) is now
+// consumed by the bridge. Stale test mocks predate that surface; supply
+// a real EventEmitter so listener registration in streamAndPostResponse
+// does not throw. Per-test stubs that need to emit events can replace
+// this with their own emitter.
+const fakeAdvisorEvents = new EventEmitter();
 
 /**
  * Wave 0 RED tests for DiscordBridge tracing integration.
@@ -103,6 +111,7 @@ describe("DiscordBridge tracing", () => {
         streamFromAgent: mockStreamFromAgent,
         getAgentConfig: mockGetAgentConfig,
         getTraceCollector: mockGetTraceCollector,
+        advisorEvents: fakeAdvisorEvents,
       } as any,
       webhookManager: fakeWebhookManager as any,
       botToken: "fake-token",
@@ -231,6 +240,7 @@ describe("typing indicator (Phase 54)", () => {
         streamFromAgent: mockStreamFromAgent,
         getAgentConfig: mockGetAgentConfig,
         getTraceCollector: mockGetTraceCollector,
+        advisorEvents: fakeAdvisorEvents,
       } as any,
       webhookManager: fakeWebhookManager as any,
       securityPolicies: opts.securityPolicies as any,
@@ -499,6 +509,7 @@ describe("streamAndPostResponse streaming cadence wire (Phase 54)", () => {
         streamFromAgent: mockStreamFromAgent,
         getAgentConfig: mockGetAgentConfig,
         getTraceCollector: mockGetTraceCollector,
+        advisorEvents: fakeAdvisorEvents,
       } as any,
       botToken: "fake-token",
       log: fakeLog as any,
@@ -683,6 +694,7 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
         getAgentConfig: mockGetAgentConfig,
         getTraceCollector: mockGetTraceCollector,
         hasActiveTurn: hasActiveTurnMock,
+        advisorEvents: fakeAdvisorEvents,
       } as any,
       webhookManager: fakeWebhookManager as any,
       botToken: "fake-token",

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
 import type { Message, Collection, Attachment } from "discord.js";
 import type { DownloadResult, AttachmentInfo } from "../attachment-types.js";
 
@@ -183,9 +184,15 @@ describe("handleMessage attachment integration", () => {
   const mockStreamFromAgent = vi.fn();
   const mockGetAgentConfig = vi.fn();
 
+  // Plan 117-09 — `sessionManager.advisorEvents` (added in 117-04) is now
+  // consumed by the bridge. Supply a real EventEmitter so the listener
+  // registration in streamAndPostResponse does not throw.
+  const fakeAdvisorEvents = new EventEmitter();
+
   const fakeSessionManager = {
     streamFromAgent: mockStreamFromAgent,
     getAgentConfig: mockGetAgentConfig,
+    advisorEvents: fakeAdvisorEvents,
   };
 
   const fakeRoutingTable = {

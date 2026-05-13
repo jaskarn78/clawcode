@@ -25,7 +25,11 @@ import {
   formatAttachmentMetadata,
   isImageAttachment,
 } from "./attachments.js";
-import { formatReactionEvent } from "./reactions.js";
+import { formatReactionEvent, addReaction } from "./reactions.js";
+import type {
+  AdvisorInvokedEvent,
+  AdvisorResultedEvent,
+} from "../advisor/types.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
 import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { WebhookManager } from "./webhook-manager.js";
@@ -179,6 +183,21 @@ export class DiscordBridge {
    * inject a fake by direct assignment to `(bridge as any).messageCoalescer`.
    */
   private messageCoalescer: MessageCoalescer = new MessageCoalescer();
+
+  /**
+   * Plan 117-09 — level-aware visibility seam (RESEARCH §13.2).
+   *
+   * Today defaults to `undefined`, so the footer mutation at the single
+   * injection point (`streamAndPostResponse:739-area`) falls through to
+   * the `"normal"` branch (reaction + footer only, no plaintext advice).
+   *
+   * Plan 117-11 attaches a real `VerboseState` instance and the
+   * `/verbose` slash command toggles per-channel level; the `"verbose"`
+   * branch in the mutation then renders an inline fenced advice block.
+   * Tests in Plan 117-09 inject a stub via `(bridge as any).verboseState`
+   * to exercise the verbose seam without depending on 117-11.
+   */
+  private verboseState: { getLevel(channelId: string): "normal" | "verbose" } | undefined;
 
   /**
    * Expose the Discord client for use by SubagentThreadSpawner.
@@ -712,25 +731,61 @@ export class DiscordBridge {
       // of turn.end() so it can fire on success/error in the try/catch
       // below. TurnDispatcher on the caller-owned-Turn path calls
       // turn.recordOrigin(origin) but NOT turn.end().
+      //
+      // Plan 117-09 (RESEARCH §2 Gate 3, §4.5, §6 Pitfall 1, §13.12 A13) —
+      // register `advisor:invoked` / `advisor:resulted` listeners on
+      // `sessionManager.advisorEvents` ONLY for the duration of this turn's
+      // dispatch. The closure (`didConsultAdvisor`, `lastAdvisorResult`)
+      // IS the per-turn scope; the register-around-dispatch pattern means
+      // listeners are GC'd naturally at turn end and cannot leak across
+      // turns. The agent-name guard (`ev.agent !== sessionName`) filters
+      // events that belong to a different agent's concurrent turn.
+      //
+      // RESEARCH §13.9 / §13.13 Pitfall 8: the standalone-runner branch
+      // (`this.turnDispatcher === undefined`) goes through
+      // `sessionManager.streamFromAgent`, which does NOT thread the
+      // advisor observer that emits these events. That bypass is
+      // accepted (production daemon always injects `turnDispatcher`).
       let response: string;
-      if (this.turnDispatcher) {
-        const turnId = `${DISCORD_SNOWFLAKE_PREFIX}${message.id}`;
-        const origin = makeRootOriginWithTurnId("discord", message.id, turnId);
-        response = await this.turnDispatcher.dispatchStream(
-          origin,
-          sessionName,
-          formattedMessage,
-          (accumulated) => editor!.update(accumulated),
-          { turn, channelId },
-        );
-      } else {
-        // v1.7 fallback — preserves standalone runner (src/cli/commands/run.ts)
-        response = await this.sessionManager.streamFromAgent(
-          sessionName,
-          formattedMessage,
-          (accumulated) => editor!.update(accumulated),
-          turn,
-        );
+      let didConsultAdvisor = false;
+      let lastAdvisorResult:
+        | { kind: AdvisorResultedEvent["kind"]; text?: string; errorCode?: string }
+        | null = null;
+      const onInvoked = (ev: AdvisorInvokedEvent): void => {
+        if (ev.agent !== sessionName) return;
+        didConsultAdvisor = true;
+        // Fire-and-forget — addReaction swallows errors itself.
+        void addReaction(message, "💭");
+      };
+      const onResulted = (ev: AdvisorResultedEvent): void => {
+        if (ev.agent !== sessionName) return;
+        lastAdvisorResult = { kind: ev.kind, text: ev.text, errorCode: ev.errorCode };
+      };
+      this.sessionManager.advisorEvents.on("advisor:invoked", onInvoked);
+      this.sessionManager.advisorEvents.on("advisor:resulted", onResulted);
+      try {
+        if (this.turnDispatcher) {
+          const turnId = `${DISCORD_SNOWFLAKE_PREFIX}${message.id}`;
+          const origin = makeRootOriginWithTurnId("discord", message.id, turnId);
+          response = await this.turnDispatcher.dispatchStream(
+            origin,
+            sessionName,
+            formattedMessage,
+            (accumulated) => editor!.update(accumulated),
+            { turn, channelId },
+          );
+        } else {
+          // v1.7 fallback — preserves standalone runner (src/cli/commands/run.ts)
+          response = await this.sessionManager.streamFromAgent(
+            sessionName,
+            formattedMessage,
+            (accumulated) => editor!.update(accumulated),
+            turn,
+          );
+        }
+      } finally {
+        this.sessionManager.advisorEvents.off("advisor:invoked", onInvoked);
+        this.sessionManager.advisorEvents.off("advisor:resulted", onResulted);
       }
 
       clearInterval(typingInterval);
