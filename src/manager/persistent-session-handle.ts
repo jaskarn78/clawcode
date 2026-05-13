@@ -29,7 +29,16 @@ import type {
   UsageCallback,
   PrefixHashProvider,
   SkillTrackingConfig,
+  AdvisorObserverConfig,
 } from "./session-adapter.js";
+// Phase 117 Plan 04 T03 — typed advisor event payloads. The observer
+// emits the two events via `advisorObserver.advisorEvents.emit(name, payload)`
+// where payload conforms to these shapes. RESEARCH §13.10 — emitter
+// ownership lives on SessionManager; payload shapes live in src/advisor/types.ts.
+import type {
+  AdvisorInvokedEvent,
+  AdvisorResultedEvent,
+} from "../advisor/types.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
@@ -160,6 +169,11 @@ export function createPersistentSessionHandle(
   usageCallback?: UsageCallback,
   prefixHashProvider?: PrefixHashProvider,
   skillTracking?: SkillTrackingConfig,
+  // Phase 117 Plan 04 T03/T04 — native advisor observer. Threaded
+  // through from SessionManager.makeAdvisorObserver(agent); when
+  // absent (test paths, fork-backend agents, missing budget) the
+  // observer is a no-op. RESEARCH §13.10 (production wiring).
+  advisorObserver?: AdvisorObserverConfig,
 ): SessionHandle {
   const inputQueue = new AsyncPushQueue<SdkUserMessage>();
   const turnQueue = new SerialTurnQueue();
@@ -301,8 +315,50 @@ export function createPersistentSessionHandle(
 
   /** Safely invoke the UsageCallback with a result message. */
   function extractUsage(msg: SdkStreamMessage): void {
-    if (!usageCallback) return;
     if (msg.type !== "result") return;
+
+    // Phase 117 Plan 04 T04 — ground-truth advisor iteration count
+    // (RESEARCH §2.1 parse-site B + §13.6 message_delta).
+    //
+    // The terminal SDKResultMessage's `usage.iterations[]` is the
+    // authoritative count of every advisor sub-inference that fired
+    // during the turn (filtered on `type === "advisor_message"`).
+    // Each entry consumes one daily-budget slot. The per-block scan
+    // at iterateUntilResult :579 (T03) is the EARLY signal for
+    // Discord visibility; only this terminal path charges the budget
+    // (RESEARCH §6 Pitfall 4 — no double-record).
+    //
+    // Observational ONLY: any failure (missing iterations, malformed
+    // entry, AdvisorBudget DB write error) is silently swallowed so
+    // the message path is never broken (matches the existing
+    // usageCallback try/catch immediately below).
+    if (advisorObserver) {
+      try {
+        const iterations = (msg as { usage?: { iterations?: unknown[] | null } })
+          .usage?.iterations;
+        if (Array.isArray(iterations)) {
+          for (const entry of iterations) {
+            if (
+              entry !== null &&
+              typeof entry === "object" &&
+              (entry as { type?: unknown }).type === "advisor_message"
+            ) {
+              try {
+                advisorObserver.advisorBudget.recordCall(
+                  advisorObserver.agentName,
+                );
+              } catch {
+                // DB write failed — keep iterating, never break message path
+              }
+            }
+          }
+        }
+      } catch {
+        // observational only — never break the message path
+      }
+    }
+
+    if (!usageCallback) return;
     try {
       const result = msg as {
         total_cost_usd?: number;
@@ -576,8 +632,34 @@ export function createPersistentSessionHandle(
                 // Observational only — never break the message path.
               }
 
+              // Phase 117 Plan 04 T03 — pending advisor tool_use id, scoped
+              // to THIS assistant message's content[]. Per RESEARCH §13.3,
+              // `server_tool_use{name:"advisor"}` and the matching
+              // `advisor_tool_result` block arrive in the SAME assistant
+              // message's content array (typically with text blocks around
+              // them); the id correlator must outlive a single loop
+              // iteration but reset between assistant messages. The advisor
+              // server tool is single-call-per-turn under the SDK's default
+              // max_uses (RESEARCH §13.5) — message-scope is sufficient.
+              let pendingAdvisorToolUseId: string | null = null;
+              // Capture the assistant message's uuid for turnId correlation
+              // (RESEARCH §13.10 — AdvisorInvokedEvent.turnId carries the
+              // SDK message id so listeners can match :invoked → :resulted
+              // pairs even across interleaved per-agent streams).
+              const messageUuid =
+                typeof (msg as { uuid?: unknown }).uuid === "string"
+                  ? (msg as { uuid: string }).uuid
+                  : sessionId;
+
               for (const raw of contentBlocks) {
-                const block = raw as { type?: string; name?: string; id?: string; text?: string };
+                const block = raw as {
+                  type?: string;
+                  name?: string;
+                  id?: string;
+                  text?: string;
+                  tool_use_id?: string;
+                  content?: unknown;
+                };
                 if (block.type === "text" && !firstTokenEnded) {
                   firstToken?.end();
                   firstTokenEnded = true;
@@ -602,6 +684,96 @@ export function createPersistentSessionHandle(
                       openedAtMs: Date.now(),
                     });
                   }
+                }
+                // Phase 117 Plan 04 T03 — native advisor observation
+                // (corrected per RESEARCH §13.1 + §13.3 + §13.4).
+                //
+                // Two block shapes to observe inside the SAME content[]:
+                //
+                //   1. `server_tool_use{name:"advisor"}` — the executor
+                //      signals "consult advisor now." Per §13.1 the
+                //      `input` is ALWAYS empty `{}`; the advisor builds
+                //      its view from the full transcript server-side, so
+                //      we deliberately do NOT extract a `question`.
+                //      Emit `advisor:invoked` carrying the toolUseId for
+                //      pair correlation.
+                //
+                //   2. `advisor_tool_result` — the advisor's answer (or
+                //      redaction / error). Per §13.4 the `content` field
+                //      is a discriminated union of three variants. Emit
+                //      `advisor:resulted` with the discriminant in `kind`
+                //      and the variant-specific payload in `text` or
+                //      `errorCode`.
+                //
+                // Wrapped in try/catch — observational only; RESEARCH §6
+                // Pitfall 1 + Pitfall 7 invariant: a listener throw MUST
+                // NOT break the message path.
+                if (
+                  advisorObserver &&
+                  block.type === "server_tool_use" &&
+                  block.name === "advisor" &&
+                  typeof block.id === "string"
+                ) {
+                  pendingAdvisorToolUseId = block.id;
+                  try {
+                    const payload: AdvisorInvokedEvent = {
+                      agent: advisorObserver.agentName,
+                      turnId: messageUuid,
+                      toolUseId: block.id,
+                    };
+                    advisorObserver.advisorEvents.emit(
+                      "advisor:invoked",
+                      payload,
+                    );
+                  } catch {
+                    // observational only — never break the message path
+                  }
+                }
+                if (
+                  advisorObserver &&
+                  block.type === "advisor_tool_result" &&
+                  typeof block.tool_use_id === "string" &&
+                  block.tool_use_id === pendingAdvisorToolUseId
+                ) {
+                  try {
+                    const content = block.content as
+                      | { type: "advisor_result"; text: string }
+                      | { type: "advisor_redacted_result"; encrypted_content: string }
+                      | { type: "advisor_tool_result_error"; error_code: string }
+                      | null
+                      | undefined;
+                    const kind =
+                      content && typeof content === "object" && "type" in content
+                        ? content.type
+                        : undefined;
+                    if (
+                      kind === "advisor_result" ||
+                      kind === "advisor_redacted_result" ||
+                      kind === "advisor_tool_result_error"
+                    ) {
+                      const payload: AdvisorResultedEvent = {
+                        agent: advisorObserver.agentName,
+                        turnId: messageUuid,
+                        toolUseId: pendingAdvisorToolUseId,
+                        kind,
+                        text:
+                          kind === "advisor_result"
+                            ? (content as { text: string }).text
+                            : undefined,
+                        errorCode:
+                          kind === "advisor_tool_result_error"
+                            ? (content as { error_code: string }).error_code
+                            : undefined,
+                      };
+                      advisorObserver.advisorEvents.emit(
+                        "advisor:resulted",
+                        payload,
+                      );
+                    }
+                  } catch {
+                    // observational only — never break the message path
+                  }
+                  pendingAdvisorToolUseId = null;
                 }
               }
             }

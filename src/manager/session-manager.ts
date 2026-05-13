@@ -77,6 +77,9 @@ import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 import type { SkillTrackingConfig } from "./session-adapter.js";
+// Phase 117 Plan 04 T03/T04/T05 — AdvisorBudget DI + observer wiring.
+import type { AdvisorBudget } from "../usage/advisor-budget.js";
+import type { AdvisorObserverConfig } from "./session-adapter.js";
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "./warm-path-check.js";
 import {
   performMcpReadinessHandshake,
@@ -555,6 +558,53 @@ export class SessionManager {
   }
 
   /**
+   * Phase 117 Plan 04 T05 — daemon-wide AdvisorBudget reference.
+   *
+   * Wired by daemon.ts AFTER SessionManager construction (daemon
+   * constructs the SQLite-backed AdvisorBudget at line ~2592, before
+   * SessionManager is constructed at line ~2401 in the existing boot
+   * order). Setter pattern mirrors `setWebhookManager` /
+   * `setBotDirectSender` so the constructor signature stays stable
+   * (15+ agent test fixtures rely on the existing shape).
+   *
+   * When unset (tests, bootstrap paths), `makeAdvisorObserver` returns
+   * undefined and the SDK adapter skips advisor-event observation +
+   * budget accounting. Native-backend agents in this state still
+   * function — the SDK enforces its own server-side `max_uses` cap;
+   * only the daily soft-cap goes uncharged. Documented as the
+   * acceptable graceful-degradation mode in RESEARCH §13.5.
+   */
+  private advisorBudget: AdvisorBudget | undefined = undefined;
+
+  setAdvisorBudget(budget: AdvisorBudget): void {
+    this.advisorBudget = budget;
+  }
+
+  /**
+   * Phase 117 Plan 04 T03/T04 — build the native-advisor observer wiring
+   * for a single agent. Returns undefined when the AdvisorBudget has
+   * not been injected (test paths) so the adapter's advisorObserver
+   * argument falls back to "no observation."
+   *
+   * Mirrors the `makeSkillTracking` pattern (line ~471 in this file) —
+   * a tiny factory invoked from startAgent / restartAgent right before
+   * the `adapter.createSession` / `resumeSession` call. Returning a
+   * fresh object each time keeps the observer config immutable per
+   * session-handle lifecycle, matching the existing observational
+   * contract for skill-mention tracking.
+   */
+  private makeAdvisorObserver(
+    agentName: string,
+  ): AdvisorObserverConfig | undefined {
+    if (!this.advisorBudget) return undefined;
+    return {
+      agentName,
+      advisorEvents: this.advisorEvents,
+      advisorBudget: this.advisorBudget,
+    };
+  }
+
+  /**
    * Phase 103 OBS-01 — inject the HeartbeatRunner reference so
    * `/clawcode-status` can read context-zone fillPercentage synchronously.
    * Called once by daemon.ts AFTER both SessionManager and HeartbeatRunner
@@ -881,6 +931,12 @@ export class SessionManager {
       usageCallback,
       this.makePrefixHashProvider(name),
       this.makeSkillTracking(config),
+      // Phase 117 Plan 04 T03/T04 — native advisor observer wiring.
+      // Returns undefined when AdvisorBudget hasn't been injected (test
+      // paths); production daemon sets the budget right after
+      // SessionManager construction so the observer is always present
+      // for the 15+ agent fleet.
+      this.makeAdvisorObserver(name),
     );
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
@@ -1990,6 +2046,12 @@ export class SessionManager {
             undefined,
             this.makePrefixHashProvider(entry.name),
             this.makeSkillTracking(config),
+            // Phase 117 Plan 04 T03/T04 — symmetric mirror of the
+            // createSession path above (Rule 3 symmetric-edits). A
+            // resumed session MUST attach the same advisor observer as
+            // the original create call so post-restart advisor events
+            // continue to fire on the daemon-wide EventEmitter.
+            this.makeAdvisorObserver(entry.name),
           );
           this.sessions.set(entry.name, handle);
           this.configs.set(entry.name, config);

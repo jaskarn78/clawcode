@@ -2592,6 +2592,15 @@ export async function startDaemon(
   const advisorBudget = new AdvisorBudget(advisorBudgetDb);
   log.info("advisor budget initialized");
 
+  // Phase 117 Plan 04 T05 — inject the AdvisorBudget into SessionManager so
+  // `makeAdvisorObserver(agent)` returns a real observer (and the SDK
+  // adapter records `advisor_message` iterations + emits advisor events
+  // for the Discord bridge in Plan 117-09). Setter DI mirrors the
+  // existing setWebhookManager / setBotDirectSender pattern — the budget
+  // is constructed AFTER SessionManager so the constructor signature
+  // stays stable (15+ agent test fixtures rely on that shape).
+  manager.setAdvisorBudget(advisorBudget);
+
   // 6-quater. Create TaskManager singleton (Phase 59 Plan 03).
   // Depends on: taskStore (6-ter), turnDispatcher (6-bis), escalationBudget (6a),
   // resolvedAgents (5a), and a SchemaRegistry loaded from ~/.clawcode/task-schemas/.

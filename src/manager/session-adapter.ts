@@ -12,6 +12,17 @@ import {
   type SkillUsageTracker,
   extractSkillMentions,
 } from "../usage/skill-usage-tracker.js";
+// Phase 117 Plan 04 T03/T04 — native advisor budget observer (typed deps).
+// `EventEmitter` is the bus exposed on SessionManager.advisorEvents; the
+// adapter emits the two observational events on it. `AdvisorBudget`
+// receives recordCall per `usage.iterations[].type === "advisor_message"`
+// entry at the terminal `result` event (ground-truth count per RESEARCH §13.6).
+import type { EventEmitter } from "node:events";
+import type { AdvisorBudget } from "../usage/advisor-budget.js";
+import type {
+  AdvisorInvokedEvent,
+  AdvisorResultedEvent,
+} from "../advisor/types.js";
 import { createPersistentSessionHandle } from "./persistent-session-handle.js";
 // Phase 115 sub-scope 14 — fs/os/path imports for the diagnostic baseopts
 // dump helper. T03 collapsed the previous TWO separate imports (a top-of-
@@ -298,6 +309,53 @@ export type SkillTrackingConfig = {
 };
 
 /**
+ * Phase 117 Plan 04 T03/T04 — native advisor observer wiring.
+ *
+ * Threaded into the adapter so `iterateWithTracing` can:
+ *
+ *   1. Scan each parent assistant message's `content[]` for the pair
+ *      `server_tool_use{name:"advisor"}` + `advisor_tool_result` and
+ *      emit `advisor:invoked` / `advisor:resulted` on `advisorEvents`
+ *      (RESEARCH §13.1 — `server_tool_use.input` is always empty `{}`;
+ *      §13.3 — both blocks arrive in the SAME assistant message's
+ *      `content[]`; §13.4 — three result-content variants).
+ *
+ *   2. At the terminal `result` event, count
+ *      `usage.iterations[].type === "advisor_message"` entries and call
+ *      `advisorBudget.recordCall(agentName)` ONCE PER ITERATION (ground-
+ *      truth count per RESEARCH §13.6). The per-block scan in step 1 is
+ *      the EARLY signal for Discord visibility; only the terminal event
+ *      charges the budget — they must NOT double-record (RESEARCH §6
+ *      Pitfall 4 boundary). The block scan emits events; the result
+ *      iteration parser records the call. Different responsibilities.
+ *
+ * Observational ONLY (RESEARCH §6 Pitfall 1 + Pitfall 7 invariant):
+ * every emit and recordCall is wrapped in try/catch in the adapter so a
+ * listener throw or a DB write failure cannot break the parent message
+ * path. The adapter mirrors the existing `skillTracking` observational
+ * contract — same fail-silent guardrails (line 1722 in this file).
+ *
+ * Optional throughout — when absent (test paths, agents with the fork
+ * backend, agents that explicitly disabled the advisor in config), the
+ * observer is a no-op. Production SessionManager threads this in via
+ * `makeAdvisorObserver(agentName)` once `advisorBudget` is wired through
+ * `SessionManagerOptions` (daemon edge).
+ *
+ * See:
+ *   - `src/advisor/types.ts` — `AdvisorInvokedEvent`, `AdvisorResultedEvent`
+ *     event payload shapes.
+ *   - `src/usage/advisor-budget.ts` — `AdvisorBudget.recordCall(agent)`.
+ *   - `.planning/phases/117-claude-code-advisor-pattern-multi-backend-scaffold-anthropic/117-RESEARCH.md`
+ *     §2.1 (parse strategy), §13.1/13.3/13.4 (block shapes), §13.6
+ *     (terminal-event iterations), §13.10 (emitter ownership).
+ */
+export type AdvisorObserverConfig = {
+  readonly agentName: string;
+  readonly advisorEvents: EventEmitter;
+  readonly advisorBudget: AdvisorBudget;
+};
+
+/**
  * Callback invoked after each SDK send/sendAndCollect with usage data
  * extracted from the result message.
  */
@@ -465,6 +523,9 @@ export type SessionAdapter = {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    // Phase 117 Plan 04 T03/T04 — native advisor observer. Optional so
+    // mock adapters / test paths / fork-backend agents skip it.
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle>;
   resumeSession(
     sessionId: string,
@@ -472,6 +533,7 @@ export type SessionAdapter = {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle>;
 };
 
@@ -739,6 +801,10 @@ export class MockSessionAdapter implements SessionAdapter {
   readonly usageCallbacks: Map<string, UsageCallback> = new Map();
   readonly prefixHashProviders: Map<string, PrefixHashProvider> = new Map();
   readonly skillTrackingConfigs: Map<string, SkillTrackingConfig> = new Map();
+  // Phase 117 Plan 04 T03/T04 — mirror the observer wiring on the mock
+  // so test paths can assert "advisor observer wired" without spinning
+  // up the SDK. Captured per-session for inspection by tests.
+  readonly advisorObservers: Map<string, AdvisorObserverConfig> = new Map();
   private counter = 0;
 
   async createSession(
@@ -746,6 +812,7 @@ export class MockSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     this.counter += 1;
     const sessionId = `mock-${config.name}-${this.counter}`;
@@ -760,6 +827,9 @@ export class MockSessionAdapter implements SessionAdapter {
     if (skillTracking) {
       this.skillTrackingConfigs.set(sessionId, skillTracking);
     }
+    if (advisorObserver) {
+      this.advisorObservers.set(sessionId, advisorObserver);
+    }
     return handle;
   }
 
@@ -769,6 +839,7 @@ export class MockSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     const existing = this.sessions.get(sessionId);
     if (usageCallback) {
@@ -779,6 +850,9 @@ export class MockSessionAdapter implements SessionAdapter {
     }
     if (skillTracking) {
       this.skillTrackingConfigs.set(sessionId, skillTracking);
+    }
+    if (advisorObserver) {
+      this.advisorObservers.set(sessionId, advisorObserver);
     }
     if (existing) {
       return existing;
@@ -920,6 +994,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
@@ -1004,6 +1079,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       usageCallback,
       prefixHashProvider,
       skillTracking,
+      advisorObserver,
     );
   }
 
@@ -1013,6 +1089,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
@@ -1078,6 +1155,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       usageCallback,
       prefixHashProvider,
       skillTracking,
+      advisorObserver,
     );
   }
 }
@@ -1160,13 +1238,54 @@ async function drainInitialQuery(
 /**
  * Extract usage data from an SDK result message and invoke the callback.
  * Wrapped in try/catch so extraction failures never break the send flow.
+ *
+ * Phase 117 Plan 04 T04 — ALSO counts `usage.iterations[].type ===
+ * "advisor_message"` entries on the terminal `result` event and calls
+ * `advisorObserver.advisorBudget.recordCall(agent)` once per iteration.
+ * Mirrors the production-path implementation in
+ * `persistent-session-handle.ts:extractUsage` so test-only callers
+ * (`createTracedSessionHandle`) exercise the same budget accounting.
+ * The per-block scan inside `iterateWithTracing` is the early Discord
+ * signal; this is the ground-truth budget charge (RESEARCH §13.6 +
+ * §6 Pitfall 4 — no double-record).
  */
 function extractUsage(
   msg: SdkStreamMessage,
   callback?: UsageCallback,
+  advisorObserver?: AdvisorObserverConfig,
 ): void {
-  if (!callback) return;
   if (msg.type !== "result") return;
+
+  // Advisor iteration counting (observational; same fail-silent
+  // contract as the rest of this function and as the production
+  // implementation in persistent-session-handle.ts).
+  if (advisorObserver) {
+    try {
+      const iterations = (msg as { usage?: { iterations?: unknown[] | null } })
+        .usage?.iterations;
+      if (Array.isArray(iterations)) {
+        for (const entry of iterations) {
+          if (
+            entry !== null &&
+            typeof entry === "object" &&
+            (entry as { type?: unknown }).type === "advisor_message"
+          ) {
+            try {
+              advisorObserver.advisorBudget.recordCall(
+                advisorObserver.agentName,
+              );
+            } catch {
+              // observational — never break message path
+            }
+          }
+        }
+      }
+    } catch {
+      // observational — never break message path
+    }
+  }
+
+  if (!callback) return;
   try {
     const costUsd = typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0;
     const usage = msg.usage;
@@ -1239,6 +1358,13 @@ function wrapSdkQuery(
   boundTurn?: Turn,
   prefixHashProvider?: PrefixHashProvider,
   skillTracking?: SkillTrackingConfig,
+  // Phase 117 Plan 04 T03/T04 — test-path mirror of the production
+  // observer wiring. `createTracedSessionHandle` accepts this on
+  // TracedSessionHandleOptions and forwards it here; the legacy
+  // iterateWithTracing loop emits the same advisor events + budget
+  // calls as createPersistentSessionHandle so both paths converge.
+  // No production caller reaches wrapSdkQuery (see @deprecated above).
+  advisorObserver?: AdvisorObserverConfig,
 ): SessionHandle {
   let sessionId = initialSessionId;
   // Phase 83 EFFORT-04 — widened to v2.2 EffortLevel set.
@@ -1485,8 +1611,24 @@ function wrapSdkQuery(
               // Observational only — never break the message path.
             }
 
+            // Phase 117 Plan 04 T03 — pending advisor tool_use id, scoped
+            // to THIS assistant message's content[]. See production
+            // mirror in persistent-session-handle.ts and RESEARCH §13.3.
+            let pendingAdvisorToolUseId: string | null = null;
+            const messageUuid =
+              typeof (msg as { uuid?: unknown }).uuid === "string"
+                ? (msg as { uuid: string }).uuid
+                : sessionId;
+
             for (const raw of contentBlocks) {
-              const block = raw as { type?: string; name?: string; id?: string; text?: string };
+              const block = raw as {
+                type?: string;
+                name?: string;
+                id?: string;
+                text?: string;
+                tool_use_id?: string;
+                content?: unknown;
+              };
               if (block.type === "text" && !firstTokenEnded) {
                 firstToken?.end();
                 firstTokenEnded = true;
@@ -1519,6 +1661,81 @@ function wrapSdkQuery(
                     openedAtMs: Date.now(),
                   });
                 }
+              }
+              // Phase 117 Plan 04 T03 — native advisor observation.
+              // Test-path mirror of the production-path implementation
+              // in persistent-session-handle.ts (single source of truth
+              // for the block-shape contract: RESEARCH §13.1 + §13.3 +
+              // §13.4). Both paths emit the same two events on the same
+              // EventEmitter (passed in via advisorObserver) so a test
+              // that uses createTracedSessionHandle exercises the exact
+              // listener wiring production uses.
+              if (
+                advisorObserver &&
+                block.type === "server_tool_use" &&
+                block.name === "advisor" &&
+                typeof block.id === "string"
+              ) {
+                pendingAdvisorToolUseId = block.id;
+                try {
+                  const payload: AdvisorInvokedEvent = {
+                    agent: advisorObserver.agentName,
+                    turnId: messageUuid,
+                    toolUseId: block.id,
+                  };
+                  advisorObserver.advisorEvents.emit(
+                    "advisor:invoked",
+                    payload,
+                  );
+                } catch {
+                  // observational only — never break the message path
+                }
+              }
+              if (
+                advisorObserver &&
+                block.type === "advisor_tool_result" &&
+                typeof block.tool_use_id === "string" &&
+                block.tool_use_id === pendingAdvisorToolUseId
+              ) {
+                try {
+                  const content = block.content as
+                    | { type: "advisor_result"; text: string }
+                    | { type: "advisor_redacted_result"; encrypted_content: string }
+                    | { type: "advisor_tool_result_error"; error_code: string }
+                    | null
+                    | undefined;
+                  const kind =
+                    content && typeof content === "object" && "type" in content
+                      ? content.type
+                      : undefined;
+                  if (
+                    kind === "advisor_result" ||
+                    kind === "advisor_redacted_result" ||
+                    kind === "advisor_tool_result_error"
+                  ) {
+                    const payload: AdvisorResultedEvent = {
+                      agent: advisorObserver.agentName,
+                      turnId: messageUuid,
+                      toolUseId: pendingAdvisorToolUseId,
+                      kind,
+                      text:
+                        kind === "advisor_result"
+                          ? (content as { text: string }).text
+                          : undefined,
+                      errorCode:
+                        kind === "advisor_tool_result_error"
+                          ? (content as { error_code: string }).error_code
+                          : undefined,
+                    };
+                    advisorObserver.advisorEvents.emit(
+                      "advisor:resulted",
+                      payload,
+                    );
+                  }
+                } catch {
+                  // observational only — never break the message path
+                }
+                pendingAdvisorToolUseId = null;
               }
             }
           }
@@ -1616,7 +1833,7 @@ function wrapSdkQuery(
 
         if (msg.type === "result") {
           if (msg.session_id) sessionId = msg.session_id;
-          extractUsage(msg, usageCallback);
+          extractUsage(msg, usageCallback, advisorObserver);
           // Phase 52 Plan 01: capture cache telemetry snapshot from msg.usage
           // onto the parent Turn. Caller-owned lifecycle preserved — we call
           // recordCacheUsage, NEVER turn.end() (50-02 invariant).
@@ -1972,6 +2189,15 @@ export type TracedSessionHandleOptions = {
   readonly turn?: Turn;
   readonly usageCallback?: UsageCallback;
   /**
+   * Phase 117 Plan 04 T03/T04 — native advisor observer for the test
+   * path. Forwarded into wrapSdkQuery so the legacy `iterateWithTracing`
+   * loop fires the SAME `advisor:invoked` / `advisor:resulted` events
+   * AND records the SAME budget calls as the production
+   * `createPersistentSessionHandle` path. Tests can subscribe to
+   * `advisorObserver.advisorEvents` directly to assert observer behavior.
+   */
+  readonly advisorObserver?: AdvisorObserverConfig;
+  /**
    * Phase 52 Plan 02 — optional per-turn prefixHash provider.
    *
    * Invoked from inside `iterateWithTracing` on every turn to compute
@@ -2011,5 +2237,6 @@ export function createTracedSessionHandle(opts: TracedSessionHandleOptions): Ses
     opts.turn,
     opts.prefixHashProvider,
     opts.skillTracking,
+    opts.advisorObserver,
   );
 }
