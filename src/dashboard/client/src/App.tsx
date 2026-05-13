@@ -36,7 +36,8 @@
  */
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useSseBridge } from './hooks/useSse'
-import { FleetLayout } from './layouts/FleetLayout'
+import { MissionControlLayout } from './layouts/MissionControlLayout'
+import { MissionHeader } from './components/mission-control/MissionHeader'
 import { CommandPalette } from './components/CommandPalette'
 import { ConfigEditor } from './components/ConfigEditor'
 import { ConversationsView } from './components/ConversationsView'
@@ -45,11 +46,14 @@ import { AgentDetailDrawer } from './components/AgentDetailDrawer'
 import { SettingsView } from './components/SettingsView'
 import { ActionToastHost } from './components/ActionToast'
 import { FleetComparisonTable } from './components/FleetComparisonTable'
-import { NotificationFeed } from './components/NotificationFeed'
-import { ThemeToggle } from './components/ThemeToggle'
-import { TelemetryBadge, useDashboardPageViewEmit } from './components/TelemetryBadge'
+import { useDashboardPageViewEmit } from './components/TelemetryBadge'
 import { DashboardErrorBoundary } from './components/DashboardErrorBoundary'
-import { Button } from '@/components/ui/button'
+// dash-redesign — route-scoped stylesheet for the Mission Control layout
+// AND header. Imported at the App level so the `.mc-header` styles reach
+// MissionHeader (which lives outside MissionControlLayout — header is
+// global across every route). Vite hoists this import to the entry
+// chunk, so all routes inherit the styles.
+import './layouts/mission-control.css'
 
 // Recharts is heavy (~70KB minified). Lazy-load the usage dashboard so the
 // eager bundle for the default Tier 1 view stays inside the plan budget.
@@ -175,118 +179,18 @@ function App() {
 
   return (
     <DashboardErrorBoundary>
-      <div className="border-b bg-background/60 px-4 py-2">
-        {/* 116-postdeploy fix-pass — header chrome fills the viewport on
-            mobile. Operator screenshot showed Dashboard/Fleet/Usage/…
-            clustered on the left with a large empty band on the right;
-            root cause was `max-w-7xl mx-auto` capping the header at
-            ~1280px even on a 375px iPhone, which left the right cluster
-            (bell + Telemetry + theme) floating mid-row instead of
-            edge-snapped.
-
-            Fix: drop the max-width cap below `xl` (1280px) so the bar
-            stretches edge-to-edge on phones, tablets, and laptops; keep
-            the cap on desktop+ where the content density justifies it.
-            Add horizontal-scroll to the nav cluster itself so a future
-            8th-or-9th tab doesn't truncate — operator can swipe through
-            tabs on a narrow viewport. The right cluster sticks to
-            `ml-auto` so it edge-snaps to the right margin regardless of
-            how many tabs fit. */}
-        <div className="mx-auto flex w-full xl:max-w-7xl items-center gap-2 text-sm">
-          {/* Page-link nav — horizontal scroll on narrow viewports keeps
-              every tab reachable without truncation. `whitespace-nowrap`
-              prevents the buttons from wrapping; `min-w-0` lets the flex
-              child actually shrink so `overflow-x-auto` engages. */}
-          <nav
-            className="flex items-center gap-1 overflow-x-auto whitespace-nowrap min-w-0 -mx-1 px-1"
-            aria-label="Dashboard sections"
-          >
-            {/* 116-postdeploy 2026-05-12 — operator-usage-frequency order.
-                Dashboard stays first (home glance). Tasks + Conversations
-                are the active operator surfaces (planning + live obs).
-                Memory moves UP because it's now the migration / consol-
-                idation driver (advance-phase + dream toggle). Usage is
-                glanced often but not interacted with. Fleet, OpenAI,
-                Audit, Graph trail off into config + forensics. */}
-            <ViewButton
-              active={view === 'dashboard'}
-              onClick={() => navigate('dashboard')}
-            >
-              Dashboard
-            </ViewButton>
-            <ViewButton
-              active={view === 'tasks'}
-              onClick={() => navigate('tasks')}
-            >
-              Tasks
-            </ViewButton>
-            <ViewButton
-              active={view === 'conversations'}
-              onClick={() => navigate('conversations')}
-            >
-              Conversations
-            </ViewButton>
-            <ViewButton
-              active={view === 'memory'}
-              onClick={() => navigate('memory')}
-            >
-              Memory
-            </ViewButton>
-            <ViewButton
-              active={view === 'benchmarks'}
-              onClick={() => navigate('benchmarks')}
-            >
-              Benchmarks
-            </ViewButton>
-            <ViewButton
-              active={view === 'usage'}
-              onClick={() => navigate('usage')}
-            >
-              Usage
-            </ViewButton>
-            <ViewButton
-              active={view === 'fleet'}
-              onClick={() => navigate('fleet')}
-            >
-              Fleet
-            </ViewButton>
-            <ViewButton
-              active={view === 'openai'}
-              onClick={() => navigate('openai')}
-            >
-              OpenAI
-            </ViewButton>
-            <ViewButton
-              active={view === 'audit'}
-              onClick={() => navigate('audit')}
-            >
-              Audit
-            </ViewButton>
-            <ViewButton
-              active={view === 'graph'}
-              onClick={() => navigate('graph')}
-            >
-              Graph
-            </ViewButton>
-          </nav>
-          {/* Right side — telemetry badge + notification bell + theme
-              toggle. `ml-auto` floats this cluster to the right edge so
-              it edge-snaps to the viewport regardless of how many nav
-              tabs are visible. `shrink-0` prevents the cluster from
-              compressing when the nav scrolls. */}
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            <TelemetryBadge />
-            <NotificationFeed />
-            <ThemeToggle />
-          </div>
-        </div>
-      </div>
+      {/* dash-redesign — top chrome lives in MissionHeader (brand cluster,
+          tab nav, heartbeat pill, TelemetryBadge + NotificationFeed +
+          ThemeToggle + settings gear). Mounted ONCE here above the view
+          switch so every route inherits the new chrome. The previous
+          Tailwind-styled chrome (`<div className="border-b …">`) was
+          removed wholesale — MissionHeader's `.mc-header` styles (route-
+          scoped CSS imported at the top of this file) own the layout. */}
+      <MissionHeader active={view} onNavigate={(v) => navigate(v as DashboardView)} />
 
       {view === 'dashboard' && (
-        <FleetLayout
-          onEditAgent={(name) => setEditingAgent(name)}
+        <MissionControlLayout
           onSelectAgent={(name) => setDrawerAgent(name)}
-          onNavigate={navigate}
         />
       )}
       {view === 'fleet' && <FleetComparisonTable />}
@@ -391,26 +295,6 @@ function App() {
           via showActionToast(). */}
       <ActionToastHost />
     </DashboardErrorBoundary>
-  )
-}
-
-function ViewButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <Button
-      variant={active ? 'default' : 'ghost'}
-      size="sm"
-      onClick={onClick}
-    >
-      {children}
-    </Button>
   )
 }
 
