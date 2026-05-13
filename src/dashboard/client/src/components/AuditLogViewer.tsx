@@ -146,21 +146,21 @@ export function AuditLogViewer(): JSX.Element {
     density === 'expanded' || expandedIdx.has(key)
 
   return (
-    <div className="mx-auto max-w-[1100px] px-4 py-6 lg:px-6">
-      {/* HEADER */}
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-display text-3xl font-bold tracking-tight text-fg-1">
-            Audit log
-          </h1>
-          <p className="mt-1 text-xs text-fg-3">
-            Every dashboard-originated mutation, append-only. Source:{' '}
+    <div className="mx-auto max-w-[1100px] px-7 py-6">
+      {/* dash-redesign sweep — section-head pattern. Source-of-truth
+          file path + entry count live in the .sub strip; the Refresh
+          button anchors right-aligned. */}
+      <div className="section-head mb-5">
+        <div className="flex items-baseline">
+          <h2>Audit log</h2>
+          <span className="sub">
+            every dashboard-originated mutation · append-only ·{' '}
             <code className="font-mono text-fg-2">
               {data?.filePath ?? 'dashboard-audit.jsonl'}
             </code>
-          </p>
+          </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <span className="font-mono text-xs text-fg-3">
             {filteredRows.length} entr{filteredRows.length === 1 ? 'y' : 'ies'}
           </span>
@@ -168,7 +168,7 @@ export function AuditLogViewer(): JSX.Element {
             Refresh
           </Button>
         </div>
-      </header>
+      </div>
 
       {/* WINDOW TAB STRIP */}
       <div
@@ -256,14 +256,11 @@ export function AuditLogViewer(): JSX.Element {
       ) : isLoading ? (
         <AuditSkeleton />
       ) : filteredRows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border bg-bg-elevated/30 p-10 text-center">
-          <p className="font-display text-base font-medium text-fg-2">
-            No audit entries
-          </p>
-          <p className="mx-auto mt-2 max-w-sm text-sm text-fg-3">
-            No entries match the current filters. Try widening the time window
-            or clearing the action / target filters.
-          </p>
+        // dash-redesign sweep — match the home view's empty-state copy
+        // tone (calm mono fallback) via the shared .feed-empty class.
+        <div className="feed-empty">
+          No audit entries match the current filters. Try widening the
+          time window or clearing the action / target filters.
         </div>
       ) : (
         <div className="space-y-8">
