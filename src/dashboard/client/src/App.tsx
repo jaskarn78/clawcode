@@ -4,7 +4,8 @@
  * `graph` (F24); heavy routes lazy-load.
  *
  * View enum (116-postdeploy):
- *   - 'dashboard'      → FleetLayout (Tier 1 — agent tile grid; default)
+ *   - 'dashboard'      → MissionControlLayout (dash-redesign; Hero +
+ *                        Fleet grid + Right rail + MCP strip)
  *   - 'fleet'          → FleetComparisonTable (F16 — 116-05)
  *   - 'usage'          → UsageDashboard (116-postdeploy; was 'costs')
  *   - 'conversations'  → ConversationsView (F27 — 116-03)
@@ -12,9 +13,11 @@
  *   - 'audit'          → AuditLogViewer (F23 — 116-06, lazy)
  *   - 'graph'          → GraphRoute (F24 — 116-06, lazy)
  *
- * Header (116-06):
- *   - Nav strip (left)
- *   - Telemetry badge + notification bell + theme toggle (right)
+ * Header (dash-redesign): <MissionHeader> renders once above the view
+ * switch — brand + tab nav + heartbeat pill + TelemetryBadge +
+ * NotificationFeed + ThemeToggle + settings gear + Cmd+K trigger.
+ * FleetLayout is retained on-disk as the legacy safety-net layout
+ * but no longer rendered.
  *
  * Path mapping (116-postdeploy):
  *   /dashboard/v2                → 'dashboard' (default)
