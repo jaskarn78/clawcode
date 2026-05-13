@@ -1320,3 +1320,132 @@ export async function runCleanupOrphans(
   }
   return (await res.json()) as CleanupOrphansResponse
 }
+
+// ---------------------------------------------------------------------------
+// 116-postdeploy 2026-05-13 — Benchmarks page hooks.
+//
+// Per-agent tool latency rollup (Section 1), benchmark trigger (Section 2),
+// cross-agent comparison (Section 3). Memory section reuses the rollup with
+// a client-side filter — no separate hook needed.
+// ---------------------------------------------------------------------------
+
+export type ToolPercentileRow = {
+  readonly tool: string
+  readonly count: number
+  readonly p50_ms: number | null
+  readonly p95_ms: number | null
+  readonly p99_ms: number | null
+  readonly slo_status?: 'ok' | 'warn' | 'breach' | 'unknown'
+  readonly slo_threshold_ms?: number | null
+  readonly slo_metric?: string | null
+}
+
+export type ToolsReport = {
+  readonly agent: string
+  readonly since: string
+  readonly tools: ReadonlyArray<ToolPercentileRow>
+}
+
+/**
+ * Per-agent tool latency rollup. Hits `/api/agents/:name/tools`.
+ */
+export function useAgentTools(
+  agentName: string | null,
+  since: string = '24h',
+): UseQueryResult<ToolsReport> {
+  return useQuery({
+    queryKey: ['agent-tools', agentName, since],
+    queryFn: () =>
+      fetchJson<ToolsReport>(
+        `/api/agents/${encodeURIComponent(agentName ?? '')}/tools?since=${encodeURIComponent(since)}`,
+      ),
+    enabled: agentName !== null && agentName.length > 0,
+    staleTime: 30_000,
+  })
+}
+
+export type BenchmarkScenario =
+  | 'discord-ack'
+  | 'tool-heavy'
+  | 'memory-recall'
+  | 'extended-thinking'
+
+export type BenchmarkRow = {
+  readonly index: number
+  readonly turnId: string | null
+  readonly headline_ms: number | null
+  readonly segments: Record<string, number>
+  readonly error: string | null
+}
+
+export type BenchmarkResult = {
+  readonly agent: string
+  readonly scenario: BenchmarkScenario
+  readonly iterations: number
+  readonly headlineSpan: string
+  readonly path: string
+  readonly startedAt: string
+  readonly finishedAt: string
+  readonly rows: ReadonlyArray<BenchmarkRow>
+  readonly aggregate: {
+    readonly runs: number
+    readonly errored: number
+    readonly p50_ms: number | null
+    readonly p95_ms: number | null
+    readonly mean_ms: number | null
+    readonly min_ms: number | null
+    readonly max_ms: number | null
+  }
+}
+
+export async function runBenchmark(
+  agentName: string,
+  scenario: BenchmarkScenario,
+  iterations: number,
+): Promise<BenchmarkResult> {
+  const res = await fetch(
+    `/api/agents/${encodeURIComponent(agentName)}/benchmark`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario, iterations }),
+    },
+  )
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(errBody.error ?? `benchmark ${res.status}`)
+  }
+  return (await res.json()) as BenchmarkResult
+}
+
+export type BenchmarkComparePoint = {
+  readonly agent: string
+  readonly value_ms: number | null
+  readonly count: number | null
+  readonly model: string | null
+  readonly error: string | null
+}
+
+export type BenchmarkCompareResponse = {
+  readonly metric: string
+  readonly since: string
+  readonly points: ReadonlyArray<BenchmarkComparePoint>
+}
+
+export function useBenchmarkCompare(
+  agents: ReadonlyArray<string>,
+  metric: string,
+  since: string = '24h',
+): UseQueryResult<BenchmarkCompareResponse> {
+  const key = [...agents].sort().join(',')
+  return useQuery({
+    queryKey: ['benchmark-compare', key, metric, since],
+    queryFn: () =>
+      fetchJson<BenchmarkCompareResponse>(
+        `/api/benchmarks/compare?agents=${encodeURIComponent(key)}&metric=${encodeURIComponent(metric)}&since=${encodeURIComponent(since)}`,
+      ),
+    enabled: agents.length > 0 && metric.length > 0,
+    staleTime: 30_000,
+  })
+}

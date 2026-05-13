@@ -80,6 +80,15 @@ const OpenAiView = lazy(() =>
 const MemoryView = lazy(() =>
   import('./components/MemoryView').then((m) => ({ default: m.MemoryView })),
 )
+// 116-postdeploy 2026-05-13 — operator-triggered per-agent benchmarks
+// (tool latency rollup + ad-hoc bench run + cross-agent compare + memory-op
+// rollup). Recharts is already a code-split chunk; lazy-loading the page
+// keeps the cold-load SPA bundle within the 1MB raw / 320KB gzip budget.
+const BenchmarksView = lazy(() =>
+  import('./components/BenchmarksView').then((m) => ({
+    default: m.BenchmarksView,
+  })),
+)
 
 export type DashboardView =
   | 'dashboard'
@@ -92,6 +101,7 @@ export type DashboardView =
   | 'settings'
   | 'openai'
   | 'memory'
+  | 'benchmarks'
 
 const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2': 'dashboard',
@@ -109,6 +119,7 @@ const PATH_TO_VIEW: Record<string, DashboardView> = {
   '/dashboard/v2/settings': 'settings',
   '/dashboard/v2/openai': 'openai',
   '/dashboard/v2/memory': 'memory',
+  '/dashboard/v2/benchmarks': 'benchmarks',
 }
 
 const VIEW_TO_PATH: Record<DashboardView, string> = {
@@ -122,6 +133,7 @@ const VIEW_TO_PATH: Record<DashboardView, string> = {
   settings: '/dashboard/v2/settings',
   openai: '/dashboard/v2/openai',
   memory: '/dashboard/v2/memory',
+  benchmarks: '/dashboard/v2/benchmarks',
 }
 
 function pathToView(path: string): DashboardView {
@@ -219,6 +231,12 @@ function App() {
               onClick={() => navigate('memory')}
             >
               Memory
+            </ViewButton>
+            <ViewButton
+              active={view === 'benchmarks'}
+              onClick={() => navigate('benchmarks')}
+            >
+              Benchmarks
             </ViewButton>
             <ViewButton
               active={view === 'usage'}
@@ -328,6 +346,17 @@ function App() {
           }
         >
           <MemoryView />
+        </Suspense>
+      )}
+      {view === 'benchmarks' && (
+        <Suspense
+          fallback={
+            <div className="mx-auto max-w-7xl p-4 text-sm text-fg-3">
+              Loading benchmarks…
+            </div>
+          }
+        >
+          <BenchmarksView />
         </Suspense>
       )}
 
