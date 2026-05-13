@@ -40,7 +40,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   useAgents,
   useAgentCache,
@@ -304,14 +303,20 @@ function FleetRow(props: {
 }
 
 function StatusBadge(props: { readonly status: string }): JSX.Element {
+  // dash-redesign sweep — use the kit's `.mc-dot` semantics instead of
+  // shadcn <Badge> color drift. Live agents pulse (live ring class);
+  // errored/crashed show warn dot; everything else is calm-idle.
   const s = props.status
-  if (s === 'running' || s === 'active') {
-    return <Badge className="bg-primary/20 text-primary border-primary/30">{s}</Badge>
-  }
-  if (s === 'errored' || s === 'crashed') {
-    return <Badge className="bg-danger/20 text-danger border-danger/30">{s}</Badge>
-  }
-  return <Badge className="bg-bg-elevated text-fg-3 border-bg-s3">{s}</Badge>
+  const isLive = s === 'running' || s === 'active'
+  const isWarn = s === 'errored' || s === 'crashed'
+  const tone = isLive ? 'ok' : isWarn ? 'warn' : 'idle'
+  const dotClass = `mc-dot ${isLive ? 'live ' : ''}${tone}`.trim()
+  return (
+    <span className="inline-flex items-center gap-2 font-mono text-[11px] text-fg-2">
+      <span className={dotClass} />
+      {s}
+    </span>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -499,15 +504,17 @@ export function FleetComparisonTable(): JSX.Element {
       : null
 
   return (
-    <div className="mx-auto max-w-7xl p-4">
-      <div className="mb-4">
-        <h1 className="font-display text-2xl font-bold text-fg-1">
-          Fleet comparison
-        </h1>
-        <p className="text-sm text-fg-3 font-sans">
-          All agents, side-by-side. Click any column header to sort. Export CSV for
-          off-line analysis.
-        </p>
+    <div className="mx-auto max-w-7xl px-7 py-6">
+      {/* dash-redesign sweep — section-head + .sub mirrors the home
+          view's MissionFleetGrid header. Body copy moves into the
+          subtitle slot so the scan path is heading → context → table. */}
+      <div className="section-head mb-5">
+        <div className="flex items-baseline">
+          <h2>Fleet comparison</h2>
+          <span className="sub">
+            click any column header to sort · CSV export below
+          </span>
+        </div>
       </div>
 
       {/* 116-06 F22 — fleet-wide 30-day activity heatmap. Sums turn
