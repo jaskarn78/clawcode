@@ -1,66 +1,65 @@
 # Backlog: Heartbeat Reply Leaks to User Channel
 
-## 999.48 — Daemon heartbeat probe replies leak into user-facing Discord channel, blocking real responses
+## 999.48 — Agent's internal cron-poll acknowledgment ("HEARTBEAT_OK") leaks into Discord channel instead of staying silent
 
-When the daemon fires its periodic context-health heartbeat (`heartbeat.every: 50m`), the agent's response — which is supposed to be the literal string `HEARTBEAT_OK` consumed internally — leaks into the agent's user-facing Discord channel. Worse: subsequent user messages sent within ~30–60 s of the heartbeat firing also get answered with `HEARTBEAT_OK` instead of a real reply. The user appears to be ignored until the heartbeat cycle clears.
+The `projects` agent runs a self-scheduled 5-minute cron poll against the `new-reel` tmux session (operator approved Option A — silent polling, set up earlier in the session). The agreed contract:
+
+- If `new-reel` is actively working → **stay silent** (no Discord post)
+- If `new-reel` hits a prompt / menu / permission ask → ping the operator with context
+- If `new-reel` session dies → tell operator, kill the cron
+- Default "nothing to report" signal → `HEARTBEAT_OK`, **meant to be internal**
+
+The bug: `HEARTBEAT_OK` is escaping the agent's internal monitor loop and being posted to the operator's Discord channel. Operator sees `HEARTBEAT_OK` as a reply to their own messages (`?`, `you there?`) and assumes the agent is unresponsive or stuck.
+
+**Important clarification (from `projects` agent self-report, 2026-05-13 15:40 PT):** this is NOT the daemon-level 50-min heartbeat (`heartbeat.every: 50m`, haiku model) that runs `Reply: HEARTBEAT_OK` for context-fill health. That is a separate mechanism. The `HEARTBEAT_OK` leaking here is the agent's *own* monitoring acknowledgment string for an *agent-owned* cron — same literal output, different source.
 
 ### Symptoms
 
-- 2026-05-13 ~15:30 PT — Operator pinged the `projects` agent (channel `1471307765401129002`) with multiple short queries (`?`, `you there?`). The agent replied `HEARTBEAT_OK` to each, then eventually surfaced a proper menu after ~1 minute.
-- Conversation transcript (verbatim, from projects channel):
+- 2026-05-13 ~15:30 PT — Operator pinged `projects` agent (channel `1471307765401129002`) with `?` and `you there?`. Agent replied `HEARTBEAT_OK` three times in five minutes. Operator surfaced this as confusing; looked like the agent was ignoring real messages.
+- Transcript:
   ```
-  ClawdyV2: HEARTBEAT_OK
-  Jas:      ?
-  ClawdyV2: 💠 new-reel needs you — numbered menu waiting. [...]
+  ClawdyV2: HEARTBEAT_OK             ← leaked cron-poll ack
   Jas:      you there?
-  ClawdyV2: HEARTBEAT_OK
+  ClawdyV2: HEARTBEAT_OK             ← leaked cron-poll ack
   Jas:      ?
-  ClawdyV2: HEARTBEAT_OK
+  ClawdyV2: HEARTBEAT_OK             ← leaked cron-poll ack
   ```
-- Pattern: heartbeat fires → 1–3 subsequent user-channel posts come back as `HEARTBEAT_OK` regardless of the user's actual question.
-- Operator surfaced this as confusing — looked like the agent was unresponsive, when actually the agent was alive but its replies were being mis-routed (or it was mis-interpreting heartbeat context as still in scope).
+- Real user messages eventually got real replies (~30–60 s later), so the agent is alive — its monitor output is just being routed to the wrong sink.
 
-### Root cause (hypotheses, ranked)
+### Root cause
 
-1. **Daemon routing bug** — heartbeat reply pathway not isolated from user-channel webhook posting. The string `HEARTBEAT_OK` is meant for an internal probe handler, but it's reaching the Discord webhook instead. Agent isolation between the haiku-driven heartbeat sub-call and the main agent session may not be tight enough.
-2. **Context pollution** — the heartbeat prompt is being injected into the same context window as user messages, so the agent treats short user pings (`?`, `you there?`) as still part of the heartbeat probe and replies in heartbeat-mode.
-3. **Sticky reply mode** — once the agent enters "minimal heartbeat reply" mode, it doesn't fully reset for 1–3 cycles, even when user messages arrive.
+The agent's cron poll runs through whatever message-sink path the agent uses for normal channel posts. The "no-op / nothing to report" signal needs a different output destination — either:
+- An internal log / state file the operator can inspect on demand, but NOT a Discord post
+- Or a dedicated monitor thread/channel, NOT the operator's main agent channel
+- Or simply: a NULL action when there's nothing to report
 
-Heartbeat config that fires this behavior (from `clawcode.yaml`):
+The contract says "stay silent" — but the implementation doesn't actually stay silent; it posts a sentinel string. Two distinct concerns:
 
-```yaml
-heartbeat:
-  every: 50m
-  model: haiku
-  prompt: |
-    # Context Health Monitor
-    1. Call session_status to get current token usage
-    2. Identify zone and act: ...
-    Reply: HEARTBEAT_OK
-```
-
-The `Reply: HEARTBEAT_OK` instruction is bare — no marker, no envelope. The daemon presumably greps for `HEARTBEAT_OK` and consumes it. If it doesn't (or if the same string also appears in user-channel output), the leak happens.
+1. **The contract is wrong** — "nothing to report = post HEARTBEAT_OK" should be "nothing to report = post nothing." Truly silent.
+2. **OR the contract is fine, but the routing is wrong** — `HEARTBEAT_OK` should go to an admin/observability channel (or stderr / a state file), not the user channel.
 
 ### Acceptance criteria
 
-- Heartbeat probe replies (`HEARTBEAT_OK`) never appear in a user-facing Discord channel
-- User messages sent within ±1 min of a heartbeat firing get real responses, not `HEARTBEAT_OK`
-- A heartbeat that returns a non-OK status (e.g. context fill warning) routes to operator alerting (admin channel), NOT to the user channel where the agent was working
-- The behavior is testable: send a synthetic message during heartbeat window and assert the agent replies normally
+- Cron poll acknowledgments do not appear in the operator's user-facing Discord channel
+- Operator messages sent during a poll cycle get real, contextually-relevant responses
+- Operator has an opt-in way to inspect monitor state ("show me the latest poll status") on demand
+- Fix is the agent's own design choice — projects agent maintains its own cron, so the fix lives in its skill/loop logic, not in the daemon
 
 ### Implementation notes
 
-- Likely fix is in the daemon's response router — branch on `isHeartbeatReply` (truthy if the agent invocation was triggered by the heartbeat scheduler) BEFORE deciding whether to post the response to a Discord webhook
-- Simpler: change the heartbeat prompt to require a wrapped marker (e.g. `<heartbeat>OK</heartbeat>`) that the daemon strips before any output gets near a webhook
-- Verify isolation: a heartbeat invocation should ideally be a completely separate session/process, not a turn inside the live user session. If it's currently a turn, switching to an out-of-band call removes the leak entirely
-- Test fixture: simulate heartbeat fire ±10 s of user message, assert correct routing
+- The projects agent owns this — operator should ask projects agent to fix its own monitor loop:
+  - "nothing to report" → log to local file or memory, don't post
+  - Only post to Discord on actionable state (yellow/red — prompt / dead / unreachable)
+- If a periodic "still alive" signal is needed for observer confidence, post to admin observability channel (admin-clawdy) instead of the agent's primary user channel — and frequency should be 30 min+, not 5 min
+- Test: run the monitor for 30 minutes against a known-quiet `new-reel` session, assert zero posts to the user channel
 
 ### Related
 
-- 999.44 — Agent-to-agent message delivery reliability (parallel routing problem; symptom-adjacent)
-- 999.45 — Hourglass-to-thumbs-up icon (UI signal that prompt-cycle completed; related to "is the agent alive" UX)
-- `feedback_recall_via_discord_history.md` — Operator already relies on Discord history when session summaries are lossy; heartbeat noise pollutes the transcript
+- 999.44 — Agent-to-agent message delivery reliability (parallel routing concern)
+- Daemon `heartbeat.every: 50m` config (separate mechanism, NOT the source of this bug)
+- Operator preference: silent monitoring (Option A, established earlier this session)
 
 ### Reporter
 
 Jas, 2026-05-13 15:36 PT
+Clarified by projects agent, 15:40 PT — root cause is agent's own cron-poll, not the daemon heartbeat
