@@ -77,3 +77,54 @@
  *
  * Class implementation lives below (filled in by Plan 117-04 T06).
  */
+
+import type { AdvisorBackend } from "./types.js";
+
+/**
+ * Native advisor backend — `BackendId === "native"`. The class is a
+ * code-aware MARKER ONLY; its `consult()` throws a documented error
+ * per RESEARCH §13.11 Option A. See the spike-finding header above
+ * for the full rationale + the soft-cap mitigation in force.
+ *
+ * The actual native advisor flow:
+ *   1. `session-config.ts:shouldEnableAdvisor` decides if the agent's
+ *      next session reload should carry `advisorModel` (gate: backend
+ *      === "native" AND AdvisorBudget.canCall).
+ *   2. `session-adapter.ts:SdkSessionAdapter.createSession/resumeSession`
+ *      spread-conditionally injects `advisorModel` into the SDK Options.
+ *   3. The bundled `claude` CLI binary injects the
+ *      `advisor-tool-2026-03-01` beta header server-side and offers the
+ *      `advisor_20260301` server tool to the executor (the agent's own
+ *      model) inside its own turn.
+ *   4. When the executor decides to consult, it emits
+ *      `server_tool_use{name:"advisor"}` and the matching
+ *      `advisor_tool_result` block lands in the SAME assistant message.
+ *   5. `persistent-session-handle.ts` (and the test-only mirror in
+ *      `session-adapter.ts:iterateWithTracing`) scan the content[] for
+ *      these blocks and emit `advisor:invoked` / `advisor:resulted` on
+ *      `SessionManager.advisorEvents`. At the terminal `result` event,
+ *      `usage.iterations[].type === "advisor_message"` is counted and
+ *      `AdvisorBudget.recordCall` is called once per iteration.
+ *
+ * No synchronous "consult me now" surface exists in this flow — the
+ * executor owns timing. AdvisorService.ask() for native-backend
+ * agents is therefore a misuse case; callers that need a synchronous
+ * advisor call must flip `agent.advisor.backend: fork` to get the
+ * `LegacyForkAdvisor` instead.
+ */
+export class AnthropicSdkAdvisor implements AdvisorBackend {
+  readonly id = "native" as const;
+
+  async consult(_args: {
+    agent: string;
+    question: string;
+    systemPrompt: string;
+    advisorModel: string;
+  }): Promise<{ answer: string }> {
+    throw new Error(
+      "AnthropicSdkAdvisor.consult() not callable — advisor runs in-request " +
+        "via Options.advisorModel; the executor decides timing autonomously. " +
+        "To force a synchronous fork-based call, set agent.advisor.backend: fork.",
+    );
+  }
+}
