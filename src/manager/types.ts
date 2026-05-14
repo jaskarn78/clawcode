@@ -111,6 +111,13 @@ export type AgentSessionConfig = {
      * Defaults to false (mandatory) at the config/loader layer.
      */
     readonly optional: boolean;
+    /**
+     * Phase 999.54 (D-01a) — mirrors ResolvedAgentConfig.mcpServers[].alwaysLoad.
+     * This field is the actual contract for what reaches transformMcpServersForSdk
+     * (session-adapter.ts:1317). Without this widening here, the transform
+     * function's inline param type silently strips the field (RESEARCH.md Pitfall 2).
+     */
+    readonly alwaysLoad?: boolean;
   }[];
   /**
    * Phase 100 GSD-02 — per-agent SDK settingSources passthrough. When omitted

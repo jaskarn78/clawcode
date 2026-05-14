@@ -419,6 +419,15 @@ export type ResolvedAgentConfig = {
      */
     readonly description?: string;
     readonly accessPattern?: "read-only" | "read-write" | "write-only";
+    /**
+     * Phase 999.54 (D-01a) — SDK alwaysLoad passthrough. UNDEFINED for legacy
+     * entries that don't set the field; spread-conditional construction at
+     * src/config/loader.ts (Plan 02) keeps the field OMITTED from the resolved
+     * entry when yaml didn't declare it, preserving byte-stable deep-equality
+     * for the existing fleet. Forwarded verbatim through AgentSessionConfig
+     * → transformMcpServersForSdk → SDK Options.mcpServers[].alwaysLoad.
+     */
+    readonly alwaysLoad?: boolean;
   }[];
   /**
    * Phase 100 follow-up — per-agent MCP env override map (vault-scoped
