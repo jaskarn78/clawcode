@@ -2,20 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Reliability & Routing
-status: v2.9-feature-complete-+-3-findings-fixed
-stopped_at: "v2.9 FEATURE-COMPLETE + DEPLOYED 2026-05-14. Two production deploys: build 4e96c24 (md5 77cc6cdb) at 21:04 PDT and build fda4b527 at 12:26 with the compact-session IPC allowlist hotfix (96bf6ec). 69 commits total. PHASE 119 (A2A): Plan 01 deployed; FIND-119-A boot sentinel still didn't fire post-deploy. PHASE 120 diagnostic done: FIND-120-A LENGTH<=11 guard hypothesis FALSE; FIND-120-B DASH-04 producer catastrophically dead (0/348 end_to_end spans have latency metadata). PHASE 121: shipped (108/108 tests). PHASE 122: shipped (36/36 tests). PHASE 123 soak: FIND-123-A transient orphans on restart, reaper catches them at T+9min; steady-state clean. PHASE 124 COMPLETE: Plan 02 (heartbeat decoupling), Plan 00 (SDK probe), Plan 01 (hybrid compactForAgent+forkSession primitive), Plan 03 (Discord /clawcode-session-compact admin), Plan 04 (telemetry + autoCompactAt auto-trigger) — all shipped + deployed. Live verification 2026-05-14: clawcode session compact 'Admin Clawdy' returned ok:true, summary_written:true, forked_to: 8be16559-da8b-46d5-8c87-019d9ab6fa92; new fork JSONL artifact verified on disk (31849 bytes). End-to-end pipeline works. Allowlist hotfix (96bf6ec) was the exact silent-path-bifurcation regression class documented in protocol-daemon-parity test (Phase 999.15 mcp-tracker, Phase 115-08 tool-latency-audit, Phase 106 hotfix fa72303 precedents). Three FIND-XX-A items remain as discrete follow-up phases. Live hot-swap (consume the fork on the running worker) still deferred — operator currently runs clawcode restart <agent> to swap to the fork. Phase 125 unblocked — extractMemoriesFn MVP is line-split filter; Phase 125 replaces with Haiku-driven tiered extraction. Ramy-active hold: operator cleared both deploy windows."
-last_updated: "2026-05-14T21:15:00.000Z"
-last_activity: 2026-05-14
+status: executing
+stopped_at: "Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md."
+last_updated: "2026-05-14T22:35:48.557Z"
+last_activity: 2026-05-14 -- Phase 999.54 execution started
 progress:
-  total_phases: 7
-  completed_phases: 0
-  partially_complete: 4
-  blocked_architectural: 2
-  blocked_diagnostic: 1
-  total_plans: 19
-  total_plan_commits: 14
-  shipped_locally_commits: 27
-  percent: 0
+  total_phases: 72
+  completed_phases: 25
+  total_plans: 145
+  completed_plans: 139
+  percent: 96
 ---
 
 # Project State
@@ -26,16 +22,17 @@ See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing mil
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** v2.9 Reliability & Routing — close operator-pain gaps in A2A delivery, post-Phase-116 dashboard observability, subagent UX, MCP lifecycle verification, plus session-compaction primitives + algorithm folded in from 999.51/999.52 on 2026-05-13. See `.planning/BACKLOG-CONSOLIDATED.md` for the merge groups + standalone items.
+**Current focus:** Phase 999.54 — allowed-tools-sdk-passthrough
 
 ## Current Position
 
-Phase: 119 (A2A Delivery Reliability) — Wave 2 code-complete (Plans 02 + 03)
-Plan: 119-03 (last shipped Wave 2 plan)
-Status: Code committed, deploy-gated on operator confirmation. Plan 04 (A2A-04, agent-side `HEARTBEAT_OK` suppression) remains.
-Last activity: 2026-05-14 — Phase 119 Wave 2 executed. Plan 119-02 (D-05 no_webhook_fallbacks_total counter + BenchmarksView SLO-styled tile) and Plan 119-03 (A2A-03 queue-state icon mutex state machine, ⏳→👍→✅/❌ with per-channel mutex + 200ms debounce + ≤3-attempt 429 retry + sticky terminal states) landed. Five atomic commits: `e147b92`, `954e3a6`, `42af77b`, `670931e`, `afcab56`. 83/83 tests pass across the four touched test files (fleet-stats, post-to-agent-ipc, queue-state-icon, bridge). 20 pre-existing slash-commands test failures confirmed via baseline `git stash`, logged in `.planning/phases/119-a2a-delivery-reliability/deferred-items.md` — `compact-session` ipcMethod regression dates to a prior phase. Two deviations documented: (Rule 3) BenchmarksView path was `src/dashboard/client/src/components/` not `src/ui/dashboard/`; (Rule 2) bridge.ts pre-119 had no IN_FLIGHT/DELIVERED transition sites — added at start of `streamAndPostResponse` (👍 fires when SDK call begins) and after successful response render (✅ terminal). Open items: (a) SC-5 dashboard screenshot at T+15min post-deploy (counter === 0 verification); (b) SC-3 operator screenshot of ⏳→👍→✅ on a real A2A turn from 2+ channels. Both gated on explicit operator "deploy" / "ship it" per `feedback_no_auto_deploy` and `feedback_ramy_active_no_deploy`. Plan 119-04 (A2A-04, agent-side HEARTBEAT_OK filter in `~/.clawcode/agents/projects/skills/cron-poll/`) is fully parallel (separate workspace repo) and not in this code repo.
+Phase: 999.54 (allowed-tools-sdk-passthrough) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 999.54
+Last activity: 2026-05-14 -- Phase 999.54 execution started
 
 **v2.9 phase map (build order — Waves 1/3/4/5/6/7):**
+
 - Phase 119: A2A Delivery Reliability (A2A-01..04) — Wave 1
 - Phase 120: Dashboard Observability Cleanup (DASH-01..05) — Wave 3, parallel to 119
 - Phase 121: Subagent UX Completion + Chunk-Boundary (SUB-01..02) — Wave 4

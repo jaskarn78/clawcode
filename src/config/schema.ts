@@ -636,6 +636,17 @@ export const mcpServerSchema = z.object({
   // YAML configs without these annotations parse unchanged.
   description: z.string().optional(),
   accessPattern: z.enum(["read-only", "read-write", "write-only"]).optional(),
+  /**
+   * Phase 999.54 (D-01, D-02) — when true, this server's tools are preloaded
+   * into the turn-1 prompt instead of being deferred behind ToolSearch. Maps
+   * 1:1 to the SDK's `McpStdioServerConfig.alwaysLoad` (sdk.d.ts:1067-1076).
+   * Default omitted (NOT false) — preserves byte-stable schema-roundtrip for
+   * the existing fleet. NON-RELOADABLE per Phase 999.54 D-04: changes require
+   * `clawcode restart <agent>`. Note: per-agent overrides require the INLINE
+   * form (`{name: clawcode, alwaysLoad: false}`), not the string-ref form
+   * (`"clawcode"`), since strings carry no extra fields (RESEARCH.md Pitfall 6).
+   */
+  alwaysLoad: z.boolean().optional(),
 });
 
 /** Inferred MCP server config type from schema. */
