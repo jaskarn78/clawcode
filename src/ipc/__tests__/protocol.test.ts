@@ -238,6 +238,13 @@ describe("IPC_METHODS", () => {
       "fleet-activity-summary",
       // Phase 124 Plan 01 — operator-triggered session compaction
       "compact-session",
+      // Phase 120 Plan 04 — `clawcode tool-latency-audit` was dispatched via
+      // `if (method === "...")` (daemon.ts:4084) which the original parity
+      // sentinel's case-only regex missed. Allowlist + sentinel extractor
+      // both widened in the same commit.
+      "tool-latency-audit",
+      // Phase 120 Plan 04 (Rule 2) — `skill-create` had the same gap.
+      "skill-create",
     ]);
   });
 });

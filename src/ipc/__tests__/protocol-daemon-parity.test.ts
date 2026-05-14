@@ -76,6 +76,12 @@ const KNOWN_NON_IPC_CASE_VALUES = new Set<string>([
  * Extract case method literals from the two `switch (method) { ... }`
  * blocks in daemon.ts. Filters out the well-known non-IPC values that
  * appear inside nested switches (see `KNOWN_NON_IPC_CASE_VALUES`).
+ *
+ * Phase 120 Plan 04 — extended to also extract `if (method === "...")`
+ * dispatch form. Original case-only extractor missed `tool-latency-audit`
+ * (Phase 115-08, dispatched at `daemon.ts:4084` via the `if`-form) and
+ * `skill-create` (Phase 47-ish, same form). Same silent-path-bifurcation
+ * class as the existing case-form drift this test was built to prevent.
  */
 function extractIpcCases(daemonSrc: string): readonly string[] {
   const lines = daemonSrc.split("\n");
@@ -85,8 +91,20 @@ function extractIpcCases(daemonSrc: string): readonly string[] {
 
   const switchOpenRe = /\bswitch\s*\(\s*method\s*\)\s*\{/;
   const caseRe = /^\s*case\s+"([a-z][a-z0-9-]*)"\s*:/;
+  // Phase 120 Plan 04 — `if (method === "...")` dispatch form. Some daemon
+  // handlers landed via this form (Phase 115-08 tool-latency-audit; older
+  // Phase 47 skill-create; OAuth helpers; cutover button). Whole-file scan
+  // — these `if` blocks live OUTSIDE the `switch (method) { ... }` blocks.
+  // Same z.enum() schema-rejection class if missing from IPC_METHODS.
+  const ifMethodRe = /^\s*if\s*\(\s*method\s*===\s*"([a-z][a-z0-9-]*)"/;
 
   for (const line of lines) {
+    // Phase 120 — `if (method === "...")` form lives outside the switch.
+    const ifMatch = ifMethodRe.exec(line);
+    if (ifMatch && !KNOWN_NON_IPC_CASE_VALUES.has(ifMatch[1]!)) {
+      cases.add(ifMatch[1]!);
+    }
+
     if (!inIpcSwitch && switchOpenRe.test(line)) {
       inIpcSwitch = true;
       switchDepth = 1;

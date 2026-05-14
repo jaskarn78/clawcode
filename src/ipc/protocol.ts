@@ -460,6 +460,24 @@ export const IPC_METHODS = [
   // of the Phase 106 / Phase 999.15 / Phase 115-08 class. Lesson reinforced:
   // every new IPC verb requires both daemon dispatch case AND protocol allowlist.
   "compact-session",
+  // Phase 120 Plan 04 — `clawcode tool-latency-audit` CLI. Daemon dispatch
+  // at `daemon.ts:4084` uses an `if (method === "tool-latency-audit")`
+  // form (not a `case`), which the original parity sentinel
+  // (`protocol-daemon-parity.test.ts`) failed to catch because its case-
+  // extraction regex only matched the `case "..."` form. Same silent-path-
+  // bifurcation class as Phase 106 / 999.15 / 115-08 / 116-postdeploy /
+  // 124-01: handler appears reachable in source, Zod rejects request as
+  // "Invalid Request" at the schema layer. Surfaced during Phase 120 Plan 04
+  // verification on clawdy. The sentinel extractor is widened in the same
+  // commit to also match `if (method === "...")` form so this whole class
+  // of drift is caught on the next CI run.
+  "tool-latency-audit",
+  // Phase 120 Plan 04 (deviation Rule 2) — same gap caught by widening the
+  // parity sentinel. `daemon.ts:4224` dispatches `skill-create` via the
+  // `if (method === "...")` form; the case-only sentinel missed it. Added
+  // here together with `tool-latency-audit` to keep the next CI run green
+  // and prevent a "fix one, expose another" thrash.
+  "skill-create",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
