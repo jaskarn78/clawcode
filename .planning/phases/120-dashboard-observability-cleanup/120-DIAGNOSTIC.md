@@ -113,6 +113,15 @@ new producer-side fix-up requires investigation of every callsite,
 potentially new code paths, and is not "dashboard observability cleanup").
 Tracked under `deferred-items.md` for a follow-up phase.
 
+**RECONCILIATION (2026-05-14 afternoon, Plan 120-05):** DEFERRED-120-A
+closed as NON-REPRODUCIBLE. The "regression" framing above is wrong —
+the producer-port commit `a0f30a6` (deployed mid-day 2026-05-11) already
+populates 100% of post-deploy traces fleet-wide. The 139 NULL traces are
+legacy pre-deploy data. The "latest NULL post-deploy at 2026-05-14T12:48"
+trace is a bootstrap turn with zero `tool_call.*` spans — a legitimate
+NULL per the conditional-spread gate. See `120-05-SUMMARY.md` for the
+fleet-wide daily-breakdown evidence + discriminator query.
+
 ## Green-light verdicts for Phase 120 plans (reconciled)
 
 - **Plan 120-02 (DASH-01/02/03 frontend bundle):**

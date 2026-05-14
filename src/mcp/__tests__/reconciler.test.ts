@@ -1,28 +1,24 @@
 /**
  * Phase 999.15 Plan 00 — Wave 0 RED tests for reconcileAllAgents.
  *
- * Module under test: ../reconciler.js (DOES NOT EXIST AT WAVE 0).
- * GREEN ships in Plan 02 (TRACK-01, TRACK-04 implementation).
+ * FIND-123-A.next T-08 — rewritten to exercise the sink-based PID lookup
+ * (`deps.getClaudePid`) that replaced the `/proc`-walk
+ * `discoverClaudeSubprocessPid` rediscovery. Behavior contract changes are
+ * called out per-test below.
  *
- * Each test pins one behavior locked in CONTEXT.md `<specifics>` pseudocode +
- * RESEARCH.md Pattern 1+4 + the locked decisions:
- *
- *   - register signature: (agentName, claudePid, mcpPids) — orchestrator rec #2
- *   - discoverClaudeSubprocessPid opts: { minAge: 10 } — orchestrator rec #3
- *   - reason values: "stale-claude" | "missing-mcps" | "agent-restart" | "agent-gone"
- *   - canonical envelope: { component, action: "reconcile", agent, oldClaudePid,
- *     newClaudePid, oldMcpCount, newMcpCount, reason }
- *   - log messages: "tracker state reconciled" (state-change), "tracker entry
- *     dropped — claude proc gone" (agent-gone)
- *   - idempotent: zero log emissions and zero mutations on no-op cycles
- *   - error swallow: per-agent failure doesn't propagate
- *   - per-agent diff log on state change (not bulk-aggregated)
+ * Sink-lookup tri-state (see ClaudePidLookup in src/mcp/reconciler.ts):
+ *   - `undefined` → session absent → agent-gone (unregister + warn)
+ *   - `null`      → session present, sink not yet populated → skip cycle
+ *   - `number`    → sink populated → updateAgent + replaceMcpPids
  *
  * Test architecture:
- *   - Mock ../proc-scan.js so isPidAlive + discoverClaudeSubprocessPid +
- *     discoverAgentMcpPids all return scripted values per test.
+ *   - Mock ../proc-scan.js so isPidAlive + discoverAgentMcpPids return
+ *     scripted values per test. discoverClaudeSubprocessPid is NO LONGER
+ *     mocked because the reconciler no longer calls it (T-08).
  *   - Fake McpProcessTracker — vi.fn() spies on the EXTENDED API surface
  *     (updateAgent, replaceMcpPids, unregister, getRegisteredAgents).
+ *   - getClaudePid fixture — per-test vi.fn returning the tri-state value
+ *     for a given agent name.
  *   - Real pino logger pointed at a captured-Writable so log-shape assertions
  *     are byte-precise on the JSON envelope.
  */
@@ -31,16 +27,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Writable } from "node:stream";
 import pino from "pino";
 
-// Hoisted mocks for proc-scan helpers (exists today: discoverClaudeSubprocessPid,
-// discoverAgentMcpPids; ships in Plan 01: isPidAlive + the opts param on
-// discoverClaudeSubprocessPid).
+// Hoisted mocks for proc-scan helpers. discoverClaudeSubprocessPid is NOT
+// mocked here because the reconciler no longer imports it after T-08.
 const {
   isPidAliveMock,
-  discoverClaudeSubprocessPidMock,
   discoverAgentMcpPidsMock,
 } = vi.hoisted(() => ({
   isPidAliveMock: vi.fn(),
-  discoverClaudeSubprocessPidMock: vi.fn(),
   discoverAgentMcpPidsMock: vi.fn(),
 }));
 
@@ -50,17 +43,11 @@ vi.mock("../proc-scan.js", async () => {
   );
   return {
     ...actual,
-    // isPidAlive does not exist in 999.14 — Plan 01 adds it. The mock returns
-    // it so the reconciler import resolves; runtime tests pin the export.
     isPidAlive: isPidAliveMock,
-    discoverClaudeSubprocessPid: discoverClaudeSubprocessPidMock,
     discoverAgentMcpPids: discoverAgentMcpPidsMock,
   };
 });
 
-// Phase 999.15 Plan 02 has shipped src/mcp/reconciler.ts. The Wave 0 RED
-// placeholder directive (ts-expect-error on the import below) has been
-// removed now that the module is real and tsc flagged it as unused.
 import { reconcileAllAgents } from "../reconciler.js";
 
 /* ------------------------------------------------------------------ */
@@ -110,6 +97,17 @@ function makeTracker(entries: ReadonlyArray<readonly [string, AgentEntry]>): Fak
   return tracker;
 }
 
+/**
+ * Build a sink-lookup fixture from a `{name → ClaudePidLookup}` map. Default
+ * for unknown agents is `undefined` (session-absent) — opt out by adding the
+ * agent to the map explicitly.
+ */
+function makeGetClaudePid(
+  table: Record<string, number | null | undefined>,
+): (name: string) => number | null | undefined {
+  return (name) => (name in table ? table[name] : undefined);
+}
+
 function captureLogger(): {
   log: pino.Logger;
   lines: () => Array<Record<string, unknown>>;
@@ -137,10 +135,9 @@ const DAEMON_PID = 99_000;
 /*  Tests                                                              */
 /* ------------------------------------------------------------------ */
 
-describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
+describe("reconcileAllAgents (FIND-123-A.next T-08 — sink-based)", () => {
   beforeEach(() => {
     isPidAliveMock.mockReset();
-    discoverClaudeSubprocessPidMock.mockReset();
     discoverAgentMcpPidsMock.mockReset();
   });
 
@@ -148,28 +145,27 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
     vi.restoreAllMocks();
   });
 
-  it("Test 1: stale-claude → calls updateAgent + replaceMcpPids and emits one warn log", async () => {
+  it("Test 1: stale-claude (sink populated) → updateAgent + replaceMcpPids and one warn log", async () => {
     const tracker = makeTracker([
       ["A", { claudePid: 100, mcpPids: [], registeredAt: 1_700_000_000_000 }],
     ]);
     isPidAliveMock.mockReturnValue(false); // claudePid 100 dead
-    discoverClaudeSubprocessPidMock.mockResolvedValue(200);
     discoverAgentMcpPidsMock.mockResolvedValue([201, 202]);
+    const getClaudePid = vi.fn(makeGetClaudePid({ A: 200 }));
 
     const { log, lines } = captureLogger();
     await reconcileAllAgents({
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid,
     });
 
     expect(tracker.updateAgent).toHaveBeenCalledWith("A", 200);
     expect(tracker.replaceMcpPids).toHaveBeenCalledWith("A", [201, 202]);
 
-    // discoverClaudeSubprocessPid called with daemonPid + opts.minAge=10
-    const call = discoverClaudeSubprocessPidMock.mock.calls[0];
-    expect(call?.[0]).toBe(DAEMON_PID);
-    expect(call?.[1]).toMatchObject({ minAge: 10 });
+    // Sink resolver called for the stale agent.
+    expect(getClaudePid).toHaveBeenCalledWith("A");
 
     const warns = lines().filter((l) => l.level === 40);
     expect(warns.length).toBe(1);
@@ -189,6 +185,7 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({ A: 100 }),
     });
 
     expect(tracker.updateAgent).not.toHaveBeenCalled();
@@ -199,18 +196,22 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
     expect(warns[0]!.reason).toBe("missing-mcps");
   });
 
-  it("Test 3: agent-gone → unregister + log, no updateAgent/replaceMcpPids", async () => {
+  it("Test 3: agent-gone (session absent) → unregister + log, no updateAgent/replaceMcpPids", async () => {
+    // Behavior change vs pre-T-08: the agent-gone trigger is now "session
+    // absent" (`getClaudePid(name) === undefined`) rather than "/proc walk
+    // returned null". This preserves cleanup for stopped agents whose
+    // tracker entry survived killAgentGroup (empty-mcpPids short-circuit).
     const tracker = makeTracker([
       ["A", { claudePid: 100, mcpPids: [], registeredAt: 1_700_000_000_000 }],
     ]);
     isPidAliveMock.mockReturnValue(false);
-    discoverClaudeSubprocessPidMock.mockResolvedValue(null);
 
     const { log, lines } = captureLogger();
     await reconcileAllAgents({
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({}), // empty table → undefined for "A"
     });
 
     expect(tracker.unregister).toHaveBeenCalledWith("A");
@@ -223,25 +224,52 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
     expect(warns[0]!.msg).toBe("tracker entry dropped — claude proc gone");
   });
 
-  it("Test 4: idempotent — second cycle with no /proc change emits zero logs and zero mutations", async () => {
-    // Tracker matches /proc state exactly: claudePid alive, mcpPids match
-    // discoverAgentMcpPids return.
+  it("Test 3b: sink-pending (session present, getClaudePid → null) → skip cycle", async () => {
+    // New test pinning edge case (b) from the T-08 design: sink null means
+    // the SDK spawn callback has not yet populated the PID. Reconciler
+    // SKIPS — no unregister, no updateAgent, no log. The next reaper tick
+    // re-checks once the sink is populated.
     const tracker = makeTracker([
-      ["A", { claudePid: 100, mcpPids: [201, 202], registeredAt: 1_700_000_000_000 }],
+      ["A", { claudePid: 100, mcpPids: [], registeredAt: 1_700_000_000_000 }],
     ]);
-    isPidAliveMock.mockReturnValue(true);
-    discoverAgentMcpPidsMock.mockResolvedValue([201, 202]);
+    isPidAliveMock.mockReturnValue(false); // old PID dead
 
     const { log, lines } = captureLogger();
     await reconcileAllAgents({
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({ A: null }), // present-but-empty sink
+    });
+
+    expect(tracker.unregister).not.toHaveBeenCalled();
+    expect(tracker.updateAgent).not.toHaveBeenCalled();
+    expect(tracker.replaceMcpPids).not.toHaveBeenCalled();
+
+    const warns = lines().filter((l) => l.level === 40);
+    expect(warns.length).toBe(0);
+  });
+
+  it("Test 4: idempotent — second cycle with no /proc change emits zero logs and zero mutations", async () => {
+    const tracker = makeTracker([
+      ["A", { claudePid: 100, mcpPids: [201, 202], registeredAt: 1_700_000_000_000 }],
+    ]);
+    isPidAliveMock.mockReturnValue(true);
+    discoverAgentMcpPidsMock.mockResolvedValue([201, 202]);
+    const getClaudePid = makeGetClaudePid({ A: 100 });
+
+    const { log, lines } = captureLogger();
+    await reconcileAllAgents({
+      tracker: tracker as unknown as never,
+      daemonPid: DAEMON_PID,
+      log,
+      getClaudePid,
     });
     await reconcileAllAgents({
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid,
     });
 
     expect(tracker.updateAgent).not.toHaveBeenCalled();
@@ -252,24 +280,28 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
   });
 
   it("Test 5: error swallow — failure for one agent doesn't propagate, doesn't block siblings", async () => {
+    // Sink lookup is synchronous and doesn't throw, so the failure surface
+    // moves to discoverAgentMcpPids (the only remaining async /proc call).
+    // Inject a throw there for agent A and verify agent B still reconciles.
     const tracker = makeTracker([
       ["A", { claudePid: 100, mcpPids: [], registeredAt: 1_700_000_000_000 }],
       ["B", { claudePid: 110, mcpPids: [], registeredAt: 1_700_000_000_000 }],
     ]);
-    isPidAliveMock.mockImplementation((pid: number) => pid === 110); // A dead, B alive
-    discoverClaudeSubprocessPidMock.mockImplementation(async () => {
-      // Only throw for the first call (agent A)
-      throw new Error("simulated /proc failure for A");
+    isPidAliveMock.mockReturnValue(true); // both alive — exercises missing-mcps path
+    discoverAgentMcpPidsMock.mockImplementation(async (pid: number) => {
+      if (pid === 100) {
+        throw new Error("simulated /proc failure for A");
+      }
+      return [311, 312];
     });
-    discoverAgentMcpPidsMock.mockResolvedValue([311, 312]); // for agent B
 
     const { log, lines } = captureLogger();
-    // MUST resolve — does not reject.
     await expect(
       reconcileAllAgents({
         tracker: tracker as unknown as never,
         daemonPid: DAEMON_PID,
         log,
+        getClaudePid: makeGetClaudePid({ A: 100, B: 110 }),
       }),
     ).resolves.toBeUndefined();
 
@@ -292,13 +324,9 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       ["B", { claudePid: 110, mcpPids: [], registeredAt: 1_700_000_000_000 }],
       ["C", { claudePid: 120, mcpPids: [], registeredAt: 1_700_000_000_000 }],
     ]);
-    // All three claudePids dead — all three need stale-claude reconcile.
+    // All three claudePids dead — all three need stale-claude reconcile via
+    // sink lookup. Each agent's sink returns a fresh PID.
     isPidAliveMock.mockReturnValue(false);
-    let callIdx = 0;
-    discoverClaudeSubprocessPidMock.mockImplementation(async () => {
-      callIdx += 1;
-      return 200 + callIdx;
-    });
     discoverAgentMcpPidsMock.mockImplementation(async (pid: number) => [pid + 1]);
 
     const { log, lines } = captureLogger();
@@ -306,6 +334,7 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({ A: 201, B: 202, C: 203 }),
     });
 
     const warns = lines().filter((l) => l.level === 40 && l.action === "reconcile");
@@ -319,7 +348,6 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       ["A", { claudePid: 100, mcpPids: [], registeredAt: 1_700_000_000_000 }],
     ]);
     isPidAliveMock.mockReturnValue(false);
-    discoverClaudeSubprocessPidMock.mockResolvedValue(200);
     discoverAgentMcpPidsMock.mockResolvedValue([201, 202]);
 
     const { log, lines } = captureLogger();
@@ -327,6 +355,7 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({ A: 200 }),
     });
 
     const warns = lines().filter((l) => l.level === 40);
@@ -356,6 +385,7 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({ A: 100 }),
     });
 
     const warns = lines().filter((l) => l.level === 40);
@@ -363,36 +393,25 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
   });
 
   // Phase 108 (Pitfall 6) — broker-owned synthetic owners must be skipped.
-  // OnePasswordMcpBroker registers each pooled MCP child PID under a
-  // synthetic owner like `__broker:1password:<tokenHash>` so the
-  // reconciler's per-agent kill logic never SIGTERMs a pool child.
   it("Test 10 (Phase 108): skips entries whose owner name starts with `__broker:`", async () => {
     const tracker = makeTracker([
-      // A real agent that should be reconciled normally.
       ["fin-acquisition", { claudePid: 100, mcpPids: [201], registeredAt: 1_700_000_000_000 }],
-      // A broker-owned synthetic owner — must be left untouched.
       ["__broker:1password:abc12345", { claudePid: 99_000, mcpPids: [501], registeredAt: 1_700_000_000_000 }],
     ]);
-    // Real agent's claudePid still alive; reconciler should be a no-op for it.
     isPidAliveMock.mockReturnValue(true);
+    const getClaudePid = vi.fn(makeGetClaudePid({ "fin-acquisition": 100 }));
 
     const { log, lines } = captureLogger();
     await reconcileAllAgents({
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid,
     });
 
-    // For the real agent: no claude probe is needed (alive), no mcp re-walk
-    // (mcpPids non-empty). For the synthetic broker owner: the early
-    // `__broker:` skip means isPidAlive / discoverClaudeSubprocessPid /
-    // discoverAgentMcpPids must NEVER be called against it. Combined
-    // assertion: the synthetic owner must remain in the registered map
-    // and updateAgent / replaceMcpPids / unregister must not have been
-    // invoked for it.
+    // Synthetic owner remains in the map; no mutation called against it.
     const stillRegistered = tracker.getRegisteredAgents();
     expect(stillRegistered.has("__broker:1password:abc12345")).toBe(true);
-    // No mutation calls for the synthetic owner.
     for (const call of tracker.updateAgent.mock.calls) {
       expect((call[0] as string).startsWith("__broker:")).toBe(false);
     }
@@ -409,6 +428,11 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
         expect((ln.agent as string).startsWith("__broker:")).toBe(false);
       }
     }
+    // Sink resolver MUST NOT be probed for broker entries (early-return
+    // before getClaudePid lookup).
+    for (const call of getClaudePid.mock.calls) {
+      expect((call[0] as string).startsWith("__broker:")).toBe(false);
+    }
   });
 
   it("Test 9: agent-restart — both claudePid and mcpPids change in one cycle", async () => {
@@ -416,7 +440,6 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       ["A", { claudePid: 100, mcpPids: [201, 202], registeredAt: 1_700_000_000_000 }],
     ]);
     isPidAliveMock.mockReturnValue(false); // old claudePid dead
-    discoverClaudeSubprocessPidMock.mockResolvedValue(300); // new claude
     discoverAgentMcpPidsMock.mockResolvedValue([301, 302]); // brand-new mcpPids
 
     const { log, lines } = captureLogger();
@@ -424,6 +447,7 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
       tracker: tracker as unknown as never,
       daemonPid: DAEMON_PID,
       log,
+      getClaudePid: makeGetClaudePid({ A: 300 }), // new claude from sink
     });
 
     expect(tracker.updateAgent).toHaveBeenCalledWith("A", 300);
@@ -431,8 +455,6 @@ describe("reconcileAllAgents (Phase 999.15 Wave 0 — RED)", () => {
 
     const warns = lines().filter((l) => l.level === 40);
     expect(warns.length).toBe(1);
-    // Per RESEARCH Pattern 4 diff classifier: when stale-claude AND mcpPids
-    // also differs from prior, classify as agent-restart.
     expect(warns[0]!.reason).toBe("agent-restart");
   });
 });

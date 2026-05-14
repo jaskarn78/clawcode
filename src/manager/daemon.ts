@@ -2081,6 +2081,16 @@ export async function startDaemon(
   const mcpLog = log.child({ subsystem: "mcp-lifecycle" });
   let mcpTracker: McpProcessTracker | null = null;
   let reaperInterval: NodeJS.Timeout | null = null;
+  // FIND-123-A.next T-08 — late-bound sink-lookup closure. Assigned after
+  // SessionManager construction (line ~2526) so the reconcile closures
+  // declared above (TRACK-06 killAgentGroup path) and below (TRACK-01
+  // per-tick path) can share a single resolver that reads
+  // `manager.getSessionHandle(name)?.getClaudePid?.()`. Returns `undefined`
+  // for absent sessions (drives agent-gone), `null` for present-but-sink-
+  // empty (drives skip), and a number for the live PID.
+  let getClaudePidByName:
+    | ((agentName: string) => number | null | undefined)
+    | undefined;
   // Phase 999.15 — hoisted out of the inner try so SessionManager construction
   // (line ~1816) and the onTickAfter reconcile closure (line ~4070+) can both
   // pass them to discoverClaudeSubprocessPid({ minAge, bootTimeUnix,
@@ -2111,8 +2121,7 @@ export async function startDaemon(
           tracker: mcpTracker,
           daemonPid: process.pid,
           log: mcpLog,
-          bootTimeUnix: mcpBootTimeUnix,
-          clockTicksPerSec: mcpClockTicksPerSec,
+          getClaudePid: getClaudePidByName,
         });
       };
       mcpTracker = new McpProcessTracker({
@@ -2539,6 +2548,17 @@ export async function startDaemon(
     mcpBootTimeUnix,
     mcpClockTicksPerSec,
   });
+
+  // FIND-123-A.next T-08 — bind the sink-lookup closure now that `manager`
+  // exists. Both reconcile callsites (TRACK-06 killAgentGroup closure above,
+  // TRACK-01 per-tick reconcileAllAgents below) read this via captured
+  // reference; assigning here makes the resolver live for every subsequent
+  // reaper tick + kill-group flow.
+  getClaudePidByName = (agentName: string): number | null | undefined => {
+    const handle = manager.getSessionHandle(agentName);
+    if (!handle) return undefined;
+    return handle.getClaudePid?.() ?? null;
+  };
 
   // 6-bis. Create TurnDispatcher singleton (Phase 57 Plan 03).
   // Single chokepoint for every agent-turn initiation — Discord bridge and
@@ -7790,8 +7810,7 @@ export async function startDaemon(
             tracker: mcpTracker,
             daemonPid: process.pid,
             log: mcpLog,
-            bootTimeUnix: mcpBootTimeUnix,
-            clockTicksPerSec: mcpClockTicksPerSec,
+            getClaudePid: getClaudePidByName,
           });
         } catch (err) {
           mcpLog.error(

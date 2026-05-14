@@ -5,12 +5,28 @@
  * onTickAfter on the existing 60s orphan-reaper interval (wired in
  * src/manager/daemon.ts) and walks every registered agent:
  *
- *   - If recorded claudePid is dead → re-discover with minAge=10s.
- *       - Found → updateAgent(name, newPid). reason="stale-claude".
- *       - Not found → unregister(name). reason="agent-gone".
+ *   - If recorded claudePid is dead → consult `deps.getClaudePid(name)`:
+ *       - Returns `undefined` (session absent / stopped) → unregister(name).
+ *         reason="agent-gone". Cleans up tracker entries when stopAgent
+ *         left a residual entry behind (e.g. killAgentGroup short-circuited
+ *         on an empty mcpPids list).
+ *       - Returns `null` (session present, sink not yet populated by the
+ *         SDK spawn callback) → SKIP this cycle. Next tick will retry.
+ *       - Returns a number (sink populated) → updateAgent(name, newPid).
+ *         reason="stale-claude".
  *   - If reason is "stale-claude" OR oldMcpCount === 0 → re-walk MCP
  *     children → replaceMcpPids(name, newMcpPids). reason upgraded to
  *     "agent-restart" if oldMcpCount > 0 AND new mcpPids differ.
+ *
+ * FIND-123-A.next T-08 — replaced the legacy `/proc`-walk rediscovery
+ * (`discoverClaudeSubprocessPid`) with sink-based lookup. The sink is the
+ * source of truth: the structural spawn wrapper writes child.pid into the
+ * per-handle `ClaudePidSink` on every (re-)spawn, so a fresh sink read
+ * always reflects the SDK's current claude PID without /proc scanning.
+ * Stale-sink case (sink holds an old PID and claude died but SDK has not
+ * yet respawned): reconciler SKIPS for that tick — the next spawn writes
+ * the new PID into the sink, OR operator stop drops the session entirely
+ * and the next tick takes the agent-gone path.
  *
  * Logging is DIFF-BASED: emits ONE warn log per agent per cycle ONLY when
  * tracker state actually changed (canonical envelope below). No-op cycles
@@ -38,11 +54,7 @@
  */
 
 import type { Logger } from "pino";
-import {
-  discoverAgentMcpPids,
-  discoverClaudeSubprocessPid,
-  isPidAlive,
-} from "./proc-scan.js";
+import { discoverAgentMcpPids, isPidAlive } from "./proc-scan.js";
 import type { McpProcessTracker } from "./process-tracker.js";
 
 export type ReconcileReason =
@@ -51,13 +63,37 @@ export type ReconcileReason =
   | "agent-restart"
   | "agent-gone";
 
+/**
+ * Result of looking up an agent's current claude PID via the per-handle sink.
+ *
+ * `undefined` → session absent (operator stopped, never started, or fork
+ * torn down). Reconciler should drop the tracker entry (agent-gone).
+ *
+ * `null` → session present but sink not yet populated (race window between
+ * handle construction and the SDK spawn callback firing). Reconciler should
+ * skip the entry for this cycle; the next tick will retry.
+ *
+ * `number` → sink populated with the live claude PID. Reconciler treats
+ * this as the source of truth.
+ */
+export type ClaudePidLookup = number | null | undefined;
+
 export interface ReconcileDeps {
   readonly tracker: McpProcessTracker;
   readonly daemonPid: number;
   readonly log: Logger;
-  /** Required when proc-scan opts.minAge is exercised — caller (daemon) caches at boot. */
-  readonly bootTimeUnix?: number;
-  readonly clockTicksPerSec?: number;
+  /**
+   * FIND-123-A.next T-08 — sink-based claudePid resolver. Synchronous read
+   * of the per-handle `ClaudePidSink` populated by the structural spawn
+   * wrapper (`src/manager/detached-spawn.ts`). See `ClaudePidLookup` for
+   * the tri-state contract.
+   *
+   * Optional ONLY to keep test fixtures that predate the sink contract
+   * compiling. Production daemon ALWAYS injects this — when omitted, the
+   * reconciler is a no-op for the stale-claude detection branch (treats
+   * every entry as if the sink were null → skip).
+   */
+  readonly getClaudePid?: (agentName: string) => ClaudePidLookup;
 }
 
 /**
@@ -122,15 +158,17 @@ export async function reconcileAgent(
   let newClaudePid = oldClaudePid;
   let reason: ReconcileReason | null = null;
 
-  // Stale-claude detection: re-discover if recorded PID is dead.
+  // Stale-claude detection: consult the per-handle sink when recorded PID
+  // is dead. Tri-state lookup (undefined / null / number) drives the next
+  // action — see ClaudePidLookup docs.
   if (!isPidAlive(oldClaudePid)) {
-    const discovered = await discoverClaudeSubprocessPid(deps.daemonPid, {
-      minAge: 10,
-      bootTimeUnix: deps.bootTimeUnix,
-      clockTicksPerSec: deps.clockTicksPerSec,
-    });
-    if (discovered === null) {
-      // Agent fully gone — drop entry + emit agent-gone log.
+    const lookup: ClaudePidLookup = deps.getClaudePid
+      ? deps.getClaudePid(name)
+      : null;
+    if (lookup === undefined) {
+      // Session absent (operator stopped, fork dispose, etc.) — drop entry
+      // and emit agent-gone log. This is the cleanup path for the case
+      // killAgentGroup left an empty-mcpPids tracker entry behind.
       deps.tracker.unregister(name);
       deps.log.warn(
         {
@@ -145,8 +183,14 @@ export async function reconcileAgent(
       );
       return;
     }
-    deps.tracker.updateAgent(name, discovered);
-    newClaudePid = discovered;
+    if (lookup === null) {
+      // Session present but sink not yet populated (SDK spawn race) — or
+      // claude died and the SDK has not yet respawned. Skip this cycle;
+      // the next tick re-checks once the sink is populated.
+      return;
+    }
+    deps.tracker.updateAgent(name, lookup);
+    newClaudePid = lookup;
     reason = "stale-claude";
   }
 
