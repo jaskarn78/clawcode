@@ -860,12 +860,14 @@ export class DiscordBridge {
       this.sessionManager.advisorEvents.on("advisor:invoked", onInvoked);
       this.sessionManager.advisorEvents.on("advisor:resulted", onResulted);
 
-      // Phase 119 A2A-03 — IN_FLIGHT transition. The SDK call is about to
-      // start; flip the icon ⏳ → 👍 so operators can distinguish queue-
-      // drain stall from active LLM latency. Fire-and-forget: the state
-      // machine internally serializes against the QUEUED transition that
-      // arrived first (mutex per channel+message).
-      void this.transitionIcon(message, "IN_FLIGHT");
+      // Phase 119 A2A-03 hotfix 2026-05-14 — icon transitions disabled at
+      // every call site. Original wiring was overly broad: fired on EVERY
+      // user→agent turn, not just A2A turns. Operator pain: ⏳→👍→✅
+      // appeared on every response in admin-clawdy + agent channels.
+      // State-machine module at queue-state-icon.ts kept intact (tested
+      // infrastructure); re-enable behind a per-agent config flag or A2A-
+      // turn detection gate in a follow-up phase.
+      // (was: void this.transitionIcon(message, "IN_FLIGHT");)
 
       try {
         if (this.turnDispatcher) {
@@ -961,10 +963,9 @@ export class DiscordBridge {
           await this.sendResponse(message, response, sessionName);
         }
         this.log.info({ agent: sessionName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
-        // Phase 119 A2A-03 — DELIVERED transition. Response landed; flip
-        // the icon 👍 → ✅. Terminal state — sticky against any subsequent
-        // heartbeat-sweep downgrade race.
-        void this.transitionIcon(message, "DELIVERED");
+        // Phase 119 A2A-03 hotfix 2026-05-14 — disabled (see IN_FLIGHT site
+        // above for full rationale).
+        // (was: void this.transitionIcon(message, "DELIVERED");)
       } else if (!messageRef.current) {
         this.log.warn({ agent: sessionName, channel: channelId }, "agent returned empty response");
       }
@@ -1036,9 +1037,8 @@ export class DiscordBridge {
         setTimeout(() => {
           void this.streamAndPostResponse(message, sessionName, formattedMessage, undefined, 0, retryCount + 1);
         }, delayMs);
-        // Phase 119 A2A-03 — back to QUEUED while we wait for the agent
-        // to come back online. The state machine handles the prior-emoji
-        // removal (e.g. if IN_FLIGHT was set earlier).
+        // Phase 119 A2A-03 — QUEUED while agent comes back online. Kept
+        // (operator-useful signal: fires only on backoff retry, NOT every msg).
         void this.transitionIcon(message, "QUEUED");
         return;
       }
@@ -1061,13 +1061,11 @@ export class DiscordBridge {
       }
 
       if (coalesced) {
-        // Phase 119 A2A-03 \u2014 coalesced into the per-agent queue; still
-        // QUEUED from the operator's POV. State machine swaps the prior
-        // emoji (likely IN_FLIGHT if we made it that far) back to \u23F3.
+        // Phase 119 A2A-03 \u2014 coalesced into per-agent queue; \u23f3 kept
+        // (operator-useful: only fires on QUEUE_FULL, NOT every msg).
         void this.transitionIcon(message, "QUEUED");
       } else {
-        // Phase 119 A2A-03 \u2014 terminal failure. State machine flips to \u274C
-        // and stickys the state (no further transitions accepted).
+        // Phase 119 A2A-03 \u2014 terminal failure; \u274c kept (operator-useful).
         void this.transitionIcon(message, "FAILED");
       }
     }
