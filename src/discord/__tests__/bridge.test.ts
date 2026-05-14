@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { Message, Collection, Attachment, Embed } from "discord.js";
 import { DiscordBridge } from "../bridge.js";
+import { _resetQueueStateMemory } from "../queue-state-icon.js";
 
 // Plan 117-09 — `sessionManager.advisorEvents` (added in 117-04) is now
 // consumed by the bridge. Stale test mocks predate that surface; supply
@@ -712,6 +713,11 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     messageId?: string;
     react?: ReturnType<typeof vi.fn>;
   } = {}): import("discord.js").Message {
+    // Phase 119 A2A-03 — queue-state icon state machine adapter requires
+    // a `reactions.cache` Map and `client.user.id` to resolve the prior
+    // emoji removal path. Empty cache + a stable bot user id is enough
+    // for the CO-4/5/6 path (no prior emoji to remove on the QUEUE_FULL
+    // entry — it's the first transition).
     return {
       content: opts.content ?? "third rapid msg",
       channelId: "chan-1",
@@ -733,6 +739,8 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
       webhookId: null,
       embeds: [],
       react: opts.react ?? vi.fn().mockResolvedValue(undefined),
+      reactions: { cache: new Map() },
+      client: { user: { id: "bot-user-1" } },
       channel: {
         sendTyping: vi.fn().mockResolvedValue(undefined),
         send: vi.fn().mockResolvedValue({ edit: vi.fn() }),
@@ -741,9 +749,20 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     } as unknown as import("discord.js").Message;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     mockGetAgentConfig.mockReturnValue({ workspace: "/workspace/agent-x" });
+    // Phase 119 A2A-03 — module-scoped state in queue-state-icon.ts
+    // survives across vitest describe blocks. Two-step cleanup:
+    //   1. Drain any pending setTimeout callbacks from the previous test
+    //      (the state machine fires fire-and-forget transitions with
+    //      200ms debounce + 200ms backoff; CO-1/2/3 don't await them).
+    //   2. Reset the maps so the current test starts fresh.
+    // Without the drain, a previous test's pending timer would fire mid-
+    // current-test, write to the (just-reset) pendingTarget, and corrupt
+    // state for the current test's first transition.
+    await new Promise((r) => setTimeout(r, 600));
+    _resetQueueStateMemory();
   });
 
   it("CO-1: when QUEUE_FULL throws, coalescer.addMessage is called (not ❌ react)", async () => {
@@ -840,6 +859,12 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     const msg = makeQueueFullMessage({ react });
 
     await (bridge as any).handleMessage(msg);
+    // Phase 119 A2A-03 — queue-state state machine debounces 200ms. The
+    // IN_FLIGHT transition fires first (start of streamAndPostResponse);
+    // the error catch then fires QUEUED/FAILED which joins the mutex
+    // chain (a second 200ms debounce window). Wait ~500ms so both slots
+    // resolve and the final react() call lands.
+    await new Promise((r) => setTimeout(r, 500));
 
     // ⏳ hourglass reaction (U+23F3) on coalesced messages
     expect(react).toHaveBeenCalledWith("⏳");
@@ -860,6 +885,9 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     const msg = makeQueueFullMessage({ react });
 
     await (bridge as any).handleMessage(msg);
+    // Phase 119 A2A-03 — IN_FLIGHT then catch-block transition;
+    // ~500ms covers both 200ms debounce windows.
+    await new Promise((r) => setTimeout(r, 500));
 
     // Cap hit — must fall back to ❌
     expect(fakeCoalescer.addMessage).toHaveBeenCalled();
@@ -880,6 +908,9 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
     const msg = makeQueueFullMessage({ react });
 
     await (bridge as any).handleMessage(msg);
+    // Phase 119 A2A-03 — IN_FLIGHT then catch-block transition;
+    // ~500ms covers both 200ms debounce windows.
+    await new Promise((r) => setTimeout(r, 500));
 
     // Coalescer must NOT have been used
     expect(fakeCoalescer.addMessage).not.toHaveBeenCalled();

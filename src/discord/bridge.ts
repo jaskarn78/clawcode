@@ -26,6 +26,11 @@ import {
   isImageAttachment,
 } from "./attachments.js";
 import { formatReactionEvent, addReaction } from "./reactions.js";
+import {
+  transitionQueueState,
+  type DiscordChannelHandle,
+  type QueueState,
+} from "./queue-state-icon.js";
 import type {
   AdvisorInvokedEvent,
   AdvisorResultedEvent,
@@ -452,6 +457,44 @@ export class DiscordBridge {
   }
 
   /**
+   * Phase 119 A2A-03 — single mutation point for the queue-state icon.
+   *
+   * Wraps `transitionQueueState` with a per-message DiscordChannelHandle
+   * adapter built from the live discord.js Message object. The state
+   * machine module owns the mutex, debounce, retry, and prior-emoji
+   * tracking — bridge.ts no longer remembers which emoji it last added.
+   *
+   * Reaction failures NEVER abort delivery. The state machine swallows
+   * non-rate-limit errors internally; this outer try/catch is a belt-and-
+   * suspenders guard in case a future refactor changes that contract.
+   */
+  private async transitionIcon(message: Message, target: QueueState): Promise<void> {
+    const handle: DiscordChannelHandle = {
+      addReaction: async (_channelId, _messageId, emoji) => {
+        await message.react(emoji);
+      },
+      removeReaction: async (_channelId, _messageId, emoji) => {
+        // discord.js v14 — Message.reactions.cache.get(emoji)?.users.remove(botUserId).
+        // Fallback to messageReactions.removeAll(emoji) shape via cache lookup.
+        const reaction = message.reactions.cache.get(emoji);
+        if (!reaction) return;
+        const botUserId = message.client.user?.id;
+        if (botUserId) {
+          await reaction.users.remove(botUserId);
+        }
+      },
+    };
+    try {
+      await transitionQueueState(message.channelId, message.id, target, handle);
+    } catch (err) {
+      this.log.warn(
+        { error: (err as Error).message, target, messageId: message.id },
+        "queue-state icon transition failed (non-fatal, delivery unaffected)",
+      );
+    }
+  }
+
+  /**
    * Phase 54 Plan 02 — fire the Discord typing indicator AND record a
    * `typing_indicator` span on the caller-owned Turn. The span opens on
    * entry and ends synchronously right after the sendTyping() call, so
@@ -816,6 +859,14 @@ export class DiscordBridge {
       };
       this.sessionManager.advisorEvents.on("advisor:invoked", onInvoked);
       this.sessionManager.advisorEvents.on("advisor:resulted", onResulted);
+
+      // Phase 119 A2A-03 — IN_FLIGHT transition. The SDK call is about to
+      // start; flip the icon ⏳ → 👍 so operators can distinguish queue-
+      // drain stall from active LLM latency. Fire-and-forget: the state
+      // machine internally serializes against the QUEUED transition that
+      // arrived first (mutex per channel+message).
+      void this.transitionIcon(message, "IN_FLIGHT");
+
       try {
         if (this.turnDispatcher) {
           const turnId = `${DISCORD_SNOWFLAKE_PREFIX}${message.id}`;
@@ -910,6 +961,10 @@ export class DiscordBridge {
           await this.sendResponse(message, response, sessionName);
         }
         this.log.info({ agent: sessionName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
+        // Phase 119 A2A-03 — DELIVERED transition. Response landed; flip
+        // the icon 👍 → ✅. Terminal state — sticky against any subsequent
+        // heartbeat-sweep downgrade race.
+        void this.transitionIcon(message, "DELIVERED");
       } else if (!messageRef.current) {
         this.log.warn({ agent: sessionName, channel: channelId }, "agent returned empty response");
       }
@@ -981,7 +1036,10 @@ export class DiscordBridge {
         setTimeout(() => {
           void this.streamAndPostResponse(message, sessionName, formattedMessage, undefined, 0, retryCount + 1);
         }, delayMs);
-        try { await message.react("⏳"); } catch { /* non-fatal */ }
+        // Phase 119 A2A-03 — back to QUEUED while we wait for the agent
+        // to come back online. The state machine handles the prior-emoji
+        // removal (e.g. if IN_FLIGHT was set earlier).
+        void this.transitionIcon(message, "QUEUED");
         return;
       }
 
@@ -1003,17 +1061,14 @@ export class DiscordBridge {
       }
 
       if (coalesced) {
-        try {
-          await message.react("\u23F3");
-        } catch (err) {
-          this.log.debug({ error: (err as Error).message }, "failed to add hourglass reaction");
-        }
+        // Phase 119 A2A-03 \u2014 coalesced into the per-agent queue; still
+        // QUEUED from the operator's POV. State machine swaps the prior
+        // emoji (likely IN_FLIGHT if we made it that far) back to \u23F3.
+        void this.transitionIcon(message, "QUEUED");
       } else {
-        try {
-          await message.react("\u274C");
-        } catch (err) {
-          this.log.debug({ error: (err as Error).message }, "failed to add error reaction");
-        }
+        // Phase 119 A2A-03 \u2014 terminal failure. State machine flips to \u274C
+        // and stickys the state (no further transitions accepted).
+        void this.transitionIcon(message, "FAILED");
       }
     }
 
