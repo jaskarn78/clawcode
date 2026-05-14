@@ -156,6 +156,13 @@ import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
 import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
 import { DiscordBridge } from "../discord/bridge.js";
+// Phase 122 — universal table wrap at the bot-direct chokepoint. Imported
+// here because the BotDirectSender concrete implementation lives inline in
+// this file (object literal at the wireup site below); the type lives in
+// restart-greeting.ts. By wrapping inside sendText / sendEmbed we cover
+// daemon-ask-agent-ipc.ts:286 (999.12 mirror) AND
+// daemon-post-to-agent-ipc.ts:220 (Phase 119 A2A-01) by inheritance.
+import { wrapMarkdownTablesInCodeFence } from "../discord/markdown-table-wrap.js";
 import { ChannelType, type CategoryChannel, type GuildTextBasedChannel, type TextChannel } from "discord.js";
 import { provisionAgent } from "./agent-provisioner.js";
 import { ThreadManager } from "../discord/thread-manager.js";
@@ -7235,19 +7242,31 @@ export async function startDaemon(
             if (!channel || !channel.isTextBased() || !("send" in channel)) {
               throw new Error(`channel ${channelId} is not a sendable text channel`);
             }
+            // Phase 122 — wrap agent-generated description body before send.
+            // setDescription mutates the embed in place so the same builder
+            // is dispatched. Embed.data is always defined on a real
+            // EmbedBuilder; optional-chain protects test doubles.
+            const description = embed.data?.description;
+            if (typeof description === "string" && description.length > 0) {
+              embed.setDescription(wrapMarkdownTablesInCodeFence(description));
+            }
             const msg = await (channel as import("discord.js").TextBasedChannel & { send: (opts: { embeds: import("discord.js").EmbedBuilder[] }) => Promise<{ id: string }> }).send({ embeds: [embed] });
             return msg.id;
           },
           // Phase 100 follow-up — plain-text bot-direct send. Mirrors the
           // sendEmbed shape but accepts a content string. Used as the
           // bot-identity fallback for TriggerEngine's deliveryFn when the
-          // agent has no per-agent webhook provisioned.
+          // agent has no per-agent webhook provisioned. Phase 122 wraps
+          // here so the Phase 119 A2A-01 bot-direct rung
+          // (daemon-post-to-agent-ipc.ts:220) and the 999.12 ask-agent
+          // mirror (daemon-ask-agent-ipc.ts:286) both inherit the wrap.
           async sendText(channelId, content) {
             const channel = await bridgeForGreeting.discordClient.channels.fetch(channelId);
             if (!channel || !channel.isTextBased() || !("send" in channel)) {
               throw new Error(`channel ${channelId} is not a sendable text channel`);
             }
-            const msg = await (channel as import("discord.js").TextBasedChannel & { send: (opts: { content: string }) => Promise<{ id: string }> }).send({ content });
+            const wrapped = wrapMarkdownTablesInCodeFence(content);
+            const msg = await (channel as import("discord.js").TextBasedChannel & { send: (opts: { content: string }) => Promise<{ id: string }> }).send({ content: wrapped });
             return msg.id;
           },
         };
