@@ -505,6 +505,62 @@ export class DiscordBridge {
   }
 
   /**
+   * Phase 119 A2A-03 hotfix 2026-05-14 #3 — transition the queue-state icon
+   * on a message identified by ID only (rather than a live Message ref).
+   *
+   * Used by the coalescer-drain path: when QUEUE_FULL stacks M2/M3 while M1
+   * processes, the eventual drain dispatches a synthesized combined payload
+   * via streamAndPostResponse(M1, ..., combinedPayload). Without this
+   * helper, the IN_FLIGHT/DELIVERED transitions in streamAndPostResponse
+   * check `queuedMessageIds.has(message.id)` — but `message.id` is M1's,
+   * not M2's or M3's, so the check fails and M2/M3's ⏳ icons stay stuck
+   * forever. Caller fetches the pending messages by ID and routes through
+   * here so the transitions land on the actual queued messages.
+   *
+   * Lookup is cache-first (channel.messages.cache.get), falling back to
+   * an API fetch. On 404 (message deleted) or other fetch errors, logs a
+   * warn and returns — reaction failures NEVER abort delivery.
+   */
+  private async transitionIconByMessageId(
+    channel: Message["channel"],
+    channelId: string,
+    messageId: string,
+    target: QueueState,
+  ): Promise<void> {
+    let resolved: Message | undefined;
+    // Cast through unknown — discord.js v14 typings; cache + fetch live on
+    // TextChannel / DMChannel / ThreadChannel, all of which carry them.
+    const ch = channel as unknown as {
+      messages?: {
+        cache?: Map<string, Message>;
+        fetch?: (id: string) => Promise<Message>;
+      };
+    };
+    const cached = ch.messages?.cache?.get(messageId);
+    if (cached) {
+      resolved = cached;
+    } else if (ch.messages?.fetch) {
+      try {
+        resolved = await ch.messages.fetch(messageId);
+      } catch (err) {
+        this.log.warn(
+          { error: (err as Error).message, target, messageId, channelId },
+          "queue-state icon transition skipped — message fetch failed (deleted? expired? non-fatal)",
+        );
+        return;
+      }
+    }
+    if (!resolved) {
+      this.log.warn(
+        { target, messageId, channelId },
+        "queue-state icon transition skipped — message not found in cache and no fetch available (non-fatal)",
+      );
+      return;
+    }
+    await this.transitionIcon(resolved, target);
+  }
+
+  /**
    * Phase 54 Plan 02 — fire the Discord typing indicator AND record a
    * `typing_indicator` span on the caller-owned Turn. The span opens on
    * entry and ends synchronously right after the sendTyping() call, so
@@ -1137,16 +1193,69 @@ export class DiscordBridge {
       { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
       "draining coalesced messages as combined dispatch",
     );
+    // Phase 119 A2A-03 hotfix 2026-05-14 #3 — transition each previously-
+    // QUEUED pending message to IN_FLIGHT (👍) BEFORE the recursive
+    // dispatch starts. Without this, the IN_FLIGHT site inside
+    // streamAndPostResponse checks queuedMessageIds.has(message.id) — but
+    // message.id is the trigger's, not the pending messages'. Result was
+    // that M2/M3 stayed stuck at ⏳ forever even though their content was
+    // delivered (operator pain reported in fin-acquisition channel:
+    // "messages received the hourglass icon, but its never updated when
+    // the message moves out of the queue").
+    const pendingIds = pending
+      .map((p) => p.messageId)
+      .filter((id) => this.queuedMessageIds.has(id));
+    for (const id of pendingIds) {
+      void this.transitionIconByMessageId(message.channel, channelId, id, "IN_FLIGHT");
+    }
     // No new Turn — the original Turn already ended. The drain dispatch
     // runs untraced (acceptable: this is the rare-path resend friction
     // fix, and the original turn already captured a failure trace).
-    await this.streamAndPostResponse(
-      message,
-      sessionName,
-      combinedPayload,
-      undefined,
-      drainDepth + 1,
-    );
+    //
+    // streamAndPostResponse internally swallows non-fatal errors (reacts
+    // ❌ on the trigger for terminal failures, re-coalesces for
+    // QUEUE_FULL, retries on crash). It does not throw on the typical
+    // failure paths. We still wrap in try/catch for the rare unhandled
+    // case (e.g., a future refactor introducing a throw, or the recursive
+    // call escaping its own error handler).
+    try {
+      await this.streamAndPostResponse(
+        message,
+        sessionName,
+        combinedPayload,
+        undefined,
+        drainDepth + 1,
+      );
+      // Success path: transition each pending to DELIVERED (✅) and clean
+      // up the queuedMessageIds tracking to bound memory.
+      //
+      // Caveat: if the recursive call internally reacted ❌ on the trigger
+      // (non-QUEUE_FULL terminal failure), the pending messages are also
+      // affected — but we don't have a fine-grained outcome signal from
+      // streamAndPostResponse to distinguish. The operator can still tell
+      // from the trigger's ❌. Future refactor: have
+      // streamAndPostResponse return a success boolean (or thread the
+      // pending IDs through so the inner failure path can react on them
+      // directly). For now, ✅ on pending after recursive call is the
+      // right default — the alternative (leaving ⏳ stuck) is worse.
+      for (const id of pendingIds) {
+        if (this.queuedMessageIds.has(id)) {
+          void this.transitionIconByMessageId(message.channel, channelId, id, "DELIVERED");
+          this.queuedMessageIds.delete(id);
+        }
+      }
+    } catch (err) {
+      // Unhandled error path — transition each pending to FAILED so the
+      // operator sees an actionable terminal-failure signal instead of
+      // stuck-⏳, then rethrow to preserve caller's error handling.
+      for (const id of pendingIds) {
+        if (this.queuedMessageIds.has(id)) {
+          void this.transitionIconByMessageId(message.channel, channelId, id, "FAILED");
+          this.queuedMessageIds.delete(id);
+        }
+      }
+      throw err;
+    }
   }
 
   /**

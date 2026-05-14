@@ -745,6 +745,52 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
         sendTyping: vi.fn().mockResolvedValue(undefined),
         send: vi.fn().mockResolvedValue({ edit: vi.fn() }),
         isThread: () => false,
+        // Phase 119 A2A-03 hotfix 2026-05-14 #3 — pending-message lookup
+        // for coalescer-drain icon transitions. Empty cache + a fetch mock
+        // that rejects by default; individual tests inject pending
+        // Messages directly into the cache.
+        messages: {
+          cache: new Map<string, import("discord.js").Message>(),
+          fetch: vi
+            .fn()
+            .mockRejectedValue(new Error("not-found")) as unknown as (
+            id: string,
+          ) => Promise<import("discord.js").Message>,
+        },
+      },
+    } as unknown as import("discord.js").Message;
+  }
+
+  /**
+   * Phase 119 A2A-03 hotfix #3 — build a lightweight Message stand-in for
+   * a pending (coalesced) message. The drain code looks these up by
+   * messageId via channel.messages.cache.get(); each pending Message
+   * needs a `react` mock + `reactions.cache` + `client.user.id` so the
+   * state-machine module can add/remove reactions.
+   */
+  function makePendingMessage(opts: {
+    messageId: string;
+    channelId?: string;
+    react?: ReturnType<typeof vi.fn>;
+  }): import("discord.js").Message {
+    return {
+      content: "pending",
+      channelId: opts.channelId ?? "chan-1",
+      id: opts.messageId,
+      type: 0,
+      author: { username: "operator", bot: false, id: "user-1" },
+      createdAt: new Date("2026-04-28T00:00:00Z"),
+      attachments: { size: 0, values: () => [].values(), [Symbol.iterator]: () => [].values(), map: () => [] },
+      reference: null,
+      webhookId: null,
+      embeds: [],
+      react: opts.react ?? vi.fn().mockResolvedValue(undefined),
+      reactions: { cache: new Map() },
+      client: { user: { id: "bot-user-1" } },
+      channel: {
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+        send: vi.fn().mockResolvedValue({ edit: vi.fn() }),
+        isThread: () => false,
       },
     } as unknown as import("discord.js").Message;
   }
@@ -1153,6 +1199,139 @@ describe("QUEUE_FULL coalescing (Phase 100-fu)", () => {
       return msgStr.includes("depth cap") || ctxStr.includes("depth cap") || msgStr.includes("drain depth");
     }).length;
     expect(capWarnCount).toBe(1);
+  });
+
+  // Phase 119 A2A-03 hotfix 2026-05-14 #3 — fix for stuck-⏳ on coalesced
+  // pending messages. Pre-hotfix-3, the drain dispatched a combined
+  // payload via streamAndPostResponse(trigger, ...) — but the IN_FLIGHT/
+  // DELIVERED checks inside streamAndPostResponse gate on
+  // queuedMessageIds.has(message.id), where message.id is the trigger's,
+  // not the pending messages'. So M2/M3 stayed stuck at ⏳ forever even
+  // though their content delivered. Fix: drain code transitions each
+  // pending messageId to IN_FLIGHT before the recursive dispatch and to
+  // DELIVERED after success (FAILED on unhandled throw). Lookup via
+  // channel.messages.cache.get(id), falling back to messages.fetch(id).
+
+  it("CO-9: after QUEUE_FULL coalesce drain, pending messages transition through IN_FLIGHT (👍) and DELIVERED (✅), not stuck at ⏳", async () => {
+    const pendingReact = vi.fn().mockResolvedValue(undefined);
+    const pendingMsg = makePendingMessage({
+      messageId: "pending-A",
+      react: pendingReact,
+    });
+
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      takePending: vi
+        .fn()
+        .mockReturnValueOnce([
+          { content: "pending-A content", messageId: "pending-A", receivedAt: 1 },
+        ])
+        .mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    // Pre-populate queuedMessageIds with the pending message's ID — in
+    // production this happens when M2's own handleMessage→catch wrote
+    // queuedMessageIds.add(M2.id) before coalescing. Skipping the natural
+    // flow here lets the test focus on the drain-side transition logic.
+    (bridge as any).queuedMessageIds.add("pending-A");
+
+    // Trigger dispatch succeeds (no QUEUE_FULL); drain dispatch succeeds.
+    // The drain dispatch has a 300ms delay so the state machine's 200ms
+    // debounce window is exceeded between IN_FLIGHT (drain start) and
+    // DELIVERED (drain success). Without the delay, both transitions fire
+    // within the debounce window and IN_FLIGHT (👍) is collapsed into
+    // DELIVERED (✅) — operator never sees 👍. Real-world LLM dispatches
+    // always take >200ms so this matches production.
+    mockStreamFromAgent
+      .mockResolvedValueOnce("trigger response")
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) =>
+            setTimeout(() => resolve("combined drained response"), 300),
+          ),
+      );
+
+    // Register the pending Message in the trigger's channel cache so the
+    // drain code's transitionIconByMessageId lookup finds it.
+    const triggerMsg = makeQueueFullMessage({ messageId: "trigger-1", content: "trigger" });
+    const cache = (triggerMsg.channel as unknown as {
+      messages: { cache: Map<string, import("discord.js").Message> };
+    }).messages.cache;
+    cache.set("pending-A", pendingMsg);
+
+    await (bridge as any).handleMessage(triggerMsg);
+    // Wait long enough for: drain dispatch (300ms) + 2 debounce windows
+    // (200ms each) + slack. 1200ms covers both transitions cleanly.
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // The pending message receives both IN_FLIGHT (👍) and DELIVERED (✅)
+    // reactions from the drain block, even though message.id inside the
+    // recursive streamAndPostResponse call is the TRIGGER's id, not
+    // pending-A's. The pre-hotfix-3 behavior was: no transitions on
+    // pending-A at all, so ⏳ stayed stuck.
+    const reactCalls = pendingReact.mock.calls.map((c) => c[0]);
+    expect(reactCalls).toContain("👍");
+    expect(reactCalls).toContain("✅");
+    // No ❌ — drain succeeded.
+    expect(reactCalls).not.toContain("❌");
+    // pending-A removed from queuedMessageIds after DELIVERED (memory bound).
+    expect((bridge as any).queuedMessageIds.has("pending-A")).toBe(false);
+  });
+
+  it("CO-10: pending-message lookup falls back to channel.messages.fetch when not in cache", async () => {
+    const pendingReact = vi.fn().mockResolvedValue(undefined);
+    const pendingMsg = makePendingMessage({
+      messageId: "pending-B",
+      react: pendingReact,
+    });
+
+    const fakeCoalescer = {
+      addMessage: vi.fn().mockReturnValue(true),
+      takePending: vi
+        .fn()
+        .mockReturnValueOnce([
+          { content: "pending-B content", messageId: "pending-B", receivedAt: 1 },
+        ])
+        .mockReturnValue([]),
+      getPendingCount: vi.fn().mockReturnValue(0),
+    };
+    const bridge = createBridge({ coalescer: fakeCoalescer });
+    (bridge as any).queuedMessageIds.add("pending-B");
+
+    // Same delay shape as CO-9 — the recursive drain dispatch needs to
+    // take longer than the 200ms debounce window so IN_FLIGHT (👍) and
+    // DELIVERED (✅) don't collapse.
+    mockStreamFromAgent
+      .mockResolvedValueOnce("trigger response")
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) =>
+            setTimeout(() => resolve("drained ok"), 300),
+          ),
+      );
+
+    const triggerMsg = makeQueueFullMessage({ messageId: "trigger-2", content: "trigger" });
+    // Cache is empty (default from makeQueueFullMessage). Override fetch to
+    // return our pending message stand-in.
+    const channelMessages = (triggerMsg.channel as unknown as {
+      messages: {
+        cache: Map<string, import("discord.js").Message>;
+        fetch: ReturnType<typeof vi.fn>;
+      };
+    }).messages;
+    channelMessages.fetch = vi.fn().mockResolvedValue(pendingMsg);
+
+    await (bridge as any).handleMessage(triggerMsg);
+    // 1200ms — drain delay (300) + 2 debounce windows (200+200) + slack.
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // fetch was called with the pending message's ID (cache-miss fallback).
+    expect(channelMessages.fetch).toHaveBeenCalledWith("pending-B");
+    // And the transitions landed on the fetched message.
+    const reactCalls = pendingReact.mock.calls.map((c) => c[0]);
+    expect(reactCalls).toContain("👍");
+    expect(reactCalls).toContain("✅");
   });
 });
 
