@@ -138,6 +138,8 @@ import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { CheckStatus, HeartbeatConfig } from "../heartbeat/types.js";
 import type { ContextZone, ZoneTransition } from "../heartbeat/context-zones.js";
+import { CompactionEventLog } from "./compaction-event-log.js";
+import { buildHeartbeatStatusPayload } from "./heartbeat-status-builder.js";
 import { TaskScheduler } from "../scheduler/scheduler.js";
 import { TriggerEngine } from "../triggers/engine.js";
 import { SchedulerSource } from "../triggers/scheduler-source.js";
@@ -3261,6 +3263,13 @@ export async function startDaemon(
       ? { inboxTimeoutMs: config.defaults.heartbeatInboxTimeoutMs }
       : {}),
   };
+  // Phase 124 Plan 04 T-01 — single source of truth for last-compaction
+  // timestamps. Constructed BEFORE the heartbeat runner so the runner can
+  // be wired with the trigger closure in Plan 04 T-02. Both the manual
+  // IPC path (case "compact-session") and the heartbeat auto-trigger path
+  // record into this same log on `ok:true`, so the cooldown gate sees a
+  // unified view regardless of which path fired the compaction.
+  const compactionEventLog = new CompactionEventLog();
   const heartbeatRunner = new HeartbeatRunner({
     sessionManager: manager,
     registryPath: REGISTRY_PATH,
@@ -3762,6 +3771,7 @@ export async function startDaemon(
             botDirectSenderRef,
             advisorService,
             config.defaults,
+            compactionEventLog,
           ),
         log,
         traceCollector: manager.getTraceCollector(agentName) ?? undefined,
@@ -3814,6 +3824,7 @@ export async function startDaemon(
         botDirectSenderRef,
         advisorService,
         config.defaults,
+        compactionEventLog,
       );
       const liveSizeMb = toolCacheEnabled ? toolCacheStore.sizeMb() : 0;
       // Phase 115 Plan 08 T03 — augment `case "cache"` with per-agent
@@ -7106,7 +7117,7 @@ export async function startDaemon(
       // === end Phase 116-06 IPC handlers ===
     }
 
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef, advisorService, config.defaults);
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef, advisorService, config.defaults, compactionEventLog);
   };
 
   // 11. Create IPC server
@@ -8314,6 +8325,11 @@ async function routeMethod(
   // Closes over `config.defaults` so the handler can short-circuit for
   // native-backend agents before invoking the service.
   advisorDefaults: { readonly advisor?: { readonly backend?: string } } | undefined,
+  // Phase 124 Plan 04 T-01 — in-memory log of last-compaction timestamps.
+  // Read by `heartbeat-status` (surfaces `last_compaction_at` per agent)
+  // and written by `compact-session` on `ok:true`. Single source of truth
+  // for both the telemetry surface and the auto-trigger cooldown gate.
+  compactionEventLog: CompactionEventLog,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -8440,31 +8456,17 @@ async function routeMethod(
     }
 
     case "heartbeat-status": {
-      const results = heartbeatRunner.getLatestResults();
-      const zoneStatuses = heartbeatRunner.getZoneStatuses();
-      const agents: Record<string, unknown> = {};
-      for (const [agentName, checks] of results) {
-        const checksObj: Record<string, unknown> = {};
-        let worstStatus: CheckStatus = "healthy";
-        for (const [checkName, { result, lastChecked }] of checks) {
-          checksObj[checkName] = {
-            status: result.status,
-            message: result.message,
-            lastChecked,
-            ...(result.metadata ? { metadata: result.metadata } : {}),
-          };
-          if (result.status === "critical" || (result.status === "warning" && worstStatus !== "critical")) {
-            worstStatus = result.status;
-          }
-        }
-        const zoneData = zoneStatuses.get(agentName);
-        agents[agentName] = {
-          checks: checksObj,
-          overall: worstStatus,
-          ...(zoneData ? { zone: zoneData.zone, fillPercentage: zoneData.fillPercentage } : {}),
-        };
-      }
-      return { agents };
+      // Phase 124 Plan 04 T-01 — delegated to the pure builder so the
+      // telemetry surface (session_tokens, last_compaction_at) stays
+      // unit-testable. Pre-Plan-04 inline body preserved verbatim inside
+      // the builder; behavior is additive (existing consumers parse the
+      // same shape).
+      return buildHeartbeatStatusPayload({
+        results: heartbeatRunner.getLatestResults(),
+        zoneStatuses: heartbeatRunner.getZoneStatuses(),
+        getLastCompactionAt: (a) => compactionEventLog.getLastCompactionAt(a),
+        getContextFillProvider: (a) => manager.getContextFillProvider(a),
+      });
     }
 
     case "context-zone-status": {
@@ -10338,7 +10340,7 @@ async function routeMethod(
             .slice(0, 20),
         );
       };
-      return await handleCompactSession(
+      const compactResult = await handleCompactSession(
         { agent: agentName },
         {
           manager: {
@@ -10378,6 +10380,15 @@ async function routeMethod(
           daemonReady: true,
         },
       );
+      // Phase 124 Plan 04 T-01 — record into the in-memory log so
+      // `heartbeat-status` surfaces `last_compaction_at` AND the heartbeat
+      // auto-trigger cooldown gate (T-02) sees both manual and auto
+      // compactions through the same source of truth. Only successful
+      // compactions are recorded — failed attempts must NOT enter cooldown.
+      if (compactResult.ok === true) {
+        compactionEventLog.record(agentName);
+      }
+      return compactResult;
     }
 
     case "set-model": {
