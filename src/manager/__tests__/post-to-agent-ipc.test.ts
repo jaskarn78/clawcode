@@ -14,13 +14,17 @@
  *   the handler so a future refactor cannot silently bifurcate the path
  *   (e.g., land logging on a function the daemon never calls).
  */
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   handlePostToAgentIpc,
   type PostToAgentDeps,
 } from "../daemon-post-to-agent-ipc.js";
+import {
+  _resetNoWebhookFallbacks,
+  snapshotNoWebhookFallbacks,
+} from "../fleet-stats.js";
 
 // ---------------------------------------------------------------------------
 // Test fixture builders
@@ -420,5 +424,129 @@ describe("Sentinel A — production caller chain pinned", () => {
       handlerSrc.match(/"post-to-agent skipped"/g) ?? []
     ).length;
     expect(skippedCount).toBeGreaterThanOrEqual(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 119 D-05 — no-webhook-fallback counter wiring.
+//
+// Two call sites in the handler. Bot-direct success increments once; inbox-
+// only return with a resolved channel increments once. Webhook success does
+// NOT increment. Bot-direct success does NOT also fire the inbox path
+// (no double-counting).
+// ---------------------------------------------------------------------------
+describe("handlePostToAgentIpc — no_webhook_fallbacks_total counter (D-05)", () => {
+  beforeEach(() => {
+    _resetNoWebhookFallbacks();
+  });
+
+  it("bot-direct success increments counter exactly once for (agent, channel)", async () => {
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+      botDirectSender: { sendText },
+    });
+    await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "hi" },
+      deps,
+    );
+    const snap = snapshotNoWebhookFallbacks();
+    expect(snap["projects:chan-1"]).toBe(1);
+    // Bot-direct success means inbox-only path NOT entered — no double-count.
+    expect(Object.values(snap).reduce((a, b) => a + b, 0)).toBe(1);
+  });
+
+  it("bot-direct sendText throws → falls through to inbox; counter increments exactly ONCE (no double-count)", async () => {
+    const sendText = vi.fn().mockRejectedValue(new Error("Discord 500"));
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+      botDirectSender: { sendText },
+    });
+    await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    const snap = snapshotNoWebhookFallbacks();
+    expect(snap["projects:chan-1"]).toBe(1);
+    expect(Object.values(snap).reduce((a, b) => a + b, 0)).toBe(1);
+  });
+
+  it("no-webhook + no botDirectSender → inbox-only path increments counter once", async () => {
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+    });
+    await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    const snap = snapshotNoWebhookFallbacks();
+    expect(snap["projects:chan-1"]).toBe(1);
+  });
+
+  it("webhook-send-failed → inbox-only path increments counter once", async () => {
+    const sendAsAgent = vi.fn().mockRejectedValue(new Error("Discord 503"));
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => true, sendAsAgent },
+    });
+    await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    const snap = snapshotNoWebhookFallbacks();
+    expect(snap["projects:chan-1"]).toBe(1);
+  });
+
+  it("webhook success does NOT increment counter", async () => {
+    const { deps } = makeDeps();
+    await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    const snap = snapshotNoWebhookFallbacks();
+    expect(Object.keys(snap)).toHaveLength(0);
+  });
+
+  it("no-target-channels → inbox-only path with no channelId; counter NOT incremented (channelId absent)", async () => {
+    const { deps } = makeDeps({
+      agentChannels: new Map(), // no channels resolved
+    });
+    await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    const snap = snapshotNoWebhookFallbacks();
+    // No channel resolvable → counter would key on empty string. Skip
+    // increment when channelId is undefined (counter measures fallbacks
+    // per channel; a request with no resolvable channel can't have one).
+    expect(Object.keys(snap)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sentinel B — silent-path-bifurcation guard for the counter call sites.
+//
+// The counter call lives at exactly TWO sites in daemon-post-to-agent-ipc.ts:
+//   1. bot-direct rung success branch
+//   2. inboxOnlyResponse helper body
+// A future refactor that adds a third increment site or removes one breaks
+// the D-05 contract (over/under-counting on the dashboard tile). Pin the
+// count to exactly 2 so the regression surfaces in CI, not in production.
+// ---------------------------------------------------------------------------
+describe("Sentinel B — incrementNoWebhookFallback call-site count pinned", () => {
+  const repoRoot = join(__dirname, "..", "..", "..");
+  const handlerSrc = readFileSync(
+    join(repoRoot, "src/manager/daemon-post-to-agent-ipc.ts"),
+    "utf8",
+  );
+  it("daemon-post-to-agent-ipc.ts has exactly 2 incrementNoWebhookFallback call sites", () => {
+    const calls = (
+      handlerSrc.match(/incrementNoWebhookFallback\(/g) ?? []
+    ).length;
+    expect(calls).toBe(2);
+  });
+  it("handler imports the counter helper from fleet-stats", () => {
+    expect(handlerSrc).toMatch(
+      /from\s+["']\.\/fleet-stats\.js["']|import\s+\{[^}]*incrementNoWebhookFallback/,
+    );
   });
 });

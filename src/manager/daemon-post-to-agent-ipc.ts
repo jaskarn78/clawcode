@@ -63,6 +63,7 @@
 import type { EmbedBuilder } from "discord.js";
 import { ManagerError } from "../shared/errors.js";
 import { buildAgentMessageEmbed } from "../discord/agent-message.js";
+import { incrementNoWebhookFallback } from "./fleet-stats.js";
 
 /** Reason discriminator surfaced in `reason` on the response. */
 export type PostToAgentSkipReason =
@@ -202,6 +203,9 @@ export async function handlePostToAgentIpc(
       { from, to, messageId, reason: "no-target-channels" satisfies PostToAgentSkipReason },
       "post-to-agent skipped",
     );
+    // No channelId resolvable on the no-target-channels path — counter
+    // remains uncounted here (Sentinel B keeps the count at 2 via the
+    // bot-direct site + the inbox-only-with-channelId site below).
     return inboxOnlyResponse(messageId, "no-target-channels", deps, from, to);
   }
 
@@ -218,6 +222,11 @@ export async function handlePostToAgentIpc(
       if (channelId) {
         try {
           await deps.botDirectSender.sendText(channelId, message);
+          // Phase 119 D-05 — bot-direct success IS a fallback dispatch.
+          // Site 1 of 2; site 2 is in inboxOnlyResponse. Sentinel B in the
+          // test suite pins the call-site count to exactly 2 so a future
+          // refactor cannot silently over- or under-count.
+          incrementNoWebhookFallback(to, channelId);
           deps.log.info(
             {
               agent: to,
@@ -240,7 +249,14 @@ export async function handlePostToAgentIpc(
       { from, to, messageId, reason: "no-webhook" satisfies PostToAgentSkipReason },
       "post-to-agent skipped",
     );
-    return inboxOnlyResponse(messageId, "no-webhook", deps, from, to);
+    return inboxOnlyResponse(
+      messageId,
+      "no-webhook",
+      deps,
+      from,
+      to,
+      targetChannels[0],
+    );
   }
 
   const senderConfig = deps.configs.find((c) => c.name === from);
@@ -267,7 +283,14 @@ export async function handlePostToAgentIpc(
       },
       "post-to-agent skipped",
     );
-    return inboxOnlyResponse(messageId, "webhook-send-failed", deps, from, to);
+    return inboxOnlyResponse(
+      messageId,
+      "webhook-send-failed",
+      deps,
+      from,
+      to,
+      targetChannels[0],
+    );
   }
 
   return { ok: true, delivered: true, messageId };
@@ -278,6 +301,14 @@ export async function handlePostToAgentIpc(
  * skip reason: `target-not-running`. Heartbeat reconciler can't dispatch a
  * turn to a stopped process, so when both webhook is unreachable AND the
  * agent is offline we surface that secondary reason for operator visibility.
+ *
+ * Phase 119 D-05 — when `channelId` is resolved (caller had a target
+ * channel even if delivery failed for another reason), increments the
+ * `no_webhook_fallbacks_total` counter so the dashboard tile surfaces the
+ * inbox-only landing. Site 2 of 2 — Sentinel B in the test suite pins the
+ * call-site count to exactly 2. When `channelId` is undefined (the
+ * no-target-channels skip path), the counter is NOT incremented — that key
+ * shape (`agent:`) is meaningless to operators.
  */
 function inboxOnlyResponse(
   messageId: string,
@@ -285,7 +316,11 @@ function inboxOnlyResponse(
   deps: PostToAgentDeps,
   from: string,
   to: string,
+  channelId?: string,
 ): PostToAgentResponse {
+  if (channelId) {
+    incrementNoWebhookFallback(to, channelId);
+  }
   if (!deps.runningAgents.includes(to)) {
     deps.log.info(
       {
