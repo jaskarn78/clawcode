@@ -145,6 +145,22 @@ export type SdkQueryOptions = {
    * Remove this field once upstream SDK wires `advisorModel` end-to-end.
    */
   readonly extraArgs?: Record<string, string | null>;
+  /**
+   * FIND-123-A.next — structural spawn override for the SDK's
+   * `spawnClaudeCodeProcess` hook (sdk.d.ts:1806). When supplied, the SDK
+   * calls this function instead of its non-detached `spawn()` default, so
+   * ClawCode owns the `detached: true` flag and the per-(re-)spawn PID
+   * capture. Only `createPersistentSessionHandle` populates this — the
+   * ephemeral query sites (advisor, haiku-direct, summarize, json-rpc-call,
+   * initial drain query, benchmarks) deliberately don't launch
+   * MCP-bearing trees, so the wrapper is not threaded through them.
+   *
+   * Typed loosely as `unknown` to avoid pulling the SDK's `SpawnOptions` /
+   * `SpawnedProcess` types into this seam-only module — the production
+   * call site in `persistent-session-handle.ts` casts when forwarding to
+   * the real SDK Options.
+   */
+  readonly spawnClaudeCodeProcess?: (options: unknown) => unknown;
 };
 
 /**
